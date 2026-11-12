@@ -298,6 +298,8 @@ int eu4_gfx_offscreen_contents_known(void *master);
    backbuffer when game mode is on and +0x78 is null; otherwise to the
    diagnostic offscreen when configured. A geometry-transition stale skip
    returns normally; unsupported or failed cases stop. */
+int eu4_gfx_swap_window(void *window);
+
 void eu4_gfx_clear(void *handle, unsigned flags, const float *color);
 /* Diagnostic offscreen only. Validate and commit without waiting. ok means
    submitted. Rejects a second clear while one is pending. Invalidates

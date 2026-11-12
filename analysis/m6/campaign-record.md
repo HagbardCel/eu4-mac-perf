@@ -285,3 +285,20 @@ Reconstructed entries:
 
 The backbuffer also receives a Depth32Float companion so default-target draws
 can depth-test.
+
+## Live title presentation and further state (2026-11-13)
+
+- `_GfxUpdateTexture` reconstructed (0x15ec66f): re-uploads mip 0 into the
+  Metal texture created for the same header (BGR/1-byte expansion included).
+- Blend descriptors with the enable flag clear now map to the opaque snapshot;
+  a blend-disabled draw no longer stops the run.
+- Shader states that are not admitted/linked are reported as unsupported
+  (skippable in collection runs) rather than fatal.
+- `SDL_GL_SwapWindow` (0x12cb130) is patched: the frontend presents through the
+  window swap rather than `_GfxPresent`, so the Metal backend now blits the
+  completed backbuffer to the layer drawable on every swap.
+- Entry-installer prologue table extended for the `test r9,r9; je` update
+  prologue.
+
+Remaining: reach the menu with a complete shader cache, then validate the
+presented title scene and three clean starts.

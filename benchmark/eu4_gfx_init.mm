@@ -571,7 +571,11 @@ static int apply_blend(void *master, void *state, int force) {
     }
     const uint8_t *desc = (const uint8_t *)state + 0x24;
     uint8_t snap[0x24];
-    if (blend_supported(desc)) {
+    if (desc[0] == 0) {
+        /* Blend disabled: the engine writes a zero enable flag; the factors are
+           then immaterial (the observed descriptor is ONE/ZERO). */
+        fill_blend_snap(snap);
+    } else if (blend_supported(desc)) {
         fill_blend_snap(snap);
     } else if (blend_sprite_supported(desc)) {
         fill_sprite_blend_snap(snap);
@@ -1933,6 +1937,64 @@ eu4_gfx_clear_status eu4_gfx_read_offscreen(void *master, void *dest, size_t cap
         *out_len = (size_t)need;
     }
     return EU4_GFX_CLEAR_OK;
+}
+
+/* The frontend does not call _GfxPresent while its present flag is clear; it
+   swaps the window instead. The reconstructed window is a CAMetalLayer, so the
+   swap is the natural presentation boundary: blit the completed backbuffer to
+   the layer's drawable and present it. */
+int eu4_gfx_swap_window(void *window) {
+    (void)window;
+    if (g_master == NULL) {
+        return 0;
+    }
+    __unsafe_unretained EU4GfxBackend *backend =
+        (__bridge EU4GfxBackend *)backend_raw_for_master(g_master);
+    if (backend == nil || backend.queue == nil || backend.gameColorTarget == nil) {
+        return 0;
+    }
+    if (backend.pendingGameCommand != nil) {
+        if (drain_pending_game(backend, NULL) != EU4_GFX_CLEAR_OK) {
+            return 0;
+        }
+    }
+    id<CAMetalDrawable> drawable = nil;
+    id<MTLTexture> destination = nil;
+    if (g_present_drawable != NULL) {
+        destination = (__bridge id<MTLTexture>)g_present_drawable;
+    } else {
+        CAMetalLayer *layer = backend.layer;
+        drawable = layer != nil ? [layer nextDrawable] : nil;
+        destination = drawable.texture;
+    }
+    if (destination == nil || destination.width != backend.gameWidth ||
+        destination.height != backend.gameHeight) {
+        return 0;
+    }
+    id<MTLCommandBuffer> command = [backend.queue commandBuffer];
+    if (command == nil) {
+        return 0;
+    }
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    if (blit == nil) {
+        return 0;
+    }
+    [blit copyFromTexture:backend.gameColorTarget
+              sourceSlice:0
+              sourceLevel:0
+             sourceOrigin:MTLOriginMake(0, 0, 0)
+               sourceSize:MTLSizeMake(backend.gameWidth, backend.gameHeight, 1)
+                toTexture:destination
+         destinationSlice:0
+         destinationLevel:0
+        destinationOrigin:MTLOriginMake(0, 0, 0)];
+    [blit endEncoding];
+    if (drawable != nil) {
+        [command presentDrawable:drawable];
+    }
+    [command commit];
+    [command waitUntilCompleted];
+    return 0;
 }
 
 void eu4_gfx_clear(void *handle, unsigned flags, const float *color) {

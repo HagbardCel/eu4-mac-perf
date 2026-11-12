@@ -47,6 +47,13 @@ void eu4_gfx_initialize_render_target_texture(void *handle, void *header,
                                               uint32_t format, uint32_t flags,
                                               uint32_t samples);
 
+/* _GfxUpdateTexture at 0x15ec66f. r9 is the TextureGFX header; rsi is the CPU
+   image for mip level 0; edx/ecx are width/height. The original binds the GL
+   texture and re-uploads the level with glTexImage2D. The Metal path uploads
+   into the texture created by _GfxInitializeTexture for the same header. */
+void eu4_gfx_update_texture(void *ignored, const void *pixels, uint32_t width,
+                            uint32_t height, uint32_t flags, void *header);
+
 /* _GfxCreateRenderTargetTexture at 0x15ecb7f. Allocates the 0x44 header and
    initialises it. Returns the header. */
 void *eu4_gfx_create_render_target_texture(void *handle, uint32_t width,

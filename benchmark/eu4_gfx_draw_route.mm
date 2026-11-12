@@ -149,6 +149,10 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
     }
     char text[256];
     void *current_shader = load_ptr(master, 0x70);
+    if (current_shader == NULL) {
+        return refuse(EU4_GFX_DRAW_ROUTE_UNSUPPORTED, diagnostic, capacity,
+                      "draw has no admitted current shader");
+    }
     if (eu4_gfx_shader_is_generic(current_shader)) {
         int32_t count32 = (int32_t)raw->rsi;
         eu4_gfx_generic_call call = {0};
@@ -185,6 +189,10 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
                               : "generic encoder refused the draw");
         }
     } else {
+        if (!eu4_gfx_shader_is_linked(current_shader)) {
+            return refuse(EU4_GFX_DRAW_ROUTE_UNSUPPORTED, diagnostic, capacity,
+                          "current shader is not linked");
+        }
         if (raw->which != 1) {
             return refuse(EU4_GFX_DRAW_ROUTE_UNSUPPORTED, diagnostic, capacity,
                           raw->which == 2

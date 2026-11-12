@@ -489,6 +489,64 @@ static const char *branch_name(int status) {
     }
 }
 
+static uint8_t *expand_bgr(const uint8_t *bgr, uint32_t width, uint32_t height);
+
+void eu4_gfx_update_texture(void *ignored, const void *pixels, uint32_t width,
+                            uint32_t height, uint32_t flags, void *header) {
+    (void)ignored;
+    (void)flags;
+    if (header == NULL) {
+        return;
+    }
+    if (pixels == NULL || width == 0 || height == 0) {
+        return;
+    }
+    id<MTLTexture> texture = (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(header);
+    if (texture == nil) {
+        return;
+    }
+    uint32_t format = 0;
+    uint32_t bpp = 0;
+    memcpy(&format, (uint8_t *)header + 0x30, 4);
+    memcpy(&bpp, (uint8_t *)header + 0x34, 4);
+    if (bpp == 0 && format >= 7 && format <= 23) {
+        bpp = kBytes[format - 7];
+    }
+    const void *upload = pixels;
+    uint8_t *expanded = NULL;
+    NSUInteger row = (NSUInteger)width * bpp;
+    if (bpp == 3) {
+        expanded = expand_bgr((const uint8_t *)pixels, width, height);
+        if (expanded == NULL) {
+            return;
+        }
+        upload = expanded;
+        row = (NSUInteger)width * 4;
+    } else if (bpp == 1) {
+        size_t count = (size_t)width * height;
+        expanded = (uint8_t *)malloc(count * 4);
+        if (expanded == NULL) {
+            return;
+        }
+        for (size_t i = 0; i < count; i++) {
+            uint8_t v = ((const uint8_t *)pixels)[i];
+            expanded[i * 4 + 0] = v;
+            expanded[i * 4 + 1] = v;
+            expanded[i * 4 + 2] = v;
+            expanded[i * 4 + 3] = 255;
+        }
+        upload = expanded;
+        row = (NSUInteger)width * 4;
+    } else if (bpp != 4 && !(format >= 17 && format <= 23)) {
+        return;
+    }
+    [texture replaceRegion:MTLRegionMake2D(0, 0, width, height)
+               mipmapLevel:0
+                 withBytes:upload
+               bytesPerRow:row];
+    free(expanded);
+}
+
 static void write_texture_trace(const char *event, void *header, const void *desc,
                                 uint32_t count, int status) {
     if (getenv("EU4_GFX_TEXTURE_TRACE") == NULL) {

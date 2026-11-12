@@ -28,17 +28,24 @@ GFX_ENTRY(draw_indexed, 0x15eaa77, 0x15eac96, eu4_gfx_draw_indexed_entry, "\x55\
 GFX_ENTRY(draw_indexed_instanced, 0x15eac9c, 0x15ead87, eu4_gfx_draw_indexed_instanced_entry, "\x55\x48\x89\xe5\x41\x57")
 // _GfxInitializeTexture. End is _GfxCreateTexture. Authorized by the glGenTextures stop at 0x15ec4ed.
 GFX_ENTRY(initialize_texture, 0x15ec43b, 0x15ec61d, eu4_gfx_initialize_texture, "\x55\x48\x89\xe5\x41\x57")
+// SDL_GL_SwapWindow. The frontend presents through the window swap, not
+// _GfxPresent. The reconstructed window is a CAMetalLayer, so the swap blits
+// the completed backbuffer to the drawable.
+GFX_ENTRY(swap_window, 0x12cb130, 0x12cb140, eu4_gfx_swap_window, "\x55\x48\x89\xe5\x5d")
+// _GfxUpdateTexture. Re-uploads mip level 0 into the Metal texture created for
+// the same header. The original binds the GL texture and calls glTexImage2D.
+GFX_ENTRY(update_texture, 0x15ec66f, 0x15ec700, eu4_gfx_update_texture, "\x4d\x85\xc9\x0f\x84")
 // _GfxSetTextures. End is InternalSetTextureAndSamplerState. The live return is 0x15ecc72.
 GFX_ENTRY(set_textures, 0x15ecbf2, 0x15ecce2, eu4_gfx_set_textures, "\x55\x48\x89\xe5\x41\x57")
+// _GfxClearTexture. End is _GfxInitializeRenderTargetTexture. Prologue is
+// test rdi,rdi; je <ret>. Deletes GL names and clears the header fields.
+GFX_ENTRY(clear_texture, 0x15ec836, 0x15ec8e2, eu4_gfx_clear_texture, "\x48\x85\xff\x0f\x84")
 // _GfxInitializeRenderTargetTexture. Creates the engine's render-target colour
 // texture (the TextureGFX header itself is the target object) and a depth
 // companion. End is _GfxCreateRenderTargetTexture.
 GFX_ENTRY(initialize_render_target_texture, 0x15ec8e2, 0x15ecb7f, eu4_gfx_initialize_render_target_texture, "\x55\x48\x89\xe5\x41\x57")
 // _GfxCreateRenderTargetTexture. Allocates the 0x44 header and initialises it.
 GFX_ENTRY(create_render_target_texture, 0x15ecb7f, 0x15ecbf2, eu4_gfx_create_render_target_texture, "\x55\x48\x89\xe5\x41\x57")
-// _GfxClearTexture. End is _GfxInitializeRenderTargetTexture. Prologue is
-// test rdi,rdi; je <ret>. Deletes GL names and clears the header fields.
-GFX_ENTRY(clear_texture, 0x15ec836, 0x15ec8e2, eu4_gfx_clear_texture, "\x48\x85\xff\x0f\x84")
 // _GfxCreateShader. End is _GfxAddVertexLayout. The null call is at 0x15eaeb9.
 GFX_ENTRY(create_shader, 0x15eae97, 0x15eaec7, eu4_gfx_create_shader, "\x55\x48\x89\xe5\x53")
 // _GfxAddVertexShader. End is LogShaderError. The null call is at 0x15eaffa.
