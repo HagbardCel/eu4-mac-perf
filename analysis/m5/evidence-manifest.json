@@ -262,7 +262,30 @@
   },
   "checker": {
     "path": "campaigns/eu4-m5/accept.py",
-    "result": "pending final clean-tree run",
-    "gates": "manifest/policy, reference event/target/artifacts/vertex/constants/texture/shader/contribution, candidate replay GPU/inputs/comparison, unsupported state, corrupted input, offline regressions, M4 checker"
+    "result": "pass",
+    "run": ".local/m5/checker-final1.json",
+    "command": "PYTHONPATH=benchmark:. python3 campaigns/eu4-m5/accept.py .",
+    "gates": {
+      "count": 19,
+      "passed": 19,
+      "failed": 0
+    },
+    "notes": [
+      "M4 checker verdict=pass on the recorded local M4 evidence",
+      "67 offline regression tests pass",
+      "fresh live-Metal replay compared exactly"
+    ]
+  },
+  "implementation_commit": "36fa8e9",
+  "final_acceptance": {
+    "verdict": "pass",
+    "commit": "36fa8e9",
+    "python": "3.14.10",
+    "reference_run": ".local/m5/experiments/sprite-gl-ref-08",
+    "fresh_candidate_run": ".local/m5/accept-1794498939",
+    "comparison": "pass 0/1930176 max_channel_error=0",
+    "mp5_host_tests": "4 pass",
+    "m4_checker": "pass",
+    "offline_regressions": "67 pass"
   }
 }

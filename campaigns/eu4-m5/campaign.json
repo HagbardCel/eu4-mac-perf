@@ -13,7 +13,7 @@
   "max_seconds": 10800,
   "accept_timeout_seconds": 900,
   "verification_manifest": "analysis/m5/evidence-manifest.json",
-  "evidence_manifest_sha256": "5f95204184177d6fab13f5c99099711e0597480f962b29e5d066970048fb7299",
+  "evidence_manifest_sha256": "3a24c7e1117d9c2c5ae31c9d3f13af6994f15f1533d2478d5fd73b5100fed2d3",
   "live_observation": {
     "launch_limit": 1,
     "deadline_seconds": 150

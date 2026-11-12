@@ -1,7 +1,8 @@
 # M5 qualification report — second authentic draw and composed comparison
 
-Status: **qualified by the M5 checker** (`campaigns/eu4-m5/accept.py`) for the
-reconstructed sprite operation. The live engine path to the draw is **not**
+Status: **qualified by the M5 checker** (`campaigns/eu4-m5/accept.py`, 19/19
+gates, verdict `pass` on commit `36fa8e9`) for the reconstructed sprite
+operation. The live engine path to the draw is **not**
 reached; the exact blocker is recorded below. The checker distinguishes the
 reconstructed operation and the live-Metal replay from a live-engine route.
 
@@ -16,7 +17,7 @@ reconstructed operation and the live-Metal replay from a live-engine route.
 | Nonzero contribution | **pass** (157,254 pixels changed) |
 | Unsupported state refusal | **pass** |
 | Corrupted-input negative control | **pass** (max channel error 243, 42,284 mismatched) |
-| Preserved M4 route and regressions | **pass** |
+| Preserved M4 route and regressions | **pass** (M4 checker verdict `pass`, 67 offline tests) |
 | Live engine reaches the draw | **not claimed** — `_GfxBeginScene` blocker |
 
 ## Selected operation
@@ -124,6 +125,9 @@ to share a raw hash.
 `tests.test_gfx_m5_sprite` covers exact replay, determinism, corrupted-input
 failure and unsupported-state refusal (4 tests, pass). The checker also runs the
 comparator, GL-reference, live-draw, Simple-draw and M4 checker tests.
+
+The final checker passed all 19 gates on the clean implementation commit
+(`36fa8e9`), including the M4 checker and 67 offline regression tests.
 
 The tracked full suite was run on Python 3.14.10:
 `PYTHONPATH=benchmark:. python -m unittest discover -s tests` ran **2468
