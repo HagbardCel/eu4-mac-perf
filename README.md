@@ -39,8 +39,8 @@ The hook runs `git diff --cached --check` on staged changes; CI still validates 
 From the repository root, using Python 3.14:
 
 ```sh
-python3 benchmark/eu4_benchmark.py inspect
-PYTHONPATH=benchmark:. python3 -m unittest discover -s tests
+python3.14 benchmark/eu4_benchmark.py inspect
+PYTHONPATH=benchmark:. python3.14 -m unittest discover -s tests
 ```
 
 CI exercises Python **3.14 only**. That is the sole tested version; it does not
@@ -49,7 +49,7 @@ establish compatibility with older Python releases.
 Phase C sealed evidence verification (CI gate; capsule is closed — see [docs/status.md](docs/status.md)):
 
 ```sh
-PYTHONPATH=benchmark python3 benchmark/eu4_frame_model.py verify-evidence \
+PYTHONPATH=benchmark python3.14 benchmark/eu4_frame_model.py verify-evidence \
   results/20261003T210202Z-intrusive-diagnostic --profile intrusive_complete_v1
 ```
 
