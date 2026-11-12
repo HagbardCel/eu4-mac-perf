@@ -276,7 +276,8 @@ static int run_clear_refusal(const char *directory) {
     return 1;
 }
 
-static int run_checkpoint(const char *operation, const char *directory) {
+static int run_checkpoint_inner(const char *operation, const char *directory,
+                                uint64_t selector, int expect_fire) {
     boot();
     eu4_metal_events_set_dir(directory);
     void *shader = make_simple_shader();
@@ -308,7 +309,6 @@ static int run_checkpoint(const char *operation, const char *directory) {
         void *master;
     } ctx = {g_master};
     const float black[4] = {0.f, 0.f, 0.f, 1.f};
-    uint64_t selector = strcmp(operation, "after-draw") == 0 ? kCallerRva : 0;
     eu4_gfx_checkpoint_configure(operation, selector, 1, directory, 1);
     if (strcmp(operation, "after-clear") == 0) {
         eu4_gfx_clear(&ctx, 1, black);
@@ -320,7 +320,11 @@ static int run_checkpoint(const char *operation, const char *directory) {
         if (eu4_gfx_draw_capture(&raw) != 1) {
             fail("checkpoint draw was not handled");
         }
-        fail("after-draw checkpoint did not stop");
+        if (expect_fire) {
+            fail("after-draw checkpoint did not stop");
+        }
+        printf("checkpoint_miss=1\n");
+        return 0;
     }
     if (strcmp(operation, "before-present") == 0) {
         if (eu4_gfx_draw_capture(&raw) != 1) {
@@ -331,6 +335,11 @@ static int run_checkpoint(const char *operation, const char *directory) {
     }
     fail("unknown checkpoint operation");
     return 2;
+}
+
+static int run_checkpoint(const char *operation, const char *directory) {
+    uint64_t selector = strcmp(operation, "after-draw") == 0 ? kCallerRva : 0;
+    return run_checkpoint_inner(operation, directory, selector, 1);
 }
 
 static int run_checkpoint_env(void) {
@@ -346,6 +355,12 @@ int main(int argc, char **argv) {
     }
     if (argc >= 4 && strcmp(argv[1], "--checkpoint") == 0) {
         return run_checkpoint(argv[2], argv[3]);
+    }
+    if (argc >= 3 && strcmp(argv[1], "--checkpoint-any") == 0) {
+        return run_checkpoint_inner("after-draw", argv[2], 0, 1);
+    }
+    if (argc >= 3 && strcmp(argv[1], "--checkpoint-miss") == 0) {
+        return run_checkpoint_inner("after-draw", argv[2], 0x123456, 0);
     }
     if (argc >= 3 && strcmp(argv[1], "--clear-refusal") == 0) {
         return run_clear_refusal(argv[2]);

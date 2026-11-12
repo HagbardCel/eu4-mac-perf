@@ -96,6 +96,17 @@ class GfxLiveDrawTests(unittest.TestCase):
             ran = self._run("--clear-flags", str(flags))
             self.assertEqual(ran.returncode, 2, ran.stderr)
 
+    def test_caller_selector_any_and_miss(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ran = self._run("--checkpoint-any", tmp)
+            self.assertEqual(ran.returncode, 2, ran.stderr)
+            self.assertTrue((Path(tmp) / "checkpoint-after-draw-1.json").is_file())
+        with tempfile.TemporaryDirectory() as tmp:
+            ran = self._run("--checkpoint-miss", tmp)
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+            self.assertIn("checkpoint_miss=1", ran.stdout)
+            self.assertFalse((Path(tmp) / "checkpoint-after-draw-1.json").exists())
+
     def test_partial_scissor_clear_fails_closed_with_reason(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ran = self._run("--clear-refusal", tmp)
