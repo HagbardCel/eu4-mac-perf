@@ -479,6 +479,11 @@ def evidence_integrity_gates(workspace: Path, manifest: dict,
         gates.append(_gate("evidence:manifest", False, "evidence manifest is missing"))
         gates.append(_gate("evidence:policy", False, "evidence manifest is missing"))
         return gates, "inconclusive"
+    if manifest.get("schema") != "eu4-m5-evidence/v1":
+        gates.append(_gate("evidence:manifest", False,
+                           "evidence manifest is malformed or has an unexpected schema"))
+        gates.append(_gate("evidence:policy", False, "evidence manifest is invalid"))
+        return gates, "fail"
     manifest_sha = _sha(manifest_path)
     campaign = _load_json(Path(__file__).resolve().parent / "campaign.json")
     pinned = campaign.get("evidence_manifest_sha256")
@@ -706,33 +711,27 @@ def main(argv: list[str]) -> int:
     manifest = _load_json(manifest_path)
     policy_path = workspace / str((manifest.get("policy") or {}).get("path") or POLICY)
     policy = _load_json(policy_path)
-    campaign = _load_json(Path(__file__).resolve().parent / "campaign.json")
-    if manifest.get("schema") != "eu4-m5-evidence/v1":
-        print(json.dumps({"verdict": "unavailable", "diagnostics": "unexpected M5 manifest schema"}))
-        return 2
-    pinned = campaign.get("evidence_manifest_sha256")
-    manifest_sha = _sha(manifest_path) if manifest_path.is_file() else ""
-    if pinned and pinned != manifest_sha:
-        print(json.dumps({
-            "verdict": "fail",
-            "diagnostics": "evidence manifest digest does not match the campaign pin",
-        }))
-        return 1
 
-    gates: list[dict] = []
     integrity_gates, integrity_status = evidence_integrity_gates(
         workspace, manifest, policy
     )
-    gates.extend(integrity_gates)
-    if integrity_status == "fail":
+    if integrity_status != "ok":
+        diagnostic = "; ".join(
+            gate["detail"] for gate in integrity_gates if not gate["ok"]
+        )
         print(json.dumps({
-            "verdict": "fail",
-            "diagnostics": "M5 evidence integrity failed: " + "; ".join(
-                gate["detail"] for gate in integrity_gates if not gate["ok"]
-            ),
+            "verdict": "inconclusive" if integrity_status == "inconclusive" else "fail",
+            "m5_complete": False,
+            "diagnostics": "M5 evidence is not qualified: " + diagnostic,
             "gates": integrity_gates,
-        }))
+            "sprite_replay_qualified": False,
+            "live_engine_qualified": False,
+            "live_composition_qualified": False,
+            "live_pixels_qualified": False,
+        }, indent=2))
         return 1
+
+    gates: list[dict] = list(integrity_gates)
 
     reference_run = workspace / str((manifest.get("reference") or {}).get("run") or "")
     reference_available = reference_run.is_dir()

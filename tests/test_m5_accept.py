@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import shutil
 import sys
@@ -84,6 +86,57 @@ class M5AcceptanceSemanticsTests(unittest.TestCase):
             self.assertFalse(composition)
             self.assertFalse(pixels)
             self.assertTrue(any(g["name"].startswith("live:") and not g["ok"] for g in gates))
+
+    def _run_main(self, workspace: Path) -> tuple[int, dict]:
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = self.checker.main(["accept.py", str(workspace)])
+        return code, json.loads(output.getvalue())
+
+    def test_main_missing_manifest_is_inconclusive(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="m5-main-missing-") as tmp:
+            code, payload = self._run_main(Path(tmp))
+            self.assertEqual(code, 1)
+            self.assertEqual(payload["verdict"], "inconclusive")
+            self.assertFalse(payload["m5_complete"])
+            self.assertIn("manifest is missing", payload["diagnostics"])
+
+    def test_main_malformed_manifest_is_fail(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="m5-main-malformed-") as tmp:
+            root = Path(tmp)
+            (root / "analysis" / "m5").mkdir(parents=True)
+            (root / "analysis" / "m5" / "evidence-manifest.json").write_text("{bad")
+            code, payload = self._run_main(root)
+            self.assertEqual(code, 1)
+            self.assertEqual(payload["verdict"], "fail")
+            self.assertFalse(payload["m5_complete"])
+
+    def test_main_invalid_schema_is_fail(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="m5-main-schema-") as tmp:
+            root = Path(tmp)
+            (root / "analysis" / "m5").mkdir(parents=True)
+            (root / "analysis" / "m5" / "evidence-manifest.json").write_text(
+                json.dumps({"schema": "not-m5"})
+            )
+            code, payload = self._run_main(root)
+            self.assertEqual(code, 1)
+            self.assertEqual(payload["verdict"], "fail")
+            self.assertFalse(payload["m5_complete"])
+
+    def test_main_digest_mismatch_is_fail(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="m5-main-digest-") as tmp:
+            root = Path(tmp)
+            (root / "analysis" / "m5").mkdir(parents=True)
+            manifest = json.loads(MANIFEST.read_text())
+            manifest["baseline_commit"] = "tampered"
+            (root / "analysis" / "m5" / "evidence-manifest.json").write_text(
+                json.dumps(manifest)
+            )
+            code, payload = self._run_main(root)
+            self.assertEqual(code, 1)
+            self.assertEqual(payload["verdict"], "fail")
+            self.assertFalse(payload["m5_complete"])
+            self.assertIn("digest does not match", payload["diagnostics"])
 
     def test_modified_policy_digest_is_fail(self) -> None:
         with tempfile.TemporaryDirectory(prefix="m5-policy-") as tmp:

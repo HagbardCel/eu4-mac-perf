@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "benchmark"
 HOST_SOURCE = ROOT / "tests" / "gfx_m5_replay_host.mm"
 HOST = BENCH / ".build" / "gfx_m5_replay_host"
+HEADERS = sorted(BENCH.glob("*.h"))
 SOURCES = [
     BENCH / "eu4_gfx_shader.mm",
     BENCH / "eu4_gfx_buffers.mm",
@@ -39,14 +40,20 @@ class ReplayError(RuntimeError):
     pass
 
 
+def _cache_current(host: Path, dependencies: list[Path]) -> bool:
+    if not host.is_file():
+        return False
+    present = [path for path in dependencies if path.is_file()]
+    if not present:
+        return False
+    newest = max(path.stat().st_mtime for path in present)
+    return host.stat().st_mtime >= newest
+
+
 def build_host(force: bool = False) -> Path:
-    if not force and HOST.is_file():
-        newest = max(
-            [HOST_SOURCE, *SOURCES, Path(__file__)],
-            key=lambda path: path.stat().st_mtime,
-        )
-        if HOST.stat().st_mtime >= newest.stat().st_mtime:
-            return HOST
+    dependencies = [HOST_SOURCE, *SOURCES, *HEADERS, Path(__file__)]
+    if not force and _cache_current(HOST, dependencies):
+        return HOST
     HOST.parent.mkdir(parents=True, exist_ok=True)
     command = [
         "clang",

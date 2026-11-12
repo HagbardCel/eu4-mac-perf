@@ -1,9 +1,11 @@
-"""M5 sprite operation: live-Metal replay, exact comparison and refusal tests.
+"""M5 sprite operation: exact seeded replay, bounds and refusal tests.
 
-The live engine cannot yet reach the second loading frame, so these tests use
-the deterministic replay boundary with the local authentic original-GL capture.
-They skip when that operator-local evidence is absent, like the other live
-graphics tests in this repository.
+The authentic engine now reaches and GPU-completes the sprite draw. These tests
+use the deterministic offline replay as the exact isolated pixel qualification
+with the local authentic original-GL capture. Full live-scene framebuffer
+equivalence is not yet established because the preceding loading-screen
+background producer is not reconstructed. They skip when that operator-local
+evidence is absent, like the other live graphics tests in this repository.
 """
 
 from __future__ import annotations
