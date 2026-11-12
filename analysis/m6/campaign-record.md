@@ -168,3 +168,35 @@ compositing).
 Live Metal execution of the menu is not yet implemented; the live backend
 currently admits only the M4/M5 effects. This is the next major workstream after
 the offline differential closes.
+
+## Full-frame equivalence passed (2026-11-12)
+
+The enum-parsing fix (sampler/state enums are JSON strings) closed the frame:
+
+| Measure | Value |
+| --- | --- |
+| Pixels | 1,930,176 |
+| Differing | 0 |
+| Max channel error | 0 |
+| Metal frame SHA-256 | `c3dab19c…` (equal to the GL reference) |
+| Determinism | two runs, identical digests |
+
+Per-draw isolation (`--pre-post-callers` capture + `--seed-marked` replay +
+`m6_frame isolate`) is committed as a reusable diagnostic; it now matches every
+marked draw exactly.
+
+## Live path progress (same day)
+
+- Runtime shader cache (`gfx-shader-cache/v1`) keyed by the engine's exact
+  compiler-input SHA-256 (the GL source with the texture-LOD extension line
+  replaced by the engine's `NO_SHADER_TEXTURE_LOD` define); `translate-live`
+  builds the cache from captured live compiler inputs.
+- Live probe: 35 menu stages load, the title scene's shaders admit (legacy
+  Simple/sprite precedence preserved).
+- Generic live encoder (`eu4_gfx_generic_draw`) executes engine draws through
+  the translated MSL: vertex layout from the engine element table, uniform
+  packing from the constant slots, texture units, blend snapshot, arrays and
+  indexed draws.
+- Texture formats 15/16 (alpha/luminance) reconstructed.
+- Blocked next: live render targets, sampler decode, non-default raster/blend,
+  depth attachment. Then three clean menu starts.

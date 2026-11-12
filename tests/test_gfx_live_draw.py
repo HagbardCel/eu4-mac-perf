@@ -27,6 +27,7 @@ SOURCES = [
     ROOT / "benchmark" / "eu4_gfx_draw_encode.mm",
     ROOT / "benchmark" / "eu4_gfx_draw_capture.c",
     ROOT / "benchmark" / "eu4_gfx_draw_route.mm",
+    ROOT / "benchmark" / "eu4_gfx_generic_draw.mm",
     ROOT / "benchmark" / "eu4_gfx_logical_capture.mm",
     ROOT / "benchmark" / "eu4_gfx_checkpoint.mm",
     ROOT / "benchmark" / "eu4_metal_events.c",

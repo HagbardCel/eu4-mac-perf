@@ -610,6 +610,66 @@ def translate_trace(frame_dir: Path, out_dir: Path) -> dict:
     return report
 
 
+def translate_live_sources(source_dir: Path, out_dir: Path,
+                           existing: Path | None = None) -> dict:
+    """Translates the engine's own compiler inputs into the runtime cache.
+
+    The live backend writes every _GfxAddVertexShader/_GfxAddPixelShader source
+    verbatim (`shader-source-<stage>-<sha>.glsl`). Those bytes are the compiler
+    input, so their SHA-256 is the cache key; no normalization is needed.
+    Existing entries (with captured attribute locations) win on a hash match.
+    """
+    source_dir = Path(source_dir)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stages: dict[str, dict] = {}
+    if existing is not None:
+        try:
+            prior = json.loads(Path(existing).read_text())
+        except (OSError, json.JSONDecodeError):
+            prior = {}
+        for key, entry in (prior.get("stages") or {}).items():
+            if isinstance(entry, dict):
+                stages[key] = entry
+                msl = entry.get("msl_file")
+                if msl:
+                    src = Path(existing).parent / msl
+                    dst = out_dir / msl
+                    if src.is_file() and not dst.exists():
+                        shutil.copyfile(src, dst)
+    translated = 0
+    failed = []
+    for path in sorted(source_dir.glob("shader-source-*.glsl")):
+        name = path.name
+        if "-vs-" in name:
+            stage = "vertex"
+        elif "-ps-" in name:
+            stage = "pixel"
+        else:
+            continue
+        text = path.read_text()
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        if digest in stages:
+            continue
+        try:
+            record = translate_stage(text, stage, out_dir, digest, None, None)
+        except TranslationError as exc:
+            failed.append({"file": name, "error": str(exc)})
+            continue
+        stages[digest] = record
+        translated += 1
+    report = {
+        "schema": "gfx-shader-cache/v1",
+        "source": str(source_dir),
+        "stages": stages,
+        "programs": {},
+        "translated": translated,
+        "failed": failed,
+    }
+    (out_dir / "shader-cache.json").write_text(json.dumps(report, indent=2) + "\n")
+    return report
+
+
 def write_shader_cache(report: dict, out_dir: Path) -> dict:
     """Emits the runtime shader cache used by the live Metal backend.
 
@@ -672,6 +732,26 @@ def write_shader_cache(report: dict, out_dir: Path) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "translate-live":
+        parser = argparse.ArgumentParser(prog="gfx_shader_translate translate-live")
+        parser.add_argument("--sources", required=True)
+        parser.add_argument("--out", required=True)
+        parser.add_argument("--merge", default=None)
+        args = parser.parse_args(argv[1:])
+        report = translate_live_sources(
+            Path(args.sources).expanduser().resolve(),
+            Path(args.out).expanduser().resolve(),
+            Path(args.merge).expanduser().resolve() if args.merge else None,
+        )
+        print(json.dumps({
+            "status": "ok" if not report["failed"] else "partial",
+            "stages": len(report["stages"]),
+            "translated": report["translated"],
+            "failed": report["failed"][:5],
+            "out": str(Path(args.out).expanduser().resolve()),
+        }, indent=2))
+        return 0 if not report["failed"] else 1
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--frame", required=True)
     parser.add_argument("--out")
@@ -699,7 +779,6 @@ def main(argv: list[str] | None = None) -> int:
     }
     print(json.dumps(summary, indent=2))
     return 0 if report["ok"] else 2
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

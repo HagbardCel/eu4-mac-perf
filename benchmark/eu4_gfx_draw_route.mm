@@ -1,6 +1,8 @@
 #import "eu4_gfx_draw_route.h"
 
 #import "eu4_gfx_draw_encode.h"
+#import "eu4_gfx_generic_draw.h"
+#import "eu4_gfx_shader.h"
 
 #import "eu4_gfx_checkpoint.h"
 #import "eu4_gfx_init.h"
@@ -61,11 +63,9 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
     if (raw == NULL) {
         return refuse(EU4_GFX_DRAW_ROUTE_FAILED, diagnostic, capacity, "null draw frame");
     }
-    if (raw->which != 1) {
+    if (raw->which != 1 && raw->which != 2 && raw->which != 3) {
         return refuse(EU4_GFX_DRAW_ROUTE_UNSUPPORTED, diagnostic, capacity,
-                      raw->which == 2
-                          ? "_GfxDrawIndexed is not encoded by the live dispatcher"
-                          : "_GfxDrawIndexedInstanced is not encoded by the live dispatcher");
+                      "unknown draw variant");
     }
 
     const uint8_t *handle = (const uint8_t *)(uintptr_t)raw->rdi;
@@ -138,15 +138,59 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
                       "backend queue refused a command buffer");
     }
     char text[256];
-    eu4_gfx_draw_encode_result encoded = eu4_gfx_draw_encode_into(
-        (const void *)handle, (int32_t)raw->rsi, (int32_t)raw->rdx, &inputs,
-        (__bridge void *)command, text, sizeof text, state);
-    if (encoded != EU4_GFX_DRAW_ENCODE_OK) {
-        return refuse(encoded == EU4_GFX_DRAW_ENCODE_UNSUPPORTED
-                          ? EU4_GFX_DRAW_ROUTE_UNSUPPORTED
-                          : EU4_GFX_DRAW_ROUTE_FAILED,
-                      diagnostic, capacity,
-                      text[0] != 0 ? text : "draw encoder refused the draw");
+    void *current_shader = load_ptr(master, 0x70);
+    if (eu4_gfx_shader_is_generic(current_shader)) {
+        int32_t count32 = (int32_t)raw->rsi;
+        eu4_gfx_generic_call call = {0};
+        call.instance_count = 1;
+        if (raw->which == 1) {
+            call.indexed = 0;
+            if (count32 <= 0) {
+                count32 = (int32_t)load_u32(master, 0x64);
+            }
+            call.count = count32;
+            call.first = (int32_t)raw->rdx;
+        } else if (raw->which == 2) {
+            call.indexed = 1;
+            if (count32 <= 0) {
+                count32 = (int32_t)load_u32(master, 0x68);
+            }
+            call.count = count32;
+            call.base_vertex = (int32_t)raw->rcx;
+        } else {
+            call.indexed = 1;
+            if (count32 <= 0) {
+                count32 = (int32_t)load_u32(master, 0x68);
+            }
+            call.count = count32;
+            call.instance_count = (int32_t)raw->rdx > 0 ? (int32_t)raw->rdx : 1;
+        }
+        const char *generic_reason = NULL;
+        if (!eu4_gfx_generic_draw_encode_into((const void *)handle, &call, &inputs,
+                                              (__bridge void *)command,
+                                              &generic_reason, state)) {
+            return refuse(EU4_GFX_DRAW_ROUTE_UNSUPPORTED, diagnostic, capacity,
+                          generic_reason != NULL && generic_reason[0] != 0
+                              ? generic_reason
+                              : "generic encoder refused the draw");
+        }
+    } else {
+        if (raw->which != 1) {
+            return refuse(EU4_GFX_DRAW_ROUTE_UNSUPPORTED, diagnostic, capacity,
+                          raw->which == 2
+                              ? "_GfxDrawIndexed has no admitted encoder for this shader"
+                              : "_GfxDrawIndexedInstanced has no admitted encoder for this shader");
+        }
+        eu4_gfx_draw_encode_result encoded = eu4_gfx_draw_encode_into(
+            (const void *)handle, (int32_t)raw->rsi, (int32_t)raw->rdx, &inputs,
+            (__bridge void *)command, text, sizeof text, state);
+        if (encoded != EU4_GFX_DRAW_ENCODE_OK) {
+            return refuse(encoded == EU4_GFX_DRAW_ENCODE_UNSUPPORTED
+                              ? EU4_GFX_DRAW_ROUTE_UNSUPPORTED
+                              : EU4_GFX_DRAW_ROUTE_FAILED,
+                          diagnostic, capacity,
+                          text[0] != 0 ? text : "draw encoder refused the draw");
+        }
     }
     [command commit];
     /* pendingGameCommand now owns the last game submission. It is still one

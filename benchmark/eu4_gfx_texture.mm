@@ -59,17 +59,33 @@ static uint32_t mip_capacity(uint32_t width, uint32_t height) {
     return count;
 }
 
-static int block_span(uint32_t width, uint32_t height, uint32_t *span) {
+/* S3TC block size in bytes: DXT1 = 8, DXT3/DXT5 = 16. */
+static uint32_t block_bytes_for(uint32_t format) {
+    switch (format) {
+        case 1: /* DXT1 */
+        case 2: /* DXT1 sRGB */
+            return 8;
+        case 3: /* DXT3 */
+        case 4: /* DXT3 sRGB */
+        case 5: /* DXT5 */
+        case 6: /* DXT5 sRGB */
+            return 16;
+        default:
+            return 0;
+    }
+}
+
+static int block_span(uint32_t width, uint32_t height, uint32_t block, uint32_t *span) {
     uint32_t blocks_wide = (width + 3) / 4;
     uint32_t blocks_high = (height + 3) / 4;
     if (blocks_wide == 0 || blocks_high > UINT32_MAX / blocks_wide) {
         return -1;
     }
     uint32_t blocks = blocks_wide * blocks_high;
-    if (blocks > UINT32_MAX / 16) {
+    if (block == 0 || blocks > UINT32_MAX / block) {
         return -1;
     }
-    uint32_t bytes = blocks * 16;
+    uint32_t bytes = blocks * block;
     if (bytes > (uint32_t)INT_MAX) {
         return -1;
     }
@@ -137,23 +153,26 @@ static int validate(void *header, const void *desc, const void *images, uint32_t
     }
     tex_desc info;
     memcpy(&info, desc, sizeof info);
-    if (info.kind == 1) {
-        return EU4_GFX_TEX_CUBEMAP;
-    }
-    if (info.kind != 0) {
+    int cube = info.kind == 1;
+    if (!cube && info.kind != 0) {
         return EU4_GFX_TEX_FORMAT;
     }
-    int compressed_bc3 = info.format == 5;
-    if (info.format >= 1 && info.format <= 7 && !compressed_bc3) {
-        return EU4_GFX_TEX_COMPRESSED;
+    if (cube && info.width != info.height) {
+        return EU4_GFX_TEX_CUBEMAP;
     }
+    uint32_t block = block_bytes_for(info.format);
+    int compressed = block != 0;
     int bgra = info.format == 0xb || info.format == 0xd;
     int srgb = info.format == 0xc || info.format == 0xe;
     int bgr = info.format == 9;
-    if (!compressed_bc3 && !bgra && !srgb && !bgr) {
+    int luminance = info.format == 16; /* GL_LUMINANCE8 */
+    int alpha_only = info.format == 15; /* GL_ALPHA8 */
+    int floating = info.format >= 17 && info.format <= 23;
+    if (!compressed && !bgra && !srgb && !bgr && !luminance && !alpha_only &&
+        !floating) {
         return EU4_GFX_TEX_FORMAT;
     }
-    if (!compressed_bc3 && (info.format < 7 || info.format > 23)) {
+    if (!compressed && (info.format < 7 || info.format > 23)) {
         return EU4_GFX_TEX_FORMAT;
     }
     if (info.width == 0 || info.height == 0 || info.width > 16384 || info.height > 16384) {
@@ -164,7 +183,7 @@ static int validate(void *header, const void *desc, const void *images, uint32_t
     }
     uint32_t raw_mips = info.mips;
     uint32_t mips = raw_mips == 0 ? 1 : raw_mips;
-    if (compressed_bc3 && mips > mip_capacity(info.width, info.height)) {
+    if (compressed && mips > mip_capacity(info.width, info.height)) {
         return EU4_GFX_TEX_LEVEL;
     }
     const tex_image *records = (const tex_image *)images;
@@ -172,7 +191,7 @@ static int validate(void *header, const void *desc, const void *images, uint32_t
         if (records[i].level >= 16) {
             return EU4_GFX_TEX_LEVEL;
         }
-        if (compressed_bc3) {
+        if (compressed && !cube) {
             if (records[i].level >= mips) {
                 return EU4_GFX_TEX_LEVEL;
             }
@@ -180,14 +199,14 @@ static int validate(void *header, const void *desc, const void *images, uint32_t
             mips = records[i].level + 1;
         }
     }
-    if (!compressed_bc3 && mips > 16) {
+    if (!compressed && mips > 16) {
         return EU4_GFX_TEX_LEVEL;
     }
-    uint32_t bpp = compressed_bc3 ? 1 : kBytes[info.format - 7];
+    uint32_t bpp = compressed ? 1 : kBytes[info.format - 7];
     for (uint32_t i = 0; i < count; i++) {
         uint32_t expect_w = mip_size(info.width, records[i].level);
         uint32_t expect_h = mip_size(info.height, records[i].level);
-        if (records[i].face != 0) {
+        if (records[i].face > (cube ? 5u : 0u)) {
             free_staged(staged, i);
             return EU4_GFX_TEX_FORMAT;
         }
@@ -197,9 +216,10 @@ static int validate(void *header, const void *desc, const void *images, uint32_t
         }
         uint8_t *copy = NULL;
         int staged_status;
-        if (compressed_bc3) {
+        if (compressed) {
             uint32_t span = 0;
-            if (block_span(records[i].width, records[i].height, &span) != 0 || records[i].bytes != span) {
+            if (block_span(records[i].width, records[i].height, block, &span) != 0 ||
+                records[i].bytes != span) {
                 free_staged(staged, i);
                 return EU4_GFX_TEX_SIZE;
             }
@@ -220,9 +240,11 @@ static int validate(void *header, const void *desc, const void *images, uint32_t
     bytes[0x18] = 0;
     bytes[0x19] = 0;
     bytes[0x1a] = 0;
-    if (compressed_bc3) {
-        /* Ordinal 5 writes only the DXT5 internal format. +0x20 and +0x24 stay put. */
-        write_u32(bytes, 0x1c, 0x83f3);
+    if (compressed) {
+        /* The engine writes only the S3TC internal format; +0x20/+0x24 stay put. */
+        static const uint32_t compressed_internal[7] = {
+            0, 0x83f1, 0x8c4d, 0x83f2, 0x8c4e, 0x83f3, 0x8c4f};
+        write_u32(bytes, 0x1c, compressed_internal[info.format]);
     } else {
         uint32_t internal = bgra ? 0x8058 : 0x8c43;
         uint32_t gl_format = 0x80e1;
@@ -240,7 +262,7 @@ static int validate(void *header, const void *desc, const void *images, uint32_t
     write_u32(bytes, 0x34, bpp);
     write_u32(bytes, 0x38, info.width);
     write_u32(bytes, 0x3c, info.height);
-    write_u32(bytes, 0x40, compressed_bc3 ? raw_mips : mips);
+    write_u32(bytes, 0x40, compressed ? raw_mips : mips);
     return EU4_GFX_TEX_OK;
 }
 
@@ -286,9 +308,13 @@ int eu4_gfx_texture_make(void *device, void *header, const void *desc, const voi
     memcpy(&height, (uint8_t *)header + 0x2c, 4);
     memcpy(&format, (uint8_t *)header + 0x30, 4);
     memcpy(&mips, (uint8_t *)header + 0x40, 4);
-    int compressed_bc3 = format == 5;
+    uint32_t block = block_bytes_for(format);
+    int compressed = block != 0;
+    uint32_t kind = 0;
+    memcpy(&kind, (const uint8_t *)desc + 0x10, 4);
+    int cube = kind == 1;
     uint32_t level_count = mips;
-    if (compressed_bc3) {
+    if (compressed) {
         uint32_t raw = 0;
         memcpy(&raw, (const uint8_t *)desc + 8, 4);
         level_count = raw == 0 ? 1 : raw;
@@ -297,14 +323,56 @@ int eu4_gfx_texture_make(void *device, void *header, const void *desc, const voi
             return EU4_GFX_TEX_METAL;
         }
     }
-    MTLPixelFormat pixel = compressed_bc3 ? MTLPixelFormatBC3_RGBA
-                           : format == 9   ? MTLPixelFormatRGBA8Unorm
-                           : (format == 0xc || format == 0xe) ? MTLPixelFormatBGRA8Unorm_sRGB
-                                                              : MTLPixelFormatBGRA8Unorm;
-    MTLTextureDescriptor *metal = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pixel
-                                                                                     width:width
-                                                                                    height:height
-                                                                                 mipmapped:level_count > 1];
+    if (cube) {
+        const tex_image *cube_records = (const tex_image *)images;
+        uint32_t levels = 1;
+        for (uint32_t i = 0; i < count; i++) {
+            if (cube_records[i].level + 1 > levels) {
+                levels = cube_records[i].level + 1;
+            }
+        }
+        level_count = levels;
+    }
+    MTLPixelFormat pixel;
+    if (compressed) {
+        switch (format) {
+            case 1: pixel = MTLPixelFormatBC1_RGBA; break;
+            case 2: pixel = MTLPixelFormatBC1_RGBA_sRGB; break;
+            case 3: pixel = MTLPixelFormatBC2_RGBA; break;
+            case 4: pixel = MTLPixelFormatBC2_RGBA_sRGB; break;
+            case 5: pixel = MTLPixelFormatBC3_RGBA; break;
+            case 6: pixel = MTLPixelFormatBC3_RGBA_sRGB; break;
+            default: pixel = MTLPixelFormatBC3_RGBA; break;
+        }
+    } else if (format == 9) {
+        pixel = MTLPixelFormatRGBA8Unorm;
+    } else if (format == 16 || format == 15) {
+        pixel = MTLPixelFormatBGRA8Unorm;
+    } else if (format == 0xc || format == 0xe) {
+        pixel = MTLPixelFormatBGRA8Unorm_sRGB;
+    } else if (format == 17) {
+        pixel = MTLPixelFormatR16Float;
+    } else if (format == 18) {
+        pixel = MTLPixelFormatRG16Float;
+    } else if (format == 19) {
+        pixel = MTLPixelFormatRGBA16Float;
+    } else if (format == 20) {
+        pixel = MTLPixelFormatR32Float;
+    } else if (format == 21) {
+        pixel = MTLPixelFormatRG32Float;
+    } else if (format == 22 || format == 23) {
+        pixel = MTLPixelFormatRGBA32Float;
+    } else {
+        pixel = MTLPixelFormatBGRA8Unorm;
+    }
+    MTLTextureDescriptor *metal = cube
+        ? [MTLTextureDescriptor textureCubeDescriptorWithPixelFormat:pixel
+                                                                size:width
+                                                           mipmapped:level_count > 1]
+        : [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pixel
+                                                             width:width
+                                                            height:height
+                                                         mipmapped:level_count > 1];
     metal.mipmapLevelCount = level_count;
     metal.usage = MTLTextureUsageShaderRead;
     metal.storageMode = MTLStorageModeShared;
@@ -317,8 +385,16 @@ int eu4_gfx_texture_make(void *device, void *header, const void *desc, const voi
     for (uint32_t i = 0; i < count; i++) {
         const uint8_t *upload = staged[i];
         uint8_t *expanded = NULL;
-        NSUInteger row = compressed_bc3 ? (NSUInteger)((records[i].width + 3) / 4) * 16
-                                        : (NSUInteger)records[i].width * 4;
+        NSUInteger row;
+        if (compressed) {
+            row = (NSUInteger)((records[i].width + 3) / 4) * block;
+        } else if (format == 9 || format == 15 || format == 16) {
+            row = (NSUInteger)records[i].width * 4; /* expanded to BGRA8 */
+        } else if (format == 22) {
+            row = (NSUInteger)records[i].width * 16; /* expanded to RGBA32F */
+        } else {
+            row = (NSUInteger)records[i].width * kBytes[format - 7];
+        }
         if (format == 9) {
             expanded = expand_bgr(staged[i], records[i].width, records[i].height);
             if (expanded == NULL) {
@@ -326,11 +402,61 @@ int eu4_gfx_texture_make(void *device, void *header, const void *desc, const voi
                 return EU4_GFX_TEX_PIXELS;
             }
             upload = expanded;
+        } else if (format == 22) {
+            /* Metal has no RGB32Float; expand to RGBA32Float with alpha 1. */
+            size_t pixels = (size_t)records[i].width * records[i].height;
+            expanded = (uint8_t *)malloc(pixels * 16);
+            if (expanded == NULL) {
+                free_staged(staged, count);
+                return EU4_GFX_TEX_PIXELS;
+            }
+            for (size_t p = 0; p < pixels; p++) {
+                memcpy(expanded + p * 16, staged[i] + p * 12, 12);
+                float one = 1.0f;
+                memcpy(expanded + p * 16 + 12, &one, 4);
+            }
+            upload = expanded;
+            row = (NSUInteger)records[i].width * 16;
+        } else if (format == 16 || format == 15) {
+            /* GL LUMINANCE samples (l,l,l,1); GL ALPHA samples (0,0,0,a).
+               Metal has no luminance/alpha-only colour format, so expand to
+               BGRA8 with exactly those component values before upload. */
+            size_t pixels = (size_t)records[i].width * records[i].height;
+            expanded = (uint8_t *)malloc(pixels * 4);
+            if (expanded == NULL) {
+                free_staged(staged, count);
+                return EU4_GFX_TEX_PIXELS;
+            }
+            for (size_t p = 0; p < pixels; p++) {
+                uint8_t value = staged[i][p];
+                if (format == 16) {
+                    expanded[p * 4 + 0] = value;
+                    expanded[p * 4 + 1] = value;
+                    expanded[p * 4 + 2] = value;
+                    expanded[p * 4 + 3] = 255;
+                } else {
+                    expanded[p * 4 + 0] = 0;
+                    expanded[p * 4 + 1] = 0;
+                    expanded[p * 4 + 2] = 0;
+                    expanded[p * 4 + 3] = value;
+                }
+            }
+            upload = expanded;
+            row = (NSUInteger)records[i].width * 4;
         }
-        [texture replaceRegion:MTLRegionMake2D(0, 0, records[i].width, records[i].height)
-                   mipmapLevel:records[i].level
-                     withBytes:upload
-                   bytesPerRow:row];
+        if (cube) {
+            [texture replaceRegion:MTLRegionMake2D(0, 0, records[i].width, records[i].height)
+                       mipmapLevel:records[i].level
+                             slice:records[i].face
+                         withBytes:upload
+                       bytesPerRow:row
+                     bytesPerImage:row * records[i].height];
+        } else {
+            [texture replaceRegion:MTLRegionMake2D(0, 0, records[i].width, records[i].height)
+                       mipmapLevel:records[i].level
+                         withBytes:upload
+                       bytesPerRow:row];
+        }
         free(expanded);
     }
     free_staged(staged, count);
@@ -457,6 +583,8 @@ void eu4_gfx_set_textures(void *handle, unsigned count, void *textures, unsigned
     (void)samplers;
     if (handle == NULL || textures == NULL || count == 0 || (flags & 1u) == 0 ||
         base_unit != 0) {
+        /* Offset texture units are not reconstructed yet; the engine's title
+           scene binds from unit 0. */
         return;
     }
     void *master = NULL;
@@ -476,6 +604,20 @@ void eu4_gfx_set_textures(void *handle, unsigned count, void *textures, unsigned
         memcpy(&header, (uint8_t *)master + 0x98, sizeof header);
     }
     backend.boundTexture0 = header;
+    if (backend.boundTextures == nil) {
+        backend.boundTextures = [NSMutableArray array];
+    }
+    [backend.boundTextures removeAllObjects];
+    const void *const *list = (const void *const *)textures;
+    unsigned limit = count > 16 ? 16 : count;
+    for (unsigned unit = 0; unit < limit; unit++) {
+        void *entry = NULL;
+        memcpy(&entry, list + unit, sizeof entry);
+        if (entry == NULL) {
+            memcpy(&entry, (uint8_t *)master + 0x98, sizeof entry);
+        }
+        [backend.boundTextures addObject:[NSValue valueWithPointer:entry]];
+    }
 }
 
 void *eu4_gfx_bound_texture(void) {

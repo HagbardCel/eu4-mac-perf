@@ -1,0 +1,50 @@
+#ifndef EU4_GFX_GENERIC_DRAW_H
+#define EU4_GFX_GENERIC_DRAW_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#include "eu4_gfx_simple_draw.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Generic live encoder for shaders admitted from the translated runtime cache.
+ *
+ * The encoder reads the same engine state the original _GfxDraw* bodies read
+ * (master mode/count, current shader, vertex-buffer element table, constant
+ * slots, bound textures, blend/depth/raster snapshots) and encodes the draw
+ * through the MSL functions of the cached shader. It never selects by caller
+ * RVA and has no scene-specific branches. */
+
+typedef struct {
+    int indexed;          /* 1 for _GfxDrawIndexed / Instanced */
+    int32_t count;        /* index count when indexed, vertex count otherwise */
+    int32_t first;        /* first vertex for arrays */
+    int32_t base_vertex;  /* glDrawElementsBaseVertex base */
+    int32_t instance_count;
+} eu4_gfx_generic_call;
+
+/* Encodes one draw into a caller-owned command buffer. Returns 1 on success.
+ * On failure it writes a reason and returns 0. */
+int eu4_gfx_generic_draw_encode_into(const void *immediate_context,
+                                     const eu4_gfx_generic_call *call,
+                                     const eu4_gfx_simple_draw_inputs *inputs,
+                                     void *command_buffer, const char **reason,
+                                     eu4_gfx_simple_draw_state *state);
+
+/* 1 when this draw has everything the generic encoder needs; otherwise writes
+ * the reason. No Metal objects are created. */
+int eu4_gfx_generic_draw_supported(const void *immediate_context,
+                                   const eu4_gfx_generic_call *call,
+                                   char *reason, size_t capacity);
+
+/* Number of draws encoded by this module (diagnostics). */
+uint64_t eu4_gfx_generic_draw_count(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

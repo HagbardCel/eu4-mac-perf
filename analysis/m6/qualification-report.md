@@ -1,8 +1,10 @@
 # M6 qualification report — complete title/main-menu frame (interim)
 
-Status: **reference and full-frame replay established; full-frame equivalence
-not yet closed.** This report records the current evidence so the campaign can
-resume at the exact remaining discrepancy. It does not claim M6 completion.
+Status: **full-frame pixel equivalence passed.** The complete authentic
+title/main-menu frame replays through the reconstructed Metal backend with zero
+differing pixels under the exact comparison policy. Live in-game Metal
+presentation of the title scene is the remaining M6 workstream and is recorded
+separately below.
 
 ## Reference scene
 
@@ -48,38 +50,48 @@ readback of the engine logical extent (1728 x 1117 BGRA8).
 | Metric | Value |
 | --- | --- |
 | Pixels | 1,930,176 |
-| Exact pixels | 1,910,472 (98.95%) |
-| Mismatched | 20,343 (1.05%) |
-| Max channel error | 121 |
-| Mean max-channel error | 0.178 |
-| Mean absolute error (B,G,R,A) | 0.106, 0.133, 0.132, 0.027 |
-| Alpha | compared; means 252.05 (GL) vs 252.17 (Metal) |
+| Exact pixels | 1,930,176 (100%) |
+| Mismatched | 0 |
+| Max channel error | 0 |
+| Mean max-channel error | 0 |
+| Mean absolute error (B,G,R,A) | 0, 0, 0, 0 |
+| Alpha | compared; equal |
+| Replay determinism | two independent runs produce the reference SHA-256 |
 
-The mismatch is **localized**: the whole frame is exact except the bottom
-frontend button band (`Single Player` / `Multiplayer` / `Tutorial` / `Credits` /
-`Options` region, framebuffer y 8..68, x 696..1031). The map, logo, panels and
-remaining UI are pixel-identical. The diff is a smooth low-magnitude difference
-across the two `buttonstate` quads plus their labels, with individual glyph
-pixels up to 121.
+The Metal readback is byte-identical to the original-GL `GL_BACK` reference:
+Metal `metal-frame.bgra` SHA-256 equals the GL reference digest
+`c3dab19c…`. The remaining discrepancy was traced to a state-decoding bug:
+recorded GL enums are JSON strings, and the replay's numeric-only helper fell
+back to linear filtering for every sampler. Parsing both string and numeric
+forms selects the captured filter/wrap/compare state and closes the frame
+exactly.
 
-## Remaining blocker (next action)
+## Isolated draw evidence (reusable capability)
 
-Localize the button-band difference. Current evidence:
+The frame tracer can capture per-draw pre/post target images for selected
+callers, and the replay can seed a marked draw with its authentic GL pre-image
+and read the isolated result back. This separates one draw's contribution from
+the rest of the frame and is independent of the title scene:
 
-- The `buttonstate` draws (program 43, callers `0x15048ba`) use a 168x63 RGBA8
-  texture with nearest min/mag and alpha blending over the map.
-- The same font shader renders other labels exactly, so the font stage itself is
-  not globally wrong; the band difference is consistent with the button quad's
-  sampled texels (a sub-texel/pixel offset or blend-precision difference).
-- Next diagnostics: capture the pre-draw target image for the selected button
-  draw (per-draw pre-image option), replay it seeded with that authentic prior
-  content, and compare the isolated contribution; that separates quad sampling
-  from compositing.
+| Draw | Program | Result before the enum fix | Result after |
+| --- | --- | --- | --- |
+| 348 | font (texture 7) | 0 differing pixels | 0 |
+| 354 / 357 / 359 / 361 / 365 | font | 2.5k-6.5k differing | 0 (full-frame) |
+| 362 / 363 | buttonstate | ~10k differing | 0 (full-frame) |
+
+## Live execution status (remaining M6 workstream)
+
+- Runtime shader cache loading and exact compiler-input admission work: a live
+  probe loads the cache, admits the title scene's stages, and keeps the existing
+  Simple/sprite identity dispatch.
+- The generic live encoder executes real engine draws through the translated
+  MSL (a font draw reached, encoded, GPU completed, pixels captured).
+- Texture format 16 (GL_LUMINANCE8) and 15 (GL_ALPHA8) are now reconstructed by
+  expanding to BGRA8 with the exact GL component semantics.
+- Not yet done: live render targets, sampler state decode, non-default blend and
+  raster descriptors, depth attachment, and three clean menu starts.
 
 ## Not yet done
 
-- Full-frame equivalence has not passed the committed policy.
-- Live EU4 Metal execution of the menu (three clean starts) has not been
-  implemented/validated; the current live backend still admits only the
-  M4/M5 effects.
-- The campaign checker and final evidence manifest are not yet written.
+- Live EU4 Metal execution of the title scene (three clean starts).
+- The campaign checker, final evidence manifest and PR set.

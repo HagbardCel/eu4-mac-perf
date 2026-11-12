@@ -1,6 +1,11 @@
 #import "eu4_gfx_buffers.h"
 #import "eu4_gfx_init.h"
-#import "eu4_gfx_shader.h"
+
+/* Hosts that link this file without the shader module must still link; the
+   runtime cache is optional for the lifecycle-only diagnostics, so it is
+   resolved at run time instead of creating a link-time reference. */
+#include <dlfcn.h>
+typedef int (*eu4_gfx_cache_loader)(const char *path);
 #import "eu4_gfx_logical_capture.h"
 #import "eu4_gfx_checkpoint.h"
 #import "eu4_metal_events.h"
@@ -1115,8 +1120,10 @@ void *eu4_gfx_init(void *handle, uint8_t *success) {
     g_phase = 2;
     {
         const char *cache = getenv("EU4_GFX_SHADER_CACHE");
-        if (cache != NULL && cache[0] != 0) {
-            int loaded = eu4_gfx_shader_load_cache(cache);
+        eu4_gfx_cache_loader load_cache =
+            (eu4_gfx_cache_loader)dlsym(RTLD_DEFAULT, "eu4_gfx_shader_load_cache");
+        if (cache != NULL && cache[0] != 0 && load_cache != NULL) {
+            int loaded = load_cache(cache);
             char body[256];
             int length = snprintf(
                 body, sizeof body,
@@ -1990,7 +1997,56 @@ eu4_gfx_clear_status eu4_gfx_set_render_target_checked(void *handle, void *targe
     return EU4_GFX_CLEAR_OK;
 }
 
+static void dump_render_target(void *master, void *target) {
+    if (target == NULL) {
+        return;
+    }
+    uint8_t bytes[0x80];
+    memset(bytes, 0, sizeof bytes);
+    memcpy(bytes, target, sizeof bytes);
+    char hex[0x80 * 2 + 1];
+    static const char digits[] = "0123456789abcdef";
+    for (int i = 0; i < 0x80; i++) {
+        hex[i * 2] = digits[bytes[i] >> 4];
+        hex[i * 2 + 1] = digits[bytes[i] & 0xf];
+    }
+    hex[0x80 * 2] = 0;
+    char body[1024];
+    int length = snprintf(
+        body, sizeof body,
+        "{\"schema\":\"gfx-render-target/v1\",\"target\":\"%p\",\"master\":\"%p\","
+        "\"fbo_name\":%u,\"width\":%u,\"height\":%u,\"bytes\":\"%s\","
+        "\"qwords\":[\"%p\",\"%p\",\"%p\",\"%p\",\"%p\",\"%p\",\"%p\",\"%p\"],"
+        "\"pid\":%d}\n",
+        target, master, load_u32(bytes, 0xc), load_u32(bytes, 0x28),
+        load_u32(bytes, 0x2c), hex,
+        load_ptr(bytes, 0), load_ptr(bytes, 8), load_ptr(bytes, 0x10),
+        load_ptr(bytes, 0x18), load_ptr(bytes, 0x20), load_ptr(bytes, 0x28),
+        load_ptr(bytes, 0x30), load_ptr(bytes, 0x38), (int)getpid());
+    if (length > 0 && (size_t)length < sizeof body) {
+        (void)eu4_metal_events_write("render-target.json", body);
+    }
+}
+
 void eu4_gfx_set_render_target(void *handle, void *target) {
+    if (target != NULL) {
+        void *master = NULL;
+        if (handle != NULL) {
+            memcpy(&master, handle, sizeof master);
+        }
+        dump_render_target(master, target);
+        if (master != NULL) {
+            uint8_t *bytes = (uint8_t *)master;
+            uint32_t width = 0, height = 0;
+            memcpy(&width, (uint8_t *)target + 0x28, 4);
+            memcpy(&height, (uint8_t *)target + 0x2c, 4);
+            memcpy(bytes + 0xac, &width, 4);
+            memcpy(bytes + 0xb0, &height, 4);
+            memset(bytes + 0xbc, 0, 4);
+            memcpy(bytes + 0x78, &target, sizeof target);
+        }
+        return;
+    }
     eu4_gfx_clear_status status = eu4_gfx_set_render_target_checked(handle, target);
     if (status == EU4_GFX_CLEAR_GEOMETRY_STALE) {
         /* Phase-1 deferral: intentional skip, engine continues. */
