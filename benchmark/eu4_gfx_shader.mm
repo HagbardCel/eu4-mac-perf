@@ -1,6 +1,12 @@
 #import "eu4_gfx_shader.h"
 
+/* The shader module is also linked into hosts that do not include the event
+   writer. Diagnostics are best effort there; the engine boot always links it. */
+extern "C" int eu4_metal_events_write(const char *name, const char *body)
+    __attribute__((weak_import));
+
 #import <CommonCrypto/CommonDigest.h>
+#import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <new>
 #import <pthread.h>
@@ -97,7 +103,12 @@ static NSMutableArray<EU4ShaderRecord *> *g_shaders;
 static uint64_t g_next_lifetime = 1;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static id<MTLDevice> g_device;
-static uint8_t g_qualified_hashes[EU4_GFX_SHADER_MAX_QUALIFIED_HASHES][32];
+typedef struct {
+    uint8_t digest[32];
+    int stage;
+} EU4QualifiedSource;
+
+static EU4QualifiedSource g_qualified[EU4_GFX_SHADER_MAX_QUALIFIED_HASHES];
 static size_t g_qualified_count;
 /* Off by default. Offline hosts may opt in; engine-path completion must not. */
 static int g_allow_transitional_markers = 0;
@@ -106,21 +117,25 @@ static void sha256_bytes(const void *data, size_t len, uint8_t out[32]) {
     CC_SHA256(data, (CC_LONG)len, out);
 }
 
-static int hash_is_qualified(const uint8_t digest[32]) {
+static int hash_is_qualified(const uint8_t digest[32], int stage) {
     for (size_t i = 0; i < g_qualified_count; i++) {
-        if (memcmp(g_qualified_hashes[i], digest, 32) == 0) {
+        if (g_qualified[i].stage == stage &&
+            memcmp(g_qualified[i].digest, digest, 32) == 0) {
             return 1;
         }
     }
     return 0;
 }
 
-int eu4_gfx_shader_register_qualified_sha256(const uint8_t digest[32]) {
-    if (digest == NULL) {
+int eu4_gfx_shader_register_qualified_sha256(int stage, const uint8_t digest[32],
+                                             const char *effect_identity) {
+    if (digest == NULL || effect_identity == NULL ||
+        (stage != EU4_GFX_SHADER_STAGE_VERTEX && stage != EU4_GFX_SHADER_STAGE_PIXEL) ||
+        strcmp(effect_identity, EU4_GFX_SHADER_SIMPLE_IDENTITY) != 0) {
         return 0;
     }
     pthread_mutex_lock(&g_lock);
-    if (hash_is_qualified(digest)) {
+    if (hash_is_qualified(digest, stage)) {
         pthread_mutex_unlock(&g_lock);
         return 1;
     }
@@ -128,26 +143,110 @@ int eu4_gfx_shader_register_qualified_sha256(const uint8_t digest[32]) {
         pthread_mutex_unlock(&g_lock);
         return 0;
     }
-    memcpy(g_qualified_hashes[g_qualified_count], digest, 32);
+    memcpy(g_qualified[g_qualified_count].digest, digest, 32);
+    g_qualified[g_qualified_count].stage = stage;
     g_qualified_count++;
     pthread_mutex_unlock(&g_lock);
     return 1;
 }
 
+size_t eu4_gfx_shader_qualified_count(void) {
+    pthread_mutex_lock(&g_lock);
+    size_t count = g_qualified_count;
+    pthread_mutex_unlock(&g_lock);
+    return count;
+}
+
+static int hex_digest(NSString *text, uint8_t out[32]) {
+    if (text == nil || text.length != 64) {
+        return 0;
+    }
+    const char *bytes = text.UTF8String;
+    for (int i = 0; i < 32; i++) {
+        char pair[3] = {bytes[i * 2], bytes[i * 2 + 1], 0};
+        char *end = NULL;
+        unsigned long value = strtoul(pair, &end, 16);
+        if (end == pair || *end != 0) {
+            return 0;
+        }
+        out[i] = (uint8_t)value;
+    }
+    return 1;
+}
+
+int eu4_gfx_shader_load_qualified_sources(const char *path) {
+    if (path == NULL || path[0] != '/') {
+        return -1;
+    }
+    NSData *data = [NSData dataWithContentsOfFile:[NSString stringWithUTF8String:path]];
+    if (data == nil) {
+        return -1;
+    }
+    NSError *error = nil;
+    id root = [NSJSONSerialization JSONObjectWithData:data options:0 error:&error];
+    if (![root isKindOfClass:[NSDictionary class]]) {
+        return -1;
+    }
+    NSArray *sources = ((NSDictionary *)root)[@"sources"];
+    if (![sources isKindOfClass:[NSArray class]]) {
+        return -1;
+    }
+    if (sources.count > EU4_GFX_SHADER_MAX_QUALIFIED_HASHES) {
+        return -1;
+    }
+    EU4QualifiedSource staged[EU4_GFX_SHADER_MAX_QUALIFIED_HASHES];
+    memset(staged, 0, sizeof staged);
+    size_t registered = 0;
+    for (id entry in sources) {
+        if (![entry isKindOfClass:[NSDictionary class]]) {
+            return -1;
+        }
+        NSDictionary *record = (NSDictionary *)entry;
+        NSString *stage = record[@"stage"];
+        NSString *effect = record[@"effect"];
+        uint8_t digest[32];
+        if (![stage isKindOfClass:[NSString class]] ||
+            ![effect isKindOfClass:[NSString class]] ||
+            ![effect isEqualToString:@EU4_GFX_SHADER_SIMPLE_IDENTITY] ||
+            !hex_digest(record[@"sha256"], digest)) {
+            return -1;
+        }
+        int stage_value = 0;
+        if ([stage isEqualToString:@"vertex"]) {
+            stage_value = EU4_GFX_SHADER_STAGE_VERTEX;
+        } else if ([stage isEqualToString:@"pixel"]) {
+            stage_value = EU4_GFX_SHADER_STAGE_PIXEL;
+        } else {
+            return -1;
+        }
+        memcpy(staged[registered].digest, digest, 32);
+        staged[registered].stage = stage_value;
+        registered += 1;
+    }
+    /* Validate every record before changing the active set. */
+    pthread_mutex_lock(&g_lock);
+    memset(g_qualified, 0, sizeof g_qualified);
+    memcpy(g_qualified, staged, sizeof staged);
+    g_qualified_count = registered;
+    pthread_mutex_unlock(&g_lock);
+    return (int)registered;
+}
+
 void eu4_gfx_shader_clear_qualified_hashes(void) {
     pthread_mutex_lock(&g_lock);
     g_qualified_count = 0;
-    memset(g_qualified_hashes, 0, sizeof(g_qualified_hashes));
+    memset(g_qualified, 0, sizeof g_qualified);
     pthread_mutex_unlock(&g_lock);
 }
 
-static int source_admitted(const char *source, int (*marker_fn)(const char *)) {
+static int source_admitted(const char *source, int stage,
+                           int (*marker_fn)(const char *)) {
     if (source == NULL) {
         return 0;
     }
     uint8_t digest[32];
     sha256_bytes(source, strlen(source), digest);
-    if (hash_is_qualified(digest)) {
+    if (hash_is_qualified(digest, stage)) {
         return 1;
     }
     /* Transitional offline path only — not engine-path completion. */
@@ -255,7 +354,7 @@ void eu4_gfx_shader_test_reset(void) {
     g_next_lifetime = 1;
     g_device = nil;
     g_qualified_count = 0;
-    memset(g_qualified_hashes, 0, sizeof(g_qualified_hashes));
+    memset(g_qualified, 0, sizeof g_qualified);
     /* Offline host helper: opt into transitional marker admission for unit tests.
        Engine path never calls this; default remains off. */
     g_allow_transitional_markers = 1;
@@ -302,6 +401,35 @@ const char *eu4_gfx_shader_identity(const void *shader) {
     return identity;
 }
 
+static void sha256_hex(const char *source, char out[65]) {
+    uint8_t digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(source, (CC_LONG)strlen(source), digest);
+    static const char digits[] = "0123456789abcdef";
+    for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) {
+        out[i * 2] = digits[digest[i] >> 4];
+        out[i * 2 + 1] = digits[digest[i] & 0xf];
+    }
+    out[64] = 0;
+}
+
+static int g_shader_event_seq;
+
+static void write_shader_event(const char *kind, const char *body) {
+    if (eu4_metal_events_write == NULL) {
+        return;
+    }
+    /* Bounded, append-only diagnostic names: the first occurrence rule would
+       hide later shader objects, and the Simple effect is not necessarily the
+       first shader the engine creates. */
+    if (g_shader_event_seq >= 128) {
+        return;
+    }
+    g_shader_event_seq += 1;
+    char name[96];
+    snprintf(name, sizeof name, "shader-%s-%03d.json", kind, g_shader_event_seq);
+    (void)eu4_metal_events_write(name, body);
+}
+
 void *eu4_gfx_create_shader(void) {
     auto *object = static_cast<uint8_t *>(::operator new(EU4_GFX_SHADER_OBJECT_SIZE));
     memset(object, 0, EU4_GFX_SHADER_OBJECT_SIZE);
@@ -329,13 +457,24 @@ int eu4_gfx_add_vertex_shader(void *unused, void *shader, const char *source) {
         pthread_mutex_unlock(&g_lock);
         return 0;
     }
-    if (!source_admitted(source, source_is_simple_vertex)) {
+    if (!source_admitted(source, EU4_GFX_SHADER_STAGE_VERTEX,
+                         source_is_simple_vertex)) {
         /* Rejected replacement: invalidate prior link / PSO observations. */
         record.linked = NO;
         record.hasVertex = NO;
         record.vertexFunction = nil;
         [record.pipelines removeAllObjects];
         pthread_mutex_unlock(&g_lock);
+        char digest[65];
+        sha256_hex(source, digest);
+        char event[512];
+        snprintf(event, sizeof event,
+                 "{\"schema\":\"gfx-shader-event/v1\",\"event\":\"add_vertex\","
+                 "\"shader\":\"0x%llx\",\"accepted\":false,\"source_sha256\":\"%s\","
+                 "\"source_length\":%zu,\"identity\":\"%s\",\"pid\":%d}\n",
+                 (unsigned long long)(uintptr_t)shader, digest, strlen(source),
+                 eu4_gfx_shader_identity(shader) ?: "", (int)getpid());
+        write_shader_event("vs", event);
         return 0;
     }
     if (record.library == nil || record.vertexFunction == nil) {
@@ -360,6 +499,16 @@ int eu4_gfx_add_vertex_shader(void *unused, void *shader, const char *source) {
     /* Keep +4 as zero: not a GL name and not a Metal handle. */
     memset(static_cast<uint8_t *>(shader) + 4, 0, 4);
     pthread_mutex_unlock(&g_lock);
+    char digest[65];
+    sha256_hex(source, digest);
+    char event[512];
+    snprintf(event, sizeof event,
+             "{\"schema\":\"gfx-shader-event/v1\",\"event\":\"add_vertex\","
+             "\"shader\":\"0x%llx\",\"accepted\":true,\"source_sha256\":\"%s\","
+             "\"source_length\":%zu,\"identity\":\"%s\",\"pid\":%d}\n",
+             (unsigned long long)(uintptr_t)shader, digest, strlen(source),
+             eu4_gfx_shader_identity(shader) ?: "", (int)getpid());
+    write_shader_event("vs", event);
     return 1;
 }
 
@@ -375,12 +524,23 @@ int eu4_gfx_add_pixel_shader(void *unused, void *shader, const char *source) {
         pthread_mutex_unlock(&g_lock);
         return 0;
     }
-    if (!source_admitted(source, source_is_simple_pixel)) {
+    if (!source_admitted(source, EU4_GFX_SHADER_STAGE_PIXEL,
+                         source_is_simple_pixel)) {
         record.linked = NO;
         record.hasPixel = NO;
         record.fragmentFunction = nil;
         [record.pipelines removeAllObjects];
         pthread_mutex_unlock(&g_lock);
+        char digest[65];
+        sha256_hex(source, digest);
+        char event[512];
+        snprintf(event, sizeof event,
+                 "{\"schema\":\"gfx-shader-event/v1\",\"event\":\"add_pixel\","
+                 "\"shader\":\"0x%llx\",\"accepted\":false,\"source_sha256\":\"%s\","
+                 "\"source_length\":%zu,\"identity\":\"%s\",\"pid\":%d}\n",
+                 (unsigned long long)(uintptr_t)shader, digest, strlen(source),
+                 eu4_gfx_shader_identity(shader) ?: "", (int)getpid());
+        write_shader_event("ps", event);
         return 0;
     }
     if (record.library == nil || record.fragmentFunction == nil) {
@@ -404,6 +564,16 @@ int eu4_gfx_add_pixel_shader(void *unused, void *shader, const char *source) {
     }
     memset(static_cast<uint8_t *>(shader) + 8, 0, 4);
     pthread_mutex_unlock(&g_lock);
+    char digest[65];
+    sha256_hex(source, digest);
+    char event[512];
+    snprintf(event, sizeof event,
+             "{\"schema\":\"gfx-shader-event/v1\",\"event\":\"add_pixel\","
+             "\"shader\":\"0x%llx\",\"accepted\":true,\"source_sha256\":\"%s\","
+             "\"source_length\":%zu,\"identity\":\"%s\",\"pid\":%d}\n",
+             (unsigned long long)(uintptr_t)shader, digest, strlen(source),
+             eu4_gfx_shader_identity(shader) ?: "", (int)getpid());
+    write_shader_event("ps", event);
     return 1;
 }
 
@@ -426,6 +596,13 @@ int eu4_gfx_link_shader(void *unused, void *shader) {
     /* Program name field stays 0 — not a fabricated GL name. */
     *reinterpret_cast<uint32_t *>(shader) = 0;
     pthread_mutex_unlock(&g_lock);
+    char event[256];
+    snprintf(event, sizeof event,
+             "{\"schema\":\"gfx-shader-event/v1\",\"event\":\"link\","
+             "\"shader\":\"0x%llx\",\"accepted\":true,\"identity\":\"%s\",\"pid\":%d}\n",
+             (unsigned long long)(uintptr_t)shader, eu4_gfx_shader_identity(shader) ?: "",
+             (int)getpid());
+    write_shader_event("link", event);
     return 1;
 }
 
@@ -459,6 +636,14 @@ void eu4_gfx_set_shader(void *immediate_context, void *shader) {
     *current = shader;
     master[0x128] = 1;
     master[0x170] = 1;
+    char event[384];
+    snprintf(event, sizeof event,
+             "{\"schema\":\"gfx-shader-event/v1\",\"event\":\"set\","
+             "\"shader\":\"0x%llx\",\"linked\":true,\"identity\":\"%s\","
+             "\"selected\":\"%s\",\"pid\":%d}\n",
+             (unsigned long long)(uintptr_t)shader, eu4_gfx_shader_identity(shader) ?: "",
+             eu4_gfx_shader_identity(shader) ?: "", (int)getpid());
+    write_shader_event("set", event);
 }
 
 void eu4_gfx_destroy_shader(void *shader) {

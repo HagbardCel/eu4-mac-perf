@@ -24,6 +24,7 @@ if str(BENCH) not in sys.path:
 
 import eu4_benchmark as base  # noqa: E402
 import eu4_gfx_live_capture as live  # noqa: E402
+from automation import launch_lease  # noqa: E402
 from fixture_manager import FixtureManager  # noqa: E402
 from reverse_engineering.macho_rva import assert_pinned_executable  # noqa: E402
 
@@ -158,6 +159,7 @@ def run(output: Path, *, authorize_live: bool) -> dict:
     session_id = f"gfx-draw-{now:%Y%m%dT%H%M%SZ}"
     probe_path = run_dir / "auto-probe.csv"
     game: subprocess.Popen | None = None
+    lease = None
     working_save: Path | None = None
     startup_ok = False
     ready = False
@@ -183,10 +185,15 @@ def run(output: Path, *, authorize_live: bool) -> dict:
             })
             with (run_dir / "game.stdout").open("wb") as stdout, (
                     run_dir / "game.stderr").open("wb") as stderr:
-                game = subprocess.Popen(
-                    ["./eu4", *launcher["exeArgs"], "--continuelastsave"],
-                    cwd=base.GOG_EXE.parent, env=env, stdin=subprocess.DEVNULL,
-                    stdout=stdout, stderr=stderr)
+                lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
+                try:
+                    game = subprocess.Popen(
+                        ["./eu4", *launcher["exeArgs"], "--continuelastsave"],
+                        cwd=base.GOG_EXE.parent, env=env, stdin=subprocess.DEVNULL,
+                        stdout=stdout, stderr=stderr, pass_fds=lease.child_fds())
+                except BaseException:
+                    lease.release()
+                    raise
             startup_path = run_dir / "startup.status"
             if not live._wait_for(startup_path, 30, game):
                 raise live.LiveError("The draw observer did not write startup attestation")
@@ -234,6 +241,8 @@ def run(output: Path, *, authorize_live: bool) -> dict:
                 live._terminate_owned_game(game, focus_bin)
             except BaseException as exc:
                 error = error or str(exc)
+            if lease is not None:
+                lease.release()
             process_exited = game is not None and game.poll() is not None
             save_matches = False
             continue_restored = False

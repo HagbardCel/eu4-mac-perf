@@ -25,6 +25,7 @@ from reverse_engineering.macho_rva import (  # noqa: E402
     assert_pinned_executable,
 )
 from reverse_engineering import paths  # noqa: E402
+from automation import launch_lease  # noqa: E402
 
 BENCH = ROOT / "benchmark"
 BUILD = BENCH / ".build"
@@ -173,14 +174,22 @@ def run(*, authorize_live: bool, wait_seconds: float = 180.0) -> dict:
     env.pop("EU4_METAL_INIT_DIR", None)
     stdout = (run_dir / "game.stdout").open("wb")
     stderr = (run_dir / "game.stderr").open("wb")
-    game = subprocess.Popen(
-        ["./eu4", *launcher["exeArgs"]],
-        cwd=base.GOG_EXE.parent,
-        env=env,
-        stdout=stdout,
-        stderr=stderr,
-        stdin=subprocess.DEVNULL,
-    )
+    lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
+    try:
+        game = subprocess.Popen(
+            ["./eu4", *launcher["exeArgs"]],
+            cwd=base.GOG_EXE.parent,
+            env=env,
+            stdout=stdout,
+            stderr=stderr,
+            stdin=subprocess.DEVNULL,
+            pass_fds=lease.child_fds(),
+        )
+    except BaseException:
+        lease.release()
+        stdout.close()
+        stderr.close()
+        raise
     status_path = run_dir / "startup.status"
     deadline = time.monotonic() + wait_seconds
     status = None
@@ -221,6 +230,7 @@ def run(*, authorize_live: bool, wait_seconds: float = 180.0) -> dict:
         if game.poll() is None:
             game.kill()
             game.wait(timeout=10)
+        lease.release()
 
     summary = {}
     if (run_dir / "summary.json").is_file():
@@ -424,14 +434,22 @@ def run_ops(
     )
     stdout = (run_dir / "game.stdout").open("wb")
     stderr = (run_dir / "game.stderr").open("wb")
-    game = subprocess.Popen(
-        ["./eu4", *launcher["exeArgs"]],
-        cwd=base.GOG_EXE.parent,
-        env=env,
-        stdout=stdout,
-        stderr=stderr,
-        stdin=subprocess.DEVNULL,
-    )
+    lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
+    try:
+        game = subprocess.Popen(
+            ["./eu4", *launcher["exeArgs"]],
+            cwd=base.GOG_EXE.parent,
+            env=env,
+            stdout=stdout,
+            stderr=stderr,
+            stdin=subprocess.DEVNULL,
+            pass_fds=lease.child_fds(),
+        )
+    except BaseException:
+        lease.release()
+        stdout.close()
+        stderr.close()
+        raise
     status_path = run_dir / "startup.status"
     status = None
     deadline = time.monotonic() + timeout_s + 20.0
@@ -454,6 +472,7 @@ def run_ops(
         termination = _terminate_owned_process(game)
         stdout.close()
         stderr.close()
+        lease.release()
     summary = {}
     if (run_dir / "summary.json").is_file():
         try:

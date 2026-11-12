@@ -26,6 +26,11 @@ from fixture_manager import FixtureManager
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from automation import launch_lease  # noqa: E402
+
 SOURCE = Path(__file__).with_suffix(".c")
 LIBRARY = ROOT / "benchmark/.build/libeu4_draw_trace.dylib"
 TEST_LIBRARY = ROOT / "benchmark/.build/libeu4_draw_trace_test.dylib"
@@ -453,7 +458,7 @@ def run(output_root: Path) -> Path:
         make_buffer(buffer_path)
         game_log = base.USER_DATA / "logs/game.log"
         old_log = game_log.read_bytes() if game_log.is_file() else b""
-        game = power = None
+        game = power = lease = None
         installed = False
         try:
             metadata["working_save"] = str(fixture.install())
@@ -465,9 +470,15 @@ def run(output_root: Path) -> Path:
                    "EU4_DRAW_BUFFER": str(buffer_path)}
             with (run_dir / "game.stdout").open("wb") as stdout, \
                  (run_dir / "game.stderr").open("wb") as stderr:
-                game = subprocess.Popen(["./eu4", *evidence["launcher_args"],
-                                         "--continuelastsave"], cwd=base.GOG_EXE.parent,
-                                        env=env, stdout=stdout, stderr=stderr)
+                lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
+                try:
+                    game = subprocess.Popen(["./eu4", *evidence["launcher_args"],
+                                             "--continuelastsave"], cwd=base.GOG_EXE.parent,
+                                            env=env, stdout=stdout, stderr=stderr,
+                                            pass_fds=lease.child_fds())
+                except BaseException:
+                    lease.release()
+                    raise
             metadata["game_pid"] = game.pid
             readiness_tail = auto.PowerTail(run_dir / "powermetrics-readiness.pliststream")
             metadata["readiness"] = auto.wait_until_ready(game, run_dir / "draw.csv",
@@ -546,6 +557,8 @@ def run(output_root: Path) -> Path:
                     except subprocess.TimeoutExpired:
                         pass
                 auto.stop_process(game,10)
+                if lease is not None:
+                    lease.release()
                 if game is not None and game.poll() is None:
                     raise base.BenchmarkError("EU IV remained running; recovery journal retained")
                 if installed:

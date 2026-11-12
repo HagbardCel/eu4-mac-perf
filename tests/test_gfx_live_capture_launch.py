@@ -139,7 +139,10 @@ class GfxLiveLaunchTests(unittest.TestCase):
             patch.object(live.subprocess, "run", side_effect=fake_run),
         ]
         if fail_seal_after_arm:
-            patches.append(patch.object(live.time, "monotonic", side_effect=[0, 100]))
+            # The first value is the lease acquisition deadline; the last is
+            # already past the arm deadline so the seal succeeds immediately.
+            patches.append(patch.object(live.time, "monotonic",
+                                        side_effect=[0, 100, 1000]))
 
         self._run_index += 1
         output = self.root / f"out-{self._run_index}"

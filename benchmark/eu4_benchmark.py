@@ -105,17 +105,28 @@ def process_executable_path(pid: int) -> str | None:
     return buffer.value.decode(errors="replace") if length > 0 else None
 
 
+def process_table() -> list[tuple[int, str]]:
+    """Read-only (pid, executable) table.
+
+    ``automation.launch_lease`` owns the macOS libproc implementation because
+    it is also the launch-admission path and works in sandboxed DSH shells
+    where ``ps`` is denied. This wrapper keeps the historical benchmark call
+    site. Non-macOS hosts have no supported EU4 launch and return an empty
+    table.
+    """
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from automation.launch_lease import process_executables
+
+    return process_executables()
+
+
 def running_game_pid(scenario: str) -> int | None:
     """Accept only the exact GOG Mach-O path, never a similarly named game."""
-    output = command("ps", "-axo", "pid=,comm=")
-    game_processes = []
-    for line in output.splitlines():
-        match = re.match(r"\s*(\d+)\s+(.+)$", line)
-        if not match:
-            continue
-        pid, executable = int(match.group(1)), match.group(2).strip()
-        if Path(executable).name == "eu4":
-            game_processes.append((pid, executable))
+    game_processes = [
+        (pid, executable) for pid, executable in process_table()
+        if Path(executable).name == "eu4"
+    ]
     if scenario == "idle":
         if game_processes:
             raise BenchmarkError(f"Idle control requires EU IV closed; found {game_processes}")

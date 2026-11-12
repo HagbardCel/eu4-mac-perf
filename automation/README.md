@@ -282,6 +282,38 @@ python3 -m automation.gfx_l32b_complete report \
   --workflow campaigns/eu4-l32b-complete/workflow.json
 ```
 
+### Host-wide lease, bounded authorization and live GPU probes
+
+The launch ledger remains the only budget authority. A separate host-wide
+`flock` lease (`automation/launch_lease.py`) coordinates every cooperating
+launcher of the same installed executable, including different worktrees and
+output directories. The game inherits the lease descriptor, so the lock survives
+a launcher crash until the game exits. Existing launchers acquire it immediately
+before `Popen`; manually started games are detected with libproc.
+
+Grant a bounded budget once, then consume it through the existing launcher:
+
+```sh
+python3 -m automation.live_gfx authorize \
+  --run-root .local/gfx-experiments/simple-01 \
+  --output-root .local/gfx-experiments \
+  --limit 3 --deadline-seconds 180 --workflow-id simple-01
+
+python3 -m automation.live_gfx probe --backend metal --checkpoint after-draw \
+  --caller-rva 0xedfcd1 --occurrence 1 \
+  --output .local/gfx-experiments/simple-01/after-draw-01 \
+  --campaign-run-root .local/gfx-experiments/simple-01
+
+python3 -m automation.live_gfx inspect \
+  --run .local/gfx-experiments/simple-01/after-draw-01
+```
+
+`probe` supports `after-clear`, `after-draw` and `before-present` through one
+checkpoint implementation. It writes raw BGRA, a PNG preview and a JSON record
+with separate `draw_reached`, `draw_encoded`, `gpu_completed`,
+`pixels_captured`, `presented` and `reference_matched` levels. See
+[docs/live-gfx-experiments.md](../docs/live-gfx-experiments.md).
+
 ### Campaign launch accounting
 
 Campaign JSON may declare:

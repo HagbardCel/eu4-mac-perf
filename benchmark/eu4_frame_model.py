@@ -40,6 +40,11 @@ from frame_model_gates import (
 from fixture_manager import FixtureManager
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from automation import launch_lease  # noqa: E402
+
 PREFLIGHT_INTRUSIVE_CONTRACT_JSON = (
     ROOT / "analysis/preflight-intrusive-diagnostic-contract-latest.json"
 )
@@ -5335,6 +5340,7 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
     control_path = run_dir / "control.bin"
     control_path.write_bytes(bytes(CONTROL_SIZE))
     game = None
+    lease = None
     control = None
     installed = False
     pm = None
@@ -5368,13 +5374,19 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
                     "EU4_FRAME_MODEL_CONTROL": str(control_path),
                 }
                 with (run_dir / "game.stdout").open("wb") as stdout, (run_dir / "game.stderr").open("wb") as stderr:
-                    game = subprocess.Popen(
-                        ["./eu4", *evidence["autonomous"]["launcher_args"], "--continuelastsave"],
-                        cwd=base.GOG_EXE.parent,
-                        env=env,
-                        stdout=stdout,
-                        stderr=stderr,
-                    )
+                    lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
+                    try:
+                        game = subprocess.Popen(
+                            ["./eu4", *evidence["autonomous"]["launcher_args"], "--continuelastsave"],
+                            cwd=base.GOG_EXE.parent,
+                            env=env,
+                            stdout=stdout,
+                            stderr=stderr,
+                            pass_fds=lease.child_fds(),
+                        )
+                    except BaseException:
+                        lease.release()
+                        raise
                 manifest["game_pid"] = game.pid
                 power_tail = auto.PowerTail(run_dir / "powermetrics.pliststream")
                 ready = auto.wait_until_ready(
@@ -5578,6 +5590,8 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
                 if game is not None and game.poll() is None:
                     auto.focus("terminate", game.pid)
                     auto.stop_process(game, 10)
+                if lease is not None:
+                    lease.release()
                 if control:
                     control.close()
                 if installed:
@@ -5705,7 +5719,7 @@ def run(
     manifest["power_window_policy"]="Power samples use the same controller phase start/end timestamps as frame/event analysis"
     control_path=run_dir/"control.bin"
     control_path.write_bytes(bytes(CONTROL_SIZE))
-    game=pm=None; control=None; installed=False; low_power_active=False
+    game=pm=None; control=None; installed=False; low_power_active=False; lease=None
     power_journal=run_dir/"power-mode-journal.json"; power_tail=None
     try:
         with FixtureManager(output_root,base.USER_DATA,auto.FIXTURE,
@@ -5725,8 +5739,14 @@ def run(
                      "EU4_FRAME_MODEL_LOG":str(run_dir/"telemetry.csv"),
                      "EU4_FRAME_MODEL_CONTROL":str(control_path)}
                 with (run_dir/"game.stdout").open("wb") as stdout,(run_dir/"game.stderr").open("wb") as stderr:
-                    game=subprocess.Popen(["./eu4",*evidence["autonomous"]["launcher_args"],"--continuelastsave"],
-                        cwd=base.GOG_EXE.parent,env=env,stdout=stdout,stderr=stderr)
+                    lease=launch_lease.acquire(base.GOG_EXE,output=run_dir)
+                    try:
+                        game=subprocess.Popen(["./eu4",*evidence["autonomous"]["launcher_args"],"--continuelastsave"],
+                            cwd=base.GOG_EXE.parent,env=env,stdout=stdout,stderr=stderr,
+                            pass_fds=lease.child_fds())
+                    except BaseException:
+                        lease.release()
+                        raise
                 manifest["game_pid"]=game.pid
                 power_tail=auto.PowerTail(run_dir/"powermetrics.pliststream")
                 ready=auto.wait_until_ready(game,run_dir/"auto-probe.csv",power_tail,anchor,
@@ -5948,6 +5968,8 @@ def run(
                 auto.stop_process(pm,3)
                 if game is not None and game.poll() is None:
                     auto.focus("terminate",game.pid); auto.stop_process(game,10)
+                if lease is not None:
+                    lease.release()
                 if control: control.close()
                 if installed:
                     manifest["working_save_changed"]=fixture.finish(run_dir)

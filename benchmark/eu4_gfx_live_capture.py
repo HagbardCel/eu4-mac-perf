@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
 import autonomous_runner as auto  # noqa: E402
 import eu4_benchmark as base  # noqa: E402
 from fixture_manager import FixtureManager  # noqa: E402
+from automation import launch_lease  # noqa: E402
 from oracle.function import fixture  # noqa: E402
 from reverse_engineering import paths  # noqa: E402
 from reverse_engineering.macho_rva import (  # noqa: E402
@@ -709,6 +710,7 @@ def _run_auto_venice(
             else "allow_unfocused_venice"),
     }
     game: subprocess.Popen | None = None
+    lease = None
     working_save: Path | None = None
     fixture_installed = False
     sealed = False
@@ -739,10 +741,16 @@ def _run_auto_venice(
             })
             with (run_dir / "game.stdout").open("wb") as stdout, (
                     run_dir / "game.stderr").open("wb") as stderr:
-                game = subprocess.Popen(
-                    ["./eu4", *launcher["exeArgs"], "--continuelastsave"],
-                    cwd=base.GOG_EXE.parent, env=env, stdin=subprocess.DEVNULL,
-                    stdout=stdout, stderr=stderr)
+                # Also refuses a manually started game that holds no lease.
+                lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
+                try:
+                    game = subprocess.Popen(
+                        ["./eu4", *launcher["exeArgs"], "--continuelastsave"],
+                        cwd=base.GOG_EXE.parent, env=env, stdin=subprocess.DEVNULL,
+                        stdout=stdout, stderr=stderr, pass_fds=lease.child_fds())
+                except BaseException:
+                    lease.release()
+                    raise
             metadata["game_pid"] = game.pid
             startup_path = run_dir / "startup.status"
             if not _wait_for(startup_path, 30, game):
@@ -782,6 +790,8 @@ def _run_auto_venice(
                 _terminate_owned_game(game, focus_bin)
             except BaseException as term_exc:
                 metadata["terminate_error"] = str(term_exc)
+            if lease is not None:
+                lease.release()
 
             launched_exited = game is not None and game.poll() is not None
             metadata["game_exited"] = launched_exited
@@ -921,12 +931,20 @@ def run(output: Path, save: Path | None = None, deadline_seconds: int = 120,
         "EU4_GFX_CAPTURE_MAX_UNIQUE": str(max_unique),
     })
     game: subprocess.Popen | None = None
+    lease = None
     try:
         with (run_dir / "game.stdout").open("wb") as stdout, (
                 run_dir / "game.stderr").open("wb") as stderr:
-            game = subprocess.Popen(
-                ["./eu4", *launcher["exeArgs"]], cwd=base.GOG_EXE.parent,
-                env=env, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr)
+            # Also refuses a manually started game that holds no lease.
+            lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
+            try:
+                game = subprocess.Popen(
+                    ["./eu4", *launcher["exeArgs"]], cwd=base.GOG_EXE.parent,
+                    env=env, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
+                    pass_fds=lease.child_fds())
+            except BaseException:
+                lease.release()
+                raise
         metadata["game_pid"] = game.pid
         metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
         startup_path = run_dir / "startup.status"
@@ -995,6 +1013,10 @@ def run(output: Path, save: Path | None = None, deadline_seconds: int = 120,
         if game is not None and game.poll() is None:
             print("EU IV is still running. Quit it normally; the dylib is not unloaded.")
         raise
+    finally:
+        if lease is not None:
+            # The game inherited the descriptor, so the kernel lease ends when it exits.
+            lease.release()
 
 
 def _relpath(path: Path, root: Path) -> str:

@@ -112,18 +112,19 @@ static uint8_t *read_file(const char *path, size_t *length) {
     return bytes;
 }
 
-static void register_source(const char *source) {
+static void register_source(const char *source, int stage) {
     uint8_t digest[CC_SHA256_DIGEST_LENGTH];
     CC_SHA256(source, (CC_LONG)strlen(source), digest);
-    if (!eu4_gfx_shader_register_qualified_sha256(digest)) {
+    if (!eu4_gfx_shader_register_qualified_sha256(
+            stage, digest, EU4_GFX_SHADER_SIMPLE_IDENTITY)) {
         fail("qualified source registration");
     }
 }
 
 static void *make_simple_shader(void) {
     eu4_gfx_shader_test_reset();
-    register_source(eu4_gfx_simple_vertex_source());
-    register_source(eu4_gfx_simple_pixel_source());
+    register_source(eu4_gfx_simple_vertex_source(), EU4_GFX_SHADER_STAGE_VERTEX);
+    register_source(eu4_gfx_simple_pixel_source(), EU4_GFX_SHADER_STAGE_PIXEL);
     eu4_gfx_shader_set_allow_transitional_markers(0);
     void *shader = eu4_gfx_create_shader();
     if (shader == NULL) {

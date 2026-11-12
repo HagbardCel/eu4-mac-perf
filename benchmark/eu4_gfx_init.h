@@ -45,6 +45,10 @@
 @property (nonatomic) uint64_t geometryGeneration;
 @property (nonatomic) uint64_t pendingGameGeneration;
 @property (nonatomic) uint64_t clearedGeneration;
+/* Generation whose _GfxClear has been submitted (not necessarily completed).
+   A live draw requires this to equal geometryGeneration, so an engine draw
+   cannot race ahead of the clear that makes its target contents defined. */
+@property (nonatomic) uint64_t gameClearGeneration;
 @property (nonatomic) BOOL awaitingFreshClear;
 /* SetRT(null) skipped during Cocoa phase 1; apply after commit when safe. */
 @property (nonatomic) BOOL deferredDefaultTargetSelect;
@@ -113,11 +117,35 @@ void eu4_gfx_test_fail_game_alloc(int on);
 void eu4_gfx_test_fail_next_drawable(int on);
 /* When non-zero, present staging texture allocation fails once. */
 void eu4_gfx_test_fail_present_staging_alloc(int on);
+/* Test-only: report the next drained game command as a GPU failure, without
+   changing the real command buffer. Exercises the failure/cleanup branch. */
+void eu4_gfx_test_fail_next_game_drain(int on);
 /* Borrowed MTLTexture used as the present destination instead of nextDrawable. */
 void eu4_gfx_test_set_present_drawable(void *texture);
 /* When dest is non-null, present blits the destination into staging and copies
    BGRA8 bytes into dest after a successful wait. Cleared after one present. */
 void eu4_gfx_test_set_present_readback(void *dest, size_t capacity);
+
+/* Validate the original blend/depth/raster/scissor snapshot for the admitted
+   Simple pass. Returns 1 when every state component is either the backend's
+   known default snapshot or an equivalent full-attachment scissor. On 0,
+   `reason` (when non-null) names the first rejected component. This reads
+   original master state only; it does not synthesize a render state. */
+int eu4_gfx_simple_state_supported(void *master, char *reason, size_t capacity);
+
+/* 1 when the current depth/stencil snapshot equals the backend default. The
+   Simple pass has no depth attachment, so a mismatch is recorded but is not
+   material to the captured colour pixels. */
+int eu4_gfx_depth_snapshot_is_default(void *master);
+
+/* Caller of the current _GfxPresent invocation, for checkpoint selection. */
+const void *eu4_gfx_current_present_caller(void);
+
+/* Optional checkpoint hooks. Hosts that do not link the checkpoint module
+   leave these unset and pay one null check per clear/present. */
+typedef void (*eu4_gfx_checkpoint_hook)(void *master, const void *caller);
+void eu4_gfx_set_checkpoint_hooks(eu4_gfx_checkpoint_hook after_clear,
+                                  eu4_gfx_checkpoint_hook before_present);
 
 /* Select game-window mode before _GfxInit. metal_init calls this. Hosts that
    omit it stay on the diagnostic offscreen path. */
@@ -242,6 +270,15 @@ eu4_gfx_clear_status eu4_gfx_complete_offscreen(void *master, int *command_statu
 /* Read known diagnostic BGRA8 bytes. capacity must be at least width*height*4. */
 eu4_gfx_clear_status eu4_gfx_read_offscreen(void *master, void *dest, size_t capacity,
                                             size_t *out_len);
+
+/* Bounded diagnostic readback of the game-owned backbuffer. Waits only for the
+   last pending game command; callers use this at a checkpoint, never in the
+   per-draw production path. Writes tightly packed BGRA8 bytes (row stride =
+   width * 4) and reports the command status. */
+eu4_gfx_clear_status eu4_gfx_read_game_target(void *master, void *dest, size_t capacity,
+                                              size_t *out_len, uint32_t *width,
+                                              uint32_t *height, uint32_t *row_stride,
+                                              uint64_t *generation, int *gpu_status);
 /* Wait for the pending game clear. On OK sets gameContentsKnown and
    readyForPresent only when the pending generation is still current. */
 eu4_gfx_clear_status eu4_gfx_complete_game(void *master, int *command_status);

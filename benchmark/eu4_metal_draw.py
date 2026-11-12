@@ -14,6 +14,12 @@ from pathlib import Path
 
 import eu4_benchmark as base
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from automation import launch_lease  # noqa: E402
+
 
 SOURCE = Path(__file__).resolve().with_suffix(".m")
 LIBRARY = SOURCE.parent / ".build/libeu4_metal_draw_x86_64.dylib"
@@ -48,13 +54,21 @@ def launch_session(run_dir: Path, wait_seconds: float = 300) -> dict:
     env["DYLD_INSERT_LIBRARIES"] = str(library)
     stdout = (run_dir / "game.stdout").open("wb")
     stderr = (run_dir / "game.stderr").open("wb")
-    game = subprocess.Popen(
-        ["./eu4", *launcher["exeArgs"], "--continuelastsave"],
-        cwd=base.GOG_EXE.parent,
-        env=env,
-        stdout=stdout,
-        stderr=stderr,
-    )
+    lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
+    try:
+        game = subprocess.Popen(
+            ["./eu4", *launcher["exeArgs"], "--continuelastsave"],
+            cwd=base.GOG_EXE.parent,
+            env=env,
+            stdout=stdout,
+            stderr=stderr,
+            pass_fds=lease.child_fds(),
+        )
+    except BaseException:
+        lease.release()
+        stdout.close()
+        stderr.close()
+        raise
     result_path = run_dir / "result.json"
     flushes_path = run_dir / "gl_flushes"
     deadline = time.monotonic() + wait_seconds
@@ -109,6 +123,7 @@ def launch_session(run_dir: Path, wait_seconds: float = 300) -> dict:
             except subprocess.TimeoutExpired:
                 game.kill()
                 game.wait(timeout=5)
+        lease.release()
         stdout.close()
         stderr.close()
         metadata["game_returncode"] = game.returncode

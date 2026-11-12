@@ -14,6 +14,12 @@ from pathlib import Path
 
 import eu4_benchmark as base
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from automation import launch_lease  # noqa: E402
+
 
 SOURCE = Path(__file__).resolve().with_suffix(".m")
 LIBRARY = SOURCE.parent / ".build/libeu4_metal_coexist.dylib"
@@ -170,13 +176,21 @@ def launch_session(run_dir: Path, settle_seconds: float = 45) -> dict:
     env["DYLD_INSERT_LIBRARIES"] = str(library)
     stdout = (run_dir / "game.stdout").open("wb")
     stderr = (run_dir / "game.stderr").open("wb")
-    game = subprocess.Popen(
-        ["./eu4", *launcher["exeArgs"]],
-        cwd=base.GOG_EXE.parent,
-        env=env,
-        stdout=stdout,
-        stderr=stderr,
-    )
+    lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
+    try:
+        game = subprocess.Popen(
+            ["./eu4", *launcher["exeArgs"]],
+            cwd=base.GOG_EXE.parent,
+            env=env,
+            stdout=stdout,
+            stderr=stderr,
+            pass_fds=lease.child_fds(),
+        )
+    except BaseException:
+        lease.release()
+        stdout.close()
+        stderr.close()
+        raise
     metadata["game_pid"] = game.pid
     try:
         receipt = wait_for_receipt(receipt_path, game, 30)
@@ -212,6 +226,7 @@ def launch_session(run_dir: Path, settle_seconds: float = 45) -> dict:
             except subprocess.TimeoutExpired:
                 game.kill()
                 game.wait(timeout=5)
+        lease.release()
         stdout.close()
         stderr.close()
         metadata["ended_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
