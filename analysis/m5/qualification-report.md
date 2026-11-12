@@ -1,7 +1,7 @@
 # M5 qualification report — second authentic draw and composed comparison
 
-Status: **qualified by the M5 checker** (`campaigns/eu4-m5/accept.py`, 18/18 gates, verdict `pass` on commit `36fa8e9`) for the reconstructed sprite
-operation. The live engine path to the draw is **not**
+Status: **qualified by the M5 checker** (`campaigns/eu4-m5/accept.py`, 18/18 gates, verdict `pass` on implementation commit `36fa8e9` and again on the
+final clean tree `d08eecd`) for the reconstructed sprite operation. The live engine path to the draw is **not**
 reached; the exact blocker is recorded below. The checker distinguishes the
 reconstructed operation and the live-Metal replay from a live-engine route.
 
