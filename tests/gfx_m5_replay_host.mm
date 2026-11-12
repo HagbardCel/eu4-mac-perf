@@ -1,14 +1,14 @@
-/* Deterministic live-Metal replay of the authentic sprite draw.
+/* Offline GPU replay of the authentic sprite draw.
  *
- * The live engine cannot currently reach the second loading frame (the next
- * _GfxBeginScene call crashes after the first presented frame), so this host
- * drives the *same* sprite encoder with the exact original-GL inputs captured
- * for the selected draw: vertex buffer, constant buffer, texture image and the
- * authentic pre-draw framebuffer. It is not a second renderer; it is a replay
+ * The live engine now reaches and GPU-completes the selected draw. This host
+ * remains the exact isolated pixel qualification: it drives the same sprite
+ * encoder with the authentic original-GL inputs (vertex, constants, texture
+ * and pre-draw) so the sprite can be compared without the unreconstructed
+ * loading-screen background. It is not a second renderer; it is a replay
  * boundary around eu4_gfx_draw_encode_into.
  *
  * Usage:
- *   gfx_m5_replay_host --reference <gl-ref-dir> --out <dir>
+ *   gfx_m5_replay_host --reference <gl-ref-dir> --out <dir> [--constant-words <n>]
  */
 
 #import "eu4_gfx_buffers.h"
@@ -166,11 +166,20 @@ static void boot(void) {
 int main(int argc, char **argv) {
     const char *reference = NULL;
     const char *out_dir = NULL;
+    uint32_t constant_words = 28; /* 112-byte authentic payload / 4 */
     for (int i = 1; i + 1 < argc; i += 2) {
         if (strcmp(argv[i], "--reference") == 0) {
             reference = argv[i + 1];
         } else if (strcmp(argv[i], "--out") == 0) {
             out_dir = argv[i + 1];
+        } else if (strcmp(argv[i], "--constant-words") == 0) {
+            char *end = NULL;
+            unsigned long value = strtoul(argv[i + 1], &end, 0);
+            if (end == argv[i + 1] || *end != 0 || value > 0xfffffffful) {
+                fprintf(stderr, "invalid --constant-words\n");
+                return 2;
+            }
+            constant_words = (uint32_t)value;
         }
     }
     if (reference == NULL || out_dir == NULL) {
@@ -227,11 +236,10 @@ int main(int argc, char **argv) {
         uint32_t words;
         uint32_t padding;
         const void *data;
-    } constant_header = {7, 0, constant};
+    } constant_header = {constant_words, 0, constant};
     void *constant_ptr = &constant_header;
     memcpy((uint8_t *)g_master + EU4_GFX_MASTER_CONSTANT_SLOT2, &constant_ptr,
            sizeof constant_ptr);
-    uint32_t constant_words = 7;
     memcpy((uint8_t *)g_master + 0xc8, &constant_words, 4);
 
     static const uint8_t blend[0x24] = {

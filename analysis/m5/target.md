@@ -1,10 +1,10 @@
 # M5 target — the loading-screen sprite draw after the Simple text draw
 
-Status: selected from the live original renderer and reconstructed. The live
-engine path to this draw is blocked by an unreconstructed frame-start GL entry
-(see [Engine reach](#engine-reach-and-blocker)); the operation itself is
-implemented in the production dispatcher and qualified through a deterministic
-live-Metal replay of its authentic inputs.
+Status: selected from the live original renderer, reconstructed, and reached by
+the live Metal engine. The three frame-start/state entries that blocked the
+frame are reconstructed (see [Engine reach](#engine-reach)); the exact seeded
+replay remains the isolated pixel qualification because the live prefix cannot
+yet reproduce the loading-screen background producer.
 
 ## Selected operation
 
@@ -57,10 +57,11 @@ admission remains exact SHA-256, not a marker or substring match.
    VBO range, the constant block, the exact attached shader sources and the
    bound texture image captured the authentic inputs for the sprite draw. The
    observer restores the GL array-buffer binding and pixel-pack state.
-3. **Metal probe.** A Metal probe with a bounded draw-sequence log showed only
-   one `_GfxDraw` before the first present and then the original
-   `CGraphics::BeginScene` crash. The engine does not reach the second loading
-   frame in the current Metal path.
+3. **Metal probe and reconstruction.** The initial bounded probe showed one
+   `_GfxDraw` before the first present and then the original
+   `CGraphics::BeginScene` crash. After reconstructing `_GfxBeginScene`,
+   `_GfxClearTexture` and the sprite blend descriptor, the final probe
+   (`metal-live-final-02`) reaches the sprite draw and GPU-completes it.
 
 ## Engine reach
 

@@ -155,9 +155,9 @@
     }
   },
   "candidate": {
-    "run": ".local/m5/experiments/metal-replay-05",
+    "run": ".local/m5/experiments/metal-replay-06",
     "descriptor": "metal-logical.json",
-    "descriptor_sha256": "8af5058cac27d63545e9e00b37b6f7d914fb6a66960a273bda8b4932700f4c3f",
+    "descriptor_sha256": "01cd6c735f24624c4057fe80677f29d90b0f3e52c08058b6b0e3e50568f3caac",
     "draw": {
       "symbol": "_GfxDraw",
       "caller_rva": "0x14f6c1b",
@@ -192,19 +192,21 @@
     },
     "artifacts": {
       "metal-logical.json": {
-        "path": ".local/m5/experiments/metal-replay-05/metal-logical.json",
-        "sha256": "8af5058cac27d63545e9e00b37b6f7d914fb6a66960a273bda8b4932700f4c3f",
+        "path": ".local/m5/experiments/metal-replay-06/metal-logical.json",
+        "sha256": "01cd6c735f24624c4057fe80677f29d90b0f3e52c08058b6b0e3e50568f3caac",
         "bytes": 1931
       },
       "metal-logical.bgra": {
-        "path": ".local/m5/experiments/metal-replay-05/metal-logical.bgra",
+        "path": ".local/m5/experiments/metal-replay-06/metal-logical.bgra",
         "sha256": "862402aaf555f417631f375abd56762c100b1cfdc13c2f105d9cedc100c37afd",
         "bytes": 7720704
       }
-    }
+    },
+    "constant_header_words": 28,
+    "constant_header_note": "Authentic 112-byte payload = 28 dwords; the encoder requires at least 24 dwords for its 96-byte uniform prefix."
   },
   "comparison": {
-    "report": ".local/m5/experiments/compare-final-m5-10/report.json",
+    "report": ".local/m5/experiments/compare-final-m5-11/report.json",
     "status": "pass",
     "pixels": 1930176,
     "max_channel_error": 0,
@@ -269,9 +271,10 @@
     "replay": "metal-replay-02"
   },
   "limitations": [
-    "The live engine path does not yet reach the sprite draw because _GfxBeginScene is unreconstructed; the qualification is a live-Metal replay of the captured operation.",
-    "The background is animated, so each reference is paired with a replay seeded by its own pre-draw payload.",
-    "The engine sampler object is not decoded; the replay uses linear clamp-to-edge, which matches the captured GL image exactly."
+    "The live engine reaches and GPU-completes the selected sprite draw. The live prefix cannot yet reproduce the loading-screen background producer, so live composed pixel equivalence is separately false; the exact seeded replay remains the pixel qualification.",
+    "The background is animated, so each reference is paired with a replay seeded by its own pre-draw payload; independent reference runs are not expected to share a raw hash.",
+    "The engine sampler object is not decoded; the captured original-GL sampler is GL_LINEAR/GL_CLAMP_TO_EDGE and the implemented Metal sampler uses the same values.",
+    "Only the Simple and sprite operations are reconstructed. Title/map/font draws remain outside the admitted route."
   ],
   "m5_host_tests": {
     "suite": "tests.test_gfx_m5_sprite",
@@ -321,7 +324,7 @@
     "commit": "2bfcb25",
     "python": "3.14.10",
     "reference_run": ".local/m5/experiments/sprite-gl-ref-09",
-    "seeded_candidate_run": ".local/m5/experiments/metal-replay-05",
+    "seeded_candidate_run": ".local/m5/experiments/metal-replay-06",
     "live_run": ".local/m5/experiments/metal-live-final-02",
     "sprite_replay": "pass 0/1930176 max_channel_error=0",
     "live_engine": "pass caller=0x14f6c1b gpu=4 target=3456x2234",

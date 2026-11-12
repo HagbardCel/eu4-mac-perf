@@ -72,6 +72,35 @@ class M5SpriteReplayTests(unittest.TestCase):
             self.assertEqual(candidate["wrap_s"], sampler["wrap_s"])
             self.assertEqual(candidate["wrap_t"], sampler["wrap_t"])
 
+    def test_constant_buffer_word_count_is_dwords(self) -> None:
+        reference = json.loads((REFERENCE / "gl-reference.json").read_text())
+        env = os.environ.copy()
+        env["EU4_GFX_EXPECTED_EXE"] = reference["provenance"]["executable"]
+        env["EU4_GFX_EXECUTABLE_SHA256"] = reference["provenance"]["executable_sha256"]
+        with tempfile.TemporaryDirectory(prefix="m5-words-") as tmp:
+            output = Path(tmp) / "candidate"
+            output.mkdir()
+            ran = subprocess.run(
+                [str(self.host), "--reference", str(REFERENCE), "--out", str(output),
+                 "--constant-words", "23"],
+                capture_output=True, text=True, check=False, env=env,
+            )
+            self.assertNotEqual(ran.returncode, 0)
+            self.assertIn("constant", ran.stderr.lower())
+            self.assertIn("24 dwords", ran.stderr.lower())
+        with tempfile.TemporaryDirectory(prefix="m5-words-ok-") as tmp:
+            output = Path(tmp) / "candidate"
+            output.mkdir()
+            ran = subprocess.run(
+                [str(self.host), "--reference", str(REFERENCE), "--out", str(output),
+                 "--constant-words", "28"],
+                capture_output=True, text=True, check=False, env=env,
+            )
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+            descriptor = json.loads((output / "metal-logical.json").read_text())
+            expected_hex = reference["constants"]["hex"][: 96 * 2]
+            self.assertEqual(descriptor["state"]["constant_hex"], expected_hex)
+
     def test_replay_is_deterministic(self) -> None:
         hashes = []
         with tempfile.TemporaryDirectory(prefix="m5-det-") as tmp:

@@ -190,9 +190,11 @@ eu4_gfx_sprite_draw_status eu4_gfx_sprite_draw_encode_into(
     }
     uint32_t constant_words = load_u32(constant, 0);
     const void *constant_data = load_ptr(constant, 8);
-    if (constant_data == NULL || constant_words < 6) {
+    /* The header stores the number of 32-bit words, not the number of vec4
+       values. The six-vec4 uniform block is 96 bytes = 24 dwords. */
+    if (constant_data == NULL || constant_words < 24) {
         return refuse(EU4_GFX_SPRITE_DRAW_CONSTANT, reason,
-                      "constant slot 2 does not hold the six sprite uniforms");
+                      "constant slot 2 declares fewer than 24 dwords (96 bytes)");
     }
 
     void *texture_binding =

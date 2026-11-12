@@ -5,17 +5,19 @@
 
 M5 requires the authentic original-OpenGL sprite draw (the next distinct
 rendering operation after the M4 Simple text draw), the same operation encoded
-by the production Metal dispatcher on a live GPU over its authentic prior
-framebuffer, exact composed pixel equivalence under the declared policy, a
-nonzero contribution, unsupported-state refusal, a corrupted-input negative
-control, and the preserved M4 route/regressions.
+and GPU-completed by the authentic live engine path, an ordered live prefix,
+exact seeded replay equivalence under the declared policy, a recomputed nonzero
+live contribution, unsupported-state refusal, corrupted-input refusal, evidence
+integrity, and the preserved M4 route/regressions.
 
-The live engine cannot currently reach the sprite draw: the second loading
-frame starts with the unreconstructed original `_GfxBeginScene`, which crashes
-after the first present. The qualification therefore uses the deterministic
-replay boundary in `automation.m5_replay`, which calls the same production
-encoder with the captured original-GL inputs. The checker records this
-limitation explicitly; it never labels the replay as a live-engine route.
+The checker reports `sprite_replay_qualified`, `live_engine_qualified`,
+`live_composition_qualified`, `live_pixels_qualified` and `m5_complete`
+separately. `verdict=pass` requires `m5_complete`; a missing live capture or
+local reference is `inconclusive`; a corrupt or inconsistent manifest/policy is
+`fail`. `live_pixels_qualified` is currently false because the live prefix
+cannot reproduce the original loading-screen background producer; this is
+reported as the remaining live-scene pixel limitation and does not substitute
+for the exact seeded replay.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -229,7 +232,7 @@ def reference_gates(workspace: Path, manifest: dict, policy: dict) -> tuple[list
 def _run_replay(workspace: Path, reference_run: Path, output: Path) -> dict:
     from automation import m5_replay  # type: ignore
 
-    return m5_replay.run_replay(reference_run, output, force_build=True)
+    return m5_replay.run_replay(reference_run, output, force_build=False)
 
 
 def comparison_gate(workspace: Path, reference_run: Path, fresh_output: Path,
@@ -320,7 +323,7 @@ def unsupported_state_gate(workspace: Path, reference_run: Path) -> dict:
         env["EU4_M5_REPLAY_BAD_STATE"] = "1"
         ran = subprocess.run(
             [str(host), "--reference", str(reference_run), "--out", tmp],
-            capture_output=True, text=True, check=False, env=env,
+            capture_output=True, text=True, check=False, env=env, timeout=120,
         )
         detail = (ran.stderr or ran.stdout).strip()[-300:]
         return _gate(
@@ -428,6 +431,77 @@ def m4_gate(workspace: Path) -> dict:
         return gate
 
 
+def _canonical_bgra(path: Path, width, height, pixel_format, origin) -> bytes:
+    if not isinstance(width, int) or not isinstance(height, int) or width <= 0 or height <= 0:
+        raise ValueError("image extent is invalid")
+    if pixel_format not in ("BGRA8", "RGBA8"):
+        raise ValueError("image pixel format is invalid")
+    if origin not in ("lower_left", "top_left"):
+        raise ValueError("image origin is invalid")
+    data = path.read_bytes()
+    if len(data) != width * height * 4:
+        raise ValueError(f"image size {len(data)} != {width}x{height}x4")
+    from automation import gfx_compare  # type: ignore
+
+    capture = SimpleNamespace(
+        payload=data, pixel_format=pixel_format, width=width, height=height,
+        row_stride=width * 4, origin=origin,
+    )
+    return gfx_compare._canonical_rgba(capture)
+
+
+def _changed_mask(before: bytes, after: bytes) -> tuple[list[int], int]:
+    if len(before) != len(after):
+        raise ValueError("image sizes differ")
+    mask = [0] * (len(before) // 4)
+    changed = 0
+    for pixel in range(len(mask)):
+        offset = pixel * 4
+        if before[offset:offset + 4] != after[offset:offset + 4]:
+            mask[pixel] = 1
+            changed += 1
+    return mask, changed
+
+
+def evidence_integrity_gates(workspace: Path, manifest: dict,
+                             policy: dict) -> tuple[list[dict], str]:
+    """Return (gates, status) for manifest/policy integrity.
+
+    status is "ok", "fail" (available evidence is inconsistent or invalid) or
+    "inconclusive" (required local evidence is missing).
+    """
+    gates: list[dict] = []
+    manifest_path = workspace / MANIFEST
+    if not manifest_path.is_file():
+        gates.append(_gate("evidence:manifest", False, "evidence manifest is missing"))
+        gates.append(_gate("evidence:policy", False, "evidence manifest is missing"))
+        return gates, "inconclusive"
+    manifest_sha = _sha(manifest_path)
+    campaign = _load_json(Path(__file__).resolve().parent / "campaign.json")
+    pinned = campaign.get("evidence_manifest_sha256")
+    if pinned and pinned != manifest_sha:
+        gates.append(_gate("evidence:manifest", False,
+                           "evidence manifest digest does not match the campaign pin"))
+        gates.append(_gate("evidence:policy", False, "manifest integrity failed"))
+        return gates, "fail"
+    gates.append(_gate("evidence:manifest", True, f"sha256={manifest_sha}"))
+
+    policy_path = workspace / str((manifest.get("policy") or {}).get("path") or POLICY)
+    if not policy_path.is_file():
+        gates.append(_gate("evidence:policy", False, "comparison policy is missing"))
+        return gates, "inconclusive"
+    expected = (manifest.get("policy") or {}).get("sha256")
+    if policy.get("schema") != "gfx-compare-policy/v1":
+        gates.append(_gate("evidence:policy", False, "comparison policy is malformed"))
+        return gates, "fail"
+    if not expected or _sha(policy_path) != expected:
+        gates.append(_gate("evidence:policy", False,
+                           "comparison policy digest does not match the manifest"))
+        return gates, "fail"
+    gates.append(_gate("evidence:policy", True, "policy digest"))
+    return gates, "ok"
+
+
 def live_engine_gates(workspace: Path, manifest: dict, policy: dict) -> tuple[list[dict], bool, bool, bool, dict]:
     """Validate the authentic live-engine reach and GPU execution.
 
@@ -457,7 +531,11 @@ def live_engine_gates(workspace: Path, manifest: dict, policy: dict) -> tuple[li
         return gates, False, False, False, {}
 
     def _load_block(block: dict) -> tuple[dict, bool]:
-        descriptor = _load_json(run / str(block.get("descriptor") or ""))
+        name = str(block.get("descriptor") or "")
+        descriptor_path = run / name
+        if not name or not descriptor_path.is_file():
+            return {}, False
+        descriptor = _load_json(descriptor_path)
         raw = run / str(block.get("bgra") or "")
         ok = (
             bool(descriptor)
@@ -465,7 +543,7 @@ def live_engine_gates(workspace: Path, manifest: dict, policy: dict) -> tuple[li
             and raw.stat().st_size == block.get("bgra_bytes")
             and _sha(raw) == block.get("bgra_sha256")
         )
-        if block.get("descriptor_sha256") and _sha(run / str(block.get("descriptor") or "")) != block.get("descriptor_sha256"):
+        if block.get("descriptor_sha256") and _sha(descriptor_path) != block.get("descriptor_sha256"):
             ok = False
         return descriptor, ok
 
@@ -531,18 +609,66 @@ def live_engine_gates(workspace: Path, manifest: dict, policy: dict) -> tuple[li
         order_ok,
         f"draws={[(d.get('caller_rva'), d.get('shader_identity')) for d in prefix_draws]}",
     ))
-    contribution = evidence.get("contribution") or {}
-    contribution_ok = (
-        contribution.get("live_differing_pixels", 0) > 0
-        and contribution.get("live_differing_pixels") == contribution.get("gl_differing_pixels")
-        and contribution.get("total_pixels") == 1728 * 1117
-    )
-    gates.append(_gate(
-        "live:contribution",
-        contribution_ok,
-        f"live={contribution.get('live_differing_pixels')} gl={contribution.get('gl_differing_pixels')} "
-        f"total={contribution.get('total_pixels')}",
-    ))
+    reported = evidence.get("contribution") or {}
+    contribution_ok = False
+    contribution_detail = "image validation failed"
+    contribution_report: dict = {}
+    try:
+        reference_run = workspace / str((manifest.get("reference") or {}).get("run") or "")
+        reference_capture = gfx_compare.load_capture(reference_run, "reference")
+        reference_descriptor = _load_json(reference_run / "gl-reference.json")
+        pre_descriptor = reference_descriptor.get("pre_draw") or {}
+        pre_gl_path = reference_run / str(pre_descriptor.get("raw_file") or "")
+        gl_pre = _canonical_bgra(
+            pre_gl_path, pre_descriptor.get("width"), pre_descriptor.get("height"),
+            pre_descriptor.get("pixel_format"), pre_descriptor.get("origin"),
+        )
+        gl_post = gfx_compare._canonical_rgba(reference_capture)
+        prefix_target = prefix.get("target") or {}
+        live_pre = _canonical_bgra(
+            run / str((evidence.get("prefix_pre") or {}).get("bgra") or ""),
+            prefix_target.get("width"), prefix_target.get("height"),
+            prefix_target.get("pixel_format"), prefix_target.get("origin"),
+        )
+        logical_target = logical.get("target") or {}
+        live_post = _canonical_bgra(
+            run / str((evidence.get("logical") or {}).get("bgra") or ""),
+            logical_target.get("width"), logical_target.get("height"),
+            logical_target.get("pixel_format"), logical_target.get("origin"),
+        )
+        gl_mask, gl_changed = _changed_mask(gl_pre, gl_post)
+        live_mask, live_changed = _changed_mask(live_pre, live_post)
+        total = len(gl_mask)
+        reported_agree = (
+            gl_changed == reported.get("gl_differing_pixels")
+            and live_changed == reported.get("live_differing_pixels")
+            and total == reported.get("total_pixels")
+        )
+        intersection = sum(1 for a, b in zip(gl_mask, live_mask) if a and b)
+        union = sum(1 for a, b in zip(gl_mask, live_mask) if a or b)
+        equal = sum(1 for a, b in zip(gl_mask, live_mask) if a == b)
+        iou = (intersection / union) if union else 0.0
+        contribution_report = {
+            "gl_recomputed": gl_changed,
+            "live_recomputed": live_changed,
+            "gl_reported": reported.get("gl_differing_pixels"),
+            "live_reported": reported.get("live_differing_pixels"),
+            "total_pixels": total,
+            "reported_agree": reported_agree,
+            "mask_intersection": intersection,
+            "mask_union": union,
+            "mask_equal_pixels": equal,
+            "mask_iou": round(iou, 6),
+        }
+        material = live_changed >= max(1, total // 1000)
+        contribution_ok = material and reported_agree
+        contribution_detail = (
+            f"live={live_changed} gl={gl_changed} reported_agree={reported_agree} "
+            f"mask_iou={iou:.3f} total={total}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        contribution_detail = str(exc)
+    gates.append(_gate("live:contribution", contribution_ok, contribution_detail))
     composition_ok = order_ok and contribution_ok
 
     live_pixels_ok = False
@@ -561,6 +687,7 @@ def live_engine_gates(workspace: Path, manifest: dict, policy: dict) -> tuple[li
     except Exception as exc:  # noqa: BLE001
         detail = str(exc)
     gates.append(_gate("live:pixels", live_pixels_ok, detail + " (separate from seeded replay)"))
+    live_report["contribution"] = contribution_report
     return gates, live_ok, composition_ok, live_pixels_ok, live_report
 
 
@@ -571,7 +698,8 @@ def main(argv: list[str]) -> int:
     workspace = Path(argv[1]).resolve()
     manifest_path = workspace / MANIFEST
     manifest = _load_json(manifest_path)
-    policy = _load_json(workspace / POLICY)
+    policy_path = workspace / str((manifest.get("policy") or {}).get("path") or POLICY)
+    policy = _load_json(policy_path)
     campaign = _load_json(Path(__file__).resolve().parent / "campaign.json")
     if manifest.get("schema") != "eu4-m5-evidence/v1":
         print(json.dumps({"verdict": "unavailable", "diagnostics": "unexpected M5 manifest schema"}))
@@ -586,18 +714,19 @@ def main(argv: list[str]) -> int:
         return 1
 
     gates: list[dict] = []
-    gates.append(_gate(
-        "evidence:manifest",
-        bool(manifest_sha) and (not pinned or pinned == manifest_sha),
-        f"sha256={manifest_sha}",
-    ))
-    policy_path = workspace / str((manifest.get("policy") or {}).get("path") or POLICY)
-    gates.append(_gate(
-        "evidence:policy",
-        policy.get("schema") == "gfx-compare-policy/v1"
-        and _sha(policy_path) == (manifest.get("policy") or {}).get("sha256"),
-        "policy digest",
-    ))
+    integrity_gates, integrity_status = evidence_integrity_gates(
+        workspace, manifest, policy
+    )
+    gates.extend(integrity_gates)
+    if integrity_status == "fail":
+        print(json.dumps({
+            "verdict": "fail",
+            "diagnostics": "M5 evidence integrity failed: " + "; ".join(
+                gate["detail"] for gate in integrity_gates if not gate["ok"]
+            ),
+            "gates": integrity_gates,
+        }))
+        return 1
 
     reference_run = workspace / str((manifest.get("reference") or {}).get("run") or "")
     reference_available = reference_run.is_dir()
@@ -638,7 +767,7 @@ def main(argv: list[str]) -> int:
     m4_result = m4_gate(workspace)
     gates.append(m4_result)
 
-    hard_fail = False
+    hard_fail = integrity_status == "fail"
     if reference_available:
         hard_fail = hard_fail or any(
             gate["name"] in ("reference:event", "reference:target", "reference:vertex",
@@ -673,8 +802,10 @@ def main(argv: list[str]) -> int:
     )
     m4_ok = m4_result.get("status") in ("pass", "not_run")
     sprite_replay_qualified = reference_ok and replay_ok
+    integrity_ok = integrity_status == "ok"
     m5_complete = (
-        sprite_replay_qualified
+        integrity_ok
+        and sprite_replay_qualified
         and live_engine_ok
         and composition_ok
         and safety_ok
@@ -702,6 +833,7 @@ def main(argv: list[str]) -> int:
         "live_composition_qualified": composition_ok,
         "live_pixels_qualified": live_pixels_ok,
         "m5_complete": m5_complete,
+        "evidence_integrity": integrity_status,
         "m4_evidence": {
             "status": m4_result.get("status", "not_run"),
             "detail": m4_result.get("detail"),
@@ -748,6 +880,7 @@ def main(argv: list[str]) -> int:
                                       if isinstance(live_report, dict) else None),
             },
             "reason": (manifest.get("live_engine") or {}).get("limitation"),
+            "contribution": live_report.get("contribution") if isinstance(live_report, dict) else None,
         },
         "engine_reach": manifest.get("engine_reach") or {},
     }

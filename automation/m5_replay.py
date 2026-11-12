@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Deterministic live-Metal replay of the M5 sprite draw.
+"""Offline GPU replay of the M5 sprite draw.
 
-The live engine cannot currently reach the second loading frame: the first
-present is followed by the original ``CGraphics::BeginScene`` calling
-``_GfxBeginScene``, which is not reconstructed and crashes. The sprite draw is
-the next ``_GfxDraw`` in the original-GL sequence, so this module drives the
-same production encoder with the exact original-GL inputs captured for that
-draw. It is a replay boundary, not a second renderer.
+The live engine now reaches and GPU-completes the selected sprite draw. This
+module remains the exact isolated pixel qualification: it drives the same
+production encoder with the exact original-GL inputs captured for that draw,
+seeding the authentic pre-draw so the animated loading-screen background does
+not affect the sprite comparison. It is a replay boundary, not a second
+renderer.
 """
 
 from __future__ import annotations
