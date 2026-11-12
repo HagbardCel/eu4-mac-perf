@@ -96,7 +96,7 @@ static void hex_bytes(const uint8_t *bytes, size_t length, char *out) {
 }
 
 static uint64_t fnv1a(const uint8_t *bytes, size_t length) {
-    uint64_t hash = 1469598103934665603ULL;
+    uint64_t hash = 14695981039346656037ULL;
     for (size_t i = 0; i < length; i++) {
         hash ^= bytes[i];
         hash *= 1099511628211ULL;
