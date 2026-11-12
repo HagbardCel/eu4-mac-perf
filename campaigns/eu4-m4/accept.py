@@ -428,7 +428,8 @@ def main(argv: list[str]) -> int:
         tests = subprocess.run(
             [
                 sys.executable, "-m", "unittest",
-                "tests.test_gfx_compare", "tests.test_gl_reference", "tests.test_live_gfx_probe",
+                "tests.test_gfx_compare", "tests.test_gl_reference",
+                "tests.test_live_gfx_probe", "tests.test_m4_accept",
             ],
             cwd=workspace,
             capture_output=True,
