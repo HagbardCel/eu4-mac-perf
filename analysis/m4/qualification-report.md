@@ -201,7 +201,7 @@ read and draw buffers as `GL_BACK`.
 `tests.test_gfx_compare`, `tests.test_gl_reference`, `tests.test_live_gfx_probe`,
 `tests.test_gfx_pack_state`, the M4 checker tests and the
 Metal/live-draw/HiDPI/simple-reference suites pass. DSH plugin tests pass (34). The tracked full suite passes:
-**2459 tests OK, 10 skipped**, with two local-only exclusions documented with
+**2462 tests OK, 10 skipped**, with two local-only exclusions documented with
 the commit: an untracked `tests/test_gfx_l32b_e2e.py` that imports a missing
 module, and a partially present untracked
 `results/20261006T193739Z-submission-experiment` directory without its manifest.
