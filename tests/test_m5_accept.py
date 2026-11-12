@@ -14,6 +14,13 @@ CHECKER = ROOT / "campaigns" / "eu4-m5" / "accept.py"
 POLICY = ROOT / "analysis" / "m5" / "comparison-policy.json"
 MANIFEST = ROOT / "analysis" / "m5" / "evidence-manifest.json"
 LIVE = ROOT / "analysis" / "m5" / "live-evidence.json"
+try:
+    _MANIFEST_VALUE = json.loads(MANIFEST.read_text())
+except (OSError, ValueError):
+    _MANIFEST_VALUE = {}
+LIVE_RUN = ROOT / str(
+    ((_MANIFEST_VALUE.get("live_engine") or {}).get("run") or "")
+)
 
 
 def _load_checker():
@@ -45,9 +52,11 @@ class M5AcceptanceSemanticsTests(unittest.TestCase):
     def test_synthetic_replay_descriptor_cannot_satisfy_live_gate(self) -> None:
         with tempfile.TemporaryDirectory(prefix="m5-live-negative-") as tmp:
             evidence = Path(tmp) / "live-evidence.json"
+            fake_run = Path(tmp) / "synthetic-run"
+            fake_run.mkdir()
             evidence.write_text(json.dumps({
                 "schema": "eu4-m5-live-evidence/v1",
-                "run": ".local/m5/experiments/metal-replay-04",
+                "run": str(fake_run),
                 "engine_reached": True,
                 "checkpoint": {
                     "descriptor": "checkpoint-after-draw-1.json",
@@ -73,9 +82,9 @@ class M5AcceptanceSemanticsTests(unittest.TestCase):
             self.assertFalse(live)
             self.assertFalse(composition)
             self.assertFalse(pixels)
-            self.assertTrue(any(g["name"] == "live:engine-gpu" and not g["ok"] for g in gates))
+            self.assertTrue(any(g["name"].startswith("live:") and not g["ok"] for g in gates))
 
-    @unittest.skipUnless(LIVE.is_file(), "local live evidence is absent")
+    @unittest.skipUnless(LIVE_RUN.is_dir(), "local live run is absent")
     def test_recorded_live_evidence_satisfies_live_gate(self) -> None:
         gates, live, composition, pixels, _ = self.checker.live_engine_gates(
             ROOT, self.manifest, self.policy

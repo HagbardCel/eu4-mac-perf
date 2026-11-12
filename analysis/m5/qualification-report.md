@@ -1,9 +1,12 @@
 # M5 qualification report — second authentic draw and composed comparison
 
-Status: **qualified by the M5 checker** (`campaigns/eu4-m5/accept.py`, 18/18 gates, verdict `pass` on implementation commit `36fa8e9` and again on the
-final clean tree `d08eecd`) for the reconstructed sprite operation. The live engine path to the draw is **not**
-reached; the exact blocker is recorded below. The checker distinguishes the
-reconstructed operation and the live-Metal replay from a live-engine route.
+Status: **M5 complete by the fail-closed checker** (`campaigns/eu4-m5/accept.py`,
+verdict `pass`, `m5_complete=true` on implementation commit `d5a9432`). The
+checker separates `sprite_replay_qualified=true`, `live_engine_qualified=true`,
+`live_composition_qualified=true`, and the explicitly **false** separate
+`live_pixels_qualified` result caused by the unreconstructed loading-screen
+background producer. The live engine now reaches and GPU-completes the selected
+draw; the exact seeded replay remains the pixel qualification.
 
 | Gate | Result |
 | --- | --- |
@@ -12,7 +15,8 @@ reconstructed operation and the live-Metal replay from a live-engine route.
 | Matching selected event and inputs | **pass** (mode 5, count 4, 80-byte stride-20 VBO, 112-byte constants, 1235×175 texture) |
 | Valid prior framebuffer contents | **pass** (diagnostic target seeded with the authentic pre-draw payload) |
 | Live Metal GPU execution | **pass** (command status 4, shared-target readback) |
-| Composed pixel equivalence | **pass** (0 differing / 1,930,176) |
+| Composed pixel equivalence (seeded replay) | **pass** (0 differing / 1,930,176) |
+| Live composed pixel equivalence | **not qualified** — live prefix pre-draw differs; separate `live_pixels_qualified=false` |
 | Nonzero contribution | **pass** (157,254 pixels changed) |
 | Unsupported state refusal | **pass** |
 | Corrupted-input negative control | **pass** (max channel error 243, 42,284 mismatched) |
@@ -20,7 +24,6 @@ reconstructed operation and the live-Metal replay from a live-engine route.
 | Live engine reaches the draw | **pass** (`metal-live-final-02`, caller `0x14f6c1b`) |
 | Live engine GPU completion and backbuffer readback | **pass** (`command_status=4`, 3456×2234) |
 | Live prefix composition | **pass** (Simple + sprite in order; contribution 157,254) |
-| Live composed pixel equivalence to GL | **not qualified** — live prefix pre-draw differs; separate result |
 
 ## Selected operation
 

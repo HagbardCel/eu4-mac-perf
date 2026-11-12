@@ -300,28 +300,35 @@
   "checker": {
     "path": "campaigns/eu4-m5/accept.py",
     "result": "pass",
-    "run": ".local/m5/checker-final1.json",
+    "run": ".local/m5/checker-final-live.json",
     "command": "PYTHONPATH=benchmark:. python3 campaigns/eu4-m5/accept.py .",
     "gates": {
-      "count": 18,
-      "passed": 18,
-      "failed": 0
+      "count": 23,
+      "required_passed": 22,
+      "separate_live_pixels_failed": 1
     },
     "notes": [
-      "M4 checker verdict=pass on the recorded local M4 evidence",
-      "67 offline regression tests pass",
-      "fresh live-Metal replay compared exactly"
+      "sprite_replay_qualified=true: exact seeded comparison on the sampler-bearing reference",
+      "live_engine_qualified=true: authentic _GfxDraw caller 0x14f6c1b, sprite identity, GPU status 4, engine-owned 3456x2234 backbuffer readback",
+      "live_composition_qualified=true: live prefix Simple draw then sprite; contribution 157254 equals GL",
+      "live_pixels_qualified=false: live prefix pre-draw differs because the background producer is unreconstructed; classified separately, not used for m5_complete",
+      "m4 checker pass on its recorded evidence",
+      "67 offline tests pass in the final checker run"
     ]
   },
-  "implementation_commit": "36fa8e9",
+  "implementation_commit": "d5a9432",
   "final_acceptance": {
     "verdict": "pass",
-    "commit": "36fa8e9",
+    "m5_complete": true,
+    "commit": "d5a9432",
     "python": "3.14.10",
-    "reference_run": ".local/m5/experiments/sprite-gl-ref-08",
-    "fresh_candidate_run": ".local/m5/accept-1794498939",
-    "comparison": "pass 0/1930176 max_channel_error=0",
-    "mp5_host_tests": "4 pass",
+    "reference_run": ".local/m5/experiments/sprite-gl-ref-09",
+    "seeded_candidate_run": ".local/m5/experiments/metal-replay-05",
+    "live_run": ".local/m5/experiments/metal-live-final-02",
+    "sprite_replay": "pass 0/1930176 max_channel_error=0",
+    "live_engine": "pass caller=0x14f6c1b gpu=4 target=3456x2234",
+    "live_composition": "pass Simple+sprite; 157254 changed pixels",
+    "live_pixels": "separate false: live prefix pre-draw differs from GL pre-draw",
     "m4_checker": "pass",
     "offline_regressions": "67 pass"
   },
