@@ -351,6 +351,11 @@ eu4_gfx_sprite_draw_status eu4_gfx_sprite_draw_encode_into(
         state->depth_default = eu4_gfx_depth_snapshot_is_default((void *)master);
         state->raster_default = 1;
         state->scissor_full = 1;
+        /* GL_LINEAR / GL_LINEAR / GL_CLAMP_TO_EDGE / GL_CLAMP_TO_EDGE. */
+        state->sampler_min_filter = 9729;
+        state->sampler_mag_filter = 9729;
+        state->sampler_wrap_s = 33071;
+        state->sampler_wrap_t = 33071;
     }
     return EU4_GFX_SPRITE_DRAW_OK;
 }

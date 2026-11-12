@@ -1,5 +1,6 @@
 #import "eu4_gfx_buffers.h"
 #import "eu4_gfx_init.h"
+#import "eu4_gfx_logical_capture.h"
 #import "eu4_gfx_checkpoint.h"
 #import "eu4_metal_events.h"
 
@@ -370,12 +371,28 @@ __attribute__((weak)) int eu4_metal_window_state(uint64_t *number, int *visible,
     return 0;
 }
 
+/* Hosts that do not link the diagnostic logical capture keep the production
+   clear/present path functional; the strong definitions win when linked. */
+__attribute__((weak)) void eu4_gfx_logical_capture_reset(void) {}
+__attribute__((weak)) void eu4_gfx_logical_capture_set_clear(const float *color) {
+    (void)color;
+}
+
 void eu4_gfx_present_capture_set(void *dest, size_t capacity) {
     g_present_readback = dest;
     g_present_readback_cap = capacity;
 }
 
 void eu4_gfx_enable_game_window(void) { g_enable_game_window = 1; }
+
+uint64_t eu4_gfx_current_geometry_generation(void) {
+    if (!g_succeeded || g_master == NULL) {
+        return 0;
+    }
+    __unsafe_unretained EU4GfxBackend *backend =
+        (__bridge EU4GfxBackend *)load_ptr(g_master, 0x180);
+    return backend != nil ? backend.geometryGeneration : 0;
+}
 
 int eu4_gfx_phase(void) { return g_phase; }
 
@@ -437,6 +454,41 @@ static void fill_blend_snap(uint8_t snap[0x24]) {
     memset(snap, 0, 0x24);
     memcpy(snap + 4, &one, 4);
     memcpy(snap + 8, &zero, 4);
+    memcpy(snap + 0xc, &add, 4);
+    memcpy(snap + 0x10, &one, 4);
+    memcpy(snap + 0x14, &zero, 4);
+    memcpy(snap + 0x18, &add, 4);
+    memcpy(snap + 0x1c, &compare, 4);
+    memcpy(snap + 0x20, &mask, 4);
+}
+
+/* Measured descriptor for the loading-screen sprite effect's blend state.
+   Enables SRC_ALPHA / ONE_MINUS_SRC_ALPHA with FUNC_ADD and the normal mask. */
+static const uint8_t kSpriteBlendDescriptor[0x24] = {
+    0x01, 0x00, 0x5c, 0x01, 0x04, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00,
+};
+
+static int blend_sprite_supported(const uint8_t *desc) {
+    if (desc == NULL) {
+        return 0;
+    }
+    /* The descriptor's +2 field is a blend-state identity that can vary across
+       engine allocations. The effective factors and mask are stable. */
+    return desc[0] == 1 && desc[4] == 4 && desc[8] == 5 && desc[0xc] == 0 &&
+           desc[0x10] == 1 && desc[0x14] == 0 && desc[0x18] == 0 &&
+           desc[0x1c] == kSpriteBlendDescriptor[0x1c] &&
+           desc[0x20] == kSpriteBlendDescriptor[0x20];
+}
+
+static void fill_sprite_blend_snap(uint8_t snap[0x24]) {
+    uint32_t enabled = 1, src = 0x0302, dst = 0x0303, add = 0x8006, one = 1, zero = 0,
+             compare = 0x206, mask = 0x01010101;
+    memset(snap, 0, 0x24);
+    memcpy(snap, &enabled, 4);
+    memcpy(snap + 4, &src, 4);
+    memcpy(snap + 8, &dst, 4);
     memcpy(snap + 0xc, &add, 4);
     memcpy(snap + 0x10, &one, 4);
     memcpy(snap + 0x14, &zero, 4);
@@ -507,11 +559,34 @@ static int apply_snap(void *master, int offset, const uint8_t *snap, int size, i
 }
 
 static int apply_blend(void *master, void *state, int force) {
-    if (state == NULL || !blend_supported((uint8_t *)state + 0x24)) {
+    if (state == NULL) {
         return -1;
     }
+    const uint8_t *desc = (const uint8_t *)state + 0x24;
     uint8_t snap[0x24];
-    fill_blend_snap(snap);
+    if (blend_supported(desc)) {
+        fill_blend_snap(snap);
+    } else if (blend_sprite_supported(desc)) {
+        fill_sprite_blend_snap(snap);
+    } else {
+        char hex[0x24 * 2 + 1];
+        static const char digits[] = "0123456789abcdef";
+        for (int i = 0; i < 0x24; i++) {
+            hex[i * 2] = digits[desc[i] >> 4];
+            hex[i * 2 + 1] = digits[desc[i] & 0xf];
+        }
+        hex[0x24 * 2] = 0;
+        char body[256];
+        int length = snprintf(
+            body, sizeof body,
+            "{\"schema\":\"gfx-blend-rejected/v1\",\"descriptor\":\"%s\","
+            "\"state\":\"%p\",\"pid\":%d}\n",
+            hex, state, (int)getpid());
+        if (length > 0 && (size_t)length < sizeof body) {
+            (void)eu4_metal_events_write("blend-rejected.json", body);
+        }
+        return -1;
+    }
     return apply_snap(master, 0xc, snap, 0x24, force);
 }
 
@@ -632,21 +707,7 @@ int eu4_gfx_sprite_state_supported(void *master, char *reason, size_t capacity) 
         return 0;
     }
     uint8_t expected_blend[0x24];
-    memset(expected_blend, 0, sizeof expected_blend);
-    uint32_t enabled = 1, src = 0x0302, dst = 0x0303, add = 0x8006,
-             one = 1, zero = 0, compare = 0x206, mask = 0x01010101;
-    memcpy(expected_blend, &enabled, 4);
-    memcpy(expected_blend + 4, &src, 4);
-    memcpy(expected_blend + 8, &dst, 4);
-    memcpy(expected_blend + 0xc, &add, 4);
-    /* The backend blend snapshot stores one/zero for the alpha factors while
-       the original GL state (and the Metal pipeline) uses SRC_ALPHA /
-       ONE_MINUS_SRC_ALPHA for alpha as well. Colour output is unaffected. */
-    memcpy(expected_blend + 0x10, &one, 4);
-    memcpy(expected_blend + 0x14, &zero, 4);
-    memcpy(expected_blend + 0x18, &add, 4);
-    memcpy(expected_blend + 0x1c, &compare, 4);
-    memcpy(expected_blend + 0x20, &mask, 4);
+    fill_sprite_blend_snap(expected_blend);
     if (memcmp((uint8_t *)master + 0xc, expected_blend, sizeof expected_blend) != 0) {
         simple_state_reason(reason, capacity,
                             "blend state is not the measured sprite alpha blend");
@@ -1186,6 +1247,57 @@ static void set_state(void *handle, void *state, int slot, int (*apply)(void *, 
 
 void eu4_gfx_set_blend(void *handle, void *state) {
     set_state(handle, state, 0x80, apply_blend, "_GfxSetBlendState", 0, __builtin_return_address(0));
+}
+
+static void write_begin_scene_receipt(void *handle, void *master, void *current,
+                                      void *blend) {
+    char body[512];
+    int length = snprintf(
+        body, sizeof body,
+        "{\"schema\":\"gfx-begin-scene/v1\",\"handle\":\"%p\","
+        "\"deref\":\"%p\",\"g_master\":\"%p\",\"handle_is_master\":%s,"
+        "\"current\":\"%p\",\"blend\":\"%p\",\"pid\":%d}\n",
+        handle, master, g_master, handle == g_master ? "true" : "false",
+        current, blend, (int)getpid());
+    if (length > 0 && (size_t)length < sizeof body) {
+        (void)eu4_metal_events_write("begin-scene.json", body);
+    }
+}
+
+int eu4_gfx_begin_scene(void *handle) {
+    if (handle == NULL) {
+        return 1;
+    }
+    uint8_t *bytes = (uint8_t *)handle;
+    void *master = NULL;
+    void *current = NULL;
+    void *blend = NULL;
+    memcpy(&current, bytes + 0x70, sizeof current);
+    memcpy(&blend, bytes + 0x80, sizeof blend);
+    if (handle == g_master) {
+        master = g_master;
+    } else {
+        memcpy(&master, bytes, sizeof master);
+    }
+    if (master == NULL) {
+        return 1;
+    }
+    write_begin_scene_receipt(handle, master, current, blend);
+    /* The original disables the current shader's vertex attribute arrays
+       through GLEW and then clears the current-shader field. The Metal path has
+       no GL attrib arrays; preserve the clear and skip only the GL effect. */
+    if (current != NULL) {
+        memset(bytes + 0x70, 0, sizeof current);
+    }
+    /* Original tail: _GfxSetBlendState(handle, *(handle+0x80)). */
+    if (blend == NULL) {
+        memcpy(&blend, (uint8_t *)master + 0x80, sizeof blend);
+    }
+    if (apply_blend(master, blend, 0) != 0 && g_succeeded) {
+        stop_now("after_init", "_GfxBeginScene", "unsupported",
+                 __builtin_return_address(0));
+    }
+    return 1;
 }
 
 void eu4_gfx_set_depth(void *handle, void *state) {
@@ -1759,6 +1871,10 @@ void eu4_gfx_clear(void *handle, unsigned flags, const float *color) {
         /* A geometry transition is a normal no-op, not a fatal clear. */
         return;
     }
+    if (status == EU4_GFX_CLEAR_OK && backend != nil && backend.gameWindow) {
+        eu4_gfx_logical_capture_set_clear(color);
+        eu4_gfx_logical_capture_reset();
+    }
     if (status != EU4_GFX_CLEAR_OK) {
         if (backend != nil) {
             uint32_t view_h = 0, view_w = 0, view_x = 0, view_y = 0, mask = 0;
@@ -2096,6 +2212,9 @@ int eu4_gfx_present(void *master) {
         (void)eu4_metal_events_write("present.json", present);
     }
     g_present_caller = NULL;
+    /* A presented frame is a hard prefix boundary. The next encoded prefix
+       starts from the next frame's clear, never from the previous frame. */
+    eu4_gfx_logical_capture_reset();
     return 1;
 }
 

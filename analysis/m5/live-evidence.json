@@ -1,0 +1,132 @@
+{
+  "schema": "eu4-m5-live-evidence/v1",
+  "run": ".local/m5/experiments/metal-live-final-02",
+  "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "library_sha256": "f324537fc93d5eb5d965c25e8edcffb2bf3c1e3cf8aca2381e0700925f840c21",
+  "session": "1794502738-18265",
+  "pid": 18326,
+  "engine_reached": true,
+  "caller_rva": "0x14f6c1b",
+  "observed_caller_rva": "0x14f6c1b",
+  "checkpoint": {
+    "descriptor": "checkpoint-after-draw-1.json",
+    "descriptor_sha256": "fd10369dbb728b3218dd6908409ac766a2ab075d1747e82a246278c422b5e46f",
+    "bgra": "checkpoint-after-draw-1.bgra",
+    "bgra_sha256": "fd2755d2fa84deaca236fa7aac4d76cc61d6e15add9ca49fc9dd8a29acee5c95",
+    "bgra_bytes": 30882816,
+    "target": [
+      3456,
+      2234
+    ],
+    "pixel_format": "BGRA8Unorm",
+    "gpu_completed": true,
+    "command_status": 4,
+    "draw": {
+      "shader_identity": "sprite-map/asset-maincode-v0",
+      "primitive": 5,
+      "count": 4,
+      "first": 0,
+      "vertex_stride": 20,
+      "vertex_offset": 0,
+      "vertex_bytes": 80,
+      "vertex_hash": "0xe505c35e88f14d7d",
+      "vertex_hex": "00000000000000000000803f000000000000803f0000000000002f430000803f000000000000000000609a44000000000000803f0000803f0000803f00609a4400002f430000803f0000803f00000000",
+      "constant_hash": "0xd82021cc92bba4f2",
+      "constant_hex": "26b4973a000000000000000000000000000000008eafea3a000000000000000000000000000000000000803f00000000721c37bf49b57dbf000000000000803f0000803f0000803f0000803f0000803f00000000000000000000803f00000000",
+      "texture": "0x7f85aa0c4560",
+      "texture_size": [
+        1235,
+        175
+      ],
+      "target": "0x7f852421c7e0",
+      "logical_size": [
+        1728,
+        1117
+      ],
+      "viewport": [
+        0,
+        0,
+        1728,
+        1117
+      ],
+      "blend_supported": 1,
+      "depth_default": 0,
+      "raster_default": 1,
+      "scissor_full": 1
+    }
+  },
+  "logical": {
+    "descriptor": "metal-logical.json",
+    "descriptor_sha256": "af6e9d2f5239b459d77df9979b19b66af9bbcf6241167581687a73ff157bdecb",
+    "bgra": "metal-logical.bgra",
+    "bgra_sha256": "b689dc374e2ca4b2f0813cfd4ec5d19f26ba7845d1dc7d450ed57859f8259527",
+    "bgra_bytes": 7720704,
+    "gpu_completed": true,
+    "command_status": 4,
+    "draw": {
+      "symbol": "_GfxDraw",
+      "caller_rva": "0x14f6c1b",
+      "caller_known": true,
+      "mode": 5,
+      "effective_count": 4,
+      "first": 0,
+      "shader_identity": "sprite-map/asset-maincode-v0",
+      "vertex_hex": "00000000000000000000803f000000000000803f0000000000002f430000803f000000000000000000609a44000000000000803f0000803f0000803f00609a4400002f430000803f0000803f00000000",
+      "vertex_sha256_fnv": "0xe505c35e88f14d7d"
+    },
+    "prefix": {
+      "count": 2,
+      "draws": [
+        {
+          "caller_rva": "0xedfcd1",
+          "shader_identity": "simple-lua-Simple/asset-maincode-v0",
+          "count": 4,
+          "first": 0
+        },
+        {
+          "caller_rva": "0x14f6c1b",
+          "shader_identity": "sprite-map/asset-maincode-v0",
+          "count": 4,
+          "first": 0
+        }
+      ]
+    },
+    "sampler": {
+      "min_filter": 9729,
+      "mag_filter": 9729,
+      "wrap_s": 33071,
+      "wrap_t": 33071
+    }
+  },
+  "prefix_pre": {
+    "descriptor": "metal-prefix-pre.json",
+    "descriptor_sha256": "f698952837e2b7f25d1fdbd9bbba67421b648aa072c0cc0b5c6eb9caa1596d94",
+    "bgra": "metal-prefix-pre.bgra",
+    "bgra_sha256": "126d51c154e47ad4be64dd83abc013fc47b54ea111f9c49f5d3334c8aeb8b0b5",
+    "bgra_bytes": 7720704,
+    "target": [
+      1728,
+      1117
+    ],
+    "pixel_format": "BGRA8"
+  },
+  "contribution": {
+    "live_differing_pixels": 157254,
+    "total_pixels": 1930176,
+    "gl_differing_pixels": 157254
+  },
+  "live_pixels_qualified": false,
+  "live_pixels_reason": "The live prefix pre-draw does not reproduce the selected original-GL pre-draw (the loading-screen background producer is not reconstructed in the live prefix). The live final is therefore not pixel-comparable to the cross-run GL capture; the exact seeded replay is the isolated pixel qualification. The live sprite contribution count matches GL exactly.",
+  "probe": {
+    "overall": "captured",
+    "status": {
+      "draw_reached": true,
+      "draw_encoded": true,
+      "gpu_completed": true,
+      "pixels_captured": true,
+      "presented": true,
+      "reference_matched": null
+    },
+    "command": "python3 -m automation.live_gfx probe --backend metal --checkpoint after-draw --caller-rva 0x14f6c1b --logical-prefix --draw-sequence --timeout 100 --output .local/m5/experiments/metal-live-final-02 --campaign-run-root .local/m5/live"
+  }
+}

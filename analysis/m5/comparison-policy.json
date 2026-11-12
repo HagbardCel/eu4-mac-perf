@@ -26,13 +26,19 @@
       "program": 22
     },
     "reference_glsl_sha256": "51868985cac47e5cab6907323a7e5f283b0d8f689234130664479c41520df235",
-    "reference_caps_byte4": 1
+    "reference_caps_byte4": 1,
+    "reference_sampler": {
+      "min_filter": 9729,
+      "mag_filter": 9729,
+      "wrap_s": 33071,
+      "wrap_t": 33071
+    }
   },
   "measured_basis": {
-    "reference_run": "sprite-gl-ref-08",
-    "candidate_run": "metal-replay-01",
-    "reference_raw_sha256": "23ab7b82693dfd8b9e7a38503f1e9ebe5488c92fc28d2fabd63b6ecd9601ce5f",
-    "candidate_raw_sha256": "f6346ca4a93a469ce7c9603c4420bbd60b74d1436cc796a90cee9ebe528a91e5",
+    "reference_run": "sprite-gl-ref-09",
+    "candidate_run": "metal-replay-04",
+    "reference_raw_sha256": "9cff01cae22e91013b715bf59cb392ee0c9b33450d1497dc1e1c16482403784c",
+    "candidate_raw_sha256": "862402aaf555f417631f375abd56762c100b1cfdc13c2f105d9cedc100c37afd",
     "observed_max_channel_error": 0,
     "observed_mismatched_pixels": 0,
     "note": "Exact equality over 1,930,176 pixels for the captured pre-draw/inputs. The loading-screen background is animated, so each authentic reference is paired with a replay seeded by its own pre-draw; independent reference runs are not expected to share a raw hash."

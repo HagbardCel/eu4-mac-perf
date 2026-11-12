@@ -415,6 +415,31 @@ void eu4_gfx_initialize_texture(void *ignored, void *header, const void *desc, c
     backend.textures[[NSValue valueWithPointer:header]] = taken;
 }
 
+void eu4_gfx_clear_texture(void *header) {
+    if (header == NULL) {
+        return;
+    }
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend != nil && backend.textures != nil) {
+        [backend.textures removeObjectForKey:[NSValue valueWithPointer:header]];
+    }
+    uint8_t *bytes = (uint8_t *)header;
+    if (bytes[0x1a] != 0) {
+        bytes[0x1a] = 0;
+        memset(bytes + 0x10, 0, 4);
+    }
+    if (bytes[0x19] != 0) {
+        bytes[0x19] = 0;
+        memset(bytes + 0x8, 0, 4);
+    }
+    if (bytes[0x1b] != 0) {
+        bytes[0x1b] = 0;
+        memset(bytes + 0x14, 0, 4);
+        memset(bytes + 0xc, 0, 4);
+    }
+    memset(bytes + 0x4, 0, 4);
+}
+
 void *eu4_gfx_texture_for_header(void *header) {
     if (header == NULL) {
         return NULL;

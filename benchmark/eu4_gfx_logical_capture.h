@@ -23,6 +23,14 @@ extern "C" {
  * its declaration was written. Every failure writes a machine-readable record
  * and returns 0; the live physical path is unaffected.
  */
+/* Reset the persistent prefix target at a frame/clear/generation boundary.
+   The target is retained and the next encoded draw clears it. */
+void eu4_gfx_logical_capture_reset(void);
+
+/* Record the engine clear colour for the next prefix frame. `color` is the
+   same four-float value passed to _GfxClear; NULL means opaque black. */
+void eu4_gfx_logical_capture_set_clear(const float *color);
+
 int eu4_gfx_logical_capture_from_env(
     void *device, void *queue, const void *immediate_context, int32_t count,
     int32_t first, const eu4_gfx_simple_draw_inputs *base_inputs,

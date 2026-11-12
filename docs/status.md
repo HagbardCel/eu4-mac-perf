@@ -34,6 +34,30 @@ frame is independently observable in the real EU4 window.
   and rejects unsupported framebuffer configurations; the final live capture
   records `restored=true`.
 
+## M5 — live sprite draw and composition (2026-11-12)
+
+The live Metal-backed EU4 process now reaches the next authentic original draw
+after the M4 Simple text: the loading-screen sprite at `_GfxDraw` caller
+`0x14f6c1b` (`CSpriteType::RenderInternal + 2271`). The probe records the
+authentic engine invocation, admits `sprite-map/asset-maincode-v0` through the
+real shader path, encodes it through the shared dispatcher/sprite encoder, and
+completes on the GPU against the engine-owned 3456×2234 backbuffer
+(`command_status=4`). The live inputs match the original: 80-byte stride-20
+vertex buffer, 96-byte uniform prefix, 1235×175 texture, linear/clamp sampler
+and alpha blend. The live prefix composes the frame's Simple draw and the
+sprite and produces the same 157,254 changed pixels as the GL pre/post pair.
+
+Three original entries were reconstructed to reach the draw: `_GfxBeginScene`
+(preserve the current-shader clear, default blend application and return 1,
+skip the GLEW attrib-disable branch), `_GfxClearTexture` (release the backend
+texture and preserve header mutations), and the sprite blend descriptor
+(admit the measured alpha blend). The exact seeded offline replay remains the
+pixel qualification. The live prefix pre-draw still differs from the original-GL
+pre-draw because the loading-screen background producer is unreconstructed, so
+live composed pixel equivalence is reported separately and is not claimed. See
+[the M5 qualification report](../analysis/m5/qualification-report.md),
+[target](../analysis/m5/target.md) and [checker](../campaigns/eu4-m5/accept.py).
+
 ## Latest milestone — authentic Simple draw on Metal (2026-11-12)
 
 Merged in [PR #185](https://github.com/HagbardCel/eu4-mac-perf/pull/185). Evidence: [live Simple draw](../analysis/reconstruction/simple-loading-draw/live-evidence.md); reusable workflow: [live graphics experiments](live-gfx-experiments.md).

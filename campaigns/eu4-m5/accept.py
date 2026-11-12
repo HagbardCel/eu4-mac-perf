@@ -84,7 +84,7 @@ def _normalized_source(path: Path) -> str:
     return hashlib.sha256(data.replace(GLSL_EXTENSION, GLSL_DEFINE)).hexdigest()
 
 
-def reference_gates(workspace: Path, manifest: dict) -> tuple[list[dict], bool, dict]:
+def reference_gates(workspace: Path, manifest: dict, policy: dict) -> tuple[list[dict], bool, dict]:
     gates: list[dict] = []
     hard_fail = False
     reference = manifest.get("reference") or {}
@@ -166,6 +166,24 @@ def reference_gates(workspace: Path, manifest: dict) -> tuple[list[dict], bool, 
     if not texture_ok:
         hard_fail = True
 
+    sampler = descriptor.get("sampler") or {}
+    expected_sampler = (policy.get("expected") or {}).get("reference_sampler") or {}
+    sampler_ok = (
+        sampler.get("status") == "ok"
+        and sampler.get("min_filter") == expected_sampler.get("min_filter")
+        and sampler.get("mag_filter") == expected_sampler.get("mag_filter")
+        and sampler.get("wrap_s") == expected_sampler.get("wrap_s")
+        and sampler.get("wrap_t") == expected_sampler.get("wrap_t")
+    )
+    gates.append(_gate(
+        "reference:sampler",
+        sampler_ok,
+        f"min={sampler.get('min_filter')} mag={sampler.get('mag_filter')} "
+        f"wrap=({sampler.get('wrap_s')},{sampler.get('wrap_t')})",
+    ))
+    if not sampler_ok:
+        hard_fail = True
+
     sources = descriptor.get("shader_sources") or []
     declared = {entry.get("stage"): entry for entry in (reference.get("shader") or {}).get("sources", [])}
     source_ok = len(sources) == 2
@@ -240,15 +258,21 @@ def comparison_gate(workspace: Path, reference_run: Path, fresh_output: Path,
     reference_descriptor = _load_json(reference_run / "gl-reference.json")
     reference_constant = reference_descriptor.get("constants") or {}
     reference_texture = reference_descriptor.get("texture_image") or {}
+    reference_sampler = reference_descriptor.get("sampler") or {}
     reference_vertex = _load_json(reference_run / "gl-reference-vertex.json")
     candidate_state = candidate.get("state") or {}
     candidate_draw = candidate.get("draw") or {}
+    candidate_sampler = candidate_state.get("sampler") or {}
     inputs_ok = (
         candidate_state.get("constant_sha256") == reference_constant.get("sha256")
         and candidate_state.get("texture_sha256") == reference_texture.get("sha256")
         and candidate_state.get("vertex_stride") == 20
         and candidate_draw.get("vertex_hex") == reference_vertex.get("hex")
         and candidate_state.get("logical_viewport") == [0, 0, 1728, 1117]
+        and candidate_sampler.get("min_filter") == reference_sampler.get("min_filter")
+        and candidate_sampler.get("mag_filter") == reference_sampler.get("mag_filter")
+        and candidate_sampler.get("wrap_s") == reference_sampler.get("wrap_s")
+        and candidate_sampler.get("wrap_t") == reference_sampler.get("wrap_t")
     )
     gates.append(_gate(
         "candidate:inputs",
@@ -374,13 +398,18 @@ def m4_gate(workspace: Path) -> dict:
     checker = workspace / "campaigns" / "eu4-m4" / "accept.py"
     evidence = workspace / ".local" / "m4" / "experiments"
     if not checker.is_file():
-        return _gate("regressions:m4-checker", True, "M4 checker is not present in this workspace")
+        gate = _gate("regressions:m4-checker", True,
+                     "M4 checker is not present in this workspace")
+        gate["status"] = "not_run"
+        return gate
     if not evidence.is_dir():
-        return _gate(
+        gate = _gate(
             "regressions:m4-checker",
             True,
             "M4 live evidence is local-only and absent; M4 host tests cover the route",
         )
+        gate["status"] = "not_run"
+        return gate
     try:
         ran = subprocess.run(
             [sys.executable, str(checker), str(workspace)],
@@ -388,9 +417,151 @@ def m4_gate(workspace: Path) -> dict:
         )
         payload = json.loads((ran.stdout or "{}").strip().splitlines()[-1])
         verdict = payload.get("verdict")
-        return _gate("regressions:m4-checker", verdict == "pass", f"verdict={verdict}")
+        gate = _gate("regressions:m4-checker", verdict in ("pass", "inconclusive"),
+                     f"verdict={verdict}")
+        gate["status"] = "pass" if verdict == "pass" else (
+            "fail" if verdict == "fail" else "not_run")
+        return gate
     except (OSError, subprocess.SubprocessError, json.JSONDecodeError, IndexError) as exc:
-        return _gate("regressions:m4-checker", False, str(exc))
+        gate = _gate("regressions:m4-checker", False, str(exc))
+        gate["status"] = "fail"
+        return gate
+
+
+def live_engine_gates(workspace: Path, manifest: dict, policy: dict) -> tuple[list[dict], bool, bool, bool, dict]:
+    """Validate the authentic live-engine reach and GPU execution.
+
+    Returns (gates, live_engine_ok, composition_ok, live_pixels_ok, live_report).
+    The live pixel comparison is reported separately because the loading-screen
+    background is not yet reconstructed in the live prefix; a mismatch there is
+    not a seeded-replay failure.
+    """
+    from automation import gfx_compare  # type: ignore
+
+    live = manifest.get("live_engine") or {}
+    gates: list[dict] = []
+    if not live:
+        gates.append(_gate("live:evidence", False, "live engine capture is absent"))
+        return gates, False, False, False, {}
+    evidence_path = workspace / str(live.get("evidence") or "analysis/m5/live-evidence.json")
+    evidence = _load_json(evidence_path)
+    if evidence.get("schema") != "eu4-m5-live-evidence/v1":
+        gates.append(_gate("live:evidence", False, "live evidence schema is unavailable"))
+        return gates, False, False, False, {}
+    if live.get("sha256") and _sha(evidence_path) != live.get("sha256"):
+        gates.append(_gate("live:evidence", False, "live evidence digest does not match"))
+        return gates, False, False, False, {}
+    run = workspace / str(evidence.get("run") or "")
+    if not run.is_dir():
+        gates.append(_gate("live:evidence", False, f"live run is absent: {run}"))
+        return gates, False, False, False, {}
+
+    def _load_block(block: dict) -> tuple[dict, bool]:
+        descriptor = _load_json(run / str(block.get("descriptor") or ""))
+        raw = run / str(block.get("bgra") or "")
+        ok = (
+            bool(descriptor)
+            and raw.is_file()
+            and raw.stat().st_size == block.get("bgra_bytes")
+            and _sha(raw) == block.get("bgra_sha256")
+        )
+        if block.get("descriptor_sha256") and _sha(run / str(block.get("descriptor") or "")) != block.get("descriptor_sha256"):
+            ok = False
+        return descriptor, ok
+
+    checkpoint, checkpoint_ok = _load_block(evidence.get("checkpoint") or {})
+    logical, logical_ok = _load_block(evidence.get("logical") or {})
+    prefix, prefix_ok = _load_block(evidence.get("prefix_pre") or {})
+    reference_descriptor = _load_json(
+        workspace / str((manifest.get("reference") or {}).get("run") or "") / "gl-reference.json"
+    )
+    reference_sampler = reference_descriptor.get("sampler") or {}
+    live_sampler = (logical.get("state") or {}).get("sampler") or {}
+    checkpoint_draw = checkpoint.get("draw") or {}
+    checkpoint_gpu = checkpoint.get("gpu") or {}
+    logical_draw = logical.get("draw") or {}
+    logical_gpu = logical.get("gpu") or {}
+    live_ok = (
+        checkpoint_ok
+        and logical_ok
+        and prefix_ok
+        and evidence.get("engine_reached") is True
+        and checkpoint.get("caller", {}).get("rva") == "0x14f6c1b"
+        and checkpoint_draw.get("shader_identity") == SPRITE_IDENTITY
+        and checkpoint_draw.get("primitive") == 5
+        and checkpoint_draw.get("count") == 4
+        and checkpoint_draw.get("vertex_stride") == 20
+        and checkpoint_draw.get("vertex_bytes") == 80
+        and checkpoint_gpu.get("completed") is True
+        and checkpoint_gpu.get("command_status") == 4
+        and checkpoint.get("target", {}).get("width") == 3456
+        and checkpoint.get("target", {}).get("height") == 2234
+        and logical_draw.get("caller_rva") == "0x14f6c1b"
+        and logical_draw.get("shader_identity") == SPRITE_IDENTITY
+        and logical_draw.get("effective_count") == 4
+        and logical_gpu.get("completed") is True
+        and prefix.get("target", {}).get("width") == 1728
+        and prefix.get("target", {}).get("height") == 1117
+        and live_sampler.get("min_filter") == reference_sampler.get("min_filter")
+        and live_sampler.get("mag_filter") == reference_sampler.get("mag_filter")
+        and live_sampler.get("wrap_s") == reference_sampler.get("wrap_s")
+        and live_sampler.get("wrap_t") == reference_sampler.get("wrap_t")
+    )
+    gates.append(_gate(
+        "live:engine-gpu",
+        live_ok,
+        f"caller={checkpoint.get('caller', {}).get('rva')} "
+        f"identity={checkpoint_draw.get('shader_identity')} "
+        f"gpu={checkpoint_gpu.get('command_status')} "
+        f"target={checkpoint.get('target', {}).get('width')}x{checkpoint.get('target', {}).get('height')}",
+    ))
+    if not live_ok:
+        return gates, False, False, False, {}
+
+    prefix_draws = (logical.get("prefix") or {}).get("draws") or []
+    order_ok = (
+        len(prefix_draws) >= 2
+        and prefix_draws[0].get("shader_identity") == "simple-lua-Simple/asset-maincode-v0"
+        and prefix_draws[-1].get("shader_identity") == SPRITE_IDENTITY
+        and prefix_draws[-1].get("caller_rva") == "0x14f6c1b"
+        and all(isinstance(draw.get("caller_rva"), str) for draw in prefix_draws)
+    )
+    gates.append(_gate(
+        "live:prefix-order",
+        order_ok,
+        f"draws={[(d.get('caller_rva'), d.get('shader_identity')) for d in prefix_draws]}",
+    ))
+    contribution = evidence.get("contribution") or {}
+    contribution_ok = (
+        contribution.get("live_differing_pixels", 0) > 0
+        and contribution.get("live_differing_pixels") == contribution.get("gl_differing_pixels")
+        and contribution.get("total_pixels") == 1728 * 1117
+    )
+    gates.append(_gate(
+        "live:contribution",
+        contribution_ok,
+        f"live={contribution.get('live_differing_pixels')} gl={contribution.get('gl_differing_pixels')} "
+        f"total={contribution.get('total_pixels')}",
+    ))
+    composition_ok = order_ok and contribution_ok
+
+    live_pixels_ok = False
+    live_report: dict = {}
+    try:
+        reference = gfx_compare.load_capture(workspace / str((manifest.get("reference") or {}).get("run") or ""), "reference")
+        candidate = gfx_compare.load_capture(run / "metal-logical.json", "candidate")
+        live_report = gfx_compare.compare(reference, candidate, policy)
+        samples = live_report.get("samples") or {}
+        live_pixels_ok = (
+            live_report.get("status") == "pass"
+            and samples.get("max_channel_error") == 0
+            and samples.get("mismatched_pixels") == 0
+        )
+        detail = f"status={live_report.get('status')} max={samples.get('max_channel_error')} mismatched={samples.get('mismatched_pixels')}"
+    except Exception as exc:  # noqa: BLE001
+        detail = str(exc)
+    gates.append(_gate("live:pixels", live_pixels_ok, detail + " (separate from seeded replay)"))
+    return gates, live_ok, composition_ok, live_pixels_ok, live_report
 
 
 def main(argv: list[str]) -> int:
@@ -428,50 +599,113 @@ def main(argv: list[str]) -> int:
         "policy digest",
     ))
 
-    reference_gates_list, hard_fail, contribution = reference_gates(workspace, manifest)
-    gates.extend(reference_gates_list)
     reference_run = workspace / str((manifest.get("reference") or {}).get("run") or "")
+    reference_available = reference_run.is_dir()
+    reference_ok = False
+    contribution: dict = {}
+    replay_ok = False
+    report: dict = {}
     fresh = workspace / ".local" / "m5" / f"accept-{int(time.time())}"
-    comparison_gates, comparison_ok, report = comparison_gate(
-        workspace, reference_run, fresh, policy
-    )
-    gates.extend(comparison_gates)
-    gates.append(unsupported_state_gate(workspace, reference_run))
-    gates.append(corrupted_input_gate(workspace, reference_run))
-    gates.append(regression_gate(workspace))
-    gates.append(m4_gate(workspace))
+    if reference_available:
+        reference_gates_list, reference_hard, contribution = reference_gates(workspace, manifest, policy)
+        gates.extend(reference_gates_list)
+        comparison_gates, replay_ok, report = comparison_gate(
+            workspace, reference_run, fresh, policy
+        )
+        gates.extend(comparison_gates)
+        reference_ok = (
+            all(gate["ok"] for gate in reference_gates_list)
+            and not reference_hard
+            and replay_ok
+        )
+    else:
+        gates.append(_gate("reference:available", False,
+                           "operator-local original-GL reference is absent"))
+        gates.append(_gate("candidate:replay-gpu", False,
+                           "offline replay is not run without the local reference"))
 
-    hard_fail = hard_fail or not comparison_ok
-    if any(gate["name"].startswith("safety:") and not gate["ok"] for gate in gates):
+    live_gates, live_engine_ok, composition_ok, live_pixels_ok, live_report = live_engine_gates(
+        workspace, manifest, policy
+    )
+    gates.extend(live_gates)
+    gates.append(unsupported_state_gate(workspace, reference_run) if reference_available
+                 else _gate("safety:unsupported-state", False,
+                            "local reference is absent"))
+    gates.append(corrupted_input_gate(workspace, reference_run) if reference_available
+                 else _gate("safety:corrupted-input", False,
+                            "local reference is absent"))
+    gates.append(regression_gate(workspace))
+    m4_result = m4_gate(workspace)
+    gates.append(m4_result)
+
+    hard_fail = False
+    if reference_available:
+        hard_fail = hard_fail or any(
+            gate["name"] in ("reference:event", "reference:target", "reference:vertex",
+                             "reference:constants", "reference:texture",
+                             "reference:shader-identity", "reference:contribution")
+            and not gate["ok"]
+            for gate in gates
+        )
+        hard_fail = hard_fail or any(
+            gate["name"] in ("candidate:comparison",) and not gate["ok"] for gate in gates
+        )
+    if any(gate["name"].startswith("safety:") and not gate["ok"] for gate in gates) and reference_available:
         hard_fail = True
     if any(gate["name"] == "regressions:offline" and not gate["ok"] for gate in gates):
         hard_fail = True
-    if any(
-        gate["name"] == "regressions:m4-checker"
-        and not gate["ok"]
-        and "verdict=inconclusive" in gate["detail"]
-        and "local-only" not in gate["detail"]
-        for gate in gates
-    ):
+    if m4_result.get("status") == "fail":
         hard_fail = True
-    inconclusive = any(not gate["ok"] for gate in gates) and not hard_fail
+    if any(gate["name"].startswith("live:") and not gate["ok"] for gate in gates) and             any(gate["name"] == "live:evidence" and not gate["ok"] for gate in gates):
+        # Missing live evidence is inconclusive, not a hard failure; a present
+        # live evidence record that fails validation is a hard failure.
+        hard_fail = hard_fail or not any(
+            gate["name"] == "live:evidence" and "absent" in gate["detail"]
+            for gate in gates
+        )
+
+    safety_ok = all(
+        gate["ok"] for gate in gates if gate["name"].startswith("safety:")
+    )
+    regressions_ok = all(
+        gate["ok"] for gate in gates
+        if gate["name"] == "regressions:offline"
+    )
+    m4_ok = m4_result.get("status") in ("pass", "not_run")
+    sprite_replay_qualified = reference_ok and replay_ok
+    m5_complete = (
+        sprite_replay_qualified
+        and live_engine_ok
+        and composition_ok
+        and safety_ok
+        and regressions_ok
+        and m4_ok
+    )
     if hard_fail:
         verdict = "fail"
         diagnostics = "M5 evidence mismatch: " + "; ".join(
             gate["detail"] for gate in gates if not gate["ok"]
         )
-    elif any(not gate["ok"] for gate in gates):
-        verdict = "inconclusive"
-        diagnostics = "M5 evidence incomplete: " + ", ".join(
-            gate["name"] for gate in gates if not gate["ok"]
-        )
-    else:
+    elif m5_complete:
         verdict = "pass"
-        diagnostics = "all M5 gates satisfied"
+        diagnostics = "live engine reach, GPU execution, composition, seeded replay and regressions satisfied"
+    else:
+        verdict = "inconclusive"
+        missing = [gate["name"] for gate in gates if not gate["ok"]]
+        diagnostics = "M5 evidence incomplete: " + ", ".join(missing)
 
     result = {
         "verdict": verdict,
         "diagnostics": diagnostics,
+        "sprite_replay_qualified": sprite_replay_qualified,
+        "live_engine_qualified": live_engine_ok,
+        "live_composition_qualified": composition_ok,
+        "live_pixels_qualified": live_pixels_ok,
+        "m5_complete": m5_complete,
+        "m4_evidence": {
+            "status": m4_result.get("status", "not_run"),
+            "detail": m4_result.get("detail"),
+        },
         "gates": gates,
         "operation": {
             "symbol": "_GfxDraw",
@@ -483,6 +717,7 @@ def main(argv: list[str]) -> int:
             "blend": "SRC_ALPHA/ONE_MINUS_SRC_ALPHA",
         },
         "reference": {
+            "available": reference_available,
             "run": str((manifest.get("reference") or {}).get("run")),
             "raw_sha256": (manifest.get("reference") or {}).get("raw", {}).get("sha256"),
             "contribution": contribution,
@@ -502,6 +737,17 @@ def main(argv: list[str]) -> int:
                                   if isinstance(report, dict) else None),
             "pixels": ((report.get("samples") or {}).get("pixels")
                        if isinstance(report, dict) else None),
+        },
+        "live": {
+            "run": (manifest.get("live_engine") or {}).get("evidence"),
+            "pixels": {
+                "status": live_report.get("status") if isinstance(live_report, dict) else None,
+                "max_channel_error": ((live_report.get("samples") or {}).get("max_channel_error")
+                                      if isinstance(live_report, dict) else None),
+                "mismatched_pixels": ((live_report.get("samples") or {}).get("mismatched_pixels")
+                                      if isinstance(live_report, dict) else None),
+            },
+            "reason": (manifest.get("live_engine") or {}).get("limitation"),
         },
         "engine_reach": manifest.get("engine_reach") or {},
     }

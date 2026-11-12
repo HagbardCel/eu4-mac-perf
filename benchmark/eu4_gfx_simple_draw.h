@@ -111,6 +111,10 @@ typedef struct {
     int depth_default;
     int raster_default;
     int scissor_full;
+    uint32_t sampler_min_filter;
+    uint32_t sampler_mag_filter;
+    uint32_t sampler_wrap_s;
+    uint32_t sampler_wrap_t;
 } eu4_gfx_simple_draw_state;
 
 /* Validate original state and encode one draw into `command_buffer`.

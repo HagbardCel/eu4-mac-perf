@@ -62,30 +62,45 @@ admission remains exact SHA-256, not a marker or substring match.
    `CGraphics::BeginScene` crash. The engine does not reach the second loading
    frame in the current Metal path.
 
-## Engine reach and blocker
+## Engine reach
 
-The sprite draw is the next distinct `_GfxDraw` in the original sequence, but it
-occurs after the first presented frame. In the reconstructed path the engine
-returns from `presentDrawable`, advances to the next frame, and crashes at:
+The sprite draw is the next distinct `_GfxDraw` in the original sequence. Three
+original entries blocked the reconstructed path; all three are now replaced
+with Metal-equivalent semantics:
 
-```
-CGraphics::BeginScene + 39
-  callq _GfxBeginScene
-```
+1. **`_GfxBeginScene` (0x15ea6df).** The original disables the current shader's
+   vertex-attribute arrays through GLEW, clears `handle+0x70`, applies
+   `_GfxSetBlendState(handle, handle+0x80)` and returns 1. In the Metal path the
+   GLEW slot is not initialized, so the original crashes at
+   `CGraphics::BeginScene + 39`. The replacement preserves the current-shader
+   clear, the default blend application and the return value 1, and skips only
+   the GL attrib-disable effect.
+2. **`_GfxClearTexture` (0x15ec836).** The original deletes GL
+   renderbuffer/framebuffer/texture names and clears the header fields. The
+   replacement releases the backend texture for the header and preserves the
+   engine-visible field mutations, so the loading-screen texture churn does not
+   call `glDeleteTextures`.
+3. **Sprite blend state.** The engine sets a second blend descriptor at caller
+   `0x14f6bb4` (enabled, `SRC_ALPHA`/`ONE_MINUS_SRC_ALPHA`). The blend-state
+   replacement now admits that descriptor and writes the measured alpha-blend
+   snapshot; the Simple descriptor remains the default.
 
-`_GfxBeginScene` is an original GL entry that is not reconstructed. The exact
-smallest next action is to reconstruct `_GfxBeginScene` (and the immediately
-following `CGraphics::ClearScene` frame-start path) so the Metal path can run a
-second loading frame. That is a separate rendering operation from the sprite
-draw and is not claimed here.
+A bounded live probe (`metal-live-final-02`) now reaches `_GfxDraw` at caller
+`0x14f6c1b` through the authentic engine path, admits
+`sprite-map/asset-maincode-v0`, encodes it through the shared dispatcher and
+sprite encoder, and completes on the GPU against the engine-owned
+3456×2234 backbuffer (`command_status=4`, `pixels_captured=1`). The live route
+records the same vertex (80-byte stride 20), constants, 1235×175 texture,
+linear/clamp sampler and alpha blend as the original.
 
-Because the engine path cannot reach the draw within the authorized launch
-budget, the M5 qualification uses a deterministic **live-Metal replay** of the
-same operation: the production sprite encoder runs on a Metal GPU with the
-captured vertex, constant and texture bytes, over a diagnostic target seeded
-with the authentic original-GL pre-draw payload. The replay is not a second
-renderer; it calls the same `eu4_gfx_draw_encode_into` dispatcher and the same
-`eu4_gfx_sprite_draw_encode_into` used by the physical route.
+The isolated **offline GPU replay** remains the exact pixel qualification: it
+seeds a diagnostic target with the authentic original-GL pre-draw and uses the
+same production encoder. The live prefix, by contrast, does not yet reproduce
+the loading-screen background producer, so its pre-draw differs from the
+original-GL pre-draw. The live final is therefore **not** claimed as
+pixel-equivalent to a cross-run GL capture; that comparison is reported
+separately, while the live sprite contribution count matches GL exactly
+(157,254 pixels).
 
 ## Technical implications
 

@@ -30,6 +30,7 @@ SOURCES = [
     BENCH / "eu4_gfx_simple_draw.mm",
     BENCH / "eu4_gfx_sprite_draw.mm",
     BENCH / "eu4_gfx_draw_encode.mm",
+    BENCH / "eu4_gfx_logical_capture.mm",
     BENCH / "eu4_metal_events.c",
 ]
 
@@ -67,7 +68,8 @@ def build_host(force: bool = False) -> Path:
         str(HOST_SOURCE),
         *[str(source) for source in SOURCES],
     ]
-    built = subprocess.run(command, capture_output=True, text=True, check=False)
+    built = subprocess.run(command, capture_output=True, text=True, check=False,
+                           timeout=180)
     if built.returncode:
         raise ReplayError(built.stderr.strip() or "M5 replay host failed to build")
     return HOST
@@ -104,6 +106,7 @@ def run_replay(reference_dir: Path, output: Path, *, force_build: bool = False) 
         text=True,
         check=False,
         env=env,
+        timeout=180,
     )
     candidate_path = output / "metal-logical.json"
     if ran.returncode != 0 or not candidate_path.is_file():

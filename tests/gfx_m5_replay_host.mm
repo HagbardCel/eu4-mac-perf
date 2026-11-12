@@ -354,6 +354,8 @@ int main(int argc, char **argv) {
         "\"vertex_offset\":%u,\"vertex_bytes\":%llu,"
         "\"constant_hex\":\"%s\",\"constant_sha256\":\"%s\","
         "\"texture_size\":[%u,%u],\"texture_sha256\":\"%s\","
+        "\"sampler\":{\"min_filter\":%u,\"mag_filter\":%u,"
+        "\"wrap_s\":%u,\"wrap_t\":%u},"
         "\"logical_viewport\":[%u,%u,%u,%u]},"
         "\"shader\":{\"identity\":\"%s\"},"
         "\"prefix\":{\"count\":1,\"draws\":[{\"caller_rva\":\"0x%x\","
@@ -367,7 +369,8 @@ int main(int argc, char **argv) {
         state.blend_supported, state.depth_default, state.raster_default,
         state.scissor_full, state.vertex_stride, state.vertex_offset,
         (unsigned long long)state.vertex_bytes, constant_hex, constant_sha,
-        1235, 175, texture_sha, inputs.viewport_x, inputs.viewport_y,
+        1235, 175, texture_sha, state.sampler_min_filter, state.sampler_mag_filter,
+        state.sampler_wrap_s, state.sampler_wrap_t, inputs.viewport_x, inputs.viewport_y,
         inputs.viewport_width, inputs.viewport_height, state.shader_identity,
         kCallerRva, state.shader_identity);
     snprintf(path, sizeof path, "%s/metal-logical.json", out_dir);

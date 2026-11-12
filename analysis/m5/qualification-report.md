@@ -17,7 +17,10 @@ reconstructed operation and the live-Metal replay from a live-engine route.
 | Unsupported state refusal | **pass** |
 | Corrupted-input negative control | **pass** (max channel error 243, 42,284 mismatched) |
 | Preserved M4 route and regressions | **pass** (M4 checker verdict `pass`, 67 offline tests) |
-| Live engine reaches the draw | **not claimed** — `_GfxBeginScene` blocker |
+| Live engine reaches the draw | **pass** (`metal-live-final-02`, caller `0x14f6c1b`) |
+| Live engine GPU completion and backbuffer readback | **pass** (`command_status=4`, 3456×2234) |
+| Live prefix composition | **pass** (Simple + sprite in order; contribution 157,254) |
+| Live composed pixel equivalence to GL | **not qualified** — live prefix pre-draw differs; separate result |
 
 ## Selected operation
 
@@ -76,17 +79,31 @@ which is what admission uses.
   with the authentic pre-draw contents, so the selected draw is encoded over
   valid destination contents rather than a blank target.
 
-The production encoder was exercised by a live-Metal replay host
-(`tests/gfx_m5_replay_host.mm`) using the captured vertex, constant and texture
-bytes over the authentic pre-draw. The host calls the same dispatcher and the
-same sprite encoder; it is not a second renderer. The live engine path does not
-yet reach the draw because the second loading frame begins with the
-unreconstructed original `_GfxBeginScene`; the first present is followed by a
-`SIGSEGV` at `CGraphics::BeginScene + 39` (return from `callq _GfxBeginScene`).
-The smallest next action is to reconstruct `_GfxBeginScene` and the immediately
-following `CGraphics::ClearScene` frame-start path.
+The production encoder was exercised on the authentic live engine path. A
+bounded probe reached the sprite draw at caller `0x14f6c1b`, admitted the exact
+sprite source hashes, selected `sprite-map/asset-maincode-v0` through the real
+`_GfxSetShader`/`_GfxDraw` path, encoded through the shared dispatcher and
+sprite encoder, and completed on the GPU. The checkpoint read back the
+engine-owned 3456×2234 Metal backbuffer (`command_status=4`,
+`pixels_captured=1`). The live inputs match the original: 80-byte stride-20 VBO,
+the 96-byte uniform prefix, the 1235×175 texture, linear/clamp sampler and the
+alpha blend. The live prefix encodes the frame's Simple draw followed by the
+sprite and produces exactly the same 157,254 changed pixels as the GL
+pre/post pair.
 
-## Comparison
+Three original entries were reconstructed to reach the draw: `_GfxBeginScene`
+(preserve current-shader clear, default blend application and return 1, skip
+the GLEW attrib-disable branch), `_GfxClearTexture` (release the backend texture
+and preserve the header field mutations), and the sprite blend descriptor
+(admit the measured alpha-blend descriptor).
+
+The live prefix pre-draw does **not** match the original-GL pre-draw because the
+loading-screen background producer is not reconstructed. The live final is
+therefore not claimed as pixel-equivalent to the cross-run GL capture; this
+comparison is reported separately (`live_pixels_qualified=false`). The exact
+seeded replay remains the isolated pixel qualification.
+
+## Comparison## Comparison
 
 Policy: [comparison-policy.json](comparison-policy.json). Exact equality
 (`max_channel_error=0`, `mismatched_fraction=0`, `mean_abs_error=0`) with only
@@ -94,8 +111,8 @@ the declared lower-left → top-left row decode.
 
 | Field | Value |
 | --- | --- |
-| Reference | `sprite-gl-ref-08` |
-| Candidate | `metal-replay-02` (and fresh checker replays) |
+| Reference | `sprite-gl-ref-09` (includes sampler evidence) |
+| Candidate | `metal-replay-05` (and fresh checker replays) |
 | Pixels | 1,930,176 |
 | Max channel error | **0** |
 | Mean absolute error | **0.0** |
@@ -105,8 +122,8 @@ the declared lower-left → top-left row decode.
 | Replay determinism | identical raw SHA-256 across independent host runs |
 
 Exact equality is justified because the replay uses the captured texture,
-constants, vertex bytes, viewport, blend and shader semantics, and is seeded
-with the exact original pre-draw payload. No resampling or tolerance is used.
+constants, vertex bytes, viewport, linear/clamp sampler, blend and shader
+semantics, and is seeded with the exact original pre-draw payload. No resampling or tolerance is used.
 The loading-screen background is animated, so each reference is paired with a
 replay seeded by its own pre-draw; independent reference runs are not expected
 to share a raw hash.
@@ -170,11 +187,14 @@ python3 campaigns/eu4-m5/accept.py .
 
 ## Known limitations
 
-- The live engine does not reach the sprite draw; `_GfxBeginScene` is the exact
-  next blocker. The live-Metal replay is a validation boundary, not a
-  production frame loop.
-- The engine sampler object is not decoded; the replay uses linear
-  clamp-to-edge, which reproduces the captured GL image exactly.
+- The live engine now reaches and GPU-completes the sprite draw. The remaining
+  live-pixel limitation is the unreconstructed loading-screen background
+  producer: the live prefix pre-draw differs from the original-GL pre-draw, so
+  live composed pixel equivalence is classified separately from the exact
+  seeded replay.
+- The engine sampler object is not decoded; the original-GL sampler was
+  captured as `GL_LINEAR`/`GL_CLAMP_TO_EDGE`, and the implemented Metal sampler
+  uses the same values. The live and seeded candidates record them.
 - The diagnostic target is seeded with the authentic pre-draw because the
   background producer is not reconstructed. It encodes the selected draw over
   that content through the same encoder, which is the minimum valid composed

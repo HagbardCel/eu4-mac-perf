@@ -65,6 +65,21 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertIn("present=1", ran.stdout)
         self.assertIn("gpu_failure=1", ran.stdout)
 
+    def test_frame_start_reconstruction_and_texture_clear(self) -> None:
+        ran = self._run("--frame-start")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("begin_scene=1", ran.stdout)
+        self.assertIn("current_cleared=1", ran.stdout)
+        self.assertIn("blend_default=1", ran.stdout)
+        self.assertIn("clear_texture=1", ran.stdout)
+
+    def test_two_frame_prefix_resets_stale_target_contents(self) -> None:
+        ran = self._run("--prefix-two-frames")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("frame1_red=1", ran.stdout)
+        self.assertIn("frame2_green=1", ran.stdout)
+        self.assertIn("stale_red=0", ran.stdout)
+
     def test_native_checkpoint_occurrence_validation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             for value in ("0", "-1", "2147483648", "abc"):

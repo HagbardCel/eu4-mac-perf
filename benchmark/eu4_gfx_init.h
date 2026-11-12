@@ -143,6 +143,10 @@ int eu4_gfx_simple_state_supported(void *master, char *reason, size_t capacity);
    depth attachment, so the depth snapshot is recorded but not gated. */
 int eu4_gfx_sprite_state_supported(void *master, char *reason, size_t capacity);
 
+/* Current committed geometry generation, or 0 before init. Used by the
+   diagnostic logical-prefix target to refuse cross-generation composition. */
+uint64_t eu4_gfx_current_geometry_generation(void);
+
 /* 1 when the current depth/stencil snapshot equals the backend default. The
    Simple pass has no depth attachment, so a mismatch is recorded but is not
    material to the captured colour pixels. */
@@ -210,6 +214,12 @@ int eu4_gfx_backend_releases(void);
 void *eu4_gfx_init(void *handle, uint8_t *success);
 void eu4_gfx_shutdown(void *master);
 void eu4_gfx_set_blend(void *handle, void *state);
+
+/* _GfxBeginScene at 0x15ea6df. The original resets the current-shader vertex
+   attribute arrays through GLEW, clears the current shader field and reapplies
+   the default blend state, then returns 1. The Metal replacement preserves the
+   engine-visible mutations and return value without calling GL. */
+int eu4_gfx_begin_scene(void *handle);
 void eu4_gfx_set_depth(void *handle, void *state);
 void eu4_gfx_set_raster(void *handle, void *state);
 /* rdi is the master. Returns 1 and does not write the master. */

@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT))
 
 from automation import gfx_compare, m5_replay  # noqa: E402
 
-REFERENCE = ROOT / ".local" / "m5" / "experiments" / "sprite-gl-ref-08"
+REFERENCE = ROOT / ".local" / "m5" / "experiments" / "sprite-gl-ref-09"
 POLICY = ROOT / "analysis" / "m5" / "comparison-policy.json"
 
 
@@ -55,6 +55,22 @@ class M5SpriteReplayTests(unittest.TestCase):
             self.assertEqual(samples["max_channel_error"], 0)
             self.assertEqual(samples["mismatched_pixels"], 0)
             self.assertEqual(samples["pixels"], 1728 * 1117)
+
+    def test_replay_records_captured_sampler(self) -> None:
+        reference = json.loads((REFERENCE / "gl-reference.json").read_text())
+        sampler = reference.get("sampler") or {}
+        self.assertEqual(sampler.get("min_filter"), 9729)
+        self.assertEqual(sampler.get("mag_filter"), 9729)
+        self.assertEqual(sampler.get("wrap_s"), 33071)
+        self.assertEqual(sampler.get("wrap_t"), 33071)
+        with tempfile.TemporaryDirectory(prefix="m5-sampler-") as tmp:
+            output = Path(tmp) / "candidate"
+            replay = self._replay(REFERENCE, output)
+            candidate = replay["candidate"]["state"]["sampler"]
+            self.assertEqual(candidate["min_filter"], sampler["min_filter"])
+            self.assertEqual(candidate["mag_filter"], sampler["mag_filter"])
+            self.assertEqual(candidate["wrap_s"], sampler["wrap_s"])
+            self.assertEqual(candidate["wrap_t"], sampler["wrap_t"])
 
     def test_replay_is_deterministic(self) -> None:
         hashes = []

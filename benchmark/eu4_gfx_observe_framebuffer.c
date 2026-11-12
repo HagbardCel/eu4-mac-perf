@@ -51,6 +51,10 @@ enum {
     GLX_ARRAY_BUFFER_BINDING = 0x8894,
     GLX_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING = 0x889F,
     GLX_BUFFER_SIZE = 0x8764,
+    GLX_TEXTURE_MIN_FILTER = 0x2801,
+    GLX_TEXTURE_MAG_FILTER = 0x2800,
+    GLX_TEXTURE_WRAP_S = 0x2802,
+    GLX_TEXTURE_WRAP_T = 0x2803,
     GLX_SHADER_TYPE = 0x8B4F,
     GLX_VERTEX_SHADER = 0x8B31,
     GLX_FRAGMENT_SHADER = 0x8B30,
@@ -520,6 +524,36 @@ static void capture_live_vertex(const gl_state *state, char *out,
         (int)buffer_size, (int)array_binding, (int)attrib_binding);
 }
 
+/* Effective original-GL sampler parameters for the bound sprite texture. */
+static void capture_sampler(const gl_state *state, char *out, size_t capacity) {
+    if (out == NULL || capacity == 0) {
+        return;
+    }
+    (void)snprintf(out, capacity, "null");
+    if (state == NULL || state->texture_2d <= 0) {
+        return;
+    }
+    GLint min_filter = -1, mag_filter = -1, wrap_s = -1, wrap_t = -1;
+    glGetTexParameteriv(GL_TEXTURE_2D, GLX_TEXTURE_MIN_FILTER, &min_filter);
+    glGetTexParameteriv(GL_TEXTURE_2D, GLX_TEXTURE_MAG_FILTER, &mag_filter);
+    glGetTexParameteriv(GL_TEXTURE_2D, GLX_TEXTURE_WRAP_S, &wrap_s);
+    glGetTexParameteriv(GL_TEXTURE_2D, GLX_TEXTURE_WRAP_T, &wrap_t);
+    GLenum error = glGetError();
+    if (error != GL_NO_ERROR) {
+        clear_gl_errors();
+        (void)snprintf(out, capacity,
+                       "{\"schema\":\"gfx-gl-sampler/v1\",\"status\":"
+                       "\"query_error\",\"gl_error\":%u}",
+                       (unsigned)error);
+        return;
+    }
+    (void)snprintf(out, capacity,
+                   "{\"schema\":\"gfx-gl-sampler/v1\",\"status\":\"ok\","
+                   "\"min_filter\":%d,\"mag_filter\":%d,\"wrap_s\":%d,"
+                   "\"wrap_t\":%d}",
+                   (int)min_filter, (int)mag_filter, (int)wrap_s, (int)wrap_t);
+}
+
 /* Authentic image of the texture bound at the selected draw. This is the
  * source data the original fragment shader sampled; the Metal replay uses the
  * same bytes. Bounded and observation-only. */
@@ -960,6 +994,8 @@ eu4_gfx_framebuffer_status eu4_gfx_observe_framebuffer_after_draw(
     GLint texture_format = 0;
     char texture_json[700] = "null";
     capture_texture(&state, texture_json, sizeof texture_json);
+    char sampler_json[256] = "null";
+    capture_sampler(&state, sampler_json, sizeof sampler_json);
     char live_vertex_json[1200] = "null";
     char shader_sources_json[4096] = "[]";
     capture_live_vertex(&state, live_vertex_json, sizeof live_vertex_json);
@@ -1050,7 +1086,7 @@ eu4_gfx_framebuffer_status eu4_gfx_observe_framebuffer_after_draw(
         "\"pre_draw\":%s,"
         "\"texture\":{\"name\":%d,\"width\":%d,\"height\":%d,"
         "\"internal_format\":%d},"
-        "\"texture_image\":%s,"
+        "\"texture_image\":%s,\"sampler\":%s,"
         "\"constants\":%s,\"shader_sources\":%s,\"live_vertex\":%s}\n",
         captured, env_text("EU4_GFX_EXPECTED_EXE"),
         env_text("EU4_GFX_EXECUTABLE_SHA256"),
@@ -1079,7 +1115,7 @@ eu4_gfx_framebuffer_status eu4_gfx_observe_framebuffer_after_draw(
         g_last_pack.row_length, g_last_pack.skip_rows, g_last_pack.skip_pixels,
         g_last_pack.pack_buffer, g_last_pack_restored ? "true" : "false",
         raw_name, length, sha, format, pre_json, state.texture_2d, texture_width,
-        texture_height, texture_format, texture_json, constant_json,
+        texture_height, texture_format, texture_json, sampler_json, constant_json,
         shader_sources_json, live_vertex_json);
     if (length_json <= 0 || (size_t)length_json >= sizeof body) {
         return EU4_GFX_FRAMEBUFFER_CAPTURE_IO;

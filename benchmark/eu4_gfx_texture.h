@@ -37,6 +37,12 @@ int eu4_gfx_texture_make(void *device, void *header, const void *desc, const voi
 void eu4_gfx_initialize_texture(void *ignored, void *header, const void *desc, const void *images,
                                 uint32_t count);
 
+/* _GfxClearTexture at 0x15ec836. Deletes the GL renderbuffer/framebuffer/
+   texture names and clears the corresponding header fields. The Metal path has
+   no GL names; release the backend texture for this header and preserve the
+   engine-visible field mutations. */
+void eu4_gfx_clear_texture(void *header);
+
 /* Borrowed MTLTexture retained by the backend for this engine header after a
    successful _GfxInitializeTexture. NULL when the header is unknown. */
 void *eu4_gfx_texture_for_header(void *header);

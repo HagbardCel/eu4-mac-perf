@@ -358,7 +358,176 @@ static int run_checkpoint_env(void) {
     return 0;
 }
 
+static uint8_t *read_file_bytes(const char *path, size_t *length) {
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) {
+        return NULL;
+    }
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        return NULL;
+    }
+    long size = ftell(file);
+    if (size <= 0 || fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        return NULL;
+    }
+    uint8_t *data = (uint8_t *)malloc((size_t)size);
+    if (data == NULL || fread(data, 1, (size_t)size, file) != (size_t)size) {
+        free(data);
+        fclose(file);
+        return NULL;
+    }
+    fclose(file);
+    *length = (size_t)size;
+    return data;
+}
+
+static int run_prefix_two_frames(void) {
+    boot();
+    uint8_t *master = (uint8_t *)g_master;
+    void *shader = make_simple_shader();
+    uint8_t quad[96];
+    make_quad(quad);
+    void *vertex_header = eu4_gfx_create_vertex_buffer(NULL, quad, 4, 24, 0);
+    if (vertex_header == NULL) {
+        fail("prefix vertex buffer");
+    }
+    uint8_t red_bgr[4 * 4 * 3];
+    for (int i = 0; i < 4 * 4; i++) {
+        red_bgr[i * 3 + 0] = 0;
+        red_bgr[i * 3 + 1] = 0;
+        red_bgr[i * 3 + 2] = 0xff;
+    }
+    uint8_t texture_header[0x44];
+    make_texture(4, 4, red_bgr, texture_header);
+    float matrix[16];
+    fill_matrix(matrix);
+    uint8_t constant[0x10];
+    memset(constant, 0, sizeof constant);
+    uint32_t words = 16;
+    memcpy(constant, &words, 4);
+    void *constant_data = matrix;
+    memcpy(constant + 8, &constant_data, sizeof constant_data);
+    install_geometry(shader, vertex_header, constant, texture_header);
+    uint32_t full_rect[6] = {64, 64, 0x3f800000u, 0, 0, 0};
+    uint32_t draw_rect[6] = {32, 32, 0x3f800000u, 0, 0, 0};
+    eu4_gfx_set_viewport(master, full_rect);
+
+    char dir[] = "/tmp/eu4-prefix-XXXXXX";
+    if (mkdtemp(dir) == NULL || setenv("EU4_GFX_LOGICAL_CAPTURE", "prefix", 1) != 0 ||
+        setenv("EU4_GFX_CHECKPOINT_DIR", dir, 1) != 0 ||
+        setenv("EU4_GFX_LOGICAL_STOP_CALLER", "0xedfcd1", 1) != 0) {
+        fail("prefix environment");
+    }
+    unsetenv("EU4_GFX_CHECKPOINT");
+
+    struct {
+        void *master;
+    } ctx = {g_master};
+    const float red[4] = {1.f, 0.f, 0.f, 1.f};
+    const float green[4] = {0.f, 1.f, 0.f, 1.f};
+    char pre_path[256];
+    snprintf(pre_path, sizeof pre_path, "%s/metal-prefix-pre.bgra", dir);
+    uint8_t frame1[64 * 64 * 4];
+    uint8_t frame2[64 * 64 * 4];
+
+    eu4_gfx_clear(&ctx, 7, red);
+    eu4_gfx_set_viewport(master, draw_rect);
+    eu4_gfx_draw_raw raw = draw_frame(&ctx);
+    if (eu4_gfx_draw_route_live(&raw, NULL, NULL, 0) != EU4_GFX_DRAW_ROUTE_HANDLED) {
+        fail("prefix frame 1 route");
+    }
+    size_t length = 0;
+    uint8_t *pre = read_file_bytes(pre_path, &length);
+    if (pre == NULL || length != sizeof frame1) {
+        fail("prefix frame 1 pre-draw");
+    }
+    memcpy(frame1, pre, sizeof frame1);
+    free(pre);
+    int command_status = -1;
+    if (eu4_gfx_complete_game(g_master, &command_status) != EU4_GFX_CLEAR_OK ||
+        command_status != (int)MTLCommandBufferStatusCompleted) {
+        fail("prefix frame 1 completion");
+    }
+
+    eu4_gfx_set_viewport(master, full_rect);
+    eu4_gfx_clear(&ctx, 7, green);
+    eu4_gfx_set_viewport(master, draw_rect);
+    raw = draw_frame(&ctx);
+    if (eu4_gfx_draw_route_live(&raw, NULL, NULL, 0) != EU4_GFX_DRAW_ROUTE_HANDLED) {
+        fail("prefix frame 2 route");
+    }
+    pre = read_file_bytes(pre_path, &length);
+    if (pre == NULL || length != sizeof frame2) {
+        fail("prefix frame 2 pre-draw");
+    }
+    memcpy(frame2, pre, sizeof frame2);
+    free(pre);
+
+    /* The draw covers the lower-left 32x32. The top-right pixel is the clear
+       colour; a stale target would still show frame 1's red there. */
+    size_t corner = ((size_t)0 * 64 + 63) * 4;
+    int frame1_red = frame1[corner + 2] > 200 && frame1[corner + 1] < 60 &&
+                     frame1[corner + 0] < 60;
+    int frame2_green = frame2[corner + 1] > 200 && frame2[corner + 2] < 60 &&
+                       frame2[corner + 0] < 60;
+    printf("frame1_red=%d frame2_green=%d stale_red=%d\n", frame1_red, frame2_green,
+           frame2[corner + 2] > 200 && frame2[corner + 1] < 60);
+    return frame1_red && frame2_green ? 0 : 1;
+}
+
+static int run_frame_start(void) {
+    boot();
+    uint8_t *master = (uint8_t *)g_master;
+    if (master == NULL) {
+        fail("frame-start master");
+    }
+    void *fake_current = (void *)0x1234;
+    memcpy(master + 0x70, &fake_current, sizeof fake_current);
+    int begin = eu4_gfx_begin_scene(master);
+    void *current = NULL;
+    memcpy(&current, master + 0x70, sizeof current);
+    static const uint8_t expected_simple_snapshot[0x24] = {
+        0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x06, 0x80, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x06, 0x80, 0x00, 0x00, 0x06, 0x02, 0x00, 0x00, 0x01, 0x01, 0x01, 0x01,
+    };
+    int blend_ok = memcmp(master + 0xc, expected_simple_snapshot,
+                          sizeof expected_simple_snapshot) == 0;
+
+    uint8_t header[0x44];
+    memset(header, 0, sizeof header);
+    header[0x1a] = 1;
+    header[0x19] = 1;
+    header[0x1b] = 1;
+    uint32_t marker = 0x11223344u;
+    memcpy(header + 0x10, &marker, 4);
+    memcpy(header + 0x8, &marker, 4);
+    memcpy(header + 0x14, &marker, 4);
+    memcpy(header + 0xc, &marker, 4);
+    memcpy(header + 4, &marker, 4);
+    eu4_gfx_clear_texture(header);
+    int clear_ok = header[0x1a] == 0 && header[0x19] == 0 && header[0x1b] == 0 &&
+                   *(uint32_t *)(header + 0x10) == 0 &&
+                   *(uint32_t *)(header + 0x8) == 0 &&
+                   *(uint32_t *)(header + 0x14) == 0 &&
+                   *(uint32_t *)(header + 0xc) == 0 &&
+                   *(uint32_t *)(header + 4) == 0 &&
+                   eu4_gfx_texture_for_header(header) == NULL;
+    int ok = begin == 1 && current == NULL && blend_ok && clear_ok;
+    printf("begin_scene=%d current_cleared=%d blend_default=%d clear_texture=%d\n",
+           begin == 1, current == NULL, blend_ok, clear_ok);
+    return ok ? 0 : 1;
+}
+
 int main(int argc, char **argv) {
+    if (argc >= 2 && strcmp(argv[1], "--frame-start") == 0) {
+        return run_frame_start();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--prefix-two-frames") == 0) {
+        return run_prefix_two_frames();
+    }
     if (argc >= 2 && strcmp(argv[1], "--checkpoint-env") == 0) {
         return run_checkpoint_env();
     }
