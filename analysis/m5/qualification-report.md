@@ -1,7 +1,6 @@
 # M5 qualification report — second authentic draw and composed comparison
 
-Status: **qualified by the M5 checker** (`campaigns/eu4-m5/accept.py`, 19/19
-gates, verdict `pass` on commit `36fa8e9`) for the reconstructed sprite
+Status: **qualified by the M5 checker** (`campaigns/eu4-m5/accept.py`, 18/18 gates, verdict `pass` on commit `36fa8e9`) for the reconstructed sprite
 operation. The live engine path to the draw is **not**
 reached; the exact blocker is recorded below. The checker distinguishes the
 reconstructed operation and the live-Metal replay from a live-engine route.
@@ -126,7 +125,7 @@ to share a raw hash.
 failure and unsupported-state refusal (4 tests, pass). The checker also runs the
 comparator, GL-reference, live-draw, Simple-draw and M4 checker tests.
 
-The final checker passed all 19 gates on the clean implementation commit
+The final checker passed all 18 gates on the clean implementation commit
 (`36fa8e9`), including the M4 checker and 67 offline regression tests.
 
 The tracked full suite was run on Python 3.14.10:
