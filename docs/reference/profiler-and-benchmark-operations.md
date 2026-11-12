@@ -24,7 +24,9 @@ playset and DLC selection throughout a comparison.
 
 ## Prepare
 
-Run from an interactive macOS Terminal, using Python 3.10 or later:
+Run from an interactive macOS Terminal with Python 3.14, the version CI tests.
+Other versions are not covered by CI; the `python3` commands below then resolve
+to that interpreter.
 
 ```sh
 python3 benchmark/eu4_benchmark.py inspect

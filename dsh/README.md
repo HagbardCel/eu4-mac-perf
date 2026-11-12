@@ -5,9 +5,11 @@ DeepSeek Harness's own `/goal` mechanism. It reuses the existing EU4
 reconstruction skills, checkers, manifests and evidence standards; it does not
 replace or drive the OpenCode runner.
 
-Status: M1 (profile, pinned runtime, skill parity). See
-[docs/dsh-native-goal.md](../docs/dsh-native-goal.md) for the architecture and
-the milestone record.
+Status: phases 0-7 implemented. Native multi-round continuation and
+completion through a fresh checker pass are proven in a supervised Web session;
+a live reviewer rejection/remediation loop is still outstanding. See
+[PROGRESS.md](PROGRESS.md) for the per-phase record and
+[docs/dsh-native-goal.md](../docs/dsh-native-goal.md) for the architecture.
 
 ## Profile
 

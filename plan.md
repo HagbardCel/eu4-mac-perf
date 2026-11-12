@@ -1,6 +1,11 @@
 # EU IV macOS performance — active plan
 
-**Updated 2026-10-18.** This is the short project entry point. The **canonical architecture roadmap** is [docs/eu4_recommended_strategy.md](docs/eu4_recommended_strategy.md); the new **source reconstruction and differential validation gates** are [docs/renderer-reconstruction-and-differential-validation.md](docs/renderer-reconstruction-and-differential-validation.md).
+**Historical snapshot (updated 2026-10-18).** This file records the October 2026
+planning view and is kept for traceability; it is not the current state of work.
+For current capabilities and evidence limits see [docs/status.md](docs/status.md);
+for current priorities see the canonical
+[docs/eu4_recommended_strategy.md](docs/eu4_recommended_strategy.md) and the
+[navigation index](docs/roadmap.md).
 
 ## What the existing evidence supports
 

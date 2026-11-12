@@ -2,6 +2,20 @@
 
 Authoritative summary of what is established, qualified, and in flight. Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
 
+## Latest milestone — authentic Simple draw on Metal (2026-11-12)
+
+Merged in [PR #185](https://github.com/HagbardCel/eu4-mac-perf/pull/185). Evidence: [live Simple draw](../analysis/reconstruction/simple-loading-draw/live-evidence.md); reusable workflow: [live graphics experiments](live-gfx-experiments.md).
+
+- **Authentic engine invocation.** The pinned GOG EU4 1.37.5 x86-64 executable reached `_GfxDraw` at caller RVA `0xedfcd1` (`CEU3Graphics::ShowBasicLoadText`). The recorded status is `draw_reached=true`.
+- **Metal draw encoding and GPU execution.** The shared Simple encoder accepted the admitted shader, vertex, constant, texture and viewport state; the command buffer reached `MTLCommandBufferStatusCompleted`. The recorded status is `draw_encoded=true` and `gpu_completed=true`.
+- **Pixels captured from the engine-owned backbuffer.** The checkpoint read back the 3456×2234 `BGRA8Unorm` target (30,882,816 bytes). The same raw SHA-256 was produced by independent launches; `pixels_captured=true`.
+- **Presentation not demonstrated by this checkpoint run.** The probe stops at the draw, before later font/UI drawing and before any present. `presented=false`.
+- **No original OpenGL reference equivalence yet.** No authentic original-OpenGL image exists for this checkpoint, so `reference_matched=null`. An independent CPU bilinear reference from `load_0.dds` matches the captured pixels on 23,808 samples, but that is not an OpenGL capture.
+
+This milestone does **not** claim a fully rendered or presented game frame, and it does not establish production submission or resource-lifetime behavior.
+
+The sections below record earlier evidence and remain as history; they do not override this milestone.
+
 ## Closed
 
 - **Phase C intrusive profiling and forensic investigation** — complete. Do not repeat live intrusive capture (`run --diagnostic-only`) merely to collect more diagnostic data.
