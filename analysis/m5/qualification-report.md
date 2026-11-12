@@ -20,7 +20,7 @@ draw; the exact seeded replay remains the pixel qualification.
 | Nonzero contribution | **pass** (157,254 pixels changed) |
 | Unsupported state refusal | **pass** |
 | Corrupted-input negative control | **pass** (max channel error 243, 42,284 mismatched) |
-| Preserved M4 route and regressions | **pass** (M4 checker verdict `pass`, 67 offline tests) |
+| Preserved M4 route and regressions | **pass** (M4 checker verdict `pass`; 2473 tracked tests OK, 22 skipped in a clean worktree) |
 | Live engine reaches the draw | **pass** (`metal-live-final-02`, caller `0x14f6c1b`) |
 | Live engine GPU completion and backbuffer readback | **pass** (`command_status=4`, 3456×2234) |
 | Live prefix composition | **pass** (Simple + sprite in order; contribution 157,254) |
@@ -132,6 +132,30 @@ replay seeded by its own pre-draw; independent reference runs are not expected
 to share a raw hash.
 
 ## Negative controls
+
+- **Unsupported state.** Forcing the Simple blend snapshot makes the sprite
+  encoder refuse with `blend state is not the measured sprite alpha blend`.
+- **Corrupted texture.** Inverting a texture band produces a meaningful
+  comparison failure: status `fail`, max channel error 243, 42,284 mismatched
+  pixels. The policy was not relaxed.
+
+## Regressions
+
+`tests.test_gfx_m5_sprite` covers exact replay, determinism, corrupted-input
+failure and unsupported-state refusal (4 tests, pass). The checker also runs the
+comparator, GL-reference, live-draw, Simple-draw and M4 checker tests.
+
+The final checker passed all 18 gates on the clean implementation commit
+(`36fa8e9`), including the M4 checker and 67 offline regression tests.
+
+The tracked full suite was run on Python 3.14.10 in a **clean detached
+worktree at `2bfcb25`** (no operator-local `.local` artifacts or untracked
+tests): `PYTHONPATH=benchmark:. python -m unittest discover -s tests` ran
+**2473 tests: all 2473 passed, 22 skipped** (live-only tests skip without the
+operator-local evidence). The checker's own offline regression subset ran 67
+tests and passed. The M4 checker passed on its recorded local evidence.
+
+## Negative controls## Negative controls
 
 - **Unsupported state.** Forcing the Simple blend snapshot makes the sprite
   encoder refuse with `blend state is not the measured sprite alpha blend`.

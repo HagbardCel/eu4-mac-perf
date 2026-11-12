@@ -287,20 +287,18 @@
   "full_suite": {
     "python": "3.14.10",
     "command": "PYTHONPATH=benchmark:. python -m unittest discover -s tests",
-    "ran": 2468,
-    "ok": 2456,
-    "skipped": 10,
-    "errors": 2,
-    "local_only_exclusions": [
-      "untracked tests/test_gfx_l32b_e2e.py imports the absent automation.gfx_l32b_hooks module",
-      "partially present untracked results/20261006T193739Z-submission-experiment lacks manifest.json"
-    ],
-    "note": "Both errors are from local-only untracked artifacts that are absent in CI; every tracked test passed."
+    "worktree": "clean detached worktree at 2bfcb25",
+    "ran": 2473,
+    "ok": 2473,
+    "skipped": 22,
+    "errors": 0,
+    "failures": 0,
+    "note": "Clean tracked checkout; operator-local live evidence and untracked artifacts are absent, so live-only tests skip. No local-only exclusions were needed."
   },
   "checker": {
     "path": "campaigns/eu4-m5/accept.py",
     "result": "pass",
-    "run": ".local/m5/checker-final-live.json",
+    "run": ".local/m5/checker-final2.json",
     "command": "PYTHONPATH=benchmark:. python3 campaigns/eu4-m5/accept.py .",
     "gates": {
       "count": 23,
@@ -316,11 +314,11 @@
       "67 offline tests pass in the final checker run"
     ]
   },
-  "implementation_commit": "d5a9432",
+  "implementation_commit": "2bfcb25",
   "final_acceptance": {
     "verdict": "pass",
     "m5_complete": true,
-    "commit": "d5a9432",
+    "commit": "2bfcb25",
     "python": "3.14.10",
     "reference_run": ".local/m5/experiments/sprite-gl-ref-09",
     "seeded_candidate_run": ".local/m5/experiments/metal-replay-05",
@@ -330,7 +328,8 @@
     "live_composition": "pass Simple+sprite; 157254 changed pixels",
     "live_pixels": "separate false: live prefix pre-draw differs from GL pre-draw",
     "m4_checker": "pass",
-    "offline_regressions": "67 pass"
+    "offline_regressions": "67 pass in checker",
+    "full_suite": "2473 tests OK, 22 skipped in a clean worktree"
   },
   "live_engine": {
     "evidence": "analysis/m5/live-evidence.json",
