@@ -431,13 +431,16 @@ def m4_gate(workspace: Path) -> dict:
         return gate
 
 
-def _canonical_bgra(path: Path, width, height, pixel_format, origin) -> bytes:
+def _canonical_bgra(path: Path, width, height, pixel_format, origin,
+                    row_stride=None) -> bytes:
     if not isinstance(width, int) or not isinstance(height, int) or width <= 0 or height <= 0:
         raise ValueError("image extent is invalid")
     if pixel_format not in ("BGRA8", "RGBA8"):
         raise ValueError("image pixel format is invalid")
     if origin not in ("lower_left", "top_left"):
         raise ValueError("image origin is invalid")
+    if row_stride is not None and row_stride != width * 4:
+        raise ValueError("image row stride does not match width*4")
     data = path.read_bytes()
     if len(data) != width * height * 4:
         raise ValueError(f"image size {len(data)} != {width}x{height}x4")
@@ -622,6 +625,7 @@ def live_engine_gates(workspace: Path, manifest: dict, policy: dict) -> tuple[li
         gl_pre = _canonical_bgra(
             pre_gl_path, pre_descriptor.get("width"), pre_descriptor.get("height"),
             pre_descriptor.get("pixel_format"), pre_descriptor.get("origin"),
+            pre_descriptor.get("row_stride"),
         )
         gl_post = gfx_compare._canonical_rgba(reference_capture)
         prefix_target = prefix.get("target") or {}
@@ -629,12 +633,14 @@ def live_engine_gates(workspace: Path, manifest: dict, policy: dict) -> tuple[li
             run / str((evidence.get("prefix_pre") or {}).get("bgra") or ""),
             prefix_target.get("width"), prefix_target.get("height"),
             prefix_target.get("pixel_format"), prefix_target.get("origin"),
+            prefix_target.get("row_stride"),
         )
         logical_target = logical.get("target") or {}
         live_post = _canonical_bgra(
             run / str((evidence.get("logical") or {}).get("bgra") or ""),
             logical_target.get("width"), logical_target.get("height"),
             logical_target.get("pixel_format"), logical_target.get("origin"),
+            logical_target.get("row_stride"),
         )
         gl_mask, gl_changed = _changed_mask(gl_pre, gl_post)
         live_mask, live_changed = _changed_mask(live_pre, live_post)
