@@ -156,10 +156,12 @@ disabled on the engine path.
 --caller-rva 0xedfcd1 --gl-reference` arms a one-shot readback at the observed
 draw exit. The observer saves and restores `GL_PACK_ALIGNMENT`,
 `GL_PACK_ROW_LENGTH`, `GL_PACK_SKIP_ROWS`, `GL_PACK_SKIP_PIXELS` and the
-`GL_PIXEL_PACK_BUFFER` binding around `glFinish`/`glReadPixels`; it rejects a
-non-default or mismatched framebuffer/read-buffer configuration. The capture
-records the draw identity, caps, GLSL digest, live vertex payload and pre-draw
-target alongside the pixels.
+`GL_PIXEL_PACK_BUFFER` binding around `glFinish`/`glReadPixels`, checks the
+configuration for GL errors before reading, and restores the state on success
+and failure. It rejects a non-default framebuffer, mismatched read/draw
+framebuffers, and a read or draw buffer that is not `GL_BACK`. The capture
+records the draw identity, caps, GLSL digest, live vertex payload, buffers and
+pre-draw target alongside the pixels.
 
 `python3 -m automation.gfx_compare compare --reference <dir> --candidate <json>
 --policy <policy> --out <dir>` validates backend declarations, event identity,

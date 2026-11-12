@@ -437,6 +437,10 @@ def _gl_reference_block(
         width = height = 0
     if target.get("origin") != "lower_left":
         problems.append("image origin is not declared as lower_left")
+    if "draw_buffer" in target and target.get("draw_buffer") != 0x0405:
+        problems.append("draw buffer is not GL_BACK")
+    if "read_buffer" in target and target.get("read_buffer") != 0x0405:
+        problems.append("read buffer is not GL_BACK")
     pixel_format = target.get("pixel_format")
     if pixel_format not in ("BGRA8", "RGBA8"):
         problems.append(f"unsupported pixel format {pixel_format!r}")
@@ -954,6 +958,18 @@ def similarity_to_drawable(
     }
 
 
+def _similarity_ok(similarity: dict, threshold: float) -> bool:
+    return (
+        similarity.get("status") == "compared"
+        and float(similarity.get("mean_abs_error", 999.0)) <= threshold
+    )
+
+
+def _window_retry_should_stop(window: dict) -> bool:
+    """A captured but over-threshold screenshot must not end discovery."""
+    return window.get("status") == "captured" and window.get("qualified") is True
+
+
 def _sck_helper() -> Path | None:
     source = ROOT / "benchmark" / "eu4_window_sck.swift"
     output = ROOT / "benchmark" / ".build" / "eu4_window_sck"
@@ -977,7 +993,8 @@ def _sck_helper() -> Path | None:
 
 
 def _sck_capture(output: Path, pid: int, drawable: Path | None,
-                 drawable_size: tuple[int, int] | None = None) -> dict:
+                 drawable_size: tuple[int, int] | None = None,
+                 similarity_threshold: float = 18.0) -> dict:
     helper = _sck_helper()
     if helper is None:
         return {"status": "unavailable", "reason": "ScreenCaptureKit helper did not build"}
@@ -1015,12 +1032,18 @@ def _sck_capture(output: Path, pid: int, drawable: Path | None,
         block["similarity"] = similarity_to_drawable(
             shot, drawable, drawable_size[0], drawable_size[1]
         )
+        block["qualified"] = _similarity_ok(
+            block["similarity"], similarity_threshold
+        )
+    else:
+        block["qualified"] = drawable is None
     return block
 
 
 def _window_capture(output: Path, pid: int, drawable: Path | None = None,
                     preferred_window: int | None = None,
-                    drawable_size: tuple[int, int] | None = None) -> dict:
+                    drawable_size: tuple[int, int] | None = None,
+                    similarity_threshold: float = 18.0) -> dict:
     """Independent visible-window capture of the game's own window.
 
     Enumerates every layer-0 window the game owns, tries the plausible main
@@ -1066,16 +1089,11 @@ def _window_capture(output: Path, pid: int, drawable: Path | None = None,
                               "alpha": 1.0, "width": 0, "height": 0})
     attempts: list[dict] = []
     accepted: dict | None = None
-    sck = _sck_capture(output, pid, drawable, drawable_size)
+    sck = _sck_capture(output, pid, drawable, drawable_size, similarity_threshold)
     attempts.append(dict(sck, kind="screen_capture_kit"))
     if sck.get("status") == "captured":
         similarity = sck.get("similarity") or {}
-        if drawable is None:
-            return dict(sck, attempts=attempts, windows=windows,
-                        preferred_window=preferred_window)
-        if similarity.get("status") == "compared" and float(
-            similarity.get("mean_abs_error", 999)
-        ) <= 18.0:
+        if sck.get("qualified"):
             return dict(sck, attempts=attempts, windows=windows,
                         preferred_window=preferred_window)
     for index, window in enumerate(candidates[:6]):
@@ -1105,15 +1123,12 @@ def _window_capture(output: Path, pid: int, drawable: Path | None = None,
                 path, drawable, drawable_size[0], drawable_size[1]
             )
         attempts.append(attempt)
-        if attempt["status"] == "captured" and accepted is None:
-            if drawable is None:
+        if attempt["status"] == "captured":
+            attempt["qualified"] = drawable is None or _similarity_ok(
+                attempt.get("similarity") or {}, similarity_threshold
+            )
+            if attempt["qualified"] and accepted is None:
                 accepted = attempt
-            else:
-                similarity = attempt.get("similarity") or {}
-                if similarity.get("status") == "compared" and float(
-                    similarity["mean_abs_error"]
-                ) <= 18.0:
-                    accepted = attempt
         if accepted is not None:
             break
     if accepted is None:
@@ -1162,12 +1177,40 @@ def _window_capture(output: Path, pid: int, drawable: Path | None = None,
                 path, drawable, drawable_size[0], drawable_size[1]
             )
         attempts.append(attempt)
-        if attempt["status"] == "captured" and (
-            drawable is None
-            or (attempt.get("similarity") or {}).get("status") == "compared"
-        ):
-            accepted = attempt
+        if attempt["status"] == "captured":
+            attempt["qualified"] = drawable is None or _similarity_ok(
+                attempt.get("similarity") or {}, similarity_threshold
+            )
+            if attempt["qualified"]:
+                accepted = attempt
     if accepted is None:
+        captured = [
+            attempt for attempt in attempts if attempt.get("status") == "captured"
+        ]
+        if captured:
+            best = min(
+                captured,
+                key=lambda attempt: float(
+                    (attempt.get("similarity") or {}).get("mean_abs_error", 999.0)
+                ),
+            )
+            return {
+                "status": "captured",
+                "shown": True,
+                "qualified": False,
+                "reason": "captured screenshot did not meet the similarity threshold",
+                "method": best.get("kind") or "window_server_screencapture",
+                "window_id": best.get("window_id"),
+                "file": best.get("file"),
+                "width": best.get("width"),
+                "height": best.get("height"),
+                "sha256": _file_sha256(output / str(best.get("file"))),
+                "source": "CGWindowList + screencapture",
+                "stats": best.get("stats"),
+                "similarity": best.get("similarity"),
+                "attempts": attempts,
+                "windows": windows,
+            }
         return {
             "status": "missing",
             "reason": "no non-blank window or screen image was captured",
@@ -1179,6 +1222,7 @@ def _window_capture(output: Path, pid: int, drawable: Path | None = None,
     return {
         "status": "captured",
         "shown": True,
+        "qualified": True,
         "preferred_window": preferred_window,
         "method": accepted.get("kind") or "window_server_screencapture",
         "window_id": accepted.get("window_id"),
@@ -1336,7 +1380,8 @@ def _presentation_descriptor(output: Path, occurrence: int = 1) -> tuple[Path, d
     return path, data
 
 
-def _presentation_block(output: Path, occurrence: int = 1) -> dict:
+def _presentation_block(output: Path, occurrence: int = 1,
+                        similarity_threshold: float = 18.0) -> dict:
     path, data = _presentation_descriptor(output, occurrence)
     marker = output / "presented.json"
     if not path.is_file():
@@ -1649,6 +1694,19 @@ def probe(args: argparse.Namespace) -> int:
         env["EU4_GFX_CHECKPOINT_HOLD_MS"] = str(args.hold_ms)
     window_evidence: dict = {}
     requested_occurrence = args.occurrence
+    similarity_threshold = args.similarity_threshold
+    if similarity_threshold is None:
+        similarity_threshold = 18.0
+        if args.checkpoint == "after-present":
+            policy_path = ROOT / "analysis" / "m4" / "comparison-policy.json"
+            try:
+                similarity_threshold = float(
+                    json.loads(policy_path.read_text()).get(
+                        "presentation_similarity_max_mean_error", 18.0
+                    )
+                )
+            except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+                similarity_threshold = 18.0
 
     def while_running(run_dir: Path, game) -> bool:
         if window_evidence:
@@ -1674,8 +1732,9 @@ def probe(args: argparse.Namespace) -> int:
                 drawable=raw,
                 preferred_window=preferred if isinstance(preferred, int) and preferred > 0 else None,
                 drawable_size=(width, height) if isinstance(width, int) and isinstance(height, int) else None,
+                similarity_threshold=similarity_threshold,
             )
-            if window.get("status") == "captured":
+            if _window_retry_should_stop(window):
                 break
         window_evidence["window"] = window
         return True
@@ -1717,17 +1776,16 @@ def probe(args: argparse.Namespace) -> int:
     presentation = {"status": "not_requested", "presented": None}
     logical_capture = {"status": "not_requested", "ok": None}
     if args.checkpoint == "after-present":
-        presentation = _presentation_block(output, args.occurrence)
+        presentation = _presentation_block(
+            output, args.occurrence, similarity_threshold
+        )
         window = window_evidence.get("window") or {
             "status": "missing",
             "reason": "the live window capture did not run",
         }
         presentation["window"] = window
         similarity = window.get("similarity") or {}
-        looks_right = (
-            similarity.get("status") == "compared"
-            and float(similarity.get("mean_abs_error", 999)) <= 18.0
-        )
+        looks_right = _similarity_ok(similarity, similarity_threshold)
         presentation["visible"] = bool(
             presentation.get("presented")
             and window.get("status") == "captured"
@@ -1997,6 +2055,7 @@ def _parser() -> argparse.ArgumentParser:
     prb.add_argument("--caller-rva", type=_rva_value)
     prb.add_argument("--occurrence", type=int, default=1)
     prb.add_argument("--hold-ms", type=int, default=8000)
+    prb.add_argument("--similarity-threshold", type=float, default=None)
     prb.add_argument("--timeout", type=float, default=120.0)
     prb.add_argument("--output", required=True)
     prb.add_argument("--campaign-run-root")

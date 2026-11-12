@@ -17,6 +17,7 @@ enum {
     GLX_DRAW_FRAMEBUFFER_BINDING = 0x8CA6,
     GLX_READ_FRAMEBUFFER_BINDING = 0x8CAA,
     GLX_READ_BUFFER = 0x0C02,
+    GLX_DRAW_BUFFER = 0x0C01,
     GLX_VIEWPORT = 0x0BA2,
     GLX_SCISSOR_BOX = 0x0C10,
     GLX_SCISSOR_TEST = 0x0C11,
@@ -42,7 +43,7 @@ enum {
     GLX_IMPLEMENTATION_COLOR_READ_FORMAT = 0x8B9B,
     GLX_IMPLEMENTATION_COLOR_READ_TYPE = 0x8B9A,
     GLX_PIXEL_PACK_BUFFER = 0x88EB,
-    GLX_PIXEL_PACK_BUFFER_BINDING = 0x88EF,
+    GLX_PIXEL_PACK_BUFFER_BINDING = 0x88ED,
     GLX_PACK_ROW_LENGTH = 0x0D02,
     GLX_PACK_SKIP_ROWS = 0x0D03,
     GLX_PACK_SKIP_PIXELS = 0x0D04,
@@ -64,6 +65,7 @@ typedef struct {
 static pack_state g_last_pack;
 static int g_last_pack_restored;
 static char g_last_reason[160];
+static int g_test_fail_pack_config;
 
 enum {
     MAX_PAYLOAD_BYTES = 256 * 1024 * 1024,
@@ -190,6 +192,7 @@ typedef struct {
     GLint draw_framebuffer;
     GLint read_framebuffer;
     GLint read_buffer;
+    GLint draw_buffer;
     GLint viewport[4];
     GLint scissor_box[4];
     GLint scissor_test;
@@ -225,6 +228,7 @@ static void read_gl_state(gl_state *state) {
     glGetIntegerv(GLX_DRAW_FRAMEBUFFER_BINDING, &state->draw_framebuffer);
     glGetIntegerv(GLX_READ_FRAMEBUFFER_BINDING, &state->read_framebuffer);
     glGetIntegerv(GLX_READ_BUFFER, &state->read_buffer);
+    glGetIntegerv(GLX_DRAW_BUFFER, &state->draw_buffer);
     glGetIntegerv(GLX_VIEWPORT, state->viewport);
     glGetIntegerv(GLX_SCISSOR_BOX, state->scissor_box);
     glGetIntegerv(GLX_SCISSOR_TEST, &state->scissor_test);
@@ -348,7 +352,7 @@ static void clear_gl_errors(void) {
     }
 }
 
-static void pack_begin(pack_state *state) {
+static int pack_begin(pack_state *state) {
     memset(state, 0, sizeof *state);
     glGetIntegerv(GLX_PACK_ALIGNMENT, &state->alignment);
     glGetIntegerv(GLX_PACK_ROW_LENGTH, &state->row_length);
@@ -361,7 +365,19 @@ static void pack_begin(pack_state *state) {
     glPixelStorei(GLX_PACK_ROW_LENGTH, 0);
     glPixelStorei(GLX_PACK_SKIP_ROWS, 0);
     glPixelStorei(GLX_PACK_SKIP_PIXELS, 0);
-    clear_gl_errors();
+    if (g_test_fail_pack_config) {
+        /* Test-only: an invalid alignment makes the driver set GL_INVALID_VALUE
+         * through the same path a real configuration failure would use. */
+        glPixelStorei(GLX_PACK_ALIGNMENT, 3);
+    }
+    GLenum error = glGetError();
+    if (error != GL_NO_ERROR) {
+        snprintf(g_last_reason, sizeof g_last_reason,
+                 "pixel-pack configuration failed (GL error 0x%x)", (unsigned)error);
+        clear_gl_errors();
+        return 0;
+    }
+    return 1;
 }
 
 static int pack_end(const pack_state *state) {
@@ -388,6 +404,10 @@ static int framebuffer_supported(const gl_state *state, const char **reason) {
         *reason = "read buffer is not GL_BACK";
         return 0;
     }
+    if (state->draw_buffer != GLX_READ_BUFFER_BACK) {
+        *reason = "draw buffer is not GL_BACK";
+        return 0;
+    }
     return 1;
 }
 
@@ -411,7 +431,12 @@ static int read_region(gl_state *state, uint8_t **out, size_t *out_len,
     if (pixels == NULL) {
         return 0;
     }
-    pack_begin(&g_last_pack);
+    if (!pack_begin(&g_last_pack)) {
+        g_last_pack_restored = pack_end(&g_last_pack);
+        *out_error = GL_INVALID_OPERATION;
+        free(pixels);
+        return 0;
+    }
     uint64_t before_finish = now_ns();
     glFinish();
     *out_finish_ns = now_ns() - before_finish;
@@ -619,7 +644,7 @@ eu4_gfx_framebuffer_status eu4_gfx_observe_framebuffer_after_draw(
         "\"0x%llx\",\"caller_known\":%s,\"thread_id\":%llu,\"mode\":%d,"
         "\"effective_count\":%d,\"first\":%d},"
         "\"target\":{\"framebuffer\":%d,\"read_framebuffer\":%d,"
-        "\"read_buffer\":%d,\"viewport\":[%d,%d,%d,%d],"
+        "\"read_buffer\":%d,\"draw_buffer\":%d,\"viewport\":[%d,%d,%d,%d],"
         "\"width\":%d,\"height\":%d,\"pixel_format\":\"%s\","
         "\"origin\":\"lower_left\",\"row_stride\":%d,"
         "\"drawable_width\":%s,\"drawable_height\":%s},"
@@ -652,7 +677,7 @@ eu4_gfx_framebuffer_status eu4_gfx_observe_framebuffer_after_draw(
         call->caller_known ? "true" : "false",
         (unsigned long long)call->thread_id, mode, effective_count, first,
         state.draw_framebuffer, state.read_framebuffer, state.read_buffer,
-        state.viewport[0], state.viewport[1], state.viewport[2],
+        state.draw_buffer, state.viewport[0], state.viewport[1], state.viewport[2],
         state.viewport[3], width, height, format, width * 4,
         drawable_width_text, drawable_height_text,
         (unsigned long long)finish_ns, (unsigned long long)read_ns,
@@ -690,4 +715,73 @@ eu4_gfx_framebuffer_status eu4_gfx_observe_framebuffer_after_draw(
     }
     atomic_fetch_add_explicit(&g_captures, 1, memory_order_relaxed);
     return EU4_GFX_FRAMEBUFFER_CAPTURE_OK;
+}
+
+/* --- Focused native test hooks (not used by the observer) --------------- */
+
+void eu4_gfx_observe_framebuffer_test_fail_pack_config(int on) {
+    g_test_fail_pack_config = on ? 1 : 0;
+}
+
+static int same_pack(const pack_state *left, const pack_state *right) {
+    return left->alignment == right->alignment &&
+           left->row_length == right->row_length &&
+           left->skip_rows == right->skip_rows &&
+           left->skip_pixels == right->skip_pixels &&
+           left->pack_buffer == right->pack_buffer;
+}
+
+static void capture_pack(pack_state *state) {
+    memset(state, 0, sizeof *state);
+    glGetIntegerv(GLX_PACK_ALIGNMENT, &state->alignment);
+    glGetIntegerv(GLX_PACK_ROW_LENGTH, &state->row_length);
+    glGetIntegerv(GLX_PACK_SKIP_ROWS, &state->skip_rows);
+    glGetIntegerv(GLX_PACK_SKIP_PIXELS, &state->skip_pixels);
+    glGetIntegerv(GLX_PIXEL_PACK_BUFFER_BINDING, &state->pack_buffer);
+}
+
+int eu4_gfx_observe_framebuffer_test_pack_roundtrip(void) {
+    pack_state before;
+    capture_pack(&before);
+    if (!pack_begin(&g_last_pack)) {
+        return 1;
+    }
+    if (!pack_end(&g_last_pack)) {
+        return 2;
+    }
+    pack_state after;
+    capture_pack(&after);
+    return same_pack(&before, &after) ? 0 : 3;
+}
+
+int eu4_gfx_observe_framebuffer_test_pack_failure(void) {
+    pack_state before;
+    capture_pack(&before);
+    g_test_fail_pack_config = 1;
+    int began = pack_begin(&g_last_pack);
+    g_test_fail_pack_config = 0;
+    int restored = pack_end(&g_last_pack);
+    pack_state after;
+    capture_pack(&after);
+    if (began) {
+        return 1;
+    }
+    if (!restored) {
+        return 2;
+    }
+    return same_pack(&before, &after) ? 0 : 3;
+}
+
+int eu4_gfx_observe_framebuffer_test_framebuffer(int draw_framebuffer,
+                                                 int read_framebuffer,
+                                                 int read_buffer,
+                                                 int draw_buffer) {
+    gl_state state;
+    memset(&state, 0, sizeof state);
+    state.draw_framebuffer = draw_framebuffer;
+    state.read_framebuffer = read_framebuffer;
+    state.read_buffer = read_buffer;
+    state.draw_buffer = draw_buffer;
+    const char *reason = NULL;
+    return framebuffer_supported(&state, &reason);
 }

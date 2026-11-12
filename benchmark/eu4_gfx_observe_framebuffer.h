@@ -56,4 +56,13 @@ uint32_t eu4_gfx_observe_framebuffer_captures(void);
  * is current. Returns 0 when unavailable; callers then report the viewport. */
 int eu4_gfx_gl_drawable_extent(uint32_t *width, uint32_t *height);
 
+/* Focused native test hooks. Not part of the observer path. */
+void eu4_gfx_observe_framebuffer_test_fail_pack_config(int on);
+int eu4_gfx_observe_framebuffer_test_pack_roundtrip(void);
+int eu4_gfx_observe_framebuffer_test_pack_failure(void);
+int eu4_gfx_observe_framebuffer_test_framebuffer(int draw_framebuffer,
+                                                 int read_framebuffer,
+                                                 int read_buffer,
+                                                 int draw_buffer);
+
 #endif

@@ -306,6 +306,8 @@ def main(argv: list[str]) -> int:
         and (reference_json.get("gpu") or {}).get("gl_error") == 0
         and (reference_json.get("gpu") or {}).get("read_pixels") is True
         and (reference_json.get("caps") or {}).get("byte4") == reference.get("caps_byte4")
+        and (reference_json.get("target") or {}).get("draw_buffer") == 0x0405
+        and (reference_json.get("target") or {}).get("read_buffer") == 0x0405
         and (reference_json.get("capture") or {}).get("raw_sha256") == reference.get("raw_sha256")
         and (reference_json.get("shader") or {}).get("glsl_sha256") == reference.get("glsl_sha256")
         and (reference_json.get("pack") or {}).get("restored") is True

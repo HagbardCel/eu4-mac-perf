@@ -36,7 +36,7 @@ Captured through the new generic observer in the existing passive observe stack
 
 | Field | Value |
 | --- | --- |
-| Run | `.local/m4/experiments/gl-reference-05` (final observer) |
+| Run | `.local/m4/experiments/gl-reference-07` (final observer) |
 | Caller / call id | `0xedfcd1` / 9 |
 | Capture | 1728×1117 BGRA8, `GL_BACK`, origin `lower_left` |
 | Raw SHA-256 | `69d41a8870679dcb3158bd3f3fad2f4afff11106e45990ab9a3ffc0f5dcc7670` |
@@ -45,7 +45,7 @@ Captured through the new generic observer in the existing passive observe stack
 | GLSL digest | `1e5d1d7b0910ec343c5d5da1ec811fa6f2f963157aff251d79bd588391905e7f` |
 | Live vertex payload | 96 bytes, SHA-256 `f13dea22399b9649d84a09965ec6b21bc13b72db3c17049916a675922a39c8ab`, V 0..1 |
 | Pre-draw target | all black, alpha 255 (authentic clear) |
-| Pixel-pack state | saved `(alignment 4, row_length 0, skips 0, pack_buffer 0)`, restored `true` |
+| Pixel-pack state | saved `(alignment 4, row_length 0, skips 0, pack_buffer 0)`, restored `true`; read and draw buffers both `GL_BACK` (1029) |
 | Determinism | `gl-reference-04` and the earlier `gl-reference-02` produced the same raw SHA-256 |
 
 Observation is disabled unless `EU4_GFX_OPS_FRAMEBUFFER` is set; the unarmed
@@ -135,10 +135,18 @@ Metal layer was misplaced.
   Negative comparator tests cover both.
 - **OpenGL readback safety.** The observer saves `GL_PACK_ALIGNMENT`,
   `GL_PACK_ROW_LENGTH`, `GL_PACK_SKIP_ROWS`, `GL_PACK_SKIP_PIXELS` and the
-  `GL_PIXEL_PACK_BUFFER` binding, forces a tightly packed CPU readback, and
-  restores all five on success and failure. It rejects non-default or
-  mismatched framebuffer/read-buffer configurations. The final live capture
-  records the saved state and `restored=true`.
+  `GL_PIXEL_PACK_BUFFER` binding, forces a tightly packed CPU readback, checks
+  the configuration for GL errors before reading, and restores all five on
+  success and failure. A failed configuration prevents `glReadPixels()` and
+  restores the saved state. The observer rejects non-default framebuffers,
+  mismatched read/draw framebuffer bindings, and a read or draw buffer that is
+  not `GL_BACK`. The final live capture records the saved state,
+  `restored=true`, and both buffers as 1029.
+- **Screenshot discovery.** The bounded retry loop distinguishes a captured
+  screenshot from one that satisfies the policy threshold; an over-threshold
+  capture is retained as a diagnostic but does not end discovery. The M4 probe
+  reads `presentation_similarity_max_mean_error` from the existing policy;
+  other experiments keep the permissive default and can override it.
 - **Presentation acceptance.** Screenshot similarity is no longer trusted from
   the manifest. The checker recomputes it from the window screenshot and
   drawable with `similarity_to_drawable()` and the policy threshold; an
@@ -178,21 +186,21 @@ and is itself pinned by `evidence_manifest_sha256` in
 [campaign.json](../../campaigns/eu4-m4/campaign.json). The checker refuses a
 manifest whose digest does not match the campaign pin.
 
-## Evidence reuse for the review revision
+## Evidence reuse for the closure revision
 
-The review changes affect checkpoint selection, observer readback safety and
-checker validation, not the Metal rendering or presentation output. The
-presentation evidence from `metal-present-20` is therefore reused; the checker
-re-reads its checkpoint and re-computes the screenshot/drawable similarity from
-the recorded files. Only the original-GL reference was recaptured
-(`gl-reference-05`), because the observer's pixel-pack handling changed. It
-reproduced `69d41a88…` and recorded `restored=true`.
+The closure changes affect OpenGL readback safety, screenshot discovery and
+docs, not Metal rendering or presentation. The presentation evidence from
+`metal-present-20` is reused; the checker re-reads its checkpoint and recomputes
+the screenshot/drawable similarity from the recorded files. The original-GL
+reference was recaptured as `gl-reference-07` with the final observer. It
+reproduced `69d41a88…`, recorded a clean pack configuration/restore, and both
+read and draw buffers as `GL_BACK`.
 
 ## Offline regressions
 
 `tests.test_gfx_compare`, `tests.test_gl_reference`, `tests.test_live_gfx_probe`,
-the M4 checker tests and the Metal/live-draw/HiDPI/simple-reference suites pass
-(90 targeted tests). DSH plugin tests pass (34). The tracked full suite passes:
+`tests.test_gfx_pack_state`, the M4 checker tests and the
+Metal/live-draw/HiDPI/simple-reference suites pass. DSH plugin tests pass (34). The tracked full suite passes:
 **2459 tests OK, 10 skipped**, with two local-only exclusions documented with
 the commit: an untracked `tests/test_gfx_l32b_e2e.py` that imports a missing
 module, and a partially present untracked

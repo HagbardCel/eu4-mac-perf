@@ -113,6 +113,28 @@ class ProbeSurfaceTests(unittest.TestCase):
         self.assertEqual(inspected["checkpoints"][0]["checkpoint"], "after-draw")
 
 
+class ScreenshotRetryTests(unittest.TestCase):
+    def test_over_threshold_capture_does_not_stop_discovery(self) -> None:
+        self.assertFalse(live_gfx._window_retry_should_stop(
+            {"status": "captured", "qualified": False}
+        ))
+        self.assertFalse(live_gfx._window_retry_should_stop({"status": "missing"}))
+        self.assertTrue(live_gfx._window_retry_should_stop(
+            {"status": "captured", "qualified": True}
+        ))
+
+    def test_similarity_threshold_is_explicit(self) -> None:
+        self.assertTrue(live_gfx._similarity_ok(
+            {"status": "compared", "mean_abs_error": 1.9}, 2.0
+        ))
+        self.assertFalse(live_gfx._similarity_ok(
+            {"status": "compared", "mean_abs_error": 2.1}, 2.0
+        ))
+        self.assertFalse(live_gfx._similarity_ok(
+            {"status": "unavailable", "mean_abs_error": 0.0}, 2.0
+        ))
+
+
 class PinnedProbeClaimTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()

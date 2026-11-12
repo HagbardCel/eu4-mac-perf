@@ -1,7 +1,7 @@
 {
   "schema": "eu4-m4-evidence/v1",
   "baseline_commit": "dd4290bc9165574d81afa1b3ce151cb767031fda",
-  "implementation_commit": "d399bbed3c084060f44e34f946b9080e64e38d63",
+  "implementation_commit": "42680136493ac76d8464dbb4d32befecc49fe27c",
   "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
   "library_sha256": "32c127b6d1e54ce157f5d3e5e35e4667b2fa08912bfc53844f674368b03738d7",
   "policy": {
@@ -9,9 +9,9 @@
     "sha256": "6b42da7002ae664ccfde009c925f8568702bcd790e8e2e8e1c99ea8f8b39b93f"
   },
   "reference": {
-    "run": ".local/m4/experiments/gl-reference-05",
+    "run": ".local/m4/experiments/gl-reference-07",
     "descriptor": "gl-reference.json",
-    "descriptor_sha256": "1e02e3f6febfea48dce3bc8f6088d363f7d9c9c7668c97b5f1d74ade629a5352",
+    "descriptor_sha256": "1be37bdf9f4ac1f74b6ab7408788dfda298b6e575ff896b821b18b2e20b2067c",
     "raw_sha256": "69d41a8870679dcb3158bd3f3fad2f4afff11106e45990ab9a3ffc0f5dcc7670",
     "raw_file": "gl-reference.bgra",
     "caller_rva": "0xedfcd1",
@@ -26,7 +26,66 @@
       "saved_pack_buffer": 0,
       "restored": true
     },
+    "target": {
+      "read_buffer": 1029,
+      "draw_buffer": 1029,
+      "width": 1728,
+      "height": 1117
+    },
     "vertex_sha256": "f13dea22399b9649d84a09965ec6b21bc13b72db3c17049916a675922a39c8ab",
+    "artifacts": {
+      "gl-reference.json": {
+        "path": ".local/m4/experiments/gl-reference-07/gl-reference.json",
+        "sha256": "1be37bdf9f4ac1f74b6ab7408788dfda298b6e575ff896b821b18b2e20b2067c",
+        "bytes": 1970
+      },
+      "gl-reference.bgra": {
+        "path": ".local/m4/experiments/gl-reference-07/gl-reference.bgra",
+        "sha256": "69d41a8870679dcb3158bd3f3fad2f4afff11106e45990ab9a3ffc0f5dcc7670",
+        "bytes": 7720704
+      },
+      "gl-reference-pre.bgra": {
+        "path": ".local/m4/experiments/gl-reference-07/gl-reference-pre.bgra",
+        "sha256": "137637b6a69b02841cdd04a748ab6cdcb739299bd10b934b2e1bf4ea571524ba",
+        "bytes": 7720704
+      },
+      "gl-reference-vertex.json": {
+        "path": ".local/m4/experiments/gl-reference-07/gl-reference-vertex.json",
+        "sha256": "bc60372374903b6a5f17d3bcf642c0b89f5cbb74e96f70ce4f45e6912d0d3995",
+        "bytes": 778
+      },
+      "gl-reference-vertex.bin": {
+        "path": ".local/m4/experiments/gl-reference-07/gl-reference-vertex.bin",
+        "sha256": "f13dea22399b9649d84a09965ec6b21bc13b72db3c17049916a675922a39c8ab",
+        "bytes": 96
+      },
+      "gl-reference-pre.json": {
+        "path": ".local/m4/experiments/gl-reference-07/gl-reference-pre.json",
+        "sha256": "487728ace0ff315efa302dae557eb16e0fd3f7862bb6b14a02ec314faba5bd5d",
+        "bytes": 322
+      },
+      "operations.jsonl": {
+        "path": ".local/m4/experiments/gl-reference-07/operations.jsonl",
+        "sha256": "55e98e820d9c8691b440e08dcb4b6166b0d2b8843ab79733bad9e4d355f211cd",
+        "bytes": 3583
+      },
+      "operations-summary.json": {
+        "path": ".local/m4/experiments/gl-reference-07/operations-summary.json",
+        "sha256": "41895da5211f0ea07c4c6ad5d9d52889e357c332075a43baa4640d5072f7e02b",
+        "bytes": 1364
+      },
+      "capture-report.json": {
+        "path": ".local/m4/experiments/gl-reference-07/capture-report.json",
+        "sha256": "72eaa827ea9c2f00bbd1e92f6a1fde90ebf56e67a6121f4d2a9355e184a72bf2",
+        "bytes": 5455
+      }
+    }
+  },
+  "reference_repeat": {
+    "run": ".local/m4/experiments/gl-reference-05",
+    "raw_sha256": "69d41a8870679dcb3158bd3f3fad2f4afff11106e45990ab9a3ffc0f5dcc7670",
+    "descriptor_sha256": "1e02e3f6febfea48dce3bc8f6088d363f7d9c9c7668c97b5f1d74ade629a5352",
+    "caller_rva": "0xedfcd1",
     "artifacts": {
       "gl-reference.json": {
         "path": ".local/m4/experiments/gl-reference-05/gl-reference.json",
@@ -38,68 +97,20 @@
         "sha256": "69d41a8870679dcb3158bd3f3fad2f4afff11106e45990ab9a3ffc0f5dcc7670",
         "bytes": 7720704
       },
-      "gl-reference-pre.bgra": {
-        "path": ".local/m4/experiments/gl-reference-05/gl-reference-pre.bgra",
-        "sha256": "137637b6a69b02841cdd04a748ab6cdcb739299bd10b934b2e1bf4ea571524ba",
-        "bytes": 7720704
-      },
-      "gl-reference-vertex.json": {
-        "path": ".local/m4/experiments/gl-reference-05/gl-reference-vertex.json",
-        "sha256": "bc60372374903b6a5f17d3bcf642c0b89f5cbb74e96f70ce4f45e6912d0d3995",
-        "bytes": 778
-      },
-      "gl-reference-vertex.bin": {
-        "path": ".local/m4/experiments/gl-reference-05/gl-reference-vertex.bin",
-        "sha256": "f13dea22399b9649d84a09965ec6b21bc13b72db3c17049916a675922a39c8ab",
-        "bytes": 96
-      },
-      "gl-reference-pre.json": {
-        "path": ".local/m4/experiments/gl-reference-05/gl-reference-pre.json",
-        "sha256": "3fe833d961175dc894e37ec94ae7b86c5430f252eb5f68a1b3303dc5b4aef55c",
-        "bytes": 322
-      },
-      "operations.jsonl": {
-        "path": ".local/m4/experiments/gl-reference-05/operations.jsonl",
-        "sha256": "afb172386ae9156880c09d5082adddfad434d1b960f5e5342ad5d3e4f1685625",
-        "bytes": 3583
-      },
       "operations-summary.json": {
         "path": ".local/m4/experiments/gl-reference-05/operations-summary.json",
         "sha256": "1b7726c8c9453c2ed4f0826eff4d00edcaabf1bf762225dbf755a8331c1187e1",
         "bytes": 1364
-      }
-    }
-  },
-  "reference_repeat": {
-    "run": ".local/m4/experiments/gl-reference-04",
-    "raw_sha256": "69d41a8870679dcb3158bd3f3fad2f4afff11106e45990ab9a3ffc0f5dcc7670",
-    "descriptor_sha256": "6eb7bd73d3ab35de25a53e90ac798bb835a3536663e90f0ae4750e2717ea10b2",
-    "caller_rva": "0xedfcd1",
-    "artifacts": {
-      "gl-reference.json": {
-        "path": ".local/m4/experiments/gl-reference-04/gl-reference.json",
-        "sha256": "6eb7bd73d3ab35de25a53e90ac798bb835a3536663e90f0ae4750e2717ea10b2",
-        "bytes": 1820
-      },
-      "gl-reference.bgra": {
-        "path": ".local/m4/experiments/gl-reference-04/gl-reference.bgra",
-        "sha256": "69d41a8870679dcb3158bd3f3fad2f4afff11106e45990ab9a3ffc0f5dcc7670",
-        "bytes": 7720704
-      },
-      "operations-summary.json": {
-        "path": ".local/m4/experiments/gl-reference-04/operations-summary.json",
-        "sha256": "b03c079a7cd4891f5f489c3a0c3271016e1324232185158b6f297e1ef520fefc",
-        "bytes": 1364
       },
       "gl-reference-vertex.json": {
-        "path": ".local/m4/experiments/gl-reference-04/gl-reference-vertex.json",
+        "path": ".local/m4/experiments/gl-reference-05/gl-reference-vertex.json",
         "sha256": "bc60372374903b6a5f17d3bcf642c0b89f5cbb74e96f70ce4f45e6912d0d3995",
         "bytes": 778
       }
     }
   },
   "readback_validation": {
-    "run": ".local/m4/experiments/gl-reference-05",
+    "run": ".local/m4/experiments/gl-reference-07",
     "pack_saved": {
       "saved_alignment": 4,
       "saved_row_length": 0,
@@ -109,6 +120,8 @@
       "restored": true
     },
     "restored": true,
+    "read_buffer": 1029,
+    "draw_buffer": 1029,
     "raw_sha256": "69d41a8870679dcb3158bd3f3fad2f4afff11106e45990ab9a3ffc0f5dcc7670",
     "matches_previous": true
   },
@@ -190,8 +203,8 @@
     }
   },
   "comparison": {
-    "out": ".local/m4/experiments/compare-final3",
-    "report_sha256": "9c8b1ac9a87ca82caae5a788c0996b6d574b509cd86eebcc73064982188281f2",
+    "out": ".local/m4/experiments/compare-final4",
+    "report_sha256": "5d843cacb59e20b92487503aedbd1fa62588834c286a8813544294d2d5dbab1e",
     "status": "pass",
     "max_channel_error": 0,
     "mismatched_pixels": 0,
@@ -201,22 +214,22 @@
     ],
     "artifacts": {
       "report.json": {
-        "path": ".local/m4/experiments/compare-final3/report.json",
-        "sha256": "9c8b1ac9a87ca82caae5a788c0996b6d574b509cd86eebcc73064982188281f2",
-        "bytes": 3995
+        "path": ".local/m4/experiments/compare-final4/report.json",
+        "sha256": "5d843cacb59e20b92487503aedbd1fa62588834c286a8813544294d2d5dbab1e",
+        "bytes": 3996
       },
       "reference.png": {
-        "path": ".local/m4/experiments/compare-final3/reference.png",
+        "path": ".local/m4/experiments/compare-final4/reference.png",
         "sha256": "6d87172e484ef8ceea0f8a29cdcaea8e0b0e7c02dfd7c71359ba7f888e9a6794",
         "bytes": 2627461
       },
       "candidate.png": {
-        "path": ".local/m4/experiments/compare-final3/candidate.png",
+        "path": ".local/m4/experiments/compare-final4/candidate.png",
         "sha256": "6d87172e484ef8ceea0f8a29cdcaea8e0b0e7c02dfd7c71359ba7f888e9a6794",
         "bytes": 2627461
       },
       "difference.png": {
-        "path": ".local/m4/experiments/compare-final3/difference.png",
+        "path": ".local/m4/experiments/compare-final4/difference.png",
         "sha256": "ae8b83e248439dd4c4b10a2ec97379fda40092c5f279f916fa4417c54a3a057a",
         "bytes": 5704
       }

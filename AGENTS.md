@@ -4,6 +4,18 @@ Current capabilities, evidence status and open limits are recorded in
 [docs/status.md](docs/status.md). Consult it before planning graphics work or
 claiming that a capability exists.
 
+## DSH permission discipline
+
+- Use normal tool execution without sandbox escalation by default.
+- Do not request `sandbox_permissions` proactively for
+  file inspection, process monitoring, tests, or builds.
+- Retry with elevated permissions only after a real
+  sandbox denial, and only when necessary.
+- Keep compiler caches and temporary build outputs
+  inside the workspace where practical.
+- Do not repeatedly request elevated permissions
+  for equivalent diagnostic commands.
+
 ## EU4 reconstruction and migration
 
 For cohesive reconstruction or migration of EU4 functionality—especially `_Gfx*` OpenGL→Metal work (shaders, render state, draws, lifecycle remediations)—**do not** implement the migration body by hand in an interactive session.
