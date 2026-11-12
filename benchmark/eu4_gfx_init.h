@@ -156,6 +156,10 @@ void eu4_gfx_set_checkpoint_hooks(eu4_gfx_checkpoint_hook after_clear,
    successful drawable blit. Diagnostic-only. */
 void eu4_gfx_present_capture_set(void *dest, size_t capacity);
 
+/* Diagnostic re-present of the last game target to a fresh drawable, without
+   depending on engine present state. Returns 1 on completion. */
+int eu4_gfx_present_diagnostic(void *master);
+
 /* Select game-window mode before _GfxInit. metal_init calls this. Hosts that
    omit it stay on the diagnostic offscreen path. */
 void eu4_gfx_enable_game_window(void);

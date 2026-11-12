@@ -1,8 +1,9 @@
 {
   "schema": "eu4-m4-evidence/v1",
   "baseline_commit": "dd4290bc9165574d81afa1b3ce151cb767031fda",
+  "implementation_commit": "3b7ed79629e2a6b7b2f111c6d0bc166744e81471",
   "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
-  "library_sha256": "c2a7a52d5154d745c6f27a6cdfb131702ed788d516b3fba967312d81edfa667f",
+  "library_sha256": "32c127b6d1e54ce157f5d3e5e35e4667b2fa08912bfc53844f674368b03738d7",
   "policy": {
     "path": "analysis/m4/comparison-policy.json",
     "sha256": "d99236b26bcae4682e7d4ff8d64e2a2839f071162f33a60f0300919b810b550d"
@@ -68,16 +69,6 @@
         "path": ".local/m4/experiments/gl-reference-04/capture-request.json",
         "sha256": "69333efa982c5526590612c511cd393809acfdb4b4d59403ce4d7953dd05647b",
         "bytes": 1137
-      },
-      "startup.status": {
-        "path": ".local/m4/experiments/gl-reference-04/startup.status",
-        "sha256": "38a7303e01d1d9fd36d4b5e3e8b7988ca06d72f14f746b9b93099c1966a72847",
-        "bytes": 328
-      },
-      "launcher-report.json": {
-        "path": ".local/m4/experiments/gl-reference-04/launcher-report.json",
-        "sha256": "e04381d7d511b5bbec115352d284de79f450a3dd480f4fbdc380b6598e1be90a",
-        "bytes": 4462
       }
     }
   },
@@ -86,7 +77,6 @@
     "raw_sha256": "69d41a8870679dcb3158bd3f3fad2f4afff11106e45990ab9a3ffc0f5dcc7670",
     "descriptor_sha256": "5b364b27c8c9b081991c33d7785c5e4ec666bab5be432b6d9aea76c641c90989",
     "caller_rva": "0xedfcd1",
-    "call_id": 3,
     "artifacts": {
       "gl-reference.json": {
         "path": ".local/m4/experiments/gl-reference-02/gl-reference.json",
@@ -106,90 +96,94 @@
     }
   },
   "candidate": {
-    "run": ".local/m4/experiments/metal-present-18",
+    "run": ".local/m4/experiments/metal-present-20",
     "descriptor": "metal-logical.json",
-    "descriptor_sha256": "c7bda342bfb42a9d536caaa5ba79bdb5bbbdb17594b2cc330dca0ce6ce837f94",
+    "descriptor_sha256": "e1b9cbe19ffdac0dcffc07d03ab10c8216c457d05c4750fc85d87273ba012a9b",
     "raw_sha256": "c668b054e87ea92eea7de6161adc7eeeeef07ea19bfcbde0ef02f069ba77fe14",
     "raw_file": "metal-logical.bgra",
     "effective_count": 4,
     "vertex_hex_sha256": "f13dea22399b9649d84a09965ec6b21bc13b72db3c17049916a675922a39c8ab",
     "artifacts": {
       "metal-logical.json": {
-        "path": ".local/m4/experiments/metal-present-18/metal-logical.json",
-        "sha256": "c7bda342bfb42a9d536caaa5ba79bdb5bbbdb17594b2cc330dca0ce6ce837f94",
+        "path": ".local/m4/experiments/metal-present-20/metal-logical.json",
+        "sha256": "e1b9cbe19ffdac0dcffc07d03ab10c8216c457d05c4750fc85d87273ba012a9b",
         "bytes": 1870
       },
       "metal-logical.bgra": {
-        "path": ".local/m4/experiments/metal-present-18/metal-logical.bgra",
+        "path": ".local/m4/experiments/metal-present-20/metal-logical.bgra",
         "sha256": "c668b054e87ea92eea7de6161adc7eeeeef07ea19bfcbde0ef02f069ba77fe14",
         "bytes": 7720704
       },
       "checkpoint-after-present-1.json": {
-        "path": ".local/m4/experiments/metal-present-18/checkpoint-after-present-1.json",
-        "sha256": "0d57151e6f0282fcba23de69d8bc048e0c8f4d2e538069051827eb6fb7ba76f0",
-        "bytes": 1809
+        "path": ".local/m4/experiments/metal-present-20/checkpoint-after-present-1.json",
+        "sha256": "ac9e2970d1affdb9ebf96ccf035b461324f219b0d71dc01d69d423d5571c97f6",
+        "bytes": 1790
       },
       "checkpoint-after-present-1.bgra": {
-        "path": ".local/m4/experiments/metal-present-18/checkpoint-after-present-1.bgra",
+        "path": ".local/m4/experiments/metal-present-20/checkpoint-after-present-1.bgra",
         "sha256": "6921c242c66ad9929c7fd935178ae01bf2d4da0b25b6b57980660de3cf7999c3",
         "bytes": 30882816
       },
       "checkpoint-after-present-1.png": {
-        "path": ".local/m4/experiments/metal-present-18/checkpoint-after-present-1.png",
+        "path": ".local/m4/experiments/metal-present-20/checkpoint-after-present-1.png",
         "sha256": "9bf049b81588f100befcc4f25a3ed1900fea017e67cf3520c58d0d0c868925f1",
         "bytes": 9546073
       },
       "presented.json": {
-        "path": ".local/m4/experiments/metal-present-18/presented.json",
-        "sha256": "134a004883a9243d761322eb361f0be96564aea49b83bbc9d33d4ea1e67b7503",
-        "bytes": 648
+        "path": ".local/m4/experiments/metal-present-20/presented.json",
+        "sha256": "42add2fa5d4c271ec1641e08686a4a496fbf57622d1c18c2fbf009545ad7d6ef",
+        "bytes": 629
       },
       "present.json": {
-        "path": ".local/m4/experiments/metal-present-18/present.json",
-        "sha256": "f214ca2af20e315c3c2f3d2d5d5c54d1389330f5cd9c41b66a4454d31dcee5e7",
-        "bytes": 57
+        "path": ".local/m4/experiments/metal-present-20/present.json",
+        "sha256": null,
+        "bytes": null
       },
       "presentation-evidence.json": {
-        "path": ".local/m4/experiments/metal-present-18/presentation-evidence.json",
-        "sha256": "7756e2df61de7df7e36c0cfae0fedc032109b54dffcab0564a12778852cbabd9",
-        "bytes": 6033
+        "path": ".local/m4/experiments/metal-present-20/presentation-evidence.json",
+        "sha256": "9ee7a85960e013723af0b05b6209c873e23ee4637bdf1f0b7ef5f05abb9b0cc1",
+        "bytes": 6215
       },
       "probe-result.json": {
-        "path": ".local/m4/experiments/metal-present-18/probe-result.json",
-        "sha256": "25e6da737aeaddc288c5fd3acbfb03021c807d9ccabdfc2f6bee95bc02fb3918",
-        "bytes": 34314
+        "path": ".local/m4/experiments/metal-present-20/probe-result.json",
+        "sha256": "5ae648b76f4ec32547cbbdda137b5c95af16a43a4d1e78efcafd74faf3b84850",
+        "bytes": 18513
       },
       "draw-route.json": {
-        "path": ".local/m4/experiments/metal-present-18/draw-route.json",
-        "sha256": "fa14a0d8e50c71290471dbc38d8be8591d1ed648f557c7fa38c57cb5ee2ede35",
+        "path": ".local/m4/experiments/metal-present-20/draw-route.json",
+        "sha256": "628ec4c25f0f80d660a3214ec08ad8361fd55a5a7aacb20da4403bd692658cc4",
         "bytes": 898
       },
       "windows.json": {
-        "path": ".local/m4/experiments/metal-present-18/windows.json",
-        "sha256": "cf8bc38fcb3116e1125d2f5653b089e857ed1d4c2d349b051feb2905398092b9",
-        "bytes": 368
+        "path": ".local/m4/experiments/metal-present-20/windows.json",
+        "sha256": "89ed6adf25f99ed74a28ab23e144fadf33ae81d80dbcce433e5ca9d758972bb1",
+        "bytes": 743
       },
-      "window-21710.png": {
-        "path": ".local/m4/experiments/metal-present-18/window-21710.png",
-        "sha256": "2b935d0f7870951aa72a2511a2e19240009690c894b0c9e08464cfafece98cd6",
-        "bytes": 144440
+      "window-21765.png": {
+        "path": ".local/m4/experiments/metal-present-20/window-21765.png",
+        "sha256": "df23010ee1f698001c3866ecaede94ccdf39ada043c83b077033b374f36420c7",
+        "bytes": 10099376
+      },
+      "repeat-present.json": {
+        "path": ".local/m4/experiments/metal-present-20/repeat-present.json",
+        "sha256": "8b80194ca10ffc974fd08850331cb9144ca3bde5777fb5da221b70e775383efc",
+        "bytes": 318
       },
       "window-fullscreen.png": {
-        "path": ".local/m4/experiments/metal-present-18/window-fullscreen.png",
-        "sha256": "c6c015261d8349549f333c84591408eae2f3b4f097a51d701145920114f824c8",
-        "bytes": 148028
+        "path": ".local/m4/experiments/metal-present-20/window-fullscreen.png",
+        "sha256": null,
+        "bytes": null
       },
       "window-sck.png": {
-        "path": ".local/m4/experiments/metal-present-18/window-sck.png",
-        "sha256": "932eb5c221fa94807f5ce367d7938378391c4cbacad71575e1f0cbe39dc8b459",
-        "bytes": 143767
+        "path": ".local/m4/experiments/metal-present-20/window-sck.png",
+        "sha256": "cf3e36feaff781c7b63b406780fa1155cd2be119039e6e8ddbdf268464109777",
+        "bytes": 141572
       }
     }
   },
   "comparison": {
-    "report": "report.json",
-    "out": ".local/m4/experiments/compare-final",
-    "report_sha256": "d8bf2b119a8266b0a67901dfc02bbf03b454ff65c2a1c1fa0fefa97c38734808",
+    "out": ".local/m4/experiments/compare-final2",
+    "report_sha256": "3c87fa50aadfb754dc08c2b7e320f8f16dbfe4ab203abf2b09a631674656c06b",
     "status": "pass",
     "max_channel_error": 0,
     "mismatched_pixels": 0,
@@ -199,127 +193,72 @@
     ],
     "artifacts": {
       "report.json": {
-        "path": ".local/m4/experiments/compare-final/report.json",
-        "sha256": "d8bf2b119a8266b0a67901dfc02bbf03b454ff65c2a1c1fa0fefa97c38734808",
+        "path": ".local/m4/experiments/compare-final2/report.json",
+        "sha256": "3c87fa50aadfb754dc08c2b7e320f8f16dbfe4ab203abf2b09a631674656c06b",
         "bytes": 3995
       },
       "reference.png": {
-        "path": ".local/m4/experiments/compare-final/reference.png",
+        "path": ".local/m4/experiments/compare-final2/reference.png",
         "sha256": "6d87172e484ef8ceea0f8a29cdcaea8e0b0e7c02dfd7c71359ba7f888e9a6794",
         "bytes": 2627461
       },
       "candidate.png": {
-        "path": ".local/m4/experiments/compare-final/candidate.png",
+        "path": ".local/m4/experiments/compare-final2/candidate.png",
         "sha256": "6d87172e484ef8ceea0f8a29cdcaea8e0b0e7c02dfd7c71359ba7f888e9a6794",
         "bytes": 2627461
       },
       "difference.png": {
-        "path": ".local/m4/experiments/compare-final/difference.png",
+        "path": ".local/m4/experiments/compare-final2/difference.png",
         "sha256": "ae8b83e248439dd4c4b10a2ec97379fda40092c5f279f916fa4417c54a3a057a",
         "bytes": 5704
       }
     }
   },
   "presentation": {
-    "run": ".local/m4/experiments/metal-present-18",
-    "checkpoint_sha256": "0d57151e6f0282fcba23de69d8bc048e0c8f4d2e538069051827eb6fb7ba76f0",
-    "presented_sha256": "134a004883a9243d761322eb361f0be96564aea49b83bbc9d33d4ea1e67b7503",
+    "run": ".local/m4/experiments/metal-present-20",
+    "checkpoint_sha256": "ac9e2970d1affdb9ebf96ccf035b461324f219b0d71dc01d69d423d5571c97f6",
+    "presented_sha256": "42add2fa5d4c271ec1641e08686a4a496fbf57622d1c18c2fbf009545ad7d6ef",
     "drawable_sha256": "6921c242c66ad9929c7fd935178ae01bf2d4da0b25b6b57980660de3cf7999c3",
     "shown": true,
     "drawable_readback": true,
-    "window_number": 21710,
-    "window_captured": "missing",
-    "visible": false,
-    "reason": "no non-blank window or screen image was captured",
-    "attempts": [
-      {
-        "status": "blank",
-        "reason": "ScreenCaptureKit produced a blank image",
-        "file": "window-sck.png",
-        "width": 3456,
-        "height": 2234,
-        "stats": {
-          "uniform": true,
-          "distinct_color_buckets": 1,
-          "mean_brightness": 50.0,
-          "variance": 0.0,
-          "width": 64,
-          "height": 64
-        },
-        "kind": "screen_capture_kit"
+    "window_number": 21765,
+    "window_captured": "captured",
+    "window_file": "window-21765.png",
+    "window_sha256": "df23010ee1f698001c3866ecaede94ccdf39ada043c83b077033b374f36420c7",
+    "window_width": 3456,
+    "window_height": 2234,
+    "similarity": {
+      "status": "compared",
+      "mean_abs_error": 1.311,
+      "max_channel_error": 20,
+      "exact_size": [
+        3456,
+        2234
+      ]
+    },
+    "visible": true,
+    "repeat_present_sha256": "8b80194ca10ffc974fd08850331cb9144ca3bde5777fb5da221b70e775383efc",
+    "artifacts": {
+      "window-21765.png": {
+        "path": ".local/m4/experiments/metal-present-20/window-21765.png",
+        "sha256": "df23010ee1f698001c3866ecaede94ccdf39ada043c83b077033b374f36420c7",
+        "bytes": 10099376
       },
-      {
-        "window_id": 21710,
-        "window": {
-          "window_id": 21710,
-          "layer": 2147483628,
-          "width": 1728,
-          "height": 1117,
-          "x": 0,
-          "y": 0,
-          "alpha": 1.0,
-          "onscreen": true,
-          "name": "Europa Universalis IV"
-        },
-        "file": "window-21710.png",
-        "status": "blank",
-        "width": 3456,
-        "height": 2234,
-        "stats": {
-          "uniform": true,
-          "distinct_color_buckets": 1,
-          "mean_brightness": 50.0,
-          "variance": 0.0,
-          "width": 64,
-          "height": 64
-        }
+      "window-fullscreen.png": {
+        "path": ".local/m4/experiments/metal-present-20/window-fullscreen.png",
+        "sha256": null,
+        "bytes": null
       },
-      {
-        "window_id": 21714,
-        "window": {
-          "window_id": 21714,
-          "layer": 0,
-          "width": 500,
-          "height": 500,
-          "x": 0,
-          "y": 617,
-          "alpha": 1.0,
-          "onscreen": false,
-          "name": ""
-        },
-        "file": "window-21714.png",
-        "status": "blank",
-        "width": 1000,
-        "height": 1000,
-        "stats": {
-          "uniform": true,
-          "distinct_color_buckets": 1,
-          "mean_brightness": 0.0,
-          "variance": 0.0,
-          "width": 64,
-          "height": 64
-        }
+      "window-sck.png": {
+        "path": ".local/m4/experiments/metal-present-20/window-sck.png",
+        "sha256": "cf3e36feaff781c7b63b406780fa1155cd2be119039e6e8ddbdf268464109777",
+        "bytes": 141572
       },
-      {
-        "window_id": null,
-        "file": "window-fullscreen.png",
-        "status": "blank",
-        "width": 3456,
-        "height": 2234,
-        "stats": {
-          "uniform": true,
-          "distinct_color_buckets": 2,
-          "mean_brightness": 50.06,
-          "variance": 0.06,
-          "width": 64,
-          "height": 64
-        },
-        "activation": {
-          "status": "ok",
-          "stderr": ""
-        },
-        "kind": "fullscreen"
+      "repeat-present.json": {
+        "path": ".local/m4/experiments/metal-present-20/repeat-present.json",
+        "sha256": "8b80194ca10ffc974fd08850331cb9144ca3bde5777fb5da221b70e775383efc",
+        "bytes": 318
       }
-    ]
+    }
   }
 }

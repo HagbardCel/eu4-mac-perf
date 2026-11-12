@@ -2,32 +2,33 @@
 
 Authoritative summary of what is established, qualified, and in flight. Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
 
-## M4 — original-GL reference and Metal presentation (2026-11-12, in progress)
+## M4 — original-GL reference and Metal presentation (2026-11-12)
 
-Work in progress on the Simple loading draw. The authentic original-OpenGL
-reference is captured and the reconstructed Metal logical output is
-**pixel-identical** under a fixed exact policy; the remaining gate is
-independent visible-window evidence. Details and hashes:
-[M4 qualification report](../analysis/m4/qualification-report.md).
+Qualified by the M4 checker. The authentic Simple loading draw was captured
+from the original OpenGL renderer, the corresponding reconstructed Metal
+output is pixel-identical under a fixed exact policy, and the reconstructed
+frame is independently observable in the real EU4 window.
+[Qualification report](../analysis/m4/qualification-report.md),
+[checker](../campaigns/eu4-m4/accept.py), [policy](../analysis/m4/comparison-policy.json).
 
 - **Original-GL reference.** `_GfxDraw` at caller `0xedfcd1`, mode 5, 4 vertices,
   1728×1117 BGRA8 from `GL_BACK`, `glFinish`+`glReadPixels` clean, raw SHA-256
-  `69d41a88…`. Independent launch produced the same hash. The live slot-0
+  `69d41a88…`; an independent launch produced the same hash. The live slot-0
   vertex payload is captured and bound to the draw.
-- **Reconstructed Metal output.** The live Metal route renders the same draw at
-  the engine's logical extent (1728×1117) with the same encoder and the same
-  live vertex payload (SHA-256 `f13dea22…`), GPU-completed.
-- **Comparison.** `python3 -m automation.gfx_compare compare` reports `pass`
-  with 0 differing pixels out of 1,930,176. The only normalization is the
-  declared lower-left (GL) to top-left (Metal) row decode.
-- **Presentation.** `presentDrawable` completed and the destination drawable
-  contains the image (raw SHA-256 `6921c242…`); the game window is visible and
-  not occluded. Independent `screencapture` and ScreenCaptureKit captures of
-  that window return a uniform frame, so the checker returns `inconclusive`.
-  M4 is **not** claimed.
-- **Checker.** [campaigns/eu4-m4/accept.py](../campaigns/eu4-m4/accept.py) fails
-  closed on missing reference, GPU, presentation, provenance or regression
-  evidence, and pins the evidence manifest digest.
+- **Reconstructed Metal output.** The live route renders the same draw at the
+  engine's logical extent with the same encoder and the same live vertex
+  payload (`f13dea22…`), GPU-completed (raw SHA-256 `c668b054…`).
+- **Comparison.** `automation.gfx_compare` reports `pass` with 0 differing
+  pixels out of 1,930,176; the only normalization is the declared lower-left to
+  top-left row decode.
+- **Presentation.** `presentDrawable` completed, the destination drawable
+  contains the image (`6921c242…`), and the main-runloop evidence hold lets
+  Core Animation commit. An independent window-server capture of the EU4 window
+  (`window-21765.png`) shows the loading frame with mean |Δ| 1.311/255 against
+  the drawable.
+- **Checker.** The M4 checker fails closed on missing reference, GPU,
+  presentation, provenance or regression evidence and pins the evidence manifest
+  digest. Its verdict on the recorded evidence is `pass`.
 
 ## Latest milestone — authentic Simple draw on Metal (2026-11-12)
 

@@ -5,6 +5,7 @@
 #import "eu4_metal_events.h"
 
 #import <CommonCrypto/CommonDigest.h>
+#import <dispatch/dispatch.h>
 #import <pthread.h>
 #import <Metal/Metal.h>
 #import <stdio.h>
@@ -502,6 +503,30 @@ void eu4_gfx_checkpoint_before_present(void *master, const void *caller) {
     capture("before-present", "_GfxPresent", "present", master, caller, caller_rva, NULL);
 }
 
+static void *g_repeat_master;
+
+static void repeat_present(void) {
+    if (g_repeat_master == NULL) {
+        return;
+    }
+    eu4_metal_ensure_visible();
+    int presented = eu4_gfx_present_diagnostic(g_repeat_master);
+    char diagnostics[512];
+    eu4_metal_window_diagnostics(diagnostics, sizeof diagnostics);
+    char body[1024];
+    int length = snprintf(
+        body, sizeof body,
+        "{\"schema\":\"gfx-repeat-present/v1\",\"presented\":%s,"
+        "\"diagnostics\":\"%s\"}\n",
+        presented ? "true" : "false", diagnostics);
+    char path[1200];
+    if (length > 0 && (size_t)length < sizeof body &&
+        snprintf(path, sizeof path, "%s/repeat-present.json", g_dir) <
+            (int)sizeof path) {
+        (void)write_bytes(path, body, (size_t)length);
+    }
+}
+
 static void *hold_thread(void *arg) {
     long milliseconds = (long)(intptr_t)arg;
     if (milliseconds > 0) {
@@ -632,8 +657,34 @@ void eu4_gfx_checkpoint_after_present(void *master, const void *caller) {
        sleeping here would leave the window blank while the drawable readback
        already contains the image. A detached thread owns the wait instead. */
     int hold = g_hold_ms > 0 ? g_hold_ms : 5000;
-    pthread_t waiter;
-    if (pthread_create(&waiter, NULL, hold_thread, (void *)(intptr_t)hold) == 0) {
-        pthread_detach(waiter);
+    g_repeat_master = master;
+    if (pthread_main_np() != 0) {
+        /* Keep the main run loop alive for the evidence window. Returning to
+           the engine lets it continue into operations outside the admitted
+           route (and crash) before Core Animation commits the drawable;
+           blocking with sleep() prevents the commit entirely. Running the
+           run loop does both: the transaction commits and the engine does not
+           advance. */
+        NSDate *deadline =
+            [NSDate dateWithTimeIntervalSinceNow:(NSTimeInterval)hold / 1000.0];
+        while ([deadline timeIntervalSinceNow] > 0.0) {
+            @autoreleasepool {
+                [[NSRunLoop currentRunLoop]
+                    runMode:NSDefaultRunLoopMode
+                    beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+            }
+            if (g_repeat_master != NULL) {
+                static int repeated;
+                if (!repeated) {
+                    repeated = 1;
+                    repeat_present();
+                }
+            }
+        }
+    } else {
+        pthread_t waiter;
+        if (pthread_create(&waiter, NULL, hold_thread, (void *)(intptr_t)hold) == 0) {
+            pthread_detach(waiter);
+        }
     }
 }

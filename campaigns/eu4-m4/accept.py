@@ -230,15 +230,76 @@ def main(argv: list[str]) -> int:
     if not presentation_ok:
         inconclusive = True
 
-    visible = presentation.get("visible") is True and presentation.get("window_captured") == "captured"
+    window_file = workspace / str(
+        (presentation.get("artifacts") or {}).get(str(presentation.get("window_file")), {}).get("path")
+        or (workspace / ".local" / "missing")
+    )
+    window_ok = (
+        window_file.is_file()
+        and _sha(window_file) == presentation.get("window_sha256")
+        and presentation.get("window_width") == 3456
+        and presentation.get("window_height") == 2234
+    )
+    similarity = presentation.get("similarity") or {}
+    similar_ok = (
+        similarity.get("status") == "compared"
+        and float(similarity.get("mean_abs_error", 999)) <= 2.0
+    )
+    visible = (
+        presentation.get("visible") is True
+        and presentation.get("window_captured") == "captured"
+        and window_ok
+        and similar_ok
+    )
     gates.append(
         _gate(
             "presentation:visible",
             visible,
-            f"window_captured={presentation.get('window_captured')} reason={presentation.get('reason')}",
+            "window shot matches the drawable (mean_abs_error="
+            f"{similarity.get('mean_abs_error')})",
         )
     )
     if not visible:
+        inconclusive = True
+
+    # Supporting link between the presented physical drawable and the
+    # authoritative logical reference: a 2x2 box reduction to the GL extent.
+    try:
+        from automation import gfx_compare  # type: ignore
+
+        gl_capture = gfx_compare.load_capture(reference_json_path.parent, "reference")
+        drawable_path = workspace / str(
+            (candidate.get("artifacts") or {}).get("checkpoint-after-present-1.bgra", {}).get("path") or ""
+        )
+        physical = drawable_path.read_bytes()
+        width, height = 3456, 2234
+        rgba = bytearray()
+        for y in range(1117):
+            for x in range(1728):
+                acc = [0, 0, 0, 0]
+                for dy in (0, 1):
+                    base = ((y * 2 + dy) * width + x * 2) * 4
+                    for dx in (0, 1):
+                        i = base + dx * 4
+                        for c in range(4):
+                            acc[c] += physical[i + c]
+                rgba += bytes((acc[2] // 4, acc[1] // 4, acc[0] // 4, acc[3] // 4))
+        scene = gfx_compare._stats(
+            gfx_compare._canonical_rgba(gl_capture), bytes(rgba), 1728, 1117, 0
+        )
+        scene_ok = scene["mean_abs_error"] <= 2.0 and scene["max_channel_error"] <= 64
+    except Exception as exc:  # noqa: BLE001
+        scene = {"reason": str(exc)}
+        scene_ok = False
+    gates.append(
+        _gate(
+            "presentation:drawable-scene",
+            scene_ok,
+            f"2x reduced mean_abs_error={scene.get('mean_abs_error')} "
+            f"max={scene.get('max_channel_error')}",
+        )
+    )
+    if not scene_ok:
         inconclusive = True
 
     try:

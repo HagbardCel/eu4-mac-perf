@@ -1977,6 +1977,50 @@ eu4_gfx_clear_status eu4_gfx_present_checked(void *master) {
     return EU4_GFX_CLEAR_OK;
 }
 
+int eu4_gfx_present_diagnostic(void *master) {
+    __unsafe_unretained EU4GfxBackend *backend =
+        (__bridge EU4GfxBackend *)backend_raw_for_master(master);
+    if (backend == nil || backend.poisoned || !backend.gameWindow ||
+        backend.gameColorTarget == nil || backend.queue == nil) {
+        return 0;
+    }
+    CAMetalLayer *layer = backend.layer;
+    id<CAMetalDrawable> drawable = layer != nil ? [layer nextDrawable] : nil;
+    if (drawable == nil) {
+        return 0;
+    }
+    id<MTLTexture> destination = drawable.texture;
+    if (destination.width != backend.gameWidth ||
+        destination.height != backend.gameHeight ||
+        destination.pixelFormat != MTLPixelFormatBGRA8Unorm) {
+        return 0;
+    }
+    id<MTLCommandBuffer> command = [backend.queue commandBuffer];
+    if (command == nil) {
+        return 0;
+    }
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    if (blit == nil) {
+        return 0;
+    }
+    MTLOrigin origin = MTLOriginMake(0, 0, 0);
+    MTLSize size = MTLSizeMake(backend.gameWidth, backend.gameHeight, 1);
+    [blit copyFromTexture:backend.gameColorTarget
+              sourceSlice:0
+              sourceLevel:0
+             sourceOrigin:origin
+               sourceSize:size
+                toTexture:destination
+         destinationSlice:0
+         destinationLevel:0
+        destinationOrigin:origin];
+    [blit endEncoding];
+    [command presentDrawable:drawable];
+    [command commit];
+    [command waitUntilCompleted];
+    return command.status == MTLCommandBufferStatusCompleted && command.error == nil ? 1 : 0;
+}
+
 int eu4_gfx_present(void *master) {
     g_present_caller = __builtin_return_address(0);
     eu4_gfx_clear_status status = eu4_gfx_present_checked(master);
