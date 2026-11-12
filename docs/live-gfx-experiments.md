@@ -43,7 +43,8 @@ python3 -m automation.live_gfx authorize \
 
 `authorize` pins the executable SHA-256 and the experiment output root, creates
 the ledger if absent and writes a pointer in the run root. It never replenishes
-an existing budget. By default the ledger lives under
+an existing budget. `--deadline-seconds`, when supplied, must be finite and
+positive. By default the ledger lives under
 `.local/launch-authority/`; the preferred location outside the worktree is not
 writable under a workspace-write DSH sandbox. This is not protection against
 deliberately malicious same-user code, consistent with the project's trust
@@ -88,7 +89,18 @@ The probe also aggregates `probe-result.json`; `inspect --run <dir>` prints the
 result or reconstructs it from the artifact files. `--reference` accepts an
 operator PNG for numerical comparison only and never sets `reference_matched`.
 
-## 4. Status levels
+## 4. Timeout contract
+
+Every live timeout and every configured positive deadline must satisfy
+`math.isfinite(value) and value > 0`; booleans and non-numeric values are
+rejected at the ledger boundary. `probe --timeout` and
+`authorize --deadline-seconds` validate before any claim, build or launch.
+`launch_ledger.claim()` validates direct Python callers and persisted ledgers,
+and `eu4_metal_boot.launch_session()` rejects an invalid `wait_seconds` before
+spawning. A pinned Metal probe requires a positive deadline; legacy workflows
+may still use `deadline_seconds=None`.
+
+## 5. Status levels
 
 These are separate facts, never collapsed into `pass`:
 
@@ -105,11 +117,13 @@ These are separate facts, never collapsed into `pass`:
 reference exists. An operator-provided PNG is compared numerically and reported
 separately in the `reference` object (`comparable`, `pixels_identical`,
 `mismatched_pixels`, `maximum_channel_error`, `difference_image`,
-`authenticated_opengl=false`). Pixel equality is not OpenGL fidelity. A
+`authenticated_opengl=false`). Pixel equality is computed over all four RGBA channels; alpha-only differences
+are visible in the difference image and are not reported as identical. Pixel
+equality is not OpenGL fidelity. A
 pre-present image is valid evidence even when later, unrelated font/UI drawing
 is not reconstructed.
 
-## 5. Draw dispatch and submission
+## 6. Draw dispatch and submission
 
 `_GfxDraw` still enters through `benchmark/eu4_gfx_draw_entry.S` and
 `eu4_gfx_draw_capture.c`. The capture records the invocation, then a small
@@ -136,7 +150,7 @@ The exact source SHA-256 values for the live Simple VS/PS are in
 only through `EU4_GFX_QUALIFIED_SOURCES`. Transitional marker admission remains
 disabled on the engine path.
 
-## 6. Known limitations
+## 7. Known limitations
 
 - The game backbuffer is colour-only. `_GfxClear` flags with depth/stencil bits
   are accepted for the colour clear and the ignored bits are recorded in

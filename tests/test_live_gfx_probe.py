@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import math
 import os
 import tempfile
 import unittest
@@ -57,6 +58,22 @@ class ProbeSurfaceTests(unittest.TestCase):
         self.assertEqual(value["deadline_seconds"], 90)
         self.assertEqual(value["executable"]["path"], str(self.exe.resolve()))
         self.assertEqual(value["output_root"], str(self.output_root.resolve()))
+
+    def test_authorize_rejects_invalid_deadline_without_creating_ledger(self) -> None:
+        with patch.dict(os.environ, {"EU4_LAUNCH_AUTHORITY_DIR": str(self.ledger_dir)}):
+            for value in (math.nan, math.inf, -math.inf, 0, -1):
+                ledger = self.ledger_dir / f"bad-{str(value)}.json"
+                code = live_gfx.main([
+                    "authorize",
+                    "--run-root", str(self.run_root),
+                    "--output-root", str(self.output_root),
+                    "--executable", str(self.exe),
+                    "--limit", "1",
+                    f"--deadline-seconds={value}",
+                    "--ledger", str(ledger),
+                ])
+                self.assertEqual(code, live_gfx.EXIT_INCOMPLETE)
+                self.assertFalse(ledger.exists())
 
     def test_png_preview_is_a_real_png(self) -> None:
         width = height = 2
@@ -133,10 +150,10 @@ class PinnedProbeClaimTests(unittest.TestCase):
         )
 
     def _claim(self, *, output: Path | None = None, sha: str | None = None,
-               path: str | None = None) -> str:
+               path: str | None = None, timeout: float = 30.0) -> str:
         return live_gfx._claim_launch(
             self.run_root, output or (self.output_root / "one"), ["_GfxDraw"],
-            requested_timeout=30.0,
+            requested_timeout=timeout,
             executable_sha256=self.sha if sha is None else sha,
             executable_path=str(self.exe.resolve()) if path is None else path,
             require_pinned=True,
@@ -190,6 +207,21 @@ class PinnedProbeClaimTests(unittest.TestCase):
                 )
             self.assertEqual(caught.exception.kind, "unpinned")
 
+    def test_legacy_claim_rejects_invalid_timeout_before_counting(self) -> None:
+        counter = self.run_root / "live-launch.json"
+        counter.write_text(json.dumps({
+            "schema": live_gfx.LAUNCH_SCHEMA, "limit": 1, "used": 0,
+            "launches": [],
+        }))
+        for value in (math.nan, math.inf, -math.inf, 0, -1):
+            with self.assertRaises(live_gfx.LaunchLimit) as caught:
+                live_gfx._claim_launch(
+                    self.run_root, self.output_root / "one", ["_GfxDraw"],
+                    requested_timeout=value,
+                )
+            self.assertEqual(caught.exception.kind, "timeout")
+        self.assertEqual(json.loads(counter.read_text())["used"], 0)
+
     def test_different_executable_sha_is_refused(self) -> None:
         self._pinned()
         with self.assertRaises(live_gfx.LaunchLimit) as caught:
@@ -207,6 +239,32 @@ class PinnedProbeClaimTests(unittest.TestCase):
         with self.assertRaises(live_gfx.LaunchLimit) as caught:
             self._claim(output=self.root / "elsewhere")
         self.assertEqual(caught.exception.kind, "output_root")
+
+    def test_timeout_must_be_finite_positive_and_within_deadline(self) -> None:
+        self._pinned(limit=2, deadline=30.0)
+        with self.assertRaises(live_gfx.LaunchLimit) as caught:
+            self._claim(timeout=30.001)
+        self.assertEqual(caught.exception.kind, "deadline")
+        self.assertEqual(launch_ledger.load_ledger(self.ledger)["used"], 0)
+        token = self._claim(timeout=30.0)
+        self.assertTrue(token)
+
+    def test_probe_rejects_invalid_timeout_before_spawn(self) -> None:
+        self._pinned(limit=1)
+        output = self.output_root / "invalid-timeout"
+        for value in (math.nan, math.inf, -math.inf, 0, -1):
+            stderr = io.StringIO()
+            with patch("sys.stderr", stderr), patch("subprocess.Popen") as popen:
+                code = live_gfx.main([
+                    "probe", "--backend", "metal", "--checkpoint", "after-draw",
+                    f"--timeout={value}", "--output", str(output),
+                    "--campaign-run-root", str(self.run_root),
+                ])
+            self.assertEqual(code, live_gfx.EXIT_INCOMPLETE)
+            self.assertIn("--timeout", stderr.getvalue())
+            popen.assert_not_called()
+            self.assertFalse(output.exists())
+            self.assertEqual(launch_ledger.load_ledger(self.ledger)["used"], 0)
 
     def test_exhausted_authorization_is_refused(self) -> None:
         self._pinned(limit=1, used=1)
@@ -329,6 +387,28 @@ class ReferenceEqualityTests(unittest.TestCase):
         self.assertFalse(result["authenticated_opengl"])
         self.assertEqual(result["mismatched_pixels"], 0)
         self.assertNotIn("reference_matched", result)
+
+    def test_alpha_only_difference_is_not_identical(self) -> None:
+        from PIL import Image
+        reference = self.root / "alpha-different.png"
+        image = Image.frombytes(
+            "RGBA", (self.width, self.height),
+            live_gfx._bgra_to_rgba(self.bgra),
+        )
+        pixels = list(image.getdata())
+        pixels[0] = (pixels[0][0], pixels[0][1], pixels[0][2], 0)
+        image.putdata(pixels)
+        image.save(reference)
+        result = live_gfx._compare_reference(reference, self.checkpoint, self.root)
+        self.assertEqual(result["status"], "compared")
+        self.assertFalse(result["pixels_identical"])
+        self.assertEqual(result["mismatched_pixels"], 1)
+        self.assertEqual(result["maximum_channel_error"], 255)
+        self.assertFalse(result["authenticated_opengl"])
+        diff = Image.open(result["difference_image"]).convert("RGBA")
+        diff_pixels = list(diff.getdata())
+        self.assertIn((255, 0, 255, 255), diff_pixels)
+        self.assertNotEqual(diff_pixels[0], (0, 0, 0, 255))
 
     def test_differing_reference_reports_metrics(self) -> None:
         from PIL import Image

@@ -19,6 +19,8 @@ if str(ROOT) not in sys.path:
 
 import eu4_benchmark as base  # noqa: E402
 from automation import launch_lease  # noqa: E402
+from automation.launch_ledger import LedgerError as _LedgerError  # noqa: E402
+from automation.launch_ledger import validate_timeout as _validate_timeout  # noqa: E402
 
 
 SOURCE = Path(__file__).resolve().with_suffix(".m")
@@ -289,6 +291,10 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
                    metal_init: bool = False, env_overrides: dict | None = None,
                    strict: bool = True) -> dict:
     """Operator launch. a1 and bootstrap exit after their receipt. metal_init keeps running."""
+    try:
+        wait_seconds = _validate_timeout(wait_seconds, field="wait_seconds")
+    except _LedgerError as exc:
+        raise base.BenchmarkError(str(exc)) from exc
     if metal_init and bootstrap:
         raise base.BenchmarkError("--metal-init and --bootstrap are mutually exclusive")
     identity = base.gog_identity()

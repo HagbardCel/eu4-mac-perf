@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import fcntl
 import json
+import math
 import os
 from pathlib import Path
 
@@ -26,6 +27,20 @@ class LedgerError(RuntimeError):
         super().__init__(kind if not detail else f"{kind}: {detail}")
         self.kind = kind
         self.detail = detail
+
+
+def validate_timeout(value, *, field: str = "timeout") -> float:
+    """Return a finite positive timeout, or raise LedgerError.
+
+    Booleans and non-numeric values are rejected at the ledger boundary so a
+    direct Python caller cannot bypass the CLI checks with NaN or infinity.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise LedgerError("timeout", f"{field} must be a finite positive number")
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        raise LedgerError("timeout", f"{field} must be a finite positive number")
+    return number
 
 
 def pointer_path(run_root: Path) -> Path:
@@ -93,6 +108,8 @@ def create_ledger(
     unchanged, so re-running an initialization command cannot reset a budget.
     """
     path = Path(path)
+    if deadline_seconds is not None:
+        validate_timeout(deadline_seconds, field="deadline_seconds")
     if path.exists():
         return path
     value = {
@@ -184,6 +201,12 @@ def validate_ledger(value: dict) -> list[str]:
     output_root = value.get("output_root")
     if output_root is not None and (not isinstance(output_root, str) or not output_root):
         errors.append("output_root is invalid")
+    deadline = value.get("deadline_seconds")
+    if deadline is not None:
+        try:
+            validate_timeout(deadline, field="deadline_seconds")
+        except LedgerError as exc:
+            errors.append(str(exc))
     return errors
 
 
@@ -208,6 +231,7 @@ def claim(
     require_pinned: bool = False,
 ) -> str:
     path = Path(path)
+    requested_timeout = validate_timeout(requested_timeout, field="requested_timeout")
     handle = _locked(path)
     try:
         value = load_ledger(path)
@@ -267,12 +291,14 @@ def claim(
                 f"{value['used']}/{value['limit']} workflow launches already used",
             )
         deadline = value.get("deadline_seconds")
-        if deadline is not None and requested_timeout > float(deadline):
-            raise LedgerError(
-                "deadline",
-                f"requested {requested_timeout:g}s exceeds workflow "
-                f"limit {float(deadline):g}s",
-            )
+        if deadline is not None:
+            deadline = validate_timeout(deadline, field="deadline_seconds")
+            if requested_timeout > deadline:
+                raise LedgerError(
+                    "deadline",
+                    f"requested {requested_timeout:g}s exceeds workflow "
+                    f"limit {deadline:g}s",
+                )
         token = f"{dt.datetime.now(dt.timezone.utc).timestamp()}-{os.getpid()}-{len(value['launches'])}"
         value["launches"].append(
             {
@@ -413,6 +439,8 @@ def authorize_workflow(
     """
     ledger_path = Path(ledger_path).expanduser().resolve()
     run_root = Path(run_root).expanduser().resolve()
+    if deadline_seconds is not None:
+        validate_timeout(deadline_seconds, field="deadline_seconds")
     created = not ledger_path.exists()
     if created:
         create_ledger(

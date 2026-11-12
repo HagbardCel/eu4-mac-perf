@@ -71,6 +71,12 @@ def _claim_launch(
     executable_path: str | None = None,
     require_pinned: bool = False,
 ) -> str:
+    try:
+        requested_timeout = launch_ledger.validate_timeout(
+            requested_timeout, field="requested_timeout"
+        )
+    except launch_ledger.LedgerError as exc:
+        raise LaunchLimit(exc.kind, exc.detail) from exc
     run_root = run_root.expanduser().resolve()
     if not run_root.is_dir():
         raise LaunchLimit("missing", f"campaign run root does not exist: {run_root}")
@@ -636,9 +642,15 @@ def authorize(args: argparse.Namespace) -> int:
     if args.limit < 0:
         print("authorize refused: --limit must be non-negative", file=sys.stderr)
         return EXIT_INCOMPLETE
-    if args.deadline_seconds is not None and args.deadline_seconds <= 0:
-        print("authorize refused: --deadline-seconds must be positive", file=sys.stderr)
-        return EXIT_INCOMPLETE
+    deadline_seconds = None
+    if args.deadline_seconds is not None:
+        try:
+            deadline_seconds = launch_ledger.validate_timeout(
+                args.deadline_seconds, field="--deadline-seconds"
+            )
+        except launch_ledger.LedgerError as exc:
+            print(f"authorize refused: {exc}", file=sys.stderr)
+            return EXIT_INCOMPLETE
     workflow_id = args.workflow_id or run_root.name
     ledger = (
         Path(args.ledger).expanduser().resolve()
@@ -651,7 +663,7 @@ def authorize(args: argparse.Namespace) -> int:
             run_root,
             workflow_id=workflow_id,
             limit=args.limit,
-            deadline_seconds=args.deadline_seconds,
+            deadline_seconds=deadline_seconds,
             executable={"path": str(executable), "sha256": _file_sha256(executable)},
             output_root=output_root,
         )
@@ -811,6 +823,11 @@ def probe(args: argparse.Namespace) -> int:
     if args.checkpoint not in CHECKPOINTS:
         print(f"unknown checkpoint: {args.checkpoint}", file=sys.stderr)
         return EXIT_INCOMPLETE
+    try:
+        timeout = launch_ledger.validate_timeout(args.timeout, field="--timeout")
+    except launch_ledger.LedgerError as exc:
+        print(f"probe refused: {exc}", file=sys.stderr)
+        return EXIT_INCOMPLETE
     if not args.campaign_run_root:
         print(
             "probe requires --campaign-run-root; the unrestricted manual "
@@ -842,7 +859,7 @@ def probe(args: argparse.Namespace) -> int:
             Path(args.campaign_run_root),
             output,
             [selector["symbol"]],
-            requested_timeout=args.timeout,
+            requested_timeout=timeout,
             executable_sha256=identity["executable_sha256"],
             executable_path=identity["executable"],
             require_pinned=True,
@@ -871,7 +888,7 @@ def probe(args: argparse.Namespace) -> int:
         output.parent.mkdir(parents=True, exist_ok=True)
         metadata = eu4_metal_boot.launch_session(
             output,
-            wait_seconds=args.timeout,
+            wait_seconds=timeout,
             metal_init=True,
             env_overrides=env,
             strict=False,
@@ -1022,21 +1039,20 @@ def _compare_reference(reference: Path, checkpoint: dict | None, output: Path) -
         }
     mismatched = 0
     maximum = 0
+    diff_pixels = []
     for got, want in zip(actual.getdata(), expected.getdata()):
-        delta = max(abs(got[0] - want[0]), abs(got[1] - want[1]), abs(got[2] - want[2]))
+        delta = max(abs(got[i] - want[i]) for i in range(4))
         if delta:
             mismatched += 1
             maximum = max(maximum, delta)
+        rgb = [min(255, abs(got[i] - want[i]) * 4) for i in range(3)]
+        alpha_delta = min(255, abs(got[3] - want[3]) * 4)
+        if rgb == [0, 0, 0] and alpha_delta:
+            # An alpha-only difference must be visible in the preview.
+            rgb = [255, 0, 255]
+        diff_pixels.append((rgb[0], rgb[1], rgb[2], 255))
     diff = Image.new("RGBA", (width, height))
-    diff.putdata([
-        (
-            min(255, abs(got[0] - want[0]) * 4),
-            min(255, abs(got[1] - want[1]) * 4),
-            min(255, abs(got[2] - want[2]) * 4),
-            255,
-        )
-        for got, want in zip(actual.getdata(), expected.getdata())
-    ])
+    diff.putdata(diff_pixels)
     diff_path = output / "difference.png"
     diff.save(diff_path)
     return {

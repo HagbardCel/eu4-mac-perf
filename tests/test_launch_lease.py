@@ -7,6 +7,7 @@ descriptor, which is the same mechanism a real game uses.
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import sys
@@ -19,8 +20,11 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "benchmark"))
 
 from automation import launch_ledger, launch_lease  # noqa: E402
+import eu4_benchmark  # noqa: E402
+import eu4_metal_boot  # noqa: E402
 
 STUB_LAUNCHER = textwrap.dedent(
     """
@@ -191,14 +195,15 @@ class AuthorizationTests(unittest.TestCase):
             self.ledger, self.run_root, **values
         )
 
-    def claim(self, *, output: Path | None = None, sha: str | None = "pinned"):
+    def claim(self, *, output: Path | None = None, sha: str | None = "pinned",
+              timeout: float = 30.0):
         return launch_ledger.claim(
             self.ledger,
             campaign_id="wf-lease",
             run_root=self.run_root,
             output=output or self.output_root / "one",
             targets=["_GfxDraw"],
-            requested_timeout=30.0,
+            requested_timeout=timeout,
             executable_sha256=sha,
         )
 
@@ -280,6 +285,89 @@ class AuthorizationTests(unittest.TestCase):
         value = launch_ledger.load_ledger(self.ledger)
         self.assertNotIn("executable", value)
         self.assertEqual(value["used"], 0)
+
+
+class TimeoutValidationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.run_root = self.root / "run"
+        self.run_root.mkdir()
+        self.ledger = self.root / "ledger.json"
+        self.output_root = self.root / "experiments"
+        launch_ledger.create_ledger(
+            self.ledger, workflow_id="wf-timeout", limit=2, deadline_seconds=60.0
+        )
+
+    def _claim(self, timeout, *, deadline=None):
+        if deadline is not None:
+            self.ledger.unlink()
+            launch_ledger.create_ledger(
+                self.ledger, workflow_id="wf-timeout", limit=2,
+                deadline_seconds=deadline,
+            )
+        return launch_ledger.claim(
+            self.ledger, campaign_id="wf-timeout", run_root=self.run_root,
+            output=self.output_root / "one", targets=["_GfxDraw"],
+            requested_timeout=timeout,
+        )
+
+    def test_non_finite_zero_and_negative_timeouts_are_rejected(self) -> None:
+        for value in (math.nan, math.inf, -math.inf, 0, 0.0, -1, -1.0, True, "30"):
+            with self.assertRaises(launch_ledger.LedgerError) as caught:
+                launch_ledger.validate_timeout(value)
+            self.assertEqual(caught.exception.kind, "timeout")
+
+    def test_claim_rejects_invalid_requested_timeout_before_writing(self) -> None:
+        for value in (math.nan, math.inf, -math.inf, 0, -1, True, "30"):
+            with self.assertRaises(launch_ledger.LedgerError) as caught:
+                self._claim(value)
+            self.assertEqual(caught.exception.kind, "timeout")
+        value = launch_ledger.load_ledger(self.ledger)
+        self.assertEqual(value["used"], 0)
+
+    def test_claim_rejects_invalid_persisted_deadline(self) -> None:
+        for value in (0, -1, math.inf, math.nan):
+            self.ledger.unlink()
+            launch_ledger.create_ledger(
+                self.ledger, workflow_id="wf-timeout", limit=2,
+                deadline_seconds=60.0,
+            )
+            raw = json.loads(self.ledger.read_text())
+            raw["deadline_seconds"] = value
+            self.ledger.write_text(json.dumps(raw))
+            with self.assertRaises(launch_ledger.LedgerError):
+                launch_ledger.load_ledger(self.ledger)
+
+    def test_valid_timeout_equal_to_deadline_is_accepted(self) -> None:
+        token = self._claim(60.0, deadline=60.0)
+        self.assertTrue(token)
+
+    def test_timeout_over_deadline_is_refused(self) -> None:
+        with self.assertRaises(launch_ledger.LedgerError) as caught:
+            self._claim(60.001, deadline=60.0)
+        self.assertEqual(caught.exception.kind, "deadline")
+        value = launch_ledger.load_ledger(self.ledger)
+        self.assertEqual(value["used"], 0)
+
+    def test_invalid_deadline_cannot_create_a_ledger(self) -> None:
+        for value in (math.nan, math.inf, -math.inf, 0, -1, True, "60"):
+            path = self.root / f"bad-{str(value).replace('.', '_')}.json"
+            with self.assertRaises(launch_ledger.LedgerError):
+                launch_ledger.create_ledger(
+                    path, workflow_id="wf", limit=1, deadline_seconds=value
+                )
+            self.assertFalse(path.exists())
+
+    def test_metal_boot_rejects_invalid_wait_before_spawn(self) -> None:
+        for value in (math.nan, math.inf, -math.inf, 0, -1, True, "180"):
+            with patch.object(eu4_metal_boot.subprocess, "Popen") as popen:
+                with self.assertRaises(eu4_benchmark.BenchmarkError):
+                    eu4_metal_boot.launch_session(
+                        self.root / f"boot-{str(value)}", wait_seconds=value
+                    )
+                popen.assert_not_called()
 
 
 if __name__ == "__main__":
