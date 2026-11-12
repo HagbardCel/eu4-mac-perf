@@ -1,0 +1,46 @@
+{
+  "schema": "gfx-compare-policy/v1",
+  "name": "m5-sprite-over-authentic-pre-draw",
+  "reference_backend": "opengl",
+  "candidate_backends": [
+    "metal"
+  ],
+  "require_same_event": true,
+  "require_same_extent": true,
+  "require_same_pixel_format": true,
+  "require_gpu_completed": true,
+  "require_presentation": false,
+  "allow_origin_normalization": [
+    "vertical_flip"
+  ],
+  "max_channel_error": 0,
+  "max_mismatched_fraction": 0.0,
+  "max_mean_abs_error": 0.0,
+  "require_vertex_inputs": true,
+  "threshold_rationale": "The selected sprite draw is an alpha-blended textured quad over the authentic original-GL pre-draw contents. The diagnostic Metal target is seeded with that exact pre-draw payload, then the selected draw is encoded by the same production sprite encoder with the captured vertex, constant and texture bytes. No resampling, filtering or synthesis is introduced by the comparison, so exact integer equality is the policy. A tolerance would require an independently measured control.",
+  "vertex_inputs_rationale": "The sprite quad is defined entirely by its 80-byte live VBO (stride 20) and the 96-byte uniform block. The comparator requires identical live vertex bytes on both sides.",
+  "expected": {
+    "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "candidate_shader_identity": "sprite-map/asset-maincode-v0",
+    "reference_gl_program": {
+      "program": 22
+    },
+    "reference_glsl_sha256": "51868985cac47e5cab6907323a7e5f283b0d8f689234130664479c41520df235",
+    "reference_caps_byte4": 1,
+    "reference_sampler": {
+      "min_filter": 9729,
+      "mag_filter": 9729,
+      "wrap_s": 33071,
+      "wrap_t": 33071
+    }
+  },
+  "measured_basis": {
+    "reference_run": "sprite-gl-ref-09",
+    "candidate_run": "metal-replay-04",
+    "reference_raw_sha256": "9cff01cae22e91013b715bf59cb392ee0c9b33450d1497dc1e1c16482403784c",
+    "candidate_raw_sha256": "862402aaf555f417631f375abd56762c100b1cfdc13c2f105d9cedc100c37afd",
+    "observed_max_channel_error": 0,
+    "observed_mismatched_pixels": 0,
+    "note": "Exact equality over 1,930,176 pixels for the captured pre-draw/inputs. The loading-screen background is animated, so each authentic reference is paired with a replay seeded by its own pre-draw; independent reference runs are not expected to share a raw hash."
+  }
+}

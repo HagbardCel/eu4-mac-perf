@@ -23,6 +23,8 @@ SOURCES = [
     ROOT / "benchmark" / "eu4_gfx_texture.mm",
     ROOT / "benchmark" / "eu4_gfx_init.mm",
     ROOT / "benchmark" / "eu4_gfx_simple_draw.mm",
+    ROOT / "benchmark" / "eu4_gfx_sprite_draw.mm",
+    ROOT / "benchmark" / "eu4_gfx_draw_encode.mm",
     ROOT / "benchmark" / "eu4_gfx_draw_capture.c",
     ROOT / "benchmark" / "eu4_gfx_draw_route.mm",
     ROOT / "benchmark" / "eu4_gfx_logical_capture.mm",
@@ -62,6 +64,21 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertIn("two_draws=1", ran.stdout)
         self.assertIn("present=1", ran.stdout)
         self.assertIn("gpu_failure=1", ran.stdout)
+
+    def test_frame_start_reconstruction_and_texture_clear(self) -> None:
+        ran = self._run("--frame-start")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("begin_scene=1", ran.stdout)
+        self.assertIn("current_cleared=1", ran.stdout)
+        self.assertIn("blend_default=1", ran.stdout)
+        self.assertIn("clear_texture=1", ran.stdout)
+
+    def test_two_frame_prefix_resets_stale_target_contents(self) -> None:
+        ran = self._run("--prefix-two-frames")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("frame1_red=1", ran.stdout)
+        self.assertIn("frame2_green=1", ran.stdout)
+        self.assertIn("stale_red=0", ran.stdout)
 
     def test_native_checkpoint_occurrence_validation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -23,6 +23,17 @@ extern "C" {
    (asset-maincode-v0). Admission compares this exact string; it is not a
    prefix or substring match. */
 #define EU4_GFX_SHADER_SIMPLE_IDENTITY "simple-lua-Simple/asset-maincode-v0"
+/* The loading-screen sprite/font effect reached after the Simple text draw.
+   VS: UNIFORM0[6] (matrix, Color, vXOffset), attributes float3 position +
+   float2 texcoord. PS: MapTexture sampled and multiplied by Color. */
+#define EU4_GFX_SHADER_SPRITE_IDENTITY "sprite-map/asset-maincode-v0"
+
+/* Vertex layouts admitted by the pipeline constructor. The layout is part of
+   the effective state, not a caller property. */
+enum {
+    EU4_GFX_VERTEX_LAYOUT_SIMPLE = 0, /* stride 24: float3, float2, uchar4 */
+    EU4_GFX_VERTEX_LAYOUT_SPRITE_MAP = 1, /* stride 20: float3, float2 */
+};
 
 /* Max number of exact source hashes admitted for Simple (VS+PS variants). */
 #define EU4_GFX_SHADER_MAX_QUALIFIED_HASHES 8
@@ -68,6 +79,7 @@ typedef struct EU4GfxPipelineKey {
     unsigned sample_count;
     unsigned color_write_mask;
     unsigned blend_enabled;
+    unsigned vertex_layout; /* EU4_GFX_VERTEX_LAYOUT_* */
 } EU4GfxPipelineKey;
 
 void *eu4_gfx_shader_pipeline_for_key(const void *shader, void *mtl_device,
@@ -109,6 +121,12 @@ void eu4_gfx_shader_test_reset(void);
    exercised with a linked shader that is not the Simple effect. This does not
    admit a new stage source or widen the Simple registry. */
 int eu4_gfx_shader_test_set_identity(void *shader, const char *identity);
+
+/* Offline/test only: compile the known Metal library for `identity` into an
+   existing engine shader object and mark both stages linked. Used by the
+   deterministic replay host; the engine path still requires exact source
+   admission. */
+int eu4_gfx_shader_test_compile_identity(void *shader, const char *identity);
 
 /* Capture / GPU-trace helpers are diagnostic-only and must not gate admission. */
 

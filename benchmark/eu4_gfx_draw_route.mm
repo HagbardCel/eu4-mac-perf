@@ -1,11 +1,14 @@
 #import "eu4_gfx_draw_route.h"
 
+#import "eu4_gfx_draw_encode.h"
+
 #import "eu4_gfx_checkpoint.h"
 #import "eu4_gfx_init.h"
 #import "eu4_gfx_logical_capture.h"
 #import "eu4_metal_events.h"
 
 #import <Metal/Metal.h>
+#import <stdio.h>
 #import <string.h>
 
 static eu4_gfx_simple_draw_state g_last_state;
@@ -134,15 +137,16 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
         return refuse(EU4_GFX_DRAW_ROUTE_FAILED, diagnostic, capacity,
                       "backend queue refused a command buffer");
     }
-    const char *reason = NULL;
-    eu4_gfx_simple_draw_status status = eu4_gfx_simple_draw_encode_into(
+    char text[256];
+    eu4_gfx_draw_encode_result encoded = eu4_gfx_draw_encode_into(
         (const void *)handle, (int32_t)raw->rsi, (int32_t)raw->rdx, &inputs,
-        (__bridge void *)command, &reason, state);
-    if (status != EU4_GFX_SIMPLE_DRAW_OK) {
-        char text[192];
-        snprintf(text, sizeof text, "Simple encoder refused the draw: %s (%s)",
-                 eu4_gfx_simple_draw_status_name(status), reason != NULL ? reason : "no detail");
-        return refuse(EU4_GFX_DRAW_ROUTE_FAILED, diagnostic, capacity, text);
+        (__bridge void *)command, text, sizeof text, state);
+    if (encoded != EU4_GFX_DRAW_ENCODE_OK) {
+        return refuse(encoded == EU4_GFX_DRAW_ENCODE_UNSUPPORTED
+                          ? EU4_GFX_DRAW_ROUTE_UNSUPPORTED
+                          : EU4_GFX_DRAW_ROUTE_FAILED,
+                      diagnostic, capacity,
+                      text[0] != 0 ? text : "draw encoder refused the draw");
     }
     [command commit];
     /* pendingGameCommand now owns the last game submission. It is still one

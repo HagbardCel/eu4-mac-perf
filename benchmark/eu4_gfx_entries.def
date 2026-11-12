@@ -17,6 +17,11 @@ GFX_ENTRY(clear, 0x15ea552, 0x15ea6b5, eu4_gfx_clear, "\x55\x48\x89\xe5\x41\x57"
 // _GfxPresent. End is _GfxBeginScene. Complete 11-byte prologue: push rbp; mov rsp,rbp;
 // mov 0x178(%rdi),rdi. The next byte is the call instruction.
 GFX_ENTRY(present, 0x15ea6cb, 0x15ea6df, eu4_gfx_present, "\x55\x48\x89\xe5\x48\x8b\xbf\x78\x01\x00\x00")
+// _GfxBeginScene. End is _GfxEndScene. The original disables current-shader
+// vertex attributes through GLEW, clears the current shader and reapplies the
+// default blend state. The GLEW branch is GL-only; the Metal replacement keeps
+// the observable mutations and return contract.
+GFX_ENTRY(begin_scene, 0x15ea6df, 0x15ea758, eu4_gfx_begin_scene, "\x55\x48\x89\xe5\x41\x57")
 // Eligible draws. Each replacement is an entry shim, not a C function.
 GFX_ENTRY(draw, 0x15ea789, 0x15eaa77, eu4_gfx_draw_entry, "\x55\x48\x89\xe5\x41\x57")
 GFX_ENTRY(draw_indexed, 0x15eaa77, 0x15eac96, eu4_gfx_draw_indexed_entry, "\x55\x48\x89\xe5\x41\x57")
@@ -25,6 +30,9 @@ GFX_ENTRY(draw_indexed_instanced, 0x15eac9c, 0x15ead87, eu4_gfx_draw_indexed_ins
 GFX_ENTRY(initialize_texture, 0x15ec43b, 0x15ec61d, eu4_gfx_initialize_texture, "\x55\x48\x89\xe5\x41\x57")
 // _GfxSetTextures. End is InternalSetTextureAndSamplerState. The live return is 0x15ecc72.
 GFX_ENTRY(set_textures, 0x15ecbf2, 0x15ecce2, eu4_gfx_set_textures, "\x55\x48\x89\xe5\x41\x57")
+// _GfxClearTexture. End is _GfxInitializeRenderTargetTexture. Prologue is
+// test rdi,rdi; je <ret>. Deletes GL names and clears the header fields.
+GFX_ENTRY(clear_texture, 0x15ec836, 0x15ec8e2, eu4_gfx_clear_texture, "\x48\x85\xff\x0f\x84")
 // _GfxCreateShader. End is _GfxAddVertexLayout. The null call is at 0x15eaeb9.
 GFX_ENTRY(create_shader, 0x15eae97, 0x15eaec7, eu4_gfx_create_shader, "\x55\x48\x89\xe5\x53")
 // _GfxAddVertexShader. End is LogShaderError. The null call is at 0x15eaffa.

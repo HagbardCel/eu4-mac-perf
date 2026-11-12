@@ -61,6 +61,45 @@ fragment float4 simple_fs(VSOut in [[stage_in]],
 }
 )";
 
+static const char kSpriteMSL[] = R"(
+#include <metal_stdlib>
+using namespace metal;
+
+struct VSIn {
+    /* Live sprite/font vertex buffer: stride 20, float3 position at +0,
+       float2 texcoord at +12. No per-vertex colour. */
+    float3 position [[attribute(0)]];
+    float2 texcoord [[attribute(1)]];
+};
+
+struct VSOut {
+    float4 position [[position]];
+    float2 texcoord;
+};
+
+struct Uniforms {
+    float4 UNIFORM0[6];
+};
+
+vertex VSOut sprite_vs(VSIn in [[stage_in]],
+                       constant Uniforms &u [[buffer(1)]]) {
+    float4x4 Matrix = float4x4(u.UNIFORM0[0], u.UNIFORM0[1],
+                               u.UNIFORM0[2], u.UNIFORM0[3]);
+    VSOut out;
+    out.position = Matrix * float4(in.position, 1.0);
+    out.texcoord = in.texcoord;
+    out.texcoord.x += u.UNIFORM0[5].x;
+    return out;
+}
+
+fragment float4 sprite_fs(VSOut in [[stage_in]],
+                          constant Uniforms &u [[buffer(1)]],
+                          texture2d<float> MapTexture [[texture(0)]],
+                          sampler MapSampler [[sampler(0)]]) {
+    return MapTexture.sample(MapSampler, in.texcoord) * u.UNIFORM0[4];
+}
+)";
+
 static const char kSimpleVertexSource[] =
     EU4_GFX_SHADER_SIMPLE_VS_MARKER "\n"
     "/* asset-maincode-v0 VertexShaderSimple from gfx/FX/simple.shader */\n"
@@ -106,6 +145,7 @@ static id<MTLDevice> g_device;
 typedef struct {
     uint8_t digest[32];
     int stage;
+    char effect[64];
 } EU4QualifiedSource;
 
 static EU4QualifiedSource g_qualified[EU4_GFX_SHADER_MAX_QUALIFIED_HASHES];
@@ -117,21 +157,38 @@ static void sha256_bytes(const void *data, size_t len, uint8_t out[32]) {
     CC_SHA256(data, (CC_LONG)len, out);
 }
 
-static int hash_is_qualified(const uint8_t digest[32], int stage) {
+static const char *effect_known(const char *effect) {
+    if (effect == NULL) {
+        return NULL;
+    }
+    if (strcmp(effect, EU4_GFX_SHADER_SIMPLE_IDENTITY) == 0) {
+        return EU4_GFX_SHADER_SIMPLE_IDENTITY;
+    }
+    if (strcmp(effect, EU4_GFX_SHADER_SPRITE_IDENTITY) == 0) {
+        return EU4_GFX_SHADER_SPRITE_IDENTITY;
+    }
+    return NULL;
+}
+
+static const char *qualified_effect(const uint8_t digest[32], int stage) {
     for (size_t i = 0; i < g_qualified_count; i++) {
         if (g_qualified[i].stage == stage &&
             memcmp(g_qualified[i].digest, digest, 32) == 0) {
-            return 1;
+            return g_qualified[i].effect;
         }
     }
-    return 0;
+    return NULL;
+}
+
+static int hash_is_qualified(const uint8_t digest[32], int stage) {
+    return qualified_effect(digest, stage) != NULL;
 }
 
 int eu4_gfx_shader_register_qualified_sha256(int stage, const uint8_t digest[32],
                                              const char *effect_identity) {
-    if (digest == NULL || effect_identity == NULL ||
-        (stage != EU4_GFX_SHADER_STAGE_VERTEX && stage != EU4_GFX_SHADER_STAGE_PIXEL) ||
-        strcmp(effect_identity, EU4_GFX_SHADER_SIMPLE_IDENTITY) != 0) {
+    const char *effect = effect_known(effect_identity);
+    if (digest == NULL || effect == NULL ||
+        (stage != EU4_GFX_SHADER_STAGE_VERTEX && stage != EU4_GFX_SHADER_STAGE_PIXEL)) {
         return 0;
     }
     pthread_mutex_lock(&g_lock);
@@ -145,6 +202,8 @@ int eu4_gfx_shader_register_qualified_sha256(int stage, const uint8_t digest[32]
     }
     memcpy(g_qualified[g_qualified_count].digest, digest, 32);
     g_qualified[g_qualified_count].stage = stage;
+    snprintf(g_qualified[g_qualified_count].effect,
+             sizeof g_qualified[g_qualified_count].effect, "%s", effect);
     g_qualified_count++;
     pthread_mutex_unlock(&g_lock);
     return 1;
@@ -207,7 +266,7 @@ int eu4_gfx_shader_load_qualified_sources(const char *path) {
         uint8_t digest[32];
         if (![stage isKindOfClass:[NSString class]] ||
             ![effect isKindOfClass:[NSString class]] ||
-            ![effect isEqualToString:@EU4_GFX_SHADER_SIMPLE_IDENTITY] ||
+            effect_known(effect.UTF8String) == NULL ||
             !hex_digest(record[@"sha256"], digest)) {
             return -1;
         }
@@ -221,6 +280,8 @@ int eu4_gfx_shader_load_qualified_sources(const char *path) {
         }
         memcpy(staged[registered].digest, digest, 32);
         staged[registered].stage = stage_value;
+        snprintf(staged[registered].effect,
+                 sizeof staged[registered].effect, "%s", effect.UTF8String);
         registered += 1;
     }
     /* Validate every record before changing the active set. */
@@ -239,21 +300,30 @@ void eu4_gfx_shader_clear_qualified_hashes(void) {
     pthread_mutex_unlock(&g_lock);
 }
 
-static int source_admitted(const char *source, int stage,
-                           int (*marker_fn)(const char *)) {
+static const char *admit_source(const char *source, int stage,
+                                int (*marker_fn)(const char *)) {
     if (source == NULL) {
-        return 0;
+        return NULL;
     }
     uint8_t digest[32];
     sha256_bytes(source, strlen(source), digest);
-    if (hash_is_qualified(digest, stage)) {
-        return 1;
+    const char *effect = qualified_effect(digest, stage);
+    if (effect != NULL) {
+        return effect;
     }
     /* Transitional offline path only — not engine-path completion. */
     if (g_allow_transitional_markers && marker_fn(source)) {
-        return 1;
+        return EU4_GFX_SHADER_SIMPLE_IDENTITY;
     }
-    return 0;
+    return NULL;
+}
+
+static int source_admitted(const char *source, int stage,
+                           int (*marker_fn)(const char *))
+    __attribute__((unused));
+static int source_admitted(const char *source, int stage,
+                           int (*marker_fn)(const char *)) {
+    return admit_source(source, stage, marker_fn) != NULL;
 }
 
 static void ensure_registry(void) {
@@ -315,27 +385,42 @@ static int source_is_simple_pixel(const char *source) {
            strstr(source, "v.vColor") != NULL;
 }
 
-static int compile_simple_library(EU4ShaderRecord *record) {
+static int compile_library(EU4ShaderRecord *record, const char *effect) {
     id<MTLDevice> device = metal_device();
     if (device == nil) {
         return 0;
     }
     NSError *error = nil;
-    NSString *source = [[NSString alloc] initWithUTF8String:kSimpleMSL];
+    NSString *source;
+    const char *vs_name;
+    const char *fs_name;
+    if (strcmp(effect, EU4_GFX_SHADER_SPRITE_IDENTITY) == 0) {
+        source = [[NSString alloc] initWithUTF8String:kSpriteMSL];
+        vs_name = "sprite_vs";
+        fs_name = "sprite_fs";
+    } else if (strcmp(effect, EU4_GFX_SHADER_SIMPLE_IDENTITY) == 0) {
+        source = [[NSString alloc] initWithUTF8String:kSimpleMSL];
+        vs_name = "simple_vs";
+        fs_name = "simple_fs";
+    } else {
+        return 0;
+    }
     id<MTLLibrary> library =
         [device newLibraryWithSource:source options:nil error:&error];
     if (library == nil) {
         return 0;
     }
-    id<MTLFunction> vs = [library newFunctionWithName:@"simple_vs"];
-    id<MTLFunction> fs = [library newFunctionWithName:@"simple_fs"];
+    id<MTLFunction> vs = [library newFunctionWithName:
+                                   [NSString stringWithUTF8String:vs_name]];
+    id<MTLFunction> fs = [library newFunctionWithName:
+                                   [NSString stringWithUTF8String:fs_name]];
     if (vs == nil || fs == nil) {
         return 0;
     }
     record.library = library;
     record.vertexFunction = vs;
     record.fragmentFunction = fs;
-    record.identity = @EU4_GFX_SHADER_SIMPLE_IDENTITY;
+    record.identity = [NSString stringWithUTF8String:effect];
     return 1;
 }
 
@@ -359,6 +444,36 @@ void eu4_gfx_shader_test_reset(void) {
        Engine path never calls this; default remains off. */
     g_allow_transitional_markers = 1;
     pthread_mutex_unlock(&g_lock);
+}
+
+int eu4_gfx_shader_test_compile_identity(void *shader, const char *identity) {
+    if (shader == NULL || effect_known(identity) == NULL) {
+        return 0;
+    }
+    pthread_mutex_lock(&g_lock);
+    EU4ShaderRecord *record = find_record(shader);
+    if (record == nil) {
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
+    record.vertexFunction = nil;
+    record.fragmentFunction = nil;
+    record.library = nil;
+    if (!compile_library(record, identity)) {
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
+    record.hasVertex = YES;
+    record.hasPixel = YES;
+    record.linked = YES;
+    if (record.pipelines == nil) {
+        record.pipelines = [NSMutableDictionary dictionary];
+    } else {
+        [record.pipelines removeAllObjects];
+    }
+    *reinterpret_cast<uint32_t *>(shader) = 0;
+    pthread_mutex_unlock(&g_lock);
+    return 1;
 }
 
 int eu4_gfx_shader_test_set_identity(void *shader, const char *identity) {
@@ -414,6 +529,21 @@ static void sha256_hex(const char *source, char out[65]) {
 
 static int g_shader_event_seq;
 
+/* Diagnostic only: preserve the exact compiler input a stage replacement saw.
+ * The file name carries the source digest so it correlates with the shader
+ * event without a second sequence. First-occurrence wins (bounded by the event
+ * cap), and the writer is absent on hosts that do not link the event module. */
+static void write_shader_source(const char *kind, const char *source) {
+    if (eu4_metal_events_write == NULL || source == NULL || kind == NULL) {
+        return;
+    }
+    char digest[65];
+    sha256_hex(source, digest);
+    char name[160];
+    snprintf(name, sizeof name, "shader-source-%s-%s.glsl", kind, digest);
+    (void)eu4_metal_events_write(name, source);
+}
+
 static void write_shader_event(const char *kind, const char *body) {
     if (eu4_metal_events_write == NULL) {
         return;
@@ -449,6 +579,7 @@ int eu4_gfx_add_vertex_shader(void *unused, void *shader, const char *source) {
     if (shader == NULL || source == NULL) {
         return 0;
     }
+    write_shader_source("vs", source);
 
     pthread_mutex_lock(&g_lock);
     EU4ShaderRecord *record = find_record(shader);
@@ -457,8 +588,11 @@ int eu4_gfx_add_vertex_shader(void *unused, void *shader, const char *source) {
         pthread_mutex_unlock(&g_lock);
         return 0;
     }
-    if (!source_admitted(source, EU4_GFX_SHADER_STAGE_VERTEX,
-                         source_is_simple_vertex)) {
+    const char *effect = admit_source(source, EU4_GFX_SHADER_STAGE_VERTEX,
+                                      source_is_simple_vertex);
+    if (effect == NULL ||
+        (record.identity != nil &&
+         strcmp(record.identity.UTF8String, effect) != 0)) {
         /* Rejected replacement: invalidate prior link / PSO observations. */
         record.linked = NO;
         record.hasVertex = NO;
@@ -477,8 +611,13 @@ int eu4_gfx_add_vertex_shader(void *unused, void *shader, const char *source) {
         write_shader_event("vs", event);
         return 0;
     }
-    if (record.library == nil || record.vertexFunction == nil) {
-        if (!compile_simple_library(record)) {
+    if (record.library == nil || record.vertexFunction == nil ||
+        record.fragmentFunction == nil || record.identity == nil ||
+        strcmp(record.identity.UTF8String, effect) != 0) {
+        record.vertexFunction = nil;
+        record.fragmentFunction = nil;
+        record.library = nil;
+        if (!compile_library(record, effect)) {
             record.linked = NO;
             pthread_mutex_unlock(&g_lock);
             return 0;
@@ -517,6 +656,7 @@ int eu4_gfx_add_pixel_shader(void *unused, void *shader, const char *source) {
     if (shader == NULL || source == NULL) {
         return 0;
     }
+    write_shader_source("ps", source);
 
     pthread_mutex_lock(&g_lock);
     EU4ShaderRecord *record = find_record(shader);
@@ -524,8 +664,11 @@ int eu4_gfx_add_pixel_shader(void *unused, void *shader, const char *source) {
         pthread_mutex_unlock(&g_lock);
         return 0;
     }
-    if (!source_admitted(source, EU4_GFX_SHADER_STAGE_PIXEL,
-                         source_is_simple_pixel)) {
+    const char *effect = admit_source(source, EU4_GFX_SHADER_STAGE_PIXEL,
+                                      source_is_simple_pixel);
+    if (effect == NULL ||
+        (record.identity != nil &&
+         strcmp(record.identity.UTF8String, effect) != 0)) {
         record.linked = NO;
         record.hasPixel = NO;
         record.fragmentFunction = nil;
@@ -543,8 +686,13 @@ int eu4_gfx_add_pixel_shader(void *unused, void *shader, const char *source) {
         write_shader_event("ps", event);
         return 0;
     }
-    if (record.library == nil || record.fragmentFunction == nil) {
-        if (!compile_simple_library(record)) {
+    if (record.library == nil || record.vertexFunction == nil ||
+        record.fragmentFunction == nil || record.identity == nil ||
+        strcmp(record.identity.UTF8String, effect) != 0) {
+        record.vertexFunction = nil;
+        record.fragmentFunction = nil;
+        record.library = nil;
+        if (!compile_library(record, effect)) {
             record.linked = NO;
             pthread_mutex_unlock(&g_lock);
             return 0;
@@ -625,23 +773,27 @@ void eu4_gfx_set_shader(void *immediate_context, void *shader) {
 
     pthread_mutex_lock(&g_lock);
     EU4ShaderRecord *record = find_record(shader);
-    int ok = record != nil && record.linked;
+    int known = record != nil;
+    int linked = record != nil && record.linked;
     pthread_mutex_unlock(&g_lock);
-    if (!ok) {
-        /* Do not publish an unlinked shader as current. */
+    if (!known) {
+        /* An object the replacement did not create is never published. */
         return;
     }
 
-    /* Skip original GL attrib-disable / SetAll. Preserve master pointer + dirty. */
+    /* The original engine may select a shader before linking it. Publishing the
+       pointer preserves that ordering; the draw encoder still requires a
+       linked shader and fails closed if the link never happens. */
     *current = shader;
     master[0x128] = 1;
     master[0x170] = 1;
     char event[384];
     snprintf(event, sizeof event,
              "{\"schema\":\"gfx-shader-event/v1\",\"event\":\"set\","
-             "\"shader\":\"0x%llx\",\"linked\":true,\"identity\":\"%s\","
+             "\"shader\":\"0x%llx\",\"linked\":%s,\"identity\":\"%s\","
              "\"selected\":\"%s\",\"pid\":%d}\n",
-             (unsigned long long)(uintptr_t)shader, eu4_gfx_shader_identity(shader) ?: "",
+             (unsigned long long)(uintptr_t)shader, linked ? "true" : "false",
+             eu4_gfx_shader_identity(shader) ?: "",
              eu4_gfx_shader_identity(shader) ?: "", (int)getpid());
     write_shader_event("set", event);
 }
@@ -673,9 +825,10 @@ int eu4_gfx_shader_is_current(const void *immediate_context, const void *shader)
 }
 
 static NSString *pipeline_cache_key(const EU4GfxPipelineKey *key) {
-    return [NSString stringWithFormat:@"%p|%p|%p|%u|%u|%u|%u", key->mtl_device,
+    return [NSString stringWithFormat:@"%p|%p|%p|%u|%u|%u|%u|%u", key->mtl_device,
                      key->vertex_function, key->fragment_function, key->pixel_format,
-                     key->sample_count, key->color_write_mask, key->blend_enabled];
+                     key->sample_count, key->color_write_mask, key->blend_enabled,
+                     key->vertex_layout];
 }
 
 int eu4_gfx_shader_reflect_validate(const void *shader) {
@@ -693,13 +846,16 @@ int eu4_gfx_shader_reflect_validate(const void *shader) {
     id<MTLFunction> fs = record.fragmentFunction;
     NSArray<MTLVertexAttribute *> *attrs = vs.vertexAttributes;
     NSUInteger attr_count = attrs != nil ? attrs.count : 0;
-    /* Prefer Metal reflection (≥3 vertex attrs). Fall back to known Simple
-       stage names when the runtime omits attribute metadata for stage_in. */
+    int simple_names = [vs.name isEqualToString:@"simple_vs"] &&
+                       [fs.name isEqualToString:@"simple_fs"];
+    int sprite_names = [vs.name isEqualToString:@"sprite_vs"] &&
+                       [fs.name isEqualToString:@"sprite_fs"];
+    /* Prefer Metal reflection (2+ vertex attrs); fall back to the known stage
+       names when the runtime omits attribute metadata for stage_in. */
     int ok = vs.name.length > 0 && fs.name.length > 0;
-    if (attr_count >= 3) {
-        ok = ok && 1;
-    } else if (![vs.name isEqualToString:@"simple_vs"] ||
-               ![fs.name isEqualToString:@"simple_fs"]) {
+    if (attr_count >= 2) {
+        ok = ok && (simple_names || sprite_names);
+    } else if (!simple_names && !sprite_names) {
         ok = 0;
     }
     pthread_mutex_unlock(&g_lock);
@@ -749,21 +905,35 @@ void *eu4_gfx_shader_pipeline_for_key(const void *shader, void *mtl_device,
         return out;
     }
 
-    /* Authentic Simple layout from the L3.2b-I draw: stride 24, POSITION is
-       three floats, TEXCOORD0 two floats, PDX_COLOR four normalized bytes.
-       A float4 POSITION here would consume the texcoord and corrupt the quad. */
     MTLVertexDescriptor *vertex = [[MTLVertexDescriptor alloc] init];
-    vertex.attributes[0].format = MTLVertexFormatFloat3;
-    vertex.attributes[0].offset = 0;
-    vertex.attributes[0].bufferIndex = 0;
-    vertex.attributes[1].format = MTLVertexFormatFloat2;
-    vertex.attributes[1].offset = 12;
-    vertex.attributes[1].bufferIndex = 0;
-    vertex.attributes[2].format = MTLVertexFormatUChar4Normalized;
-    vertex.attributes[2].offset = 20;
-    vertex.attributes[2].bufferIndex = 0;
-    vertex.layouts[0].stride = 24;
-    vertex.layouts[0].stepFunction = MTLVertexStepFunctionPerVertex;
+    if (effective.vertex_layout == EU4_GFX_VERTEX_LAYOUT_SPRITE_MAP) {
+        /* Live sprite/font layout: stride 20, float3 POSITION at +0,
+           float2 TEXCOORD0 at +12, no per-vertex colour. */
+        vertex.attributes[0].format = MTLVertexFormatFloat3;
+        vertex.attributes[0].offset = 0;
+        vertex.attributes[0].bufferIndex = 0;
+        vertex.attributes[1].format = MTLVertexFormatFloat2;
+        vertex.attributes[1].offset = 12;
+        vertex.attributes[1].bufferIndex = 0;
+        vertex.layouts[0].stride = 20;
+        vertex.layouts[0].stepFunction = MTLVertexStepFunctionPerVertex;
+    } else {
+        /* Authentic Simple layout from the L3.2b-I draw: stride 24, POSITION is
+           three floats, TEXCOORD0 two floats, PDX_COLOR four normalized bytes.
+           A float4 POSITION here would consume the texcoord and corrupt the
+           quad. */
+        vertex.attributes[0].format = MTLVertexFormatFloat3;
+        vertex.attributes[0].offset = 0;
+        vertex.attributes[0].bufferIndex = 0;
+        vertex.attributes[1].format = MTLVertexFormatFloat2;
+        vertex.attributes[1].offset = 12;
+        vertex.attributes[1].bufferIndex = 0;
+        vertex.attributes[2].format = MTLVertexFormatUChar4Normalized;
+        vertex.attributes[2].offset = 20;
+        vertex.attributes[2].bufferIndex = 0;
+        vertex.layouts[0].stride = 24;
+        vertex.layouts[0].stepFunction = MTLVertexStepFunctionPerVertex;
+    }
 
     MTLRenderPipelineDescriptor *desc = [[MTLRenderPipelineDescriptor alloc] init];
     desc.vertexFunction = (__bridge id<MTLFunction>)effective.vertex_function;

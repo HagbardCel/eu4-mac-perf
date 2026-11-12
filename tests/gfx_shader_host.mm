@@ -1,5 +1,6 @@
 #include "eu4_gfx_shader.h"
 
+#include <CommonCrypto/CommonDigest.h>
 #include <Metal/Metal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -168,6 +169,41 @@ int main(void) {
     }
 
     eu4_gfx_destroy_shader(object2);
+
+    /* Actual exact-hash sprite admission and linking, without the test-only
+       direct compilation helper. The synthetic sources exercise the same
+       qualified-source table and sprite MSL compilation as the engine path. */
+    const char *sprite_vs = "synthetic sprite exact-hash vertex";
+    const char *sprite_ps = "synthetic sprite exact-hash pixel";
+    uint8_t vs_digest[CC_SHA256_DIGEST_LENGTH];
+    uint8_t ps_digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(sprite_vs, (CC_LONG)strlen(sprite_vs), vs_digest);
+    CC_SHA256(sprite_ps, (CC_LONG)strlen(sprite_ps), ps_digest);
+    eu4_gfx_shader_clear_qualified_hashes();
+    if (!eu4_gfx_shader_register_qualified_sha256(
+            EU4_GFX_SHADER_STAGE_VERTEX, vs_digest, EU4_GFX_SHADER_SPRITE_IDENTITY) ||
+        !eu4_gfx_shader_register_qualified_sha256(
+            EU4_GFX_SHADER_STAGE_PIXEL, ps_digest, EU4_GFX_SHADER_SPRITE_IDENTITY)) {
+        return 35;
+    }
+    void *sprite = eu4_gfx_create_shader();
+    if (sprite == nullptr ||
+        eu4_gfx_add_vertex_shader(nullptr, sprite, sprite_vs) != 1 ||
+        eu4_gfx_add_pixel_shader(nullptr, sprite, sprite_ps) != 1 ||
+        eu4_gfx_link_shader(nullptr, sprite) != 1) {
+        return 36;
+    }
+    const char *identity = eu4_gfx_shader_identity(sprite);
+    if (identity == nullptr || strcmp(identity, EU4_GFX_SHADER_SPRITE_IDENTITY) != 0) {
+        return 37;
+    }
+    if (!eu4_gfx_shader_reflect_validate(sprite)) {
+        return 38;
+    }
+    if (eu4_gfx_shader_pipeline(sprite, (__bridge void *)device) == nullptr) {
+        return 39;
+    }
+    eu4_gfx_destroy_shader(sprite);
     fprintf(stdout, "ok\n");
     return 0;
 }

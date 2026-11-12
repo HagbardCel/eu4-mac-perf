@@ -303,7 +303,70 @@ void eu4_gfx_draw_route_record(const char *name, const char *route, const char *
     (void)eu4_metal_events_write(name, body);
 }
 
+/* Bounded diagnostic sequence of every _GfxDraw-family invocation, written
+   before the semantic route decides. This is how a later blocked operation is
+   located without guessing from caller RVAs. Disabled unless explicitly armed;
+   never part of the render path. */
+static int g_sequence_written;
+
+static void record_draw_sequence(const eu4_gfx_draw_raw *raw) {
+    if (raw == NULL || g_sequence_written >= 256) {
+        return;
+    }
+    const char *enabled = getenv("EU4_GFX_DRAW_SEQUENCE");
+    if (enabled == NULL || strcmp(enabled, "1") != 0) {
+        return;
+    }
+    const char *dir = getenv("EU4_GFX_CHECKPOINT_DIR");
+    if (dir == NULL || dir[0] != '/') {
+        dir = getenv("EU4_GFX_STARTUP_DIR");
+    }
+    if (dir == NULL || dir[0] != '/') {
+        return;
+    }
+    uint64_t caller_rva = 0;
+    int inside = 0;
+    uint64_t thread = 0;
+    int pid = 0;
+    eu4_metal_events_describe((const void *)(uintptr_t)raw->retaddr, NULL, 0,
+                              &caller_rva, &inside, &thread, &pid);
+    const uint8_t *handle = (const uint8_t *)(uintptr_t)raw->rdi;
+    const uint8_t *master = NULL;
+    if (handle != NULL) {
+        memcpy(&master, handle, sizeof master);
+    }
+    uint32_t mode = 0;
+    int32_t count = (int32_t)raw->rsi;
+    uint64_t shader = 0;
+    if (master != NULL) {
+        memcpy(&mode, master + 8, sizeof mode);
+        if (count <= 0) {
+            memcpy(&count, master + 0x64, sizeof count);
+        }
+        memcpy(&shader, master + 0x70, sizeof shader);
+    }
+    char path[1200];
+    if (snprintf(path, sizeof path, "%s/draw-sequence.jsonl", dir) >=
+        (int)sizeof path) {
+        return;
+    }
+    FILE *file = fopen(path, "a");
+    if (file == NULL) {
+        return;
+    }
+    fprintf(file,
+            "{\"symbol\":\"%s\",\"caller_rva\":\"0x%llx\","
+            "\"inside\":%s,\"mode\":%u,\"count\":%d,\"shader\":\"0x%llx\"}\n",
+            symbol_for(raw->which), (unsigned long long)caller_rva,
+            inside ? "true" : "false", mode, count,
+            (unsigned long long)shader);
+    fflush(file);
+    fclose(file);
+    g_sequence_written += 1;
+}
+
 int eu4_gfx_draw_capture(const eu4_gfx_draw_raw *raw) {
+    record_draw_sequence(raw);
     char body[8192];
     const char *reason = "error";
     const char *symbol = "_GfxDraw";

@@ -18,6 +18,8 @@ enum {
     DRAW_SHADER_OFFSET = 0x70,
     DRAW_CONSTANT_COUNT_OFFSET = 0xC8,
     DRAW_CONSTANT_POINTER_OFFSET = 0xD0,
+    DRAW_VERTEX_OFFSET = 0x150,
+    DRAW_VERTEX_STRIDE = 0x160,
     DRAW_CONSTANT_MIN_VEC4 = 4,
     DRAW_MODE_TRIANGLE_STRIP = 5,
     DRAW_MIN_VERTICES = 3,
@@ -167,6 +169,16 @@ void eu4_gfx_observe_draw_entry(eu4_gfx_capture_frame *frame,
         g_tls.target_mode = mode;
         g_tls.target_count = effective_count;
         g_tls.target_first = first;
+        if (snapshot_ok) {
+            uint32_t vertex_stride = 0;
+            uint32_t vertex_offset = 0;
+            memcpy(&vertex_offset, snapshot + DRAW_VERTEX_OFFSET,
+                   sizeof vertex_offset);
+            memcpy(&vertex_stride, snapshot + DRAW_VERTEX_STRIDE,
+                   sizeof vertex_stride);
+            eu4_gfx_observe_framebuffer_set_vertex_range(
+                vertex_stride, vertex_offset, first, effective_count);
+        }
         (void)eu4_gfx_observe_framebuffer_before_draw(call, mode, effective_count,
                                                       first);
     }

@@ -488,6 +488,55 @@ def _gl_reference_block(
             pre_path = output / str(pre.get("raw_file") or "")
             if pre.get("raw_file") and not pre_path.is_file():
                 problems.append("pre-draw payload is absent")
+    shader_sources = data.get("shader_sources")
+    if shader_sources is not None:
+        if not isinstance(shader_sources, list):
+            problems.append("shader_sources metadata is malformed")
+            shader_sources = []
+        else:
+            for entry in shader_sources:
+                if not isinstance(entry, dict):
+                    problems.append("shader source entry is malformed")
+                    continue
+                stage = entry.get("stage")
+                name = entry.get("file")
+                if stage not in ("vertex", "pixel", "other"):
+                    problems.append(f"unexpected shader stage {stage!r}")
+                if not isinstance(name, str) or not name:
+                    problems.append("shader source file is missing")
+                    continue
+                source_path = output / name
+                if not source_path.is_file():
+                    problems.append(f"shader source payload is absent: {name}")
+                    continue
+                if source_path.stat().st_size != entry.get("bytes"):
+                    problems.append(f"shader source size differs: {name}")
+                if _file_sha256_text(source_path) != entry.get("sha256"):
+                    problems.append(f"shader source sha256 differs: {name}")
+    live_vertex = data.get("live_vertex")
+    if live_vertex is not None and not isinstance(live_vertex, dict):
+        problems.append("live_vertex metadata is malformed")
+        live_vertex = None
+    if isinstance(live_vertex, dict) and live_vertex.get("status") == "ok":
+        raw_name = live_vertex.get("raw_file")
+        live_path = output / str(raw_name or "")
+        if not isinstance(raw_name, str) or not raw_name or not live_path.is_file():
+            problems.append("live vertex payload is absent")
+        else:
+            if live_path.stat().st_size != live_vertex.get("bytes"):
+                problems.append("live vertex size differs from its declaration")
+            if _file_sha256_text(live_path) != live_vertex.get("sha256"):
+                problems.append("live vertex sha256 differs from its declaration")
+            stride = live_vertex.get("stride")
+            count = live_vertex.get("count")
+            if (
+                not isinstance(stride, int)
+                or not isinstance(count, int)
+                or stride <= 0
+                or count <= 0
+                or stride * count != live_vertex.get("bytes")
+            ):
+                problems.append("live vertex range does not match its layout")
     return {
         "status": "ok" if not problems else "invalid",
         "ok": not problems,
@@ -505,6 +554,8 @@ def _gl_reference_block(
         "target": target,
         "gpu": gpu,
         "pre_draw": pre,
+        "shader_sources": shader_sources or [],
+        "live_vertex": live_vertex,
     }
 
 
@@ -1268,6 +1319,66 @@ def _gl_vertex_block(output: Path, reference: dict) -> dict:
     draw_call = draw.get("call_id")
     if not isinstance(draw_call, int):
         return {"status": "missing", "ok": False, "reason": "draw call id is absent"}
+    live = reference.get("live_vertex")
+    if isinstance(live, dict) and live.get("status") == "ok":
+        raw_name = str(live.get("raw_file") or "")
+        path = output / raw_name
+        if not raw_name or not path.is_file():
+            return {"status": "missing", "ok": False,
+                    "reason": "live vertex payload file is absent"}
+        data = path.read_bytes()
+        if len(data) != live.get("bytes"):
+            return {"status": "invalid", "ok": False,
+                    "reason": "live vertex payload size mismatch"}
+        if hashlib.sha256(data).hexdigest() != live.get("sha256"):
+            return {"status": "invalid", "ok": False,
+                    "reason": "live vertex payload sha256 mismatch"}
+        stride = live.get("stride")
+        count = live.get("count")
+        if (
+            not isinstance(stride, int)
+            or not isinstance(count, int)
+            or stride <= 0
+            or count <= 0
+            or len(data) != stride * count
+        ):
+            return {"status": "invalid", "ok": False,
+                    "reason": "live vertex payload does not match its layout"}
+        if count != draw.get("effective_count"):
+            return {"status": "invalid", "ok": False,
+                    "reason": "live vertex count differs from the draw count"}
+        out_name = "gl-reference-vertex.bin"
+        (output / out_name).write_bytes(data)
+        digest = hashlib.sha256(data).hexdigest()
+        block = {
+            "schema": "gfx-gl-vertex/v1",
+            "status": "ok",
+            "ok": True,
+            "reason": "",
+            "source": "live_gl_vbo",
+            "raw_file": out_name,
+            "bytes": len(data),
+            "sha256": digest,
+            "hex": data.hex(),
+            "stride": stride,
+            "count": count,
+            "offset": live.get("offset"),
+            "first": live.get("first"),
+            "buffer": live.get("buffer"),
+            "buffer_size": live.get("buffer_size"),
+            "call_id": draw_call,
+            "symbol": "_GfxDraw",
+            "source_record": {
+                "file": "gl-reference.json",
+                "field": "live_vertex",
+                "raw_file": raw_name,
+                "payload_sha256": digest,
+            },
+        }
+        (output / "gl-reference-vertex.json").write_text(
+            json.dumps(block, indent=2) + "\n"
+        )
+        return block
     rows = _read_operations(output)
     if not rows:
         return {"status": "missing", "ok": False, "reason": "operations.jsonl is absent"}
@@ -1688,7 +1799,13 @@ def probe(args: argparse.Namespace) -> int:
             Path(args.qualified_sources).expanduser().resolve()
         ),
     }
-    if args.checkpoint == "after-present":
+    if args.draw_sequence:
+        env["EU4_GFX_DRAW_SEQUENCE"] = "1"
+    if args.logical_prefix:
+        env["EU4_GFX_LOGICAL_CAPTURE"] = "prefix"
+        if caller_rva:
+            env["EU4_GFX_LOGICAL_STOP_CALLER"] = f"0x{caller_rva:x}"
+    elif args.checkpoint == "after-present":
         env["EU4_GFX_LOGICAL_CAPTURE"] = "1"
         env["EU4_GFX_DRAW_SKIP_UNSUPPORTED"] = "1"
         env["EU4_GFX_CHECKPOINT_HOLD_MS"] = str(args.hold_ms)
@@ -2055,6 +2172,16 @@ def _parser() -> argparse.ArgumentParser:
     prb.add_argument("--caller-rva", type=_rva_value)
     prb.add_argument("--occurrence", type=int, default=1)
     prb.add_argument("--hold-ms", type=int, default=8000)
+    prb.add_argument(
+        "--draw-sequence",
+        action="store_true",
+        help="write a bounded diagnostic sequence of every _GfxDraw-family call",
+    )
+    prb.add_argument(
+        "--logical-prefix",
+        action="store_true",
+        help="encode every handled draw into one persistent diagnostic logical target",
+    )
     prb.add_argument("--similarity-threshold", type=float, default=None)
     prb.add_argument("--timeout", type=float, default=120.0)
     prb.add_argument("--output", required=True)

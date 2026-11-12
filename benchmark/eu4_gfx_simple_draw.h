@@ -94,7 +94,7 @@ typedef struct {
     uint64_t vertex_hash;
     char vertex_hex[193];
     uint64_t constant_hash;
-    char constant_hex[129];
+    char constant_hex[193];
     uint64_t texture_pointer;
     uint32_t texture_width;
     uint32_t texture_height;
@@ -111,6 +111,10 @@ typedef struct {
     int depth_default;
     int raster_default;
     int scissor_full;
+    uint32_t sampler_min_filter;
+    uint32_t sampler_mag_filter;
+    uint32_t sampler_wrap_s;
+    uint32_t sampler_wrap_t;
 } eu4_gfx_simple_draw_state;
 
 /* Validate original state and encode one draw into `command_buffer`.

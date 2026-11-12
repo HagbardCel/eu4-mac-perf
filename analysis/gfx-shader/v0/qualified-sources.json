@@ -1,6 +1,6 @@
 {
   "schema": "eu4-gfx-qualified-sources/v0",
-  "note": "Exact compiler-input SHA-256 values for admission. The two Simple entries were promoted from live pinned-engine observations; transitional markers remain offline-only and are not enabled on the engine path.",
+  "note": "Exact compiler-input SHA-256 values for admission. Simple entries were promoted from the M4 live pinned-engine observation; sprite-map entries were promoted from the M5 live pinned-engine sprite shader. Transitional markers remain offline-only and are not enabled on the engine path.",
   "repo_baseline_commit": "173321b6d3258576060e7941e9bd91f608e8f543",
   "eu4_executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
   "sources": [
@@ -19,6 +19,22 @@
       "effect": "simple-lua-Simple/asset-maincode-v0",
       "status": "qualified",
       "provenance": "Exact source observed at the live pinned EU4 _GfxAddPixelShader replacement on 2026-11-12 while approaching _GfxDraw caller RVA 0xedfcd1; source length recorded; exact SHA-256 admission, no marker admission."
+    },
+    {
+      "stage": "vertex",
+      "sha256": "e9422b2cfbc43350df7e735f31b70fd8de2da9ebef533cc6c3360efeda5a26c0",
+      "length": 5142,
+      "effect": "sprite-map/asset-maincode-v0",
+      "status": "qualified",
+      "provenance": "Exact source observed at the live pinned EU4 _GfxAddVertexShader replacement while the loading-screen sprite shader was created (Metal probe .local/m5/experiments/metal-sprite-source-01, pid 80047). The same compiler input is recovered from the original-GL draw at caller RVA 0x14f6c1b after normalizing the driver's GL_ARB_shader_texture_lod extension line to the NO_SHADER_TEXTURE_LOD define."
+    },
+    {
+      "stage": "pixel",
+      "sha256": "10ca615e5608f4efd0bcc204c25d8b3682c6785fd4f1f53eac9f6b9f7ca8b062",
+      "length": 4893,
+      "effect": "sprite-map/asset-maincode-v0",
+      "status": "qualified",
+      "provenance": "Exact source observed at the live pinned EU4 _GfxAddPixelShader replacement paired with the sprite vertex object (Metal probe .local/m5/experiments/metal-sprite-source-01, pid 80047). The original-GL pixel source at caller RVA 0x14f6c1b normalizes to this exact hash."
     }
   ],
   "transitional_marker_admission_only": {
