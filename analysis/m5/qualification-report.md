@@ -173,11 +173,12 @@ also runs the comparator, GL-reference, live-draw, Simple-draw and M4 tests.
 
 Final results:
 
-- Clean detached worktree at `2bfcb25`: **2473 tracked tests OK, 22 skipped**
+- Clean detached worktree at `be4430d`: **2480 tracked tests OK, 26 skipped**
   (live-only tests skip without operator-local evidence).
 - Checker offline regression subset: **67 tests pass**.
 - M4 checker: **pass** on its recorded evidence.
-- Final M5 checker on the final tree: **pass**, `m5_complete=true`, with
+- Final M5 checker on the final tree: **pass**, `m5_complete=true`, 23 gates
+  (22 required pass + the separate live-pixels result), with
   `sprite_replay_qualified=true`, `live_engine_qualified=true`,
   `live_composition_qualified=true`, `live_pixels_qualified=false` (separate).
 

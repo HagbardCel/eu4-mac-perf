@@ -290,10 +290,10 @@
   "full_suite": {
     "python": "3.14.10",
     "command": "PYTHONPATH=benchmark:. python -m unittest discover -s tests",
-    "worktree": "clean detached worktree at 2bfcb25",
-    "ran": 2473,
-    "ok": 2473,
-    "skipped": 22,
+    "worktree": "clean detached worktree at be4430d",
+    "ran": 2480,
+    "ok": 2480,
+    "skipped": 26,
     "errors": 0,
     "failures": 0,
     "note": "Clean tracked checkout; operator-local live evidence and untracked artifacts are absent, so live-only tests skip. No local-only exclusions were needed."
@@ -301,7 +301,7 @@
   "checker": {
     "path": "campaigns/eu4-m5/accept.py",
     "result": "pass",
-    "run": ".local/m5/checker-final2.json",
+    "run": ".local/m5/checker-final4.json",
     "command": "PYTHONPATH=benchmark:. python3 campaigns/eu4-m5/accept.py .",
     "gates": {
       "count": 23,
@@ -309,30 +309,32 @@
       "separate_live_pixels_failed": 1
     },
     "notes": [
+      "evidence integrity (manifest digest and policy digest) is required for m5_complete",
       "sprite_replay_qualified=true: exact seeded comparison on the sampler-bearing reference",
       "live_engine_qualified=true: authentic _GfxDraw caller 0x14f6c1b, sprite identity, GPU status 4, engine-owned 3456x2234 backbuffer readback",
-      "live_composition_qualified=true: live prefix Simple draw then sprite; contribution 157254 equals GL",
+      "live_composition_qualified=true: live prefix Simple draw then sprite; recomputed contribution 157254 equals GL and reported counts agree",
       "live_pixels_qualified=false: live prefix pre-draw differs because the background producer is unreconstructed; classified separately, not used for m5_complete",
       "m4 checker pass on its recorded evidence",
       "67 offline tests pass in the final checker run"
     ]
   },
-  "implementation_commit": "2bfcb25",
+  "implementation_commit": "be4430d",
   "final_acceptance": {
     "verdict": "pass",
     "m5_complete": true,
-    "commit": "2bfcb25",
+    "commit": "be4430d",
     "python": "3.14.10",
     "reference_run": ".local/m5/experiments/sprite-gl-ref-09",
     "seeded_candidate_run": ".local/m5/experiments/metal-replay-06",
     "live_run": ".local/m5/experiments/metal-live-final-02",
     "sprite_replay": "pass 0/1930176 max_channel_error=0",
     "live_engine": "pass caller=0x14f6c1b gpu=4 target=3456x2234",
-    "live_composition": "pass Simple+sprite; 157254 changed pixels",
+    "live_composition": "pass Simple+sprite; recomputed live=157254 gl=157254; mask_iou=1.0",
     "live_pixels": "separate false: live prefix pre-draw differs from GL pre-draw",
     "m4_checker": "pass",
     "offline_regressions": "67 pass in checker",
-    "full_suite": "2473 tests OK, 22 skipped in a clean worktree"
+    "constant_buffer_fix": "24-dword minimum; authentic 28-dword fixture replayed exactly",
+    "full_suite": "2480 tests OK, 26 skipped in a clean worktree"
   },
   "live_engine": {
     "evidence": "analysis/m5/live-evidence.json",
