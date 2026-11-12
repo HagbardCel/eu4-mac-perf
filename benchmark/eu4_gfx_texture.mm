@@ -293,7 +293,9 @@ int eu4_gfx_texture_make(void *device, void *header, const void *desc, const voi
     if (out_texture != NULL) {
         *out_texture = NULL;
     }
-    uint8_t *staged[16];
+    /* A cube may carry up to 96 face/level records (6 faces x 16 levels);
+       the staging pointer table must cover every record the validator keeps. */
+    uint8_t *staged[128];
     memset(staged, 0, sizeof staged);
     int status = validate(header, desc, images, count, staged);
     if (status != 0) {
