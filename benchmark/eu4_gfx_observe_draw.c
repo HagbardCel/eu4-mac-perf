@@ -1,6 +1,7 @@
 #include "eu4_gfx_observe_draw.h"
 
 #include "eu4_gfx_observe_buffers.h"
+#include "eu4_gfx_observe_framebuffer.h"
 
 #include <stdatomic.h>
 #include <stdint.h>
@@ -29,6 +30,10 @@ typedef struct {
     int32_t primitive_enum;
     uint64_t primitive_call_id;
     int valid;
+    uint64_t target_call_id;
+    int32_t target_mode;
+    int32_t target_count;
+    int32_t target_first;
 } draw_tls;
 
 static _Thread_local draw_tls g_tls;
@@ -157,6 +162,14 @@ void eu4_gfx_observe_draw_entry(eu4_gfx_capture_frame *frame,
             sample <= EU4_GFX_OBSERVE_NONMATCH_SAMPLE_CAP ? 1 : 0;
     }
 
+    if (call->target_selected) {
+        g_tls.target_call_id = call->call_id;
+        g_tls.target_mode = mode;
+        g_tls.target_count = effective_count;
+        g_tls.target_first = first;
+        (void)eu4_gfx_observe_framebuffer_before_draw(call, mode, effective_count,
+                                                      first);
+    }
     if (!snapshot_ok) {
         eu4_gfx_observe_fail_fields(call);
     }
@@ -216,6 +229,13 @@ void eu4_gfx_observe_draw_exit(eu4_gfx_capture_frame *frame,
                                eu4_gfx_observe_call *call,
                                eu4_gfx_observe_record *record) {
     (void)frame;
-    (void)call;
     (void)record;
+    if (call == NULL || !call->target_selected ||
+        g_tls.target_call_id != call->call_id) {
+        return;
+    }
+    /* Runs after the original _GfxDraw body returned, so the original OpenGL
+     * implementation has already executed glDrawArrays for this draw. */
+    (void)eu4_gfx_observe_framebuffer_after_draw(
+        call, g_tls.target_mode, g_tls.target_count, g_tls.target_first);
 }

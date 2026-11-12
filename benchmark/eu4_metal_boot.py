@@ -37,6 +37,7 @@ CHECKPOINT = SOURCE.with_name("eu4_gfx_checkpoint.mm")
 TEXTURE = SOURCE.with_name("eu4_gfx_texture.mm")
 SHADER = SOURCE.with_name("eu4_gfx_shader.mm")
 SIMPLE_DRAW = SOURCE.with_name("eu4_gfx_simple_draw.mm")
+LOGICAL_CAPTURE = SOURCE.with_name("eu4_gfx_logical_capture.mm")
 LIBRARY = SOURCE.parent / ".build/libeu4_metal_boot.dylib"
 HOST_SOURCE = SOURCE.parents[1] / "tests/metal_boot_host.c"
 HOST = SOURCE.parent / ".build/metal_boot_host"
@@ -55,7 +56,7 @@ def build_library(arch: str = "x86_64") -> Path:
         "-framework", "QuartzCore", "-framework", "OpenGL",
         "-o", str(output), str(SOURCE), str(PATCH), str(ENTRY), str(EVENTS), str(GL_DIAG), str(GFX),
         str(BUFFERS), str(DRAW_C), str(DRAW_S), str(TEXTURE), str(SHADER),
-        str(SIMPLE_DRAW), str(DRAW_ROUTE), str(CHECKPOINT),
+        str(SIMPLE_DRAW), str(DRAW_ROUTE), str(CHECKPOINT), str(LOGICAL_CAPTURE),
     ]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode:
@@ -289,7 +290,7 @@ def stop_game(game: subprocess.Popen) -> None:
 
 def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = False,
                    metal_init: bool = False, env_overrides: dict | None = None,
-                   strict: bool = True) -> dict:
+                   strict: bool = True, while_running=None) -> dict:
     """Operator launch. a1 and bootstrap exit after their receipt. metal_init keeps running."""
     try:
         wait_seconds = _validate_timeout(wait_seconds, field="wait_seconds")
@@ -355,6 +356,10 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
                     deadline_hit,
                 )
                 if why is not None:
+                    break
+                if while_running is not None and while_running(run_dir, game):
+                    why = "evidence"
+                    launcher_signaled = True
                     break
                 time.sleep(0.2)
             if why == "stop" and game.poll() is None:

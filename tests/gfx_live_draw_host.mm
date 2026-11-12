@@ -342,6 +342,15 @@ static int run_checkpoint(const char *operation, const char *directory) {
     return run_checkpoint_inner(operation, directory, selector, 1);
 }
 
+static int run_present_caller_filter(const char *directory) {
+    eu4_gfx_checkpoint_configure("after-present", 0xabc, 1, directory, 0);
+    int unrelated = eu4_gfx_checkpoint_present_select(0xdef);
+    int selected = eu4_gfx_checkpoint_present_select(0xabc);
+    int later = eu4_gfx_checkpoint_present_select(0xabc);
+    printf("unrelated=%d selected=%d later=%d\n", unrelated, selected, later);
+    return unrelated == 0 && selected == 1 && later == 0 ? 0 : 1;
+}
+
 static int run_checkpoint_env(void) {
     int enabled = eu4_gfx_checkpoint_configure_from_env();
     printf("enabled=%d occurrence=%d\n", enabled,
@@ -352,6 +361,9 @@ static int run_checkpoint_env(void) {
 int main(int argc, char **argv) {
     if (argc >= 2 && strcmp(argv[1], "--checkpoint-env") == 0) {
         return run_checkpoint_env();
+    }
+    if (argc >= 3 && strcmp(argv[1], "--present-caller-filter") == 0) {
+        return run_present_caller_filter(argv[2]);
     }
     if (argc >= 4 && strcmp(argv[1], "--checkpoint") == 0) {
         return run_checkpoint(argv[2], argv[3]);

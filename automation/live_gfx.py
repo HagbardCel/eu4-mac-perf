@@ -19,6 +19,8 @@ import json
 import os
 import sys
 import struct
+import subprocess
+import tempfile
 import time
 import zlib
 from pathlib import Path
@@ -373,6 +375,139 @@ def _draw_block(report: dict, output: Path) -> dict:
     return block
 
 
+def _file_sha256_text(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _gl_reference_block(
+    output: Path, evidence: dict, caller_rva: int | None
+) -> dict:
+    """Validate the original-OpenGL framebuffer capture written by the observer.
+
+    Fail closed: every field the comparator relies on is checked here, and a
+    missing or truncated payload is never reported as a usable reference.
+    """
+    path = output / "gl-reference.json"
+    if not path.is_file():
+        failure = output / "gl-reference-failure.json"
+        pre_failure = output / "gl-reference-pre-failure.json"
+        reason = "gl-reference.json was not written"
+        if failure.is_file() or pre_failure.is_file():
+            reason = "the original GL readback failed"
+        blocked = output / "blocked_at.json"
+        if blocked.is_file():
+            reason = f"GL capture was blocked: {blocked.name}"
+        return {"status": "missing", "ok": False, "reason": reason}
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return {"status": "invalid", "ok": False, "reason": f"unreadable: {exc}"}
+    problems: list[str] = []
+    if not isinstance(data, dict) or data.get("schema") != "gfx-gl-reference/v1":
+        return {"status": "invalid", "ok": False, "reason": "unexpected schema"}
+    if data.get("backend") != "opengl":
+        problems.append("backend is not opengl")
+    provenance = data.get("provenance") if isinstance(data.get("provenance"), dict) else {}
+    if provenance.get("executable_sha256") != evidence.get("executable_sha256"):
+        problems.append("executable identity does not match the pinned launch")
+    if not provenance.get("executable"):
+        problems.append("executable path is missing")
+    draw = data.get("draw") if isinstance(data.get("draw"), dict) else {}
+    if draw.get("symbol") != "_GfxDraw":
+        problems.append("draw symbol is not _GfxDraw")
+    if caller_rva is not None:
+        expected = f"0x{caller_rva:x}"
+        if draw.get("caller_rva") != expected:
+            problems.append(
+                f"caller is {draw.get('caller_rva')!r}, expected {expected}"
+            )
+    if draw.get("mode") != 5:
+        problems.append(f"draw mode is {draw.get('mode')!r}, expected 5")
+    count = draw.get("effective_count")
+    if not isinstance(count, int) or count < 3:
+        problems.append("effective draw count is below 3")
+    target = data.get("target") if isinstance(data.get("target"), dict) else {}
+    width, height = target.get("width"), target.get("height")
+    if not isinstance(width, int) or not isinstance(height, int) or width <= 0 or height <= 0:
+        problems.append("target extent is missing or invalid")
+        width = height = 0
+    if target.get("origin") != "lower_left":
+        problems.append("image origin is not declared as lower_left")
+    if "draw_buffer" in target and target.get("draw_buffer") != 0x0405:
+        problems.append("draw buffer is not GL_BACK")
+    if "read_buffer" in target and target.get("read_buffer") != 0x0405:
+        problems.append("read buffer is not GL_BACK")
+    pixel_format = target.get("pixel_format")
+    if pixel_format not in ("BGRA8", "RGBA8"):
+        problems.append(f"unsupported pixel format {pixel_format!r}")
+    gpu = data.get("gpu") if isinstance(data.get("gpu"), dict) else {}
+    if gpu.get("read_pixels") is not True:
+        problems.append("glReadPixels completion is not recorded")
+    if gpu.get("gl_error") != 0:
+        problems.append(f"GL error {gpu.get('gl_error')!r} during readback")
+    if not isinstance(gpu.get("finish_ns"), int) or gpu.get("finish_ns") < 0:
+        problems.append("glFinish boundary is not recorded")
+    capture = data.get("capture") if isinstance(data.get("capture"), dict) else {}
+    raw_name = capture.get("raw_file")
+    raw_bytes = capture.get("raw_bytes")
+    raw_sha = capture.get("raw_sha256")
+    if not isinstance(raw_name, str) or not raw_name:
+        problems.append("raw payload file is missing")
+        raw_path = None
+    else:
+        raw_path = output / raw_name
+    if width and height:
+        expected_bytes = width * height * 4
+        if raw_bytes != expected_bytes:
+            problems.append(
+                f"raw_bytes {raw_bytes!r} != {width}x{height}x4={expected_bytes}"
+            )
+        if capture.get("pixel_format") != pixel_format:
+            problems.append("capture and target pixel formats disagree")
+        if target.get("row_stride") != width * 4:
+            problems.append("row_stride does not match the width")
+    if raw_path is not None:
+        if not raw_path.is_file():
+            problems.append(f"raw payload is absent: {raw_name}")
+        else:
+            size = raw_path.stat().st_size
+            if raw_bytes != size:
+                problems.append(f"raw payload is {size} bytes, declared {raw_bytes!r}")
+            digest = _file_sha256_text(raw_path)
+            if digest != raw_sha:
+                problems.append("raw payload sha256 does not match its declaration")
+    pre = data.get("pre_draw")
+    if pre is not None:
+        if not isinstance(pre, dict):
+            problems.append("pre_draw metadata is malformed")
+        else:
+            pre_path = output / str(pre.get("raw_file") or "")
+            if pre.get("raw_file") and not pre_path.is_file():
+                problems.append("pre-draw payload is absent")
+    return {
+        "status": "ok" if not problems else "invalid",
+        "ok": not problems,
+        "reason": "; ".join(problems) if problems else "",
+        "path": str(path),
+        "raw_file": raw_name,
+        "raw_sha256": raw_sha,
+        "width": width,
+        "height": height,
+        "pixel_format": pixel_format,
+        "caller_rva": draw.get("caller_rva"),
+        "call_id": draw.get("call_id"),
+        "executable_sha256": provenance.get("executable_sha256"),
+        "draw": draw,
+        "target": target,
+        "gpu": gpu,
+        "pre_draw": pre,
+    }
+
+
 def capture(args: argparse.Namespace) -> int:
     if bool(args.authorize_live) == bool(args.campaign_run_root):
         print(
@@ -386,6 +521,9 @@ def capture(args: argparse.Namespace) -> int:
         print(f"capture output already exists: {output}", file=sys.stderr)
         return EXIT_INCOMPLETE
     until_target_draw = bool(args.until_target_draw)
+    if args.gl_reference and not until_target_draw:
+        print("--gl-reference requires --until-target-draw", file=sys.stderr)
+        return EXIT_INCOMPLETE
     if until_target_draw:
         if args.max_events is not None or args.duration is not None:
             print(
@@ -411,6 +549,7 @@ def capture(args: argparse.Namespace) -> int:
             duration_s=duration,
             until_target_draw=until_target_draw,
             target_caller_rva=args.caller_rva,
+            gl_reference=bool(args.gl_reference),
         )
     except (startup.StartupError, OSError, RuntimeError) as exc:
         print(f"capture preflight failed: {exc}", file=sys.stderr)
@@ -441,6 +580,7 @@ def capture(args: argparse.Namespace) -> int:
             evidence=evidence,
             until_target_draw=until_target_draw,
             target_caller_rva=args.caller_rva,
+            gl_reference=bool(args.gl_reference),
         )
     except (startup.StartupError, OSError, RuntimeError) as exc:
         if token is not None:
@@ -456,6 +596,18 @@ def capture(args: argparse.Namespace) -> int:
     status, reason = _capture_status(
         report, until_target_draw=until_target_draw
     )
+    gl_reference = {"status": "not_requested", "ok": True}
+    gl_vertex = {"status": "not_requested", "ok": True}
+    if args.gl_reference:
+        gl_reference = _gl_reference_block(output, evidence, args.caller_rva)
+        gl_vertex = _gl_vertex_block(output, gl_reference)
+        gl_reference["vertex"] = gl_vertex
+        if status == "complete" and not gl_reference["ok"]:
+            status = "incomplete"
+            reason = f"gl_reference_{gl_reference['status']}"
+        elif status == "complete" and not gl_vertex["ok"]:
+            status = "incomplete"
+            reason = f"gl_vertex_{gl_vertex['status']}"
     coverage: dict = {}
     validation: dict = {}
     draw_block: dict = {}
@@ -493,6 +645,8 @@ def capture(args: argparse.Namespace) -> int:
         "coverage": coverage,
         "validation": validation,
         "draw": draw_block,
+        "gl_reference": gl_reference,
+        "gl_vertex": gl_vertex,
         "launch": {
             "mode": "campaign" if token is not None else "manual",
         },
@@ -680,7 +834,656 @@ CHECKPOINTS = {
     "after-clear": {"symbol": "_GfxClear", "draw": False},
     "after-draw": {"symbol": "_GfxDraw", "draw": True},
     "before-present": {"symbol": "_GfxPresent", "draw": False},
+    "after-present": {"symbol": "_GfxPresent", "draw": True},
 }
+
+
+def _png_size(path: Path) -> tuple[int, int] | None:
+    try:
+        header = path.read_bytes()[:33]
+    except OSError:
+        return None
+    if len(header) < 24 or not header.startswith(b"\x89PNG\r\n\x1a\n"):
+        return None
+    width, height = struct.unpack(">II", header[16:24])
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+
+def _window_list_helper() -> Path | None:
+    """Compile (once) the window-server lister used for visible evidence."""
+    source = ROOT / "benchmark" / "eu4_window_list.m"
+    output = ROOT / "benchmark" / ".build" / "eu4_window_list"
+    if output.is_file() and output.stat().st_mtime >= source.stat().st_mtime:
+        return output
+    output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        result = subprocess.run(
+            [
+                "clang", "-O2", "-Wall", "-Wextra",
+                "-framework", "ApplicationServices",
+                "-framework", "CoreFoundation",
+                "-o", str(output), str(source),
+            ],
+            capture_output=True, text=True, check=False, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return output if result.returncode == 0 else None
+
+
+def _image_stats(path: Path) -> dict:
+    """Cheap evidence that a screenshot contains an image, not a blank frame."""
+    try:
+        from PIL import Image  # type: ignore
+    except Exception:  # noqa: BLE001
+        return {"uniform": None, "reason": "PIL is not installed"}
+    try:
+        with Image.open(path) as image:
+            small = image.convert("RGB").resize((64, 64))
+            pixels = list(small.getdata())
+    except (OSError, ValueError) as exc:
+        return {"uniform": None, "reason": str(exc)}
+    colors = {(r // 8, g // 8, b // 8) for r, g, b in pixels}
+    mean = sum(sum(pixel) for pixel in pixels) / (len(pixels) * 3)
+    variance = sum(
+        (sum(pixel) / 3 - mean) ** 2 for pixel in pixels
+    ) / len(pixels)
+    return {
+        "uniform": len(colors) <= 2,
+        "distinct_color_buckets": len(colors),
+        "mean_brightness": round(mean, 2),
+        "variance": round(variance, 2),
+        "width": small.width,
+        "height": small.height,
+    }
+
+
+def similarity_to_drawable(
+    shot: Path,
+    drawable: Path,
+    drawable_width: int,
+    drawable_height: int,
+    pixel_format: str = "BGRA8",
+) -> dict:
+    """Compare a visible screenshot with the presented drawable loosely.
+
+    This is a visibility check, not the authoritative pixel comparison: it
+    tolerates compositor scaling, colour management and occlusion. The exact
+    comparison is the comparator's job on the drawable payload. Dimensions come
+    from the capture descriptor, never from a fixed fixture.
+    """
+    try:
+        from PIL import Image, ImageChops, ImageStat  # type: ignore
+    except Exception:  # noqa: BLE001
+        return {"status": "unavailable", "reason": "PIL is not installed"}
+    if not drawable.is_file():
+        return {"status": "unavailable", "reason": "drawable payload is absent"}
+    if drawable_width <= 0 or drawable_height <= 0:
+        return {"status": "unavailable", "reason": "drawable extent is absent"}
+    payload = drawable.read_bytes()
+    if len(payload) != drawable_width * drawable_height * 4:
+        return {"status": "unavailable", "reason": "drawable payload size mismatch"}
+    if pixel_format not in ("BGRA8", "RGBA8"):
+        return {"status": "unavailable", "reason": "unsupported drawable format"}
+    try:
+        expected = Image.frombuffer(
+            "RGBA",
+            (drawable_width, drawable_height),
+            payload,
+            "raw",
+            "BGRA" if pixel_format == "BGRA8" else "RGBA",
+            0,
+            1,
+        ).convert("RGB")
+        with Image.open(shot) as image:
+            actual = image.convert("RGB")
+    except (OSError, ValueError) as exc:
+        return {"status": "unavailable", "reason": str(exc)}
+    width = 256
+    height = max(1, round(width * drawable_height / drawable_width))
+    size = (width, height)
+    left = expected.resize(size)
+    right = actual.resize(size)
+    diff = ImageChops.difference(left, right)
+    stat = ImageStat.Stat(diff)
+    mean = sum(stat.mean) / 3.0
+    maximum = max(stat.extrema[channel][1] for channel in range(3))
+    return {
+        "status": "compared",
+        "mean_abs_error": round(mean, 3),
+        "max_channel_error": maximum,
+        "exact_size": list(actual.size),
+    }
+
+
+def _similarity_ok(similarity: dict, threshold: float) -> bool:
+    return (
+        similarity.get("status") == "compared"
+        and float(similarity.get("mean_abs_error", 999.0)) <= threshold
+    )
+
+
+def _window_retry_should_stop(window: dict) -> bool:
+    """A captured but over-threshold screenshot must not end discovery."""
+    return window.get("status") == "captured" and window.get("qualified") is True
+
+
+def _sck_helper() -> Path | None:
+    source = ROOT / "benchmark" / "eu4_window_sck.swift"
+    output = ROOT / "benchmark" / ".build" / "eu4_window_sck"
+    if output.is_file() and output.stat().st_mtime >= source.stat().st_mtime:
+        return output
+    cache = ROOT / ".local" / "swift-module-cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    try:
+        result = subprocess.run(
+            [
+                "swiftc", "-parse-as-library", "-O",
+                "-module-cache-path", str(cache),
+                "-framework", "ScreenCaptureKit", "-framework", "AppKit",
+                "-o", str(output), str(source),
+            ],
+            capture_output=True, text=True, check=False, timeout=180,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return output if result.returncode == 0 else None
+
+
+def _sck_capture(output: Path, pid: int, drawable: Path | None,
+                 drawable_size: tuple[int, int] | None = None,
+                 similarity_threshold: float = 18.0) -> dict:
+    helper = _sck_helper()
+    if helper is None:
+        return {"status": "unavailable", "reason": "ScreenCaptureKit helper did not build"}
+    shot = output / "window-sck.png"
+    try:
+        captured = subprocess.run(
+            [str(helper), str(pid), str(shot)],
+            capture_output=True, text=True, check=False, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"status": "unavailable", "reason": f"ScreenCaptureKit failed: {exc}"}
+    size = _png_size(shot) if shot.is_file() else None
+    stats = _image_stats(shot) if size else {"uniform": True}
+    if captured.returncode != 0 or size is None or stats.get("uniform", True):
+        return {
+            "status": "blank",
+            "reason": captured.stderr.strip() or "ScreenCaptureKit produced a blank image",
+            "file": shot.name if shot.is_file() else None,
+            "width": size[0] if size else None,
+            "height": size[1] if size else None,
+            "stats": stats,
+        }
+    block = {
+        "status": "captured",
+        "shown": True,
+        "method": "screen_capture_kit",
+        "file": shot.name,
+        "width": size[0],
+        "height": size[1],
+        "sha256": _file_sha256(shot),
+        "stats": stats,
+        "source": "SCScreenshotManager(desktopIndependentWindow)",
+    }
+    if drawable is not None and drawable_size is not None:
+        block["similarity"] = similarity_to_drawable(
+            shot, drawable, drawable_size[0], drawable_size[1]
+        )
+        block["qualified"] = _similarity_ok(
+            block["similarity"], similarity_threshold
+        )
+    else:
+        block["qualified"] = drawable is None
+    return block
+
+
+def _window_capture(output: Path, pid: int, drawable: Path | None = None,
+                    preferred_window: int | None = None,
+                    drawable_size: tuple[int, int] | None = None,
+                    similarity_threshold: float = 18.0) -> dict:
+    """Independent visible-window capture of the game's own window.
+
+    Enumerates every layer-0 window the game owns, tries the plausible main
+    windows, and falls back to a full-screen capture. A candidate is accepted
+    only if it is non-uniform and (when PIL is available) resembles the
+    presented drawable. The chosen image and every attempt are recorded.
+    """
+    helper = _window_list_helper()
+    if helper is None:
+        return {"status": "unavailable", "reason": "window lister did not build"}
+    try:
+        listed = subprocess.run(
+            [str(helper), str(pid)], capture_output=True, text=True,
+            check=False, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"status": "unavailable", "reason": f"window listing failed: {exc}"}
+    windows: list[dict] = []
+    for line in listed.stdout.splitlines():
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict) and row.get("window_id"):
+            windows.append(row)
+    (output / "windows.json").write_text(json.dumps(windows, indent=2) + "\n")
+    candidates = [
+        window for window in windows
+        if float(window.get("alpha", 0)) > 0.05
+        and int(window.get("width", 0)) >= 400 and int(window.get("height", 0)) >= 400
+    ]
+    candidates.sort(
+        key=lambda w: (
+            int(w.get("window_id", 0)) != preferred_window,
+            not w.get("onscreen"),
+            -int(w["width"]) * int(w["height"]),
+        )
+    )
+    if preferred_window is not None and not any(
+        int(window.get("window_id", 0)) == preferred_window for window in candidates
+    ):
+        candidates.insert(0, {"window_id": preferred_window, "onscreen": False,
+                              "alpha": 1.0, "width": 0, "height": 0})
+    attempts: list[dict] = []
+    accepted: dict | None = None
+    sck = _sck_capture(output, pid, drawable, drawable_size, similarity_threshold)
+    attempts.append(dict(sck, kind="screen_capture_kit"))
+    if sck.get("status") == "captured":
+        similarity = sck.get("similarity") or {}
+        if sck.get("qualified"):
+            return dict(sck, attempts=attempts, windows=windows,
+                        preferred_window=preferred_window)
+    for index, window in enumerate(candidates[:6]):
+        path = output / f"window-{window['window_id']}.png"
+        try:
+            captured = subprocess.run(
+                ["screencapture", "-x", "-o", "-l", str(window["window_id"]), str(path)],
+                capture_output=True, text=True, check=False, timeout=60,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            attempts.append({"window_id": window["window_id"], "status": "error",
+                             "reason": str(exc)})
+            continue
+        size = _png_size(path) if path.is_file() else None
+        stats = _image_stats(path) if size else {"uniform": True}
+        attempt = {
+            "window_id": window["window_id"],
+            "window": window,
+            "file": path.name,
+            "status": "captured" if size and not stats.get("uniform") else "blank",
+            "width": size[0] if size else None,
+            "height": size[1] if size else None,
+            "stats": stats,
+        }
+        if size and drawable is not None and drawable_size is not None and not stats.get("uniform"):
+            attempt["similarity"] = similarity_to_drawable(
+                path, drawable, drawable_size[0], drawable_size[1]
+            )
+        attempts.append(attempt)
+        if attempt["status"] == "captured":
+            attempt["qualified"] = drawable is None or _similarity_ok(
+                attempt.get("similarity") or {}, similarity_threshold
+            )
+            if attempt["qualified"] and accepted is None:
+                accepted = attempt
+        if accepted is not None:
+            break
+    if accepted is None:
+        # Full-screen fallback. Try to bring the game forward first; failure is
+        # recorded, not hidden.
+        activation = {"status": "not_attempted"}
+        try:
+            ran = subprocess.run(
+                [
+                    "osascript", "-e",
+                    "tell application \"System Events\" to set frontmost of "
+                    f"first process whose unix id is {pid} to true",
+                ],
+                capture_output=True, text=True, check=False, timeout=20,
+            )
+            activation = {
+                "status": "ok" if ran.returncode == 0 else "refused",
+                "stderr": ran.stderr.strip(),
+            }
+        except (OSError, subprocess.SubprocessError) as exc:
+            activation = {"status": "error", "reason": str(exc)}
+        time.sleep(0.5)
+        path = output / "window-fullscreen.png"
+        try:
+            captured = subprocess.run(
+                ["screencapture", "-x", str(path)],
+                capture_output=True, text=True, check=False, timeout=60,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"status": "unavailable", "reason": f"screencapture failed: {exc}",
+                    "attempts": attempts, "windows": windows}
+        size = _png_size(path) if path.is_file() else None
+        stats = _image_stats(path) if size else {"uniform": True}
+        attempt = {
+            "window_id": None,
+            "file": path.name,
+            "status": "captured" if size and not stats.get("uniform") else "blank",
+            "width": size[0] if size else None,
+            "height": size[1] if size else None,
+            "stats": stats,
+            "activation": activation,
+            "kind": "fullscreen",
+        }
+        if size and drawable is not None and drawable_size is not None and not stats.get("uniform"):
+            attempt["similarity"] = similarity_to_drawable(
+                path, drawable, drawable_size[0], drawable_size[1]
+            )
+        attempts.append(attempt)
+        if attempt["status"] == "captured":
+            attempt["qualified"] = drawable is None or _similarity_ok(
+                attempt.get("similarity") or {}, similarity_threshold
+            )
+            if attempt["qualified"]:
+                accepted = attempt
+    if accepted is None:
+        captured = [
+            attempt for attempt in attempts if attempt.get("status") == "captured"
+        ]
+        if captured:
+            best = min(
+                captured,
+                key=lambda attempt: float(
+                    (attempt.get("similarity") or {}).get("mean_abs_error", 999.0)
+                ),
+            )
+            return {
+                "status": "captured",
+                "shown": True,
+                "qualified": False,
+                "reason": "captured screenshot did not meet the similarity threshold",
+                "method": best.get("kind") or "window_server_screencapture",
+                "window_id": best.get("window_id"),
+                "file": best.get("file"),
+                "width": best.get("width"),
+                "height": best.get("height"),
+                "sha256": _file_sha256(output / str(best.get("file"))),
+                "source": "CGWindowList + screencapture",
+                "stats": best.get("stats"),
+                "similarity": best.get("similarity"),
+                "attempts": attempts,
+                "windows": windows,
+            }
+        return {
+            "status": "missing",
+            "reason": "no non-blank window or screen image was captured",
+            "window_id": None,
+            "attempts": attempts,
+            "windows": windows,
+        }
+    shot = output / accepted["file"]
+    return {
+        "status": "captured",
+        "shown": True,
+        "qualified": True,
+        "preferred_window": preferred_window,
+        "method": accepted.get("kind") or "window_server_screencapture",
+        "window_id": accepted.get("window_id"),
+        "file": shot.name,
+        "width": accepted["width"],
+        "height": accepted["height"],
+        "sha256": _file_sha256(shot),
+        "source": "CGWindowList + screencapture",
+        "stats": accepted.get("stats"),
+        "similarity": accepted.get("similarity"),
+        "attempts": attempts,
+        "windows": windows,
+    }
+
+
+def _read_operations(output: Path) -> list[dict]:
+    path = output / "operations.jsonl"
+    if not path.is_file():
+        return []
+    rows: list[dict] = []
+    try:
+        for line in path.read_text().splitlines():
+            if line.strip():
+                row = json.loads(line)
+                if isinstance(row, dict):
+                    rows.append(row)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return []
+    return rows
+
+
+def _gl_vertex_block(output: Path, reference: dict) -> dict:
+    """Extract the live slot-0 vertex payload that fed the selected draw.
+
+    The payload is the engine's own _GfxCreateVertexBuffer /
+    _GfxUpdateVertexBuffer argument, linked through the _GfxSetVertexBuffers
+    resource ids observed in the same session. It is copied out with a digest
+    so the comparator can reject unmatched inputs.
+    """
+    if not reference.get("ok"):
+        return {"status": "missing", "ok": False, "reason": "no reference draw"}
+    draw = reference.get("draw") or {}
+    draw_call = draw.get("call_id")
+    if not isinstance(draw_call, int):
+        return {"status": "missing", "ok": False, "reason": "draw call id is absent"}
+    rows = _read_operations(output)
+    if not rows:
+        return {"status": "missing", "ok": False, "reason": "operations.jsonl is absent"}
+
+    def before(row: dict) -> bool:
+        call = row.get("call_id")
+        return isinstance(call, int) and call < draw_call
+
+    binds = [
+        row for row in rows
+        if row.get("symbol") == "_GfxSetVertexBuffers" and before(row)
+    ]
+    if not binds:
+        return {"status": "missing", "ok": False, "reason": "no vertex bind before the draw"}
+    bind = max(binds, key=lambda row: row["call_id"])
+    ids = bind.get("ids")
+    if not isinstance(ids, list) or not ids:
+        return {"status": "invalid", "ok": False, "reason": "bind record has no resource ids"}
+    slot0 = ids[0]
+    candidates = [
+        row for row in rows
+        if row.get("resource_id") == slot0
+        and row.get("symbol") in ("_GfxCreateVertexBuffer", "_GfxUpdateVertexBuffer")
+        and before(row)
+        and (row.get("payload") or {}).get("file")
+    ]
+    if not candidates:
+        return {
+            "status": "missing",
+            "ok": False,
+            "reason": f"no payload for bound resource {slot0}",
+            "resource_id": slot0,
+        }
+    source = max(candidates, key=lambda row: row["call_id"])
+    payload = source.get("payload") or {}
+    path = output / str(payload.get("file") or "")
+    if not path.is_file():
+        return {"status": "missing", "ok": False, "reason": "vertex payload file is absent"}
+    data = path.read_bytes()
+    if len(data) != payload.get("size"):
+        return {"status": "invalid", "ok": False, "reason": "vertex payload size mismatch"}
+    stride = source.get("stride")
+    count = source.get("count")
+    if not isinstance(stride, int) or not isinstance(count, int):
+        return {"status": "invalid", "ok": False, "reason": "vertex layout is not recorded"}
+    if stride <= 0 or count <= 0 or len(data) != stride * count:
+        return {"status": "invalid", "ok": False, "reason": "vertex payload does not match its layout"}
+    raw_name = "gl-reference-vertex.bin"
+    (output / raw_name).write_bytes(data)
+    digest = hashlib.sha256(data).hexdigest()
+    block = {
+        "schema": "gfx-gl-vertex/v1",
+        "status": "ok",
+        "ok": True,
+        "reason": "",
+        "raw_file": raw_name,
+        "bytes": len(data),
+        "sha256": digest,
+        "hex": data.hex(),
+        "stride": stride,
+        "count": count,
+        "resource_id": slot0,
+        "call_id": source.get("call_id"),
+        "symbol": source.get("symbol"),
+        "source_record": {
+            "file": "operations.jsonl",
+            "call_id": source.get("call_id"),
+            "symbol": source.get("symbol"),
+            "payload_file": payload.get("file"),
+            "payload_sha256": digest,
+        },
+    }
+    (output / "gl-reference-vertex.json").write_text(json.dumps(block, indent=2) + "\n")
+    return block
+
+
+def _presentation_marker(output: Path) -> dict:
+    marker = output / "presented.json"
+    if not marker.is_file():
+        return {}
+    try:
+        value = json.loads(marker.read_text())
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _presentation_descriptor(output: Path, occurrence: int = 1) -> tuple[Path, dict]:
+    """Resolve the requested after-present descriptor, marker first."""
+    marker = _presentation_marker(output)
+    name = marker.get("checkpoint_file")
+    if not isinstance(name, str) or not name:
+        name = f"checkpoint-after-present-{occurrence}.json"
+    path = output / name
+    if not path.is_file():
+        path = output / f"checkpoint-after-present-{occurrence}.json"
+    if not path.is_file():
+        return path, {}
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return path, {}
+    if not isinstance(data, dict):
+        return path, {}
+    if data.get("occurrence") not in (None, occurrence):
+        return path, {}
+    marker_occurrence = marker.get("occurrence", 1)
+    if marker_occurrence not in (None, occurrence):
+        return path, {}
+    return path, data
+
+
+def _presentation_block(output: Path, occurrence: int = 1,
+                        similarity_threshold: float = 18.0) -> dict:
+    path, data = _presentation_descriptor(output, occurrence)
+    marker = output / "presented.json"
+    if not path.is_file():
+        return {
+            "status": "missing",
+            "presented": False,
+            "reason": "no after-present checkpoint descriptor",
+            "marker": marker.is_file(),
+            "occurrence": occurrence,
+        }
+    if not data:
+        return {
+            "status": "invalid",
+            "presented": False,
+            "reason": "checkpoint descriptor is unreadable or for another occurrence",
+            "marker": marker.is_file(),
+            "occurrence": occurrence,
+        }
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return {"status": "invalid", "presented": False, "reason": str(exc)}
+    presentation = data.get("presentation") or {}
+    capture = data.get("capture") or {}
+    raw = output / str(capture.get("raw_file") or "")
+    problems = []
+    if presentation.get("shown") is not True:
+        problems.append("presentation is not marked as shown")
+    if presentation.get("drawable_readback") is not True:
+        problems.append("no drawable readback proves the presented image")
+    if not raw.is_file():
+        problems.append("drawable payload is absent")
+    elif raw.stat().st_size != capture.get("raw_bytes"):
+        problems.append("drawable payload size does not match its declaration")
+    elif _file_sha256(raw) != capture.get("raw_sha256"):
+        problems.append("drawable payload sha256 does not match its declaration")
+    gpu = data.get("gpu") or {}
+    if gpu.get("completed") is not True:
+        problems.append("present command did not complete")
+    if not marker.is_file():
+        problems.append("presented.json marker is absent")
+    return {
+        "status": "ok" if not problems else "invalid",
+        "presented": not problems,
+        "reason": "; ".join(problems),
+        "checkpoint": str(path),
+        "occurrence": occurrence,
+        "raw_file": capture.get("raw_file"),
+        "raw_sha256": capture.get("raw_sha256"),
+        "extent": [
+            (data.get("target") or {}).get("width"),
+            (data.get("target") or {}).get("height"),
+        ],
+        "origin": (data.get("target") or {}).get("origin"),
+        "presentation": presentation,
+        "draw": data.get("draw"),
+        "marker": marker.is_file(),
+        "window_number": presentation.get("window_number"),
+    }
+
+
+def _logical_capture_block(output: Path, identity: dict) -> dict:
+    path = output / "metal-logical.json"
+    if not path.is_file():
+        return {"status": "missing", "ok": False, "reason": "no logical capture"}
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return {"status": "invalid", "ok": False, "reason": str(exc)}
+    problems = []
+    if data.get("schema") != "gfx-metal-logical/v1":
+        problems.append("unexpected schema")
+    provenance = data.get("provenance") or {}
+    if provenance.get("executable_sha256") != identity.get("executable_sha256"):
+        problems.append("executable identity does not match the pinned launch")
+    capture = data.get("capture") or {}
+    raw = output / str(capture.get("raw_file") or "")
+    target = data.get("target") or {}
+    if not raw.is_file():
+        problems.append("payload is absent")
+    else:
+        if raw.stat().st_size != capture.get("raw_bytes"):
+            problems.append("payload size does not match its declaration")
+        elif _file_sha256(raw) != capture.get("raw_sha256"):
+            problems.append("payload sha256 does not match its declaration")
+        expected = (target.get("width") or 0) * (target.get("height") or 0) * 4
+        if capture.get("raw_bytes") != expected:
+            problems.append("payload is not width*height*4")
+    if (data.get("gpu") or {}).get("completed") is not True:
+        problems.append("GPU command completion is not recorded")
+    if target.get("origin") != "top_left":
+        problems.append("image origin is not declared as top_left")
+    return {
+        "status": "ok" if not problems else "invalid",
+        "ok": not problems,
+        "reason": "; ".join(problems),
+        "path": str(path),
+        "raw_file": capture.get("raw_file"),
+        "raw_sha256": capture.get("raw_sha256"),
+        "target": target,
+        "draw": data.get("draw"),
+    }
 
 
 def _write_png(path: Path, bgra: bytes, width: int, height: int) -> None:
@@ -741,10 +1544,15 @@ def _inspect(output: Path) -> dict:
     }
 
 
-def _read_status(output: Path) -> dict:
+def _read_status(output: Path, occurrence: int | None = None) -> dict:
     """Aggregate the explicit success levels from real artifact files."""
     checkpoint = None
-    for path in _checkpoint_files(output):
+    files = _checkpoint_files(output)
+    if occurrence is not None:
+        exact = output / f"checkpoint-after-present-{occurrence}.json"
+        if exact.is_file():
+            files = [exact] + [path for path in files if path != exact]
+    for path in files:
         try:
             value = json.loads(path.read_text())
         except json.JSONDecodeError:
@@ -880,6 +1688,57 @@ def probe(args: argparse.Namespace) -> int:
             Path(args.qualified_sources).expanduser().resolve()
         ),
     }
+    if args.checkpoint == "after-present":
+        env["EU4_GFX_LOGICAL_CAPTURE"] = "1"
+        env["EU4_GFX_DRAW_SKIP_UNSUPPORTED"] = "1"
+        env["EU4_GFX_CHECKPOINT_HOLD_MS"] = str(args.hold_ms)
+    window_evidence: dict = {}
+    requested_occurrence = args.occurrence
+    similarity_threshold = args.similarity_threshold
+    if similarity_threshold is None:
+        similarity_threshold = 18.0
+        if args.checkpoint == "after-present":
+            policy_path = ROOT / "analysis" / "m4" / "comparison-policy.json"
+            try:
+                similarity_threshold = float(
+                    json.loads(policy_path.read_text()).get(
+                        "presentation_similarity_max_mean_error", 18.0
+                    )
+                )
+            except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+                similarity_threshold = 18.0
+
+    def while_running(run_dir: Path, game) -> bool:
+        if window_evidence:
+            return True
+        descriptor, data = _presentation_descriptor(run_dir, requested_occurrence)
+        if not data:
+            return False
+        marker = _presentation_marker(run_dir)
+        preferred = marker.get("window_number")
+        target = data.get("target") or {}
+        width = target.get("width")
+        height = target.get("height")
+        raw = run_dir / str((data.get("capture") or {}).get("raw_file") or "")
+        # A fullscreen Space transition and the Core Animation commit can take
+        # a few seconds; a capture during the transition is a uniform gray
+        # placeholder. Try several times and keep the first informative image.
+        window = None
+        for delay in (2.0, 2.0, 3.0):
+            time.sleep(delay)
+            window = _window_capture(
+                run_dir,
+                game.pid,
+                drawable=raw,
+                preferred_window=preferred if isinstance(preferred, int) and preferred > 0 else None,
+                drawable_size=(width, height) if isinstance(width, int) and isinstance(height, int) else None,
+                similarity_threshold=similarity_threshold,
+            )
+            if _window_retry_should_stop(window):
+                break
+        window_evidence["window"] = window
+        return True
+
     metadata = None
     error = None
     try:
@@ -892,10 +1751,15 @@ def probe(args: argparse.Namespace) -> int:
             metal_init=True,
             env_overrides=env,
             strict=False,
+            while_running=while_running if args.checkpoint == "after-present" else None,
         )
     except Exception as exc:  # noqa: BLE001
         error = str(exc)
-    status = _read_status(output) if output.is_dir() else {}
+    status = (
+        _read_status(output, occurrence=args.occurrence if args.checkpoint == "after-present" else None)
+        if output.is_dir()
+        else {}
+    )
     # The launcher creates the directory; it may be absent only on an early
     # build/preflight failure, where the launch is still accounted for.
     if output.is_dir():
@@ -909,6 +1773,49 @@ def probe(args: argparse.Namespace) -> int:
             except (OSError, ValueError) as exc:
                 png = None
                 error = error or f"PNG preview failed: {exc}"
+    presentation = {"status": "not_requested", "presented": None}
+    logical_capture = {"status": "not_requested", "ok": None}
+    if args.checkpoint == "after-present":
+        presentation = _presentation_block(
+            output, args.occurrence, similarity_threshold
+        )
+        window = window_evidence.get("window") or {
+            "status": "missing",
+            "reason": "the live window capture did not run",
+        }
+        presentation["window"] = window
+        similarity = window.get("similarity") or {}
+        looks_right = _similarity_ok(similarity, similarity_threshold)
+        presentation["visible"] = bool(
+            presentation.get("presented")
+            and window.get("status") == "captured"
+            and window.get("shown")
+            and looks_right
+        )
+        if window.get("status") == "captured" and not looks_right:
+            presentation["reason"] = (
+                "screenshot comparison "
+                + ("unavailable" if similarity.get("status") != "compared"
+                   else f"exceeds threshold: {similarity.get('mean_abs_error')}")
+            )
+        logical_capture = _logical_capture_block(output, identity)
+        (output / "presentation-evidence.json").write_text(
+            json.dumps(
+                {
+                    "schema": "gfx-presentation-evidence/v1",
+                    "presentation": presentation,
+                    "logical_capture": logical_capture,
+                    "provenance": {
+                        "executable": identity["executable"],
+                        "executable_sha256": identity["executable_sha256"],
+                        "library_sha256": env.get("EU4_GFX_LIBRARY_SHA256"),
+                        "session": session,
+                    },
+                },
+                indent=2,
+            )
+            + "\n"
+        )
     reference = {"status": "not_provided"}
     if args.reference:
         reference = _compare_reference(
@@ -928,7 +1835,20 @@ def probe(args: argparse.Namespace) -> int:
                 except OSError:
                     continue
     overall = "unavailable"
-    if status.get("pixels_captured"):
+    if args.checkpoint == "after-present":
+        if presentation.get("visible") and logical_capture.get("ok"):
+            overall = "presented"
+        elif presentation.get("presented"):
+            overall = "presented_unverified"
+        elif status.get("pixels_captured"):
+            overall = "captured"
+        elif status.get("draw_reached"):
+            overall = "draw_reached"
+        elif status.get("unsupported"):
+            overall = "unsupported"
+        elif error:
+            overall = "failed"
+    elif status.get("pixels_captured"):
         overall = "captured"
     elif status.get("draw_reached"):
         overall = "draw_reached"
@@ -976,6 +1896,8 @@ def probe(args: argparse.Namespace) -> int:
             "files": file_hashes,
         },
         "reference": reference,
+        "presentation": presentation,
+        "logical_capture": logical_capture,
         "error": error,
         "metadata": metadata,
     }
@@ -988,6 +1910,14 @@ def probe(args: argparse.Namespace) -> int:
         status="completed" if status.get("pixels_captured") else f"failed: {overall}",
     )
     print(json.dumps(result, indent=2))
+    if args.checkpoint == "after-present":
+        if overall == "presented":
+            return EXIT_COMPLETE
+        if overall in ("presented_unverified", "captured", "draw_reached"):
+            return EXIT_INCOMPLETE
+        if overall == "unsupported":
+            return EXIT_LIMIT
+        return EXIT_UNAVAILABLE
     if status.get("pixels_captured"):
         return EXIT_COMPLETE
     if status.get("unsupported"):
@@ -1096,6 +2026,7 @@ def _parser() -> argparse.ArgumentParser:
     cap.add_argument("--duration", type=float)
     cap.add_argument("--until-target-draw", action="store_true")
     cap.add_argument("--caller-rva", type=_rva_value)
+    cap.add_argument("--gl-reference", action="store_true")
     cap.add_argument("--timeout", type=float, default=120.0)
     cap.add_argument("--output", required=True)
     cap.add_argument("--authorize-live", action="store_true")
@@ -1123,6 +2054,8 @@ def _parser() -> argparse.ArgumentParser:
     prb.add_argument("--checkpoint", required=True, choices=sorted(CHECKPOINTS))
     prb.add_argument("--caller-rva", type=_rva_value)
     prb.add_argument("--occurrence", type=int, default=1)
+    prb.add_argument("--hold-ms", type=int, default=8000)
+    prb.add_argument("--similarity-threshold", type=float, default=None)
     prb.add_argument("--timeout", type=float, default=120.0)
     prb.add_argument("--output", required=True)
     prb.add_argument("--campaign-run-root")

@@ -2,6 +2,38 @@
 
 Authoritative summary of what is established, qualified, and in flight. Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
 
+## M4 — original-GL reference and Metal presentation (2026-11-12)
+
+Qualified by the M4 checker. The authentic Simple loading draw was captured
+from the original OpenGL renderer, the corresponding reconstructed Metal
+output is pixel-identical under a fixed exact policy, and the reconstructed
+frame is independently observable in the real EU4 window.
+[Qualification report](../analysis/m4/qualification-report.md),
+[checker](../campaigns/eu4-m4/accept.py), [policy](../analysis/m4/comparison-policy.json).
+
+- **Original-GL reference.** `_GfxDraw` at caller `0xedfcd1`, mode 5, 4 vertices,
+  1728×1117 BGRA8 from `GL_BACK`, `glFinish`+`glReadPixels` clean, raw SHA-256
+  `69d41a88…`; an independent launch produced the same hash. The live slot-0
+  vertex payload is captured and bound to the draw.
+- **Reconstructed Metal output.** The live route renders the same draw at the
+  engine's logical extent with the same encoder and the same live vertex
+  payload (`f13dea22…`), GPU-completed (raw SHA-256 `c668b054…`).
+- **Comparison.** `automation.gfx_compare` reports `pass` with 0 differing
+  pixels out of 1,930,176; the only normalization is the declared lower-left to
+  top-left row decode.
+- **Presentation.** `presentDrawable` completed, the destination drawable
+  contains the image (`6921c242…`), and the main-runloop evidence hold lets
+  Core Animation commit. An independent window-server capture of the EU4 window
+  (`window-21765.png`) shows the loading frame with mean |Δ| 1.311/255 against
+  the drawable.
+- **Checker.** The M4 checker fails closed on missing reference, GPU,
+  presentation, provenance or regression evidence and pins the evidence manifest
+  digest. It recomputes screenshot/drawable similarity and validates the
+  after-present checkpoint; its verdict on the recorded evidence is `pass`.
+- **Readback safety.** The original-GL observer saves/restores pixel-pack state
+  and rejects unsupported framebuffer configurations; the final live capture
+  records `restored=true`.
+
 ## Latest milestone — authentic Simple draw on Metal (2026-11-12)
 
 Merged in [PR #185](https://github.com/HagbardCel/eu4-mac-perf/pull/185). Evidence: [live Simple draw](../analysis/reconstruction/simple-loading-draw/live-evidence.md); reusable workflow: [live graphics experiments](live-gfx-experiments.md).

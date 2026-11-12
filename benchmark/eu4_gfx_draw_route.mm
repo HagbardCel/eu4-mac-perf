@@ -2,10 +2,29 @@
 
 #import "eu4_gfx_checkpoint.h"
 #import "eu4_gfx_init.h"
+#import "eu4_gfx_logical_capture.h"
 #import "eu4_metal_events.h"
 
 #import <Metal/Metal.h>
 #import <string.h>
+
+static eu4_gfx_simple_draw_state g_last_state;
+static uint64_t g_last_caller_rva;
+static int g_have_last;
+
+int eu4_gfx_draw_route_last(eu4_gfx_simple_draw_state *state,
+                            uint64_t *caller_rva) {
+    if (!g_have_last) {
+        return 0;
+    }
+    if (state != NULL) {
+        *state = g_last_state;
+    }
+    if (caller_rva != NULL) {
+        *caller_rva = g_last_caller_rva;
+    }
+    return 1;
+}
 
 static void *load_ptr(const uint8_t *base, size_t offset) {
     void *value = NULL;
@@ -143,7 +162,16 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
     int pid = 0;
     eu4_metal_events_describe((const void *)(uintptr_t)raw->retaddr, NULL, 0,
                               &caller_rva, &inside, &thread, &pid);
+    if (state != NULL) {
+        g_last_state = *state;
+        g_last_caller_rva = caller_rva;
+        g_have_last = 1;
+    }
     eu4_gfx_draw_route_record("draw-route.json", "live", "", state, raw, caller_rva);
+    (void)eu4_gfx_logical_capture_from_env(
+        (__bridge void *)backend.device, (__bridge void *)backend.queue,
+        (const void *)handle, state != NULL ? state->count : (int32_t)raw->rsi,
+        (int32_t)raw->rdx, &inputs, state, caller_rva);
     eu4_gfx_checkpoint_after_draw((void *)master, raw, state);
     return EU4_GFX_DRAW_ROUTE_HANDLED;
 }

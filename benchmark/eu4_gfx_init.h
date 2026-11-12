@@ -99,6 +99,10 @@ void *eu4_gfx_default_depth_stencil(void *device, const uint8_t *desc);
 
 /* Weak in the host. The boot dylib's copy returns the child-view layer. */
 void *eu4_metal_child_layer(void);
+void eu4_metal_ensure_visible(void);
+void eu4_metal_window_diagnostics(char *out, size_t capacity);
+int eu4_metal_window_state(uint64_t *number, int *visible, int *occluded,
+                           double *width, double *height, double *scale);
 
 void eu4_gfx_set_layer(void *layer);
 void eu4_gfx_set_image(uint8_t *image, void **master_slot);
@@ -145,7 +149,16 @@ const void *eu4_gfx_current_present_caller(void);
    leave these unset and pay one null check per clear/present. */
 typedef void (*eu4_gfx_checkpoint_hook)(void *master, const void *caller);
 void eu4_gfx_set_checkpoint_hooks(eu4_gfx_checkpoint_hook after_clear,
-                                  eu4_gfx_checkpoint_hook before_present);
+                                  eu4_gfx_checkpoint_hook before_present,
+                                  eu4_gfx_checkpoint_hook after_present);
+
+/* The checkpoint module owns the destination buffer; present fills it after a
+   successful drawable blit. Diagnostic-only. */
+void eu4_gfx_present_capture_set(void *dest, size_t capacity);
+
+/* Diagnostic re-present of the last game target to a fresh drawable, without
+   depending on engine present state. Returns 1 on completion. */
+int eu4_gfx_present_diagnostic(void *master);
 
 /* Select game-window mode before _GfxInit. metal_init calls this. Hosts that
    omit it stay on the diagnostic offscreen path. */

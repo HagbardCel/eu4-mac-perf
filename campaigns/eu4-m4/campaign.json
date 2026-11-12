@@ -1,0 +1,21 @@
+{
+  "id": "eu4-m4",
+  "objective": "objective.md",
+  "runtime": "dsh",
+  "workspace": {
+    "mode": "repo"
+  },
+  "accept": [
+    "python3",
+    "accept.py"
+  ],
+  "max_rounds": 12,
+  "max_seconds": 10800,
+  "accept_timeout_seconds": 600,
+  "verification_manifest": "analysis/m4/evidence-manifest.json",
+  "evidence_manifest_sha256": "2036dcffa5ca70b6c6bb6da77009bb7c7abbefcc609e8892312cda8786de2d2c",
+  "live_observation": {
+    "launch_limit": 1,
+    "deadline_seconds": 180
+  }
+}
