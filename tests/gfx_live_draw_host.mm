@@ -455,6 +455,38 @@ int main(int argc, char **argv) {
     }
     memcpy(master + EU4_GFX_MASTER_VERTEX_HEADER, &saved, sizeof saved);
 
-    printf("live_route=ok clear_draw=1 two_draws=1 present=1 transition=1 unsupported=1\n");
+    /* GPU command failure path: submit one more draw, then make the next
+       drain report a failed command. The backend must clear ownership, mark
+       the contents unknown, and poison itself rather than declare success. */
+    eu4_gfx_set_shader(&ctx, shader);
+    eu4_gfx_set_textures(&ctx, 1, &green, 1, 0, NULL);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("failure-path draw was not handled");
+    }
+    eu4_gfx_test_fail_next_game_drain(1);
+    uint8_t *failed_pixels = (uint8_t *)malloc(length);
+    size_t failed_got = 0;
+    uint32_t failed_w = 0, failed_h = 0, failed_stride = 0;
+    uint64_t failed_generation = 0;
+    int failed_status = -1;
+    eu4_gfx_clear_status failed_read = eu4_gfx_read_game_target(
+        g_master, failed_pixels, length, &failed_got, &failed_w, &failed_h,
+        &failed_stride, &failed_generation, &failed_status);
+    free(failed_pixels);
+    if (failed_read != EU4_GFX_CLEAR_FAILED) {
+        fail("injected GPU failure was not reported");
+    }
+    if (!backend.poisoned || backend.pendingGameCommand != nil ||
+        backend.gameContentsKnown || backend.readyForPresent) {
+        fail("GPU failure did not clean up backend ownership/readiness");
+    }
+    if (eu4_gfx_read_game_target(g_master, (void *)quad, sizeof quad, &failed_got,
+                                 &failed_w, &failed_h, &failed_stride,
+                                 &failed_generation, &failed_status) !=
+        EU4_GFX_CLEAR_UNSUPPORTED) {
+        fail("poisoned backend accepted another readback");
+    }
+
+    printf("live_route=ok clear_draw=1 two_draws=1 present=1 transition=1 unsupported=1 gpu_failure=1\n");
     return 0;
 }

@@ -137,6 +137,7 @@ static int g_fail_offscreen_alloc;
 static int g_fail_game_alloc;
 static int g_fail_next_drawable;
 static int g_fail_present_staging_alloc;
+static int g_fail_next_game_drain;
 static void *g_present_drawable;
 static void *g_present_readback;
 static size_t g_present_readback_cap;
@@ -335,6 +336,8 @@ void eu4_gfx_test_fail_game_alloc(int on) { g_fail_game_alloc = on; }
 void eu4_gfx_test_fail_next_drawable(int on) { g_fail_next_drawable = on; }
 
 void eu4_gfx_test_fail_present_staging_alloc(int on) { g_fail_present_staging_alloc = on; }
+
+void eu4_gfx_test_fail_next_game_drain(int on) { g_fail_next_game_drain = on; }
 
 void eu4_gfx_test_set_present_drawable(void *texture) { g_present_drawable = texture; }
 
@@ -1279,6 +1282,10 @@ static eu4_gfx_clear_status drain_pending_game(__unsafe_unretained EU4GfxBackend
     uint64_t generation = backend.pendingGameGeneration;
     [command waitUntilCompleted];
     MTLCommandBufferStatus status = command.status;
+    if (g_fail_next_game_drain) {
+        g_fail_next_game_drain = 0;
+        status = MTLCommandBufferStatusError;
+    }
     if (command_status != NULL) {
         *command_status = (int)status;
     }

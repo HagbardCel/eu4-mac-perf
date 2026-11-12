@@ -60,6 +60,7 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertIn("clear_draw=1", ran.stdout)
         self.assertIn("two_draws=1", ran.stdout)
         self.assertIn("present=1", ran.stdout)
+        self.assertIn("gpu_failure=1", ran.stdout)
 
     def test_partial_scissor_clear_fails_closed_with_reason(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

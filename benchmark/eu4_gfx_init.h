@@ -117,6 +117,9 @@ void eu4_gfx_test_fail_game_alloc(int on);
 void eu4_gfx_test_fail_next_drawable(int on);
 /* When non-zero, present staging texture allocation fails once. */
 void eu4_gfx_test_fail_present_staging_alloc(int on);
+/* Test-only: report the next drained game command as a GPU failure, without
+   changing the real command buffer. Exercises the failure/cleanup branch. */
+void eu4_gfx_test_fail_next_game_drain(int on);
 /* Borrowed MTLTexture used as the present destination instead of nextDrawable. */
 void eu4_gfx_test_set_present_drawable(void *texture);
 /* When dest is non-null, present blits the destination into staging and copies
