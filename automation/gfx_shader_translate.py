@@ -185,6 +185,20 @@ LEGACY_TEXTURE_FUNCTIONS = [
 ]
 
 
+def compiler_input(source: str) -> str:
+    """The exact bytes the engine passes to _GfxAddVertexShader/_GfxAddPixelShader.
+
+    The GL driver-visible source (glGetShaderSource) carries the
+    GL_ARB_shader_texture_lod extension line; BuildGLSL hands the compiler the
+    NO_SHADER_TEXTURE_LOD define instead. The live shader cache must be keyed by
+    that compiler input, not by the driver copy.
+    """
+    return source.replace(
+        "#extension GL_ARB_shader_texture_lod : enable",
+        "#define NO_SHADER_TEXTURE_LOD",
+    )
+
+
 def _stage_kind(stage: str) -> str:
     if stage == "vertex":
         return "vert"
@@ -437,6 +451,10 @@ def translate_stage(
     msl = msl_path.read_text()
     return {
         "stage": stage,
+        "source_sha256": sha,
+        "compiler_sha256": hashlib.sha256(
+            compiler_input(source_text).encode()
+        ).hexdigest(),
         "attribute_locations": complete_locations if stage == "vertex" else {},
         "glsl_file": glsl_path.name,
         "spv_file": spv_path.name,
@@ -619,6 +637,8 @@ def write_shader_cache(report: dict, out_dir: Path) -> dict:
             hashes[stage_name] = source_sha
             record = {
                 "stage": stage_name,
+                "source_sha256": source_sha,
+                "compiler_sha256": stage.get("compiler_sha256"),
                 "msl_file": stage.get("msl_file"),
                 "msl_entry": stage.get("msl_entry"),
                 "msl_uniform_buffer": stage.get("msl_uniform_buffer"),
@@ -628,11 +648,13 @@ def write_shader_cache(report: dict, out_dir: Path) -> dict:
                 "uniforms": stage.get("uniforms") or [],
                 "samplers": stage.get("samplers") or [],
             }
-            if source_sha:
-                stages[source_sha] = record
+            key_sha = stage.get("compiler_sha256") or source_sha
+            if key_sha:
+                stages[key_sha] = record
             entry["stages"][stage_name] = record
         key = "|".join(
-            str(hashes.get(stage_name) or "") for stage_name in ("vertex", "pixel")
+            str((entry["stages"].get(stage_name) or {}).get("compiler_sha256") or "")
+            for stage_name in ("vertex", "pixel")
         )
         if key.strip("|"):
             programs[key] = entry

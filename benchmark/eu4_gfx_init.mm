@@ -1,5 +1,6 @@
 #import "eu4_gfx_buffers.h"
 #import "eu4_gfx_init.h"
+#import "eu4_gfx_shader.h"
 #import "eu4_gfx_logical_capture.h"
 #import "eu4_gfx_checkpoint.h"
 #import "eu4_metal_events.h"
@@ -1112,6 +1113,24 @@ void *eu4_gfx_init(void *handle, uint8_t *success) {
     g_succeeded = 1;
     g_master = master;
     g_phase = 2;
+    {
+        const char *cache = getenv("EU4_GFX_SHADER_CACHE");
+        if (cache != NULL && cache[0] != 0) {
+            int loaded = eu4_gfx_shader_load_cache(cache);
+            char body[256];
+            int length = snprintf(
+                body, sizeof body,
+                "{\"schema\":\"gfx-shader-cache-load/v1\",\"path\":\"%s\","
+                "\"stages\":%d,\"pid\":%d}\n",
+                cache, loaded, (int)getpid());
+            if (length > 0 && (size_t)length < sizeof body) {
+                (void)eu4_metal_events_write("shader-cache-load.json", body);
+            }
+            if (loaded < 0 && g_succeeded) {
+                stop_now("after_init", "_GfxInit", "shader-cache", __builtin_return_address(0));
+            }
+        }
+    }
     eu4_gfx_buffers_bind_thread();
     EU4GfxBackend *backend = (__bridge EU4GfxBackend *)load_ptr(master, 0x180);
     int wrote = write_success(master, backend);
