@@ -697,7 +697,14 @@ static void test_backend(void) {
     if (load_at(master, 0x188) != expect_limit) {
         fail("max texture");
     }
-    for (int i = 4; i < 11; i++) {
+    /* The authentic OpenGL caps word on this machine is 0040000001010101:
+       byte 4 (0x18c) is 1, which drives the engine's POW2 decision and the
+       live loading-quad UVs. 0x18e stays 0 because the Metal backend does not
+       implement ARB_shader_texture_lod. */
+    if (((uint8_t *)master)[0x18c] != 1) {
+        fail("capability POW2 byte");
+    }
+    for (int i = 5; i < 11; i++) {
         if (((uint8_t *)master)[0x188 + i] != 0) {
             fail("capability span was not otherwise zero");
         }

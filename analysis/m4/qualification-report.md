@@ -181,9 +181,13 @@ manifest whose digest does not match the campaign pin.
 ## Offline regressions
 
 `tests.test_gfx_compare`, `tests.test_gl_reference`, `tests.test_live_gfx_probe`,
-the Metal boot/HiDPI/simple-reference suites and the full repository suite
-completed with exit 0. The M4 checker itself runs the comparator and the
-graphics tests on every validation.
+the M4 checker tests and the Metal/live-draw/HiDPI/simple-reference suites pass
+(90 targeted tests). DSH plugin tests pass (34). The tracked full suite is run
+with two local-only exclusions documented with the commit: an untracked
+`tests/test_gfx_l32b_e2e.py` that imports a missing module, and a partially
+present untracked `results/20261006T193739Z-submission-experiment` directory
+without its manifest. Both are absent in CI. The M4 checker runs the comparator
+and graphics tests on every validation.
 
 ## Known limitations / deferred
 
