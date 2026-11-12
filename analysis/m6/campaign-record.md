@@ -227,3 +227,34 @@ full loading-to-menu traversal is still blocked by one or more texture
 descriptions or a silent backend exit; the texture trace identifies the last
 successful initialization. Render targets, sampler decode, non-default
 raster/blend descriptors and the depth attachment remain unimplemented.
+
+## Next concrete blocker: render-target texture initialization (2026-11-12)
+
+The startup now progresses past all previously rejected texture formats. The
+latest diagnostic run stops at:
+
+```
+glGenTextures  caller_rva 0x15ec938  object_got 64
+```
+
+RVA `0x15ec938` is inside `_GfxInitializeRenderTargetTexture` (0x15ec8e2), which
+the Metal backend does not replace. The original creates the engine's
+render-target colour texture with GL calls (glGenTextures, glBindTexture,
+glTexImage2D) using `GetOpenGLTextureFormat`; the Metal path needs the same
+entry reconstructed: create an MTLTexture with
+`MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead`, store it in
+`backend.textures` for the header, and write the engine-visible header fields.
+
+Also confirmed and fixed in this round: the texture staging table was 16
+entries but cube maps can carry up to 96 face/level records, which smashed the
+stack for cube-bearing startups.
+
+Next steps:
+1. Reconstruct `_GfxInitializeRenderTargetTexture` (and the render-target object
+   creation path if separate) and map the target struct's colour attachment to
+   the created Metal texture.
+2. Make `_GfxSetRenderTarget` switch the current target, and `_GfxClear` clear
+   it.
+3. Depth attachment for the backbuffer and render targets.
+4. Sampler-state decode and non-default raster/blend descriptor support.
+5. Then three clean menu starts.
