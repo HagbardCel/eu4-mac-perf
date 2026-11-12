@@ -8,7 +8,7 @@
       "stage": "vertex",
       "sha256": "f70c85854b691cc256b8fac86ff085d1a357575657470d36de88b6729ba751cb",
       "length": 5213,
-      "effect": "simple-lua-Simple",
+      "effect": "simple-lua-Simple/asset-maincode-v0",
       "status": "qualified",
       "provenance": "Exact source observed at the live pinned EU4 _GfxAddVertexShader replacement on 2026-11-12 while approaching _GfxDraw caller RVA 0xedfcd1; source length recorded; exact SHA-256 admission, no marker admission."
     },
@@ -16,7 +16,7 @@
       "stage": "pixel",
       "sha256": "5c3933f415dfe7a9a437b97a40882fc7a6f27dbfde5a9000112820818fc2cbb6",
       "length": 4946,
-      "effect": "simple-lua-Simple",
+      "effect": "simple-lua-Simple/asset-maincode-v0",
       "status": "qualified",
       "provenance": "Exact source observed at the live pinned EU4 _GfxAddPixelShader replacement on 2026-11-12 while approaching _GfxDraw caller RVA 0xedfcd1; source length recorded; exact SHA-256 admission, no marker admission."
     }

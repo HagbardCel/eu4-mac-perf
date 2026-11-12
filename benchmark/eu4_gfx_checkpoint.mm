@@ -32,7 +32,7 @@ static void *load_ptr(const uint8_t *base, size_t offset) {
 }
 
 static int parse_uint(const char *text, uint64_t *out) {
-    if (text == NULL || text[0] == 0) {
+    if (text == NULL || text[0] == 0 || text[0] == '-') {
         return 0;
     }
     char *end = NULL;
@@ -49,7 +49,12 @@ void eu4_gfx_checkpoint_configure(const char *operation, uint64_t caller_rva,
                                   int stop_after_capture) {
     g_checkpoint = EU4_GFX_CHECKPOINT_NONE;
     g_caller_rva = caller_rva;
-    g_occurrence = occurrence > 0 ? occurrence : 1;
+    if (occurrence < 1) {
+        g_occurrence = 1;
+        g_dir[0] = 0;
+        return;
+    }
+    g_occurrence = occurrence;
     g_stop = stop_after_capture ? 1 : 0;
     memset(g_counts, 0, sizeof g_counts);
     g_dir[0] = 0;
@@ -73,6 +78,7 @@ void eu4_gfx_checkpoint_configure(const char *operation, uint64_t caller_rva,
 }
 
 int eu4_gfx_checkpoint_configure_from_env(void) {
+    g_checkpoint = EU4_GFX_CHECKPOINT_NONE;
     const char *operation = getenv("EU4_GFX_CHECKPOINT");
     const char *dir = getenv("EU4_GFX_CHECKPOINT_DIR");
     const char *caller = getenv("EU4_GFX_CHECKPOINT_CALLER_RVA");
@@ -83,12 +89,15 @@ int eu4_gfx_checkpoint_configure_from_env(void) {
     }
     uint64_t caller_rva = 0;
     uint64_t occurrence_value = 1;
-    if (caller != NULL && caller[0] != 0 && !parse_uint(caller, &caller_rva)) {
+    if (caller != NULL && caller[0] != 0 &&
+        (!parse_uint(caller, &caller_rva) || caller_rva > 0xFFFFFFFFULL)) {
         return 0;
     }
-    if (occurrence != NULL && occurrence[0] != 0 &&
-        (!parse_uint(occurrence, &occurrence_value) || occurrence_value == 0)) {
-        return 0;
+    if (occurrence != NULL && occurrence[0] != 0) {
+        if (!parse_uint(occurrence, &occurrence_value) || occurrence_value < 1 ||
+            occurrence_value > 0x7FFFFFFFULL) {
+            return 0;
+        }
     }
     int stop_after = 1;
     if (stop != NULL && stop[0] != 0 && strcmp(stop, "0") == 0) {
@@ -105,6 +114,14 @@ int eu4_gfx_checkpoint_configure_from_env(void) {
 
 int eu4_gfx_checkpoint_enabled(void) {
     return g_checkpoint != EU4_GFX_CHECKPOINT_NONE;
+}
+
+int eu4_gfx_checkpoint_test_enabled(void) {
+    return g_checkpoint != EU4_GFX_CHECKPOINT_NONE;
+}
+
+int eu4_gfx_checkpoint_test_occurrence(void) {
+    return g_occurrence;
 }
 
 static int qualifies(int checkpoint, uint64_t caller_rva) {

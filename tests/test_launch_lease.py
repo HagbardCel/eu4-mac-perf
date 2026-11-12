@@ -138,6 +138,24 @@ class ProcessLeaseTests(unittest.TestCase):
         )
         self.assertEqual(pids, [222])
 
+    def test_injected_process_data_works_on_non_macos_hosts(self) -> None:
+        """Portable CI is Linux; explicit test data must not be platform-gated."""
+        env = LeaseEnvironment(self)
+        output = "  111 /usr/bin/other\n  222 /Applications/eu4.app/Contents/MacOS/eu4\n"
+        with patch.object(launch_lease.sys, "platform", "linux"):
+            resolved = launch_lease.manual_game_pids(
+                env.exe,
+                ps_output=output,
+                resolve_pid=lambda pid: str(env.exe) if pid == 222 else "/usr/bin/other",
+            )
+            self.assertEqual(resolved, [222])
+            # Without a resolver, the Linux path uses the recorded comm column.
+            comm = launch_lease.manual_game_pids(
+                env.exe, ps_output=f"  222 {env.exe}\n"
+            )
+            self.assertEqual(comm, [222])
+            self.assertEqual(launch_lease.process_executables(), [])
+
     def test_stale_json_body_is_not_a_lock(self) -> None:
         env = LeaseEnvironment(self)
         lease = env.acquire()
@@ -219,6 +237,49 @@ class AuthorizationTests(unittest.TestCase):
         self.assertFalse(second["created"])
         self.assertEqual(second["used"], 1)
         self.assertEqual(second["limit"], 2)
+        value = launch_ledger.load_ledger(self.ledger)
+        self.assertEqual(value["launches"][0]["status"], "completed")
+
+    def test_identical_reauthorization_preserves_receipts_and_remaining_budget(self) -> None:
+        self.authorize(limit=3)
+        token = self.claim()
+        launch_ledger.finish(self.ledger, token, pid=1, status="completed")
+        again = self.authorize(limit=3)
+        self.assertFalse(again["created"])
+        self.assertEqual(again["used"], 1)
+        value = launch_ledger.load_ledger(self.ledger)
+        self.assertEqual(len(value["launches"]), 1)
+        self.assertEqual(value["launches"][0]["status"], "completed")
+        self.assertEqual(value["limit"] - value["used"], 2)
+
+    def test_reauthorization_cannot_change_the_contract(self) -> None:
+        self.authorize(limit=3)
+        for overrides in (
+            {"limit": 4},
+            {"deadline_seconds": 61.0},
+            {"executable": {"path": str(self.root / "other"), "sha256": "pinned"}},
+            {"executable": {"path": str(self.root / "eu4"), "sha256": "other"}},
+            {"output_root": self.root / "other-output"},
+        ):
+            requested = {"limit": 3}
+            requested.update(overrides)
+            with self.assertRaises(launch_ledger.LedgerError) as caught:
+                self.authorize(**requested)
+            self.assertEqual(caught.exception.kind, "conflict")
+        value = launch_ledger.load_ledger(self.ledger)
+        self.assertEqual(value["used"], 0)
+
+    def test_an_unpinned_ledger_cannot_be_adopted_as_pinned(self) -> None:
+        self.ledger.parent.mkdir(parents=True, exist_ok=True)
+        launch_ledger.create_ledger(
+            self.ledger, workflow_id="wf-lease", limit=2, deadline_seconds=None
+        )
+        with self.assertRaises(launch_ledger.LedgerError) as caught:
+            self.authorize()
+        self.assertEqual(caught.exception.kind, "conflict")
+        value = launch_ledger.load_ledger(self.ledger)
+        self.assertNotIn("executable", value)
+        self.assertEqual(value["used"], 0)
 
 
 if __name__ == "__main__":

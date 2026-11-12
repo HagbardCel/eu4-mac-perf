@@ -62,6 +62,40 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertIn("present=1", ran.stdout)
         self.assertIn("gpu_failure=1", ran.stdout)
 
+    def test_native_checkpoint_occurrence_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            for value in ("0", "-1", "2147483648", "abc"):
+                env = os.environ.copy()
+                env.update({
+                    "EU4_GFX_CHECKPOINT": "after-draw",
+                    "EU4_GFX_CHECKPOINT_DIR": tmp,
+                    "EU4_GFX_CHECKPOINT_OCCURRENCE": value,
+                })
+                ran = subprocess.run([str(HOST), "--checkpoint-env"],
+                                     capture_output=True, text=True, check=False, env=env)
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                self.assertIn("enabled=0", ran.stdout, value)
+            for value in ("1", "2147483647"):
+                env = os.environ.copy()
+                env.update({
+                    "EU4_GFX_CHECKPOINT": "after-draw",
+                    "EU4_GFX_CHECKPOINT_DIR": tmp,
+                    "EU4_GFX_CHECKPOINT_OCCURRENCE": value,
+                })
+                ran = subprocess.run([str(HOST), "--checkpoint-env"],
+                                     capture_output=True, text=True, check=False, env=env)
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                self.assertIn(f"enabled=1 occurrence={value}", ran.stdout)
+
+    def test_clear_flag_mask(self) -> None:
+        for flags in (1, 7):
+            ran = self._run("--clear-flags", str(flags))
+            self.assertEqual(ran.returncode, 0, ran.stderr)
+            self.assertIn(f"clear_ok={flags}", ran.stdout)
+        for flags in (0, 8, 9):
+            ran = self._run("--clear-flags", str(flags))
+            self.assertEqual(ran.returncode, 2, ran.stderr)
+
     def test_partial_scissor_clear_fails_closed_with_reason(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ran = self._run("--clear-refusal", tmp)

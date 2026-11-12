@@ -121,28 +121,6 @@ def _describe_holder(holder: dict | None) -> str:
     return f"EU4 lease is held by pid {pid} ({worktree})"
 
 
-def _manual_pids_windows() -> list[tuple[int, str]]:
-    """Windows fallback: no libproc. Kept explicit rather than silently empty."""
-    try:
-        output = subprocess.run(
-            ["tasklist", "/FI", "IMAGENAME eq eu4.exe", "/FO", "CSV", "/NH"],
-            capture_output=True,
-            text=True,
-            check=False,
-        ).stdout
-    except OSError:
-        return []
-    found = []
-    for line in output.splitlines():
-        fields = [part.strip('"') for part in line.split('","')]
-        if len(fields) >= 2 and fields[0].lower().endswith("eu4.exe"):
-            try:
-                found.append((int(fields[1]), fields[0]))
-            except ValueError:
-                continue
-    return found
-
-
 def _process_executable_path(pid: int) -> str | None:
     if sys.platform != "darwin":
         return None
@@ -161,8 +139,6 @@ def process_executables() -> list[tuple[int, str]]:
     read-only system API. This removes the external process-listing dependency
     from the refusal path.
     """
-    if sys.platform == "win32":
-        return _manual_pids_windows()
     if sys.platform != "darwin":
         return []
     libproc = ctypes.CDLL("/usr/lib/libproc.dylib")
@@ -203,25 +179,34 @@ def manual_game_pids(
     tested without a real game process. With neither, enumeration is libproc
     (not ``ps``).
     """
-    if sys.platform not in ("darwin", "win32"):
-        return []
     wanted = str(_resolved(executable))
     if ps_output is None and resolve_pid is None:
+        if sys.platform != "darwin":
+            return []
         return [
             pid for pid, path in process_executables()
             if str(Path(path).resolve(strict=False)) == wanted
         ]
+
+    # Explicit test data / resolver: evaluate on every host so portable CI can
+    # exercise the matching contract without a real process table or libproc.
     if ps_output is None:
         ps_output = ""
-    resolve = resolve_pid or _process_executable_path
-    candidates = []
+    rows = []
     for line in ps_output.splitlines():
         match = re.match(r"\s*(\d+)\s+(.+)$", line)
-        if match is None:
-            continue
-        if resolve is _process_executable_path and Path(match.group(2).strip()).name != "eu4":
-            continue
-        candidates.append(int(match.group(1)))
+        if match is not None:
+            rows.append((int(match.group(1)), match.group(2).strip()))
+    if resolve_pid is not None:
+        resolve = resolve_pid
+        candidates = [pid for pid, _comm in rows]
+    elif sys.platform == "darwin":
+        resolve = _process_executable_path
+        candidates = [pid for pid, comm in rows if Path(comm).name == "eu4"]
+    else:
+        by_pid = {pid: comm for pid, comm in rows}
+        resolve = lambda pid: by_pid.get(pid)
+        candidates = [pid for pid, _comm in rows]
     found = []
     for pid in candidates:
         try:

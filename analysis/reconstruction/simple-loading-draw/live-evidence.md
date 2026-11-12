@@ -139,3 +139,39 @@ checkpoint terminated inside the route before the capture layer could write
 `draw-route.json`. The route now writes that record before the checkpoint can
 stop the process; the checkpoint JSON was already sufficient for the status,
 but the diagnostic is now complete for the next run.
+
+## Closure re-run (2026-11-12, `simple-04`)
+
+A fresh one-launch operator authorization was used after the PR #185 closure
+fixes. The probe still reached the authentic Simple draw and produced the same
+deterministic pixels as the original experiment:
+
+| Field | Value |
+| --- | --- |
+| Experiment | `.local/gfx-experiments/simple-04/after-draw-01` |
+| Checkpoint | `after-draw`, occurrence 1, caller `0xedfcd1` |
+| Executable SHA-256 | `b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d` |
+| Replacement library SHA-256 | `af85516de01bb6a5abe4383f18b1e32cb01725f343d0dce07cc1de9d32d0e5a8` |
+| Game PID | 63052 |
+| Status | `draw_reached`, `draw_encoded`, `gpu_completed`, `pixels_captured`; `presented=false`, `reference_matched=null` |
+| Raw BGRA SHA-256 | `8b8eed11e86f84b70e58e1ee58f4a2ccc31e52285add7cee63ebd9cc3fa4e524` (same as the earlier runs) |
+| Checkpoint JSON SHA-256 | `c8c28884ee0a7e21c5f97e1846540d20514a5796c68e23ab5c4380c034dfc5a0` |
+| PNG SHA-256 | `ced15735224d00d70d1e1ecff3e0f50781e5a26c5ed6f98628d068aed414624e` |
+| `draw-route.json` | present (`7a32293e…90b4`) |
+
+The new checkpoint records the live vertex bytes. They differ from the offline
+L3.2b packet in the V coordinate: the live quad uses
+`(u,v) = (0,0),(1,0),(0,0.75),(1,0.75)`, while the offline packet used 0..1.
+That explains the earlier CPU-reference mismatch.
+
+Using the live vertex UVs and the live matrix, an independent CPU bilinear
+reference from `load_0.dds` matches the captured frame on 23,808 sample points:
+0 samples differ by more than 4/255, maximum channel error 0.0031, mean 0.0014.
+This is an **independently calculated CPU reference**, not an original OpenGL
+capture, so the result still reports `reference_matched=null` rather than
+overstating OpenGL equivalence.
+
+The closure fixes exercised in this run: strict pinned authorization (no legacy
+counter fallback), stage-aware exact shader admission, the established clear
+flag mask (`flags=7`), generic probe caller handling with an explicit
+`--caller-rva`, and the final `draw-route.json`/`vertex_hex` diagnostics.

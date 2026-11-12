@@ -27,9 +27,20 @@ extern "C" {
 /* Max number of exact source hashes admitted for Simple (VS+PS variants). */
 #define EU4_GFX_SHADER_MAX_QUALIFIED_HASHES 8
 
-/* Register an exact qualified compiler-input SHA-256 (32 bytes). Returns 1 on
-   success. Unknown hashes remain rejected. */
-int eu4_gfx_shader_register_qualified_sha256(const uint8_t digest[32]);
+/* Shader stage identity for exact source-hash admission. */
+typedef enum {
+    EU4_GFX_SHADER_STAGE_VERTEX = 1,
+    EU4_GFX_SHADER_STAGE_PIXEL = 2,
+} eu4_gfx_shader_stage;
+
+/* Register an exact qualified compiler-input SHA-256 for one stage and one
+   effect. Returns 1 on success. A vertex hash never admits a pixel source
+   (and vice versa). Unknown hashes remain rejected. */
+int eu4_gfx_shader_register_qualified_sha256(int stage, const uint8_t digest[32],
+                                             const char *effect_identity);
+
+/* Number of active qualified source records (tests/diagnostics). */
+size_t eu4_gfx_shader_qualified_count(void);
 
 /* Clear qualified-hash table (tests). */
 void eu4_gfx_shader_clear_qualified_hashes(void);

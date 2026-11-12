@@ -106,39 +106,19 @@ def process_executable_path(pid: int) -> str | None:
 
 
 def process_table() -> list[tuple[int, str]]:
-    """Read-only (pid, executable) table via libproc.
+    """Read-only (pid, executable) table.
 
-    ``ps`` is denied in some sandboxed DSH shells. libproc is a system API and
-    is sufficient for the exact-path check this module needs.
+    ``automation.launch_lease`` owns the macOS libproc implementation because
+    it is also the launch-admission path and works in sandboxed DSH shells
+    where ``ps`` is denied. This wrapper keeps the historical benchmark call
+    site. Non-macOS hosts have no supported EU4 launch and return an empty
+    table.
     """
-    if sys.platform != "darwin":
-        output = command("ps", "-axo", "pid=,comm=")
-        rows = []
-        for line in output.splitlines():
-            match = re.match(r"\s*(\d+)\s+(.+)$", line)
-            if match:
-                rows.append((int(match.group(1)), match.group(2).strip()))
-        return rows
-    libproc = ctypes.CDLL("/usr/lib/libproc.dylib")
-    libproc.proc_listpids.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p,
-                                      ctypes.c_int]
-    libproc.proc_listpids.restype = ctypes.c_int
-    libproc.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
-    libproc.proc_pidpath.restype = ctypes.c_int
-    capacity = 8192
-    buffer = (ctypes.c_int * capacity)()
-    used = libproc.proc_listpids(1, 0, buffer, ctypes.sizeof(buffer))
-    if used <= 0:
-        return []
-    rows = []
-    for pid in list(buffer)[: used // ctypes.sizeof(ctypes.c_int)]:
-        if pid <= 0:
-            continue
-        path = ctypes.create_string_buffer(4096)
-        length = libproc.proc_pidpath(pid, path, len(path))
-        if length > 0:
-            rows.append((pid, path.value.decode(errors="replace")))
-    return rows
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from automation.launch_lease import process_executables
+
+    return process_executables()
 
 
 def running_game_pid(scenario: str) -> int | None:

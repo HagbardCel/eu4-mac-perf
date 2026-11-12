@@ -85,7 +85,8 @@ Each successful checkpoint writes:
   writer.
 
 The probe also aggregates `probe-result.json`; `inspect --run <dir>` prints the
-result or reconstructs it from the artifact files.
+result or reconstructs it from the artifact files. `--reference` accepts an
+operator PNG for numerical comparison only and never sets `reference_matched`.
 
 ## 4. Status levels
 
@@ -98,11 +99,15 @@ These are separate facts, never collapsed into `pass`:
 | `gpu_completed` | the command buffer finished successfully |
 | `pixels_captured` | the engine-owned target was read back |
 | `presented` | `_GfxPresent` reached the Metal presentation path |
-| `reference_matched` | compared to an operator-provided reference with zero mismatched pixels |
+| `reference_matched` | authenticated original OpenGL reference with equivalent checkpoint semantics |
 
-`reference_matched` is `null` when no reference was supplied. A pre-present
-image is valid evidence even when later, unrelated font/UI drawing is not
-reconstructed.
+`reference_matched` remains `null` unless such an authenticated original
+reference exists. An operator-provided PNG is compared numerically and reported
+separately in the `reference` object (`comparable`, `pixels_identical`,
+`mismatched_pixels`, `maximum_channel_error`, `difference_image`,
+`authenticated_opengl=false`). Pixel equality is not OpenGL fidelity. A
+pre-present image is valid evidence even when later, unrelated font/UI drawing
+is not reconstructed.
 
 ## 5. Draw dispatch and submission
 
@@ -142,9 +147,9 @@ disabled on the engine path.
   object is not decoded yet.
 - No original OpenGL frame was captured for this checkpoint. The Metal output is
   therefore not claimed to be `reference_matched`. An independently calculated
-  CPU reference from the offline packet does not align exactly with the live
-  capture; the live vertex/UV bytes were only added to the checkpoint after the
-  last authorized draw launch, so that comparison remains open.
+  CPU reference using the live vertex UVs and matrix matched the captured frame
+  on 23,808 samples (0 samples over 4/255, maximum channel error 0.0031). That is
+  CPU fidelity evidence, not OpenGL equivalence.
 - A workspace-write DSH sandbox cannot run the game: the game writes its own
   user-data files outside the workspace. The smoke runs used a one-shot
   host-file-access approval for the already-bounded probe command. `ps` is also

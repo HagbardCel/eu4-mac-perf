@@ -103,7 +103,12 @@ static NSMutableArray<EU4ShaderRecord *> *g_shaders;
 static uint64_t g_next_lifetime = 1;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static id<MTLDevice> g_device;
-static uint8_t g_qualified_hashes[EU4_GFX_SHADER_MAX_QUALIFIED_HASHES][32];
+typedef struct {
+    uint8_t digest[32];
+    int stage;
+} EU4QualifiedSource;
+
+static EU4QualifiedSource g_qualified[EU4_GFX_SHADER_MAX_QUALIFIED_HASHES];
 static size_t g_qualified_count;
 /* Off by default. Offline hosts may opt in; engine-path completion must not. */
 static int g_allow_transitional_markers = 0;
@@ -112,21 +117,25 @@ static void sha256_bytes(const void *data, size_t len, uint8_t out[32]) {
     CC_SHA256(data, (CC_LONG)len, out);
 }
 
-static int hash_is_qualified(const uint8_t digest[32]) {
+static int hash_is_qualified(const uint8_t digest[32], int stage) {
     for (size_t i = 0; i < g_qualified_count; i++) {
-        if (memcmp(g_qualified_hashes[i], digest, 32) == 0) {
+        if (g_qualified[i].stage == stage &&
+            memcmp(g_qualified[i].digest, digest, 32) == 0) {
             return 1;
         }
     }
     return 0;
 }
 
-int eu4_gfx_shader_register_qualified_sha256(const uint8_t digest[32]) {
-    if (digest == NULL) {
+int eu4_gfx_shader_register_qualified_sha256(int stage, const uint8_t digest[32],
+                                             const char *effect_identity) {
+    if (digest == NULL || effect_identity == NULL ||
+        (stage != EU4_GFX_SHADER_STAGE_VERTEX && stage != EU4_GFX_SHADER_STAGE_PIXEL) ||
+        strcmp(effect_identity, EU4_GFX_SHADER_SIMPLE_IDENTITY) != 0) {
         return 0;
     }
     pthread_mutex_lock(&g_lock);
-    if (hash_is_qualified(digest)) {
+    if (hash_is_qualified(digest, stage)) {
         pthread_mutex_unlock(&g_lock);
         return 1;
     }
@@ -134,10 +143,18 @@ int eu4_gfx_shader_register_qualified_sha256(const uint8_t digest[32]) {
         pthread_mutex_unlock(&g_lock);
         return 0;
     }
-    memcpy(g_qualified_hashes[g_qualified_count], digest, 32);
+    memcpy(g_qualified[g_qualified_count].digest, digest, 32);
+    g_qualified[g_qualified_count].stage = stage;
     g_qualified_count++;
     pthread_mutex_unlock(&g_lock);
     return 1;
+}
+
+size_t eu4_gfx_shader_qualified_count(void) {
+    pthread_mutex_lock(&g_lock);
+    size_t count = g_qualified_count;
+    pthread_mutex_unlock(&g_lock);
+    return count;
 }
 
 static int hex_digest(NSString *text, uint8_t out[32]) {
@@ -174,37 +191,62 @@ int eu4_gfx_shader_load_qualified_sources(const char *path) {
     if (![sources isKindOfClass:[NSArray class]]) {
         return -1;
     }
-    int registered = 0;
+    if (sources.count > EU4_GFX_SHADER_MAX_QUALIFIED_HASHES) {
+        return -1;
+    }
+    EU4QualifiedSource staged[EU4_GFX_SHADER_MAX_QUALIFIED_HASHES];
+    memset(staged, 0, sizeof staged);
+    size_t registered = 0;
     for (id entry in sources) {
         if (![entry isKindOfClass:[NSDictionary class]]) {
             return -1;
         }
+        NSDictionary *record = (NSDictionary *)entry;
+        NSString *stage = record[@"stage"];
+        NSString *effect = record[@"effect"];
         uint8_t digest[32];
-        if (!hex_digest(((NSDictionary *)entry)[@"sha256"], digest)) {
+        if (![stage isKindOfClass:[NSString class]] ||
+            ![effect isKindOfClass:[NSString class]] ||
+            ![effect isEqualToString:@EU4_GFX_SHADER_SIMPLE_IDENTITY] ||
+            !hex_digest(record[@"sha256"], digest)) {
             return -1;
         }
-        if (!eu4_gfx_shader_register_qualified_sha256(digest)) {
+        int stage_value = 0;
+        if ([stage isEqualToString:@"vertex"]) {
+            stage_value = EU4_GFX_SHADER_STAGE_VERTEX;
+        } else if ([stage isEqualToString:@"pixel"]) {
+            stage_value = EU4_GFX_SHADER_STAGE_PIXEL;
+        } else {
             return -1;
         }
+        memcpy(staged[registered].digest, digest, 32);
+        staged[registered].stage = stage_value;
         registered += 1;
     }
-    return registered;
+    /* Validate every record before changing the active set. */
+    pthread_mutex_lock(&g_lock);
+    memset(g_qualified, 0, sizeof g_qualified);
+    memcpy(g_qualified, staged, sizeof staged);
+    g_qualified_count = registered;
+    pthread_mutex_unlock(&g_lock);
+    return (int)registered;
 }
 
 void eu4_gfx_shader_clear_qualified_hashes(void) {
     pthread_mutex_lock(&g_lock);
     g_qualified_count = 0;
-    memset(g_qualified_hashes, 0, sizeof(g_qualified_hashes));
+    memset(g_qualified, 0, sizeof g_qualified);
     pthread_mutex_unlock(&g_lock);
 }
 
-static int source_admitted(const char *source, int (*marker_fn)(const char *)) {
+static int source_admitted(const char *source, int stage,
+                           int (*marker_fn)(const char *)) {
     if (source == NULL) {
         return 0;
     }
     uint8_t digest[32];
     sha256_bytes(source, strlen(source), digest);
-    if (hash_is_qualified(digest)) {
+    if (hash_is_qualified(digest, stage)) {
         return 1;
     }
     /* Transitional offline path only — not engine-path completion. */
@@ -312,7 +354,7 @@ void eu4_gfx_shader_test_reset(void) {
     g_next_lifetime = 1;
     g_device = nil;
     g_qualified_count = 0;
-    memset(g_qualified_hashes, 0, sizeof(g_qualified_hashes));
+    memset(g_qualified, 0, sizeof g_qualified);
     /* Offline host helper: opt into transitional marker admission for unit tests.
        Engine path never calls this; default remains off. */
     g_allow_transitional_markers = 1;
@@ -415,7 +457,8 @@ int eu4_gfx_add_vertex_shader(void *unused, void *shader, const char *source) {
         pthread_mutex_unlock(&g_lock);
         return 0;
     }
-    if (!source_admitted(source, source_is_simple_vertex)) {
+    if (!source_admitted(source, EU4_GFX_SHADER_STAGE_VERTEX,
+                         source_is_simple_vertex)) {
         /* Rejected replacement: invalidate prior link / PSO observations. */
         record.linked = NO;
         record.hasVertex = NO;
@@ -481,7 +524,8 @@ int eu4_gfx_add_pixel_shader(void *unused, void *shader, const char *source) {
         pthread_mutex_unlock(&g_lock);
         return 0;
     }
-    if (!source_admitted(source, source_is_simple_pixel)) {
+    if (!source_admitted(source, EU4_GFX_SHADER_STAGE_PIXEL,
+                         source_is_simple_pixel)) {
         record.linked = NO;
         record.hasPixel = NO;
         record.fragmentFunction = nil;

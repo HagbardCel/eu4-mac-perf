@@ -68,6 +68,8 @@ def _claim_launch(
     *,
     requested_timeout: float,
     executable_sha256: str | None = None,
+    executable_path: str | None = None,
+    require_pinned: bool = False,
 ) -> str:
     run_root = run_root.expanduser().resolve()
     if not run_root.is_dir():
@@ -86,11 +88,18 @@ def _claim_launch(
                 targets=targets,
                 requested_timeout=requested_timeout,
                 executable_sha256=executable_sha256,
+                executable_path=executable_path,
+                require_pinned=require_pinned,
             )
         except launch_ledger.LedgerError as exc:
             raise LaunchLimit(exc.kind, exc.detail) from exc
         _mirror_claim(run_root, token, output, targets)
         return token
+    if require_pinned:
+        raise LaunchLimit(
+            "unauthorized",
+            "the Metal probe requires a modern pinned workflow authorization pointer",
+        )
     lock_path = run_root / "live-launch.lock"
     counter_path = run_root / "live-launch.json"
     with lock_path.open("a+") as handle:
@@ -793,6 +802,12 @@ def probe(args: argparse.Namespace) -> int:
     if args.backend != "metal":
         print("probe currently supports --backend metal only", file=sys.stderr)
         return EXIT_INCOMPLETE
+    if not 1 <= args.occurrence <= 0x7FFFFFFF:
+        print(
+            f"--occurrence must be between 1 and {0x7FFFFFFF}: {args.occurrence}",
+            file=sys.stderr,
+        )
+        return EXIT_INCOMPLETE
     if args.checkpoint not in CHECKPOINTS:
         print(f"unknown checkpoint: {args.checkpoint}", file=sys.stderr)
         return EXIT_INCOMPLETE
@@ -807,9 +822,9 @@ def probe(args: argparse.Namespace) -> int:
     if output.exists():
         print(f"probe output already exists: {output}", file=sys.stderr)
         return EXIT_INCOMPLETE
-    caller_rva = args.caller_rva
-    if caller_rva is None:
-        caller_rva = 0xEDFCD1 if args.checkpoint == "after-draw" else 0
+    # The generic probe has no Simple-specific caller default. An explicit
+    # --caller-rva filters; otherwise the first qualifying invocation wins.
+    caller_rva = args.caller_rva or 0
     selector = CHECKPOINTS[args.checkpoint]
     try:
         import eu4_benchmark as bench_base
@@ -829,6 +844,8 @@ def probe(args: argparse.Namespace) -> int:
             [selector["symbol"]],
             requested_timeout=args.timeout,
             executable_sha256=identity["executable_sha256"],
+            executable_path=identity["executable"],
+            require_pinned=True,
         )
     except LaunchLimit as exc:
         print(f"campaign launch refused: {exc}", file=sys.stderr)
@@ -882,9 +899,7 @@ def probe(args: argparse.Namespace) -> int:
             status.get("checkpoint"),
             output,
         )
-        reference["kind"] = "operator_provided_reference"
-        if reference.get("status") == "compared":
-            status["reference_matched"] = reference.get("mismatched_pixels") == 0
+        reference["kind"] = "operator_provided_png"
     file_hashes = []
     if output.is_dir():
         for path in sorted(output.iterdir()):
@@ -965,12 +980,21 @@ def probe(args: argparse.Namespace) -> int:
 
 def _compare_reference(reference: Path, checkpoint: dict | None, output: Path) -> dict:
     if checkpoint is None:
-        return {"status": "unavailable", "reason": "no checkpoint image"}
+        return {
+            "status": "unavailable",
+            "comparable": False,
+            "pixels_identical": None,
+            "authenticated_opengl": False,
+            "reason": "no checkpoint image",
+        }
     try:
         from PIL import Image  # type: ignore
     except Exception:  # noqa: BLE001
         return {
             "status": "unavailable",
+            "comparable": False,
+            "pixels_identical": None,
+            "authenticated_opengl": False,
             "reason": "PIL is not installed; existing reference comparison cannot decode PNG",
         }
     raw_path = output / checkpoint["capture"]["raw_file"]
@@ -980,10 +1004,19 @@ def _compare_reference(reference: Path, checkpoint: dict | None, output: Path) -
         actual = Image.frombytes("RGBA", (width, height), _bgra_to_rgba(raw_path.read_bytes()))
         expected = Image.open(reference).convert("RGBA")
     except (OSError, ValueError) as exc:
-        return {"status": "unavailable", "reason": str(exc)}
+        return {
+            "status": "unavailable",
+            "comparable": False,
+            "pixels_identical": None,
+            "authenticated_opengl": False,
+            "reason": str(exc),
+        }
     if expected.size != actual.size:
         return {
             "status": "incomparable",
+            "comparable": False,
+            "pixels_identical": None,
+            "authenticated_opengl": False,
             "reason": f"reference is {expected.size[0]}x{expected.size[1]}, capture is {width}x{height}",
             "reference": str(reference),
         }
@@ -1008,6 +1041,9 @@ def _compare_reference(reference: Path, checkpoint: dict | None, output: Path) -
     diff.save(diff_path)
     return {
         "status": "compared",
+        "comparable": True,
+        "pixels_identical": mismatched == 0,
+        "authenticated_opengl": False,
         "reference": str(reference),
         "mismatched_pixels": mismatched,
         "maximum_channel_error": maximum,

@@ -74,12 +74,12 @@ class PowermetricsTests(unittest.TestCase):
 
     def test_process_path_must_match_gog_executable(self):
         steam = "/Users/test/Library/Application Support/Steam/steamapps/common/Europa Universalis IV/eu4.app/Contents/MacOS/eu4"
-        output = f"  100 {steam}\n  200 {benchmark.GOG_EXE}\n"
-        with patch.object(benchmark, "command", return_value=output), \
+        rows = [(100, steam), (200, str(benchmark.GOG_EXE))]
+        with patch.object(benchmark, "process_table", return_value=rows), \
              patch.object(benchmark, "process_executable_path", side_effect=lambda pid: steam if pid == 100 else str(benchmark.GOG_EXE)):
             with self.assertRaisesRegex(benchmark.BenchmarkError, "Expected one running GOG"):
                 benchmark.running_game_pid("paused")
-        with patch.object(benchmark, "command", return_value="  200 ./eu4\n"), \
+        with patch.object(benchmark, "process_table", return_value=[(200, "./eu4")]), \
              patch.object(benchmark, "process_executable_path", return_value=str(benchmark.GOG_EXE)):
             self.assertEqual(benchmark.running_game_pid("paused"), 200)
 

@@ -104,18 +104,19 @@ static void boot(void) {
     eu4_gfx_draw_route_install(eu4_gfx_draw_route_live);
 }
 
-static void register_source(const char *source) {
+static void register_source(const char *source, int stage) {
     uint8_t digest[CC_SHA256_DIGEST_LENGTH];
     CC_SHA256(source, (CC_LONG)strlen(source), digest);
-    if (!eu4_gfx_shader_register_qualified_sha256(digest)) {
+    if (!eu4_gfx_shader_register_qualified_sha256(
+            stage, digest, EU4_GFX_SHADER_SIMPLE_IDENTITY)) {
         fail("qualified source registration");
     }
 }
 
 static void *make_simple_shader(void) {
     eu4_gfx_shader_test_reset();
-    register_source(eu4_gfx_simple_vertex_source());
-    register_source(eu4_gfx_simple_pixel_source());
+    register_source(eu4_gfx_simple_vertex_source(), EU4_GFX_SHADER_STAGE_VERTEX);
+    register_source(eu4_gfx_simple_pixel_source(), EU4_GFX_SHADER_STAGE_PIXEL);
     eu4_gfx_shader_set_allow_transitional_markers(0);
     void *shader = eu4_gfx_create_shader();
     if (shader == NULL) {
@@ -235,6 +236,27 @@ static void setup_scene(void *shader, void *vertex_header, void *constant,
     install_geometry(shader, vertex_header, constant, texture_header);
 }
 
+static int run_clear_flags(int flags) {
+    boot();
+    struct {
+        void *master;
+    } ctx = {g_master};
+    uint8_t *master = (uint8_t *)g_master;
+    uint32_t rect[6] = {kSize, kSize, 0x3f800000u, 0, 0, 0};
+    eu4_gfx_set_viewport(master, rect);
+    uint32_t mask = 0x01010101u;
+    memcpy(master + 0x2c, &mask, sizeof mask);
+    const float black[4] = {0.f, 0.f, 0.f, 1.f};
+    eu4_gfx_clear(&ctx, (unsigned)flags, black);
+    int status = -1;
+    if (eu4_gfx_complete_game(g_master, &status) != EU4_GFX_CLEAR_OK ||
+        status != (int)MTLCommandBufferStatusCompleted) {
+        fail("clear completion");
+    }
+    printf("clear_ok=%d\n", flags);
+    return 0;
+}
+
 static int run_clear_refusal(const char *directory) {
     boot();
     struct {
@@ -311,12 +333,25 @@ static int run_checkpoint(const char *operation, const char *directory) {
     return 2;
 }
 
+static int run_checkpoint_env(void) {
+    int enabled = eu4_gfx_checkpoint_configure_from_env();
+    printf("enabled=%d occurrence=%d\n", enabled,
+           eu4_gfx_checkpoint_test_occurrence());
+    return 0;
+}
+
 int main(int argc, char **argv) {
+    if (argc >= 2 && strcmp(argv[1], "--checkpoint-env") == 0) {
+        return run_checkpoint_env();
+    }
     if (argc >= 4 && strcmp(argv[1], "--checkpoint") == 0) {
         return run_checkpoint(argv[2], argv[3]);
     }
     if (argc >= 3 && strcmp(argv[1], "--clear-refusal") == 0) {
         return run_clear_refusal(argv[2]);
+    }
+    if (argc >= 3 && strcmp(argv[1], "--clear-flags") == 0) {
+        return run_clear_flags(atoi(argv[2]));
     }
     boot();
     uint8_t *master = (uint8_t *)g_master;

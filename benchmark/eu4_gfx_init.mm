@@ -1484,6 +1484,10 @@ static eu4_gfx_clear_status clear_game_checked(void *handle, unsigned flags, con
         g_clear_reason = "game backbuffer allocation failed";
         return allocated;
     }
+    if ((flags & ~7u) != 0) {
+        g_clear_reason = "clear flags contain bits outside the established colour/depth/stencil mask";
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
     if ((flags & 1u) == 0) {
         g_clear_reason = "clear does not include the colour buffer bit";
         return EU4_GFX_CLEAR_UNSUPPORTED;
