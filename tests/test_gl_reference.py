@@ -146,6 +146,31 @@ class GlReferenceValidationTests(unittest.TestCase):
         self.assertIn("backend", block["reason"])
 
 
+class GlVertexExtractionTests(unittest.TestCase):
+    def test_bind_ids_and_payload_are_read_from_top_level_records(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            payload = bytes(range(48)) * 2  # 96 bytes
+            (run / "payloads").mkdir()
+            (run / "payloads" / "5-1.bin").write_bytes(payload)
+            rows = [
+                {"call_id": 5, "symbol": "_GfxCreateVertexBuffer",
+                 "resource_id": "vb_3", "stride": 24, "count": 4,
+                 "payload": {"size": 96, "file": "payloads/5-1.bin"}},
+                {"call_id": 8, "symbol": "_GfxSetVertexBuffers",
+                 "ids": ["vb_3"], "offsets": [0], "count": 1},
+            ]
+            (run / "operations.jsonl").write_text(
+                "\n".join(json.dumps(row) for row in rows) + "\n"
+            )
+            reference = {"ok": True, "draw": {"call_id": 9}}
+            block = live_gfx._gl_vertex_block(run, reference)
+            self.assertTrue(block["ok"], block.get("reason"))
+            self.assertEqual(block["sha256"], hashlib.sha256(payload).hexdigest())
+            self.assertEqual(block["resource_id"], "vb_3")
+            self.assertTrue((run / "gl-reference-vertex.json").is_file())
+
+
 class PresentationValidationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()

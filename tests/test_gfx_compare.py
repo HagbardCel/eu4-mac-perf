@@ -408,6 +408,22 @@ class ComparatorTests(unittest.TestCase):
         self.assertEqual(report["status"], "invalid")
         self.assertEqual(len([r for r in report["reasons"] if "digest" in r]), 2)
 
+    def test_reference_with_contradictory_backend_is_invalid(self) -> None:
+        self.factory.gl(raise_on="backend")
+        self.factory.metal()
+        report = self.run_compare(self.root / "reference", self.root / "candidate", policy())
+        self.assertEqual(report["status"], "invalid")
+        self.assertIn("backend", " ".join(report["reasons"]))
+
+    def test_candidate_with_contradictory_backend_is_invalid(self) -> None:
+        self.factory.gl()
+        descriptor = self.factory.metal()
+        descriptor["backend"] = "cpu"
+        (self.root / "candidate" / "metal-logical.json").write_text(json.dumps(descriptor))
+        report = self.run_compare(self.root / "reference", self.root / "candidate", policy())
+        self.assertEqual(report["status"], "invalid")
+        self.assertIn("backend", " ".join(report["reasons"]))
+
     def test_missing_policy_field_is_invalid(self) -> None:
         self.factory.gl()
         self.factory.metal()

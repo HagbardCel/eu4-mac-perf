@@ -441,10 +441,22 @@ void eu4_gfx_checkpoint_after_clear(void *master, const void *caller) {
     capture("after-clear", "_GfxClear", "clear", master, caller, caller_rva, NULL);
 }
 
+int eu4_gfx_checkpoint_present_select(uint64_t caller_rva) {
+    if (g_checkpoint != EU4_GFX_CHECKPOINT_AFTER_PRESENT) {
+        return 0;
+    }
+    return qualifies(EU4_GFX_CHECKPOINT_AFTER_PRESENT, caller_rva);
+}
+
 void eu4_gfx_checkpoint_before_present(void *master, const void *caller) {
     if (g_checkpoint == EU4_GFX_CHECKPOINT_AFTER_PRESENT) {
-        g_counts[EU4_GFX_CHECKPOINT_AFTER_PRESENT] += 1;
-        if (g_counts[EU4_GFX_CHECKPOINT_AFTER_PRESENT] != g_occurrence) {
+        uint64_t caller_rva = 0;
+        int inside = 0;
+        uint64_t thread = 0;
+        int pid = 0;
+        eu4_metal_events_describe(caller, NULL, 0, &caller_rva, &inside, &thread,
+                                  &pid);
+        if (!eu4_gfx_checkpoint_present_select(caller_rva)) {
             return;
         }
         __unsafe_unretained EU4GfxBackend *backend =
@@ -630,16 +642,20 @@ void eu4_gfx_checkpoint_after_present(void *master, const void *caller) {
                       g_counts[EU4_GFX_CHECKPOINT_AFTER_PRESENT]);
         return;
     }
-    char marker[768];
+    char marker[1536];
     int marker_length = snprintf(
         marker, sizeof marker,
         "{\"schema\":\"gfx-presentation/v1\",\"shown\":true,"
-        "\"checkpoint\":\"%s\",\"raw_file\":\"%s\","
+        "\"checkpoint\":\"after-present\",\"occurrence\":%d,"
+        "\"checkpoint_file\":\"checkpoint-after-present-%d.json\","
+        "\"raw_file\":\"%s\","
         "\"raw_sha256\":\"%s\",\"width\":%u,\"height\":%u,"
         "\"window_number\":%llu,\"window_visible\":%s,\"window_occluded\":%s,"
         "\"window_diagnostics\":\"%s\","
         "\"draw_caller_rva\":\"0x%llx\",\"present_caller_rva\":\"0x%llx\"}\n",
-        "after-present", raw_name, digest, g_present_width, g_present_height,
+        g_counts[EU4_GFX_CHECKPOINT_AFTER_PRESENT],
+        g_counts[EU4_GFX_CHECKPOINT_AFTER_PRESENT], raw_name, digest,
+        g_present_width, g_present_height,
         (unsigned long long)g_present_window_number,
         g_present_window_visible ? "true" : "false",
         g_present_window_occluded ? "true" : "false",

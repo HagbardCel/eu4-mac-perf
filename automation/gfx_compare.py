@@ -189,6 +189,8 @@ def from_gl_reference(path: Path) -> Capture:
     data = _read_json(path)
     if data.get("schema") != "gfx-gl-reference/v1":
         raise InputError("invalid", "reference is not a gfx-gl-reference/v1 descriptor")
+    if data.get("backend") != "opengl":
+        raise InputError("invalid", "reference backend is missing or not opengl")
     target = data.get("target") or {}
     capture = data.get("capture") or {}
     provenance = data.get("provenance") or {}
@@ -257,6 +259,8 @@ def from_metal_logical(path: Path) -> Capture:
     data = _read_json(path)
     if data.get("schema") != "gfx-metal-logical/v1":
         raise InputError("invalid", "candidate is not a gfx-metal-logical/v1 descriptor")
+    if data.get("backend") != "metal":
+        raise InputError("invalid", "candidate backend is missing or not metal")
     target = data.get("target") or {}
     capture = data.get("capture") or {}
     provenance = data.get("provenance") or {}
@@ -304,6 +308,8 @@ def from_metal_checkpoint(path: Path) -> Capture:
     data = _read_json(path)
     if data.get("schema") != "gfx-checkpoint/v1":
         raise InputError("invalid", "candidate is not a gfx-checkpoint/v1 descriptor")
+    if "backend" in data and data.get("backend") not in (None, "metal"):
+        raise InputError("invalid", "checkpoint backend is not metal")
     target = data.get("target") or {}
     capture = data.get("capture") or {}
     gpu = data.get("gpu") or {}

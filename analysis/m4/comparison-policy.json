@@ -42,5 +42,9 @@
     "observed_max_channel_error": 0,
     "observed_mismatched_pixels": 0,
     "note": "Exact equality observed on 1,930,176 pixels across independent launches with identical live vertex inputs; a non-zero tolerance is not justified."
-  }
+  },
+  "presentation_similarity_max_mean_error": 2.0,
+  "presentation_scene_max_mean_error": 2.0,
+  "presentation_scene_max_channel_error": 64,
+  "presentation_rationale": "The window screenshot is an independent compositor view of the same drawable, rescaled to a common small comparison grid; its tolerance covers compositor colour handling and scaling only. The physical drawable is compared to the logical GL reference after an integer box reduction as a supporting M4 consistency check."
 }

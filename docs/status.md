@@ -28,7 +28,11 @@ frame is independently observable in the real EU4 window.
   the drawable.
 - **Checker.** The M4 checker fails closed on missing reference, GPU,
   presentation, provenance or regression evidence and pins the evidence manifest
-  digest. Its verdict on the recorded evidence is `pass`.
+  digest. It recomputes screenshot/drawable similarity and validates the
+  after-present checkpoint; its verdict on the recorded evidence is `pass`.
+- **Readback safety.** The original-GL observer saves/restores pixel-pack state
+  and rejects unsupported framebuffer configurations; the final live capture
+  records `restored=true`.
 
 ## Latest milestone — authentic Simple draw on Metal (2026-11-12)
 

@@ -150,7 +150,29 @@ The exact source SHA-256 values for the live Simple VS/PS are in
 only through `EU4_GFX_QUALIFIED_SOURCES`. Transitional marker admission remains
 disabled on the engine path.
 
-## 7. Known limitations
+## 7. Original-GL reference and differential comparison
+
+`python3 -m automation.live_gfx capture --target _GfxDraw ... --until-target-draw
+--caller-rva 0xedfcd1 --gl-reference` arms a one-shot readback at the observed
+draw exit. The observer saves and restores `GL_PACK_ALIGNMENT`,
+`GL_PACK_ROW_LENGTH`, `GL_PACK_SKIP_ROWS`, `GL_PACK_SKIP_PIXELS` and the
+`GL_PIXEL_PACK_BUFFER` binding around `glFinish`/`glReadPixels`; it rejects a
+non-default or mismatched framebuffer/read-buffer configuration. The capture
+records the draw identity, caps, GLSL digest, live vertex payload and pre-draw
+target alongside the pixels.
+
+`python3 -m automation.gfx_compare compare --reference <dir> --candidate <json>
+--policy <policy> --out <dir>` validates backend declarations, event identity,
+draw inputs, extents, formats, GPU completion and payload digests before
+comparing. Only a declared vertical origin difference is decoded; nothing is
+rescaled.
+
+The Metal `metal-logical` capture is a **diagnostic replay** through the same
+encoder with the same live inputs at the engine's logical extent. It is not a
+readback of the physical draw target and is only valid for compatible draw state
+and target contents.
+
+## 8. Known limitations
 
 - The game backbuffer is colour-only. `_GfxClear` flags with depth/stencil bits
   are accepted for the colour clear and the ignored bits are recorded in
@@ -159,11 +181,10 @@ disabled on the engine path.
   validated; a non-default snapshot is refused.
 - The live sampler is the `simple.shader` asset contract; the engine sampler
   object is not decoded yet.
-- No original OpenGL frame was captured for this checkpoint. The Metal output is
-  therefore not claimed to be `reference_matched`. An independently calculated
-  CPU reference using the live vertex UVs and matrix matched the captured frame
-  on 23,808 samples (0 samples over 4/255, maximum channel error 0.0031). That is
-  CPU fidelity evidence, not OpenGL equivalence.
+- M4 now captures an authentic original-OpenGL reference and compares it
+  exactly; see [the M4 qualification report](../analysis/m4/qualification-report.md).
+  The presentation is a bounded diagnostic evidence window, not a continuous
+  production frame loop.
 - A workspace-write DSH sandbox cannot run the game: the game writes its own
   user-data files outside the workspace. The smoke runs used a one-shot
   host-file-access approval for the already-bounded probe command. `ps` is also

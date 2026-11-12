@@ -25,6 +25,7 @@ SOURCES = [
     ROOT / "benchmark" / "eu4_gfx_simple_draw.mm",
     ROOT / "benchmark" / "eu4_gfx_draw_capture.c",
     ROOT / "benchmark" / "eu4_gfx_draw_route.mm",
+    ROOT / "benchmark" / "eu4_gfx_logical_capture.mm",
     ROOT / "benchmark" / "eu4_gfx_checkpoint.mm",
     ROOT / "benchmark" / "eu4_metal_events.c",
 ]
@@ -86,6 +87,12 @@ class GfxLiveDrawTests(unittest.TestCase):
                                      capture_output=True, text=True, check=False, env=env)
                 self.assertEqual(ran.returncode, 0, ran.stderr)
                 self.assertIn(f"enabled=1 occurrence={value}", ran.stdout)
+
+    def test_after_present_caller_filter_selects_only_matching_callers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ran = self._run("--present-caller-filter", tmp)
+            self.assertEqual(ran.returncode, 0, ran.stderr or ran.stdout)
+            self.assertIn("unrelated=0 selected=1 later=0", ran.stdout)
 
     def test_clear_flag_mask(self) -> None:
         for flags in (1, 7):

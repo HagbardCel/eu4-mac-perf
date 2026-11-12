@@ -36,7 +36,7 @@ Captured through the new generic observer in the existing passive observe stack
 
 | Field | Value |
 | --- | --- |
-| Run | `.local/m4/experiments/gl-reference-04` |
+| Run | `.local/m4/experiments/gl-reference-05` (final observer) |
 | Caller / call id | `0xedfcd1` / 9 |
 | Capture | 1728×1117 BGRA8, `GL_BACK`, origin `lower_left` |
 | Raw SHA-256 | `69d41a8870679dcb3158bd3f3fad2f4afff11106e45990ab9a3ffc0f5dcc7670` |
@@ -45,7 +45,8 @@ Captured through the new generic observer in the existing passive observe stack
 | GLSL digest | `1e5d1d7b0910ec343c5d5da1ec811fa6f2f963157aff251d79bd588391905e7f` |
 | Live vertex payload | 96 bytes, SHA-256 `f13dea22399b9649d84a09965ec6b21bc13b72db3c17049916a675922a39c8ab`, V 0..1 |
 | Pre-draw target | all black, alpha 255 (authentic clear) |
-| Determinism | independent launch `gl-reference-02` produced the same raw SHA-256 |
+| Pixel-pack state | saved `(alignment 4, row_length 0, skips 0, pack_buffer 0)`, restored `true` |
+| Determinism | `gl-reference-04` and the earlier `gl-reference-02` produced the same raw SHA-256 |
 
 Observation is disabled unless `EU4_GFX_OPS_FRAMEBUFFER` is set; the unarmed
 path performs no GL calls. Missing, truncated or corrupted payloads are
@@ -63,14 +64,15 @@ rejected by `_gl_reference_block` and by the comparator.
 | Live vertex | same 96 bytes (`f13dea22…`), effective count 4, shader `simple-lua-Simple/asset-maincode-v0` |
 | GPU | `MTLCommandBufferStatusCompleted` (logical encode + staging blit) |
 | Presented drawable | 3456×2234 BGRA8, SHA-256 `6921c242c66ad9929c7fd935178ae01bf2d4da0b25b6b57980660de3cf7999c3` |
-| Presentation | `presentDrawable` completed; drawable readback after completion |
+| Presentation | `presentDrawable` completed; drawable readback after completion; checker recomputes the screenshot comparison from the two files |
 | Visible window | `window=21765`, `window-21765.png`, 3456×2234, SHA-256 `df23010e…` |
-| Window-vs-drawable | mean |Δ| 1.311/255, max 20, 225 colour buckets (not blank) |
+| Window-vs-drawable | recomputed mean |Δ| 1.311/255, max 20, 225 colour buckets (not blank) |
 | Repeat present | `repeat-present.json`, `presented=true` |
 
-The logical capture uses the same Metal encoder as the live route at the
-engine's logical extent, so it is directly comparable with the original GL
-surface. The physical drawable remains the presentation target.
+The logical capture is a **diagnostic second pass** through the same Metal
+encoder with the same live inputs; it is not a readback of the original physical
+draw target. It is applicable only to compatible draw state and target contents.
+The physical drawable remains the presentation target.
 
 ## Comparison policy and result
 
@@ -116,6 +118,38 @@ then returns the loading frame.
 This also explains the earlier "uniform gray" captures: they were taken while
 the presentation had not committed / the process had ended, not because the
 Metal layer was misplaced.
+
+## Review remediation in this revision
+
+- **After-present caller filtering.** `eu4_gfx_checkpoint_present_select()` applies
+  the existing `qualifies()` caller filter before the occurrence counter, so an
+  earlier presentation from another caller cannot consume the selected
+  occurrence. A host test drives an unrelated caller, the selected caller and a
+  later duplicate.
+- **Selected occurrence.** The presentation validator and screenshot callback
+  resolve `checkpoint-after-present-<occurrence>.json` from the presentation
+  marker (with occurrence-1 fallback for older evidence). `--occurrence 2` is
+  covered by a synthetic test.
+- **Backend admission.** `from_gl_reference()` rejects a missing or non-OpenGL
+  backend; the Metal logical adapter rejects a missing or non-Metal backend.
+  Negative comparator tests cover both.
+- **OpenGL readback safety.** The observer saves `GL_PACK_ALIGNMENT`,
+  `GL_PACK_ROW_LENGTH`, `GL_PACK_SKIP_ROWS`, `GL_PACK_SKIP_PIXELS` and the
+  `GL_PIXEL_PACK_BUFFER` binding, forces a tightly packed CPU readback, and
+  restores all five on success and failure. It rejects non-default or
+  mismatched framebuffer/read-buffer configurations. The final live capture
+  records the saved state and `restored=true`.
+- **Presentation acceptance.** Screenshot similarity is no longer trusted from
+  the manifest. The checker recomputes it from the window screenshot and
+  drawable with `similarity_to_drawable()` and the policy threshold; an
+  unavailable comparison is inconclusive, not success. It also validates the
+  checkpoint's GPU completion, drawable payload digest and run identity.
+- **Removed one-off assumptions.** Image operations take extents from the
+  capture descriptor. The physical-to-logical reduction derives its integer
+  scale from the two extents and remains an explicitly M4-specific check.
+- **Repaired regression.** `_gl_vertex_block()` was referenced but missing from
+  the committed capture path; it is restored and tested, and the live-draw host
+  now links the logical-capture translation unit.
 
 ## DSH autonomous execution and remediation
 

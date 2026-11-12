@@ -41,7 +41,29 @@ enum {
     GLX_PACK_ALIGNMENT = 0x0D05,
     GLX_IMPLEMENTATION_COLOR_READ_FORMAT = 0x8B9B,
     GLX_IMPLEMENTATION_COLOR_READ_TYPE = 0x8B9A,
+    GLX_PIXEL_PACK_BUFFER = 0x88EB,
+    GLX_PIXEL_PACK_BUFFER_BINDING = 0x88EF,
+    GLX_PACK_ROW_LENGTH = 0x0D02,
+    GLX_PACK_SKIP_ROWS = 0x0D03,
+    GLX_PACK_SKIP_PIXELS = 0x0D04,
+    GLX_READ_BUFFER_BACK = 0x0405,
 };
+
+/* Saved CPU pixel-pack state. Non-default row length, skips or a bound PBO
+ * would otherwise make glReadPixels write outside the tightly packed
+ * destination. The observer restores every field it touches, on success and
+ * failure. */
+typedef struct {
+    GLint alignment;
+    GLint row_length;
+    GLint skip_rows;
+    GLint skip_pixels;
+    GLint pack_buffer;
+} pack_state;
+
+static pack_state g_last_pack;
+static int g_last_pack_restored;
+static char g_last_reason[160];
 
 enum {
     MAX_PAYLOAD_BYTES = 256 * 1024 * 1024,
@@ -321,6 +343,54 @@ static void read_caps(const eu4_gfx_observe_call *call, char out[17],
     *byte4 = caps[4];
 }
 
+static void clear_gl_errors(void) {
+    for (int guard = 0; guard < 32 && glGetError() != GL_NO_ERROR; guard++) {
+    }
+}
+
+static void pack_begin(pack_state *state) {
+    memset(state, 0, sizeof *state);
+    glGetIntegerv(GLX_PACK_ALIGNMENT, &state->alignment);
+    glGetIntegerv(GLX_PACK_ROW_LENGTH, &state->row_length);
+    glGetIntegerv(GLX_PACK_SKIP_ROWS, &state->skip_rows);
+    glGetIntegerv(GLX_PACK_SKIP_PIXELS, &state->skip_pixels);
+    glGetIntegerv(GLX_PIXEL_PACK_BUFFER_BINDING, &state->pack_buffer);
+    clear_gl_errors();
+    glBindBuffer(GLX_PIXEL_PACK_BUFFER, 0);
+    glPixelStorei(GLX_PACK_ALIGNMENT, 1);
+    glPixelStorei(GLX_PACK_ROW_LENGTH, 0);
+    glPixelStorei(GLX_PACK_SKIP_ROWS, 0);
+    glPixelStorei(GLX_PACK_SKIP_PIXELS, 0);
+    clear_gl_errors();
+}
+
+static int pack_end(const pack_state *state) {
+    glPixelStorei(GLX_PACK_ALIGNMENT, state->alignment);
+    glPixelStorei(GLX_PACK_ROW_LENGTH, state->row_length);
+    glPixelStorei(GLX_PACK_SKIP_ROWS, state->skip_rows);
+    glPixelStorei(GLX_PACK_SKIP_PIXELS, state->skip_pixels);
+    glBindBuffer(GLX_PIXEL_PACK_BUFFER, (GLuint)state->pack_buffer);
+    GLenum error = glGetError();
+    clear_gl_errors();
+    return error == GL_NO_ERROR;
+}
+
+static int framebuffer_supported(const gl_state *state, const char **reason) {
+    if (state->draw_framebuffer != state->read_framebuffer) {
+        *reason = "draw and read framebuffer bindings differ";
+        return 0;
+    }
+    if (state->read_framebuffer != 0) {
+        *reason = "non-default framebuffer is not supported by this observer";
+        return 0;
+    }
+    if (state->read_buffer != GLX_READ_BUFFER_BACK) {
+        *reason = "read buffer is not GL_BACK";
+        return 0;
+    }
+    return 1;
+}
+
 /* Reads the viewport rectangle, which is exactly the region this draw writes.
  * glFinish is the explicit GPU-completion boundary; it is diagnostic-only and
  * never runs unless the observer is armed. */
@@ -341,8 +411,7 @@ static int read_region(gl_state *state, uint8_t **out, size_t *out_len,
     if (pixels == NULL) {
         return 0;
     }
-    GLint alignment = state->pack_alignment != 0 ? state->pack_alignment : 4;
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    pack_begin(&g_last_pack);
     uint64_t before_finish = now_ns();
     glFinish();
     *out_finish_ns = now_ns() - before_finish;
@@ -360,7 +429,13 @@ static int read_region(gl_state *state, uint8_t **out, size_t *out_len,
         format = "RGBA8";
     }
     *out_read_ns = now_ns() - before_read;
-    glPixelStorei(GL_PACK_ALIGNMENT, alignment);
+    g_last_pack_restored = pack_end(&g_last_pack);
+    if (!g_last_pack_restored) {
+        error = GL_INVALID_OPERATION;
+        g_last_reason[0] = 0;
+        snprintf(g_last_reason, sizeof g_last_reason,
+                 "pixel-pack state restore failed");
+    }
     *out_error = error;
     if (error != GL_NO_ERROR) {
         free(pixels);
@@ -374,14 +449,15 @@ static int read_region(gl_state *state, uint8_t **out, size_t *out_len,
     return 1;
 }
 
-static void write_failure(const char *name, GLenum error, const gl_state *state) {
-    char body[256];
+static void write_failure(const char *name, GLenum error, const gl_state *state,
+                          const char *reason) {
+    char body[512];
     int length = snprintf(
         body, sizeof body,
         "{\"schema\":\"gfx-gl-reference-failure/v1\",\"gl_error\":%u,"
-        "\"viewport\":[%d,%d,%d,%d]}\n",
-        (unsigned)error, state->viewport[0], state->viewport[1],
-        state->viewport[2], state->viewport[3]);
+        "\"reason\":\"%s\",\"viewport\":[%d,%d,%d,%d]}\n",
+        (unsigned)error, reason != NULL ? reason : "", state->viewport[0],
+        state->viewport[1], state->viewport[2], state->viewport[3]);
     char path[1200];
     if (length > 0 && (size_t)length < sizeof body &&
         snprintf(path, sizeof path, "%s/%s", g_fb.run_dir, name) <
@@ -409,6 +485,11 @@ eu4_gfx_framebuffer_status eu4_gfx_observe_framebuffer_before_draw(
 
     gl_state state;
     read_gl_state(&state);
+    const char *reason = NULL;
+    if (!framebuffer_supported(&state, &reason)) {
+        write_failure("gl-reference-pre-failure.json", GL_INVALID_OPERATION, &state, reason);
+        return EU4_GFX_FRAMEBUFFER_CAPTURE_GL;
+    }
     uint8_t *pixels = NULL;
     size_t length = 0;
     int width = 0, height = 0;
@@ -417,7 +498,8 @@ eu4_gfx_framebuffer_status eu4_gfx_observe_framebuffer_before_draw(
     GLenum error = GL_NO_ERROR;
     if (!read_region(&state, &pixels, &length, &width, &height, &format,
                      &finish_ns, &read_ns, &error)) {
-        write_failure("gl-reference-pre-failure.json", error, &state);
+        write_failure("gl-reference-pre-failure.json", error, &state,
+                      g_last_reason[0] != 0 ? g_last_reason : "framebuffer readback failed");
         return EU4_GFX_FRAMEBUFFER_CAPTURE_GL;
     }
     const char *suffix = strcmp(format, "BGRA8") == 0 ? "bgra" : "rgba";
@@ -468,6 +550,11 @@ eu4_gfx_framebuffer_status eu4_gfx_observe_framebuffer_after_draw(
     }
     gl_state state;
     read_gl_state(&state);
+    const char *reason = NULL;
+    if (!framebuffer_supported(&state, &reason)) {
+        write_failure("gl-reference-failure.json", GL_INVALID_OPERATION, &state, reason);
+        return EU4_GFX_FRAMEBUFFER_CAPTURE_GL;
+    }
     char glsl_sha[65];
     int shader_count = 0;
     read_glsl_identity(state.program, glsl_sha, &shader_count);
@@ -482,7 +569,8 @@ eu4_gfx_framebuffer_status eu4_gfx_observe_framebuffer_after_draw(
     GLenum error = GL_NO_ERROR;
     if (!read_region(&state, &pixels, &length, &width, &height, &format,
                      &finish_ns, &read_ns, &error)) {
-        write_failure("gl-reference-failure.json", error, &state);
+        write_failure("gl-reference-failure.json", error, &state,
+                      g_last_reason[0] != 0 ? g_last_reason : "framebuffer readback failed");
         return EU4_GFX_FRAMEBUFFER_CAPTURE_GL;
     }
     const char *suffix = strcmp(format, "BGRA8") == 0 ? "bgra" : "rgba";
@@ -549,6 +637,9 @@ eu4_gfx_framebuffer_status eu4_gfx_observe_framebuffer_after_draw(
         "\"shader\":{\"program\":%d,\"glsl_sha256\":\"%s\","
         "\"shader_count\":%d},"
         "\"caps\":{\"bytes_hex\":\"%s\",\"byte4\":%d},"
+        "\"pack\":{\"saved_alignment\":%d,\"saved_row_length\":%d,"
+        "\"saved_skip_rows\":%d,\"saved_skip_pixels\":%d,"
+        "\"saved_pack_buffer\":%d,\"restored\":%s},"
         "\"settings\":{\"force_pow2_source\":\"engine TestPOW2TextureCompatibility\"},"
         "\"capture\":{\"raw_file\":\"%s\",\"raw_bytes\":%zu,"
         "\"raw_sha256\":\"%s\",\"pixel_format\":\"%s\"},"
@@ -575,8 +666,10 @@ eu4_gfx_framebuffer_status eu4_gfx_observe_framebuffer_after_draw(
         state.color_mask[0], state.color_mask[1], state.color_mask[2],
         state.color_mask[3], state.program, state.active_texture,
         state.texture_2d, state.read_format, state.read_type, state.program,
-        glsl_sha, shader_count, caps_hex, caps_byte4, raw_name, length, sha,
-        format, pre_json);
+        glsl_sha, shader_count, caps_hex, caps_byte4, g_last_pack.alignment,
+        g_last_pack.row_length, g_last_pack.skip_rows, g_last_pack.skip_pixels,
+        g_last_pack.pack_buffer, g_last_pack_restored ? "true" : "false",
+        raw_name, length, sha, format, pre_json);
     if (length_json <= 0 || (size_t)length_json >= sizeof body) {
         return EU4_GFX_FRAMEBUFFER_CAPTURE_IO;
     }
