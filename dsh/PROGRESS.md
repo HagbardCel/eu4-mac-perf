@@ -227,9 +227,11 @@ passes against the same profile.
 - **No live reviewer rejection/remediation loop.** The channel, the schema
   validation and the receipt writing are exercised with a scripted reviewer; the
   live reviewer was run once and returned `unresolved`.
-- **Original-EU4 live capture is disabled** and will stay disabled until every
-  launch path shares a host-wide process lease. Worktrees pinned before the ledger
-  existed cannot participate at all.
+- **Original-EU4 live capture requires the shared host lease and a bounded
+  operator budget.** The host-wide process lease now exists and the reusable
+  `automation.live_gfx probe` path uses it; a manually started game is refused.
+  Worktrees pinned before the lease and launch-ledger infrastructure still cannot
+  participate. See [live graphics experiments](../docs/live-gfx-experiments.md).
 - **The pilot's qualification record sits in an agent-writable directory**
   (`<checkout>/.local/dsh/...`). Authority is unaffected -- completion requires a
   fresh checker run -- but production campaigns should keep records in the trusted
@@ -241,6 +243,5 @@ passes against the same profile.
 
 ## Deferred deliberately
 
-A shared process lease for original-EU4 launches; a replacement Ghidra query
-engine; a multi-round headless facility; a general campaign platform; any
-per-campaign or per-function special-casing in the plugin.
+A replacement Ghidra query engine; a multi-round headless facility; a general
+campaign platform; any per-campaign or per-function special-casing in the plugin.

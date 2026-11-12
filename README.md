@@ -4,6 +4,9 @@ This repository measures and profiles the **GOG** macOS build of Europa Universa
 
 - **Current state:** [docs/status.md](docs/status.md)
 - **Strategy (canonical):** [docs/eu4_recommended_strategy.md](docs/eu4_recommended_strategy.md) ([navigation index](docs/roadmap.md))
+- **Live graphics experiments:** [docs/live-gfx-experiments.md](docs/live-gfx-experiments.md)
+- **OpenCode campaigns:** [automation/README.md](automation/README.md)
+- **DSH native-goal path:** [dsh/README.md](dsh/README.md)
 - **Full profiler and benchmark manual:** [docs/reference/profiler-and-benchmark-operations.md](docs/reference/profiler-and-benchmark-operations.md)
 
 ## Repository layout
@@ -33,12 +36,15 @@ The hook runs `git diff --cached --check` on staged changes; CI still validates 
 
 ## Quick start
 
-From the repository root, using Python 3.10+:
+From the repository root, using Python 3.14:
 
 ```sh
 python3 benchmark/eu4_benchmark.py inspect
 PYTHONPATH=benchmark:. python3 -m unittest discover -s tests
 ```
+
+CI exercises Python **3.14 only**. That is the sole tested version; it does not
+establish compatibility with older Python releases.
 
 Phase C sealed evidence verification (CI gate; capsule is closed — see [docs/status.md](docs/status.md)):
 

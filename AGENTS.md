@@ -1,5 +1,9 @@
 # Agent defaults
 
+Current capabilities, evidence status and open limits are recorded in
+[docs/status.md](docs/status.md). Consult it before planning graphics work or
+claiming that a capability exists.
+
 ## EU4 reconstruction and migration
 
 For cohesive reconstruction or migration of EU4 functionality—especially `_Gfx*` OpenGL→Metal work (shaders, render state, draws, lifecycle remediations)—**do not** implement the migration body by hand in an interactive session.
