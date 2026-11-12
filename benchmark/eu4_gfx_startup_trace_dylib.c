@@ -1,4 +1,5 @@
 #include "eu4_gfx_startup_trace.h"
+#include "eu4_gfx_frame_trace.h"
 #include "eu4_gfx_observe.h"
 
 #include <errno.h>
@@ -253,6 +254,13 @@ __attribute__((constructor)) static void initialize_startup_trace(void) {
                                  kPatch)) {
         (void)write_status(run_dir, "error", session, actual, image_base,
                            settings_site, init_site, "install-failed");
+        return;
+    }
+    if (eu4_gfx_frame_trace_configure_from_env() != 0 &&
+        eu4_gfx_frame_trace_enabled() == 0 &&
+        getenv("EU4_GFX_FRAME_TRACE_DIR") != NULL) {
+        (void)write_status(run_dir, "error", session, actual, image_base,
+                           settings_site, init_site, "frame-config");
         return;
     }
     if (!eu4_gfx_observe_configure_from_env()) {
