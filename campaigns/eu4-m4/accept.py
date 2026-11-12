@@ -263,7 +263,8 @@ def main(argv: list[str]) -> int:
         inconclusive = True
 
     tree = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=workspace, capture_output=True, text=True, check=False
+        ["git", "status", "--porcelain", "--untracked-files=no"],
+        cwd=workspace, capture_output=True, text=True, check=False,
     ).stdout.strip()
     provenance_ok = bool(expected_exe) and bool(candidate.get("vertex_hex_sha256")) and not tree
     gates.append(_gate("provenance:source", provenance_ok, "clean tree and recorded identities"))

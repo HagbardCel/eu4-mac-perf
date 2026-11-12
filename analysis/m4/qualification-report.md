@@ -23,6 +23,7 @@ the acceptance checker returns `inconclusive`, not `pass`.
 | Field | Value |
 | --- | --- |
 | Baseline commit | `dd4290bc9165574d81afa1b3ce151cb767031fda` (M3 merge, PR #185) |
+| Implementation commit | `3de8d4a` on `m4/gl-reference-and-presentation` |
 | Pinned executable | `/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4` |
 | Executable SHA-256 | `b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d` |
 | GPU | Apple M5 Max, Metal 4 |
