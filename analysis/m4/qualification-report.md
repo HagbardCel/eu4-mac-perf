@@ -178,6 +178,16 @@ and is itself pinned by `evidence_manifest_sha256` in
 [campaign.json](../../campaigns/eu4-m4/campaign.json). The checker refuses a
 manifest whose digest does not match the campaign pin.
 
+## Evidence reuse for the review revision
+
+The review changes affect checkpoint selection, observer readback safety and
+checker validation, not the Metal rendering or presentation output. The
+presentation evidence from `metal-present-20` is therefore reused; the checker
+re-reads its checkpoint and re-computes the screenshot/drawable similarity from
+the recorded files. Only the original-GL reference was recaptured
+(`gl-reference-05`), because the observer's pixel-pack handling changed. It
+reproduced `69d41a88…` and recorded `restored=true`.
+
 ## Offline regressions
 
 `tests.test_gfx_compare`, `tests.test_gl_reference`, `tests.test_live_gfx_probe`,
