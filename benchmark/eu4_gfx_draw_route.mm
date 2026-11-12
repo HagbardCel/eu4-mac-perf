@@ -177,18 +177,23 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
         return refuse(EU4_GFX_DRAW_ROUTE_FAILED, diagnostic, capacity,
                       "backend queue refused a command buffer");
     }
-    char text[256];
     void *current_shader = load_ptr(master, 0x70);
     if (current_shader == NULL) {
         return refuse(EU4_GFX_DRAW_ROUTE_UNSUPPORTED, diagnostic, capacity,
                       "draw has no admitted current shader");
     }
-    if (eu4_gfx_shader_is_generic(current_shader)) {
-        int32_t count32 = (int32_t)raw->rsi;
+    const char *identity = eu4_gfx_shader_identity(current_shader);
+    int legacy_preferred = identity != NULL &&
+        (strstr(identity, "simple") != NULL || strstr(identity, "sprite") != NULL);
+    int generic_ready = eu4_gfx_shader_is_generic(current_shader);
+    char text[256];
+    text[0] = 0;
+    if (generic_ready && !legacy_preferred) {
         eu4_gfx_generic_call call = {0};
         call.instance_count = 1;
         if (raw->which == 1) {
             call.indexed = 0;
+            int32_t count32 = (int32_t)raw->rsi;
             if (count32 <= 0) {
                 count32 = (int32_t)load_u32(master, 0x64);
             }
@@ -196,6 +201,7 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
             call.first = (int32_t)raw->rdx;
         } else if (raw->which == 2) {
             call.indexed = 1;
+            int32_t count32 = (int32_t)raw->rsi;
             if (count32 <= 0) {
                 count32 = (int32_t)load_u32(master, 0x68);
             }
@@ -203,6 +209,7 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
             call.base_vertex = (int32_t)raw->rcx;
         } else {
             call.indexed = 1;
+            int32_t count32 = (int32_t)raw->rsi;
             if (count32 <= 0) {
                 count32 = (int32_t)load_u32(master, 0x68);
             }
@@ -219,23 +226,49 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
                               : "generic encoder refused the draw");
         }
     } else {
-        if (!eu4_gfx_shader_is_linked(current_shader)) {
+        if (current_shader == NULL) {
+            return refuse(EU4_GFX_DRAW_ROUTE_UNSUPPORTED, diagnostic, capacity,
+                          "draw has no admitted current shader");
+        }
+        if (!eu4_gfx_shader_is_linked(current_shader) && !generic_ready) {
             return refuse(EU4_GFX_DRAW_ROUTE_UNSUPPORTED, diagnostic, capacity,
                           "current shader is not linked");
         }
-        if (raw->which != 1) {
-            return refuse(EU4_GFX_DRAW_ROUTE_UNSUPPORTED, diagnostic, capacity,
-                          raw->which == 2
-                              ? "_GfxDrawIndexed has no admitted encoder for this shader"
-                              : "_GfxDrawIndexedInstanced has no admitted encoder for this shader");
+        int encoded_ok = 0;
+        if (raw->which == 1) {
+            eu4_gfx_draw_encode_result encoded = eu4_gfx_draw_encode_into(
+                (const void *)handle, (int32_t)raw->rsi, (int32_t)raw->rdx, &inputs,
+                (__bridge void *)command, text, sizeof text, state);
+            if (encoded == EU4_GFX_DRAW_ENCODE_OK) {
+                encoded_ok = 1;
+            }
         }
-        eu4_gfx_draw_encode_result encoded = eu4_gfx_draw_encode_into(
-            (const void *)handle, (int32_t)raw->rsi, (int32_t)raw->rdx, &inputs,
-            (__bridge void *)command, text, sizeof text, state);
-        if (encoded != EU4_GFX_DRAW_ENCODE_OK) {
-            return refuse(encoded == EU4_GFX_DRAW_ENCODE_UNSUPPORTED
-                              ? EU4_GFX_DRAW_ROUTE_UNSUPPORTED
-                              : EU4_GFX_DRAW_ROUTE_FAILED,
+        if (!encoded_ok && generic_ready) {
+            eu4_gfx_generic_call call = {0};
+            call.instance_count = 1;
+            call.indexed = raw->which != 1;
+            int32_t count32 = (int32_t)raw->rsi;
+            if (count32 <= 0) {
+                count32 = (int32_t)load_u32(master, raw->which == 1 ? 0x64 : 0x68);
+            }
+            call.count = count32;
+            call.first = (int32_t)raw->rdx;
+            call.base_vertex = (int32_t)raw->rcx;
+            if (raw->which == 3) {
+                call.instance_count = (int32_t)raw->rdx > 0 ? (int32_t)raw->rdx : 1;
+            }
+            const char *generic_reason = NULL;
+            if (!eu4_gfx_generic_draw_encode_into((const void *)handle, &call,
+                                                  &inputs, (__bridge void *)command,
+                                                  &generic_reason, state)) {
+                return refuse(EU4_GFX_DRAW_ROUTE_UNSUPPORTED, diagnostic, capacity,
+                              generic_reason != NULL && generic_reason[0] != 0
+                                  ? generic_reason
+                                  : "generic encoder refused the draw");
+            }
+        } else if (!encoded_ok) {
+            return refuse(raw->which != 1 ? EU4_GFX_DRAW_ROUTE_UNSUPPORTED
+                                          : EU4_GFX_DRAW_ROUTE_FAILED,
                           diagnostic, capacity,
                           text[0] != 0 ? text : "draw encoder refused the draw");
         }

@@ -773,6 +773,10 @@ int eu4_gfx_add_vertex_shader(void *unused, void *shader, const char *source) {
         return 1;
     }
     }
+    {
+        NSDictionary *attached = cached_stage_for(source, EU4_GFX_SHADER_STAGE_VERTEX);
+        if (attached != nil) { record.vertexStage = attached; }
+    }
     const char *effect = legacy_effect;
     if (effect == NULL ||
         (record.identity != nil &&
@@ -870,6 +874,10 @@ int eu4_gfx_add_pixel_shader(void *unused, void *shader, const char *source) {
         write_shader_event("ps", event);
         return 1;
     }
+    }
+    {
+        NSDictionary *attached = cached_stage_for(source, EU4_GFX_SHADER_STAGE_PIXEL);
+        if (attached != nil) { record.pixelStage = attached; }
     }
     const char *effect = legacy_effect;
     if (effect == NULL ||

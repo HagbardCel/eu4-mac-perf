@@ -259,8 +259,9 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
             return NO;
         }
         if ([declared count] > 0 && ![declared containsObject:@(location)]) {
-            fail(reason, capacity, "vertex element location is absent from the translated stage");
-            return NO;
+            /* The engine layout can carry attributes the linked program does
+               not consume; they are not part of the Metal descriptor. */
+            continue;
         }
         void *header = load_ptr(master, 0x130 + (size_t)slot * 8);
         uint32_t slot_offset = load_u32(master, 0x150 + (size_t)slot * 4);
