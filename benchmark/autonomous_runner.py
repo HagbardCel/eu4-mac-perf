@@ -26,6 +26,11 @@ from fixture_manager import FixtureManager
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from automation import launch_lease  # noqa: E402
+
 FIXTURE = ROOT / "fixtures/venice_paused.eu4"
 FIXTURE_MANIFEST = ROOT / "fixtures/venice_paused.json"
 PROBE_SOURCE = Path(__file__).with_name("eu4_auto_probe.c")
@@ -824,7 +829,7 @@ def run(output_root: Path, evidence: dict, bootstrap: bool = False) -> Path:
         metadata["clock_anchor"] = anchor
         game_log = base.USER_DATA / "logs/game.log"
         old_log = game_log.read_bytes() if game_log.is_file() else b""
-        game = pm = None
+        game = pm = lease = None
         installed = False
         try:
             working_save = fixture.install()
@@ -841,9 +846,15 @@ def run(output_root: Path, evidence: dict, bootstrap: bool = False) -> Path:
                        "EU4_AUTO_PROBE_LOG": str(run_dir / "auto-probe.csv")}
                 with (run_dir / "game.stdout").open("wb") as stdout, \
                      (run_dir / "game.stderr").open("wb") as stderr:
-                    game = subprocess.Popen(["./eu4", *evidence["launcher_args"],
-                                             "--continuelastsave"], cwd=base.GOG_EXE.parent,
-                                            env=env, stdout=stdout, stderr=stderr)
+                    lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
+                    try:
+                        game = subprocess.Popen(["./eu4", *evidence["launcher_args"],
+                                                 "--continuelastsave"], cwd=base.GOG_EXE.parent,
+                                                env=env, stdout=stdout, stderr=stderr,
+                                                pass_fds=lease.child_fds())
+                    except BaseException:
+                        lease.release()
+                        raise
                 metadata["game_pid"] = game.pid
                 tail = PowerTail(pm_path)
                 ready = wait_until_ready(game, run_dir / "auto-probe.csv", tail, anchor,
@@ -891,6 +902,8 @@ def run(output_root: Path, evidence: dict, bootstrap: bool = False) -> Path:
                     except subprocess.TimeoutExpired:
                         pass
                 stop_process(game, 10)
+                if lease is not None:
+                    lease.release()
                 if game is not None and game.poll() is None:
                     raise base.BenchmarkError("EU IV remained running; recovery journal was retained")
                 if installed:

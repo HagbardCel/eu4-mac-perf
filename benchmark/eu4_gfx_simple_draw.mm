@@ -1,6 +1,7 @@
 #import "eu4_gfx_simple_draw.h"
 
 #import "eu4_gfx_buffers.h"
+#import "eu4_gfx_init.h"
 #import "eu4_gfx_shader.h"
 #import "eu4_gfx_texture.h"
 
@@ -59,6 +60,8 @@ const char *eu4_gfx_simple_draw_status_name(eu4_gfx_simple_draw_status status) {
         return "pipeline";
     case EU4_GFX_SIMPLE_DRAW_ENCODE:
         return "encode";
+    case EU4_GFX_SIMPLE_DRAW_STATE:
+        return "state";
     }
     return "unknown";
 }
@@ -83,15 +86,48 @@ static eu4_gfx_simple_draw_status refuse(eu4_gfx_simple_draw_status status, cons
     return status;
 }
 
-eu4_gfx_simple_draw_status eu4_gfx_simple_draw(const void *immediate_context, int32_t count,
-                                               int32_t first,
-                                               const eu4_gfx_simple_draw_inputs *inputs,
-                                               const char **reason) {
+static void hex_bytes(const uint8_t *bytes, size_t length, char *out) {
+    static const char digits[] = "0123456789abcdef";
+    for (size_t i = 0; i < length; i++) {
+        out[i * 2] = digits[bytes[i] >> 4];
+        out[i * 2 + 1] = digits[bytes[i] & 0xf];
+    }
+    out[length * 2] = 0;
+}
+
+static uint64_t fnv1a(const uint8_t *bytes, size_t length) {
+    uint64_t hash = 1469598103934665603ULL;
+    for (size_t i = 0; i < length; i++) {
+        hash ^= bytes[i];
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+static void copy_identity(char *dest, size_t capacity, const char *source) {
+    if (capacity == 0) {
+        return;
+    }
+    snprintf(dest, capacity, "%s", source != NULL ? source : "");
+}
+
+eu4_gfx_simple_draw_status eu4_gfx_simple_draw_encode_into(
+    const void *immediate_context, int32_t count, int32_t first,
+    const eu4_gfx_simple_draw_inputs *inputs, void *command_buffer,
+    const char **reason, eu4_gfx_simple_draw_state *state) {
     if (reason != NULL) {
         *reason = NULL;
     }
-    if (immediate_context == NULL || inputs == NULL) {
-        return refuse(EU4_GFX_SIMPLE_DRAW_CONTEXT, reason, "null context or inputs");
+    if (state != NULL) {
+        memset(state, 0, sizeof *state);
+    }
+    if (immediate_context == NULL || inputs == NULL || command_buffer == NULL) {
+        return refuse(EU4_GFX_SIMPLE_DRAW_CONTEXT, reason,
+                      "null context, inputs or command buffer");
+    }
+    id<MTLCommandBuffer> command = (__bridge id<MTLCommandBuffer>)command_buffer;
+    if (command == nil) {
+        return refuse(EU4_GFX_SIMPLE_DRAW_CONTEXT, reason, "null command buffer");
     }
     const uint8_t *master = (const uint8_t *)load_ptr((const uint8_t *)immediate_context, 0);
     if (master == NULL) {
@@ -172,10 +208,17 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw(const void *immediate_context, in
     }
     if (inputs->device == NULL || inputs->target == NULL || inputs->target_width == 0 ||
         inputs->target_height == 0 || inputs->viewport_width == 0 ||
-        inputs->viewport_height == 0 ||
-        (uint64_t)inputs->viewport_x + inputs->viewport_width > inputs->target_width ||
-        (uint64_t)inputs->viewport_y + inputs->viewport_height > inputs->target_height) {
+        inputs->viewport_height == 0) {
         return refuse(EU4_GFX_SIMPLE_DRAW_TARGET, reason, "target or viewport invalid");
+    }
+    uint32_t logical_width =
+        inputs->logical_width != 0 ? inputs->logical_width : inputs->target_width;
+    uint32_t logical_height =
+        inputs->logical_height != 0 ? inputs->logical_height : inputs->target_height;
+    if ((uint64_t)inputs->viewport_x + inputs->viewport_width > logical_width ||
+        (uint64_t)inputs->viewport_y + inputs->viewport_height > logical_height) {
+        return refuse(EU4_GFX_SIMPLE_DRAW_TARGET, reason,
+                      "viewport exceeds the logical engine dimensions");
     }
 
     id<MTLDevice> device = (__bridge id<MTLDevice>)inputs->device;
@@ -206,6 +249,15 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw(const void *immediate_context, in
                       "texture is on another device or aliases the render target");
     }
 
+    /* The blend/depth/raster snapshots are original master state written by the
+       replacement state entry points. The Simple pass admits only the backend's
+       known default snapshots and a full-attachment (or unset) scissor. */
+    char state_reason[128];
+    if (!eu4_gfx_simple_state_supported((void *)master, state_reason,
+                                        sizeof state_reason)) {
+        return refuse(EU4_GFX_SIMPLE_DRAW_STATE, reason, state_reason);
+    }
+
     EU4GfxPipelineKey key = {};
     key.mtl_device = inputs->device;
     key.pixel_format = (unsigned)MTLPixelFormatBGRA8Unorm;
@@ -225,23 +277,11 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw(const void *immediate_context, in
     }
 
     /* Matrix bytes are copied before encoding: the engine buffer is caller-owned
-       and may be rewritten by the next UpdateConstantBuffer. */
+       and may be rewritten by the next UpdateConstantBuffer. The small
+       constant is bound to the vertex stage directly, so no temporary GPU buffer
+       or asynchronous lifetime is created for it. */
     uint8_t matrix[64];
     memcpy(matrix, constant_data, sizeof matrix);
-    id<MTLBuffer> uniforms = [device newBufferWithBytes:matrix
-                                                 length:sizeof matrix
-                                                options:MTLResourceStorageModeShared];
-
-    id<MTLCommandQueue> queue = inputs->queue != NULL
-                                    ? (__bridge id<MTLCommandQueue>)inputs->queue
-                                    : [device newCommandQueue];
-    if (uniforms == nil || queue == nil) {
-        return refuse(EU4_GFX_SIMPLE_DRAW_ENCODE, reason, "Metal allocation failed");
-    }
-    if (queue.device != device) {
-        return refuse(EU4_GFX_SIMPLE_DRAW_ENCODE, reason,
-                      "command queue belongs to another device");
-    }
 
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
     pass.colorAttachments[0].texture = target;
@@ -254,38 +294,131 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw(const void *immediate_context, in
                               inputs->clear_color[2], inputs->clear_color[3]);
     }
 
-    id<MTLCommandBuffer> command = [queue commandBuffer];
     id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
-    if (command == nil || encoder == nil) {
+    if (encoder == nil) {
         return refuse(EU4_GFX_SIMPLE_DRAW_ENCODE, reason, "command encoding failed");
     }
     [encoder setRenderPipelineState:pipeline];
+    /* The admitted default raster snapshot does not cull in the reconstructed
+       pass (the full-screen strip has one triangle of each winding). State is
+       still validated above; a non-default snapshot is refused. */
+    [encoder setCullMode:MTLCullModeNone];
     /* The engine viewport (and glViewport) uses a lower-left origin; Metal uses
-       top-left. For the authentic full-attachment viewport this is a no-op. */
-    double viewport_y = (double)inputs->target_height -
-                        ((double)inputs->viewport_y + (double)inputs->viewport_height);
-    [encoder setViewport:(MTLViewport){(double)inputs->viewport_x, viewport_y,
-                                       (double)inputs->viewport_width,
-                                       (double)inputs->viewport_height, 0.0, 1.0}];
+       top-left. Logical engine coordinates are scaled to the physical target
+       before the origin conversion; at 1:1 this is identical to the previous
+       encoder. */
+    double scale_x = (double)inputs->target_width / (double)logical_width;
+    double scale_y = (double)inputs->target_height / (double)logical_height;
+    double viewport_x = (double)inputs->viewport_x * scale_x;
+    double viewport_y =
+        ((double)logical_height - ((double)inputs->viewport_y +
+                                   (double)inputs->viewport_height)) *
+        scale_y;
+    double viewport_width = (double)inputs->viewport_width * scale_x;
+    double viewport_height = (double)inputs->viewport_height * scale_y;
+    [encoder setViewport:(MTLViewport){viewport_x, viewport_y, viewport_width,
+                                       viewport_height, 0.0, 1.0}];
+    [encoder setVertexBytes:matrix length:sizeof matrix atIndex:1];
     [encoder setVertexBuffer:(__bridge id<MTLBuffer>)vertex_buffer
                       offset:(NSUInteger)vertex_offset
                      atIndex:0];
-    [encoder setVertexBuffer:uniforms offset:0 atIndex:1];
     [encoder setFragmentTexture:texture atIndex:0];
     [encoder setFragmentSamplerState:sampler atIndex:0];
     [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
                 vertexStart:(NSUInteger)first
                 vertexCount:(NSUInteger)count];
     [encoder endEncoding];
+
+    if (state != NULL) {
+        copy_identity(state->shader_identity, sizeof state->shader_identity, identity);
+        state->primitive = 5;
+        state->count = count;
+        state->first = first;
+        state->vertex_stride = vertex_stride;
+        state->vertex_offset = vertex_offset;
+        state->vertex_bytes = (uint64_t)vertex_length;
+        state->vertex_hash = 0;
+        state->vertex_hex[0] = 0;
+        id<MTLBuffer> vertex_mtl = (__bridge id<MTLBuffer>)vertex_buffer;
+        const uint8_t *vertex_contents = (const uint8_t *)[vertex_mtl contents];
+        if (vertex_contents != NULL) {
+            size_t available = vertex_length > vertex_offset
+                                   ? (size_t)(vertex_length - vertex_offset)
+                                   : 0;
+            size_t sample = available < 96 ? available : 96;
+            if (sample > 0) {
+                const uint8_t *start = vertex_contents + vertex_offset;
+                state->vertex_hash = fnv1a(start, sample);
+                hex_bytes(start, sample, state->vertex_hex);
+            }
+        }
+        state->constant_hash = fnv1a(matrix, sizeof matrix);
+        hex_bytes(matrix, sizeof matrix, state->constant_hex);
+        state->texture_pointer = (uint64_t)(uintptr_t)texture_binding;
+        state->texture_width = (uint32_t)texture.width;
+        state->texture_height = (uint32_t)texture.height;
+        state->target_pointer = (uint64_t)(uintptr_t)inputs->target;
+        state->target_width = inputs->target_width;
+        state->target_height = inputs->target_height;
+        state->logical_width = logical_width;
+        state->logical_height = logical_height;
+        state->viewport_x = inputs->viewport_x;
+        state->viewport_y = inputs->viewport_y;
+        state->viewport_width = inputs->viewport_width;
+        state->viewport_height = inputs->viewport_height;
+        state->blend_supported = 1;
+        state->depth_default = eu4_gfx_depth_snapshot_is_default((void *)master);
+        state->raster_default = 1;
+        state->scissor_full = 1;
+    }
+    return EU4_GFX_SIMPLE_DRAW_OK;
+}
+
+eu4_gfx_simple_draw_status eu4_gfx_simple_draw_with_state(
+    const void *immediate_context, int32_t count, int32_t first,
+    const eu4_gfx_simple_draw_inputs *inputs, const char **reason,
+    eu4_gfx_simple_draw_state *state) {
+    if (inputs == NULL || inputs->device == NULL) {
+        return refuse(EU4_GFX_SIMPLE_DRAW_CONTEXT, reason, "null inputs or device");
+    }
+    id<MTLDevice> device = (__bridge id<MTLDevice>)inputs->device;
+    id<MTLCommandQueue> queue = inputs->queue != NULL
+                                    ? (__bridge id<MTLCommandQueue>)inputs->queue
+                                    : [device newCommandQueue];
+    if (queue == nil) {
+        return refuse(EU4_GFX_SIMPLE_DRAW_ENCODE, reason, "Metal queue creation failed");
+    }
+    if (queue.device != device) {
+        return refuse(EU4_GFX_SIMPLE_DRAW_ENCODE, reason,
+                      "command queue belongs to another device");
+    }
+    id<MTLCommandBuffer> command = [queue commandBuffer];
+    if (command == nil) {
+        return refuse(EU4_GFX_SIMPLE_DRAW_ENCODE, reason, "command buffer creation failed");
+    }
+    eu4_gfx_simple_draw_status encoded = eu4_gfx_simple_draw_encode_into(
+        immediate_context, count, first, inputs, (__bridge void *)command, reason, state);
+    if (encoded != EU4_GFX_SIMPLE_DRAW_OK) {
+        return encoded;
+    }
     /* Offline reconstruction boundary: this diagnostic entry point commits and
        blocks so callers can read the target and report a concrete failure. It is
        deliberately NOT the production submission contract; live _GfxDraw wiring
-       must not wait after every draw. Buffers and textures are borrowed, so the
-       wait also keeps every resource alive until the GPU is done with it. */
+       must not wait after every draw. Resources referenced by the command
+       buffer are retained by Metal until completion. */
     [command commit];
     [command waitUntilCompleted];
     if (command.status != MTLCommandBufferStatusCompleted || command.error != nil) {
-        return refuse(EU4_GFX_SIMPLE_DRAW_ENCODE, reason, "command buffer did not complete");
+        return refuse(EU4_GFX_SIMPLE_DRAW_ENCODE, reason,
+                      "command buffer did not complete");
     }
     return EU4_GFX_SIMPLE_DRAW_OK;
+}
+
+eu4_gfx_simple_draw_status eu4_gfx_simple_draw(const void *immediate_context, int32_t count,
+                                               int32_t first,
+                                               const eu4_gfx_simple_draw_inputs *inputs,
+                                               const char **reason) {
+    return eu4_gfx_simple_draw_with_state(immediate_context, count, first, inputs,
+                                          reason, NULL);
 }

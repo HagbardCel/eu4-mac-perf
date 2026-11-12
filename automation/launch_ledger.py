@@ -77,23 +77,48 @@ def read_pointer(run_root: Path) -> dict | None:
 
 
 def create_ledger(
-    path: Path, *, workflow_id: str, limit: int, deadline_seconds: float | None
+    path: Path,
+    *,
+    workflow_id: str,
+    limit: int,
+    deadline_seconds: float | None,
+    executable: dict | None = None,
+    output_root: Path | str | None = None,
 ) -> Path:
+    """Create the one authoritative ledger if it is absent.
+
+    ``executable`` (``{"path", "sha256"}``) and ``output_root`` are optional
+    operator pins. They narrow an existing contract; they do not add a second
+    authority or a concurrency control. An existing ledger is returned
+    unchanged, so re-running an initialization command cannot reset a budget.
+    """
     path = Path(path)
     if path.exists():
         return path
-    _atomic(
-        path,
-        {
-            "schema": LEDGER_SCHEMA,
-            "workflow_id": workflow_id,
-            "limit": int(limit),
-            "deadline_seconds": deadline_seconds,
-            "used": 0,
-            "launches": [],
-        },
-    )
+    value = {
+        "schema": LEDGER_SCHEMA,
+        "workflow_id": workflow_id,
+        "limit": int(limit),
+        "deadline_seconds": deadline_seconds,
+        "used": 0,
+        "launches": [],
+    }
+    if executable is not None:
+        value["executable"] = {
+            "path": str(Path(executable["path"]).expanduser().resolve(strict=False)),
+            "sha256": str(executable["sha256"]),
+        }
+    if output_root is not None:
+        value["output_root"] = str(Path(output_root).expanduser().resolve(strict=False))
+    _atomic(path, value)
     return path
+
+
+def _within(path: Path, root: Path) -> bool:
+    try:
+        return os.path.commonpath([str(path), str(root)]) == str(root)
+    except ValueError:
+        return False
 
 
 def load_ledger(path: Path) -> dict:
@@ -148,6 +173,17 @@ def validate_ledger(value: dict) -> list[str]:
             errors.append(f"launches[{index}] has no campaign id")
     if type(limit) is int and type(used) is int and used > limit:
         errors.append("used exceeds the limit")
+    executable = value.get("executable")
+    if executable is not None:
+        if not isinstance(executable, dict):
+            errors.append("executable is not an object")
+        elif not isinstance(executable.get("path"), str) or not executable["path"]:
+            errors.append("executable.path is missing")
+        elif not isinstance(executable.get("sha256"), str) or not executable["sha256"]:
+            errors.append("executable.sha256 is missing")
+    output_root = value.get("output_root")
+    if output_root is not None and (not isinstance(output_root, str) or not output_root):
+        errors.append("output_root is invalid")
     return errors
 
 
@@ -167,11 +203,33 @@ def claim(
     output: Path,
     targets: list[str],
     requested_timeout: float,
+    executable_sha256: str | None = None,
 ) -> str:
     path = Path(path)
     handle = _locked(path)
     try:
         value = load_ledger(path)
+        pinned = value.get("executable")
+        if isinstance(pinned, dict):
+            if executable_sha256 is None:
+                raise LedgerError(
+                    "executable",
+                    "the workflow pins an executable; the launch must attest its sha256",
+                )
+            if executable_sha256 != pinned.get("sha256"):
+                raise LedgerError(
+                    "executable",
+                    "launch executable does not match the operator-pinned identity",
+                )
+        root_value = value.get("output_root")
+        if isinstance(root_value, str):
+            root = Path(root_value).expanduser().resolve(strict=False)
+            destination = Path(output).expanduser().resolve(strict=False)
+            if not _within(destination, root):
+                raise LedgerError(
+                    "output_root",
+                    f"experiment output escapes the authorized root: {destination}",
+                )
         if value["used"] >= value["limit"]:
             raise LedgerError(
                 "exhausted",
@@ -256,6 +314,63 @@ def reconcile(path: Path) -> int:
     finally:
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         handle.close()
+
+
+def authorize_workflow(
+    ledger_path: Path,
+    run_root: Path,
+    *,
+    workflow_id: str,
+    limit: int,
+    deadline_seconds: float | None,
+    executable: dict | None = None,
+    output_root: Path | str | None = None,
+) -> dict:
+    """Operator initialization: one ledger plus a pointer in the run root.
+
+    The pointer is a discovery aid. The ledger is authoritative and may live
+    outside the worktree. An existing ledger is never rewritten, so the command
+    cannot be used to replenish a spent budget.
+    """
+    ledger_path = Path(ledger_path).expanduser().resolve()
+    run_root = Path(run_root).expanduser().resolve()
+    created = not ledger_path.exists()
+    create_ledger(
+        ledger_path,
+        workflow_id=workflow_id,
+        limit=limit,
+        deadline_seconds=deadline_seconds,
+        executable=executable,
+        output_root=output_root,
+    )
+    value = load_ledger(ledger_path)
+    pinned = value.get("executable")
+    if executable is not None and isinstance(pinned, dict):
+        if pinned.get("sha256") != executable.get("sha256") or pinned.get("path") != str(
+            Path(executable["path"]).expanduser().resolve(strict=False)
+        ):
+            raise LedgerError(
+                "executable",
+                "this workflow ledger already pins a different executable",
+            )
+    write_pointer(
+        run_root,
+        workflow_id=value["workflow_id"],
+        ledger_path=ledger_path,
+        limit=value["limit"],
+    )
+    return {
+        "schema": "launch-authorization/v1",
+        "created": created,
+        "ledger": str(ledger_path),
+        "run_root": str(run_root),
+        "workflow_id": value["workflow_id"],
+        "limit": value["limit"],
+        "used": value["used"],
+        "deadline_seconds": value.get("deadline_seconds"),
+        "executable": value.get("executable"),
+        "output_root": value.get("output_root"),
+    }
 
 
 def campaign_receipts(

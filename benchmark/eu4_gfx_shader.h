@@ -34,6 +34,12 @@ int eu4_gfx_shader_register_qualified_sha256(const uint8_t digest[32]);
 /* Clear qualified-hash table (tests). */
 void eu4_gfx_shader_clear_qualified_hashes(void);
 
+/* Load exact compiler-input SHA-256 values from the tracked qualification
+   manifest (analysis/gfx-shader/v0/qualified-sources.json). Returns the number
+   registered, or -1 on an unreadable/malformed manifest. This never enables
+   transitional marker admission. */
+int eu4_gfx_shader_load_qualified_sources(const char *path);
+
 /* Opt into transitional MainCode/marker admission (offline hosts only).
    Default is off; engine-path completion must keep this disabled. */
 void eu4_gfx_shader_set_allow_transitional_markers(int allowed);

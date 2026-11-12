@@ -14,10 +14,13 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import fcntl
+import hashlib
 import json
 import os
 import sys
+import struct
 import time
+import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,6 +67,7 @@ def _claim_launch(
     targets: list[str],
     *,
     requested_timeout: float,
+    executable_sha256: str | None = None,
 ) -> str:
     run_root = run_root.expanduser().resolve()
     if not run_root.is_dir():
@@ -81,6 +85,7 @@ def _claim_launch(
                 output=output,
                 targets=targets,
                 requested_timeout=requested_timeout,
+                executable_sha256=executable_sha256,
             )
         except launch_ledger.LedgerError as exc:
             raise LaunchLimit(exc.kind, exc.detail) from exc
@@ -404,6 +409,7 @@ def capture(args: argparse.Namespace) -> int:
                 output,
                 args.target,
                 requested_timeout=args.timeout,
+                executable_sha256=evidence.get("executable_sha256"),
             )
         except LaunchLimit as exc:
             print(f"campaign launch refused: {exc}", file=sys.stderr)
@@ -587,6 +593,436 @@ def next_blocker(args: argparse.Namespace) -> int:
     return EXIT_UNAVAILABLE
 
 
+def _authority_dir() -> Path:
+    override = os.environ.get("EU4_LAUNCH_AUTHORITY_DIR")
+    if override:
+        return Path(override).expanduser()
+    # The preferred location is outside the worktree, but a workspace-write
+    # sandbox cannot create ~/Library. .local is gitignored and outside the
+    # candidate's normal source tree; it is not a protection against malicious
+    # same-user code (the project's documented trust model).
+    return ROOT / ".local" / "launch-authority"
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def authorize(args: argparse.Namespace) -> int:
+    """Operator-only: pin an executable and grant a bounded launch budget."""
+    from reverse_engineering import paths as re_paths
+
+    run_root = Path(args.run_root).expanduser().resolve()
+    output_root = Path(args.output_root).expanduser().resolve()
+    executable = Path(
+        args.executable or re_paths.load_target()["default_executable"]
+    ).expanduser().resolve(strict=False)
+    if not executable.is_file():
+        print(f"authorize refused: executable is absent: {executable}", file=sys.stderr)
+        return EXIT_UNAVAILABLE
+    if args.limit < 0:
+        print("authorize refused: --limit must be non-negative", file=sys.stderr)
+        return EXIT_INCOMPLETE
+    if args.deadline_seconds is not None and args.deadline_seconds <= 0:
+        print("authorize refused: --deadline-seconds must be positive", file=sys.stderr)
+        return EXIT_INCOMPLETE
+    workflow_id = args.workflow_id or run_root.name
+    ledger = (
+        Path(args.ledger).expanduser().resolve()
+        if args.ledger
+        else (_authority_dir() / f"{workflow_id}.json").resolve()
+    )
+    try:
+        result = launch_ledger.authorize_workflow(
+            ledger,
+            run_root,
+            workflow_id=workflow_id,
+            limit=args.limit,
+            deadline_seconds=args.deadline_seconds,
+            executable={"path": str(executable), "sha256": _file_sha256(executable)},
+            output_root=output_root,
+        )
+    except launch_ledger.LedgerError as exc:
+        print(f"authorize refused: {exc}", file=sys.stderr)
+        return EXIT_INCOMPLETE
+    output_root.mkdir(parents=True, exist_ok=True)
+    (run_root / "authorization.json").write_text(json.dumps(result, indent=2) + "\n")
+    print(json.dumps(result, indent=2))
+    return EXIT_COMPLETE
+
+
+CHECKPOINTS = {
+    "after-clear": {"symbol": "_GfxClear", "draw": False},
+    "after-draw": {"symbol": "_GfxDraw", "draw": True},
+    "before-present": {"symbol": "_GfxPresent", "draw": False},
+}
+
+
+def _write_png(path: Path, bgra: bytes, width: int, height: int) -> None:
+    """Minimal PNG preview (standard library only). BGRA8 -> RGBA8."""
+    stride = width * 4
+    rows = bytearray()
+    for y in range(height):
+        rows.append(0)  # filter: none
+        row = bgra[y * stride:(y + 1) * stride]
+        for x in range(0, len(row), 4):
+            rows.extend((row[x + 2], row[x + 1], row[x], row[x + 3]))
+
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        body = kind + payload
+        return struct.pack(">I", len(payload)) + body + struct.pack(
+            ">I", zlib.crc32(body) & 0xFFFFFFFF
+        )
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    data = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", zlib.compress(bytes(rows), 6))
+        + chunk(b"IEND", b"")
+    )
+    path.write_bytes(data)
+
+
+def _checkpoint_files(output: Path) -> list[Path]:
+    return sorted(output.glob("checkpoint-*.json"))
+
+
+def _inspect(output: Path) -> dict:
+    result_path = output / "probe-result.json"
+    if result_path.is_file():
+        return json.loads(result_path.read_text())
+    checkpoints = []
+    for path in _checkpoint_files(output):
+        try:
+            checkpoints.append(json.loads(path.read_text()))
+        except json.JSONDecodeError:
+            continue
+    route = None
+    route_path = output / "draw-route.json"
+    if route_path.is_file():
+        route = json.loads(route_path.read_text())
+    stop = None
+    stop_path = output / "stop.json"
+    if stop_path.is_file():
+        stop = json.loads(stop_path.read_text())
+    return {
+        "schema": "gfx-experiment-inspection/v1",
+        "run": str(output),
+        "checkpoints": checkpoints,
+        "route": route,
+        "stop": stop,
+        "artifacts": [str(path) for path in sorted(output.iterdir()) if path.is_file()],
+    }
+
+
+def _read_status(output: Path) -> dict:
+    """Aggregate the explicit success levels from real artifact files."""
+    checkpoint = None
+    for path in _checkpoint_files(output):
+        try:
+            value = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            checkpoint = value
+            break
+    route = None
+    route_path = output / "draw-route.json"
+    if route_path.is_file():
+        try:
+            route = json.loads(route_path.read_text())
+        except json.JSONDecodeError:
+            route = None
+    stop = None
+    stop_path = output / "stop.json"
+    if stop_path.is_file():
+        try:
+            stop = json.loads(stop_path.read_text())
+        except json.JSONDecodeError:
+            stop = None
+    unsupported = output / "draw-unsupported.json"
+    failed = output / "draw-failed.json"
+    clear = output / "clear-unsupported.json"
+    clear_diagnostic = None
+    if clear.is_file():
+        try:
+            clear_diagnostic = json.loads(clear.read_text())
+        except json.JSONDecodeError:
+            clear_diagnostic = None
+
+    draw_reached = bool(route) or (
+        isinstance(stop, dict) and stop.get("symbol") == "_GfxDraw"
+    ) or bool(checkpoint and checkpoint.get("status", {}).get("draw_reached"))
+    draw_encoded = bool(route and route.get("route") == "live") or bool(
+        checkpoint and checkpoint.get("status", {}).get("draw_encoded")
+    )
+    gpu_completed = bool(
+        checkpoint and checkpoint.get("status", {}).get("gpu_completed")
+    )
+    pixels_captured = bool(
+        checkpoint
+        and checkpoint.get("status", {}).get("pixels_captured")
+        and (output / str(checkpoint.get("capture", {}).get("raw_file", ""))).is_file()
+    )
+    presented = (output / "present.json").is_file() or bool(
+        checkpoint and checkpoint.get("status", {}).get("presented")
+    )
+    return {
+        "draw_reached": draw_reached,
+        "draw_encoded": draw_encoded,
+        "gpu_completed": gpu_completed,
+        "pixels_captured": pixels_captured,
+        "presented": presented,
+        "reference_matched": None,
+        "unsupported": unsupported.is_file() or clear.is_file(),
+        "failed": failed.is_file(),
+        "checkpoint": checkpoint,
+        "route": route,
+        "clear": clear_diagnostic,
+        "stop": stop,
+    }
+
+
+def probe(args: argparse.Namespace) -> int:
+    """Bounded Metal live observation with one selected GPU checkpoint."""
+    if args.backend != "metal":
+        print("probe currently supports --backend metal only", file=sys.stderr)
+        return EXIT_INCOMPLETE
+    if args.checkpoint not in CHECKPOINTS:
+        print(f"unknown checkpoint: {args.checkpoint}", file=sys.stderr)
+        return EXIT_INCOMPLETE
+    if not args.campaign_run_root:
+        print(
+            "probe requires --campaign-run-root; the unrestricted manual "
+            "--authorize-live switch is not a substitute for operator authorization",
+            file=sys.stderr,
+        )
+        return EXIT_INCOMPLETE
+    output = Path(args.output).expanduser().resolve()
+    if output.exists():
+        print(f"probe output already exists: {output}", file=sys.stderr)
+        return EXIT_INCOMPLETE
+    caller_rva = args.caller_rva
+    if caller_rva is None:
+        caller_rva = 0xEDFCD1 if args.checkpoint == "after-draw" else 0
+    selector = CHECKPOINTS[args.checkpoint]
+    try:
+        import eu4_benchmark as bench_base
+        import eu4_metal_boot
+    except Exception as exc:  # noqa: BLE001
+        print(f"probe unavailable: {exc}", file=sys.stderr)
+        return EXIT_UNAVAILABLE
+    try:
+        identity = bench_base.gog_identity()
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"probe preflight failed: {exc}", file=sys.stderr)
+        return EXIT_UNAVAILABLE
+    try:
+        token = _claim_launch(
+            Path(args.campaign_run_root),
+            output,
+            [selector["symbol"]],
+            requested_timeout=args.timeout,
+            executable_sha256=identity["executable_sha256"],
+        )
+    except LaunchLimit as exc:
+        print(f"campaign launch refused: {exc}", file=sys.stderr)
+        return EXIT_LIMIT
+    session = f"{int(time.time())}-{os.getpid()}"
+    env = {
+        "EU4_GFX_CHECKPOINT": args.checkpoint,
+        "EU4_GFX_CHECKPOINT_DIR": str(output),
+        "EU4_GFX_CHECKPOINT_CALLER_RVA": f"0x{caller_rva:x}" if caller_rva else "0",
+        "EU4_GFX_CHECKPOINT_OCCURRENCE": str(args.occurrence),
+        "EU4_GFX_STARTUP_ID": session,
+        "EU4_GFX_EXPECTED_EXE": identity["executable"],
+        "EU4_GFX_EXECUTABLE_SHA256": identity["executable_sha256"],
+        "EU4_GFX_QUALIFIED_SOURCES": str(
+            Path(args.qualified_sources).expanduser().resolve()
+        ),
+    }
+    metadata = None
+    error = None
+    try:
+        library = eu4_metal_boot.build_library("x86_64")
+        env["EU4_GFX_LIBRARY_SHA256"] = bench_base.sha256(library)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        metadata = eu4_metal_boot.launch_session(
+            output,
+            wait_seconds=args.timeout,
+            metal_init=True,
+            env_overrides=env,
+            strict=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        error = str(exc)
+    status = _read_status(output) if output.is_dir() else {}
+    # The launcher creates the directory; it may be absent only on an early
+    # build/preflight failure, where the launch is still accounted for.
+    if output.is_dir():
+        checkpoint = status.get("checkpoint")
+        if checkpoint and status.get("pixels_captured"):
+            raw = output / checkpoint["capture"]["raw_file"]
+            png = raw.with_suffix(".png")
+            try:
+                _write_png(png, raw.read_bytes(), checkpoint["target"]["width"],
+                           checkpoint["target"]["height"])
+            except (OSError, ValueError) as exc:
+                png = None
+                error = error or f"PNG preview failed: {exc}"
+    reference = {"status": "not_provided"}
+    if args.reference:
+        reference = _compare_reference(
+            Path(args.reference).expanduser().resolve(),
+            status.get("checkpoint"),
+            output,
+        )
+        reference["kind"] = "operator_provided_reference"
+        if reference.get("status") == "compared":
+            status["reference_matched"] = reference.get("mismatched_pixels") == 0
+    overall = "unavailable"
+    if status.get("pixels_captured"):
+        overall = "captured"
+    elif status.get("draw_reached"):
+        overall = "draw_reached"
+    elif status.get("unsupported"):
+        overall = "unsupported"
+    elif error:
+        overall = "failed"
+    result = {
+        "schema": "gfx-experiment/v1",
+        "command": "probe",
+        "backend": "metal",
+        "checkpoint": args.checkpoint,
+        "caller_rva": f"0x{caller_rva:x}" if caller_rva else None,
+        "occurrence": args.occurrence,
+        "overall": overall,
+        "status": {
+            key: status.get(key)
+            for key in (
+                "draw_reached",
+                "draw_encoded",
+                "gpu_completed",
+                "pixels_captured",
+                "presented",
+                "reference_matched",
+            )
+        },
+        "provenance": {
+            "executable": identity["executable"],
+            "executable_sha256": identity["executable_sha256"],
+            "library_sha256": env.get("EU4_GFX_LIBRARY_SHA256"),
+            "session": session,
+            "pid": None if not metadata else metadata.get("pid"),
+            "game_pid": None if not status.get("checkpoint") else status["checkpoint"].get("caller", {}).get("pid"),
+        },
+        "launch": {
+            "mode": "campaign",
+            "token": token,
+            "run_root": str(Path(args.campaign_run_root).resolve()),
+        },
+        "artifacts": {
+            "checkpoint": status.get("checkpoint"),
+            "route": status.get("route"),
+            "clear": status.get("clear"),
+            "stop": status.get("stop"),
+        },
+        "reference": reference,
+        "error": error,
+        "metadata": metadata,
+    }
+    if output.is_dir():
+        (output / "probe-result.json").write_text(json.dumps(result, indent=2) + "\n")
+    _finish_launch(
+        Path(args.campaign_run_root),
+        token,
+        pid=None if not metadata else metadata.get("pid"),
+        status="completed" if status.get("pixels_captured") else f"failed: {overall}",
+    )
+    print(json.dumps(result, indent=2))
+    if status.get("pixels_captured"):
+        return EXIT_COMPLETE
+    if status.get("unsupported"):
+        return EXIT_LIMIT
+    return EXIT_UNAVAILABLE
+
+
+def _compare_reference(reference: Path, checkpoint: dict | None, output: Path) -> dict:
+    if checkpoint is None:
+        return {"status": "unavailable", "reason": "no checkpoint image"}
+    try:
+        from PIL import Image  # type: ignore
+    except Exception:  # noqa: BLE001
+        return {
+            "status": "unavailable",
+            "reason": "PIL is not installed; existing reference comparison cannot decode PNG",
+        }
+    raw_path = output / checkpoint["capture"]["raw_file"]
+    width = checkpoint["target"]["width"]
+    height = checkpoint["target"]["height"]
+    try:
+        actual = Image.frombytes("RGBA", (width, height), _bgra_to_rgba(raw_path.read_bytes()))
+        expected = Image.open(reference).convert("RGBA")
+    except (OSError, ValueError) as exc:
+        return {"status": "unavailable", "reason": str(exc)}
+    if expected.size != actual.size:
+        return {
+            "status": "incomparable",
+            "reason": f"reference is {expected.size[0]}x{expected.size[1]}, capture is {width}x{height}",
+            "reference": str(reference),
+        }
+    mismatched = 0
+    maximum = 0
+    for got, want in zip(actual.getdata(), expected.getdata()):
+        delta = max(abs(got[0] - want[0]), abs(got[1] - want[1]), abs(got[2] - want[2]))
+        if delta:
+            mismatched += 1
+            maximum = max(maximum, delta)
+    diff = Image.new("RGBA", (width, height))
+    diff.putdata([
+        (
+            min(255, abs(got[0] - want[0]) * 4),
+            min(255, abs(got[1] - want[1]) * 4),
+            min(255, abs(got[2] - want[2]) * 4),
+            255,
+        )
+        for got, want in zip(actual.getdata(), expected.getdata())
+    ])
+    diff_path = output / "difference.png"
+    diff.save(diff_path)
+    return {
+        "status": "compared",
+        "reference": str(reference),
+        "mismatched_pixels": mismatched,
+        "maximum_channel_error": maximum,
+        "difference_image": str(diff_path),
+    }
+
+
+def _bgra_to_rgba(payload: bytes) -> bytes:
+    out = bytearray(len(payload))
+    for i in range(0, len(payload), 4):
+        out[i] = payload[i + 2]
+        out[i + 1] = payload[i + 1]
+        out[i + 2] = payload[i]
+        out[i + 3] = payload[i + 3]
+    return bytes(out)
+
+
+def inspect(args: argparse.Namespace) -> int:
+    output = Path(args.run).expanduser().resolve()
+    if not output.is_dir():
+        print(f"experiment output is absent: {output}", file=sys.stderr)
+        return EXIT_INCOMPLETE
+    print(json.dumps(_inspect(output), indent=2))
+    return EXIT_COMPLETE
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -616,6 +1052,40 @@ def _parser() -> argparse.ArgumentParser:
     pkt.add_argument("--output", required=True)
     pkt.add_argument("--caller-rva", type=_rva_value, default=0xEDFCD1)
     pkt.set_defaults(func=packet)
+
+    prb = sub.add_parser(
+        "probe", description="bounded live Metal GPU checkpoint (operator-authorized)"
+    )
+    prb.add_argument("--backend", default="metal")
+    prb.add_argument("--checkpoint", required=True, choices=sorted(CHECKPOINTS))
+    prb.add_argument("--caller-rva", type=_rva_value)
+    prb.add_argument("--occurrence", type=int, default=1)
+    prb.add_argument("--timeout", type=float, default=120.0)
+    prb.add_argument("--output", required=True)
+    prb.add_argument("--campaign-run-root")
+    prb.add_argument("--reference")
+    prb.add_argument(
+        "--qualified-sources",
+        default=str(ROOT / "analysis" / "gfx-shader" / "v0" / "qualified-sources.json"),
+    )
+    prb.set_defaults(func=probe)
+
+    ins = sub.add_parser("inspect", description="inspect one experiment's artifacts")
+    ins.add_argument("--run", required=True)
+    ins.set_defaults(func=inspect)
+
+    aut = sub.add_parser(
+        "authorize",
+        description="operator: pin the executable and grant a bounded launch budget",
+    )
+    aut.add_argument("--run-root", required=True)
+    aut.add_argument("--output-root", required=True)
+    aut.add_argument("--executable")
+    aut.add_argument("--limit", type=int, required=True)
+    aut.add_argument("--deadline-seconds", type=float)
+    aut.add_argument("--workflow-id")
+    aut.add_argument("--ledger")
+    aut.set_defaults(func=authorize)
 
     nxt = sub.add_parser(
         "next-blocker", description="classify the next actionable Metal-only blocker"

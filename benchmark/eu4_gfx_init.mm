@@ -1,5 +1,6 @@
 #import "eu4_gfx_buffers.h"
 #import "eu4_gfx_init.h"
+#import "eu4_gfx_checkpoint.h"
 #import "eu4_metal_events.h"
 
 #import <Metal/Metal.h>
@@ -231,11 +232,23 @@ static uint64_t current_thread(void) {
 }
 
 static const void *g_stop_caller;
+static const void *g_present_caller;
+static eu4_gfx_checkpoint_hook g_checkpoint_after_clear;
+static _Thread_local const char *g_clear_reason;
+static eu4_gfx_checkpoint_hook g_checkpoint_before_present;
 static void *load_ptr(void *master, int offset);
+
+void eu4_gfx_set_checkpoint_hooks(eu4_gfx_checkpoint_hook after_clear,
+                                  eu4_gfx_checkpoint_hook before_present) {
+    g_checkpoint_after_clear = after_clear;
+    g_checkpoint_before_present = before_present;
+}
 
 uint8_t *eu4_gfx_image(void) { return g_image; }
 
 const void *eu4_gfx_test_stop_caller(void) { return g_stop_caller; }
+
+const void *eu4_gfx_current_present_caller(void) { return g_present_caller; }
 
 void *eu4_gfx_backend_token(void) {
     if (!g_succeeded || g_master == NULL) {
@@ -445,6 +458,13 @@ static void fill_raster_snap(uint8_t snap[0x10]) {
     snap[0xd] = 1;
 }
 
+static const char *simple_state_reason(char *reason, size_t capacity, const char *text) {
+    if (reason != NULL && capacity > 0) {
+        snprintf(reason, capacity, "%s", text);
+    }
+    return text;
+}
+
 static int apply_snap(void *master, int offset, const uint8_t *snap, int size, int force) {
     uint8_t *bytes = (uint8_t *)master;
     if (!force && memcmp(bytes + offset, snap, (size_t)size) == 0) {
@@ -511,6 +531,58 @@ static void rollback(void *master) {
         EU4GfxBackend *taken = (__bridge_transfer EU4GfxBackend *)raw;
         (void)taken;
     }
+}
+
+int eu4_gfx_depth_snapshot_is_default(void *master) {
+    if (master == NULL || !g_succeeded || master != g_master) {
+        return 0;
+    }
+    uint8_t desc[EU4_GFX_DEPTH_DESC_SIZE];
+    eu4_gfx_write_default_depth_stencil(desc);
+    uint8_t expected[0x24];
+    depth_snap_from_desc(desc, expected);
+    return memcmp((uint8_t *)master + 0x30, expected, sizeof expected) == 0;
+}
+
+int eu4_gfx_simple_state_supported(void *master, char *reason, size_t capacity) {
+    if (reason != NULL && capacity > 0) {
+        reason[0] = 0;
+    }
+    if (master == NULL || !g_succeeded || master != g_master) {
+        simple_state_reason(reason, capacity, "no live backend");
+        return 0;
+    }
+    __unsafe_unretained EU4GfxBackend *backend =
+        (__bridge EU4GfxBackend *)load_ptr(master, 0x180);
+    if (backend == nil || backend.poisoned) {
+        simple_state_reason(reason, capacity, "backend is unavailable or poisoned");
+        return 0;
+    }
+    uint8_t expected_blend[0x24];
+    fill_blend_snap(expected_blend);
+    if (memcmp((uint8_t *)master + 0xc, expected_blend, sizeof expected_blend) != 0) {
+        simple_state_reason(reason, capacity, "blend state is not the admitted Simple blend");
+        return 0;
+    }
+    /* Depth/stencil is recorded but not gated: the reconstructed pass has no
+       depth attachment, so depth state cannot change the captured colour. */
+    uint8_t expected_raster[0x10];
+    fill_raster_snap(expected_raster);
+    if (memcmp((uint8_t *)master + 0x54, expected_raster, sizeof expected_raster) != 0) {
+        simple_state_reason(reason, capacity,
+                            "rasterizer state is not the backend default snapshot");
+        return 0;
+    }
+    if (backend.scissorValid) {
+        if (backend.scissorGlX != 0 || backend.scissorGlY != 0 ||
+            backend.scissorWidth != (int32_t)backend.logicalWidth ||
+            backend.scissorHeight != (int32_t)backend.logicalHeight) {
+            simple_state_reason(reason, capacity,
+                                "a partial scissor is not supported by the Simple pass");
+            return 0;
+        }
+    }
+    return 1;
 }
 
 static void stop_now(const char *phase, const char *symbol, const char *reason, const void *caller) {
@@ -586,6 +658,7 @@ static eu4_gfx_clear_status allocate_game_backbuffer(__unsafe_unretained EU4GfxB
     backend.gameContentsKnown = NO;
     backend.readyForPresent = NO;
     backend.clearedGeneration = 0;
+    backend.gameClearGeneration = 0;
     return EU4_GFX_CLEAR_OK;
 }
 
@@ -599,6 +672,7 @@ static void commit_game_geometry(EU4GfxBackend *backend, uint32_t logical_width,
     backend.physicalWidth = physical_width;
     backend.physicalHeight = physical_height;
     backend.geometryGeneration += 1;
+    backend.gameClearGeneration = 0;
 }
 
 /* Combines master logical +0xa0/+0xa4 with the committed physical snapshot.
@@ -1365,45 +1439,85 @@ static eu4_gfx_clear_status clear_game_checked(void *handle, unsigned flags, con
     void *master = master_from_handle(handle);
     __unsafe_unretained EU4GfxBackend *backend =
         (__bridge EU4GfxBackend *)backend_raw_for_master(master);
+    g_clear_reason = NULL;
     if (backend == nil || backend.poisoned || !backend.gameWindow) {
+        g_clear_reason = "no usable Metal game backend";
         return EU4_GFX_CLEAR_UNSUPPORTED;
     }
     if (load_ptr(master, 0x78) != NULL) {
+        g_clear_reason = "a non-null engine render target is not reconstructed";
         return EU4_GFX_CLEAR_UNSUPPORTED;
     }
     (void)reconcile_game_geometry(backend, master);
     if (pending_is_obsolete(backend)) {
         /* No wait, no submit, no clear into the obsolete attachment, and no
            write to the pending command or its generation. */
+        g_clear_reason = "an older-generation GPU command is still pending";
         return EU4_GFX_CLEAR_GEOMETRY_STALE;
     }
     if (geometry_transition_in_progress()) {
         /* Phase 1: intended size published, committed generation unchanged.
            Same-gen pending must not become a fatal UNSUPPORTED. */
+        g_clear_reason = "physical geometry transition is in progress";
         return EU4_GFX_CLEAR_GEOMETRY_STALE;
     }
     if (backend.pendingGameCommand != nil) {
         /* Same generation: the P5.1 ordinary second-clear rejection. */
+        g_clear_reason = "a same-generation game command is already pending";
         return EU4_GFX_CLEAR_UNSUPPORTED;
     }
     eu4_gfx_clear_status deferred = apply_deferred_default_target(backend, master);
     if (deferred != EU4_GFX_CLEAR_OK) {
+        g_clear_reason = "deferred default-target selection is not drainable here";
         return deferred;
     }
     eu4_gfx_clear_status allocated =
         allocate_game_backbuffer(backend, backend.physicalWidth, backend.physicalHeight);
     if (allocated != EU4_GFX_CLEAR_OK) {
+        g_clear_reason = "game backbuffer allocation failed";
         return allocated;
     }
-    /* The viewport image is logical; the attachment is physical. */
-    if (!clear_gates(backend, master, flags, color, backend.logicalWidth,
-                     backend.logicalHeight)) {
+    if ((flags & 1u) == 0) {
+        g_clear_reason = "clear does not include the colour buffer bit";
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if ((flags & ~1u) != 0) {
+        /* The game backbuffer is colour-only. There is no depth or stencil
+           attachment in the reconstructed target, so those bits have no
+           pixels to clear. Record the limitation rather than silently
+           pretending a depth buffer exists. */
+        char semantics[512];
+        int length = snprintf(
+            semantics, sizeof semantics,
+            "{\"schema\":\"gfx-clear-semantics/v1\",\"flags\":%u,"
+            "\"colour_cleared\":true,\"depth_stencil_ignored\":true,"
+            "\"reason\":\"game backbuffer is colour-only; no depth attachment exists\"}\n",
+            flags);
+        if (length > 0 && (size_t)length < sizeof semantics) {
+            (void)eu4_metal_events_write("clear-semantics.json", semantics);
+        }
+    }
+    if (backend.scissorValid) {
+        g_clear_reason = "a partial scissor is not supported by the clear";
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (!viewport_covers_attachment(master, backend.logicalWidth, backend.logicalHeight)) {
+        g_clear_reason = "viewport does not cover the logical attachment";
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (!color_mask_accepted(master)) {
+        g_clear_reason = "engine colour write mask is not 0x01010101";
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (!color_in_range(color)) {
+        g_clear_reason = "clear colour is outside [0,1]";
         return EU4_GFX_CLEAR_UNSUPPORTED;
     }
     id command = nil;
     eu4_gfx_clear_status encoded =
         encode_color_clear(backend, backend.gameColorTarget, color, &command);
     if (encoded != EU4_GFX_CLEAR_OK) {
+        g_clear_reason = "clear command encoding failed";
         return encoded;
     }
     backend.gameContentsKnown = NO;
@@ -1411,6 +1525,7 @@ static eu4_gfx_clear_status clear_game_checked(void *handle, unsigned flags, con
     backend.awaitingFreshClear = YES;
     backend.pendingGameGeneration = backend.geometryGeneration;
     backend.pendingGameCommand = command;
+    backend.gameClearGeneration = backend.geometryGeneration;
     [command commit];
     return EU4_GFX_CLEAR_OK;
 }
@@ -1449,6 +1564,58 @@ uint64_t eu4_gfx_geometry_generation(void *master) {
     __unsafe_unretained EU4GfxBackend *backend =
         (__bridge EU4GfxBackend *)backend_raw_for_master(master);
     return backend != nil ? backend.geometryGeneration : 0;
+}
+
+eu4_gfx_clear_status eu4_gfx_read_game_target(void *master, void *dest, size_t capacity,
+                                              size_t *out_len, uint32_t *width,
+                                              uint32_t *height, uint32_t *row_stride,
+                                              uint64_t *generation, int *gpu_status) {
+    __unsafe_unretained EU4GfxBackend *backend =
+        (__bridge EU4GfxBackend *)backend_raw_for_master(master);
+    if (backend == nil || backend.poisoned || backend.gameColorTarget == nil) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    int status = (int)MTLCommandBufferStatusNotEnqueued;
+    if (backend.pendingGameCommand != nil) {
+        eu4_gfx_clear_status drained = drain_pending_game(backend, &status);
+        if (drained != EU4_GFX_CLEAR_OK) {
+            return drained;
+        }
+    } else if (backend.gameContentsKnown) {
+        /* A previous drain completed the last game command; the known contents
+           were produced by that completed submission. */
+        status = (int)MTLCommandBufferStatusCompleted;
+    }
+    if (!backend.gameContentsKnown) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    uint64_t need = (uint64_t)backend.gameWidth * (uint64_t)backend.gameHeight * 4u;
+    if (need == 0 || need > SIZE_MAX || dest == NULL || capacity < (size_t)need) {
+        return EU4_GFX_CLEAR_FAILED;
+    }
+    [backend.gameColorTarget getBytes:dest
+                          bytesPerRow:(NSUInteger)backend.gameWidth * 4u
+                           fromRegion:MTLRegionMake2D(0, 0, backend.gameWidth, backend.gameHeight)
+                          mipmapLevel:0];
+    if (out_len != NULL) {
+        *out_len = (size_t)need;
+    }
+    if (width != NULL) {
+        *width = backend.gameWidth;
+    }
+    if (height != NULL) {
+        *height = backend.gameHeight;
+    }
+    if (row_stride != NULL) {
+        *row_stride = backend.gameWidth * 4u;
+    }
+    if (generation != NULL) {
+        *generation = backend.geometryGeneration;
+    }
+    if (gpu_status != NULL) {
+        *gpu_status = status;
+    }
+    return EU4_GFX_CLEAR_OK;
 }
 
 eu4_gfx_clear_status eu4_gfx_read_offscreen(void *master, void *dest, size_t capacity,
@@ -1491,8 +1658,39 @@ void eu4_gfx_clear(void *handle, unsigned flags, const float *color) {
         return;
     }
     if (status != EU4_GFX_CLEAR_OK) {
+        if (backend != nil) {
+            uint32_t view_h = 0, view_w = 0, view_x = 0, view_y = 0, mask = 0;
+            memcpy(&view_h, (uint8_t *)master + 0xac, sizeof view_h);
+            memcpy(&view_w, (uint8_t *)master + 0xb0, sizeof view_w);
+            memcpy(&view_x, (uint8_t *)master + 0xbc, sizeof view_x);
+            memcpy(&view_y, (uint8_t *)master + 0xc0, sizeof view_y);
+            memcpy(&mask, (uint8_t *)master + 0x2c, sizeof mask);
+            char body[1024];
+            int length = snprintf(
+                body, sizeof body,
+                "{\"schema\":\"gfx-clear-diagnostic/v1\",\"symbol\":\"_GfxClear\","
+                "\"caller_rva\":\"0x%llx\",\"reason\":\"%s\",\"flags\":%u,"
+                "\"logical\":[%u,%u],\"physical\":[%u,%u],"
+                "\"viewport\":[%u,%u,%u,%u],\"color_mask\":\"0x%x\","
+                "\"scissor_valid\":%s,\"pending\":%s,"
+                "\"geometry_generation\":%llu,\"clear_generation\":%llu}\n",
+                (unsigned long long)(uintptr_t)__builtin_return_address(0),
+                g_clear_reason != NULL ? g_clear_reason : "unspecified",
+                flags, backend.logicalWidth, backend.logicalHeight,
+                backend.physicalWidth, backend.physicalHeight, view_x, view_y,
+                view_w, view_h, mask, backend.scissorValid ? "true" : "false",
+                backend.pendingGameCommand != nil ? "true" : "false",
+                (unsigned long long)backend.geometryGeneration,
+                (unsigned long long)backend.gameClearGeneration);
+            if (length > 0 && (size_t)length < sizeof body) {
+                (void)eu4_metal_events_write("clear-unsupported.json", body);
+            }
+        }
         eu4_gfx_stop("_GfxClear", status == EU4_GFX_CLEAR_UNSUPPORTED ? "unsupported" : "failed",
                      __builtin_return_address(0));
+    }
+    if (g_checkpoint_after_clear != NULL) {
+        g_checkpoint_after_clear(master, __builtin_return_address(0));
     }
 }
 
@@ -1591,6 +1789,9 @@ eu4_gfx_clear_status eu4_gfx_present_checked(void *master) {
     }
     if (!backend.gameContentsKnown || !backend.readyForPresent) {
         return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (g_checkpoint_before_present != NULL) {
+        g_checkpoint_before_present(master, g_present_caller);
     }
     if (backend.gameColorTarget == nil || backend.queue == nil) {
         return EU4_GFX_CLEAR_UNSUPPORTED;
@@ -1724,6 +1925,7 @@ eu4_gfx_clear_status eu4_gfx_present_checked(void *master) {
 }
 
 int eu4_gfx_present(void *master) {
+    g_present_caller = __builtin_return_address(0);
     eu4_gfx_clear_status status = eu4_gfx_present_checked(master);
     if (status == EU4_GFX_CLEAR_GEOMETRY_STALE) {
         /* Geometry transition: nothing presented, original present still
@@ -1734,6 +1936,15 @@ int eu4_gfx_present(void *master) {
         eu4_gfx_stop("_GfxPresent", status == EU4_GFX_CLEAR_UNSUPPORTED ? "unsupported" : "failed",
                      __builtin_return_address(0));
     }
+    char present[256];
+    int wrote = snprintf(present, sizeof present,
+                         "{\"symbol\":\"_GfxPresent\",\"pid\":%d,\"rva\":\"0x%llx\"}\n",
+                         (int)getpid(),
+                         (unsigned long long)((uintptr_t)__builtin_return_address(0)));
+    if (wrote > 0 && (size_t)wrote < sizeof present) {
+        (void)eu4_metal_events_write("present.json", present);
+    }
+    g_present_caller = NULL;
     return 1;
 }
 

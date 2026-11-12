@@ -11,6 +11,8 @@
 // A1 exits after the clear. Bootstrap returns this window and stops at _glewInit.
 #import "eu4_gfx_buffers.h"
 #import "eu4_gfx_draw_capture.h"
+#import "eu4_gfx_draw_route.h"
+#import "eu4_gfx_checkpoint.h"
 #import "eu4_gfx_entry_patch.h"
 #import "eu4_gfx_init.h"
 #import "eu4_metal_geometry_view.h"
@@ -550,6 +552,12 @@ __attribute__((constructor)) static void eu4_metal_boot_init(void) {
         eu4_metal_events_set_dir(dir);
         eu4_gfx_set_terminate(metal_init_terminate);
         eu4_gfx_enable_game_window();
+        eu4_gfx_draw_route_install(eu4_gfx_draw_route_live);
+        const char *qualified = getenv("EU4_GFX_QUALIFIED_SOURCES");
+        if (qualified != NULL && qualified[0] == '/') {
+            (void)eu4_gfx_shader_load_qualified_sources(qualified);
+        }
+        (void)eu4_gfx_checkpoint_configure_from_env();
     } else {
         const char *path = getenv("EU4_METAL_BOOT_RECEIPT");
         if (path == NULL || path[0] != '/') {

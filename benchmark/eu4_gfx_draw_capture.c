@@ -1,6 +1,7 @@
 #include "eu4_gfx_draw_capture.h"
 
 #include "eu4_gfx_buffers.h"
+#include "eu4_gfx_draw_route.h"
 #include "eu4_gfx_init.h"
 #include "eu4_metal_events.h"
 
@@ -21,6 +22,15 @@ enum {
 
 static int g_draw_count;
 static int g_skip_count;
+static eu4_gfx_draw_route_fn g_route;
+
+void eu4_gfx_draw_route_install(eu4_gfx_draw_route_fn route) {
+    g_route = route;
+}
+
+eu4_gfx_draw_route_fn eu4_gfx_draw_route_current(void) {
+    return g_route;
+}
 
 void eu4_gfx_draw_selection_reset(void) {
     g_draw_count = 0;
@@ -238,10 +248,66 @@ int eu4_gfx_draw_receipt(const eu4_gfx_draw_raw *raw, char *out, int cap) {
     return 0;
 }
 
+void eu4_gfx_draw_route_record(const char *name, const char *route, const char *reason,
+                               const eu4_gfx_simple_draw_state *state,
+                               const eu4_gfx_draw_raw *raw, uint64_t caller_rva) {
+    char body[2048];
+    int length = snprintf(
+        body, sizeof body,
+        "{\"schema\":\"gfx-draw-route/v0\",\"route\":\"%s\",\"reason\":\"%s\","
+        "\"variant\":\"%s\",\"caller_rva\":\"0x%llx\",\"count\":%d,\"first\":%d,"
+        "\"shader_identity\":\"%s\",\"primitive\":%u,\"vertex_stride\":%u,"
+        "\"vertex_offset\":%u,\"vertex_bytes\":%llu,\"constant_hash\":\"0x%llx\","
+        "\"constant_hex\":\"%s\",\"vertex_hash\":\"0x%llx\",\"vertex_hex\":\"%s\","
+        "\"texture\":\"0x%llx\",\"texture_size\":[%u,%u],"
+        "\"target\":\"0x%llx\",\"target_size\":[%u,%u],"
+        "\"logical_size\":[%u,%u],\"viewport\":[%u,%u,%u,%u],"
+        "\"blend\":%d,\"depth_default\":%d,\"raster_default\":%d,\"scissor_full\":%d}\n",
+        route != NULL ? route : "", reason != NULL ? reason : "",
+        symbol_for(raw != NULL ? raw->which : 0) != NULL
+            ? symbol_for(raw != NULL ? raw->which : 0)
+            : "unknown",
+        (unsigned long long)caller_rva,
+        state != NULL ? state->count : 0, state != NULL ? state->first : 0,
+        state != NULL ? state->shader_identity : "",
+        state != NULL ? state->primitive : 0,
+        state != NULL ? state->vertex_stride : 0,
+        state != NULL ? state->vertex_offset : 0,
+        state != NULL ? (unsigned long long)state->vertex_bytes : 0,
+        state != NULL ? (unsigned long long)state->constant_hash : 0,
+        state != NULL ? state->constant_hex : "",
+        state != NULL ? (unsigned long long)state->vertex_hash : 0,
+        state != NULL ? state->vertex_hex : "",
+        state != NULL ? (unsigned long long)state->texture_pointer : 0,
+        state != NULL ? state->texture_width : 0,
+        state != NULL ? state->texture_height : 0,
+        state != NULL ? (unsigned long long)state->target_pointer : 0,
+        state != NULL ? state->target_width : 0,
+        state != NULL ? state->target_height : 0,
+        state != NULL ? state->logical_width : 0,
+        state != NULL ? state->logical_height : 0,
+        state != NULL ? state->viewport_x : 0,
+        state != NULL ? state->viewport_y : 0,
+        state != NULL ? state->viewport_width : 0,
+        state != NULL ? state->viewport_height : 0,
+        state != NULL ? state->blend_supported : 0,
+        state != NULL ? state->depth_default : 0,
+        state != NULL ? state->raster_default : 0,
+        state != NULL ? state->scissor_full : 0);
+    if (length < 0 || (size_t)length >= sizeof body) {
+        return;
+    }
+    (void)eu4_metal_events_write(name, body);
+}
+
 int eu4_gfx_draw_capture(const eu4_gfx_draw_raw *raw) {
     char body[8192];
     const char *reason = "error";
     const char *symbol = "_GfxDraw";
+    uint64_t caller_rva = 0;
+    int inside = 0;
+    uint64_t thread = 0;
+    int pid = 0;
     if (raw != NULL) {
         const char *named = symbol_for(raw->which);
         if (named != NULL) {
@@ -249,12 +315,33 @@ int eu4_gfx_draw_capture(const eu4_gfx_draw_raw *raw) {
         }
         int disposition = eu4_gfx_draw_receipt(raw, body, (int)sizeof body);
         if (disposition == 1) {
+            eu4_gfx_draw_route_record("draw-noop.json", "noop", "proven empty draw", NULL, raw, 0);
             return 1;
         }
         if (disposition == 0 && eu4_metal_events_write("draw_invocation.json", body) == 0 &&
             strstr(body, "\"provenance\":\"game\"") != NULL) {
             reason = "draw";
         }
+        eu4_metal_events_describe((const void *)(uintptr_t)raw->retaddr, NULL, 0,
+                                  &caller_rva, &inside, &thread, &pid);
+    }
+    if (raw != NULL && g_route != NULL) {
+        eu4_gfx_simple_draw_state state;
+        char diagnostic[256];
+        eu4_gfx_draw_route_result route =
+            g_route(raw, &state, diagnostic, sizeof diagnostic);
+        if (route == EU4_GFX_DRAW_ROUTE_HANDLED) {
+            eu4_gfx_draw_route_record("draw-route.json", "live", "", &state, raw, caller_rva);
+            return 1;
+        }
+        eu4_gfx_draw_route_record(route == EU4_GFX_DRAW_ROUTE_UNSUPPORTED
+                               ? "draw-unsupported.json"
+                               : "draw-failed.json",
+                           route == EU4_GFX_DRAW_ROUTE_UNSUPPORTED ? "unsupported" : "failed",
+                           diagnostic, &state, raw, caller_rva);
+        eu4_gfx_stop(symbol,
+                     route == EU4_GFX_DRAW_ROUTE_UNSUPPORTED ? "unsupported" : "failed",
+                     (const void *)(uintptr_t)raw->retaddr);
     }
     const void *caller = raw == NULL ? NULL : (const void *)(uintptr_t)raw->retaddr;
     eu4_gfx_stop(symbol, reason, caller);

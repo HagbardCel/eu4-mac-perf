@@ -13,7 +13,12 @@ import sys
 import time
 from pathlib import Path
 
-import eu4_benchmark as base
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import eu4_benchmark as base  # noqa: E402
+from automation import launch_lease  # noqa: E402
 
 
 SOURCE = Path(__file__).resolve().with_suffix(".m")
@@ -25,6 +30,8 @@ GFX = SOURCE.with_name("eu4_gfx_init.mm")
 BUFFERS = SOURCE.with_name("eu4_gfx_buffers.mm")
 DRAW_C = SOURCE.with_name("eu4_gfx_draw_capture.c")
 DRAW_S = SOURCE.with_name("eu4_gfx_draw_entry.S")
+DRAW_ROUTE = SOURCE.with_name("eu4_gfx_draw_route.mm")
+CHECKPOINT = SOURCE.with_name("eu4_gfx_checkpoint.mm")
 TEXTURE = SOURCE.with_name("eu4_gfx_texture.mm")
 SHADER = SOURCE.with_name("eu4_gfx_shader.mm")
 SIMPLE_DRAW = SOURCE.with_name("eu4_gfx_simple_draw.mm")
@@ -46,7 +53,7 @@ def build_library(arch: str = "x86_64") -> Path:
         "-framework", "QuartzCore", "-framework", "OpenGL",
         "-o", str(output), str(SOURCE), str(PATCH), str(ENTRY), str(EVENTS), str(GL_DIAG), str(GFX),
         str(BUFFERS), str(DRAW_C), str(DRAW_S), str(TEXTURE), str(SHADER),
-        str(SIMPLE_DRAW),
+        str(SIMPLE_DRAW), str(DRAW_ROUTE), str(CHECKPOINT),
     ]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode:
@@ -279,7 +286,8 @@ def stop_game(game: subprocess.Popen) -> None:
 
 
 def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = False,
-                   metal_init: bool = False) -> dict:
+                   metal_init: bool = False, env_overrides: dict | None = None,
+                   strict: bool = True) -> dict:
     """Operator launch. a1 and bootstrap exit after their receipt. metal_init keeps running."""
     if metal_init and bootstrap:
         raise base.BenchmarkError("--metal-init and --bootstrap are mutually exclusive")
@@ -306,16 +314,26 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
         env["EU4_METAL_BOOT_RECEIPT"] = str(receipt_path)
     env["SDL_VIDEO_EXTERNAL_CONTEXT"] = "1"
     env["DYLD_INSERT_LIBRARIES"] = str(library)
+    if env_overrides:
+        env.update({str(key): str(value) for key, value in env_overrides.items()})
     started = dt.datetime.now(dt.timezone.utc).isoformat()
     stdout = (run_dir / "game.stdout").open("wb")
     stderr = (run_dir / "game.stderr").open("wb")
-    game = subprocess.Popen(
-        ["./eu4", *launcher["exeArgs"]],
-        cwd=base.GOG_EXE.parent,
-        env=env,
-        stdout=stdout,
-        stderr=stderr,
-    )
+    lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
+    try:
+        game = subprocess.Popen(
+            ["./eu4", *launcher["exeArgs"]],
+            cwd=base.GOG_EXE.parent,
+            env=env,
+            stdout=stdout,
+            stderr=stderr,
+            pass_fds=lease.child_fds(),
+        )
+    except BaseException:
+        lease.release()
+        stdout.close()
+        stderr.close()
+        raise
     deadline = time.monotonic() + wait_seconds
     receipt = None
     why = None
@@ -357,6 +375,7 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
         stop_game(game)
         stdout.close()
         stderr.close()
+        lease.release()
     if metal_init:
         init = session_event(run_dir / "init.json", game.pid)
         stop = session_event(run_dir / "stop.json", game.pid)
@@ -385,12 +404,14 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
             "gfx_entry_ranges": [[entry, end] for _name, entry, end, _fn, _prefix in GFX_ENTRIES],
         }
         (run_dir / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
-        if outcome["raises"]:
+        if outcome["raises"] and strict:
             raise base.BenchmarkError(
                 f"metal_init did not reach a successful init: stop={why} phase={phase} "
                 f"exit={game.returncode}"
             )
-        return init
+        if strict:
+            return init
+        return metadata
     wanted = "backend_bootstrap_checkpoint_reached" if bootstrap else "metal_window_boot_verified"
     verified = receipt is not None and receipt.get("result") == wanted and game.returncode == 0
     metadata = {
@@ -402,11 +423,11 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
         "probe_sha256": base.sha256(library),
     }
     (run_dir / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
-    if not verified:
+    if not verified and strict:
         raise base.BenchmarkError(
             f"Metal boot was not verified: result={metadata['result']} exit={game.returncode}"
         )
-    return receipt
+    return receipt if strict else metadata
 
 
 def main(argv: list[str] | None = None) -> int:

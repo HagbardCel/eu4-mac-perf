@@ -16,6 +16,12 @@ from pathlib import Path
 
 import eu4_benchmark as base
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from automation import launch_lease  # noqa: E402
+
 
 SOURCE = Path(__file__).resolve().with_suffix(".c")
 LIBRARY = SOURCE.parent / ".build/libeu4_frame_counter.dylib"
@@ -120,6 +126,7 @@ def measure(args: argparse.Namespace) -> None:
                 "multithreaded_gl_requested": args.multithreaded_gl}
     metadata_path = run_dir / "metadata.json"
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
+    lease = None
     try:
         env = os.environ.copy()
         env["EU4_FRAME_LOG"] = str(log)
@@ -128,8 +135,14 @@ def measure(args: argparse.Namespace) -> None:
             env["EU4_GL_MULTITHREADED"] = "1"
             env["EU4_GL_STATUS_LOG"] = str(status_log)
         with (run_dir / "game.stdout").open("wb") as stdout, (run_dir / "game.stderr").open("wb") as stderr:
-            game = subprocess.Popen(["./eu4", *launcher["exeArgs"]], cwd=base.GOG_EXE.parent,
-                                    env=env, stdout=stdout, stderr=stderr)
+            lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
+            try:
+                game = subprocess.Popen(["./eu4", *launcher["exeArgs"]], cwd=base.GOG_EXE.parent,
+                                        env=env, stdout=stdout, stderr=stderr,
+                                        pass_fds=lease.child_fds())
+            except BaseException:
+                lease.release()
+                raise
         metadata["game_pid"] = game.pid
         print("Launched the installed GOG EU IV executable with a passive frame counter.")
         print("Load the disposable Venice save and pause. Return to Terminal when ready.")
@@ -191,6 +204,9 @@ def measure(args: argparse.Namespace) -> None:
         metadata["error"] = str(exc)
         raise
     finally:
+        if lease is not None:
+            # The game inherited the descriptor, so the kernel lease ends when it exits.
+            lease.release()
         metadata["ended_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
         metadata_path.write_text(json.dumps(metadata, indent=2, default=str) + "\n")
 

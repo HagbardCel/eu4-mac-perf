@@ -412,8 +412,9 @@ def _load_live(data: dict) -> bool:
     enabled = bool(live.get("enabled") or False)
     if enabled:
         raise SidecarError(
-            "live_capture.enabled must be false: no host-wide EU4 process exclusivity "
-            "exists yet, and the launch ledger accounts for budget, not concurrency"
+            "live_capture.enabled is not a sidecar feature: EU4 launch exclusivity is "
+            "enforced by the host-wide process lease, and the launch ledger accounts for "
+            "budget, not concurrency"
         )
     return enabled
 

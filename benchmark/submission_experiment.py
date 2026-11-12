@@ -40,6 +40,11 @@ from submission_control import MODE_CANDIDATE, MODE_REFERENCE
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from automation import launch_lease  # noqa: E402
+
 PHASE_SCHEDULE = (
     ("a1", "reference", MODE_REFERENCE),
     ("b1", "candidate", MODE_CANDIDATE),
@@ -453,7 +458,7 @@ def run_border_multidraw_experiment(output_root: Path) -> Path:
     anchor = mark(events, "clock_anchor")
     game_log = base.USER_DATA / "logs/game.log"
     old_log = game_log.read_bytes() if game_log.is_file() else b""
-    game = pm = None
+    game = pm = lease = None
     installed = False
     tail = None
     control_path = run_dir / "submission_control.bin"
@@ -481,13 +486,19 @@ def run_border_multidraw_experiment(output_root: Path) -> Path:
                 manifest["test_stub_hook_enabled"] = False
                 env["EU4_AUTO_PROBE_LOG"] = str(run_dir / "auto-probe.csv")
                 with (run_dir / "game.stdout").open("wb") as stdout, (run_dir / "game.stderr").open("wb") as stderr:
-                    game = subprocess.Popen(
-                        ["./eu4", *evidence["launcher_args"], "--continuelastsave"],
-                        cwd=base.GOG_EXE.parent,
-                        env=env,
-                        stdout=stdout,
-                        stderr=stderr,
-                    )
+                    lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
+                    try:
+                        game = subprocess.Popen(
+                            ["./eu4", *evidence["launcher_args"], "--continuelastsave"],
+                            cwd=base.GOG_EXE.parent,
+                            env=env,
+                            stdout=stdout,
+                            stderr=stderr,
+                            pass_fds=lease.child_fds(),
+                        )
+                    except BaseException:
+                        lease.release()
+                        raise
                 tail = auto.PowerTail(pm_path)
                 wait_diag: dict = {}
                 try:
@@ -599,6 +610,8 @@ def run_border_multidraw_experiment(output_root: Path) -> Path:
                 except subprocess.TimeoutExpired:
                     pass
             stop_process(game, 10)
+            if lease is not None:
+                lease.release()
             if installed:
                 manifest["working_save_changed"] = fixture.finish(run_dir)
             manifest_path.write_text(json.dumps(manifest, indent=2, default=str) + "\n", encoding="utf-8")
@@ -641,7 +654,7 @@ def run_border_mode_census(output_root: Path) -> Path:
     anchor = mark(events, "clock_anchor")
     game_log = base.USER_DATA / "logs/game.log"
     old_log = game_log.read_bytes() if game_log.is_file() else b""
-    game = pm = None
+    game = pm = lease = None
     installed = False
     tail = None
     control_path = run_dir / "submission_control.bin"
@@ -668,13 +681,19 @@ def run_border_mode_census(output_root: Path) -> Path:
                 manifest["test_stub_hook_enabled"] = False
                 env["EU4_AUTO_PROBE_LOG"] = str(run_dir / "auto-probe.csv")
                 with (run_dir / "game.stdout").open("wb") as stdout, (run_dir / "game.stderr").open("wb") as stderr:
-                    game = subprocess.Popen(
-                        ["./eu4", *evidence["launcher_args"], "--continuelastsave"],
-                        cwd=base.GOG_EXE.parent,
-                        env=env,
-                        stdout=stdout,
-                        stderr=stderr,
-                    )
+                    lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
+                    try:
+                        game = subprocess.Popen(
+                            ["./eu4", *evidence["launcher_args"], "--continuelastsave"],
+                            cwd=base.GOG_EXE.parent,
+                            env=env,
+                            stdout=stdout,
+                            stderr=stderr,
+                            pass_fds=lease.child_fds(),
+                        )
+                    except BaseException:
+                        lease.release()
+                        raise
                 tail = auto.PowerTail(pm_path)
                 wait_diag: dict = {}
                 try:
@@ -760,6 +779,8 @@ def run_border_mode_census(output_root: Path) -> Path:
                 except subprocess.TimeoutExpired:
                     pass
             stop_process(game, 10)
+            if lease is not None:
+                lease.release()
             if installed:
                 manifest["working_save_changed"] = fixture.finish(run_dir)
             manifest_path.write_text(json.dumps(manifest, indent=2, default=str) + "\n", encoding="utf-8")
@@ -812,7 +833,7 @@ def run_experiment(
     anchor = mark(events, "clock_anchor")
     game_log = base.USER_DATA / "logs/game.log"
     old_log = game_log.read_bytes() if game_log.is_file() else b""
-    game = pm = None
+    game = pm = lease = None
     installed = False
     tail = None
     control_path = run_dir / "submission_control.bin"
@@ -838,13 +859,19 @@ def run_experiment(
                 env = control.dylib_env(control_path, auto.PROBE)
                 env["EU4_AUTO_PROBE_LOG"] = str(run_dir / "auto-probe.csv")
                 with (run_dir / "game.stdout").open("wb") as stdout, (run_dir / "game.stderr").open("wb") as stderr:
-                    game = subprocess.Popen(
-                        ["./eu4", *evidence["launcher_args"], "--continuelastsave"],
-                        cwd=base.GOG_EXE.parent,
-                        env=env,
-                        stdout=stdout,
-                        stderr=stderr,
-                    )
+                    lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
+                    try:
+                        game = subprocess.Popen(
+                            ["./eu4", *evidence["launcher_args"], "--continuelastsave"],
+                            cwd=base.GOG_EXE.parent,
+                            env=env,
+                            stdout=stdout,
+                            stderr=stderr,
+                            pass_fds=lease.child_fds(),
+                        )
+                    except BaseException:
+                        lease.release()
+                        raise
                 tail = auto.PowerTail(pm_path)
                 ready = auto.wait_until_ready(game, run_dir / "auto-probe.csv", tail, anchor, game_log, old_log)
                 manifest["readiness"] = ready
@@ -939,6 +966,8 @@ def run_experiment(
                 except subprocess.TimeoutExpired:
                     pass
             stop_process(game, 10)
+            if lease is not None:
+                lease.release()
             if installed:
                 manifest["working_save_changed"] = fixture.finish(run_dir)
             manifest_path.write_text(json.dumps(manifest, indent=2, default=str) + "\n", encoding="utf-8")

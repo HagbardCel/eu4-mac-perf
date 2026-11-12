@@ -226,3 +226,27 @@ boundaries and the offline submission contract), `d2c7724` (viewport origin,
 nonzero-first readback and review-driven refusals), `8b69907` (sampleable alias
 coverage), and `ee0fb1d` (default texture header → `backend.fallback`). Not
 merged.
+
+## Live follow-up (2026-11-12)
+
+The offline milestone above was extended into an authentic live capture through
+the reusable `automation.live_gfx probe` path. The pinned game reached
+`_GfxDraw` at caller RVA `0xedfcd1`, the shared Simple encoder submitted into
+the engine-owned 3456×2234 Metal backbuffer, and the GPU checkpoint read back a
+real loading-screen frame. The status levels were `draw_reached`, `draw_encoded`,
+`gpu_completed` and `pixels_captured`; `presented` and `reference_matched`
+remained false/null. The same checkpoint implementation also captured an
+`after-clear` frame.
+
+Two concrete corrections came out of the live run:
+
+1. The live constant slot 2 is at `master+0xd0`, not `+0xf0`.
+2. The exact live Simple VS/PS source SHA-256 values were promoted into
+   `analysis/gfx-shader/v0/qualified-sources.json`; marker admission stayed off.
+3. `_GfxClear` flags 7 are accepted for the colour-only backbuffer, with the
+   ignored depth/stencil bits recorded in `clear-semantics.json`.
+
+Evidence, hashes, iteration history and remaining limitations are in
+[analysis/reconstruction/simple-loading-draw/live-evidence.md](analysis/reconstruction/simple-loading-draw/live-evidence.md).
+The reusable workflow is documented in
+[docs/live-gfx-experiments.md](docs/live-gfx-experiments.md).

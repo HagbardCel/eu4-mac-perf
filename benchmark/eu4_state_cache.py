@@ -20,8 +20,12 @@ from pathlib import Path
 import eu4_benchmark as base
 import eu4_diagnostic as diagnostic
 
-
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from automation import launch_lease  # noqa: E402
+
 SOURCE = Path(__file__).with_suffix(".c")
 LIBRARY = SOURCE.parent / ".build/libeu4_state_cache.dylib"
 HARNESS = ROOT / "tests/state_cache_harness.c"
@@ -354,7 +358,7 @@ def run(args: argparse.Namespace) -> None:
                 "save_sha256": save_hash, "library_sha256": evidence["library_sha256"]}
     metadata_path = run_dir / "metadata.json"
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
-    game = pm = None
+    game = pm = lease = None
     phases: list[dict] = []
     try:
         with control_path.open("r+b") as control_file, mmap.mmap(control_file.fileno(), 4096) as control:
@@ -362,8 +366,14 @@ def run(args: argparse.Namespace) -> None:
             env.update(EU4_CACHE_LOG=str(run_dir / "state.csv"),
                        EU4_CACHE_CONTROL=str(control_path), DYLD_INSERT_LIBRARIES=str(LIBRARY))
             with (run_dir / "game.stdout").open("wb") as stdout, (run_dir / "game.stderr").open("wb") as stderr:
-                game = subprocess.Popen(["./eu4", *launcher["exeArgs"]], cwd=base.GOG_EXE.parent,
-                                        env=env, stdout=stdout, stderr=stderr)
+                lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
+                try:
+                    game = subprocess.Popen(["./eu4", *launcher["exeArgs"]], cwd=base.GOG_EXE.parent,
+                                            env=env, stdout=stdout, stderr=stderr,
+                                            pass_fds=lease.child_fds())
+                except BaseException:
+                    lease.release()
+                    raise
             metadata["game_pid"] = game.pid
             print("Launched GOG EU IV with the state cache OFF. Load the disposable Venice save and pause.")
             if base.prompt("Confirm the save and intended DLC/mods are loaded (yes/no): ", True).lower() != "yes":
@@ -448,6 +458,9 @@ def run(args: argparse.Namespace) -> None:
                 control_file.flush()
         if pm is not None and pm.poll() is None:
             pm.terminate()
+        if lease is not None:
+            # The game inherited the descriptor, so the kernel lease ends when it exits.
+            lease.release()
         metadata["ended_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
         metadata_path.write_text(json.dumps(metadata, indent=2, default=str) + "\n")
 

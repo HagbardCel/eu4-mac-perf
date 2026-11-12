@@ -1,6 +1,12 @@
 #import "eu4_gfx_shader.h"
 
+/* The shader module is also linked into hosts that do not include the event
+   writer. Diagnostics are best effort there; the engine boot always links it. */
+extern "C" int eu4_metal_events_write(const char *name, const char *body)
+    __attribute__((weak_import));
+
 #import <CommonCrypto/CommonDigest.h>
+#import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <new>
 #import <pthread.h>
@@ -132,6 +138,57 @@ int eu4_gfx_shader_register_qualified_sha256(const uint8_t digest[32]) {
     g_qualified_count++;
     pthread_mutex_unlock(&g_lock);
     return 1;
+}
+
+static int hex_digest(NSString *text, uint8_t out[32]) {
+    if (text == nil || text.length != 64) {
+        return 0;
+    }
+    const char *bytes = text.UTF8String;
+    for (int i = 0; i < 32; i++) {
+        char pair[3] = {bytes[i * 2], bytes[i * 2 + 1], 0};
+        char *end = NULL;
+        unsigned long value = strtoul(pair, &end, 16);
+        if (end == pair || *end != 0) {
+            return 0;
+        }
+        out[i] = (uint8_t)value;
+    }
+    return 1;
+}
+
+int eu4_gfx_shader_load_qualified_sources(const char *path) {
+    if (path == NULL || path[0] != '/') {
+        return -1;
+    }
+    NSData *data = [NSData dataWithContentsOfFile:[NSString stringWithUTF8String:path]];
+    if (data == nil) {
+        return -1;
+    }
+    NSError *error = nil;
+    id root = [NSJSONSerialization JSONObjectWithData:data options:0 error:&error];
+    if (![root isKindOfClass:[NSDictionary class]]) {
+        return -1;
+    }
+    NSArray *sources = ((NSDictionary *)root)[@"sources"];
+    if (![sources isKindOfClass:[NSArray class]]) {
+        return -1;
+    }
+    int registered = 0;
+    for (id entry in sources) {
+        if (![entry isKindOfClass:[NSDictionary class]]) {
+            return -1;
+        }
+        uint8_t digest[32];
+        if (!hex_digest(((NSDictionary *)entry)[@"sha256"], digest)) {
+            return -1;
+        }
+        if (!eu4_gfx_shader_register_qualified_sha256(digest)) {
+            return -1;
+        }
+        registered += 1;
+    }
+    return registered;
 }
 
 void eu4_gfx_shader_clear_qualified_hashes(void) {
@@ -302,6 +359,35 @@ const char *eu4_gfx_shader_identity(const void *shader) {
     return identity;
 }
 
+static void sha256_hex(const char *source, char out[65]) {
+    uint8_t digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(source, (CC_LONG)strlen(source), digest);
+    static const char digits[] = "0123456789abcdef";
+    for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) {
+        out[i * 2] = digits[digest[i] >> 4];
+        out[i * 2 + 1] = digits[digest[i] & 0xf];
+    }
+    out[64] = 0;
+}
+
+static int g_shader_event_seq;
+
+static void write_shader_event(const char *kind, const char *body) {
+    if (eu4_metal_events_write == NULL) {
+        return;
+    }
+    /* Bounded, append-only diagnostic names: the first occurrence rule would
+       hide later shader objects, and the Simple effect is not necessarily the
+       first shader the engine creates. */
+    if (g_shader_event_seq >= 128) {
+        return;
+    }
+    g_shader_event_seq += 1;
+    char name[96];
+    snprintf(name, sizeof name, "shader-%s-%03d.json", kind, g_shader_event_seq);
+    (void)eu4_metal_events_write(name, body);
+}
+
 void *eu4_gfx_create_shader(void) {
     auto *object = static_cast<uint8_t *>(::operator new(EU4_GFX_SHADER_OBJECT_SIZE));
     memset(object, 0, EU4_GFX_SHADER_OBJECT_SIZE);
@@ -336,6 +422,16 @@ int eu4_gfx_add_vertex_shader(void *unused, void *shader, const char *source) {
         record.vertexFunction = nil;
         [record.pipelines removeAllObjects];
         pthread_mutex_unlock(&g_lock);
+        char digest[65];
+        sha256_hex(source, digest);
+        char event[512];
+        snprintf(event, sizeof event,
+                 "{\"schema\":\"gfx-shader-event/v1\",\"event\":\"add_vertex\","
+                 "\"shader\":\"0x%llx\",\"accepted\":false,\"source_sha256\":\"%s\","
+                 "\"source_length\":%zu,\"identity\":\"%s\",\"pid\":%d}\n",
+                 (unsigned long long)(uintptr_t)shader, digest, strlen(source),
+                 eu4_gfx_shader_identity(shader) ?: "", (int)getpid());
+        write_shader_event("vs", event);
         return 0;
     }
     if (record.library == nil || record.vertexFunction == nil) {
@@ -360,6 +456,16 @@ int eu4_gfx_add_vertex_shader(void *unused, void *shader, const char *source) {
     /* Keep +4 as zero: not a GL name and not a Metal handle. */
     memset(static_cast<uint8_t *>(shader) + 4, 0, 4);
     pthread_mutex_unlock(&g_lock);
+    char digest[65];
+    sha256_hex(source, digest);
+    char event[512];
+    snprintf(event, sizeof event,
+             "{\"schema\":\"gfx-shader-event/v1\",\"event\":\"add_vertex\","
+             "\"shader\":\"0x%llx\",\"accepted\":true,\"source_sha256\":\"%s\","
+             "\"source_length\":%zu,\"identity\":\"%s\",\"pid\":%d}\n",
+             (unsigned long long)(uintptr_t)shader, digest, strlen(source),
+             eu4_gfx_shader_identity(shader) ?: "", (int)getpid());
+    write_shader_event("vs", event);
     return 1;
 }
 
@@ -381,6 +487,16 @@ int eu4_gfx_add_pixel_shader(void *unused, void *shader, const char *source) {
         record.fragmentFunction = nil;
         [record.pipelines removeAllObjects];
         pthread_mutex_unlock(&g_lock);
+        char digest[65];
+        sha256_hex(source, digest);
+        char event[512];
+        snprintf(event, sizeof event,
+                 "{\"schema\":\"gfx-shader-event/v1\",\"event\":\"add_pixel\","
+                 "\"shader\":\"0x%llx\",\"accepted\":false,\"source_sha256\":\"%s\","
+                 "\"source_length\":%zu,\"identity\":\"%s\",\"pid\":%d}\n",
+                 (unsigned long long)(uintptr_t)shader, digest, strlen(source),
+                 eu4_gfx_shader_identity(shader) ?: "", (int)getpid());
+        write_shader_event("ps", event);
         return 0;
     }
     if (record.library == nil || record.fragmentFunction == nil) {
@@ -404,6 +520,16 @@ int eu4_gfx_add_pixel_shader(void *unused, void *shader, const char *source) {
     }
     memset(static_cast<uint8_t *>(shader) + 8, 0, 4);
     pthread_mutex_unlock(&g_lock);
+    char digest[65];
+    sha256_hex(source, digest);
+    char event[512];
+    snprintf(event, sizeof event,
+             "{\"schema\":\"gfx-shader-event/v1\",\"event\":\"add_pixel\","
+             "\"shader\":\"0x%llx\",\"accepted\":true,\"source_sha256\":\"%s\","
+             "\"source_length\":%zu,\"identity\":\"%s\",\"pid\":%d}\n",
+             (unsigned long long)(uintptr_t)shader, digest, strlen(source),
+             eu4_gfx_shader_identity(shader) ?: "", (int)getpid());
+    write_shader_event("ps", event);
     return 1;
 }
 
@@ -426,6 +552,13 @@ int eu4_gfx_link_shader(void *unused, void *shader) {
     /* Program name field stays 0 — not a fabricated GL name. */
     *reinterpret_cast<uint32_t *>(shader) = 0;
     pthread_mutex_unlock(&g_lock);
+    char event[256];
+    snprintf(event, sizeof event,
+             "{\"schema\":\"gfx-shader-event/v1\",\"event\":\"link\","
+             "\"shader\":\"0x%llx\",\"accepted\":true,\"identity\":\"%s\",\"pid\":%d}\n",
+             (unsigned long long)(uintptr_t)shader, eu4_gfx_shader_identity(shader) ?: "",
+             (int)getpid());
+    write_shader_event("link", event);
     return 1;
 }
 
@@ -459,6 +592,14 @@ void eu4_gfx_set_shader(void *immediate_context, void *shader) {
     *current = shader;
     master[0x128] = 1;
     master[0x170] = 1;
+    char event[384];
+    snprintf(event, sizeof event,
+             "{\"schema\":\"gfx-shader-event/v1\",\"event\":\"set\","
+             "\"shader\":\"0x%llx\",\"linked\":true,\"identity\":\"%s\","
+             "\"selected\":\"%s\",\"pid\":%d}\n",
+             (unsigned long long)(uintptr_t)shader, eu4_gfx_shader_identity(shader) ?: "",
+             eu4_gfx_shader_identity(shader) ?: "", (int)getpid());
+    write_shader_event("set", event);
 }
 
 void eu4_gfx_destroy_shader(void *shader) {

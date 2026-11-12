@@ -1,9 +1,26 @@
 {
   "schema": "eu4-gfx-qualified-sources/v0",
-  "note": "Exact compiler-input SHA-256 values for P5.2b admission. Empty until P5.2a closure promotes hashes. Markers below are transitional and must not satisfy the engine-path completion gate.",
+  "note": "Exact compiler-input SHA-256 values for admission. The two Simple entries were promoted from live pinned-engine observations; transitional markers remain offline-only and are not enabled on the engine path.",
   "repo_baseline_commit": "173321b6d3258576060e7941e9bd91f608e8f543",
   "eu4_executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
-  "sources": [],
+  "sources": [
+    {
+      "stage": "vertex",
+      "sha256": "f70c85854b691cc256b8fac86ff085d1a357575657470d36de88b6729ba751cb",
+      "length": 5213,
+      "effect": "simple-lua-Simple",
+      "status": "qualified",
+      "provenance": "Exact source observed at the live pinned EU4 _GfxAddVertexShader replacement on 2026-11-12 while approaching _GfxDraw caller RVA 0xedfcd1; source length recorded; exact SHA-256 admission, no marker admission."
+    },
+    {
+      "stage": "pixel",
+      "sha256": "5c3933f415dfe7a9a437b97a40882fc7a6f27dbfde5a9000112820818fc2cbb6",
+      "length": 4946,
+      "effect": "simple-lua-Simple",
+      "status": "qualified",
+      "provenance": "Exact source observed at the live pinned EU4 _GfxAddPixelShader replacement on 2026-11-12 while approaching _GfxDraw caller RVA 0xedfcd1; source length recorded; exact SHA-256 admission, no marker admission."
+    }
+  ],
   "transitional_marker_admission_only": {
     "vertex_marker": "EU4_METAL_SIMPLE_VS_V0",
     "pixel_marker": "EU4_METAL_SIMPLE_PS_V0",

@@ -105,17 +105,48 @@ def process_executable_path(pid: int) -> str | None:
     return buffer.value.decode(errors="replace") if length > 0 else None
 
 
+def process_table() -> list[tuple[int, str]]:
+    """Read-only (pid, executable) table via libproc.
+
+    ``ps`` is denied in some sandboxed DSH shells. libproc is a system API and
+    is sufficient for the exact-path check this module needs.
+    """
+    if sys.platform != "darwin":
+        output = command("ps", "-axo", "pid=,comm=")
+        rows = []
+        for line in output.splitlines():
+            match = re.match(r"\s*(\d+)\s+(.+)$", line)
+            if match:
+                rows.append((int(match.group(1)), match.group(2).strip()))
+        return rows
+    libproc = ctypes.CDLL("/usr/lib/libproc.dylib")
+    libproc.proc_listpids.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p,
+                                      ctypes.c_int]
+    libproc.proc_listpids.restype = ctypes.c_int
+    libproc.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+    libproc.proc_pidpath.restype = ctypes.c_int
+    capacity = 8192
+    buffer = (ctypes.c_int * capacity)()
+    used = libproc.proc_listpids(1, 0, buffer, ctypes.sizeof(buffer))
+    if used <= 0:
+        return []
+    rows = []
+    for pid in list(buffer)[: used // ctypes.sizeof(ctypes.c_int)]:
+        if pid <= 0:
+            continue
+        path = ctypes.create_string_buffer(4096)
+        length = libproc.proc_pidpath(pid, path, len(path))
+        if length > 0:
+            rows.append((pid, path.value.decode(errors="replace")))
+    return rows
+
+
 def running_game_pid(scenario: str) -> int | None:
     """Accept only the exact GOG Mach-O path, never a similarly named game."""
-    output = command("ps", "-axo", "pid=,comm=")
-    game_processes = []
-    for line in output.splitlines():
-        match = re.match(r"\s*(\d+)\s+(.+)$", line)
-        if not match:
-            continue
-        pid, executable = int(match.group(1)), match.group(2).strip()
-        if Path(executable).name == "eu4":
-            game_processes.append((pid, executable))
+    game_processes = [
+        (pid, executable) for pid, executable in process_table()
+        if Path(executable).name == "eu4"
+    ]
     if scenario == "idle":
         if game_processes:
             raise BenchmarkError(f"Idle control requires EU IV closed; found {game_processes}")
