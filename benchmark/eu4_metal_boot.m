@@ -373,6 +373,13 @@ static void ensure_visible_on_main(void) {
     g_child.layer.contentsScale = window.backingScaleFactor;
     [content addSubview:g_child positioned:NSWindowAbove relativeTo:nil];
     [(EU4MetalChildView *)g_child syncDrawableGeometry];
+    if (getenv("EU4_GFX_RED_PROBE") != NULL) {
+        CALayer *probe = [CALayer layer];
+        probe.frame = content.bounds;
+        probe.backgroundColor = CGColorCreateSRGB(1.0, 0.0, 0.0, 1.0);
+        probe.zPosition = 100.0f;
+        [content.layer addSublayer:probe];
+    }
     [NSApp activateIgnoringOtherApps:YES];
     [window makeKeyAndOrderFront:nil];
     [window orderFrontRegardless];

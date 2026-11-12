@@ -138,17 +138,24 @@ This is the exact reason the acceptance checker reports `inconclusive`. A
 completed `presentDrawable`, a drawable readback and a visible window object are
 not independent proof that the intended image became visible.
 
-### Known limitation and next experiment
+### Decisive compositing probe and refined blocker
 
 The Metal layer is attached to the current SDL window's content view on the
-main thread and is layer-backed, on top, opaque, and reports a 3456×2234
-drawable. The window server still composites the SDL background. The next
-bounded experiment is to render a solid diagnostic colour through the same
-attached layer and capture the window; if that is also absent, the SDL view is
-replacing or covering the layer during its fullscreen lifecycle, and the
-presentation target must move to the SDL/Metal view owned by the engine rather
-than a child view. That experiment needs one authorized launch; it is not a
-pixel-comparison or reconstruction question.
+main thread, is layer-backed, on top, opaque, and reports a 3456×2234 drawable.
+The window server still composites a uniform gray surface.
+
+A solid red `CALayer` added at the same point in the same content view (run
+`.local/m4/experiments/red-probe-01`, `EU4_GFX_RED_PROBE=1`) was also invisible:
+all capture paths still returned a uniform gray frame. This separates the
+failure from the Metal drawable entirely. The captured EU4 window does not
+composite the content view's layer tree in this environment, whether the
+sublayer is Metal or a plain color layer.
+
+The next step is therefore not a rendering change: find the surface SDL
+actually presents (its own `CAMetalLayer`/view, or the window-server surface the
+engine writes) and attach the reconstructed output there, rather than to a
+child of `contentView`. Until that is resolved, no independent visible-window
+evidence exists and M4 cannot be claimed.
 
 ## DSH autonomous execution and remediation
 
