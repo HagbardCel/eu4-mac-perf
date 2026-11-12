@@ -239,6 +239,26 @@ static double double_number(id value, double fallback) {
     return fallback;
 }
 
+/* GL enums are recorded as JSON strings ("0x2600") while counts and flags are
+   numbers. Both forms must resolve; a string silently falling back to a default
+   would select the wrong sampler or depth state. */
+static NSUInteger enum_value(id value, NSUInteger fallback) {
+    if ([value isKindOfClass:[NSNumber class]]) {
+        return (NSUInteger)[(NSNumber *)value unsignedLongLongValue];
+    }
+    if ([value isKindOfClass:[NSString class]]) {
+        const char *text = [(NSString *)value UTF8String];
+        if (text != NULL && text[0] != 0) {
+            char *end = NULL;
+            unsigned long long parsed = strtoull(text, &end, 0);
+            if (end != NULL && *end == 0) {
+                return (NSUInteger)parsed;
+            }
+        }
+    }
+    return fallback;
+}
+
 static NSString *string_value(id value) {
     return [value isKindOfClass:[NSString class]] ? value : nil;
 }
@@ -1271,7 +1291,7 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
         if (depth_test) {
             MTLDepthStencilDescriptor *depth_descriptor = [MTLDepthStencilDescriptor new];
             depth_descriptor.depthCompareFunction = compare_function(
-                (NSUInteger)strtoul([string_value(depth_state[@"func"]) ?: @"0x203" UTF8String], NULL, 0));
+                enum_value(depth_state[@"func"], 0x203));
             depth_descriptor.depthWriteEnabled = depth_write;
             id<MTLDepthStencilState> depth_object =
                 [g_device newDepthStencilStateWithDescriptor:depth_descriptor];
@@ -1372,21 +1392,31 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                     const char *linear_min = getenv("EU4_FRAME_REPLAY_LINEAR_MIN");
                     descriptor.minFilter = (linear_min != NULL && linear_min[0] == '1')
                         ? MTLSamplerMinMagFilterLinear
-                        : min_filter(number(sampler_state[@"min"], 0x2601));
+                        : min_filter(enum_value(sampler_state[@"min"], 0x2601));
                     descriptor.magFilter =
-                        number(sampler_state[@"mag"], 0x2601) == 0x2600
+                        enum_value(sampler_state[@"mag"], 0x2601) == 0x2600
                             ? MTLSamplerMinMagFilterNearest
                             : MTLSamplerMinMagFilterLinear;
-                    descriptor.mipFilter = mip_filter(number(sampler_state[@"min"], 0x2601));
-                    descriptor.sAddressMode = address_mode(number(sampler_state[@"wrap_s"], 0x812F));
-                    descriptor.tAddressMode = address_mode(number(sampler_state[@"wrap_t"], 0x812F));
-                    descriptor.rAddressMode = address_mode(number(sampler_state[@"wrap_r"], 0x812F));
+                    const char *linear_all = getenv("EU4_FRAME_REPLAY_LINEAR_ALL");
+                    if (linear_all != NULL && linear_all[0] == '1') {
+                        descriptor.minFilter = MTLSamplerMinMagFilterLinear;
+                        descriptor.magFilter = MTLSamplerMinMagFilterLinear;
+                    }
+                    const char *nearest_all = getenv("EU4_FRAME_REPLAY_NEAREST_ALL");
+                    if (nearest_all != NULL && nearest_all[0] == '1') {
+                        descriptor.minFilter = MTLSamplerMinMagFilterNearest;
+                        descriptor.magFilter = MTLSamplerMinMagFilterNearest;
+                    }
+                    descriptor.mipFilter = mip_filter(enum_value(sampler_state[@"min"], 0x2601));
+                    descriptor.sAddressMode = address_mode(enum_value(sampler_state[@"wrap_s"], 0x812F));
+                    descriptor.tAddressMode = address_mode(enum_value(sampler_state[@"wrap_t"], 0x812F));
+                    descriptor.rAddressMode = address_mode(enum_value(sampler_state[@"wrap_r"], 0x812F));
                     descriptor.lodMinClamp = (float)double_number(sampler_state[@"min_lod"], 0);
                     descriptor.lodMaxClamp = (float)double_number(sampler_state[@"max_lod"], 1000);
                     descriptor.lodBias = (float)double_number(sampler_state[@"lod_bias"], 0);
-                    if (number(sampler_state[@"compare_mode"], 0) == 0x884C) {
+                    if (enum_value(sampler_state[@"compare_mode"], 0) == 0x884C) {
                         descriptor.compareFunction = compare_function(
-                            number(sampler_state[@"compare_func"], 0x0203));
+                            enum_value(sampler_state[@"compare_func"], 0x0203));
                     }
                     sampler = [g_device newSamplerStateWithDescriptor:descriptor];
                     if (sampler == nil) {
@@ -1603,6 +1633,98 @@ static BOOL upload_seed(NSString *frameDir, NSDictionary *seed,
     return YES;
 }
 
+/* Uploads a captured GL-origin (lower-left) BGRA image into a target texture. */
+static BOOL upload_image_to_target(NSString *frameDir, NSDictionary *image,
+                                   NSDictionary *target_info,
+                                   NSError **error) {
+    if (image == nil || target_info == nil) {
+        return YES;
+    }
+    NSData *pixels = read_blob(frameDir, string_value(image[@"file"]));
+    NSUInteger width = number(image[@"width"], 0);
+    NSUInteger height = number(image[@"height"], 0);
+    if (pixels == nil || width == 0 || height == 0 ||
+        pixels.length != width * height * 4) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:100
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"captured image size mismatch"}];
+        }
+        return NO;
+    }
+    uint8_t *flipped = (uint8_t *)malloc(pixels.length);
+    if (flipped == NULL) {
+        return NO;
+    }
+    flip_rows((const uint8_t *)pixels.bytes, flipped, width, height, 4);
+    MTLTextureDescriptor *staging_descriptor = [MTLTextureDescriptor new];
+    staging_descriptor.textureType = MTLTextureType2D;
+    staging_descriptor.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    staging_descriptor.width = width;
+    staging_descriptor.height = height;
+    staging_descriptor.usage = MTLTextureUsageShaderRead;
+    staging_descriptor.storageMode = MTLStorageModeManaged;
+    id<MTLTexture> staging = [g_device newTextureWithDescriptor:staging_descriptor];
+    if (staging == nil) {
+        free(flipped);
+        return NO;
+    }
+    [staging replaceRegion:MTLRegionMake2D(0, 0, width, height)
+               mipmapLevel:0
+                 withBytes:flipped
+               bytesPerRow:width * 4];
+    free(flipped);
+    id<MTLTexture> color = target_info[@"color"];
+    id<MTLCommandBuffer> blit = [g_queue commandBuffer];
+    id<MTLBlitCommandEncoder> encoder = [blit blitCommandEncoder];
+    [encoder copyFromTexture:staging
+                 sourceSlice:0
+                 sourceLevel:0
+                sourceOrigin:MTLOriginMake(0, 0, 0)
+                  sourceSize:MTLSizeMake(MIN(width, color.width),
+                                         MIN(height, color.height), 1)
+                   toTexture:color
+            destinationSlice:0
+            destinationLevel:0
+           destinationOrigin:MTLOriginMake(0, 0, 0)];
+    [encoder endEncoding];
+    [blit commit];
+    [blit waitUntilCompleted];
+    return YES;
+}
+
+/* Reads a target back and writes it in the captured GL origin convention. */
+static BOOL capture_target_to_file(NSDictionary *target_info, NSString *path) {
+    id<MTLTexture> color = target_info[@"color"];
+    NSUInteger width = color.width;
+    NSUInteger height = color.height;
+    NSUInteger bytes_per_row = width * 4;
+    id<MTLBuffer> buffer = [g_device newBufferWithLength:bytes_per_row * height
+                                                 options:MTLResourceStorageModeShared];
+    id<MTLCommandBuffer> blit = [g_queue commandBuffer];
+    id<MTLBlitCommandEncoder> encoder = [blit blitCommandEncoder];
+    [encoder copyFromTexture:color
+                 sourceSlice:0
+                 sourceLevel:0
+                sourceOrigin:MTLOriginMake(0, 0, 0)
+                  sourceSize:MTLSizeMake(width, height, 1)
+                    toBuffer:buffer
+           destinationOffset:0
+      destinationBytesPerRow:bytes_per_row
+    destinationBytesPerImage:bytes_per_row * height];
+    [encoder endEncoding];
+    [blit commit];
+    [blit waitUntilCompleted];
+    uint8_t *flipped = (uint8_t *)malloc(bytes_per_row * height);
+    if (flipped == NULL) {
+        return NO;
+    }
+    flip_rows((const uint8_t *)buffer.contents, flipped, width, height, 4);
+    NSData *data = [NSData dataWithBytes:flipped length:bytes_per_row * height];
+    free(flipped);
+    return [data writeToFile:path atomically:YES];
+}
+
 /* ------------------------------------------------------------------------- */
 /* Main                                                                       */
 /* ------------------------------------------------------------------------- */
@@ -1614,6 +1736,8 @@ int main(int argc, const char *argv[]) {
         NSString *output_path = nil;
         NSInteger stop_after = -1;
         NSInteger only_event = -1;
+        BOOL seed_marked = NO;
+        BOOL capture_post_images = NO;
         for (int index = 1; index < argc; index++) {
             if (strcmp(argv[index], "--frame") == 0 && index + 1 < argc) {
                 frame_path = @(argv[++index]);
@@ -1625,6 +1749,10 @@ int main(int argc, const char *argv[]) {
                 stop_after = atoi(argv[++index]);
             } else if (strcmp(argv[index], "--only-event") == 0 && index + 1 < argc) {
                 only_event = atoi(argv[++index]);
+            } else if (strcmp(argv[index], "--seed-marked") == 0) {
+                seed_marked = YES;
+            } else if (strcmp(argv[index], "--capture-post") == 0) {
+                capture_post_images = YES;
             }
         }
         if (frame_path.length == 0 || shader_path.length == 0 ||
@@ -1766,8 +1894,37 @@ int main(int argc, const char *argv[]) {
                                                                      @"program %@ has no translated stages",
                                                                      program]}];
                 } else {
-                    ok = encode_draw(event, entry, frame_path, shader_path,
-                                     command, &event_error);
+                    NSDictionary *target_info = target_for(event[@"target"] ?: @{}, NULL);
+                    if (seed_marked && event[@"pre_image"] != nil &&
+                        target_info != nil) {
+                        if (!upload_image_to_target(frame_path, event[@"pre_image"],
+                                                    target_info, &event_error)) {
+                            ok = NO;
+                        }
+                    }
+                    if (ok) {
+                        ok = encode_draw(event, entry, frame_path, shader_path,
+                                         command, &event_error);
+                    }
+                    if (ok && capture_post_images && event[@"post_image"] != nil &&
+                        target_info != nil) {
+                        /* The draw was encoded into the frame command buffer; commit
+                           and drain it so the isolated post-image includes this draw
+                           and no later event. */
+                        [command commit];
+                        [command waitUntilCompleted];
+                        command = [g_queue commandBuffer];
+                        NSString *name = [NSString stringWithFormat:@"isolated-post-%lu.bgra",
+                                          (unsigned long)index];
+                        NSString *path = [output_path stringByAppendingPathComponent:name];
+                        if (!capture_target_to_file(target_info, path)) {
+                            ok = NO;
+                            event_error = [NSError errorWithDomain:kErrorDomain
+                                                              code:101
+                                                          userInfo:@{NSLocalizedDescriptionKey:
+                                                                         @"post readback failed"}];
+                        }
+                    }
                 }
             }
             if (!ok) {

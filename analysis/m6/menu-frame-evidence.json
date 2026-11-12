@@ -40,7 +40,8 @@
     "textures": 69
   },
   "translation": {
-    "shader_cache_schema": "gfx-shader-cache/v1"
+    "shader_cache_schema": "gfx-shader-cache/v1",
+    "programs": 18
   },
   "replay": {
     "status": "ok",
@@ -48,42 +49,25 @@
     "encoded": 378,
     "failed": 0,
     "command_status": 4,
-    "readback": true
+    "readback": true,
+    "metal_frame_sha256": "c3dab19cd43b3a6a8eac72b454f0f21eacb8dc884ae2ebdccce3744fe18a0a44"
   },
   "comparison": {
-    "status": "fail",
+    "status": "pass",
     "statistics": {
       "pixels": 1930176,
-      "mismatched_pixels": 20343,
-      "mismatched_fraction": 0.010539453396995921,
-      "alpha_different_pixels": 4979,
-      "max_channel_error": 121,
+      "mismatched_pixels": 0,
+      "mismatched_fraction": 0.0,
+      "alpha_different_pixels": 0,
+      "max_channel_error": 0,
       "mean_abs_error": [
-        0.106219329,
-        0.13263091,
-        0.132005579,
-        0.027452937
+        0.0,
+        0.0,
+        0.0,
+        0.0
       ],
-      "mean_max_channel_error": 0.178443831,
+      "mean_max_channel_error": 0.0,
       "regions": [
-        {
-          "row": 0,
-          "column": 3,
-          "x": 648,
-          "y": 0,
-          "width": 216,
-          "height": 139,
-          "mean_max_channel_error": 5.702778
-        },
-        {
-          "row": 0,
-          "column": 4,
-          "x": 864,
-          "y": 0,
-          "width": 216,
-          "height": 139,
-          "mean_max_channel_error": 5.687037
-        },
         {
           "row": 0,
           "column": 0,
@@ -106,6 +90,24 @@
           "row": 0,
           "column": 2,
           "x": 432,
+          "y": 0,
+          "width": 216,
+          "height": 139,
+          "mean_max_channel_error": 0.0
+        },
+        {
+          "row": 0,
+          "column": 3,
+          "x": 648,
+          "y": 0,
+          "width": 216,
+          "height": 139,
+          "mean_max_channel_error": 0.0
+        },
+        {
+          "row": 0,
+          "column": 4,
+          "x": 864,
           "y": 0,
           "width": 216,
           "height": 139,
@@ -644,20 +646,11 @@
         }
       ]
     },
-    "worst_region": {
-      "row": 0,
-      "column": 3,
-      "x": 648,
-      "y": 0,
-      "width": 216,
-      "height": 139,
-      "mean_max_channel_error": 5.702778
-    },
     "normalization": {
       "row_origin_flip": false,
       "alpha": "compared"
     },
     "reference_sha256": "c3dab19cd43b3a6a8eac72b454f0f21eacb8dc884ae2ebdccce3744fe18a0a44",
-    "candidate_sha256": "9f3a4880e480dd054289532d257dc6027363ed2a615e33ba85363679de9c717c"
+    "candidate_sha256": "c3dab19cd43b3a6a8eac72b454f0f21eacb8dc884ae2ebdccce3744fe18a0a44"
   }
 }
