@@ -24,6 +24,7 @@ the acceptance checker returns `inconclusive`, not `pass`.
 | --- | --- |
 | Baseline commit | `dd4290bc9165574d81afa1b3ce151cb767031fda` (M3 merge, PR #185) |
 | Implementation commit | `3de8d4a` on `m4/gl-reference-and-presentation` |
+| Report/blocker commit | `1c23e40` (branch head when this report was written) |
 | Pinned executable | `/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4` |
 | Executable SHA-256 | `b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d` |
 | GPU | Apple M5 Max, Metal 4 |
@@ -180,8 +181,10 @@ fixed policy reports `invalid` on unmatched vertex inputs.
 ## Offline regressions
 
 `tests.test_gfx_compare`, `tests.test_gl_reference` and
-`tests.test_live_gfx_probe` pass (62 tests). The full repository suite is run on
-the final commit; results are recorded with the commit.
+`tests.test_live_gfx_probe` pass (62 tests); the broader Metal/host subset
+(including `test_metal_boot`, `test_gfx_hidpi`, `test_metal_simple_ref`) passes
+as well (70 tests together). The full repository suite completed with exit 0 on
+2026-11-12 before the final report-only commit.
 
 ## Deferred
 
