@@ -114,11 +114,12 @@ only a preview of those bytes. The image is visually the authentic EU4 loading
 screen. No original OpenGL frame exists for this checkpoint, so the output is
 not labelled `reference_matched`.
 
-**Iterations and self-corrections.** Six live launches across three operator
-budgets: a sandbox abort, `ps` denial, `_GfxClear` flags 7, live shader-source
-admission, the `master+0xd0` matrix slot, and finally the captured draw. Every
-failure produced a machine-readable diagnostic before the next step; the
-successful launch required no manual function-by-function direction.
+**Iterations and self-corrections.** Nine live launches across three operator
+budgets (3 + 4 + 2): a sandbox abort, a `ps` denial, the `_GfxClear` flags 7
+boundary, live shader-source admission, the `master+0xd0` matrix slot, the
+captured draw, the matrix-bytes replay and the after-clear reuse. Every failure
+produced a machine-readable diagnostic before the next step; the successful
+launch required no manual function-by-function direction.
 
 **Reuse.** The same `probe`, checkpoint selector and readback path produced the
 after-clear frame. The offline host exercises after-clear, after-draw and
