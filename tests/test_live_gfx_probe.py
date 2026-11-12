@@ -164,6 +164,32 @@ class PinnedProbeClaimTests(unittest.TestCase):
             self._claim()
         self.assertEqual(caught.exception.kind, "unpinned")
 
+    def test_partial_pins_are_refused(self) -> None:
+        cases = [
+            ({"executable": {"path": str(self.exe.resolve()), "sha256": self.sha}},
+             "executable only"),
+            ({"output_root": self.output_root}, "output root only"),
+            ({"executable": {"path": str(self.exe.resolve()), "sha256": self.sha},
+              "output_root": self.output_root, "deadline_seconds": None},
+             "no deadline"),
+        ]
+        for index, (kwargs, _label) in enumerate(cases):
+            ledger = self.root / f"partial-{index}.json"
+            launch_ledger.create_ledger(
+                ledger, workflow_id="wf", limit=2,
+                deadline_seconds=kwargs.pop("deadline_seconds", 180.0), **kwargs,
+            )
+            launch_ledger.write_pointer(
+                self.run_root, workflow_id="wf", ledger_path=ledger, limit=2
+            )
+            with self.assertRaises(live_gfx.LaunchLimit) as caught:
+                live_gfx._claim_launch(
+                    self.run_root, self.output_root / "one", ["_GfxDraw"],
+                    requested_timeout=30.0, executable_sha256=self.sha,
+                    executable_path=str(self.exe.resolve()), require_pinned=True,
+                )
+            self.assertEqual(caught.exception.kind, "unpinned")
+
     def test_different_executable_sha_is_refused(self) -> None:
         self._pinned()
         with self.assertRaises(live_gfx.LaunchLimit) as caught:
