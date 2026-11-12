@@ -314,7 +314,8 @@ class TimeoutValidationTests(unittest.TestCase):
         )
 
     def test_non_finite_zero_and_negative_timeouts_are_rejected(self) -> None:
-        for value in (math.nan, math.inf, -math.inf, 0, 0.0, -1, -1.0, True, "30"):
+        for value in (math.nan, math.inf, -math.inf, 0, 0.0, -1, -1.0, True, "30",
+                      10 ** 400):
             with self.assertRaises(launch_ledger.LedgerError) as caught:
                 launch_ledger.validate_timeout(value)
             self.assertEqual(caught.exception.kind, "timeout")

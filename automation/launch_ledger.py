@@ -37,7 +37,10 @@ def validate_timeout(value, *, field: str = "timeout") -> float:
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise LedgerError("timeout", f"{field} must be a finite positive number")
-    number = float(value)
+    try:
+        number = float(value)
+    except (OverflowError, ValueError) as exc:
+        raise LedgerError("timeout", f"{field} must be a finite positive number") from exc
     if not math.isfinite(number) or number <= 0:
         raise LedgerError("timeout", f"{field} must be a finite positive number")
     return number
