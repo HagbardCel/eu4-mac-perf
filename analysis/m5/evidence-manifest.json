@@ -290,7 +290,7 @@
   "full_suite": {
     "python": "3.14.10",
     "command": "PYTHONPATH=benchmark:. python -m unittest discover -s tests",
-    "worktree": "clean detached worktree at be4430d",
+    "worktree": "clean detached worktree at c8d5ab5",
     "ran": 2480,
     "ok": 2480,
     "skipped": 26,
@@ -301,7 +301,7 @@
   "checker": {
     "path": "campaigns/eu4-m5/accept.py",
     "result": "pass",
-    "run": ".local/m5/checker-final4.json",
+    "run": ".local/m5/checker-final6.json",
     "command": "PYTHONPATH=benchmark:. python3 campaigns/eu4-m5/accept.py .",
     "gates": {
       "count": 23,
@@ -318,11 +318,11 @@
       "67 offline tests pass in the final checker run"
     ]
   },
-  "implementation_commit": "be4430d",
+  "implementation_commit": "c8d5ab5",
   "final_acceptance": {
     "verdict": "pass",
     "m5_complete": true,
-    "commit": "be4430d",
+    "commit": "c8d5ab5",
     "python": "3.14.10",
     "reference_run": ".local/m5/experiments/sprite-gl-ref-09",
     "seeded_candidate_run": ".local/m5/experiments/metal-replay-06",
@@ -334,7 +334,8 @@
     "m4_checker": "pass",
     "offline_regressions": "67 pass in checker",
     "constant_buffer_fix": "24-dword minimum; authentic 28-dword fixture replayed exactly",
-    "full_suite": "2480 tests OK, 26 skipped in a clean worktree"
+    "full_suite": "2480 tests OK, 26 skipped in a clean worktree",
+    "checker": "pass 23 gates (22 required + separate live-pixels=false)"
   },
   "live_engine": {
     "evidence": "analysis/m5/live-evidence.json",

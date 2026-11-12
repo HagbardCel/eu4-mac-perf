@@ -173,7 +173,7 @@ also runs the comparator, GL-reference, live-draw, Simple-draw and M4 tests.
 
 Final results:
 
-- Clean detached worktree at `be4430d`: **2480 tracked tests OK, 26 skipped**
+- Clean detached worktree at `c8d5ab5`: **2480 tracked tests OK, 26 skipped**
   (live-only tests skip without operator-local evidence).
 - Checker offline regression subset: **67 tests pass**.
 - M4 checker: **pass** on its recorded evidence.
