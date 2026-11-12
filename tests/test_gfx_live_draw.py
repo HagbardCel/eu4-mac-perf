@@ -23,6 +23,8 @@ SOURCES = [
     ROOT / "benchmark" / "eu4_gfx_texture.mm",
     ROOT / "benchmark" / "eu4_gfx_init.mm",
     ROOT / "benchmark" / "eu4_gfx_simple_draw.mm",
+    ROOT / "benchmark" / "eu4_gfx_sprite_draw.mm",
+    ROOT / "benchmark" / "eu4_gfx_draw_encode.mm",
     ROOT / "benchmark" / "eu4_gfx_draw_capture.c",
     ROOT / "benchmark" / "eu4_gfx_draw_route.mm",
     ROOT / "benchmark" / "eu4_gfx_logical_capture.mm",

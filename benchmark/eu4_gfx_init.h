@@ -137,6 +137,12 @@ void eu4_gfx_test_set_present_readback(void *dest, size_t capacity);
    original master state only; it does not synthesize a render state. */
 int eu4_gfx_simple_state_supported(void *master, char *reason, size_t capacity);
 
+/* 1 when the current state is the measured sprite pass state: alpha blend
+   (SRC_ALPHA / ONE_MINUS_SRC_ALPHA, FUNC_ADD), the backend default raster
+   snapshot, and a full-attachment (or unset) scissor. The sprite pass has no
+   depth attachment, so the depth snapshot is recorded but not gated. */
+int eu4_gfx_sprite_state_supported(void *master, char *reason, size_t capacity);
+
 /* 1 when the current depth/stencil snapshot equals the backend default. The
    Simple pass has no depth attachment, so a mismatch is recorded but is not
    material to the captured colour pixels. */

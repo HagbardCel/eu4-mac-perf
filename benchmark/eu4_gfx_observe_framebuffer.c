@@ -48,6 +48,12 @@ enum {
     GLX_PACK_SKIP_ROWS = 0x0D03,
     GLX_PACK_SKIP_PIXELS = 0x0D04,
     GLX_READ_BUFFER_BACK = 0x0405,
+    GLX_ARRAY_BUFFER_BINDING = 0x8894,
+    GLX_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING = 0x889F,
+    GLX_BUFFER_SIZE = 0x8764,
+    GLX_SHADER_TYPE = 0x8B4F,
+    GLX_VERTEX_SHADER = 0x8B31,
+    GLX_FRAGMENT_SHADER = 0x8B30,
 };
 
 /* Saved CPU pixel-pack state. Non-default row length, skips or a bound PBO
@@ -82,10 +88,20 @@ typedef struct {
     int pre_height;
     char pre_format[8];
     char pre_name[128];
+    /* Selected draw's live vertex range, supplied by the draw entry hook. */
+    int vertex_range_set;
+    uint32_t vertex_stride;
+    uint32_t vertex_offset;
+    int32_t vertex_first;
+    int32_t vertex_count;
 } framebuffer_state;
 
 static framebuffer_state g_fb;
 static _Atomic uint32_t g_captures;
+
+static void clear_gl_errors(void);
+static int pack_begin(pack_state *state);
+static int pack_end(const pack_state *state);
 
 static uint64_t now_ns(void) {
     struct timespec ts;
@@ -315,6 +331,280 @@ static void read_glsl_identity(GLint program, char out[65], int *count) {
     }
 }
 
+/* Original GLSL attached to the program bound at the selected draw. The digest
+ * in gl-reference.json is the identity; the dumped sources are the authentic
+ * bytes a Metal translation must reproduce. Observation only: the GL program is
+ * read, never modified. */
+static int dump_glsl_sources(GLint program, char *out, size_t capacity) {
+    if (out == NULL || capacity == 0) {
+        return 0;
+    }
+    int used = snprintf(out, capacity, "[");
+    if (used < 0 || (size_t)used >= capacity) {
+        out[0] = 0;
+        return 0;
+    }
+    if (program <= 0) {
+        (void)snprintf(out, capacity, "[]");
+        return 0;
+    }
+    GLint attached = 0;
+    glGetProgramiv((GLuint)program, GL_ATTACHED_SHADERS, &attached);
+    if (attached <= 0 || attached > 8) {
+        (void)snprintf(out, capacity, "[]");
+        return 0;
+    }
+    GLuint shaders[8];
+    GLsizei got = 0;
+    glGetAttachedShaders((GLuint)program, 8, &got, shaders);
+    int dumped = 0;
+    for (GLsizei i = 0; i < got && i < 8; i++) {
+        GLint length = 0;
+        GLint type = 0;
+        glGetShaderiv(shaders[i], GLX_SHADER_TYPE, &type);
+        glGetShaderiv(shaders[i], GL_SHADER_SOURCE_LENGTH, &length);
+        if (length <= 0 || length > 65536) {
+            continue;
+        }
+        char *source = (char *)malloc((size_t)length + 1);
+        if (source == NULL) {
+            continue;
+        }
+        GLsizei written = 0;
+        glGetShaderSource(shaders[i], length, &written, source);
+        if (written <= 0) {
+            free(source);
+            continue;
+        }
+        const char *stage = type == GLX_VERTEX_SHADER
+                                ? "vertex"
+                                : type == GLX_FRAGMENT_SHADER ? "pixel" : "other";
+        char name[96];
+        (void)snprintf(name, sizeof name, "gl-reference-shader-%d-%s.glsl", (int)i,
+                       stage);
+        char path[1200];
+        char digest[65] = {0};
+        sha256_hex(source, (size_t)written, digest);
+        int write_ok = 0;
+        if (snprintf(path, sizeof path, "%s/%s", g_fb.run_dir, name) <
+            (int)sizeof path) {
+            write_ok = write_atomic(path, source, (size_t)written) == 0;
+        }
+        free(source);
+        if (!write_ok) {
+            continue;
+        }
+        int wrote = snprintf(out + used, capacity - (size_t)used,
+                             "%s{\"stage\":\"%s\",\"file\":\"%s\",\"bytes\":%d,"
+                             "\"sha256\":\"%s\"}",
+                             dumped == 0 ? "" : ",", stage, name, (int)written,
+                             digest);
+        if (wrote < 0 || (size_t)(used + wrote) >= capacity) {
+            break;
+        }
+        used += wrote;
+        dumped += 1;
+    }
+    if ((size_t)used + 1 < capacity) {
+        out[used++] = ']';
+        out[used] = 0;
+    }
+    return dumped;
+}
+
+void eu4_gfx_observe_framebuffer_set_vertex_range(uint32_t vertex_stride,
+                                                  uint32_t vertex_offset,
+                                                  int32_t first, int32_t count) {
+    g_fb.vertex_range_set = 0;
+    if (!g_fb.enabled || vertex_stride == 0 || vertex_stride > 4096 || first < 0 ||
+        count <= 0) {
+        return;
+    }
+    uint64_t bytes = (uint64_t)(uint32_t)count * (uint64_t)vertex_stride;
+    if (bytes == 0 || bytes > 65536) {
+        return;
+    }
+    g_fb.vertex_stride = vertex_stride;
+    g_fb.vertex_offset = vertex_offset;
+    g_fb.vertex_first = first;
+    g_fb.vertex_count = count;
+    g_fb.vertex_range_set = 1;
+}
+
+/* Read the exact VBO range the selected draw consumed. The engine's array
+ * buffer binding is saved/restored, and every failure is reported in JSON
+ * rather than silently substituting bytes. */
+static void capture_live_vertex(const gl_state *state, char *out,
+                                size_t capacity) {
+    (void)state;
+    if (out == NULL || capacity == 0) {
+        return;
+    }
+    (void)snprintf(out, capacity, "null");
+    if (!g_fb.vertex_range_set) {
+        return;
+    }
+    GLint array_binding = 0;
+    GLint attrib_binding = 0;
+    glGetIntegerv(GLX_ARRAY_BUFFER_BINDING, &array_binding);
+    glGetVertexAttribiv(0, GLX_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING,
+                        &attrib_binding);
+    GLint buffer = attrib_binding != 0 ? attrib_binding : array_binding;
+    if (buffer <= 0) {
+        (void)snprintf(out, capacity,
+                       "{\"schema\":\"gfx-gl-live-vertex/v1\",\"status\":"
+                       "\"no_array_buffer\",\"stride\":%u,\"offset\":%u,"
+                       "\"first\":%d,\"count\":%d}",
+                       g_fb.vertex_stride, g_fb.vertex_offset, g_fb.vertex_first,
+                       g_fb.vertex_count);
+        clear_gl_errors();
+        return;
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, (GLuint)buffer);
+    GLint buffer_size = 0;
+    glGetBufferParameteriv(GL_ARRAY_BUFFER, GLX_BUFFER_SIZE, &buffer_size);
+    uint64_t start = (uint64_t)g_fb.vertex_offset +
+                     (uint64_t)(uint32_t)g_fb.vertex_first *
+                         (uint64_t)g_fb.vertex_stride;
+    uint64_t bytes =
+        (uint64_t)(uint32_t)g_fb.vertex_count * (uint64_t)g_fb.vertex_stride;
+    if (buffer_size <= 0 || start > (uint64_t)buffer_size ||
+        bytes > (uint64_t)buffer_size - start || bytes > 65536) {
+        glBindBuffer(GL_ARRAY_BUFFER, (GLuint)array_binding);
+        clear_gl_errors();
+        (void)snprintf(out, capacity,
+                       "{\"schema\":\"gfx-gl-live-vertex/v1\",\"status\":"
+                       "\"range_unavailable\",\"buffer\":%d,\"buffer_size\":%d,"
+                       "\"stride\":%u,\"offset\":%u,\"first\":%d,\"count\":%d}",
+                       (int)buffer, (int)buffer_size, g_fb.vertex_stride,
+                       g_fb.vertex_offset, g_fb.vertex_first, g_fb.vertex_count);
+        return;
+    }
+    uint8_t data[65536];
+    glGetBufferSubData(GL_ARRAY_BUFFER, (GLintptr)start, (GLsizeiptr)bytes, data);
+    GLenum error = glGetError();
+    glBindBuffer(GL_ARRAY_BUFFER, (GLuint)array_binding);
+    if (error != GL_NO_ERROR) {
+        clear_gl_errors();
+        (void)snprintf(out, capacity,
+                       "{\"schema\":\"gfx-gl-live-vertex/v1\",\"status\":"
+                       "\"read_error\",\"gl_error\":%u,\"buffer\":%d,"
+                       "\"buffer_size\":%d,\"stride\":%u,\"offset\":%u,"
+                       "\"first\":%d,\"count\":%d}",
+                       (unsigned)error, (int)buffer, (int)buffer_size,
+                       g_fb.vertex_stride, g_fb.vertex_offset, g_fb.vertex_first,
+                       g_fb.vertex_count);
+        return;
+    }
+    char sha[65] = {0};
+    sha256_hex(data, (size_t)bytes, sha);
+    char name[64];
+    (void)snprintf(name, sizeof name, "gl-reference-vertex-live.bin");
+    char path[1200];
+    if (snprintf(path, sizeof path, "%s/%s", g_fb.run_dir, name) >=
+            (int)sizeof path ||
+        write_atomic(path, data, (size_t)bytes) != 0) {
+        (void)snprintf(out, capacity,
+                       "{\"schema\":\"gfx-gl-live-vertex/v1\",\"status\":"
+                       "\"write_failed\"}");
+        return;
+    }
+    (void)snprintf(
+        out, capacity,
+        "{\"schema\":\"gfx-gl-live-vertex/v1\",\"status\":\"ok\",\"raw_file\":"
+        "\"%s\",\"bytes\":%llu,\"sha256\":\"%s\",\"stride\":%u,\"offset\":%u,"
+        "\"first\":%d,\"count\":%d,\"buffer\":%d,\"buffer_size\":%d,"
+        "\"array_buffer_binding\":%d,\"attrib0_buffer_binding\":%d}",
+        name, (unsigned long long)bytes, sha, g_fb.vertex_stride,
+        g_fb.vertex_offset, g_fb.vertex_first, g_fb.vertex_count, (int)buffer,
+        (int)buffer_size, (int)array_binding, (int)attrib_binding);
+}
+
+/* Authentic image of the texture bound at the selected draw. This is the
+ * source data the original fragment shader sampled; the Metal replay uses the
+ * same bytes. Bounded and observation-only. */
+static void capture_texture(const gl_state *state, char *out, size_t capacity) {
+    if (out == NULL || capacity == 0) {
+        return;
+    }
+    (void)snprintf(out, capacity, "null");
+    if (state == NULL || state->texture_2d <= 0) {
+        return;
+    }
+    GLint width = -1, height = -1, internal_format = 0;
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &width);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &height);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT,
+                             &internal_format);
+    GLenum error = glGetError();
+    if (error != GL_NO_ERROR || width <= 0 || height <= 0 || width > 8192 ||
+        height > 8192) {
+        clear_gl_errors();
+        (void)snprintf(out, capacity,
+                       "{\"schema\":\"gfx-gl-texture/v1\",\"status\":"
+                       "\"unavailable\",\"gl_error\":%u,\"width\":%d,"
+                       "\"height\":%d,\"internal_format\":%d}",
+                       (unsigned)error, (int)width, (int)height,
+                       (int)internal_format);
+        return;
+    }
+    size_t bytes = (size_t)width * (size_t)height * 4u;
+    if (bytes == 0 || bytes > 64u * 1024u * 1024u) {
+        (void)snprintf(out, capacity,
+                       "{\"schema\":\"gfx-gl-texture/v1\",\"status\":"
+                       "\"too_large\",\"width\":%d,\"height\":%d}",
+                       (int)width, (int)height);
+        return;
+    }
+    uint8_t *pixels = (uint8_t *)malloc(bytes);
+    if (pixels == NULL) {
+        return;
+    }
+    pack_state pack;
+    if (!pack_begin(&pack)) {
+        (void)pack_end(&pack);
+        free(pixels);
+        return;
+    }
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_BGRA, GL_UNSIGNED_BYTE, pixels);
+    error = glGetError();
+    (void)pack_end(&pack);
+    if (error != GL_NO_ERROR) {
+        clear_gl_errors();
+        free(pixels);
+        (void)snprintf(out, capacity,
+                       "{\"schema\":\"gfx-gl-texture/v1\",\"status\":"
+                       "\"read_error\",\"gl_error\":%u,\"width\":%d,"
+                       "\"height\":%d}",
+                       (unsigned)error, (int)width, (int)height);
+        return;
+    }
+    char sha[65] = {0};
+    sha256_hex(pixels, bytes, sha);
+    char name[64];
+    (void)snprintf(name, sizeof name, "gl-reference-texture.bgra");
+    char path[1200];
+    int wrote = 0;
+    if (snprintf(path, sizeof path, "%s/%s", g_fb.run_dir, name) <
+        (int)sizeof path) {
+        wrote = write_atomic(path, pixels, bytes) == 0;
+    }
+    free(pixels);
+    if (!wrote) {
+        (void)snprintf(out, capacity,
+                       "{\"schema\":\"gfx-gl-texture/v1\",\"status\":"
+                       "\"write_failed\"}");
+        return;
+    }
+    (void)snprintf(out, capacity,
+                   "{\"schema\":\"gfx-gl-texture/v1\",\"status\":\"ok\","
+                   "\"raw_file\":\"%s\",\"width\":%d,\"height\":%d,"
+                   "\"internal_format\":%d,\"bytes\":%llu,"
+                   "\"sha256\":\"%s\"}",
+                   name, (int)width, (int)height, (int)internal_format,
+                   (unsigned long long)bytes, sha);
+}
+
 /* Original GL capability bytes, read from the live master context the draw
  * used. Byte 4 drives CSettings::TestPOW2TextureCompatibility in the engine. */
 static void read_caps(const eu4_gfx_observe_call *call, char out[17],
@@ -345,6 +635,59 @@ static void read_caps(const eu4_gfx_observe_call *call, char out[17],
     }
     out[16] = 0;
     *byte4 = caps[4];
+}
+
+typedef struct {
+    uint64_t shader_object;
+    uint32_t constant_words;
+    uint32_t constant_bytes;
+    uint8_t constant[128];
+    int constant_ok;
+} draw_inputs;
+
+static void read_draw_inputs(const eu4_gfx_observe_call *call,
+                             draw_inputs *out) {
+    memset(out, 0, sizeof *out);
+    if (call == NULL || call->input_size < sizeof(uint64_t)) {
+        return;
+    }
+    uint64_t handle = 0;
+    memcpy(&handle, call->input, sizeof handle);
+    uint64_t master = 0;
+    if (handle == 0 ||
+        !eu4_gfx_observe_read((const void *)(uintptr_t)handle, &master,
+                              sizeof master) ||
+        master == 0) {
+        return;
+    }
+    (void)eu4_gfx_observe_read((const void *)(uintptr_t)(master + 0x70),
+                               &out->shader_object, sizeof out->shader_object);
+    uint64_t header = 0;
+    uint32_t words = 0;
+    if (!eu4_gfx_observe_read((const void *)(uintptr_t)(master + 0xc8), &words,
+                              sizeof words) ||
+        !eu4_gfx_observe_read((const void *)(uintptr_t)(master + 0xd0), &header,
+                              sizeof header) ||
+        header == 0 || words == 0 || words > 32) {
+        return;
+    }
+    uint64_t data = 0;
+    if (!eu4_gfx_observe_read((const void *)(uintptr_t)(header + 8), &data,
+                              sizeof data) ||
+        data == 0) {
+        return;
+    }
+    uint32_t bytes = words * 16u;
+    if (bytes > sizeof out->constant) {
+        bytes = sizeof out->constant;
+    }
+    if (!eu4_gfx_observe_read_bytes((const void *)(uintptr_t)data, out->constant,
+                                    bytes)) {
+        return;
+    }
+    out->constant_words = words;
+    out->constant_bytes = bytes;
+    out->constant_ok = 1;
 }
 
 static void clear_gl_errors(void) {
@@ -586,6 +929,42 @@ eu4_gfx_framebuffer_status eu4_gfx_observe_framebuffer_after_draw(
     char caps_hex[17];
     int caps_byte4 = -1;
     read_caps(call, caps_hex, &caps_byte4);
+    draw_inputs inputs;
+    read_draw_inputs(call, &inputs);
+    char constant_json[900] = "null";
+    if (inputs.constant_ok) {
+        char sha[65] = {0};
+        sha256_hex(inputs.constant, inputs.constant_bytes, sha);
+        char path[1200];
+        if (snprintf(path, sizeof path, "%s/gl-reference-constant.bin",
+                     g_fb.run_dir) < (int)sizeof path &&
+            write_atomic(path, inputs.constant, inputs.constant_bytes) == 0) {
+            char hex[257];
+            static const char digits[] = "0123456789abcdef";
+            uint32_t shown = inputs.constant_bytes > 128 ? 128 : inputs.constant_bytes;
+            for (uint32_t i = 0; i < shown; i++) {
+                hex[i * 2] = digits[inputs.constant[i] >> 4];
+                hex[i * 2 + 1] = digits[inputs.constant[i] & 0xf];
+            }
+            hex[shown * 2] = 0;
+            (void)snprintf(
+                constant_json, sizeof constant_json,
+                "{\"schema\":\"gfx-gl-constant/v1\",\"raw_file\":"
+                "\"gl-reference-constant.bin\",\"words\":%u,\"bytes\":%u,"
+                "\"sha256\":\"%s\",\"hex\":\"%s\"}",
+                inputs.constant_words, inputs.constant_bytes, sha, hex);
+        }
+    }
+    GLint texture_width = -1;
+    GLint texture_height = -1;
+    GLint texture_format = 0;
+    char texture_json[700] = "null";
+    capture_texture(&state, texture_json, sizeof texture_json);
+    char live_vertex_json[1200] = "null";
+    char shader_sources_json[4096] = "[]";
+    capture_live_vertex(&state, live_vertex_json, sizeof live_vertex_json);
+    (void)dump_glsl_sources(state.program, shader_sources_json,
+                            sizeof shader_sources_json);
     uint8_t *pixels = NULL;
     size_t length = 0;
     int width = 0, height = 0;
@@ -642,7 +1021,7 @@ eu4_gfx_framebuffer_status eu4_gfx_observe_framebuffer_after_draw(
         "\"library_sha256\":\"%s\",\"session\":\"%s\",\"pid\":%d},"
         "\"draw\":{\"symbol\":\"_GfxDraw\",\"call_id\":%llu,\"caller_rva\":"
         "\"0x%llx\",\"caller_known\":%s,\"thread_id\":%llu,\"mode\":%d,"
-        "\"effective_count\":%d,\"first\":%d},"
+        "\"effective_count\":%d,\"first\":%d,\"shader_object\":\"0x%llx\"},"
         "\"target\":{\"framebuffer\":%d,\"read_framebuffer\":%d,"
         "\"read_buffer\":%d,\"draw_buffer\":%d,\"viewport\":[%d,%d,%d,%d],"
         "\"width\":%d,\"height\":%d,\"pixel_format\":\"%s\","
@@ -668,7 +1047,11 @@ eu4_gfx_framebuffer_status eu4_gfx_observe_framebuffer_after_draw(
         "\"settings\":{\"force_pow2_source\":\"engine TestPOW2TextureCompatibility\"},"
         "\"capture\":{\"raw_file\":\"%s\",\"raw_bytes\":%zu,"
         "\"raw_sha256\":\"%s\",\"pixel_format\":\"%s\"},"
-        "\"pre_draw\":%s}\n",
+        "\"pre_draw\":%s,"
+        "\"texture\":{\"name\":%d,\"width\":%d,\"height\":%d,"
+        "\"internal_format\":%d},"
+        "\"texture_image\":%s,"
+        "\"constants\":%s,\"shader_sources\":%s,\"live_vertex\":%s}\n",
         captured, env_text("EU4_GFX_EXPECTED_EXE"),
         env_text("EU4_GFX_EXECUTABLE_SHA256"),
         env_text("EU4_GFX_LIBRARY_SHA256"), env_text("EU4_GFX_STARTUP_ID"),
@@ -676,6 +1059,7 @@ eu4_gfx_framebuffer_status eu4_gfx_observe_framebuffer_after_draw(
         (unsigned long long)call->caller_rva,
         call->caller_known ? "true" : "false",
         (unsigned long long)call->thread_id, mode, effective_count, first,
+        (unsigned long long)inputs.shader_object,
         state.draw_framebuffer, state.read_framebuffer, state.read_buffer,
         state.draw_buffer, state.viewport[0], state.viewport[1], state.viewport[2],
         state.viewport[3], width, height, format, width * 4,
@@ -694,7 +1078,9 @@ eu4_gfx_framebuffer_status eu4_gfx_observe_framebuffer_after_draw(
         glsl_sha, shader_count, caps_hex, caps_byte4, g_last_pack.alignment,
         g_last_pack.row_length, g_last_pack.skip_rows, g_last_pack.skip_pixels,
         g_last_pack.pack_buffer, g_last_pack_restored ? "true" : "false",
-        raw_name, length, sha, format, pre_json);
+        raw_name, length, sha, format, pre_json, state.texture_2d, texture_width,
+        texture_height, texture_format, texture_json, constant_json,
+        shader_sources_json, live_vertex_json);
     if (length_json <= 0 || (size_t)length_json >= sizeof body) {
         return EU4_GFX_FRAMEBUFFER_CAPTURE_IO;
     }

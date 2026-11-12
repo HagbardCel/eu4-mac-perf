@@ -617,6 +617,60 @@ int eu4_gfx_simple_state_supported(void *master, char *reason, size_t capacity) 
     return 1;
 }
 
+int eu4_gfx_sprite_state_supported(void *master, char *reason, size_t capacity) {
+    if (reason != NULL && capacity > 0) {
+        reason[0] = 0;
+    }
+    if (master == NULL || !g_succeeded || master != g_master) {
+        simple_state_reason(reason, capacity, "no live backend");
+        return 0;
+    }
+    __unsafe_unretained EU4GfxBackend *backend =
+        (__bridge EU4GfxBackend *)load_ptr(master, 0x180);
+    if (backend == nil || backend.poisoned) {
+        simple_state_reason(reason, capacity, "backend is unavailable or poisoned");
+        return 0;
+    }
+    uint8_t expected_blend[0x24];
+    memset(expected_blend, 0, sizeof expected_blend);
+    uint32_t enabled = 1, src = 0x0302, dst = 0x0303, add = 0x8006,
+             one = 1, zero = 0, compare = 0x206, mask = 0x01010101;
+    memcpy(expected_blend, &enabled, 4);
+    memcpy(expected_blend + 4, &src, 4);
+    memcpy(expected_blend + 8, &dst, 4);
+    memcpy(expected_blend + 0xc, &add, 4);
+    /* The backend blend snapshot stores one/zero for the alpha factors while
+       the original GL state (and the Metal pipeline) uses SRC_ALPHA /
+       ONE_MINUS_SRC_ALPHA for alpha as well. Colour output is unaffected. */
+    memcpy(expected_blend + 0x10, &one, 4);
+    memcpy(expected_blend + 0x14, &zero, 4);
+    memcpy(expected_blend + 0x18, &add, 4);
+    memcpy(expected_blend + 0x1c, &compare, 4);
+    memcpy(expected_blend + 0x20, &mask, 4);
+    if (memcmp((uint8_t *)master + 0xc, expected_blend, sizeof expected_blend) != 0) {
+        simple_state_reason(reason, capacity,
+                            "blend state is not the measured sprite alpha blend");
+        return 0;
+    }
+    uint8_t expected_raster[0x10];
+    fill_raster_snap(expected_raster);
+    if (memcmp((uint8_t *)master + 0x54, expected_raster, sizeof expected_raster) != 0) {
+        simple_state_reason(reason, capacity,
+                            "rasterizer state is not the backend default snapshot");
+        return 0;
+    }
+    if (backend.scissorValid) {
+        if (backend.scissorGlX != 0 || backend.scissorGlY != 0 ||
+            backend.scissorWidth != (int32_t)backend.logicalWidth ||
+            backend.scissorHeight != (int32_t)backend.logicalHeight) {
+            simple_state_reason(reason, capacity,
+                                "a partial scissor is not supported by the sprite pass");
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static void stop_now(const char *phase, const char *symbol, const char *reason, const void *caller) {
     eu4_metal_events_stop(phase, symbol, reason, caller);
     if (g_terminate != NULL) {

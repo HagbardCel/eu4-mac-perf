@@ -94,7 +94,7 @@ typedef struct {
     uint64_t vertex_hash;
     char vertex_hex[193];
     uint64_t constant_hash;
-    char constant_hex[129];
+    char constant_hex[193];
     uint64_t texture_pointer;
     uint32_t texture_width;
     uint32_t texture_height;

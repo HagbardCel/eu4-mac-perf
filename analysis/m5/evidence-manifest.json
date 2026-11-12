@@ -1,0 +1,268 @@
+{
+  "schema": "eu4-m5-evidence/v1",
+  "baseline_commit": "9e02bd3",
+  "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "policy": {
+    "path": "analysis/m5/comparison-policy.json",
+    "sha256": "d1cb3130d3cf15449a8bed1fc77b4796f3b55a243872fbc686a04be4d3f40d85"
+  },
+  "reference": {
+    "run": ".local/m5/experiments/sprite-gl-ref-08",
+    "descriptor": "gl-reference.json",
+    "descriptor_sha256": "f90be68e5a5fa7073f8b415f42f4e928f345f0d50387463bd677a575cd8cb452",
+    "draw": {
+      "symbol": "_GfxDraw",
+      "call_id": 6,
+      "caller_rva": "0x14f6c1b",
+      "mode": 5,
+      "effective_count": 4,
+      "first": 0,
+      "shader_object": "0x600003fd0580"
+    },
+    "target": {
+      "width": 1728,
+      "height": 1117,
+      "pixel_format": "BGRA8",
+      "origin": "lower_left",
+      "read_buffer": 1029,
+      "draw_buffer": 1029
+    },
+    "raw": {
+      "file": "gl-reference.bgra",
+      "bytes": 7720704,
+      "sha256": "23ab7b82693dfd8b9e7a38503f1e9ebe5488c92fc28d2fabd63b6ecd9601ce5f"
+    },
+    "pre_draw": {
+      "file": "gl-reference-pre.bgra",
+      "bytes": 7720704,
+      "sha256": "31f890d40de312e7ef5112bc313411c355c8225fb8ec5901a73a457f95f9d88f"
+    },
+    "vertex": {
+      "file": "gl-reference-vertex.bin",
+      "bytes": 80,
+      "sha256": "7f6317491981f88be8807e7e6e03e3851695937903ac80b9838ad91337095e53",
+      "stride": 20,
+      "offset": 0,
+      "first": 0,
+      "count": 4
+    },
+    "constant": {
+      "file": "gl-reference-constant.bin",
+      "bytes": 112,
+      "sha256": "277f0413bc86ee12aa096bb4c1b22ffa4641033eee5946639460ff3cedf2adc9",
+      "words": 7
+    },
+    "texture": {
+      "file": "gl-reference-texture.bgra",
+      "bytes": 864500,
+      "sha256": "5f4940d7600454d4558d96f6aefeb5a7b3c676fc7ee4cbbb0b72b9cbcbb7e0e0",
+      "width": 1235,
+      "height": 175,
+      "internal_format": 32856
+    },
+    "shader": {
+      "program": 22,
+      "glsl_sha256": "51868985cac47e5cab6907323a7e5f283b0d8f689234130664479c41520df235",
+      "sources": [
+        {
+          "stage": "vertex",
+          "file": "gl-reference-shader-0-vertex.glsl",
+          "bytes": 5158,
+          "sha256": "ec699d5ff0c9a9cd8b512dccd0ed8b3c5e4eb88130e53a03dd2e21eedeb5485f",
+          "compiler_input_sha256": "e9422b2cfbc43350df7e735f31b70fd8de2da9ebef533cc6c3360efeda5a26c0"
+        },
+        {
+          "stage": "pixel",
+          "file": "gl-reference-shader-1-pixel.glsl",
+          "bytes": 4909,
+          "sha256": "117a1a697ece90d45ae072216e4a16d7a9f461ef8e25caa8ed5e1d73b8f5aa53",
+          "compiler_input_sha256": "10ca615e5608f4efd0bcc204c25d8b3682c6785fd4f1f53eac9f6b9f7ca8b062"
+        }
+      ]
+    },
+    "caps": {
+      "bytes_hex": "0040000001010101",
+      "byte4": 1
+    },
+    "pack": {
+      "restored": true
+    },
+    "contribution": {
+      "differing_pixels": 157254,
+      "total_pixels": 1930176
+    },
+    "artifacts": {
+      "gl-reference.json": {
+        "path": ".local/m5/experiments/sprite-gl-ref-08/gl-reference.json",
+        "sha256": "f90be68e5a5fa7073f8b415f42f4e928f345f0d50387463bd677a575cd8cb452",
+        "bytes": 3378
+      },
+      "gl-reference.bgra": {
+        "path": ".local/m5/experiments/sprite-gl-ref-08/gl-reference.bgra",
+        "sha256": "23ab7b82693dfd8b9e7a38503f1e9ebe5488c92fc28d2fabd63b6ecd9601ce5f",
+        "bytes": 7720704
+      },
+      "gl-reference-pre.bgra": {
+        "path": ".local/m5/experiments/sprite-gl-ref-08/gl-reference-pre.bgra",
+        "sha256": "31f890d40de312e7ef5112bc313411c355c8225fb8ec5901a73a457f95f9d88f",
+        "bytes": 7720704
+      },
+      "gl-reference-vertex.bin": {
+        "path": ".local/m5/experiments/sprite-gl-ref-08/gl-reference-vertex.bin",
+        "sha256": "7f6317491981f88be8807e7e6e03e3851695937903ac80b9838ad91337095e53",
+        "bytes": 80
+      },
+      "gl-reference-constant.bin": {
+        "path": ".local/m5/experiments/sprite-gl-ref-08/gl-reference-constant.bin",
+        "sha256": "277f0413bc86ee12aa096bb4c1b22ffa4641033eee5946639460ff3cedf2adc9",
+        "bytes": 112
+      },
+      "gl-reference-texture.bgra": {
+        "path": ".local/m5/experiments/sprite-gl-ref-08/gl-reference-texture.bgra",
+        "sha256": "5f4940d7600454d4558d96f6aefeb5a7b3c676fc7ee4cbbb0b72b9cbcbb7e0e0",
+        "bytes": 864500
+      },
+      "gl-reference-shader-0-vertex.glsl": {
+        "path": ".local/m5/experiments/sprite-gl-ref-08/gl-reference-shader-0-vertex.glsl",
+        "sha256": "ec699d5ff0c9a9cd8b512dccd0ed8b3c5e4eb88130e53a03dd2e21eedeb5485f",
+        "bytes": 5158
+      },
+      "gl-reference-shader-1-pixel.glsl": {
+        "path": ".local/m5/experiments/sprite-gl-ref-08/gl-reference-shader-1-pixel.glsl",
+        "sha256": "117a1a697ece90d45ae072216e4a16d7a9f461ef8e25caa8ed5e1d73b8f5aa53",
+        "bytes": 4909
+      },
+      "capture-report.json": {
+        "path": ".local/m5/experiments/sprite-gl-ref-08/capture-report.json",
+        "sha256": "e148db65a20b77a27f2b16c0619e2d134c3739aa21f8f0c08c5549ea51a9e1d4",
+        "bytes": 7198
+      },
+      "operations-summary.json": {
+        "path": ".local/m5/experiments/sprite-gl-ref-08/operations-summary.json",
+        "sha256": "1f51a108d723abe5594ce567670d6e34ae5d213704c9a79e123a3cadce342c18",
+        "bytes": 1139
+      }
+    }
+  },
+  "candidate": {
+    "run": ".local/m5/experiments/metal-replay-02",
+    "descriptor": "metal-logical.json",
+    "descriptor_sha256": "ede0d0aaddf5524072825b122e646026a4df59c95794c32ac8ca1863c4b2fc98",
+    "draw": {
+      "symbol": "_GfxDraw",
+      "caller_rva": "0x14f6c1b",
+      "mode": 5,
+      "effective_count": 4,
+      "first": 0,
+      "shader_identity": "sprite-map/asset-maincode-v0"
+    },
+    "target": {
+      "width": 1728,
+      "height": 1117,
+      "pixel_format": "BGRA8",
+      "origin": "top_left"
+    },
+    "raw": {
+      "file": "metal-logical.bgra",
+      "bytes": 7720704,
+      "sha256": "f6346ca4a93a469ce7c9603c4420bbd60b74d1436cc796a90cee9ebe528a91e5"
+    },
+    "gpu": {
+      "completed": true,
+      "command_status": 4,
+      "evidence": "MTLCommandBufferStatusCompleted + shared target readback"
+    },
+    "replay": {
+      "host": "tests/gfx_m5_replay_host.mm",
+      "seeds_pre_draw": true,
+      "same_encoder": true
+    },
+    "artifacts": {
+      "metal-logical.json": {
+        "path": ".local/m5/experiments/metal-replay-02/metal-logical.json",
+        "sha256": "ede0d0aaddf5524072825b122e646026a4df59c95794c32ac8ca1863c4b2fc98",
+        "bytes": 1684
+      },
+      "metal-logical.bgra": {
+        "path": ".local/m5/experiments/metal-replay-02/metal-logical.bgra",
+        "sha256": "f6346ca4a93a469ce7c9603c4420bbd60b74d1436cc796a90cee9ebe528a91e5",
+        "bytes": 7720704
+      }
+    }
+  },
+  "comparison": {
+    "report": ".local/m5/experiments/compare-final-m5-01/report.json",
+    "status": "pass",
+    "pixels": 1930176,
+    "max_channel_error": 0,
+    "mean_abs_error": 0.0,
+    "mismatched_pixels": 0,
+    "normalization": [
+      "vertical_flip"
+    ]
+  },
+  "engine_reach": {
+    "reached": false,
+    "blocker": {
+      "symbol": "_GfxBeginScene",
+      "caller": "CGraphics::BeginScene + 39",
+      "observed": "SIGSEGV after the first presented loading frame while advancing to the next frame"
+    },
+    "smallest_next_action": "Reconstruct _GfxBeginScene and the immediately following CGraphics::ClearScene frame-start path; then select the first _GfxDraw at caller 0x14f6c1b in the live route."
+  },
+  "m4_regressions": {
+    "checker": "campaigns/eu4-m4/accept.py",
+    "host_tests": [
+      "tests.test_gfx_live_draw",
+      "tests.test_gfx_simple_draw",
+      "tests.test_gfx_compare",
+      "tests.test_m4_accept"
+    ],
+    "expected": "pass on the recorded M4 evidence",
+    "result": "pass (M4 checker and host tests; recorded local evidence)"
+  },
+  "commands": [
+    "python3 -m automation.live_gfx capture --target _GfxDraw --until-target-draw --caller-rva 0x14f6c1b --gl-reference --timeout 70 --output .local/m5/experiments/sprite-gl-ref-08 --campaign-run-root .local/m5/impl",
+    "python3 -m automation.m5_replay --reference .local/m5/experiments/sprite-gl-ref-08 --output .local/m5/experiments/metal-replay-02",
+    "python3 -m automation.gfx_compare compare --reference .local/m5/experiments/sprite-gl-ref-08 --candidate .local/m5/experiments/metal-replay-02 --policy analysis/m5/comparison-policy.json --out .local/m5/experiments/compare-final-m5-01",
+    "python3 campaigns/eu4-m5/accept.py ."
+  ],
+  "session": {
+    "gl_capture": "sprite-gl-ref-08",
+    "replay": "metal-replay-02"
+  },
+  "limitations": [
+    "The live engine path does not yet reach the sprite draw because _GfxBeginScene is unreconstructed; the qualification is a live-Metal replay of the captured operation.",
+    "The background is animated, so each reference is paired with a replay seeded by its own pre-draw payload.",
+    "The engine sampler object is not decoded; the replay uses linear clamp-to-edge, which matches the captured GL image exactly."
+  ],
+  "m5_host_tests": {
+    "suite": "tests.test_gfx_m5_sprite",
+    "tests": 4,
+    "result": "pass",
+    "cases": [
+      "exact replay",
+      "determinism",
+      "corrupted texture failure",
+      "unsupported state refusal"
+    ]
+  },
+  "full_suite": {
+    "python": "3.14.10",
+    "command": "PYTHONPATH=benchmark:. python -m unittest discover -s tests",
+    "ran": 2468,
+    "ok": 2456,
+    "skipped": 10,
+    "errors": 2,
+    "local_only_exclusions": [
+      "untracked tests/test_gfx_l32b_e2e.py imports the absent automation.gfx_l32b_hooks module",
+      "partially present untracked results/20261006T193739Z-submission-experiment lacks manifest.json"
+    ],
+    "note": "Both errors are from local-only untracked artifacts that are absent in CI; every tracked test passed."
+  },
+  "checker": {
+    "path": "campaigns/eu4-m5/accept.py",
+    "result": "pending final clean-tree run",
+    "gates": "manifest/policy, reference event/target/artifacts/vertex/constants/texture/shader/contribution, candidate replay GPU/inputs/comparison, unsupported state, corrupted input, offline regressions, M4 checker"
+  }
+}

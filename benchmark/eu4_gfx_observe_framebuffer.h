@@ -42,6 +42,15 @@ eu4_gfx_framebuffer_status eu4_gfx_observe_framebuffer_before_draw(
     const eu4_gfx_observe_call *call, int32_t mode, int32_t effective_count,
     int32_t first);
 
+/* Record the vertex range the selected draw consumes so the post-draw hook can
+ * read the live GL vertex buffer contents (in addition to the engine resource
+ * payloads). The readback binds the draw's array buffer, reads the exact range,
+ * and restores the previous binding; it is observation only. */
+void eu4_gfx_observe_framebuffer_set_vertex_range(uint32_t vertex_stride,
+                                                  uint32_t vertex_offset,
+                                                  int32_t first,
+                                                  int32_t count);
+
 /* Called from the observed draw exit hook for the selected target draw.
  * Performs glFinish, reads the framebuffer, writes the payload and metadata,
  * and returns OK only when the post-draw payload is complete. */
