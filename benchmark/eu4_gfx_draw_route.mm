@@ -14,6 +14,7 @@
 #import <string.h>
 
 static eu4_gfx_simple_draw_state g_last_state;
+static const eu4_gfx_draw_raw *g_refusal_raw;
 static uint64_t g_last_caller_rva;
 static int g_have_last;
 
@@ -43,11 +44,39 @@ static uint32_t load_u32(const uint8_t *base, size_t offset) {
     return value;
 }
 
+static void record_refusal(eu4_gfx_draw_route_result route, const char *text) {
+    if (g_refusal_raw == NULL) {
+        return;
+    }
+    uint64_t rva = 0;
+    int inside = 0;
+    uint64_t thread = 0;
+    int pid = 0;
+    eu4_metal_events_describe((const void *)(uintptr_t)g_refusal_raw->retaddr, NULL,
+                              0, &rva, &inside, &thread, &pid);
+    char name[96];
+    snprintf(name, sizeof name, "draw-refused-%llx.json",
+             (unsigned long long)rva);
+    char body[768];
+    int n = snprintf(
+        body, sizeof body,
+        "{\"schema\":\"gfx-draw-refused/v1\",\"route\":%d,"
+        "\"variant\":%u,\"caller_rva\":\"0x%llx\",\"rsi\":%lld,"
+        "\"rdx\":%lld,\"rcx\":%lld,\"reason\":\"%s\",\"pid\":%d}\n",
+        (int)route, g_refusal_raw->which, (unsigned long long)rva,
+        (long long)g_refusal_raw->rsi, (long long)g_refusal_raw->rdx,
+        (long long)g_refusal_raw->rcx, text != NULL ? text : "", pid);
+    if (n > 0 && (size_t)n < sizeof body) {
+        (void)eu4_metal_events_write(name, body);
+    }
+}
+
 static eu4_gfx_draw_route_result refuse(eu4_gfx_draw_route_result result, char *diagnostic,
                                         size_t capacity, const char *text) {
     if (diagnostic != NULL && capacity > 0) {
         snprintf(diagnostic, capacity, "%s", text);
     }
+    record_refusal(result, text);
     return result;
 }
 
@@ -60,6 +89,7 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
     if (state != NULL) {
         memset(state, 0, sizeof *state);
     }
+    g_refusal_raw = raw;
     if (raw == NULL) {
         return refuse(EU4_GFX_DRAW_ROUTE_FAILED, diagnostic, capacity, "null draw frame");
     }

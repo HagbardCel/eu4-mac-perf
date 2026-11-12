@@ -482,10 +482,10 @@ static int blend_sprite_supported(const uint8_t *desc) {
     }
     /* The descriptor's +2 field is a blend-state identity that can vary across
        engine allocations. The effective factors and mask are stable. */
+    /* Factors/equations define the pass; the tail fields are unrelated state
+       that varies between otherwise identical alpha-blend descriptors. */
     return desc[0] == 1 && desc[4] == 4 && desc[8] == 5 && desc[0xc] == 0 &&
-           desc[0x10] == 1 && desc[0x14] == 0 && desc[0x18] == 0 &&
-           desc[0x1c] == kSpriteBlendDescriptor[0x1c] &&
-           desc[0x20] == kSpriteBlendDescriptor[0x20];
+           desc[0x10] == 1 && desc[0x14] == 0 && desc[0x18] == 0;
 }
 
 static void fill_sprite_blend_snap(uint8_t snap[0x24]) {
@@ -633,10 +633,13 @@ static int apply_raster(void *master, void *state, int force) {
     memcpy(&front_engine, desc + 8, 4);
     uint32_t cull = cull_engine == 1 ? 0x404 : cull_engine == 2 ? 0x405
                      : cull_engine == 0 ? 0 : 0x408;
-    uint32_t polygon = polygon_engine == 0 ? 0x1b00
-                       : polygon_engine == 1 ? 0x1b01 : 0x1b02;
+    /* The title scene only fills polygons. Engine enum 1 is the line/wire
+       variant; 0 and 2 both appear for filled states across the engine's two
+       state-object layouts. Anything else would be wireframe, which the
+       reconstructed pass cannot represent. */
+    uint32_t polygon = polygon_engine == 1 ? 0x1b01 : 0x1b02;
     uint32_t front = front_engine == 1 ? 0x901 : 0x900;
-    if (polygon != 0x1b02 && polygon != 0x1b01 && polygon != 0) {
+    if (polygon != 0x1b02 && polygon != 0x1b01) {
         uint8_t bytes[0x10];
         memcpy(bytes, desc, sizeof bytes);
         char hex[0x10 * 2 + 1];
@@ -1943,6 +1946,19 @@ eu4_gfx_clear_status eu4_gfx_read_offscreen(void *master, void *dest, size_t cap
    swaps the window instead. The reconstructed window is a CAMetalLayer, so the
    swap is the natural presentation boundary: blit the completed backbuffer to
    the layer's drawable and present it. */
+/* GL resolve helpers: the Metal targets are single-sample and already hold
+   the resolved colour, so the GL resolve steps are no-ops. */
+void eu4_gfx_resolve_noop(void *unused, void *header) {
+    (void)unused;
+    (void)header;
+}
+
+void eu4_gfx_resolve_texture_noop(void *handle, void *source, void *target) {
+    (void)handle;
+    (void)source;
+    (void)target;
+}
+
 int eu4_gfx_swap_window(void *window) {
     (void)window;
     if (g_master == NULL) {

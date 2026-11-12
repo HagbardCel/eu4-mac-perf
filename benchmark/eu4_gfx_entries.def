@@ -28,6 +28,10 @@ GFX_ENTRY(draw_indexed, 0x15eaa77, 0x15eac96, eu4_gfx_draw_indexed_entry, "\x55\
 GFX_ENTRY(draw_indexed_instanced, 0x15eac9c, 0x15ead87, eu4_gfx_draw_indexed_instanced_entry, "\x55\x48\x89\xe5\x41\x57")
 // _GfxInitializeTexture. End is _GfxCreateTexture. Authorized by the glGenTextures stop at 0x15ec4ed.
 GFX_ENTRY(initialize_texture, 0x15ec43b, 0x15ec61d, eu4_gfx_initialize_texture, "\x55\x48\x89\xe5\x41\x57")
+// _GfxResolve. GL-only texture resolve; the Metal target is already resolved.
+GFX_ENTRY(resolve, 0x15ece13, 0x15ece63, eu4_gfx_resolve_noop, "\x48\x85\xf6\x74\x4a")
+// _GfxResolveTexture. Multisample blit resolve; the Metal path is single-sample.
+GFX_ENTRY(resolve_texture, 0x15ece63, 0x15eceff, eu4_gfx_resolve_texture_noop, "\x55\x48\x89\xe5\x41\x57")
 // SDL_GL_SwapWindow. The frontend presents through the window swap, not
 // _GfxPresent. The reconstructed window is a CAMetalLayer, so the swap blits
 // the completed backbuffer to the drawable.

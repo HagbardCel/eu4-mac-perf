@@ -141,13 +141,15 @@ bool eu4_gfx_entry_prepare(const eu4_gfx_entry_request *requests, int count) {
         static const uint8_t kShaderDestroy[5] = {0x48, 0x85, 0xff, 0x74, 0x1c};
         static const uint8_t kTextureClear[5] = {0x48, 0x85, 0xff, 0x0f, 0x84};
         static const uint8_t kTextureUpdate[5] = {0x4d, 0x85, 0xc9, 0x0f, 0x84};
+        static const uint8_t kTextureResolve[5] = {0x48, 0x85, 0xf6, 0x74, 0x4a};
         int prologue = requests[i].expected[0] == 0x55 && requests[i].expected[1] == 0x48;
         int exact = length == 5 && (memcmp(requests[i].expected, kVertexDestroy, 5) == 0 ||
                                      memcmp(requests[i].expected, kIndexDestroy, 5) == 0 ||
                                      memcmp(requests[i].expected, kIndexSet, 5) == 0 ||
                                      memcmp(requests[i].expected, kShaderDestroy, 5) == 0 ||
                                      memcmp(requests[i].expected, kTextureClear, 5) == 0 ||
-                                     memcmp(requests[i].expected, kTextureUpdate, 5) == 0);
+                                     memcmp(requests[i].expected, kTextureUpdate, 5) == 0 ||
+                                     memcmp(requests[i].expected, kTextureResolve, 5) == 0);
         if (!prologue && !exact) {
             return false;
         }
