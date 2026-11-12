@@ -2,6 +2,7 @@
 
 #include "eu4_gfx_observe_buffers.h"
 #include "eu4_gfx_observe_draw.h"
+#include "eu4_gfx_observe_framebuffer.h"
 #include "eu4_gfx_observe_viewport.h"
 #include "eu4_gfx_site_patch.h"
 #include "eu4_gfx_startup_trace.h"
@@ -685,6 +686,9 @@ bool eu4_gfx_observe_configure_from_env(void) {
     atomic_store_explicit(&g_duration_ms, duration_ms, memory_order_relaxed);
     if (!eu4_gfx_observe_configure_policy(stop_policy, target_caller,
                                           retention)) {
+        return false;
+    }
+    if (!eu4_gfx_observe_framebuffer_configure_from_env()) {
         return false;
     }
     atomic_store_explicit(&g_enabled, 1, memory_order_relaxed);

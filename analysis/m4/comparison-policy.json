@@ -1,0 +1,46 @@
+{
+  "schema": "gfx-compare-policy/v1",
+  "name": "m4-simple-loading-opengl-vs-metal",
+  "reference_backend": "opengl",
+  "candidate_backends": [
+    "metal"
+  ],
+  "require_same_event": true,
+  "require_same_extent": true,
+  "require_same_pixel_format": true,
+  "require_gpu_completed": true,
+  "require_presentation": false,
+  "allow_origin_normalization": [
+    "vertical_flip"
+  ],
+  "max_channel_error": 0,
+  "max_mismatched_fraction": 0.0,
+  "max_mean_abs_error": 0.0,
+  "threshold_rationale": "The Simple draw is an opaque quad over a cleared BGRA8 target, sampled with the same linear filter on both backends. No anti-aliasing, dithering or alpha blending is required for this draw (the quad covers the viewport and alpha is 1). Exact integer equality is therefore the initial policy; a tolerance may only be adopted with an independently measured control and a recorded rationale before candidate qualification.",
+  "expected": {
+    "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "candidate_shader_identity": "simple-lua-Simple/asset-maincode-v0",
+    "reference_caps_byte4": 1,
+    "reference_glsl_sha256": "1e5d1d7b0910ec343c5d5da1ec811fa6f2f963157aff251d79bd588391905e7f"
+  },
+  "require_vertex_inputs": true,
+  "vertex_inputs_rationale": "The engine builds the loading quad from the texture description; different POW2/caps state changes the live V range (0..1 vs 0..0.75). The comparator therefore requires the same live slot-0 vertex payload on both sides, not merely the same caller.",
+  "measured_basis": {
+    "reference_runs": [
+      "gl-reference-01",
+      "gl-reference-02",
+      "gl-reference-04"
+    ],
+    "reference_raw_sha256": "69d41a8870679dcb3158bd3f3fad2f4afff11106e45990ab9a3ffc0f5dcc7670",
+    "candidate_runs": [
+      "metal-present-02",
+      "metal-present-06",
+      "metal-present-13",
+      "metal-present-18"
+    ],
+    "candidate_logical_raw_sha256": "c668b054e87ea92eea7de6161adc7eeeeef07ea19bfcbde0ef02f069ba77fe14",
+    "observed_max_channel_error": 0,
+    "observed_mismatched_pixels": 0,
+    "note": "Exact equality observed on 1,930,176 pixels across independent launches with identical live vertex inputs; a non-zero tolerance is not justified."
+  }
+}

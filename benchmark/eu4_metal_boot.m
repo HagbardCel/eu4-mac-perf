@@ -27,6 +27,7 @@
 #import <AppKit/AppKit.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
+#import <dispatch/dispatch.h>
 #import <dlfcn.h>
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
@@ -126,6 +127,7 @@ static id<MTLDevice> g_device;
 static id<MTLCommandQueue> g_queue;
 static CAMetalLayer *g_layer;
 static NSView *g_child;
+static NSWindow *g_visible_window;
 static uint32_t g_incoming;
 static uint32_t g_passed;
 static uint32_t g_window_flags;
@@ -315,6 +317,129 @@ static void present(CAMetalLayer *layer, uint32_t incoming, uint32_t passed, uin
     finish(matches ? "metal_window_boot_verified" : "metal_window_boot_failed",
            matches ? NULL : "clear_readback_mismatch", incoming, passed, 1, window_flags, 1, 1,
            (int)width, (int)height, status, matches);
+}
+
+/* SDL may replace the NSWindow when it enters fullscreen, leaving the Metal
+ * child view on the retired window. Reattach the same view and layer to the
+ * current SDL window before presenting, so the drawable is on screen rather
+ * than on a hidden/retired window. */
+static void ensure_visible_on_main(void);
+
+void eu4_metal_ensure_visible(void) {
+    if (pthread_main_np() != 0) {
+        ensure_visible_on_main();
+        return;
+    }
+    /* AppKit view hierarchy changes are main-thread-only. If the engine
+       presents from a render thread, marshal the attachment to the main
+       queue before the drawable is presented. */
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        ensure_visible_on_main();
+    });
+}
+
+static void ensure_visible_on_main(void) {
+    if (g_child == nil || g_window == NULL || g_get_wm_info == NULL) {
+        return;
+    }
+    eu4_sdl_syswm info;
+    memset(&info, 0, sizeof info);
+    g_get_version(info.version);
+    if (!g_get_wm_info(g_window, &info) || info.subsystem != 4) {
+        return;
+    }
+    void *raw = NULL;
+    memcpy(&raw, info.info, sizeof raw);
+    NSWindow *window = (__bridge NSWindow *)raw;
+    if (window == nil || window.contentView == nil) {
+        return;
+    }
+    NSView *content = window.contentView;
+    /* SDL's view is surface-backed by default. Force it layer-backed so a
+       CAMetalLayer subview is composited, then keep the Metal child on top. */
+    if (!content.wantsLayer) {
+        content.wantsLayer = YES;
+    }
+    g_visible_window = window;
+    if (g_child.superview != content) {
+        [g_child removeFromSuperview];
+    }
+    g_child.frame = content.bounds;
+    g_child.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    g_child.hidden = NO;
+    g_child.alphaValue = 1.0;
+    g_child.layer.opacity = 1.0f;
+    g_child.layer.zPosition = 1.0f;
+    g_child.layer.contentsScale = window.backingScaleFactor;
+    [content addSubview:g_child positioned:NSWindowAbove relativeTo:nil];
+    [(EU4MetalChildView *)g_child syncDrawableGeometry];
+    [NSApp activateIgnoringOtherApps:YES];
+    [window makeKeyAndOrderFront:nil];
+    [window orderFrontRegardless];
+}
+
+void eu4_metal_window_diagnostics(char *out, size_t capacity) {
+    if (out == NULL || capacity == 0) {
+        return;
+    }
+    out[0] = 0;
+    if (g_child == nil) {
+        snprintf(out, capacity, "child=null");
+        return;
+    }
+    NSWindow *window = g_visible_window != nil ? g_visible_window : g_child.window;
+    NSView *content = window.contentView;
+    CAMetalLayer *layer = g_layer;
+    snprintf(out, capacity,
+             "window=%ld child_frame=%.0fx%.0f child_hidden=%d child_alpha=%.2f "
+             "superview=%s subviews=%lu content_class=%s content_wantsLayer=%d "
+             "layer_hidden=%d layer_opacity=%.2f layer_bounds=%.0fx%.0f "
+             "drawable=%.0fx%.0f scale=%.2f layered=%d main_thread=%d",
+             (long)(window != nil ? window.windowNumber : 0),
+             g_child.frame.size.width, g_child.frame.size.height,
+             g_child.hidden ? 1 : 0, g_child.alphaValue,
+             g_child.superview != nil
+                 ? NSStringFromClass([g_child.superview class]).UTF8String
+                 : "null",
+             (unsigned long)(content != nil ? content.subviews.count : 0),
+             content != nil ? NSStringFromClass([content class]).UTF8String : "null",
+             content != nil && content.wantsLayer ? 1 : 0,
+             layer != nil && layer.isHidden ? 1 : 0,
+             layer != nil ? layer.opacity : 0.0f,
+             layer != nil ? layer.bounds.size.width : 0.0,
+             layer != nil ? layer.bounds.size.height : 0.0,
+             layer != nil ? layer.drawableSize.width : 0.0,
+             layer != nil ? layer.drawableSize.height : 0.0,
+             window != nil ? window.backingScaleFactor : 0.0,
+             g_child.layer != nil ? 1 : 0,
+             pthread_main_np());
+}
+
+int eu4_metal_window_state(uint64_t *number, int *visible, int *occluded,
+                           double *width, double *height, double *scale) {
+    if (g_child == nil || g_child.window == nil) {
+        return 0;
+    }
+    NSWindow *window = g_child.window;
+    if (number != NULL) {
+        *number = (uint64_t)window.windowNumber;
+    }
+    if (visible != NULL) {
+        *visible = window.visible ? 1 : 0;
+    }
+    if (occluded != NULL) {
+        *occluded = (window.occlusionState & NSWindowOcclusionStateVisible) != 0 ? 0 : 1;
+    }
+    if (width != NULL) {
+        *width = g_child.bounds.size.width;
+    }
+    if (height != NULL) {
+        *height = g_child.bounds.size.height;
+    }
+    if (scale != NULL) {
+        *scale = window.backingScaleFactor;
+    }
+    return 1;
 }
 
 static void record_view_points(NSView *view) {

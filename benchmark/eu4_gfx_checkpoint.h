@@ -27,6 +27,7 @@ void eu4_gfx_checkpoint_after_draw(void *master, const eu4_gfx_draw_raw *raw,
                                    const eu4_gfx_simple_draw_state *state);
 void eu4_gfx_checkpoint_after_clear(void *master, const void *caller);
 void eu4_gfx_checkpoint_before_present(void *master, const void *caller);
+void eu4_gfx_checkpoint_after_present(void *master, const void *caller);
 
 #ifdef __cplusplus
 }

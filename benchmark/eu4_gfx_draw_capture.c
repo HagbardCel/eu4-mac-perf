@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* _GfxDrawIndexed reads the context through (%rdi). The other two entries
@@ -22,6 +23,8 @@ enum {
 
 static int g_draw_count;
 static int g_skip_count;
+static int g_route_handled;
+static int g_route_skipped;
 static eu4_gfx_draw_route_fn g_route;
 
 void eu4_gfx_draw_route_install(eu4_gfx_draw_route_fn route) {
@@ -331,7 +334,28 @@ int eu4_gfx_draw_capture(const eu4_gfx_draw_raw *raw) {
         eu4_gfx_draw_route_result route =
             g_route(raw, &state, diagnostic, sizeof diagnostic);
         if (route == EU4_GFX_DRAW_ROUTE_HANDLED) {
+            g_route_handled = 1;
             eu4_gfx_draw_route_record("draw-route.json", "live", "", &state, raw, caller_rva);
+            return 1;
+        }
+        if (route == EU4_GFX_DRAW_ROUTE_UNSUPPORTED && g_route_handled &&
+            getenv("EU4_GFX_DRAW_SKIP_UNSUPPORTED") != NULL &&
+            strcmp(getenv("EU4_GFX_DRAW_SKIP_UNSUPPORTED"), "1") == 0) {
+            /* Bounded presentation diagnostic: later draws are outside the
+               admitted route. Skipping them is recorded explicitly; the target
+               draw has already been submitted and its contents are prepared
+               for the engine's own present. */
+            g_route_skipped += 1;
+            char skip[512];
+            int skip_length = snprintf(
+                skip, sizeof skip,
+                "{\"schema\":\"gfx-draw-skip/v1\",\"symbol\":\"%s\","
+                "\"caller_rva\":%llu,\"skipped\":%d,\"reason\":\"%s\"}\n",
+                symbol, (unsigned long long)caller_rva, g_route_skipped,
+                diagnostic);
+            if (skip_length > 0 && (size_t)skip_length < sizeof skip) {
+                (void)eu4_metal_events_write("draw-skipped.json", skip);
+            }
             return 1;
         }
         eu4_gfx_draw_route_record(route == EU4_GFX_DRAW_ROUTE_UNSUPPORTED

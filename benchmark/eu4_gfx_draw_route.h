@@ -40,6 +40,11 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
     const eu4_gfx_draw_raw *raw, eu4_gfx_simple_draw_state *state,
     char *diagnostic, size_t capacity);
 
+/* Last successfully handled draw, for later diagnostic stages (presentation).
+   Returns 0 when no draw has been handled in this process. */
+int eu4_gfx_draw_route_last(eu4_gfx_simple_draw_state *state,
+                            uint64_t *caller_rva);
+
 #ifdef __cplusplus
 }
 #endif

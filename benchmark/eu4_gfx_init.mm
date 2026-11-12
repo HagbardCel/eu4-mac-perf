@@ -237,12 +237,15 @@ static const void *g_present_caller;
 static eu4_gfx_checkpoint_hook g_checkpoint_after_clear;
 static _Thread_local const char *g_clear_reason;
 static eu4_gfx_checkpoint_hook g_checkpoint_before_present;
+static eu4_gfx_checkpoint_hook g_checkpoint_after_present;
 static void *load_ptr(void *master, int offset);
 
 void eu4_gfx_set_checkpoint_hooks(eu4_gfx_checkpoint_hook after_clear,
-                                  eu4_gfx_checkpoint_hook before_present) {
+                                  eu4_gfx_checkpoint_hook before_present,
+                                  eu4_gfx_checkpoint_hook after_present) {
     g_checkpoint_after_clear = after_clear;
     g_checkpoint_before_present = before_present;
+    g_checkpoint_after_present = after_present;
 }
 
 uint8_t *eu4_gfx_image(void) { return g_image; }
@@ -342,6 +345,32 @@ void eu4_gfx_test_fail_next_game_drain(int on) { g_fail_next_game_drain = on; }
 void eu4_gfx_test_set_present_drawable(void *texture) { g_present_drawable = texture; }
 
 void eu4_gfx_test_set_present_readback(void *dest, size_t capacity) {
+    g_present_readback = dest;
+    g_present_readback_cap = capacity;
+}
+
+__attribute__((weak)) void eu4_metal_ensure_visible(void) {}
+
+__attribute__((weak)) void eu4_metal_window_diagnostics(char *out,
+                                                        size_t capacity) {
+    if (out != NULL && capacity > 0) {
+        out[0] = 0;
+    }
+}
+
+__attribute__((weak)) int eu4_metal_window_state(uint64_t *number, int *visible,
+                                                 int *occluded, double *width,
+                                                 double *height, double *scale) {
+    (void)number;
+    (void)visible;
+    (void)occluded;
+    (void)width;
+    (void)height;
+    (void)scale;
+    return 0;
+}
+
+void eu4_gfx_present_capture_set(void *dest, size_t capacity) {
     g_present_readback = dest;
     g_present_readback_cap = capacity;
 }
@@ -824,6 +853,14 @@ static int fill_master(void *master, void *handle) {
     }
     uint32_t texture_limit = max_texture(device);
     memcpy((uint8_t *)master + 0x188, &texture_limit, sizeof texture_limit);
+    /* _GfxGetCaps copies 8 bytes from +0x188; byte 4 is consumed by
+       CSettings::TestPOW2TextureCompatibility as "(byte ^ 1) = force POW2".
+       The authentic original GL context on this machine reports
+       caps_hex=0040000001010101, i.e. byte 4 == 1, so the engine prefers
+       non-POW2 textures. The Metal backend must reproduce that decision or it
+       silently changes engine-computed UVs and the persisted setting. */
+    uint8_t legacy_caps_byte = 1;
+    memcpy((uint8_t *)master + 0x18c, &legacy_caps_byte, sizeof legacy_caps_byte);
     /* 0x15e985e sets +0x18e only when ___GLEW_ARB_shader_texture_lod is 1. */
     uint8_t texture_lod = 0;
     memcpy((uint8_t *)master + 0x18e, &texture_lod, sizeof texture_lod);
@@ -1928,6 +1965,11 @@ eu4_gfx_clear_status eu4_gfx_present_checked(void *master) {
               bytesPerRow:(NSUInteger)backend.gameWidth * 4u
                fromRegion:MTLRegionMake2D(0, 0, backend.gameWidth, backend.gameHeight)
               mipmapLevel:0];
+        if (g_checkpoint_after_present != NULL) {
+            /* The destination drawable's bytes are in the checkpoint-owned
+               buffer; consume them before clearing the capture pointer. */
+            g_checkpoint_after_present(master, g_present_caller);
+        }
         g_present_readback = NULL;
         g_present_readback_cap = 0;
     }

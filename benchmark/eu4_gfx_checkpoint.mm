@@ -1,9 +1,11 @@
 #import "eu4_gfx_checkpoint.h"
 
+#import "eu4_gfx_draw_route.h"
 #import "eu4_gfx_init.h"
 #import "eu4_metal_events.h"
 
 #import <CommonCrypto/CommonDigest.h>
+#import <pthread.h>
 #import <Metal/Metal.h>
 #import <stdio.h>
 #import <stdlib.h>
@@ -16,6 +18,7 @@ enum {
     EU4_GFX_CHECKPOINT_AFTER_CLEAR = 1,
     EU4_GFX_CHECKPOINT_AFTER_DRAW = 2,
     EU4_GFX_CHECKPOINT_BEFORE_PRESENT = 3,
+    EU4_GFX_CHECKPOINT_AFTER_PRESENT = 4,
 };
 
 static int g_checkpoint;
@@ -23,7 +26,20 @@ static uint64_t g_caller_rva;
 static int g_occurrence = 1;
 static int g_stop = 1;
 static char g_dir[1024];
-static int g_counts[4];
+static int g_counts[5];
+static int g_hold_ms;
+static uint8_t *g_present_pixels;
+static size_t g_present_capacity;
+static int g_present_selected;
+static uint32_t g_present_width;
+static uint32_t g_present_height;
+static uint64_t g_present_window_number;
+static int g_present_window_visible;
+static int g_present_window_occluded;
+static double g_present_window_width;
+static double g_present_window_height;
+static double g_present_window_scale;
+static char g_present_window_diagnostics[512];
 
 static void *load_ptr(const uint8_t *base, size_t offset) {
     void *value = NULL;
@@ -57,6 +73,7 @@ void eu4_gfx_checkpoint_configure(const char *operation, uint64_t caller_rva,
     g_occurrence = occurrence;
     g_stop = stop_after_capture ? 1 : 0;
     memset(g_counts, 0, sizeof g_counts);
+    g_present_selected = 0;
     g_dir[0] = 0;
     if (operation == NULL || output_dir == NULL || output_dir[0] != '/') {
         return;
@@ -67,13 +84,16 @@ void eu4_gfx_checkpoint_configure(const char *operation, uint64_t caller_rva,
         g_checkpoint = EU4_GFX_CHECKPOINT_AFTER_DRAW;
     } else if (strcmp(operation, "before-present") == 0) {
         g_checkpoint = EU4_GFX_CHECKPOINT_BEFORE_PRESENT;
+    } else if (strcmp(operation, "after-present") == 0) {
+        g_checkpoint = EU4_GFX_CHECKPOINT_AFTER_PRESENT;
     } else {
         return;
     }
     snprintf(g_dir, sizeof g_dir, "%s", output_dir);
     if (g_checkpoint != EU4_GFX_CHECKPOINT_NONE) {
         eu4_gfx_set_checkpoint_hooks(eu4_gfx_checkpoint_after_clear,
-                                     eu4_gfx_checkpoint_before_present);
+                                     eu4_gfx_checkpoint_before_present,
+                                     eu4_gfx_checkpoint_after_present);
     }
 }
 
@@ -103,11 +123,21 @@ int eu4_gfx_checkpoint_configure_from_env(void) {
     if (stop != NULL && stop[0] != 0 && strcmp(stop, "0") == 0) {
         stop_after = 0;
     }
+    g_hold_ms = 0;
+    const char *hold = getenv("EU4_GFX_CHECKPOINT_HOLD_MS");
+    if (hold != NULL && hold[0] != 0) {
+        uint64_t value = 0;
+        if (!parse_uint(hold, &value) || value > 60000) {
+            return 0;
+        }
+        g_hold_ms = (int)value;
+    }
     eu4_gfx_checkpoint_configure(operation, caller_rva, (int)occurrence_value, dir,
                                  stop_after);
     if (g_checkpoint != EU4_GFX_CHECKPOINT_NONE) {
         eu4_gfx_set_checkpoint_hooks(eu4_gfx_checkpoint_after_clear,
-                                     eu4_gfx_checkpoint_before_present);
+                                     eu4_gfx_checkpoint_before_present,
+                                     eu4_gfx_checkpoint_after_present);
     }
     return g_checkpoint != EU4_GFX_CHECKPOINT_NONE;
 }
@@ -411,6 +441,53 @@ void eu4_gfx_checkpoint_after_clear(void *master, const void *caller) {
 }
 
 void eu4_gfx_checkpoint_before_present(void *master, const void *caller) {
+    if (g_checkpoint == EU4_GFX_CHECKPOINT_AFTER_PRESENT) {
+        g_counts[EU4_GFX_CHECKPOINT_AFTER_PRESENT] += 1;
+        if (g_counts[EU4_GFX_CHECKPOINT_AFTER_PRESENT] != g_occurrence) {
+            return;
+        }
+        __unsafe_unretained EU4GfxBackend *backend =
+            master != NULL
+                ? (__bridge EU4GfxBackend *)load_ptr((const uint8_t *)master, 0x180)
+                : nil;
+        if (backend == nil || backend.gameWidth == 0 || backend.gameHeight == 0 ||
+            backend.gameWidth != backend.physicalWidth ||
+            backend.gameHeight != backend.physicalHeight) {
+            write_failure("after-present", "no committed physical drawable",
+                          0, g_counts[EU4_GFX_CHECKPOINT_AFTER_PRESENT]);
+            return;
+        }
+        uint64_t need = (uint64_t)backend.gameWidth * backend.gameHeight * 4u;
+        if (need == 0 || need > (uint64_t)128 * 1024 * 1024) {
+            write_failure("after-present", "drawable extent is unsupported",
+                          0, g_counts[EU4_GFX_CHECKPOINT_AFTER_PRESENT]);
+            return;
+        }
+        if (g_present_pixels == NULL || g_present_capacity < (size_t)need) {
+            free(g_present_pixels);
+            g_present_pixels = (uint8_t *)malloc((size_t)need);
+            g_present_capacity = (size_t)need;
+        }
+        if (g_present_pixels == NULL) {
+            write_failure("after-present", "drawable readback allocation failed",
+                          0, g_counts[EU4_GFX_CHECKPOINT_AFTER_PRESENT]);
+            return;
+        }
+        g_present_width = backend.gameWidth;
+        g_present_height = backend.gameHeight;
+        eu4_metal_ensure_visible();
+        eu4_metal_window_diagnostics(g_present_window_diagnostics,
+                                     sizeof g_present_window_diagnostics);
+        (void)eu4_metal_window_state(&g_present_window_number,
+                                     &g_present_window_visible,
+                                     &g_present_window_occluded,
+                                     &g_present_window_width,
+                                     &g_present_window_height,
+                                     &g_present_window_scale);
+        eu4_gfx_present_capture_set(g_present_pixels, g_present_capacity);
+        g_present_selected = 1;
+        return;
+    }
     if (g_checkpoint != EU4_GFX_CHECKPOINT_BEFORE_PRESENT) {
         return;
     }
@@ -423,4 +500,140 @@ void eu4_gfx_checkpoint_before_present(void *master, const void *caller) {
         return;
     }
     capture("before-present", "_GfxPresent", "present", master, caller, caller_rva, NULL);
+}
+
+static void *hold_thread(void *arg) {
+    long milliseconds = (long)(intptr_t)arg;
+    if (milliseconds > 0) {
+        usleep((useconds_t)milliseconds * 1000u);
+    }
+    return NULL;
+}
+
+void eu4_gfx_checkpoint_after_present(void *master, const void *caller) {
+    if (g_checkpoint != EU4_GFX_CHECKPOINT_AFTER_PRESENT || !g_present_selected) {
+        return;
+    }
+    (void)master;
+    g_present_selected = 0;
+    size_t need = (size_t)g_present_width * g_present_height * 4u;
+    if (g_present_pixels == NULL || need == 0) {
+        write_failure("after-present", "drawable payload is absent", 0,
+                      g_counts[EU4_GFX_CHECKPOINT_AFTER_PRESENT]);
+        return;
+    }
+    char raw_name[64];
+    snprintf(raw_name, sizeof raw_name, "checkpoint-after-present-%d.bgra",
+             g_counts[EU4_GFX_CHECKPOINT_AFTER_PRESENT]);
+    char raw_path[1300];
+    if (snprintf(raw_path, sizeof raw_path, "%s/%s", g_dir, raw_name) >=
+            (int)sizeof raw_path ||
+        write_bytes(raw_path, g_present_pixels, need) != 0) {
+        write_failure("after-present", "drawable payload write failed", 0,
+                      g_counts[EU4_GFX_CHECKPOINT_AFTER_PRESENT]);
+        return;
+    }
+    char digest[65];
+    sha256_hex(g_present_pixels, need, digest);
+    uint64_t caller_rva = 0;
+    int inside = 0;
+    uint64_t thread = 0;
+    int pid = 0;
+    eu4_metal_events_describe(caller, NULL, 0, &caller_rva, &inside, &thread, &pid);
+    char image[512];
+    eu4_metal_events_describe(caller, image, sizeof image, &caller_rva, &inside,
+                              &thread, &pid);
+    eu4_gfx_simple_draw_state draw;
+    memset(&draw, 0, sizeof draw);
+    uint64_t draw_caller = 0;
+    int have_draw = eu4_gfx_draw_route_last(&draw, &draw_caller);
+    char shader_identity[256];
+    json_text(shader_identity, sizeof shader_identity,
+              have_draw ? draw.shader_identity : "");
+    char body[4096];
+    int length = snprintf(
+        body, sizeof body,
+        "{\"schema\":\"gfx-checkpoint/v1\",\"checkpoint\":\"after-present\","
+        "\"occurrence\":%d,\"caller\":{\"rva\":\"0x%llx\",\"inside\":%s,"
+        "\"thread\":%llu,\"pid\":%d,\"image\":\"%s\"},"
+        "\"session\":\"%s\",\"executable\":\"%s\","
+        "\"executable_sha256\":\"%s\",\"library_sha256\":\"%s\","
+        "\"target\":{\"width\":%u,\"height\":%u,\"row_stride\":%u,"
+        "\"pixel_format\":\"BGRA8\",\"origin\":\"top_left\","
+        "\"storage\":\"CAMetalLayer drawable BGRA8Unorm\"},"
+        "\"gpu\":{\"command_status\":%d,\"completed\":true,"
+        "\"evidence\":\"presentDrawable + waitUntilCompleted + drawable readback\"},"
+        "\"capture\":{\"raw_file\":\"%s\",\"raw_bytes\":%zu,"
+        "\"raw_sha256\":\"%s\",\"pixel_format\":\"BGRA8\"},"
+        "\"presentation\":{\"shown\":true,\"method\":\"drawable_readback\","
+        "\"drawable_scheduled\":true,\"drawable_readback\":true,"
+        "\"command\":\"presentDrawable\",\"width\":%u,\"height\":%u,"
+        "\"window_number\":%llu,\"window_visible\":%s,\"window_occluded\":%s,"
+        "\"window_points\":[%.1f,%.1f],\"backing_scale\":%.2f,"
+        "\"window_diagnostics\":\"%s\"},"
+        "\"status\":{\"draw_reached\":%d,\"draw_encoded\":%d,"
+        "\"gpu_completed\":true,\"pixels_captured\":1,\"presented\":1},"
+        "\"draw\":{\"symbol\":\"_GfxDraw\",\"caller_rva\":\"0x%llx\","
+        "\"shader_identity\":\"%s\",\"primitive\":%u,\"count\":%u,"
+        "\"first\":%d,\"logical_size\":[%u,%u],\"viewport\":[%u,%u,%u,%u]}}\n",
+        g_counts[EU4_GFX_CHECKPOINT_AFTER_PRESENT],
+        (unsigned long long)caller_rva, inside ? "true" : "false",
+        (unsigned long long)thread, pid, image,
+        env_text("EU4_GFX_STARTUP_ID"), env_text("EU4_GFX_EXPECTED_EXE"),
+        env_text("EU4_GFX_EXECUTABLE_SHA256"), env_text("EU4_GFX_LIBRARY_SHA256"),
+        g_present_width, g_present_height, g_present_width * 4u,
+        (int)MTLCommandBufferStatusCompleted, raw_name, need, digest,
+        g_present_width, g_present_height,
+        (unsigned long long)g_present_window_number,
+        g_present_window_visible ? "true" : "false",
+        g_present_window_occluded ? "true" : "false",
+        g_present_window_width, g_present_window_height,
+        g_present_window_scale, g_present_window_diagnostics,
+        have_draw ? 1 : 0, have_draw ? 1 : 0,
+        (unsigned long long)draw_caller, shader_identity, draw.primitive,
+        draw.count, draw.first, draw.logical_width, draw.logical_height,
+        draw.viewport_x, draw.viewport_y, draw.viewport_width,
+        draw.viewport_height);
+    char json_path[1300];
+    if (length <= 0 || (size_t)length >= sizeof body ||
+        snprintf(json_path, sizeof json_path,
+                 "%s/checkpoint-after-present-%d.json", g_dir,
+                 g_counts[EU4_GFX_CHECKPOINT_AFTER_PRESENT]) >=
+            (int)sizeof json_path ||
+        write_bytes(json_path, body, (size_t)length) != 0) {
+        write_failure("after-present", "drawable descriptor write failed", 0,
+                      g_counts[EU4_GFX_CHECKPOINT_AFTER_PRESENT]);
+        return;
+    }
+    char marker[768];
+    int marker_length = snprintf(
+        marker, sizeof marker,
+        "{\"schema\":\"gfx-presentation/v1\",\"shown\":true,"
+        "\"checkpoint\":\"%s\",\"raw_file\":\"%s\","
+        "\"raw_sha256\":\"%s\",\"width\":%u,\"height\":%u,"
+        "\"window_number\":%llu,\"window_visible\":%s,\"window_occluded\":%s,"
+        "\"window_diagnostics\":\"%s\","
+        "\"draw_caller_rva\":\"0x%llx\",\"present_caller_rva\":\"0x%llx\"}\n",
+        "after-present", raw_name, digest, g_present_width, g_present_height,
+        (unsigned long long)g_present_window_number,
+        g_present_window_visible ? "true" : "false",
+        g_present_window_occluded ? "true" : "false",
+        g_present_window_diagnostics,
+        (unsigned long long)draw_caller, (unsigned long long)caller_rva);
+    char marker_path[1300];
+    if (marker_length > 0 && (size_t)marker_length < sizeof marker &&
+        snprintf(marker_path, sizeof marker_path, "%s/presented.json", g_dir) <
+            (int)sizeof marker_path) {
+        (void)write_bytes(marker_path, marker, (size_t)marker_length);
+    }
+    /* Keep the process alive for a bounded interval so an independent window
+       screenshot can be taken. The wait must NOT block the presenting thread:
+       Core Animation commits the drawable transaction on the main run loop, so
+       sleeping here would leave the window blank while the drawable readback
+       already contains the image. A detached thread owns the wait instead. */
+    int hold = g_hold_ms > 0 ? g_hold_ms : 5000;
+    pthread_t waiter;
+    if (pthread_create(&waiter, NULL, hold_thread, (void *)(intptr_t)hold) == 0) {
+        pthread_detach(waiter);
+    }
 }

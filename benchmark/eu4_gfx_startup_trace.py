@@ -52,6 +52,8 @@ def build_library() -> Path:
         "-Wall",
         "-Wextra",
         "-dynamiclib",
+        "-framework", "OpenGL",
+        "-framework", "AppKit",
         "-I",
         str(BENCH),
         "-o",
@@ -60,6 +62,8 @@ def build_library() -> Path:
         str(BENCH / "eu4_gfx_observe.c"),
         str(BENCH / "eu4_gfx_observe_buffers.c"),
         str(BENCH / "eu4_gfx_observe_draw.c"),
+        str(BENCH / "eu4_gfx_observe_framebuffer.c"),
+        str(BENCH / "eu4_gfx_observe_framebuffer_drawable.mm"),
         str(BENCH / "eu4_gfx_observe_viewport.c"),
         str(BENCH / "eu4_gfx_observe_gateway.S"),
         str(BENCH / "eu4_gfx_startup_trace.c"),
@@ -84,12 +88,14 @@ def build_host() -> Path:
         "-Wextra",
         "-I",
         str(BENCH),
+        "-framework", "OpenGL",
         "-o",
         str(HOST),
         str(BENCH / "eu4_gfx_site_patch.c"),
         str(BENCH / "eu4_gfx_observe.c"),
         str(BENCH / "eu4_gfx_observe_buffers.c"),
         str(BENCH / "eu4_gfx_observe_draw.c"),
+        str(BENCH / "eu4_gfx_observe_framebuffer.c"),
         str(BENCH / "eu4_gfx_observe_viewport.c"),
         str(BENCH / "eu4_gfx_observe_gateway.S"),
         str(BENCH / "eu4_gfx_startup_trace.c"),
@@ -257,6 +263,7 @@ def preflight_ops(
     duration_s: float = 10.0,
     until_target_draw: bool = False,
     target_caller_rva: int | None = None,
+    gl_reference: bool = False,
 ) -> dict:
     """Pin the executable and verify every selected observation prefix."""
     if not targets:
@@ -276,6 +283,8 @@ def preflight_ops(
             raise StartupError("--caller-rva must be a non-zero 32-bit RVA")
     elif target_caller_rva is not None:
         raise StartupError("--caller-rva requires --until-target-draw")
+    if gl_reference and not until_target_draw:
+        raise StartupError("--gl-reference requires --until-target-draw")
     entries = observe_registry.load_entries()
     by_symbol = {entry.symbol: entry for entry in entries}
     selected = []
@@ -330,6 +339,7 @@ def preflight_ops(
         f"0x{target_caller_rva:x}" if target_caller_rva is not None else None
     )
     evidence["caller_site_hex"] = caller_site_hex
+    evidence["gl_reference"] = bool(gl_reference)
     return evidence
 
 
@@ -376,6 +386,7 @@ def run_ops(
     evidence: dict | None = None,
     until_target_draw: bool = False,
     target_caller_rva: int | None = None,
+    gl_reference: bool = False,
 ) -> dict:
     """Launch one bounded original-process observation session."""
     if not authorize_live:
@@ -390,7 +401,10 @@ def run_ops(
         duration_s=duration_s,
         until_target_draw=until_target_draw,
         target_caller_rva=target_caller_rva,
+        gl_reference=gl_reference,
     )
+    if gl_reference and not until_target_draw:
+        raise StartupError("--gl-reference requires --until-target-draw")
     run_dir = Path(output).expanduser().resolve()
     if run_dir.exists():
         raise StartupError(f"Capture output already exists: {run_dir}")
@@ -413,6 +427,7 @@ def run_ops(
     env["EU4_GFX_OPS_RETENTION"] = "state" if until_target_draw else "legacy"
     if target_caller_rva is not None:
         env["EU4_GFX_OPS_TARGET_CALLER"] = f"0x{target_caller_rva:x}"
+    env["EU4_GFX_OPS_FRAMEBUFFER"] = "pre+post" if gl_reference else ""
     env.pop("EU4_METAL_BOOT_MODE", None)
     env.pop("EU4_METAL_INIT_DIR", None)
     request = {
@@ -425,6 +440,7 @@ def run_ops(
         "retention": "state" if until_target_draw else "legacy",
         "target_caller_rva": evidence.get("target_caller_rva"),
         "caller_site_hex": evidence.get("caller_site_hex"),
+        "gl_reference": bool(gl_reference),
         "timeout_s": timeout_s,
         "executable_sha256": evidence["executable_sha256"],
         "library_sha256": evidence["library_sha256"],
