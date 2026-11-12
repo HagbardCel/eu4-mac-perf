@@ -200,3 +200,30 @@ marked draw exactly.
 - Texture formats 15/16 (alpha/luminance) reconstructed.
 - Blocked next: live render targets, sampler decode, non-default raster/blend,
   depth attachment. Then three clean menu starts.
+
+## Live texture reconstruction and diagnostics (2026-11-12, continued)
+
+Reconstructed texture capabilities now include:
+- S3TC DXT1/DXT3/DXT5 (formats 1-6) with sRGB variants, mapped to Metal
+  BC1/BC2/BC3 pixel formats;
+- GL luminance8 (format 16) and alpha8 (format 15) expanded to BGRA8 with the
+  exact GL component semantics;
+- half/float formats 17-23 (R16F, RG16F, RGBA16F, R32F, RG32F, RGB32F expanded
+  to RGBA32F, RGBA32F);
+- square cubemaps (kind 1) with per-face/level uploads.
+
+Diagnostics added (game-independent):
+- `EU4_GFX_TEXTURE_TRACE` writes the last texture description/status.
+- `EU4_GFX_TEXTURE_PLACEHOLDER` substitutes a 1x1 opaque placeholder for an
+  unsupported texture. This is a collection-only mode; production/acceptance
+  runs stay fail-closed.
+- `live_gfx probe --texture-diagnostics` enables both.
+
+## Live status at end of round
+
+The engine now admits the title scene's shader stages and executes real draws
+through the generic encoder (font draw reached, encoded, GPU completed). A
+full loading-to-menu traversal is still blocked by one or more texture
+descriptions or a silent backend exit; the texture trace identifies the last
+successful initialization. Render targets, sampler decode, non-default
+raster/blend descriptors and the depth attachment remain unimplemented.

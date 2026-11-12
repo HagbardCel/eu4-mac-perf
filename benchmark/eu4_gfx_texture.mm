@@ -178,7 +178,7 @@ static int validate(void *header, const void *desc, const void *images, uint32_t
     if (info.width == 0 || info.height == 0 || info.width > 16384 || info.height > 16384) {
         return EU4_GFX_TEX_SIZE;
     }
-    if (count > 16) {
+    if (count > (cube ? 96u : 16u)) {
         return EU4_GFX_TEX_LEVEL;
     }
     uint32_t raw_mips = info.mips;
@@ -487,13 +487,41 @@ static const char *branch_name(int status) {
     }
 }
 
+static void write_texture_trace(const char *event, void *header, const void *desc,
+                                uint32_t count, int status) {
+    if (getenv("EU4_GFX_TEXTURE_TRACE") == NULL) {
+        return;
+    }
+    uint32_t width = 0, height = 0, mips = 0, format = 0, kind = 0;
+    if (desc != NULL) {
+        memcpy(&width, (const uint8_t *)desc, 4);
+        memcpy(&height, (const uint8_t *)desc + 4, 4);
+        memcpy(&mips, (const uint8_t *)desc + 8, 4);
+        memcpy(&format, (const uint8_t *)desc + 12, 4);
+        memcpy(&kind, (const uint8_t *)desc + 16, 4);
+    }
+    char body[320];
+    int length = snprintf(
+        body, sizeof body,
+        "{\"schema\":\"gfx-texture-trace/v1\",\"event\":\"%s\",\"header\":\"%p\","
+        "\"width\":%u,\"height\":%u,\"mips\":%u,\"format\":%u,\"kind\":%u,"
+        "\"count\":%u,\"status\":%d,\"pid\":%d}\n",
+        event, header, width, height, mips, format, kind, count, status,
+        (int)getpid());
+    if (length > 0 && (size_t)length < sizeof body) {
+        (void)eu4_metal_events_write("texture-trace.json", body);
+    }
+}
+
 void eu4_gfx_initialize_texture(void *ignored, void *header, const void *desc, const void *images,
                                 uint32_t count) {
     const void *caller = __builtin_return_address(0);
     (void)ignored;
     eu4_gfx_require_thread("_GfxInitializeTexture", caller);
+    write_texture_trace("begin", header, desc, count, -1);
     void *gpu = NULL;
     int status = eu4_gfx_texture_make(eu4_gfx_metal_device(), header, desc, images, count, &gpu);
+    write_texture_trace("end", header, desc, count, status);
     if (status != 0) {
         uint32_t format = 0;
         uint32_t kind = 0;
@@ -524,6 +552,41 @@ void eu4_gfx_initialize_texture(void *ignored, void *header, const void *desc, c
         }
         if (length > 0 && (size_t)length < sizeof body) {
             (void)eu4_metal_events_write("blocked_at.json", body);
+        }
+        if (getenv("EU4_GFX_TEXTURE_PLACEHOLDER") != NULL) {
+            /* Diagnostic collection mode only: an unsupported texture becomes a
+               1x1 opaque placeholder so a long startup can still be traversed.
+               Production and acceptance runs keep fail-closed behaviour. */
+            id<MTLDevice> device = (__bridge id<MTLDevice>)eu4_gfx_metal_device();
+            if (device != nil) {
+                MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                              width:1
+                                                                                             height:1
+                                                                                          mipmapped:NO];
+                id<MTLTexture> placeholder = [device newTextureWithDescriptor:d];
+                const uint8_t white[4] = {0xff, 0xff, 0xff, 0xff};
+                [placeholder replaceRegion:MTLRegionMake2D(0, 0, 1, 1)
+                               mipmapLevel:0
+                                 withBytes:white
+                               bytesPerRow:4];
+                EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+                if (backend != nil && placeholder != nil) {
+                    if (backend.textures == nil) {
+                        backend.textures = [NSMutableDictionary dictionary];
+                    }
+                    backend.textures[[NSValue valueWithPointer:header]] = placeholder;
+                    char note[256];
+                    int n = snprintf(note, sizeof note,
+                                     "{\"schema\":\"gfx-texture-placeholder/v1\","
+                                     "\"format\":%u,\"kind\":%u,\"status\":\"%s\","
+                                     "\"pid\":%d}\n",
+                                     format, kind, branch_name(status), (int)getpid());
+                    if (n > 0 && (size_t)n < sizeof note) {
+                        (void)eu4_metal_events_write("texture-placeholder.json", note);
+                    }
+                    return;
+                }
+            }
         }
         eu4_gfx_stop("_GfxInitializeTexture", "blocked_at", caller);
     }
