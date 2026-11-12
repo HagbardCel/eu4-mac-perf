@@ -85,12 +85,20 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
         return refuse(EU4_GFX_DRAW_ROUTE_UNSUPPORTED, diagnostic, capacity,
                       "draw arrived before an engine clear for the current geometry generation");
     }
-    if (backend.gameColorTarget == nil || backend.queue == nil ||
-        backend.gameWidth != backend.physicalWidth ||
-        backend.gameHeight != backend.physicalHeight ||
-        backend.gameWidth == 0 || backend.gameHeight == 0) {
+    if (backend.queue == nil) {
         return refuse(EU4_GFX_DRAW_ROUTE_UNSUPPORTED, diagnostic, capacity,
-                      "game backbuffer is absent or does not match the committed geometry");
+                      "draw has no Metal queue");
+    }
+    id current_target = backend.currentTargetColor;
+    if (current_target == nil) {
+        if (backend.gameColorTarget == nil ||
+            backend.gameWidth != backend.physicalWidth ||
+            backend.gameHeight != backend.physicalHeight ||
+            backend.gameWidth == 0 || backend.gameHeight == 0) {
+            return refuse(EU4_GFX_DRAW_ROUTE_UNSUPPORTED, diagnostic, capacity,
+                          "game backbuffer is absent or does not match the committed geometry");
+        }
+        current_target = backend.gameColorTarget;
     }
     eu4_gfx_physical_geometry_state published;
     if (eu4_gfx_physical_geometry_snapshot(&published) && published.valid) {
@@ -120,10 +128,12 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
 
     eu4_gfx_simple_draw_inputs inputs = {};
     inputs.device = (__bridge void *)backend.device;
-    inputs.target = (__bridge void *)backend.gameColorTarget;
+    inputs.target = (__bridge void *)current_target;
     inputs.queue = NULL; /* the backend queue is used by the command buffer below */
-    inputs.target_width = backend.gameWidth;
-    inputs.target_height = backend.gameHeight;
+    inputs.target_width = backend.currentTargetColor != nil
+        ? backend.currentTargetWidth : backend.gameWidth;
+    inputs.target_height = backend.currentTargetColor != nil
+        ? backend.currentTargetHeight : backend.gameHeight;
     inputs.logical_width = backend.logicalWidth;
     inputs.logical_height = backend.logicalHeight;
     inputs.viewport_x = viewport_x;

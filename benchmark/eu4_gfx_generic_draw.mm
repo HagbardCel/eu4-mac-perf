@@ -304,6 +304,7 @@ static id<MTLRenderPipelineState> pipeline_for(EU4GfxPipelineKey *unused,
                                                id<MTLFunction> fragment,
                                                MTLVertexDescriptor *descriptor,
                                                MTLPixelFormat color_format,
+                                               MTLPixelFormat depth_format,
                                                const uint8_t *blend_snapshot,
                                                BOOL depth_test, BOOL depth_write,
                                                uint32_t depth_compare) {
@@ -321,9 +322,9 @@ static id<MTLRenderPipelineState> pipeline_for(EU4GfxPipelineKey *unused,
     uint32_t src_a = load_u32(blend_snapshot, 0x10);
     uint32_t dst_a = load_u32(blend_snapshot, 0x14);
     uint32_t equation_a = load_u32(blend_snapshot, 0x18);
-    NSString *key = [NSString stringWithFormat:@"%p-%p-%lu-%u-%u-%u-%u-%u-%u-%u-%u-%d-%d-%u",
+    NSString *key = [NSString stringWithFormat:@"%p-%p-%lu-%lu-%u-%u-%u-%u-%u-%u-%u-%u-%d-%d-%u",
                      (__bridge void *)vertex, (__bridge void *)fragment,
-                     (unsigned long)color_format, enabled, src, dst, equation,
+                     (unsigned long)color_format, (unsigned long)depth_format, enabled, src, dst, equation,
                      src_a, dst_a, equation_a, depth_test ? 1u : 0u,
                      depth_write ? 1 : 0, (unsigned)depth_compare,
                      (unsigned)descriptor.hash];
@@ -336,6 +337,9 @@ static id<MTLRenderPipelineState> pipeline_for(EU4GfxPipelineKey *unused,
     pipeline_descriptor.fragmentFunction = fragment;
     pipeline_descriptor.vertexDescriptor = descriptor;
     pipeline_descriptor.colorAttachments[0].pixelFormat = color_format;
+    if (depth_format != MTLPixelFormatInvalid) {
+        pipeline_descriptor.depthAttachmentPixelFormat = depth_format;
+    }
     MTLRenderPipelineColorAttachmentDescriptor *color = pipeline_descriptor.colorAttachments[0];
     if (enabled != 0) {
         color.blendingEnabled = YES;
@@ -453,15 +457,22 @@ int eu4_gfx_generic_draw_encode_into(const void *immediate_context,
     }
     uint8_t blend_snapshot[0x24];
     memcpy(blend_snapshot, master + 0xc, sizeof blend_snapshot);
-    /* The backend has no depth attachment yet; depth state is not encoded. */
-    BOOL depth_test = NO;
-    BOOL depth_write = NO;
-    uint32_t depth_compare = 0x0207;
+    __unsafe_unretained EU4GfxBackend *backend =
+        (__bridge EU4GfxBackend *)load_ptr(master, 0x180);
+    id<MTLTexture> depth_texture = backend != nil ? backend.currentTargetDepth : nil;
+    BOOL depth_test = depth_texture != nil && load_u32(master + 0x30, 0) != 0;
+    BOOL depth_write = depth_texture != nil && ((const uint8_t *)master)[0x31] != 0;
+    uint32_t depth_compare = load_u32(master + 0x34, 0);
+    if (depth_compare == 0) {
+        depth_compare = 0x0207;
+    }
     id<MTLRenderPipelineState> pipeline =
         pipeline_for(NULL, device, (__bridge id<MTLFunction>)vertex_function,
                      (__bridge id<MTLFunction>)fragment_function, descriptor,
-                     target.pixelFormat, blend_snapshot, depth_test, depth_write,
-                     depth_compare);
+                     target.pixelFormat,
+                     depth_texture != nil ? MTLPixelFormatDepth32Float
+                                          : MTLPixelFormatInvalid,
+                     blend_snapshot, depth_test, depth_write, depth_compare);
     if (pipeline == nil) {
         fail(local_reason, sizeof(local_reason), "generic pipeline creation failed");
         return 0;
@@ -470,6 +481,11 @@ int eu4_gfx_generic_draw_encode_into(const void *immediate_context,
     pass.colorAttachments[0].texture = target;
     pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
     pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    if (depth_texture != nil) {
+        pass.depthAttachment.texture = depth_texture;
+        pass.depthAttachment.loadAction = MTLLoadActionLoad;
+        pass.depthAttachment.storeAction = MTLStoreActionStore;
+    }
     id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
     if (encoder == nil) {
         fail(local_reason, sizeof(local_reason), "generic render encoder failed");
@@ -483,7 +499,30 @@ int eu4_gfx_generic_draw_encode_into(const void *immediate_context,
     [encoder setViewport:viewport];
     MTLScissorRect scissor = {0, 0, target.width, target.height};
     [encoder setScissorRect:scissor];
-    [encoder setCullMode:MTLCullModeNone];
+    uint8_t raster[0x10];
+    memcpy(raster, master + 0x54, sizeof raster);
+    uint32_t cull_face = load_u32(raster, 0);
+    uint32_t front_face = load_u32(raster, 8);
+    [encoder setFrontFacingWinding:front_face == 0x900 ? MTLWindingClockwise
+                                                       : MTLWindingCounterClockwise];
+    if (raster[0xc] != 0 && cull_face == 0x405) {
+        [encoder setCullMode:MTLCullModeBack];
+    } else if (raster[0xc] != 0 && cull_face == 0x404) {
+        [encoder setCullMode:MTLCullModeFront];
+    } else {
+        [encoder setCullMode:MTLCullModeNone];
+    }
+    if (depth_texture != nil) {
+        MTLDepthStencilDescriptor *depth_descriptor = [MTLDepthStencilDescriptor new];
+        depth_descriptor.depthCompareFunction = depth_test
+            ? compare_function(depth_compare) : MTLCompareFunctionAlways;
+        depth_descriptor.depthWriteEnabled = depth_write ? YES : NO;
+        id<MTLDepthStencilState> depth_state =
+            [device newDepthStencilStateWithDescriptor:depth_descriptor];
+        if (depth_state != nil) {
+            [encoder setDepthStencilState:depth_state];
+        }
+    }
     NSUInteger vertex_uniform_buffer = num(vertex_stage[@"msl_uniform_buffer"], 0);
     NSUInteger pixel_uniform_buffer = num(pixel_stage[@"msl_uniform_buffer"], 0);
     if (vertex_uniforms.length > 0) {
@@ -498,9 +537,7 @@ int eu4_gfx_generic_draw_encode_into(const void *immediate_context,
     }
     /* Textures: the engine binds units in the shader's sampler declaration
        order, which is the translated stage's binding order. */
-    __unsafe_unretained EU4GfxBackend *backend =
-        (__bridge EU4GfxBackend *)load_ptr(master, 0x180);
-    NSArray *bound = backend.boundTextures;
+    NSArray *bound = backend != nil ? backend.boundTextures : nil;
     for (NSString *stage_name in @[@"vertex", @"pixel"]) {
         NSDictionary *stage = [stage_name isEqualToString:@"vertex"] ? vertex_stage : pixel_stage;
         NSArray *samplers = stage[@"samplers"];

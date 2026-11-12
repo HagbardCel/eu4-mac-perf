@@ -258,3 +258,30 @@ Next steps:
 3. Depth attachment for the backbuffer and render targets.
 4. Sampler-state decode and non-default raster/blend descriptor support.
 5. Then three clean menu starts.
+
+## Render targets, raster decode and depth (2026-11-13)
+
+The engine's render-target object is its TextureGFX header itself
+(`SGfxRenderTargetScope(context, TextureGFX*)` calls `_GfxSetRenderTarget`).
+Reconstructed entries:
+
+- `_GfxInitializeRenderTargetTexture` (0x15ec8e2) and
+  `_GfxCreateRenderTargetTexture` (0x15ecb7f): allocate a Metal 2D texture with
+  RenderTarget|ShaderRead usage, a Depth32Float companion when the engine
+  requests depth, and write the engine-visible header fields (dims, format,
+  bpp, flags). Created headers are the target objects the engine binds.
+- `_GfxSetRenderTarget`: resolves the header's colour/depth textures, tracks
+  the current target (dims, textures) and restores the backbuffer on null.
+  Restoring the default target now drains pending same-generation work instead
+  of refusing it (the offline P5.1 rejection is invalid for real multi-target
+  frames).
+- `_GfxClear` on a render target clears colour and depth on the bound target.
+- Raster descriptors are decoded generically: the engine uses its own enums
+  (cull 0/1/2 = none/front/back, polygon 0/1/2 = point/line/fill, front 0/1 =
+  CW/CCW), mapped to the normalised GL snapshot; only filled polygons are
+  addressable (point/line stays fail-closed).
+- The generic encoder now uses the target's depth attachment, the engine depth
+  snapshot (enable/write/compare) and the decoded cull/front-face state.
+
+The backbuffer also receives a Depth32Float companion so default-target draws
+can depth-test.

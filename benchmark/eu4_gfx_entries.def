@@ -30,6 +30,12 @@ GFX_ENTRY(draw_indexed_instanced, 0x15eac9c, 0x15ead87, eu4_gfx_draw_indexed_ins
 GFX_ENTRY(initialize_texture, 0x15ec43b, 0x15ec61d, eu4_gfx_initialize_texture, "\x55\x48\x89\xe5\x41\x57")
 // _GfxSetTextures. End is InternalSetTextureAndSamplerState. The live return is 0x15ecc72.
 GFX_ENTRY(set_textures, 0x15ecbf2, 0x15ecce2, eu4_gfx_set_textures, "\x55\x48\x89\xe5\x41\x57")
+// _GfxInitializeRenderTargetTexture. Creates the engine's render-target colour
+// texture (the TextureGFX header itself is the target object) and a depth
+// companion. End is _GfxCreateRenderTargetTexture.
+GFX_ENTRY(initialize_render_target_texture, 0x15ec8e2, 0x15ecb7f, eu4_gfx_initialize_render_target_texture, "\x55\x48\x89\xe5\x41\x57")
+// _GfxCreateRenderTargetTexture. Allocates the 0x44 header and initialises it.
+GFX_ENTRY(create_render_target_texture, 0x15ecb7f, 0x15ecbf2, eu4_gfx_create_render_target_texture, "\x55\x48\x89\xe5\x41\x57")
 // _GfxClearTexture. End is _GfxInitializeRenderTargetTexture. Prologue is
 // test rdi,rdi; je <ret>. Deletes GL names and clears the header fields.
 GFX_ENTRY(clear_texture, 0x15ec836, 0x15ec8e2, eu4_gfx_clear_texture, "\x48\x85\xff\x0f\x84")

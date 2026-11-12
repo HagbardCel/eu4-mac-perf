@@ -37,6 +37,26 @@ int eu4_gfx_texture_make(void *device, void *header, const void *desc, const voi
 void eu4_gfx_initialize_texture(void *ignored, void *header, const void *desc, const void *images,
                                 uint32_t count);
 
+/* _GfxInitializeRenderTargetTexture at 0x15ec8e2. Creates the engine's
+   render-target colour texture (and a Metal depth companion) for a header
+   allocated by _GfxCreateRenderTargetTexture. rsi is the 0x44 TextureGFX
+   header; rdx/rcx are width/height; r8d is EGfxTextureFormat; r9d is the
+   "has depth" flag; the stack argument is the multisample count. */
+void eu4_gfx_initialize_render_target_texture(void *handle, void *header,
+                                              uint32_t width, uint32_t height,
+                                              uint32_t format, uint32_t flags,
+                                              uint32_t samples);
+
+/* _GfxCreateRenderTargetTexture at 0x15ecb7f. Allocates the 0x44 header and
+   initialises it. Returns the header. */
+void *eu4_gfx_create_render_target_texture(void *handle, uint32_t width,
+                                           uint32_t height, uint32_t format,
+                                           uint32_t flags, uint32_t samples);
+
+/* Borrowed depth texture paired with a render-target header (NULL when the
+   header is not a render target). */
+void *eu4_gfx_depth_texture_for_header(void *header);
+
 /* _GfxClearTexture at 0x15ec836. Deletes the GL renderbuffer/framebuffer/
    texture names and clears the corresponding header fields. The Metal path has
    no GL names; release the backend texture for this header and preserve the

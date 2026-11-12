@@ -545,7 +545,8 @@ static void fill_raster_snap(uint8_t snap[0x10]) {
     memcpy(snap, &back, 4);
     memcpy(snap + 4, &fill, 4);
     memcpy(snap + 8, &winding, 4);
-    snap[0xd] = 1;
+    snap[0xc] = 1; /* cull face enabled */
+    snap[0xd] = 1; /* valid snapshot */
 }
 
 static const char *simple_state_reason(char *reason, size_t capacity, const char *text) {
@@ -610,12 +611,54 @@ static int apply_depth(void *master, void *state, int force) {
     return apply_snap(master, 0x30, snap, 0x24, force);
 }
 
+/* Raster descriptors are decoded generically. The engine passes a struct whose
+   +0x0 is the GL cull face, +0x4 the polygon mode, +0x8 the front face and
+   +0xc the cull-enable flag (see _GfxSetRasterizerState). Only filled polygons
+   are representable in the reconstructed pass; anything else fails closed. */
 static int apply_raster(void *master, void *state, int force) {
-    if (state == NULL || !raster_supported((uint8_t *)state + 0x10)) {
+    if (state == NULL) {
+        return -1;
+    }
+    const uint8_t *desc = (const uint8_t *)state + 0x10;
+    /* The engine descriptor uses its own enums: cull 0/1/2 (none/front/back),
+       polygon 0/1/2 (point/line/fill), front 0/1 (CW/CCW). The original setter
+       maps them to GL enums; the snapshot stores the GL form. */
+    uint32_t cull_engine = 0, polygon_engine = 0, front_engine = 0;
+    memcpy(&cull_engine, desc, 4);
+    memcpy(&polygon_engine, desc + 4, 4);
+    memcpy(&front_engine, desc + 8, 4);
+    uint32_t cull = cull_engine == 1 ? 0x404 : cull_engine == 2 ? 0x405
+                     : cull_engine == 0 ? 0 : 0x408;
+    uint32_t polygon = polygon_engine == 0 ? 0x1b00
+                       : polygon_engine == 1 ? 0x1b01 : 0x1b02;
+    uint32_t front = front_engine == 1 ? 0x901 : 0x900;
+    if (polygon != 0x1b02 && polygon != 0x1b01 && polygon != 0) {
+        uint8_t bytes[0x10];
+        memcpy(bytes, desc, sizeof bytes);
+        char hex[0x10 * 2 + 1];
+        static const char digits[] = "0123456789abcdef";
+        for (int i = 0; i < 0x10; i++) {
+            hex[i * 2] = digits[bytes[i] >> 4];
+            hex[i * 2 + 1] = digits[bytes[i] & 0xf];
+        }
+        hex[0x10 * 2] = 0;
+        char body[256];
+        int n = snprintf(body, sizeof body,
+                         "{\"schema\":\"gfx-raster-rejected/v1\","
+                         "\"descriptor\":\"%s\",\"pid\":%d}\n",
+                         hex, (int)getpid());
+        if (n > 0 && (size_t)n < sizeof body) {
+            (void)eu4_metal_events_write("raster-rejected.json", body);
+        }
         return -1;
     }
     uint8_t snap[0x10];
-    fill_raster_snap(snap);
+    memset(snap, 0, sizeof snap);
+    memcpy(snap, &cull, 4);
+    memcpy(snap + 4, &polygon, 4);
+    memcpy(snap + 8, &front, 4);
+    snap[0xc] = cull != 0 ? 1 : 0;
+    snap[0xd] = 1;
     return apply_snap(master, 0x54, snap, 0x10, force);
 }
 
@@ -805,7 +848,16 @@ static eu4_gfx_clear_status allocate_game_backbuffer(__unsafe_unretained EU4GfxB
     if (next == nil) {
         return EU4_GFX_CLEAR_FAILED;
     }
+    MTLTextureDescriptor *depth_desc =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
+                                                           width:width
+                                                          height:height
+                                                       mipmapped:NO];
+    depth_desc.usage = MTLTextureUsageRenderTarget;
+    depth_desc.storageMode = MTLStorageModePrivate;
+    id<MTLTexture> depth = [backend.device newTextureWithDescriptor:depth_desc];
     backend.gameColorTarget = next;
+    backend.gameDepthTarget = depth;
     backend.gameWidth = width;
     backend.gameHeight = height;
     backend.gameContentsKnown = NO;
@@ -1887,6 +1939,48 @@ void eu4_gfx_clear(void *handle, unsigned flags, const float *color) {
     void *master = master_from_handle(handle);
     __unsafe_unretained EU4GfxBackend *backend =
         (__bridge EU4GfxBackend *)backend_raw_for_master(master);
+    if (backend != nil && backend.currentTargetHeader != NULL &&
+        backend.currentTargetColor != nil && backend.queue != nil) {
+        /* A render-target clear belongs to that target, not to the window
+           backbuffer state machine. One command buffer keeps queue order with
+           the draws that follow. */
+        id<MTLCommandBuffer> command = [backend.queue commandBuffer];
+        if (command != nil) {
+            MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+            pass.colorAttachments[0].texture = backend.currentTargetColor;
+            if ((flags & 0x4000u) != 0) {
+                double r = 0.0, g = 0.0, b = 0.0, a = 1.0;
+                if (color != NULL) {
+                    r = color[0];
+                    g = color[1];
+                    b = color[2];
+                    a = color[3];
+                }
+                pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+                pass.colorAttachments[0].clearColor = MTLClearColorMake(r, g, b, a);
+            } else {
+                pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
+            }
+            pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+            if (backend.currentTargetDepth != nil) {
+                pass.depthAttachment.texture = backend.currentTargetDepth;
+                pass.depthAttachment.loadAction =
+                    (flags & 0x100u) != 0 ? MTLLoadActionClear : MTLLoadActionLoad;
+                pass.depthAttachment.clearDepth = 1.0;
+                pass.depthAttachment.storeAction = MTLStoreActionStore;
+            }
+            id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
+            if (encoder != nil) {
+                [encoder endEncoding];
+                [command commit];
+                backend.pendingGameCommand = command;
+                backend.pendingGameGeneration = backend.geometryGeneration;
+                backend.gameContentsKnown = NO;
+                backend.readyForPresent = NO;
+            }
+        }
+        return;
+    }
     eu4_gfx_clear_status status;
     if (backend != nil && backend.gameWindow) {
         status = clear_game_checked(handle, flags, color);
@@ -2029,23 +2123,66 @@ static void dump_render_target(void *master, void *target) {
 }
 
 void eu4_gfx_set_render_target(void *handle, void *target) {
+    void *master = NULL;
+    if (handle != NULL) {
+        memcpy(&master, handle, sizeof master);
+    }
+    __unsafe_unretained EU4GfxBackend *backend =
+        master != NULL ? (__bridge EU4GfxBackend *)load_ptr(master, 0x180) : nil;
     if (target != NULL) {
-        void *master = NULL;
-        if (handle != NULL) {
-            memcpy(&master, handle, sizeof master);
-        }
         dump_render_target(master, target);
+        if (backend == nil) {
+            eu4_gfx_stop("_GfxSetRenderTarget", "unsupported", __builtin_return_address(0));
+            return;
+        }
+        id<MTLTexture> color = backend.textures[[NSValue valueWithPointer:target]];
+        id<MTLTexture> depth = backend.renderTargetDepths[[NSValue valueWithPointer:target]];
+        if (color == nil) {
+            char body[256];
+            int n = snprintf(body, sizeof body,
+                             "{\"schema\":\"gfx-render-target-missing/v1\","
+                             "\"target\":\"%p\",\"pid\":%d}\n",
+                             target, (int)getpid());
+            if (n > 0 && (size_t)n < sizeof body) {
+                (void)eu4_metal_events_write("render-target-missing.json", body);
+            }
+            eu4_gfx_stop("_GfxSetRenderTarget", "unsupported", __builtin_return_address(0));
+            return;
+        }
+        uint32_t width = 0, height = 0;
+        memcpy(&width, (uint8_t *)target + 0x28, 4);
+        memcpy(&height, (uint8_t *)target + 0x2c, 4);
+        backend.currentTargetHeader = target;
+        backend.currentTargetColor = color;
+        backend.currentTargetDepth = depth;
+        backend.currentTargetWidth = width;
+        backend.currentTargetHeight = height;
         if (master != NULL) {
             uint8_t *bytes = (uint8_t *)master;
-            uint32_t width = 0, height = 0;
-            memcpy(&width, (uint8_t *)target + 0x28, 4);
-            memcpy(&height, (uint8_t *)target + 0x2c, 4);
             memcpy(bytes + 0xac, &width, 4);
             memcpy(bytes + 0xb0, &height, 4);
             memset(bytes + 0xbc, 0, 4);
             memcpy(bytes + 0x78, &target, sizeof target);
         }
         return;
+    }
+    if (backend != nil) {
+        backend.currentTargetHeader = NULL;
+        backend.currentTargetColor = nil;
+        backend.currentTargetDepth = backend.gameDepthTarget;
+        backend.currentTargetWidth = 0;
+        backend.currentTargetHeight = 0;
+    }
+    if (backend != nil && backend.pendingGameCommand != nil) {
+        /* Restoring the default target after a render-target pass: finish the
+           queued work first so the default-viewport selection observes a
+           stable state (the offline P5.1 same-generation rejection is not a
+           valid refusal once real multi-target frames are executed). */
+        eu4_gfx_clear_status drained = drain_pending_game(backend, NULL);
+        if (drained != EU4_GFX_CLEAR_OK) {
+            eu4_gfx_stop("_GfxSetRenderTarget", "failed", __builtin_return_address(0));
+            return;
+        }
     }
     eu4_gfx_clear_status status = eu4_gfx_set_render_target_checked(handle, target);
     if (status == EU4_GFX_CLEAR_GEOMETRY_STALE) {

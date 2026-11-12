@@ -515,6 +515,118 @@ static void write_texture_trace(const char *event, void *header, const void *des
     }
 }
 
+static MTLPixelFormat render_target_format(uint32_t format) {
+    switch (format) {
+        case 9: return MTLPixelFormatRGBA8Unorm;
+        case 0xc:
+        case 0xe: return MTLPixelFormatBGRA8Unorm_sRGB;
+        case 17: return MTLPixelFormatR16Float;
+        case 18: return MTLPixelFormatRG16Float;
+        case 19: return MTLPixelFormatRGBA16Float;
+        case 20: return MTLPixelFormatR32Float;
+        case 21: return MTLPixelFormatRG32Float;
+        case 22:
+        case 23: return MTLPixelFormatRGBA32Float;
+        default: return MTLPixelFormatBGRA8Unorm;
+    }
+}
+
+static uint32_t render_target_bytes(uint32_t format) {
+    if (format >= 7 && format <= 23) {
+        return kBytes[format - 7];
+    }
+    return 4;
+}
+
+void eu4_gfx_initialize_render_target_texture(void *handle, void *header,
+                                              uint32_t width, uint32_t height,
+                                              uint32_t format, uint32_t flags,
+                                              uint32_t samples) {
+    (void)handle;
+    (void)samples;
+    if (header == NULL) {
+        return;
+    }
+    id<MTLDevice> device = (__bridge id<MTLDevice>)eu4_gfx_metal_device();
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (device == nil || backend == nil) {
+        return;
+    }
+    if (width == 0 || height == 0) {
+        return;
+    }
+    MTLTextureDescriptor *descriptor =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:render_target_format(format)
+                                                           width:width
+                                                          height:height
+                                                       mipmapped:NO];
+    descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    descriptor.storageMode = MTLStorageModeShared;
+    id<MTLTexture> color = [device newTextureWithDescriptor:descriptor];
+    id<MTLTexture> depth = nil;
+    if (color == nil) {
+        return;
+    }
+    if (flags != 0) {
+        MTLTextureDescriptor *depth_descriptor =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
+                                                               width:width
+                                                              height:height
+                                                           mipmapped:NO];
+        depth_descriptor.usage = MTLTextureUsageRenderTarget;
+        depth_descriptor.storageMode = MTLStorageModePrivate;
+        depth = [device newTextureWithDescriptor:depth_descriptor];
+    }
+    if (backend.textures == nil) {
+        backend.textures = [NSMutableDictionary dictionary];
+    }
+    if (backend.renderTargetDepths == nil) {
+        backend.renderTargetDepths = [NSMutableDictionary dictionary];
+    }
+    backend.textures[[NSValue valueWithPointer:header]] = color;
+    if (depth != nil) {
+        backend.renderTargetDepths[[NSValue valueWithPointer:header]] = depth;
+    }
+    uint8_t *bytes = (uint8_t *)header;
+    memset(bytes, 0, 0x44);
+    bytes[0x19] = 1;
+    bytes[0x1a] = flags != 0 ? 1 : 0;
+    bytes[0x1b] = 0;
+    uint32_t bpp = render_target_bytes(format);
+    memcpy(bytes + 0x28, &width, 4);
+    memcpy(bytes + 0x2c, &height, 4);
+    memcpy(bytes + 0x30, &format, 4);
+    memcpy(bytes + 0x34, &bpp, 4);
+    memcpy(bytes + 0x38, &width, 4);
+    memcpy(bytes + 0x3c, &height, 4);
+    uint32_t zero = 0;
+    memcpy(bytes + 0x40, &zero, 4);
+}
+
+void *eu4_gfx_create_render_target_texture(void *handle, uint32_t width,
+                                           uint32_t height, uint32_t format,
+                                           uint32_t flags, uint32_t samples) {
+    uint8_t *header = (uint8_t *)calloc(1, 0x44);
+    if (header == NULL) {
+        return NULL;
+    }
+    eu4_gfx_initialize_render_target_texture(handle, header, width, height,
+                                             format, flags, samples);
+    return header;
+}
+
+void *eu4_gfx_depth_texture_for_header(void *header) {
+    if (header == NULL) {
+        return NULL;
+    }
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil || backend.renderTargetDepths == nil) {
+        return NULL;
+    }
+    id depth = backend.renderTargetDepths[[NSValue valueWithPointer:header]];
+    return (__bridge void *)depth;
+}
+
 void eu4_gfx_initialize_texture(void *ignored, void *header, const void *desc, const void *images,
                                 uint32_t count) {
     const void *caller = __builtin_return_address(0);
