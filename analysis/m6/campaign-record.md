@@ -670,3 +670,29 @@ map never appears. The title UI presentation is unaffected. Resolving this
 needs the reconstructed submission/clear interplay to preserve the previous
 backbuffer content at the same point the engine copies it (GL's back-buffer
 retention semantics), which is the remaining map-background item.
+
+## Composite diagnostics and acceptance hardening (2026-11-13 10:10)
+
+Live bind diagnostics for the composite draw (stage 11a05cd9) now report the
+decoded primitive, scaled viewport, target size and converted position data:
+
+```
+count=4 target=3456x2234 viewport=1728x1117 scaled=3456x2234
+primitive=4 (MTL triangle list) positions=0 (conversion not logged)
+```
+
+The authentic captured composite is a **4-vertex triangle strip** (captured
+draw mode 5); the live draw is encoded as a triangle list (mode 4), which draws
+only three vertices and cannot cover the screen. The primitive source in the
+live encoder is `master+8`; reconciling it with the engine's actual mode (and
+logging the converted positions) is the next concrete step.
+
+Acceptance tooling was tightened:
+- `automation/m6_live_accept.py` now requires a valid reference (hard failure),
+  separates executed/gpu_completed/presented/visual_match/accepted, derives
+  dimensions from the reference and candidate, and validates integer
+  physical-to-logical resampling.
+- `analysis/m6/live-scene-policy.json` carries the UI regions, tolerance and
+  map-region structure bounds.
+- The current three starts are honestly reported `visual_match=false`
+  (map background missing), so they are not accepted.

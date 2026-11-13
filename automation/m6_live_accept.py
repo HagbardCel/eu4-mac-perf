@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 """Independent acceptance check for the M6 live title-scene runs.
 
-Validates, for each given probe output directory:
-  * the probe captured at the menu checkpoint (draw reached/encoded, GPU
-    completed, pixels captured, presented);
-  * no live draw was refused (no draw-refused-*.json);
-  * the presented backbuffer dump exists and is non-blank;
-  * the title UI region matches the authentic GL reference within a bounded
-    tolerance (the animated map region is excluded).
+A run is accepted only when every mandatory criterion passes:
+
+  executed       the menu checkpoint was reached and encoded, no draw refused
+  gpu_completed  the GPU finished the frame
+  presented      a non-blank frame was actually presented and captured
+  visual_match   the authentic reference is present and both the UI regions
+                 and the animated map region match the scene policy
+
+Missing or invalid reference data is a hard failure: a run can never be
+accepted without it. The scene policy (regions, tolerances) lives in
+``analysis/m6/live-scene-policy.json`` so the checker stays reusable.
 
 Usage:
-    python3 -m automation.m6_live_accept --reference <menu frame dir> \
+    python3 -m automation.m6_live_accept \
+        --reference <menu frame dir> --policy <policy.json> \
         --run <probe output> [--run ...]
 """
 
@@ -19,22 +24,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
-
-# The title UI lives in the lower third of the 1728x1117 logical frame; the
-# logo occupies the top-left. The map between them animates, so it is excluded
-# from the presentation comparison.
-UI_REGIONS = (
-    (900, 1117, 0, 1728),      # bottom bar (buttons, version, icon row)
-    (40, 260, 0, 760),         # EU4 logo
-    (40, 260, 1580, 1728),     # Paradox logo
-)
-UI_MEAN_ERROR_LIMIT = 40.0
+DEFAULT_POLICY = ROOT / "analysis" / "m6" / "live-scene-policy.json"
 
 
 def _sha256(path: Path) -> str:
@@ -45,89 +40,154 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _load_logical(path: Path) -> np.ndarray | None:
+def load_reference(reference: Path, logical: tuple[int, int]) -> tuple[np.ndarray | None, str]:
+    path = reference / "frame-reference.bgra"
+    width, height = logical
+    if not path.is_file():
+        return None, f"reference frame is missing: {path}"
+    data = np.fromfile(path, dtype=np.uint8)
+    if data.size != width * height * 4:
+        return None, (
+            f"reference frame has {data.size} bytes, expected "
+            f"{width * height * 4} for {width}x{height}"
+        )
+    picture = data.reshape(height, width, 4)
+    return picture[::-1, :, [2, 1, 0]].astype(np.int16), ""
+
+
+def load_candidate(path: Path, logical: tuple[int, int]) -> tuple[np.ndarray | None, str, dict]:
     from PIL import Image
 
-    try:
-        image = Image.open(path).convert("RGB")
-    except OSError:
-        return None
-    return np.asarray(image.resize((1728, 1117), Image.LANCZOS), dtype=np.int16)
-
-
-def _reference(reference: Path) -> np.ndarray | None:
-    path = reference / "frame-reference.bgra"
+    details: dict = {}
     if not path.is_file():
-        return None
+        return None, f"presented frame dump is missing: {path}", details
     data = np.fromfile(path, dtype=np.uint8)
-    if data.size != 1728 * 1117 * 4:
-        return None
-    picture = data.reshape(1117, 1728, 4)
-    return picture[::-1, :, [2, 1, 0]].astype(np.int16)
+    if data.size % 4 != 0:
+        return None, "presented frame dump is not 32-bit", details
+    physical = None
+    for candidate in ((3456, 2234), (1728, 1117), (2160, 1396), (2560, 1654)):
+        if candidate[0] * candidate[1] * 4 == data.size:
+            physical = candidate
+            break
+    if physical is None:
+        return None, f"presented frame dump has unexpected size {data.size}", details
+    details["physical"] = list(physical)
+    width, height = logical
+    picture = data.reshape(physical[1], physical[0], 4)
+    # The dump keeps the captured GL lower-left origin, like the reference.
+    rgb = picture[:, :, [2, 1, 0]]
+    if physical[0] % width != 0 or physical[1] % height != 0:
+        return None, (
+            f"physical frame {physical[0]}x{physical[1]} is not an integer "
+            f"multiple of the logical scene {width}x{height}"
+        ), details
+    if physical != (width, height):
+        image = Image.fromarray(rgb.astype(np.uint8)).resize((width, height), Image.LANCZOS)
+        rgb = np.asarray(image)
+    details["resampled"] = physical != (width, height)
+    return rgb.astype(np.int16), "", details
 
 
-def check_run(run: Path, reference: np.ndarray | None) -> dict:
-    result: dict = {"run": str(run), "checks": {}, "ok": False}
+def region_error(candidate: np.ndarray, reference: np.ndarray, region) -> float:
+    y0, y1, x0, x1 = region
+    return float(np.abs(candidate[y0:y1, x0:x1] - reference[y0:y1, x0:x1]).mean())
+
+
+def check_run(run: Path, reference: np.ndarray | None, reference_error: str,
+              policy: dict) -> dict:
+    logical = tuple(policy["reference"]["logical"])
+    result: dict = {"run": str(run), "status": {}, "checks": {}, "stats": {}}
+    status = result["status"]
+    checks = result["checks"]
+
     probe_path = run / "probe-result.json"
     if not probe_path.is_file():
         result["reason"] = "no probe-result.json"
         return result
     probe = json.loads(probe_path.read_text())
-    status = probe.get("status") or {}
-    required = ("draw_reached", "draw_encoded", "gpu_completed",
-                "pixels_captured", "presented")
-    checks = result["checks"]
-    checks["overall_captured"] = probe.get("overall") == "captured"
-    for key in required:
-        checks[key] = bool(status.get(key))
+    probe_status = probe.get("status") or {}
     refused = sorted(run.glob("draw-refused-*.json"))
-    checks["no_refused_draws"] = not refused
-    dump = run / "swap-frame.bgra"
-    checks["swap_dump"] = dump.is_file() and dump.stat().st_size == 3456 * 2234 * 4
-    stats = {}
-    if checks["swap_dump"]:
-        from PIL import Image
 
-        data = np.fromfile(dump, dtype=np.uint8).reshape(2234, 3456, 4)
-        # The backend writes the dump in the captured GL lower-left origin, the
-        # same convention as the reference; no flip here.
-        picture = data[:, :, [2, 1, 0]].astype(np.int16)
-        logical = np.asarray(
-            Image.fromarray(picture.astype(np.uint8)).resize(
-                (1728, 1117), Image.LANCZOS
-            ),
-            dtype=np.int16,
+    checks["probe_captured"] = probe.get("overall") == "captured"
+    checks["draw_reached"] = bool(probe_status.get("draw_reached"))
+    checks["draw_encoded"] = bool(probe_status.get("draw_encoded"))
+    checks["pixels_captured"] = bool(probe_status.get("pixels_captured"))
+    checks["no_refused_draws"] = not refused
+    status["executed"] = all(
+        checks[key]
+        for key in ("probe_captured", "draw_reached", "draw_encoded",
+                    "pixels_captured", "no_refused_draws")
+    )
+    checks["gpu_completed"] = bool(probe_status.get("gpu_completed"))
+    status["gpu_completed"] = checks["gpu_completed"]
+
+    candidate, candidate_error, details = load_candidate(
+        run / "swap-frame.bgra", logical
+    )
+    checks["frame_dump"] = candidate is not None
+    checks["presented_flag"] = bool(probe_status.get("presented"))
+    if candidate is not None:
+        unique = int(len(np.unique(candidate.reshape(-1, 3), axis=0)))
+        details["unique_colors"] = unique
+        checks["non_blank"] = unique > 1000
+        checks["frame_sha256"] = _sha256(run / "swap-frame.bgra")
+    else:
+        checks["non_blank"] = False
+        result["reason"] = candidate_error
+    status["presented"] = bool(
+        checks["presented_flag"] and checks["frame_dump"] and checks["non_blank"]
+    )
+
+    status["visual_match"] = False
+    if reference is None:
+        result["reason"] = reference_error or "reference is unavailable"
+    elif candidate is not None:
+        errors = [region_error(candidate, reference, tuple(region))
+                  for region in policy["ui_regions"]]
+        details["ui_region_error"] = [round(value, 3) for value in errors]
+        ui_ok = max(errors) <= float(policy["ui_tolerance"])
+        y0, y1, x0, x1 = policy["map_region"]
+        window = candidate[y0:y1, x0:x1]
+        map_unique = int(len(np.unique(window.reshape(-1, 3), axis=0)))
+        map_mean = float(window.mean())
+        details["map_unique_colors"] = map_unique
+        details["map_mean"] = round(map_mean, 3)
+        map_ok = (
+            map_unique >= int(policy["map_min_unique_colors"])
+            and map_mean >= float(policy["map_min_mean"])
+            and map_unique < int(0.5 * (y1 - y0) * (x1 - x0))
         )
-        stats["unique_colors"] = int(len(np.unique(picture.reshape(-1, 3), axis=0)))
-        checks["non_blank"] = stats["unique_colors"] > 1000
-        checks["dump_sha256"] = _sha256(dump)
-        if reference is not None:
-            errors = []
-            for y0, y1, x0, x1 in UI_REGIONS:
-                errors.append(
-                    float(np.abs(logical[y0:y1, x0:x1] - reference[y0:y1, x0:x1]).mean())
-                )
-            stats["ui_region_mean_error"] = errors
-            stats["ui_max_region_error"] = max(errors)
-            checks["ui_matches_reference"] = (
-                max(errors) <= UI_MEAN_ERROR_LIMIT
-            )
-        result["stats"] = stats
-    result["ok"] = all(checks.values())
+        details["ui_ok"] = ui_ok
+        details["map_ok"] = map_ok
+        checks["ui_regions"] = ui_ok
+        checks["map_region"] = map_ok
+        status["visual_match"] = bool(ui_ok and map_ok)
+    result["stats"] = details
+    status["accepted"] = bool(
+        status["executed"] and status["gpu_completed"] and status["presented"]
+        and status["visual_match"]
+    )
+    result["ok"] = status["accepted"]
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--reference", required=True)
+    parser.add_argument("--policy", default=str(DEFAULT_POLICY))
     parser.add_argument("--run", action="append", required=True)
     parser.add_argument("--out", default=None)
     args = parser.parse_args(argv)
-    reference = _reference(Path(args.reference))
-    runs = [check_run(Path(item), reference) for item in args.run]
+    policy = json.loads(Path(args.policy).read_text())
+    logical = tuple(policy["reference"]["logical"])
+    reference, reference_error = load_reference(Path(args.reference), logical)
+    runs = [check_run(Path(item), reference, reference_error, policy)
+            for item in args.run]
     report = {
         "schema": "m6-live-acceptance/v1",
         "reference": str(args.reference),
+        "reference_ok": reference is not None,
+        "reference_error": reference_error,
         "runs": runs,
         "clean_starts": sum(1 for item in runs if item["ok"]),
         "ok": len(runs) == 3 and all(item["ok"] for item in runs),

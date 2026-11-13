@@ -45,6 +45,9 @@ static NSUInteger num(id value, NSUInteger fallback) {
     return fallback;
 }
 
+static float g_logged_positions[16];
+static int g_have_positions;
+
 static const char *fail(char *reason, size_t capacity, const char *text) {
     if (reason != NULL && capacity > 0) {
         snprintf(reason, capacity, "%s", text);
@@ -519,6 +522,12 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
             bound_buffer = converted;
             bound_stride = converted_stride;
             bound_offset = 0;
+            if (location == 0 && converted.contents != NULL &&
+                converted.length >= 16 * sizeof(float)) {
+                memcpy(g_logged_positions, converted.contents,
+                       16 * sizeof(float));
+                g_have_positions = 1;
+            }
         } else {
             bound_offset = offset + slot_offset;
         }
@@ -750,6 +759,8 @@ static int generic_draw_encode_impl(const void *immediate_context,
                                     void *command_buffer, char *reason,
                                     size_t reason_capacity,
                                     eu4_gfx_simple_draw_state *state) {
+    memset(g_logged_positions, 0, sizeof g_logged_positions);
+    g_have_positions = 0;
     if (reason != NULL && reason_capacity > 0) {
         reason[0] = 0;
     }
@@ -1058,12 +1069,23 @@ static int generic_draw_encode_impl(const void *immediate_context,
             @"{\"schema\":\"gfx-texture-bind/v1\",\"stage\":\"%s\","
              "\"bindings\":[%@],\"count\":%d,\"instances\":%d,"
              "\"target\":\"%p\",\"target_size\":[%u,%u],"
-             "\"viewport\":[%u,%u,%u,%u],\"pid\":%d}\n",
+             "\"viewport\":[%u,%u,%u,%u],"
+             "\"scaled_viewport\":[%.1f,%.1f,%.1f,%.1f],"
+             "\"primitive\":%d,\"positions\":\"%.3f,%.3f,%.3f,%.3f,"
+             "%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\","
+             "\"has_positions\":%d,\"pid\":%d}\n",
             vertex_file.UTF8String ?: "",
             binding_log, call->count, call->instance_count, inputs->target,
             inputs->target_width, inputs->target_height, inputs->viewport_x,
             inputs->viewport_y, inputs->viewport_width, inputs->viewport_height,
-            (int)getpid()];
+            viewport_x, viewport_y, viewport_width, viewport_height,
+            (int)primitive,
+            g_logged_positions[0], g_logged_positions[1], g_logged_positions[2],
+            g_logged_positions[3], g_logged_positions[4], g_logged_positions[5],
+            g_logged_positions[6], g_logged_positions[7], g_logged_positions[8],
+            g_logged_positions[9], g_logged_positions[10], g_logged_positions[11],
+            g_logged_positions[12], g_logged_positions[13], g_logged_positions[14],
+            g_logged_positions[15], g_have_positions, (int)getpid()];
         NSString *name = [NSString stringWithFormat:@"bind-%@.json", stem];
         if (json.length > 0) {
             (void)eu4_metal_events_write(name.UTF8String, json.UTF8String);
