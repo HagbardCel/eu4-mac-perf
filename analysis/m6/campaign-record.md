@@ -353,3 +353,15 @@ and `0xd0 + 16*slot`, matching `_GfxDraw`/`_GfxDrawIndexed`/
 A uniform-pack trace (`EU4_GFX_UNIFORM_TRACE=1`, probe `--uniform-trace`)
 records the stage, slot, count, header/values pointers and copy ranges for
 future slot-layout diagnostics.
+
+## Live presentation diagnostics (2026-11-13)
+
+- The generic encoder scales the engine's logical viewport to the physical
+  drawable (HiDPI), matching the shared Simple/sprite encoders.
+- SDL's Cocoa video driver swaps through `_Cocoa_GL_SwapWindow` /
+  `_Cocoa_GLES_SwapWindow`; both are now patched alongside the public
+  `SDL_GL_SwapWindow`.
+- The swap hook records `swap.json` (game vs drawable dimensions) and, with
+  `EU4_GFX_SWAP_DUMP`, dumps the exact backbuffer blitted to the drawable
+  (`probe --swap-dump`). This is independent evidence of the presented frame
+  even when the window server cannot list the game window.

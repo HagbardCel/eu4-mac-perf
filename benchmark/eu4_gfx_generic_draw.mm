@@ -567,10 +567,22 @@ static int generic_draw_encode_impl(const void *immediate_context,
         return 0;
     }
     [encoder setRenderPipelineState:pipeline];
+    /* The engine viewport is in logical pixels; the backbuffer can be the
+       physical drawable (HiDPI). Scale exactly like the shared encoders. */
+    double scale_x = 1.0;
+    double scale_y = 1.0;
+    if (inputs->logical_width > 0 && inputs->logical_height > 0) {
+        scale_x = (double)inputs->target_width / (double)inputs->logical_width;
+        scale_y = (double)inputs->target_height / (double)inputs->logical_height;
+    }
+    double viewport_x = (double)inputs->viewport_x * scale_x;
+    double viewport_y = (double)inputs->viewport_y * scale_y;
+    double viewport_width = (double)inputs->viewport_width * scale_x;
+    double viewport_height = (double)inputs->viewport_height * scale_y;
     MTLViewport viewport = {
-        (double)inputs->viewport_x,
-        (double)(inputs->target_height - inputs->viewport_y - inputs->viewport_height),
-        (double)inputs->viewport_width, (double)inputs->viewport_height, 0.0, 1.0};
+        viewport_x,
+        (double)inputs->target_height - viewport_y - viewport_height,
+        viewport_width, viewport_height, 0.0, 1.0};
     [encoder setViewport:viewport];
     MTLScissorRect scissor = {0, 0, target.width, target.height};
     [encoder setScissorRect:scissor];

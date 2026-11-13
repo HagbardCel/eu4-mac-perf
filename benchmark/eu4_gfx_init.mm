@@ -1959,6 +1959,14 @@ void eu4_gfx_resolve_texture_noop(void *handle, void *source, void *target) {
     (void)target;
 }
 
+int eu4_gfx_cocoa_swap_window(void *window) {
+    return eu4_gfx_swap_window(window);
+}
+
+int eu4_gfx_cocoa_gles_swap_window(void *window) {
+    return eu4_gfx_swap_window(window);
+}
+
 int eu4_gfx_swap_window(void *window) {
     (void)window;
     if (g_master == NULL) {
@@ -1983,6 +1991,19 @@ int eu4_gfx_swap_window(void *window) {
         drawable = layer != nil ? [layer nextDrawable] : nil;
         destination = drawable.texture;
     }
+    {
+        char body[384];
+        int n = snprintf(body, sizeof body,
+                         "{\"schema\":\"gfx-swap/v1\",\"game\":[%u,%u],"
+                         "\"drawable\":[%lu,%lu],\"destination\":%s,\"pid\":%d}\n",
+                         backend.gameWidth, backend.gameHeight,
+                         (unsigned long)(destination != nil ? destination.width : 0),
+                         (unsigned long)(destination != nil ? destination.height : 0),
+                         destination != nil ? "true" : "false", (int)getpid());
+        if (n > 0 && (size_t)n < sizeof body) {
+            (void)eu4_metal_events_write("swap.json", body);
+        }
+    }
     if (destination == nil || destination.width != backend.gameWidth ||
         destination.height != backend.gameHeight) {
         return 0;
@@ -2005,11 +2026,50 @@ int eu4_gfx_swap_window(void *window) {
          destinationLevel:0
         destinationOrigin:MTLOriginMake(0, 0, 0)];
     [blit endEncoding];
+    id<MTLBuffer> dump_buffer = nil;
+    const char *dump_path = getenv("EU4_GFX_SWAP_DUMP");
+    if (dump_path != NULL && dump_path[0] != 0) {
+        NSUInteger row = (NSUInteger)backend.gameWidth * 4;
+        dump_buffer = [backend.device newBufferWithLength:row * backend.gameHeight
+                                                  options:MTLResourceStorageModeShared];
+        if (dump_buffer != nil) {
+            id<MTLBlitCommandEncoder> readback = [command blitCommandEncoder];
+            if (readback != nil) {
+                [readback copyFromTexture:backend.gameColorTarget
+                              sourceSlice:0
+                              sourceLevel:0
+                             sourceOrigin:MTLOriginMake(0, 0, 0)
+                               sourceSize:MTLSizeMake(backend.gameWidth, backend.gameHeight, 1)
+                                 toBuffer:dump_buffer
+                        destinationOffset:0
+                   destinationBytesPerRow:row
+                 destinationBytesPerImage:row * backend.gameHeight];
+                [readback endEncoding];
+            }
+        }
+    }
     if (drawable != nil) {
         [command presentDrawable:drawable];
     }
     [command commit];
     [command waitUntilCompleted];
+    if (dump_buffer != nil) {
+        NSUInteger row = (NSUInteger)backend.gameWidth * 4;
+        uint8_t *flipped = (uint8_t *)malloc(row * backend.gameHeight);
+        if (flipped != NULL) {
+            const uint8_t *src = (const uint8_t *)dump_buffer.contents;
+            for (uint32_t y = 0; y < backend.gameHeight; y++) {
+                memcpy(flipped + (size_t)y * row,
+                       src + (size_t)(backend.gameHeight - 1 - y) * row, row);
+            }
+            FILE *file = fopen(dump_path, "wb");
+            if (file != NULL) {
+                fwrite(flipped, 1, row * backend.gameHeight, file);
+                fclose(file);
+            }
+            free(flipped);
+        }
+    }
     return 0;
 }
 

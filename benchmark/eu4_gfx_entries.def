@@ -32,6 +32,10 @@ GFX_ENTRY(initialize_texture, 0x15ec43b, 0x15ec61d, eu4_gfx_initialize_texture, 
 GFX_ENTRY(resolve, 0x15ece13, 0x15ece63, eu4_gfx_resolve_noop, "\x48\x85\xf6\x74\x4a")
 // _GfxResolveTexture. Multisample blit resolve; the Metal path is single-sample.
 GFX_ENTRY(resolve_texture, 0x15ece63, 0x15eceff, eu4_gfx_resolve_texture_noop, "\x55\x48\x89\xe5\x41\x57")
+// SDL's Cocoa video driver swaps through these functions; the public
+// SDL_GL_SwapWindow is not necessarily the call path.
+GFX_ENTRY(cocoa_swap_window, 0x1392740, 0x1392970, eu4_gfx_cocoa_swap_window, "\x55\x48\x89\xe5\x41\x57")
+GFX_ENTRY(cocoa_gles_swap_window, 0x1392990, 0x13929b0, eu4_gfx_cocoa_gles_swap_window, "\x55\x48\x89\xe5\x48\x8b")
 // SDL_GL_SwapWindow. The frontend presents through the window swap, not
 // _GfxPresent. The reconstructed window is a CAMetalLayer, so the swap blits
 // the completed backbuffer to the drawable.

@@ -299,6 +299,8 @@ int eu4_gfx_offscreen_contents_known(void *master);
    diagnostic offscreen when configured. A geometry-transition stale skip
    returns normally; unsupported or failed cases stop. */
 int eu4_gfx_swap_window(void *window);
+int eu4_gfx_cocoa_swap_window(void *window);
+int eu4_gfx_cocoa_gles_swap_window(void *window);
 void eu4_gfx_resolve_noop(void *unused, void *header);
 void eu4_gfx_resolve_texture_noop(void *handle, void *source, void *target);
 
