@@ -560,3 +560,21 @@ adjustments were required by the generalized live state decode:
   validity but not the new cull-enable byte (+0xc), which the generic live
   encoder tracks separately.
 Degenerate all-zero blend factor pairs stay fail-closed.
+
+## Map background: frame-feedback semantics (2026-11-13 07:15)
+
+`_GfxResolveTexture` (the explicit FBO blit) is **never called** in the live
+title scene; only `_GfxResolve` (glCopyTexSubImage2D from the current read
+framebuffer) runs, and its destination is the composite's sampled map texture.
+The engine therefore maintains the menu background as a **frame feedback
+image**: each frame copies the backbuffer (the previous presented frame) into
+the sampled texture and composites over it.
+
+The reconstruction preserves and feeds the previous presented frame, so the
+sampled textures are non-zero (u0 mean 156.95). The map is absent because the
+first title-scene frame's backbuffer never contained the map in the live run:
+the original's menu background must already be present in the backbuffer when
+the menu starts (rendered during the loading-to-menu transition), while the
+live transition frame we capture shows the tip banner over the magenta clear.
+Finding where the original first renders the menu background map into the
+backbuffer (and why the live transition does not) is the remaining item.
