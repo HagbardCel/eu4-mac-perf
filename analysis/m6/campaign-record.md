@@ -546,3 +546,17 @@ is the remaining map-background item. The title UI presentation is unaffected.
 
 Status: offline full-frame equivalence exact; three clean live title-scene
 starts presented (UI); map background is the one known render-affecting gap.
+
+## Test status (2026-11-13 06:55)
+
+Full suite: 2502 tests, 2500 pass, 2 errors — both pre-existing and unrelated:
+`test_gfx_l32b_e2e` imports the absent `automation.gfx_l32b_hooks`, and
+`test_pre_ready_forensic` needs a run directory that is not present. All M6,
+M5, lifecycle, texture, live-draw, boot and shader hosts pass. Two contract
+adjustments were required by the generalized live state decode:
+- lifecycle hosts resolve the texture lookup at run time (they link `init.mm`
+  without the texture module);
+- the legacy Simple/sprite raster contract compares cull/polygon/winding/
+  validity but not the new cull-enable byte (+0xc), which the generic live
+  encoder tracks separately.
+Degenerate all-zero blend factor pairs stay fail-closed.
