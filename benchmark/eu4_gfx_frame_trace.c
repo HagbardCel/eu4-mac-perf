@@ -89,6 +89,8 @@ static struct {
     int boundary_fb; /* -1: present boundary; >=0: clear of this framebuffer */
     int boundary_scene; /* PresentScene entry/exit boundary */
     int scene_index;
+    uint64_t pre_post_callers[16];
+    int pre_post_count;
     uint32_t max_draws;
 
     int present_index;
@@ -116,6 +118,8 @@ static struct {
     char gl_vendor[256];
     char gl_renderer[256];
     char gl_version[256];
+    char pre_image_json[2048];
+    int pre_image_valid;
     char seed_json[2048];
     int seed_width;
     int seed_height;
@@ -399,6 +403,7 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
     const char *dir = getenv("EU4_GFX_FRAME_TRACE_DIR");
     const char *boundary_fb = getenv("EU4_GFX_FRAME_TRACE_BOUNDARY_FB");
     const char *boundary = getenv("EU4_GFX_FRAME_TRACE_BOUNDARY");
+    const char *pre_post = getenv("EU4_GFX_FRAME_TRACE_PRE_POST_CALLERS");
     const char *test_only = getenv("EU4_GFX_FRAME_TRACE_TEST_ONLY");
     const char *callers = getenv("EU4_GFX_FRAME_TRACE_CALLERS");
     const char *min_draws = getenv("EU4_GFX_FRAME_TRACE_MIN_DRAWS");
@@ -440,6 +445,22 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
     }
     if (boundary != NULL && strcmp(boundary, "scene") == 0) {
         g.boundary_scene = 1;
+    }
+    if (pre_post != NULL && pre_post[0] != 0) {
+        char copy[512];
+        snprintf(copy, sizeof(copy), "%s", pre_post);
+        char *save = NULL;
+        for (char *token = strtok_r(copy, ",", &save); token != NULL;
+             token = strtok_r(NULL, ",", &save)) {
+            if (g.pre_post_count >= 16) {
+                return -1;
+            }
+            uint64_t value = 0;
+            if (parse_u64(token, &value) != 0) {
+                return -1;
+            }
+            g.pre_post_callers[g.pre_post_count++] = value;
+        }
     }
     if (boundary_fb != NULL && boundary_fb[0] != 0 &&
         strcmp(boundary_fb, "-1") != 0) {
@@ -1265,7 +1286,9 @@ static int capture_target(json_out *out, GLint *out_width, GLint *out_height) {
     return 0;
 }
 
-static int capture_seed(json_out *out, int *out_width, int *out_height) {
+static int capture_target_pixels(const char *prefix, const char *member,
+                                 json_out *out, int *out_width,
+                                 int *out_height) {
     GLint framebuffer = 0;
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &framebuffer);
     GLint width = 0, height = 0;
@@ -1360,15 +1383,15 @@ static int capture_seed(json_out *out, int *out_width, int *out_height) {
     }
     char blob_name[FTRACE_NAME] = "";
     char blob_sha[65] = "";
-    if (put_blob(pixels, bytes, "seed", blob_name, blob_sha) != 0) {
+    if (put_blob(pixels, bytes, prefix, blob_name, blob_sha) != 0) {
         free(pixels);
         return -1;
     }
     free(pixels);
     jprintf(out,
-            "\"seed\":{\"width\":%d,\"height\":%d,\"file\":\"%s\","
+            "\"%s\":{\"width\":%d,\"height\":%d,\"file\":\"%s\","
             "\"sha256\":\"%s\"}",
-            width, height, blob_name, blob_sha);
+            member, width, height, blob_name, blob_sha);
     if (out_width != NULL) {
         *out_width = width;
     }
@@ -1376,6 +1399,10 @@ static int capture_seed(json_out *out, int *out_width, int *out_height) {
         *out_height = height;
     }
     return 0;
+}
+
+static int capture_seed(json_out *out, int *out_width, int *out_height) {
+    return capture_target_pixels("seed", "seed", out, out_width, out_height);
 }
 
 static void capture_draw_state(json_out *out, int indexed, GLint mode, int first,
@@ -2105,6 +2132,29 @@ static void draw_entry_common(eu4_gfx_capture_frame *frame,
         g_pending.instances = instances;
         g_pending.base_vertex = base_vertex;
     }
+    if (g.armed && g.events != NULL) {
+        for (int i = 0; i < g.pre_post_count; i++) {
+            if (g.pre_post_callers[i] != call->caller_rva) {
+                continue;
+            }
+            char *pre_json = NULL;
+            size_t pre_size = 0;
+            FILE *pre_stream = open_memstream(&pre_json, &pre_size);
+            if (pre_stream != NULL) {
+                json_out pre_out = {pre_stream, 0};
+                (void)capture_target_pixels("pre", "pre_image", &pre_out, NULL,
+                                            NULL);
+                fclose(pre_stream);
+                if (!pre_out.failed && pre_json != NULL) {
+                    snprintf(g.pre_image_json, sizeof(g.pre_image_json), "%s",
+                             pre_json);
+                    g.pre_image_valid = 1;
+                }
+                free(pre_json);
+            }
+            break;
+        }
+    }
     if (g.armed && g.events != NULL && !g.have_seed) {
         char *buffer = NULL;
         size_t size = 0;
@@ -2159,6 +2209,24 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
                     jprintf(&out, ",%.*s", (int)(length - 2), seed + 1);
                 }
                 g.seed_emitted = 1;
+            }
+            if (g.pre_image_valid) {
+                jprintf(&out, ",%s", g.pre_image_json);
+                char *post_json = NULL;
+                size_t post_size = 0;
+                FILE *post_stream = open_memstream(&post_json, &post_size);
+                if (post_stream != NULL) {
+                    json_out post_out = {post_stream, 0};
+                    (void)capture_target_pixels("post", "post_image", &post_out,
+                                                NULL, NULL);
+                    fclose(post_stream);
+                    if (!post_out.failed && post_json != NULL) {
+                        jprintf(&out, ",%s", post_json);
+                    }
+                    free(post_json);
+                }
+                g.pre_image_valid = 0;
+                g.pre_image_json[0] = 0;
             }
             jprintf(&out, ",");
             capture_draw_state(&out, indexed, mode, first, count,

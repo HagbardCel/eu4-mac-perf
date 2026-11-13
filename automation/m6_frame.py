@@ -359,6 +359,7 @@ def capture(args: argparse.Namespace) -> int:
         "EU4_GFX_FRAME_TRACE_MAX_FRAME_DRAWS": str(args.max_frame_draws or 0),
         "EU4_GFX_FRAME_TRACE_BOUNDARY_FB": str(args.boundary_fb),
         "EU4_GFX_FRAME_TRACE_BOUNDARY": args.boundary,
+        "EU4_GFX_FRAME_TRACE_PRE_POST_CALLERS": args.pre_post_callers or "",
         "EU4_GFX_FRAME_TRACE_OCCURRENCE": str(args.occurrence),
         "EU4_GFX_FRAME_TRACE_MAX_DRAWS": str(args.max_draws),
     }
@@ -405,6 +406,7 @@ def capture(args: argparse.Namespace) -> int:
             "after_ms": args.after_ms,
             "boundary_fb": args.boundary_fb,
             "boundary": args.boundary,
+            "pre_post_callers": args.pre_post_callers,
         },
     }
     status = 0
@@ -543,6 +545,10 @@ def replay_command(args: argparse.Namespace) -> int:
     ]
     if args.stop_after is not None:
         command += ["--stop-after", str(args.stop_after)]
+    if args.seed_marked:
+        command.append("--seed-marked")
+    if args.capture_post:
+        command.append("--capture-post")
     ran = subprocess.run(command, capture_output=True, text=True, check=False, timeout=1200)
     result_path = out / "replay.json"
     if ran.returncode != 0 or not result_path.is_file():
@@ -622,6 +628,94 @@ def compare_command(args: argparse.Namespace) -> int:
     return 0 if report["status"] == "pass" else 2
 
 
+def isolate_command(args: argparse.Namespace) -> int:
+    """Compares the isolated replay of marked draws with their GL post-images."""
+    from automation import m6_compare
+
+    frame_dir = Path(args.frame).expanduser().resolve()
+    candidate = Path(args.candidate).expanduser().resolve()
+    try:
+        trace = load_trace(frame_dir)
+    except FrameError as exc:
+        print(json.dumps({"status": "invalid", "reason": str(exc)}, indent=2))
+        return 1
+    results = []
+    for index, event in enumerate(trace.get("_events") or []):
+        if event.get("kind") != "draw":
+            continue
+        post = event.get("post_image")
+        pre = event.get("pre_image")
+        if not isinstance(post, dict) or not isinstance(pre, dict):
+            continue
+        replay_path = candidate / f"isolated-post-{index}.bgra"
+        gl_path = frame_dir / "blobs" / str(post.get("file") or "")
+        if not replay_path.is_file() or not gl_path.is_file():
+            results.append(
+                {
+                    "event": index,
+                    "caller": (event.get("draw") or {}).get("caller_rva"),
+                    "status": "missing",
+                }
+            )
+            continue
+        width = int(post.get("width") or 0)
+        height = int(post.get("height") or 0)
+        reference = gl_path.read_bytes()
+        candidate_bytes = replay_path.read_bytes()
+        if width <= 0 or height <= 0 or len(reference) != width * height * 4:
+            results.append({"event": index, "status": "invalid_reference"})
+            continue
+        if len(candidate_bytes) != len(reference):
+            results.append({"event": index, "status": "size_mismatch"})
+            continue
+        statistics = m6_compare.compare_images(
+            reference, candidate_bytes, width, height
+        )
+        results.append(
+            {
+                "event": index,
+                "caller": (event.get("draw") or {}).get("caller_rva"),
+                "program": (event.get("program") or {}).get("name"),
+                "textures": [
+                    item.get("name") for item in event.get("textures") or []
+                ],
+                "status": "compared",
+                "statistics": statistics,
+            }
+        )
+    report = {
+        "schema": "gfx-isolated-draw-differential/v1",
+        "frame": str(frame_dir),
+        "candidate": str(candidate),
+        "draws": results,
+        "ok": bool(results)
+        and all(
+            item.get("status") == "compared"
+            and item["statistics"]["mismatched_pixels"] == 0
+            for item in results
+        ),
+    }
+    (candidate / "isolated-differential.json").write_text(
+        json.dumps(report, indent=2) + "\n"
+    )
+    print(json.dumps({
+        "ok": report["ok"],
+        "draws": [
+            {
+                "event": item["event"],
+                "caller": item.get("caller"),
+                "program": item.get("program"),
+                "status": item.get("status"),
+                "mismatched": (item.get("statistics") or {}).get("mismatched_pixels"),
+                "pixels": (item.get("statistics") or {}).get("pixels"),
+                "max": (item.get("statistics") or {}).get("max_channel_error"),
+            }
+            for item in results
+        ],
+    }, indent=2))
+    return 0 if report["ok"] else 2
+
+
 # ---------------------------------------------------------------------------
 # Inspection
 # ---------------------------------------------------------------------------
@@ -681,6 +775,7 @@ def _parser() -> argparse.ArgumentParser:
     cap.add_argument("--after-ms", type=int, default=0)
     cap.add_argument("--boundary-fb", type=int, default=-1)
     cap.add_argument("--boundary", default="")
+    cap.add_argument("--pre-post-callers", default="")
     cap.add_argument("--log", action="store_true")
     cap.add_argument("--max-draws", type=int, default=256)
     cap.add_argument("--duration", type=float, default=90.0)
@@ -704,7 +799,14 @@ def _parser() -> argparse.ArgumentParser:
     rep.add_argument("--stop-after", type=int, default=None)
     rep.add_argument("--force", action="store_true")
     rep.add_argument("--force-build", action="store_true")
+    rep.add_argument("--seed-marked", action="store_true")
+    rep.add_argument("--capture-post", action="store_true")
     rep.set_defaults(handler=replay_command)
+
+    iso = sub.add_parser("isolate", help="isolated marked-draw differential")
+    iso.add_argument("--frame", required=True)
+    iso.add_argument("--candidate", required=True)
+    iso.set_defaults(handler=isolate_command)
 
     cmp = sub.add_parser("compare", help="full-frame differential")
     cmp.add_argument("--reference", required=True)
