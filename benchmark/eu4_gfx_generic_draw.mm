@@ -955,7 +955,9 @@ static int generic_draw_encode_impl(const void *immediate_context,
     uint32_t front_face = load_u32(raster, 8);
     [encoder setFrontFacingWinding:front_face == 0x900 ? MTLWindingClockwise
                                                        : MTLWindingCounterClockwise];
-    if (raster[0xc] != 0 && cull_face == 0x405) {
+    if (getenv("EU4_GFX_NO_CULL") != NULL) {
+        [encoder setCullMode:MTLCullModeNone];
+    } else if (raster[0xc] != 0 && cull_face == 0x405) {
         [encoder setCullMode:MTLCullModeBack];
     } else if (raster[0xc] != 0 && cull_face == 0x404) {
         [encoder setCullMode:MTLCullModeFront];

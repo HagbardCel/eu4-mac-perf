@@ -872,3 +872,23 @@ depth-disabled with a full viewport. The `before/after-composite` dumps are
 inconclusive (the after dump is taken before the command buffer is committed).
 Next: diff the live generic encoding of this draw against the offline replay's
 encoding, which renders the same draw exactly.
+
+## THE MAP RENDERS: the composite was being culled (2026-11-13 15:55)
+
+With `EU4_GFX_NO_CULL=1` (`--no-cull`) the presented live frame changes from the
+magenta clear to the **full title scene**: the EU4 world map behind the logo,
+Paradox logo, Continue Game (Lubeck), Single Player/Multiplayer/Tutorial/Exit,
+version text and icon row (`analysis/live-cull-01.png`, mean 59.8, 375,789
+colours).
+
+Root cause: the composite's authentic state has `cull.enabled = false` (GL
+`glIsEnabled(GL_CULL_FACE)`) while its cull *mode* is 0x405 (back). The
+reconstruction derives the cull-enable bit from the descriptor's cull enum, so
+it enabled back-face culling and culled the full-screen quad. Disabling culling
+for the draw makes the composite cover and the frame-feedback chain (map ->
+resolve -> composite) complete.
+
+Remaining: decode the engine's real cull-enable flag so culling is honoured
+per draw (not globally disabled), and compare the resulting map colours with
+the authentic reference (the no-cull frame has a magenta cast from the
+feedback/season composition).

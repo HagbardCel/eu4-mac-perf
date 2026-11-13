@@ -1814,6 +1814,8 @@ def probe(args: argparse.Namespace) -> int:
         env["EU4_GFX_UNIFORM_DUMP"] = str(Path(output))
     if args.order_trace:
         env["EU4_GFX_ORDER_TRACE"] = "1"
+    if args.no_cull:
+        env["EU4_GFX_NO_CULL"] = "1"
     if args.element_trace:
         env["EU4_GFX_ELEMENT_TRACE"] = "1"
     if args.sample_texture_dump:
@@ -2243,6 +2245,7 @@ def _parser() -> argparse.ArgumentParser:
     prb.add_argument("--texture-type-trace", action="store_true")
     prb.add_argument("--sample-texture-dump", action="store_true")
     prb.add_argument("--element-trace", action="store_true")
+    prb.add_argument("--no-cull", action="store_true")
     prb.add_argument("--sample-texture-stage", default="")
     prb.add_argument(
         "--qualified-sources",
