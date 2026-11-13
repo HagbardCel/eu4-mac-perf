@@ -1810,6 +1810,8 @@ def probe(args: argparse.Namespace) -> int:
         env["EU4_GFX_SWAP_DUMP"] = str(Path(output) / "swap-frame.bgra")
     if args.texture_bind_trace:
         env["EU4_GFX_TEXTURE_BIND_TRACE"] = "1"
+    if args.uniform_dump:
+        env["EU4_GFX_UNIFORM_DUMP"] = str(Path(output))
     if args.min_uptime_ms:
         env["EU4_GFX_CHECKPOINT_MIN_UPTIME_MS"] = str(int(args.min_uptime_ms))
     if args.dump_targets:
@@ -2214,6 +2216,7 @@ def _parser() -> argparse.ArgumentParser:
     prb.add_argument("--dump-targets", action="store_true")
     prb.add_argument("--min-uptime-ms", type=int, default=0)
     prb.add_argument("--texture-bind-trace", action="store_true")
+    prb.add_argument("--uniform-dump", action="store_true")
     prb.add_argument(
         "--qualified-sources",
         default=str(ROOT / "analysis" / "gfx-shader" / "v0" / "qualified-sources.json"),

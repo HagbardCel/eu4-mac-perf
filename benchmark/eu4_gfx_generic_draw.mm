@@ -239,6 +239,39 @@ static NSData *pack_stage_uniforms(NSDictionary *stage, const uint8_t *master,
         }
         memcpy((uint8_t *)data.mutableBytes + member_offset, values, copy);
     }
+    if (getenv("EU4_GFX_UNIFORM_DUMP") != NULL && data.length > 0) {
+        NSString *file = stage[@"msl_file"] ?: @"";
+        NSString *stem = file.lastPathComponent.stringByDeletingPathExtension;
+        if (stem.length > 16) {
+            stem = [stem substringToIndex:16];
+        }
+        const char *dir = getenv("EU4_GFX_UNIFORM_DUMP");
+        char bin[512];
+        char meta[512];
+        snprintf(bin, sizeof bin, "%s/uniform-%s.bin", dir, stem.UTF8String);
+        snprintf(meta, sizeof meta, "%s/uniform-%s.json", dir, stem.UTF8String);
+        FILE *bf = fopen(bin, "wb");
+        if (bf != NULL) {
+            fwrite(data.bytes, 1, data.length, bf);
+            fclose(bf);
+        }
+        NSMutableString *info = [NSMutableString stringWithFormat:
+            @"{\"stage\":\"%s\",\"size\":%lu,\"slots\":[",
+            stem.UTF8String, (unsigned long)data.length];
+        for (int slot = 0; slot < 6; slot++) {
+            uint32_t count = load_u32(master, 0xc8 + slot * 16);
+            void *header = load_ptr(master, 0xd0 + slot * 16);
+            const void *values = header != NULL ? load_ptr((const uint8_t *)header, 8) : NULL;
+            [info appendFormat:@"%@{\"slot\":%d,\"count\":%u,\"header\":\"%p\",\"values\":\"%p\"}",
+                               slot > 0 ? @"," : @"", slot, count, header, values];
+        }
+        [info appendString:@"]}\n"];
+        FILE *mf = fopen(meta, "w");
+        if (mf != NULL) {
+            fputs(info.UTF8String, mf);
+            fclose(mf);
+        }
+    }
     return data;
 }
 
