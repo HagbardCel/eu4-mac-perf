@@ -646,6 +646,51 @@ int eu4_gfx_generic_draw_supported(const void *immediate_context,
     return 1;
 }
 
+static void dump_texture_file(id<MTLTexture> texture, const char *path) {
+    if (texture == nil || path == NULL) {
+        return;
+    }
+    id<MTLDevice> device = texture.device;
+    if (device == nil) {
+        return;
+    }
+    NSUInteger row = texture.width * 4;
+    id<MTLBuffer> buffer = [device newBufferWithLength:row * texture.height
+                                              options:MTLResourceStorageModeShared];
+    if (buffer == nil) {
+        return;
+    }
+    id<MTLCommandQueue> queue = [device newCommandQueue];
+    id<MTLCommandBuffer> command = [queue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    [blit copyFromTexture:texture
+              sourceSlice:0
+              sourceLevel:0
+             sourceOrigin:MTLOriginMake(0, 0, 0)
+               sourceSize:MTLSizeMake(texture.width, texture.height, 1)
+                 toBuffer:buffer
+        destinationOffset:0
+   destinationBytesPerRow:row
+ destinationBytesPerImage:row * texture.height];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    uint8_t *flipped = (uint8_t *)malloc(row * texture.height);
+    if (flipped == NULL) {
+        return;
+    }
+    const uint8_t *src = (const uint8_t *)buffer.contents;
+    for (NSUInteger y = 0; y < texture.height; y++) {
+        memcpy(flipped + y * row, src + (texture.height - 1 - y) * row, row);
+    }
+    FILE *file = fopen(path, "wb");
+    if (file != NULL) {
+        fwrite(flipped, 1, row * texture.height, file);
+        fclose(file);
+    }
+    free(flipped);
+}
+
 static int generic_draw_encode_impl(const void *immediate_context,
                                     const eu4_gfx_generic_call *call,
                                     const eu4_gfx_simple_draw_inputs *inputs,
@@ -714,6 +759,32 @@ static int generic_draw_encode_impl(const void *immediate_context,
     if (pipeline == nil) {
         fail(local_reason, sizeof(local_reason), "generic pipeline creation failed");
         return 0;
+    }
+    BOOL composite_dump = NO;
+    const char *composite_stage = getenv("EU4_GFX_COMPOSITE_STAGE");
+    const char *composite_dir = getenv("EU4_GFX_COMPOSITE_DUMP");
+    if (composite_stage != NULL && composite_dir != NULL && composite_stage[0] != 0) {
+        NSString *file = vertex_stage[@"msl_file"] ?: @"";
+        NSString *stem = file.lastPathComponent.stringByDeletingPathExtension;
+        composite_dump = [stem hasPrefix:[NSString stringWithUTF8String:composite_stage]];
+    }
+    if (composite_dump) {
+        char path[512];
+        snprintf(path, sizeof path, "%s/before-composite.bgra", composite_dir);
+        dump_texture_file(target, path);
+        NSArray *bound_textures = backend != nil ? backend.boundTextures : nil;
+        for (NSUInteger unit = 0; unit < bound_textures.count; unit++) {
+            void *header = NULL;
+            [(NSValue *)bound_textures[unit] getValue:&header];
+            id<MTLTexture> texture = header != NULL
+                ? (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(header) : nil;
+            if (texture != nil && texture.width >= 800) {
+                snprintf(path, sizeof path, "%s/sample-u%lu-%lux%lu.bgra", composite_dir,
+                         (unsigned long)unit, (unsigned long)texture.width,
+                         (unsigned long)texture.height);
+                dump_texture_file(texture, path);
+            }
+        }
     }
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
     pass.colorAttachments[0].texture = target;
@@ -918,6 +989,11 @@ static int generic_draw_encode_impl(const void *immediate_context,
                     vertexCount:(NSUInteger)call->count
                   instanceCount:instance_count];
     }
+    if (composite_dump) {
+        char path[512];
+        snprintf(path, sizeof path, "%s/after-composite.bgra", composite_dir);
+        dump_texture_file(target, path);
+    }
     if (binding_log != nil) {
         NSString *vertex_file = vertex_stage[@"msl_file"] ?: @"";
         NSString *stem = vertex_file.lastPathComponent.stringByDeletingPathExtension;
@@ -926,9 +1002,14 @@ static int generic_draw_encode_impl(const void *immediate_context,
         }
         NSString *json = [NSString stringWithFormat:
             @"{\"schema\":\"gfx-texture-bind/v1\",\"stage\":\"%s\","
-             "\"bindings\":[%@],\"count\":%d,\"instances\":%d,\"pid\":%d}\n",
+             "\"bindings\":[%@],\"count\":%d,\"instances\":%d,"
+             "\"target\":\"%p\",\"target_size\":[%u,%u],"
+             "\"viewport\":[%u,%u,%u,%u],\"pid\":%d}\n",
             vertex_file.UTF8String ?: "",
-            binding_log, call->count, call->instance_count, (int)getpid()];
+            binding_log, call->count, call->instance_count, inputs->target,
+            inputs->target_width, inputs->target_height, inputs->viewport_x,
+            inputs->viewport_y, inputs->viewport_width, inputs->viewport_height,
+            (int)getpid()];
         NSString *name = [NSString stringWithFormat:@"bind-%@.json", stem];
         if (json.length > 0) {
             (void)eu4_metal_events_write(name.UTF8String, json.UTF8String);
