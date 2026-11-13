@@ -1812,6 +1812,11 @@ def probe(args: argparse.Namespace) -> int:
         env["EU4_GFX_TEXTURE_BIND_TRACE"] = "1"
     if args.uniform_dump:
         env["EU4_GFX_UNIFORM_DUMP"] = str(Path(output))
+    if args.order_trace:
+        env["EU4_GFX_ORDER_TRACE"] = "1"
+    if args.metal_validation:
+        env["MTL_DEBUG_LAYER"] = "1"
+        env["MTL_DEBUG_LAYER_ERROR_MODE"] = "nslog"
     if args.resolve_trace:
         env["EU4_GFX_RESOLVE_TRACE"] = "1"
         env["EU4_GFX_RESOLVE_DUMP"] = str(Path(output))
@@ -2225,6 +2230,8 @@ def _parser() -> argparse.ArgumentParser:
     prb.add_argument("--uniform-dump", action="store_true")
     prb.add_argument("--composite-dump", action="store_true")
     prb.add_argument("--resolve-trace", action="store_true")
+    prb.add_argument("--order-trace", action="store_true")
+    prb.add_argument("--metal-validation", action="store_true")
     prb.add_argument(
         "--qualified-sources",
         default=str(ROOT / "analysis" / "gfx-shader" / "v0" / "qualified-sources.json"),

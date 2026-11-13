@@ -38,6 +38,7 @@
 @property (nonatomic, strong) id previousFrameTexture;
 @property (nonatomic, strong) id lastDrawTargetColor;
 @property (nonatomic, strong) id lastFullTargetColor;
+void eu4_gfx_order_trace(const char *operation, unsigned long long value);
 extern uint64_t eu4_gfx_live_draw_sequence;
 extern uint64_t eu4_gfx_live_clear_sequence;
 @property (nonatomic, strong) id lastBoundRTColor;

@@ -2127,13 +2127,13 @@ void eu4_gfx_resolve_noop(void *unused, void *header) {
         return;
     }
     id<MTLTexture> dst = (__bridge id<MTLTexture>)texture_for_header(header);
-    /* The engine copies the previous frame's image here (GL's back buffer
-       still holds it); the reconstructed single backbuffer is cleared before
-       this point, so the preserved previous frame is the correct source. */
-    /* _GfxResolve(mainRenderTargetTexture) copies the framebuffer the map
-       passes rendered into. Prefer the target of the most recent draw when its
-       size matches the sampled texture, then fall back to the preserved
-       previous frame. */
+    /* glCopyTexSubImage2D observes every command issued before it. Record the
+       sequence and drain the pending submission so the copy cannot read a
+       backbuffer whose draws are still pending. */
+    eu4_gfx_order_trace("resolve", eu4_gfx_live_draw_sequence);
+    if (backend.pendingGameCommand != nil) {
+        (void)drain_pending_game(backend, NULL);
+    }
     /* The engine's copy reads the current default framebuffer (fb0): early in
        the frame it holds the map passes, later it holds the complete frame.
        Copy the live backbuffer every call, exactly like glCopyTexSubImage2D. */
@@ -2333,6 +2333,38 @@ static void preserve_previous_frame(void) {
 uint64_t eu4_gfx_live_draw_sequence;
 uint64_t eu4_gfx_live_clear_sequence;
 
+/* Opt-in submission-order trace: records draws, clears and resolves with a
+   global sequence, thread and timestamp so deferred/threaded submission order
+   can be compared with the engine's CPU order. */
+void eu4_gfx_order_trace(const char *operation, unsigned long long value) {
+    if (getenv("EU4_GFX_ORDER_TRACE") == NULL) {
+        return;
+    }
+    static uint64_t sequence;
+    static int enabled_check;
+    if (!enabled_check) {
+        enabled_check = 1;
+    }
+    uint64_t seq = __atomic_fetch_add(&sequence, 1, __ATOMIC_RELAXED) + 1;
+    if (seq > 20000) {
+        return;
+    }
+    char body[256];
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    uint64_t thread = 0;
+    (void)pthread_threadid_np(NULL, &thread);
+    int n = snprintf(body, sizeof body,
+                     "{\"seq\":%llu,\"op\":\"%s\",\"value\":%llu,"
+                     "\"thread\":%llu,\"ns\":%llu}\n",
+                     (unsigned long long)seq, operation, value,
+                     (unsigned long long)thread,
+                     (unsigned long long)(ts.tv_sec * 1000000000ull + ts.tv_nsec));
+    if (n > 0 && (size_t)n < sizeof body) {
+        (void)eu4_metal_events_append("order.jsonl", body);
+    }
+}
+
 void eu4_gfx_present_scene(void *self) {
     if (self == NULL) {
         return;
@@ -2468,6 +2500,7 @@ int eu4_gfx_swap_window(void *window) {
 
 void eu4_gfx_clear(void *handle, unsigned flags, const float *color) {
     eu4_gfx_live_clear_sequence++;
+    eu4_gfx_order_trace("clear", eu4_gfx_live_clear_sequence);
     void *master = master_from_handle(handle);
     __unsafe_unretained EU4GfxBackend *backend =
         (__bridge EU4GfxBackend *)backend_raw_for_master(master);

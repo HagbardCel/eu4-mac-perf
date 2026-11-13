@@ -744,3 +744,25 @@ by `pendingGameCommand` at the copy point (multi-threaded/deferred submission),
 or the copy genuinely happens before those draws in the live execution order.
 The feedback texture therefore stays empty and the map background remains the
 one M6-blocking gap.
+
+## Root cause found: Metal validation rejects the map draws (2026-11-13 13:30)
+
+Running the game with `MTL_DEBUG_LAYER=1` (`--metal-validation`, error mode
+`nslog`) produced 9,381 draw validation errors in one menu run:
+
+- 9,366 x `Fragment Function(main0): incorrect type of texture
+  (MTLTextureTypeCube) bound at Texture binding index 2 (expect
+  MTLTextureType2D) for tex7[0].`
+- 15 x `Vertex Function(sprite_vs): missing Buffer binding at index 1 for u[0].`
+
+Metal rejects a draw whose bound texture type does not match the shader's
+declaration, so the map draws that bind a cubemap to `tex7` are dropped on the
+GPU. That is why the map passes encode with real counts and target the
+backbuffer, yet the backbuffer stays black at the resolve and the composite
+samples an empty feedback texture.
+
+Fixes required:
+1. Declare `texturecube<float>` for cube samplers in the translated MSL (or bind
+   the correct texture type) for the affected map shader(s); the captured
+   sampler metadata must carry the cube type through translation.
+2. Bind the sprite uniform buffer at index 1 for the 15 `sprite_vs` draws.

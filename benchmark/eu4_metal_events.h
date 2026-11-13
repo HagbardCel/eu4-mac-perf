@@ -14,6 +14,9 @@ void eu4_metal_events_add_executable(uintptr_t start, uintptr_t end);
 
 /* Temp sibling, fflush, fsync, then rename. An existing final file is left as it is. */
 int eu4_metal_events_write(const char *name, const char *body);
+/* Appends one record to a streaming JSONL file (unlike write, which keeps the
+   first document and refuses to overwrite). */
+int eu4_metal_events_append(const char *name, const char *body);
 
 /* First terminating record wins. Caller is the return address to report. */
 void eu4_metal_events_stop(const char *phase, const char *symbol, const char *reason,

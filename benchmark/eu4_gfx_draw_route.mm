@@ -287,6 +287,7 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
     backend.gameContentsKnown = NO;
     backend.readyForPresent = NO;
     eu4_gfx_live_draw_sequence++;
+    eu4_gfx_order_trace("draw", eu4_gfx_live_draw_sequence);
     backend.lastDrawTargetColor = (__bridge id)inputs.target;
     backend.lastDrawTargetWidth = inputs.target_width;
     backend.lastDrawTargetHeight = inputs.target_height;
