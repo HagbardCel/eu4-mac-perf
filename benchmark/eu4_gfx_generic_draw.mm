@@ -46,6 +46,10 @@ static NSUInteger num(id value, NSUInteger fallback) {
     return fallback;
 }
 
+static id<MTLSamplerState> sampler_for_unit(id<MTLDevice> device,
+                                            NSArray *samplers,
+                                            NSUInteger unit);
+
 static float g_logged_positions[16];
 static int g_have_positions;
 typedef struct {
@@ -203,6 +207,81 @@ static MTLCompareFunction compare_function(uint32_t gl) {
         case 0x0207: return MTLCompareFunctionAlways;
         default: return MTLCompareFunctionAlways;
     }
+}
+
+static MTLSamplerAddressMode metal_address_mode(uint32_t gl_wrap) {
+    switch (gl_wrap) {
+        case 0x2901: return MTLSamplerAddressModeRepeat;
+        case 0x8370: return MTLSamplerAddressModeMirrorRepeat;
+        case 0x812D: return MTLSamplerAddressModeClampToBorderColor;
+        default: return MTLSamplerAddressModeClampToEdge;
+    }
+}
+
+/* Per-unit sampler derived from the engine's sampler object, cached by the
+   effective GL state. Falls back to linear/clamp only when the draw carries no
+   sampler object (the engine's default texture state). */
+static id<MTLSamplerState> sampler_for_unit(id<MTLDevice> device,
+                                            NSArray *samplers,
+                                            NSUInteger unit) {
+    static NSMutableDictionary *cache;
+    static id<MTLDevice> cached_device;
+    if (cache == nil || cached_device != device) {
+        cache = [NSMutableDictionary dictionary];
+        cached_device = device;
+    }
+    eu4_gfx_sampler_state state = {0};
+    BOOL have_state = NO;
+    if (samplers != nil && unit < samplers.count) {
+        void *object = NULL;
+        [(NSValue *)samplers[unit] getValue:&object];
+        if (object != NULL && eu4_gfx_decode_sampler(object, &state) == 0) {
+            have_state = YES;
+        }
+    }
+    NSString *key;
+    if (have_state) {
+        key = [NSString stringWithFormat:@"s%u-%u-%u-%u-%u",
+                                         state.min_filter, state.mag_filter,
+                                         state.mip_filter, state.wrap_s,
+                                         state.wrap_t];
+    } else {
+        key = @"default-linear-clamp";
+    }
+    id<MTLSamplerState> cached = cache[key];
+    if (cached != nil) {
+        return cached;
+    }
+    MTLSamplerDescriptor *descriptor = [MTLSamplerDescriptor new];
+    if (have_state) {
+        uint32_t min = state.min_filter;
+        BOOL min_linear = min == 0x2601 || min == 0x2701 || min == 0x2703;
+        BOOL mip_none = min == 0x2600 || min == 0x2601;
+        BOOL mip_linear = min == 0x2702 || min == 0x2703;
+        descriptor.minFilter = min_linear ? MTLSamplerMinMagFilterLinear
+                                          : MTLSamplerMinMagFilterNearest;
+        descriptor.magFilter = state.mag_filter == 0x2601
+                                   ? MTLSamplerMinMagFilterLinear
+                                   : MTLSamplerMinMagFilterNearest;
+        descriptor.mipFilter = mip_none ? MTLSamplerMipFilterNotMipmapped
+                                        : (mip_linear ? MTLSamplerMipFilterLinear
+                                                      : MTLSamplerMipFilterNearest);
+        descriptor.sAddressMode = metal_address_mode(state.wrap_s);
+        descriptor.tAddressMode = metal_address_mode(state.wrap_t);
+        descriptor.rAddressMode = metal_address_mode(state.wrap_r);
+    } else {
+        descriptor.minFilter = MTLSamplerMinMagFilterLinear;
+        descriptor.magFilter = MTLSamplerMinMagFilterLinear;
+        descriptor.mipFilter = MTLSamplerMipFilterNotMipmapped;
+        descriptor.sAddressMode = MTLSamplerAddressModeClampToEdge;
+        descriptor.tAddressMode = MTLSamplerAddressModeClampToEdge;
+        descriptor.rAddressMode = MTLSamplerAddressModeClampToEdge;
+    }
+    id<MTLSamplerState> sampler = [device newSamplerStateWithDescriptor:descriptor];
+    if (sampler != nil) {
+        cache[key] = sampler;
+    }
+    return sampler;
 }
 
 static id<MTLSamplerState> generic_sampler(id<MTLDevice> device,
@@ -1068,7 +1147,10 @@ static int generic_draw_encode_impl(const void *immediate_context,
         NSString *name = [(__bridge id<MTLFunction>)vertex_function name];
         sprite_function = [name isEqualToString:@"sprite_vs"];
     }
-    if (sprite_function || vertex_stage[@"msl_uniform_buffer"] == nil) {
+    /* Only the explicitly identified legacy sprite contract falls back to the
+       sprite uniform block; a non-sprite stage without a declaration must not
+       receive sprite data. */
+    if (sprite_function) {
         uint8_t sprite_uniform[EU4_GFX_SPRITE_CONSTANT_BYTES];
         if (eu4_gfx_sprite_uniform_data(master, sprite_uniform,
                                         sizeof sprite_uniform) != 0) {
@@ -1239,7 +1321,9 @@ static int generic_draw_encode_impl(const void *immediate_context,
                     }
                 }
             }
-            id<MTLSamplerState> sampler = generic_sampler(device, @"linear", NO);
+            id<MTLSamplerState> sampler =
+                sampler_for_unit(device, backend != nil ? backend.boundSamplers : nil,
+                                 unit);
             if ([stage_name isEqualToString:@"vertex"]) {
                 [encoder setVertexTexture:texture atIndex:texture_index];
                 [encoder setVertexSamplerState:sampler atIndex:sampler_index];

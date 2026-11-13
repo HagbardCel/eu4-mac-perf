@@ -26,6 +26,7 @@
 @property (nonatomic) void *boundTexture0;
 /* Up to 16 engine texture headers bound by the last _GfxSetTextures. */
 @property (nonatomic, strong) NSMutableArray *boundTextures;
+@property (nonatomic, strong) NSMutableArray *boundSamplers;
 /* Render targets: the engine header currently bound as the draw target, its
    colour/depth Metal textures, and the default backbuffer to restore. */
 @property (nonatomic) void *currentTargetHeader;

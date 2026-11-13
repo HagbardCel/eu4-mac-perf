@@ -603,6 +603,44 @@ static int run_scissor_helper(void) {
     return ok ? 0 : 1;
 }
 
+static int run_sampler_decode(void) {
+    boot();
+    /* Linear filtering with repeat addressing, as the map/terrain draws use. */
+    uint8_t linear[0x40];
+    memset(linear, 0, sizeof linear);
+    uint32_t linear_min = 0x2601, linear_mag = 0x2601, repeat = 0x2901, mip = 0x2601;
+    memcpy(linear + 0x18, &repeat, 4);
+    memcpy(linear + 0x1c, &repeat, 4);
+    memcpy(linear + 0x20, &linear_mag, 4);
+    memcpy(linear + 0x24, &linear_min, 4);
+    memcpy(linear + 0x28, &mip, 4);
+    eu4_gfx_sampler_state a = {0};
+    int ok_a = eu4_gfx_decode_sampler(linear, &a) == 0 &&
+               a.min_filter == 0x2601 && a.mag_filter == 0x2601 &&
+               a.wrap_s == 0x2901;
+    /* Nearest filtering with clamp-to-edge. */
+    uint8_t nearest[0x40];
+    memset(nearest, 0, sizeof nearest);
+    uint32_t nearest_min = 0x2600, nearest_mag = 0x2600, clamp = 0x812f;
+    memcpy(nearest + 0x18, &clamp, 4);
+    memcpy(nearest + 0x1c, &clamp, 4);
+    memcpy(nearest + 0x20, &nearest_mag, 4);
+    memcpy(nearest + 0x24, &nearest_min, 4);
+    memcpy(nearest + 0x28, &mip, 4);
+    eu4_gfx_sampler_state b = {0};
+    int ok_b = eu4_gfx_decode_sampler(nearest, &b) == 0 &&
+               b.min_filter == 0x2600 && b.mag_filter == 0x2600 &&
+               b.wrap_s == 0x812f;
+    /* An unsupported state must be refused, not approximated. */
+    uint32_t bad = 0x1234;
+    memcpy(nearest + 0x20, &bad, 4);
+    eu4_gfx_sampler_state c = {0};
+    int refused = eu4_gfx_decode_sampler(nearest, &c) != 0;
+    int ok = ok_a && ok_b && refused;
+    printf("sampler_decode=%d\n", ok);
+    return ok ? 0 : 1;
+}
+
 static int run_sprite_uniform(void) {
     boot();
     uint8_t *master = (uint8_t *)g_master;
@@ -744,6 +782,9 @@ int main(int argc, char **argv) {
     }
     if (argc >= 2 && strcmp(argv[1], "--sprite-uniform") == 0) {
         return run_sprite_uniform();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--sampler-decode") == 0) {
+        return run_sampler_decode();
     }
     if (argc >= 2 && strcmp(argv[1], "--scissor-helper") == 0) {
         return run_scissor_helper();

@@ -1026,3 +1026,21 @@ shader inputs (sampled terrain textures / uniforms) are therefore the
 remaining divergence. Terrain textures carry real data (RGB 14-191, several
 normal-map-like layers with alpha 255); the exact shader-input mismatch is not
 yet identified. M6 live acceptance remains blocked.
+
+## Sampler state and partial texture updates implemented; map still pink (2026-11-13 21:00)
+
+The engine's per-unit sampler objects are now decoded (`_GfxCreateSampler`
+layout: +0x18/+0x1c wrap, +0x20 mag, +0x24 min, +0x28 mip) and Metal samplers
+are cached per effective GL state instead of a single linear/clamp sampler.
+`_GfxSetTextures` now honours `base_unit` and both engine bind ranges (flags bit
+0 at base_unit, bit 1 at base_unit+0xf) and preserves unaffected units instead
+of clearing the whole array.
+
+A settled live frame with these corrections still has the pink map
+(palette affinity 0.583 vs 0.617 before, means unchanged at 157/123/149), so
+sampler filtering/wrapping and partial texture-unit binding are excluded as the
+cause. The remaining divergence is in the map passes' shader inputs (constant
+slots or sampled texture contents); the captured trace does not record uniforms
+for the terrain draw (only the seed draw), so the next concrete step is a GL
+capture seeded on a map-producing caller (0x10ce96e) and a byte-level diff of
+that draw's constant data against the live packed uniform block.

@@ -82,6 +82,21 @@ void *eu4_gfx_bound_texture(void);
 /* Forces the BC3 capability check to fail. The host sets it back to 0. */
 void eu4_gfx_test_no_bc(int on);
 
+/* Decoded SOpenGL sampler state (GL enums). `_GfxCreateSampler` stores the GL
+   wrap at +0x18/+0x1c, mag at +0x20, min at +0x24 and the mip filter at +0x28. */
+typedef struct {
+    uint32_t min_filter;
+    uint32_t mag_filter;
+    uint32_t mip_filter;
+    uint32_t wrap_s;
+    uint32_t wrap_t;
+    uint32_t wrap_r;
+} eu4_gfx_sampler_state;
+
+/* Returns 0 and fills `out`, or -1 when the sampler object is missing or uses a
+   state the reconstructed backend cannot represent. */
+int eu4_gfx_decode_sampler(const void *sampler, eu4_gfx_sampler_state *out);
+
 /* _GfxSetTextures at 0x15ecbf2. rdi is the handle and (%rdi) is the state object.
    esi is the count. rdx is the texture-pointer array. ecx bit 0 binds from r8d,
    and bit 1 binds from r8d + 0xf. r9 is an optional sampler-pointer array. A null

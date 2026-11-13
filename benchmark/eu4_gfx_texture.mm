@@ -822,13 +822,57 @@ void *eu4_gfx_texture_for_header(void *header) {
     return texture != nil ? (__bridge void *)texture : NULL;
 }
 
+int eu4_gfx_decode_sampler(const void *sampler, eu4_gfx_sampler_state *out) {
+    if (sampler == NULL || out == NULL) {
+        return -1;
+    }
+    const uint8_t *bytes = (const uint8_t *)sampler;
+    uint32_t wrap_s = 0, wrap_t = 0, mag = 0, min = 0, mip = 0;
+    memcpy(&wrap_s, bytes + 0x18, 4);
+    memcpy(&wrap_t, bytes + 0x1c, 4);
+    memcpy(&mag, bytes + 0x20, 4);
+    memcpy(&min, bytes + 0x24, 4);
+    memcpy(&mip, bytes + 0x28, 4);
+    /* GL filter enums only; anything else is an unsupported state. */
+    if (mag != 0x2600 && mag != 0x2601) {
+        return -1;
+    }
+    switch (min) {
+        case 0x2600:
+        case 0x2601:
+        case 0x2700:
+        case 0x2701:
+        case 0x2702:
+        case 0x2703:
+            break;
+        default:
+            return -1;
+    }
+    if (mip != 0x2600 && mip != 0x2601) {
+        return -1;
+    }
+    switch (wrap_s) {
+        case 0x2900: /* GL_CLAMP */
+        case 0x2901: /* GL_REPEAT */
+        case 0x812D: /* GL_CLAMP_TO_BORDER */
+        case 0x812F: /* GL_CLAMP_TO_EDGE */
+        case 0x8370: /* GL_MIRRORED_REPEAT */
+            break;
+        default:
+            return -1;
+    }
+    out->min_filter = min;
+    out->mag_filter = mag;
+    out->mip_filter = mip;
+    out->wrap_s = wrap_s;
+    out->wrap_t = wrap_t;
+    out->wrap_r = wrap_s;
+    return 0;
+}
+
 void eu4_gfx_set_textures(void *handle, unsigned count, void *textures, unsigned flags,
                           unsigned base_unit, void *samplers) {
-    (void)samplers;
-    if (handle == NULL || textures == NULL || count == 0 || (flags & 1u) == 0 ||
-        base_unit != 0) {
-        /* Offset texture units are not reconstructed yet; the engine's title
-           scene binds from unit 0. */
+    if (handle == NULL || textures == NULL || count == 0 || (flags & 1u) == 0) {
         return;
     }
     void *master = NULL;
@@ -851,16 +895,43 @@ void eu4_gfx_set_textures(void *handle, unsigned count, void *textures, unsigned
     if (backend.boundTextures == nil) {
         backend.boundTextures = [NSMutableArray array];
     }
-    [backend.boundTextures removeAllObjects];
+    if (backend.boundSamplers == nil) {
+        backend.boundSamplers = [NSMutableArray array];
+    }
     const void *const *list = (const void *const *)textures;
-    unsigned limit = count > 16 ? 16 : count;
-    for (unsigned unit = 0; unit < limit; unit++) {
-        void *entry = NULL;
-        memcpy(&entry, list + unit, sizeof entry);
-        if (entry == NULL) {
-            memcpy(&entry, (uint8_t *)master + 0x98, sizeof entry);
+    const void *const *sampler_list = (const void *const *)samplers;
+    void *default_header = NULL;
+    memcpy(&default_header, (uint8_t *)master + 0x98, sizeof default_header);
+    /* flags bit 0 binds the contiguous range at base_unit; bit 1 binds the
+       engine's second range at base_unit + 0xf. Unaffected units are kept. */
+    for (unsigned pass = 0; pass < 2; pass++) {
+        if ((flags & (1u << pass)) == 0) {
+            continue;
         }
-        [backend.boundTextures addObject:[NSValue valueWithPointer:entry]];
+        unsigned start = base_unit + (pass == 0 ? 0u : 0xfu);
+        for (unsigned i = 0; i < count; i++) {
+            unsigned unit = start + i;
+            if (unit >= 32) {
+                break;
+            }
+            void *entry = NULL;
+            memcpy(&entry, list + i, sizeof entry);
+            if (entry == NULL) {
+                entry = default_header;
+            }
+            void *sampler = NULL;
+            if (sampler_list != NULL) {
+                memcpy(&sampler, sampler_list + i, sizeof sampler);
+            }
+            while (backend.boundTextures.count <= unit) {
+                [backend.boundTextures addObject:[NSValue valueWithPointer:NULL]];
+            }
+            while (backend.boundSamplers.count <= unit) {
+                [backend.boundSamplers addObject:[NSValue valueWithPointer:NULL]];
+            }
+            backend.boundTextures[unit] = [NSValue valueWithPointer:entry];
+            backend.boundSamplers[unit] = [NSValue valueWithPointer:sampler];
+        }
     }
 }
 
