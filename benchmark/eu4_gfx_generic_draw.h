@@ -39,6 +39,12 @@ int eu4_gfx_generic_draw_encode_into(const void *immediate_context,
                                      size_t reason_capacity,
                                      eu4_gfx_simple_draw_state *state);
 
+/* Decides whether a bound texture may feed a sampler declared as 2D or cube.
+   Returns 1 when the binding is valid (optionally with a diagnostic
+   substitution) and 0 when the draw must be refused. */
+int eu4_gfx_texture_binding_decision(int expects_cube, int bound_type,
+                                     int allow_substitution, int *substitute);
+
 /* 1 when this draw has everything the generic encoder needs; otherwise writes
  * the reason. No Metal objects are created. */
 int eu4_gfx_generic_draw_supported(const void *immediate_context,

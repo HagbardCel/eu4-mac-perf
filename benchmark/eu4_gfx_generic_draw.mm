@@ -59,6 +59,26 @@ static int g_logged_element_count;
    versa) even when the unit is not sampled. The engine's GL bindings include
    such units; substitute a compatible 1x1 placeholder for the declared type so
    the draw is not rejected. */
+int eu4_gfx_texture_binding_decision(int expects_cube, int bound_type,
+                                      int allow_substitution,
+                                      int *substitute) {
+    int is_cube = bound_type == (int)MTLTextureTypeCube ||
+                  bound_type == (int)MTLTextureTypeCubeArray;
+    if (substitute != NULL) {
+        *substitute = 0;
+    }
+    if ((expects_cube != 0) == (is_cube != 0)) {
+        return 1;
+    }
+    if (allow_substitution) {
+        if (substitute != NULL) {
+            *substitute = 1;
+        }
+        return 1;
+    }
+    return 0;
+}
+
 static id<MTLTexture> generic_type_placeholder(id<MTLDevice> device, BOOL cube) {
     static id<MTLTexture> flat;
     static id<MTLTexture> cubemap;
@@ -677,10 +697,27 @@ static id<MTLRenderPipelineState> pipeline_for(EU4GfxPipelineKey *unused,
                      src_a, dst_a, equation_a, depth_test ? 1u : 0u,
                      depth_write ? 1 : 0, (unsigned)depth_compare,
                      (unsigned)descriptor.hash];
+    static uint64_t pipeline_hits;
+    static uint64_t pipeline_misses;
     id<MTLRenderPipelineState> pipeline = cache[key];
     if (pipeline != nil) {
+        pipeline_hits++;
+        if (getenv("EU4_GFX_PIPELINE_STATS") != NULL) {
+            char body[256];
+            int length = snprintf(
+                body, sizeof body,
+                "{\"schema\":\"gfx-pipeline-stats/v1\",\"hits\":%llu,"
+                "\"misses\":%llu,\"cached\":%lu,\"pid\":%d}\n",
+                (unsigned long long)pipeline_hits,
+                (unsigned long long)pipeline_misses,
+                (unsigned long)cache.count, (int)getpid());
+            if (length > 0 && (size_t)length < sizeof body) {
+                (void)eu4_metal_events_write("pipeline-stats.json", body);
+            }
+        }
         return pipeline;
     }
+    pipeline_misses++;
     MTLRenderPipelineDescriptor *pipeline_descriptor = [MTLRenderPipelineDescriptor new];
     pipeline_descriptor.vertexFunction = vertex;
     pipeline_descriptor.fragmentFunction = fragment;
@@ -872,8 +909,13 @@ static int generic_draw_encode_impl(const void *immediate_context,
     __unsafe_unretained EU4GfxBackend *backend =
         (__bridge EU4GfxBackend *)load_ptr(master, 0x180);
     id<MTLTexture> depth_texture = backend != nil ? backend.currentTargetDepth : nil;
-    BOOL depth_test = depth_texture != nil && load_u32(master + 0x30, 0) != 0;
-    BOOL depth_write = depth_texture != nil && ((const uint8_t *)master)[0x31] != 0;
+    int effective_test = 0, effective_write = 0;
+    eu4_gfx_effective_depth_state(depth_texture != nil,
+                                  ((const uint8_t *)master)[0x30],
+                                  ((const uint8_t *)master)[0x31],
+                                  &effective_test, &effective_write);
+    BOOL depth_test = effective_test != 0;
+    BOOL depth_write = effective_write != 0;
     uint32_t depth_compare = load_u32(master + 0x34, 0);
     if (depth_compare == 0) {
         depth_compare = 0x0207;
@@ -948,6 +990,42 @@ static int generic_draw_encode_impl(const void *immediate_context,
         viewport_width, viewport_height, 0.0, 1.0};
     [encoder setViewport:viewport];
     MTLScissorRect scissor = {0, 0, target.width, target.height};
+    if (backend != nil && backend.scissorValid) {
+        /* The engine's scissor is in logical pixels; convert it to the physical
+           attachment through the shared helper and the viewport scale. */
+        uint32_t logical_w = inputs->logical_width > 0 ? inputs->logical_width
+                                                       : target.width;
+        uint32_t logical_h = inputs->logical_height > 0 ? inputs->logical_height
+                                                        : target.height;
+        eu4_gfx_metal_scissor box = {0, 0, 0, 0};
+        eu4_gfx_scissor_status status = eu4_gfx_scissor_for_attachment(
+            1, backend.scissorGlX, backend.scissorGlY, backend.scissorWidth,
+            backend.scissorHeight, logical_w, logical_h, &box);
+        if (status == EU4_GFX_SCISSOR_EMPTY) {
+            [encoder endEncoding];
+            fail(reason, reason_capacity, "empty scissor rectangle");
+            return 0;
+        }
+        if (status == EU4_GFX_SCISSOR_VALID) {
+            scissor.x = (NSUInteger)((double)box.x * scale_x);
+            scissor.y = (NSUInteger)((double)box.y * scale_y);
+            scissor.width = (NSUInteger)((double)box.width * scale_x);
+            scissor.height = (NSUInteger)((double)box.height * scale_y);
+            if (scissor.x > target.width) scissor.x = target.width;
+            if (scissor.y > target.height) scissor.y = target.height;
+            if (scissor.x + scissor.width > target.width) {
+                scissor.width = target.width - scissor.x;
+            }
+            if (scissor.y + scissor.height > target.height) {
+                scissor.height = target.height - scissor.y;
+            }
+            if (scissor.width == 0 || scissor.height == 0) {
+                [encoder endEncoding];
+                fail(reason, reason_capacity, "empty scissor rectangle");
+                return 0;
+            }
+        }
+    }
     [encoder setScissorRect:scissor];
     uint8_t raster[0x10];
     memcpy(raster, master + 0x54, sizeof raster);
@@ -1052,10 +1130,23 @@ static int generic_draw_encode_impl(const void *immediate_context,
                                texture.textureType == MTLTextureTypeCubeArray;
                 BOOL mismatched = expects_cube != is_cube;
                 if (mismatched) {
-                    id<MTLTexture> placeholder = generic_type_placeholder(device, expects_cube);
-                    if (placeholder != nil) {
-                        texture = placeholder;
-                        substituted = YES;
+                    int substitute = 0;
+                    BOOL allow = getenv("EU4_GFX_ALLOW_TEXTURE_TYPE_SUBSTITUTION") != NULL;
+                    if (!eu4_gfx_texture_binding_decision(
+                            expects_cube ? 1 : 0, (int)texture.textureType,
+                            allow ? 1 : 0, &substitute)) {
+                        [encoder endEncoding];
+                        fail(reason, reason_capacity,
+                             "sampled texture type does not match the shader declaration");
+                        return 0;
+                    }
+                    if (substitute) {
+                        id<MTLTexture> placeholder =
+                            generic_type_placeholder(device, expects_cube);
+                        if (placeholder != nil) {
+                            texture = placeholder;
+                            substituted = YES;
+                        }
                     }
                 }
                 if (getenv("EU4_GFX_TEXTURE_TYPE_TRACE") != NULL) {
