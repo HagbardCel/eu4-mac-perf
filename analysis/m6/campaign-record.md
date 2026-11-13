@@ -321,3 +321,21 @@ presented title scene and three clean starts.
 Acceptance state: the engine reaches the map/water passes in the frontend
 scene; the menu caller has not yet been reached in a single run within the
 launch deadline. The offline captured-frame equivalence remains exact.
+
+## Current live blocker (2026-11-13 02:00)
+
+The frontend now runs through the map passes; the water draw
+(`CPdxMapTerrainLayer::DrawWater`, caller 0x10d52fc, instanced indexed) crashes
+with SIGSEGV inside `generic_draw_encode_impl` -> `pack_stage_uniforms`. The
+last instructions before the fault are the post-call sequence of
+`pack_stage_uniforms`; the fault address is a low, non-canonical value, which is
+consistent with a bad constant-slot data pointer for one of the large uniform
+arrays (several stages declare `UNIFORM2[200]`).
+
+Next diagnostic (already prepared): gate a uniform-pack trace
+(`EU4_GFX_UNIFORM_TRACE=1`) that records, per call, the stage, members, the six
+master constant-slot counts and header/data pointers, and the copy ranges. The
+last record before the crash identifies the exact slot without another guess.
+
+The stuck game holds the launch lease; clean up with
+`pkill -9 -x eu4; pkill -9 -f "CrashReporter.*eu4"` before the next probe.
