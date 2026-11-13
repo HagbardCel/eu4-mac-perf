@@ -527,3 +527,22 @@ filled before the composite (see the sampled-texture lifecycle finding).
 The automated checker `automation/m6_live_accept.py` validates capture status,
 refusals, non-blank dump and UI-region similarity; its UI-region metric is
 currently dominated by the missing map background.
+
+## Previous-frame resolve and the remaining map chain (2026-11-13 06:30)
+
+The engine's `glCopyTexSubImage2D` copies the previous frame's image; our
+single backbuffer was already cleared, so the source was all zero. The backend
+now preserves the previous presented frame and resolves from it. The sampled
+textures are no longer zero (u0 mean 156.95, u1 mean 9.81), and the composite
+draws the previous frame as its background.
+
+The map still does not appear because the chain is circular under the current
+reconstruction: the composite's background is the previous frame's fb0, and fb0
+only ever receives the composite itself (the map passes target render targets
+fb6/fb1/fb2/fb3/fb8/fb9). In the captured GL frame, texture 452 (the composite's
+unit 0) holds the map rendered this frame; identifying which operation fills it
+(and whether the GL frame's fb0 already contained the map before the composite)
+is the remaining map-background item. The title UI presentation is unaffected.
+
+Status: offline full-frame equivalence exact; three clean live title-scene
+starts presented (UI); map background is the one known render-affecting gap.

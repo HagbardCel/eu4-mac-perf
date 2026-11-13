@@ -89,11 +89,15 @@ the rest of the frame and is independent of the title scene:
   EU4 logo, Paradox logo, Continue Game (Lubeck, 25 January 1609), Single
   Player, Multiplayer, Tutorial, Exit, version text and the icon row.
 - Known gap: the animated map background is still the magenta backbuffer
-  clear. The engine composites a resolved render-target copy; the sampled
-  texture is not filled before the composite (the sampled-texture lifecycle is
-  the open item). The automated live checker
-  (`automation/m6_live_accept.py`) validates capture/refusal/presentation
-  status; its UI-region similarity is dominated by the missing map background.
+  clear. The composite's background is a `glCopyTexSubImage2D` of the previous
+  frame; the backend now preserves and feeds the previous presented frame
+  (sampled textures are non-zero), but the chain remains circular because fb0
+  only receives the composite itself while the map passes target render
+  targets. Identifying the operation that fills the composite's unit-0 map
+  texture in the captured GL frame is the remaining item. The automated live
+  checker (`automation/m6_live_accept.py`) validates capture/refusal/
+  presentation status; its UI-region similarity is dominated by the missing
+  map background.
 - Live sampler state defaults to linear/clamp; the engine sampler objects are
   not decoded.
 
