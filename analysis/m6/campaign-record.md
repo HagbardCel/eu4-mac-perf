@@ -633,3 +633,24 @@ one known render-affecting gap.
 Tooling state: the observer registry was restored to its original entries and
 targets; the frame tracer retains the un-gated resolve hook for future use.
 Affected host suites pass again (33 tests OK).
+
+## Definitive map copy finding (2026-11-13 09:00)
+
+A DYLD interposer for `glCopyTexSubImage2D` (added as a diagnostic source)
+recorded every copy in a menu frame:
+
+```
+read_fbo=0 draw_fbo=0 fbo=0 texture=452 x=0 y=0 width=1728 height=1117
+```
+
+So the engine's `_GfxResolve` copies the **default framebuffer (fb0)** into
+texture 452 (the composite's unit 0) many times per frame: the menu background
+is a frame-feedback of the backbuffer, exactly as the composite and reference
+capture suggested. The loading-screen frames are dark (mean 5, logos), so the
+map must enter fb0 through periodic map renders during the menu; the
+reconstructed live frames feed the feedback with UI-on-magenta because those
+fb0 map renders do not occur in the live path.
+
+The interposer is kept as an opt-in diagnostic source (removed from the default
+observer build to avoid destabilizing captures). The remaining map work is to
+identify the periodic fb0 map render and reproduce it.
