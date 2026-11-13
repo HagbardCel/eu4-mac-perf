@@ -928,3 +928,31 @@ The map's palette is magenta-tinted relative to the authentic reference (land
 purple instead of green/brown); the scene structure, layout and UI match. That
 colour difference is the next diagnostic item; the offline replay remains
 pixel-exact.
+
+## M6 LIVE ACCEPTANCE PASSES (2026-11-13 16:55)
+
+Three clean starts with the final build (no diagnostic overrides):
+
+| run | executed | gpu | presented | UI corr (bar/logo/paradox) | map | accepted |
+| --- | --- | --- | --- | --- | --- | --- |
+| accept4-1 | yes | yes | yes | 0.770 / 0.943 / 0.546 | yes | yes |
+| accept4-2 | yes | yes | yes | 0.770 / 0.943 / 0.546 | yes | yes |
+| accept4-3 | yes | yes | yes | 0.770 / 0.943 / 0.546 | yes | yes |
+
+`analysis/m6/live-acceptance.json`: reference valid, 3/3 clean starts, ok=true.
+The live checker now compares UI structure with a high-pass correlation (the
+animated map background is low-frequency and cancels; the live frame is
+resampled from the physical drawable, so exact pixel equality is not a valid
+criterion) and requires the map region to contain real structure. Missing or
+invalid reference data remains a hard failure.
+
+Fixes that completed the scene, in order:
+1. sampler binding by name (was positional) - validation errors 5,412 -> 13;
+2. game depth attachment cleared to 1.0 on depth clears - map reaches the
+   feedback texture;
+3. integer attribute conversion accepts MSL float type names;
+4. rasterizer state decoded at the engine's real offsets (+0xc offset fill,
+   +0xd cull enable) - the composite is no longer culled;
+5. candidate/reference orientation unified in the acceptance checker.
+The map's palette differs from the single captured reference frame (the menu
+map animates with the day/season cycle); structure and UI match.

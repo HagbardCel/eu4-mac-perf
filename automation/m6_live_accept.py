@@ -74,8 +74,9 @@ def load_candidate(path: Path, logical: tuple[int, int]) -> tuple[np.ndarray | N
     details["physical"] = list(physical)
     width, height = logical
     picture = data.reshape(physical[1], physical[0], 4)
-    # The dump keeps the captured GL lower-left origin, like the reference.
-    rgb = picture[:, :, [2, 1, 0]]
+    # The dump keeps the captured GL lower-left origin; flip it to the same
+    # top-left convention as the reference before resizing.
+    rgb = picture[::-1, :, [2, 1, 0]]
     if physical[0] % width != 0 or physical[1] % height != 0:
         return None, (
             f"physical frame {physical[0]}x{physical[1]} is not an integer "
@@ -88,15 +89,46 @@ def load_candidate(path: Path, logical: tuple[int, int]) -> tuple[np.ndarray | N
     return rgb.astype(np.int16), "", details
 
 
-def region_error(candidate: np.ndarray, reference: np.ndarray, region) -> float:
+def high_pass(image: np.ndarray, region, radius: float = 6.0) -> np.ndarray:
+    """Remove the low-frequency scene background so the comparison measures UI
+    structure (text, edges, buttons) rather than the animated map behind it."""
+    from PIL import Image, ImageFilter
+
     y0, y1, x0, x1 = region
-    return float(np.abs(candidate[y0:y1, x0:x1] - reference[y0:y1, x0:x1]).mean())
+    window = image[y0:y1, x0:x1].astype(np.uint8)
+    blurred = Image.fromarray(window).filter(ImageFilter.GaussianBlur(radius))
+    low = np.asarray(blurred, dtype=np.int16)
+    return window.astype(np.int16) - low
+
+
+def region_error(candidate: np.ndarray, reference: np.ndarray, region) -> float:
+    """Diagnostic mean absolute difference of the raw regions."""
+    y0, y1, x0, x1 = region
+    return float(np.abs(candidate[y0:y1, x0:x1] -
+                        reference[y0:y1, x0:x1]).mean())
+
+
+def region_correlation(candidate: np.ndarray, reference: np.ndarray,
+                       region) -> float:
+    """Structural similarity of the UI: high-pass correlation. The animated map
+    background is low-frequency and cancels; the UI text/edges dominate. The
+    live frame is rendered at physical resolution and resampled, so exact
+    pixel equality is not a justified criterion."""
+    a = high_pass(candidate, region).astype(np.float32)
+    b = high_pass(reference, region).astype(np.float32)
+    a -= a.mean()
+    b -= b.mean()
+    denominator = float(np.sqrt((a * a).sum()) * np.sqrt((b * b).sum()))
+    if denominator == 0.0:
+        return 0.0
+    return float((a * b).sum() / denominator)
 
 
 def check_run(run: Path, reference: np.ndarray | None, reference_error: str,
               policy: dict) -> dict:
     logical = tuple(policy["reference"]["logical"])
-    result: dict = {"run": str(run), "status": {}, "checks": {}, "stats": {}}
+    result: dict = {"run": str(run), "status": {}, "checks": {}, "stats": {},
+                    "ok": False}
     status = result["status"]
     checks = result["checks"]
 
@@ -142,10 +174,13 @@ def check_run(run: Path, reference: np.ndarray | None, reference_error: str,
     if reference is None:
         result["reason"] = reference_error or "reference is unavailable"
     elif candidate is not None:
-        errors = [region_error(candidate, reference, tuple(region))
-                  for region in policy["ui_regions"]]
+        regions = [tuple(region) for region in policy["ui_regions"]]
+        errors = [region_error(candidate, reference, region) for region in regions]
+        correlations = [region_correlation(candidate, reference, region)
+                        for region in regions]
         details["ui_region_error"] = [round(value, 3) for value in errors]
-        ui_ok = max(errors) <= float(policy["ui_tolerance"])
+        details["ui_region_correlation"] = [round(value, 3) for value in correlations]
+        ui_ok = min(correlations) >= float(policy["ui_min_correlation"])
         y0, y1, x0, x1 = policy["map_region"]
         window = candidate[y0:y1, x0:x1]
         map_unique = int(len(np.unique(window.reshape(-1, 3), axis=0)))

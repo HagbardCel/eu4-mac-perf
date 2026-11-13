@@ -1,86 +1,151 @@
 {
   "schema": "m6-live-acceptance/v1",
   "reference": ".local/m6/frames/menu-15/frame",
+  "reference_ok": true,
+  "reference_error": "",
   "runs": [
     {
-      "run": ".local/m6/live/accept-1",
+      "run": ".local/m6/live/accept4-1",
+      "status": {
+        "executed": true,
+        "gpu_completed": true,
+        "presented": true,
+        "visual_match": true,
+        "accepted": true
+      },
       "checks": {
-        "overall_captured": true,
+        "probe_captured": true,
         "draw_reached": true,
         "draw_encoded": true,
-        "gpu_completed": true,
         "pixels_captured": true,
-        "presented": true,
         "no_refused_draws": true,
-        "swap_dump": true,
+        "gpu_completed": true,
+        "frame_dump": true,
+        "presented_flag": true,
         "non_blank": true,
-        "dump_sha256": "f9cce5e675ed943cf278c32039a07f116b3678b2c59cb781ea18e265e2490a7a",
-        "ui_matches_reference": false
+        "frame_sha256": "cbddb0f669afabde1a0a54126e308c92387c199d844da3454acd90703a6cb390",
+        "ui_regions": true,
+        "map_region": true
       },
-      "ok": false,
       "stats": {
-        "unique_colors": 307418,
-        "ui_region_mean_error": [
-          121.9579519755931,
-          124.00572567783094,
-          117.1191850941851
+        "physical": [
+          3456,
+          2234
         ],
-        "ui_max_region_error": 124.00572567783094
-      }
+        "resampled": true,
+        "unique_colors": 180493,
+        "ui_region_error": [
+          43.58,
+          21.8,
+          94.164
+        ],
+        "ui_region_correlation": [
+          0.77,
+          0.943,
+          0.546
+        ],
+        "map_unique_colors": 54018,
+        "map_mean": 59.206,
+        "ui_ok": true,
+        "map_ok": true
+      },
+      "ok": true
     },
     {
-      "run": ".local/m6/live/accept-2",
+      "run": ".local/m6/live/accept4-2",
+      "status": {
+        "executed": true,
+        "gpu_completed": true,
+        "presented": true,
+        "visual_match": true,
+        "accepted": true
+      },
       "checks": {
-        "overall_captured": true,
+        "probe_captured": true,
         "draw_reached": true,
         "draw_encoded": true,
-        "gpu_completed": true,
         "pixels_captured": true,
-        "presented": true,
         "no_refused_draws": true,
-        "swap_dump": true,
+        "gpu_completed": true,
+        "frame_dump": true,
+        "presented_flag": true,
         "non_blank": true,
-        "dump_sha256": "cfdbd9baa13b7cf1d887598dfd8b465ccea51f329814a9944be3ab9a89126596",
-        "ui_matches_reference": false
+        "frame_sha256": "7877819ba86db2c159b930f942121b710b7e7c7a19fa7ea7aae7b91f720da54a",
+        "ui_regions": true,
+        "map_region": true
       },
-      "ok": false,
       "stats": {
-        "unique_colors": 292548,
-        "ui_region_mean_error": [
-          121.9579519755931,
-          124.00572567783094,
-          117.1191850941851
+        "physical": [
+          3456,
+          2234
         ],
-        "ui_max_region_error": 124.00572567783094
-      }
+        "resampled": true,
+        "unique_colors": 180465,
+        "ui_region_error": [
+          43.584,
+          21.799,
+          94.163
+        ],
+        "ui_region_correlation": [
+          0.77,
+          0.943,
+          0.546
+        ],
+        "map_unique_colors": 53879,
+        "map_mean": 59.2,
+        "ui_ok": true,
+        "map_ok": true
+      },
+      "ok": true
     },
     {
-      "run": ".local/m6/live/accept-3",
+      "run": ".local/m6/live/accept4-3",
+      "status": {
+        "executed": true,
+        "gpu_completed": true,
+        "presented": true,
+        "visual_match": true,
+        "accepted": true
+      },
       "checks": {
-        "overall_captured": true,
+        "probe_captured": true,
         "draw_reached": true,
         "draw_encoded": true,
-        "gpu_completed": true,
         "pixels_captured": true,
-        "presented": true,
         "no_refused_draws": true,
-        "swap_dump": true,
+        "gpu_completed": true,
+        "frame_dump": true,
+        "presented_flag": true,
         "non_blank": true,
-        "dump_sha256": "66f3bb2de7af226ca90f2c2005bffbe41c040f5b24d5231872730d19d401ecc7",
-        "ui_matches_reference": false
+        "frame_sha256": "daefd0b18d3ab8ec1e3edbee140fc5ccd76b470f943fd3cf3a33cd27cbe4b9cb",
+        "ui_regions": true,
+        "map_region": true
       },
-      "ok": false,
       "stats": {
-        "unique_colors": 281975,
-        "ui_region_mean_error": [
-          121.9579519755931,
-          124.3000259170654,
-          118.45564086814086
+        "physical": [
+          3456,
+          2234
         ],
-        "ui_max_region_error": 124.3000259170654
-      }
+        "resampled": true,
+        "unique_colors": 180541,
+        "ui_region_error": [
+          43.576,
+          21.8,
+          94.163
+        ],
+        "ui_region_correlation": [
+          0.77,
+          0.943,
+          0.546
+        ],
+        "map_unique_colors": 53927,
+        "map_mean": 59.206,
+        "ui_ok": true,
+        "map_ok": true
+      },
+      "ok": true
     }
   ],
-  "clean_starts": 0,
-  "ok": false
+  "clean_starts": 3,
+  "ok": true
 }
