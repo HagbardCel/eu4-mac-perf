@@ -18,7 +18,12 @@ and icon row. [Qualification report](../analysis/m6/qualification-report.md),
   nonzero; the readback is now non-invasive. The authoritative capture is the
   menu-caller occurrence-300 frame (326 events, reference SHA-256 `ff2f4e2b…`,
   undirected corrected capture `92ea2167…`).
-- **Offline replay (exact).** The canonical corrected capture
+- **Replay scope.** Patching the terrain view-projection in a copied trace
+  produces zero pixel change while patching the composite uniform changes
+  763,491 pixels: the offline replay is a captured-state seed replay, not an
+  independent terrain reconstruction, so it cannot qualify the live terrain
+  pass.
+- **Offline replay (exact, captured-state).** The canonical corrected capture
   (`menu-occ300`) replays exactly against independent files: 326/326 events,
   zero failed, GPU completed, 0 differing pixels of 1,930,176, reference and
   Metal SHA-256 `ff2f4e2b…`. The comparator rejects aliased files, so this is

@@ -1142,7 +1142,11 @@ static int dump_texture_file(id<MTLTexture> texture, const char *path) {
             return -1;
         }
         FILE *file = fopen(path, "wb");
-        if (file != NULL) {
+        if (file == NULL) {
+            free(decoded);
+            return -1;
+        }
+        {
             size_t written = fwrite(decoded, 1, row * texture.height, file);
             int close_status = fclose(file);
             if (written != row * texture.height || close_status != 0) {
@@ -1153,7 +1157,10 @@ static int dump_texture_file(id<MTLTexture> texture, const char *path) {
             int n = snprintf(sidecar, sizeof sidecar, "%s.json", path);
             if (n > 0 && (size_t)n < sizeof sidecar) {
                 FILE *meta = fopen(sidecar, "w");
-                if (meta != NULL) {
+                if (meta == NULL) {
+                    free(decoded);
+                    return -1;
+                } else {
                     unsigned long long digest = 1469598103934665603ULL;
                 for (NSUInteger i = 0; i < row * texture.height; i++) {
                     digest ^= decoded[i];

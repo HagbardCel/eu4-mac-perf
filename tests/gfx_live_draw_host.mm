@@ -707,6 +707,36 @@ static int run_dump_texture(void) {
     remove(path);
     ok = ok && eu4_gfx_dump_texture((__bridge void *)texture,
                                     "/nonexistent-dir/dump-test.bgra") != 0;
+    /* The BC path must also fail visibly for an unwritable destination. */
+    if (device.supportsBCTextureCompression) {
+        const uint8_t bc1_block[8] = {0x00, 0xF8, 0x00, 0x00, 0, 0, 0, 0};
+        MTLTextureDescriptor *bc1 = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatBC1_RGBA
+                                         width:4
+                                        height:4
+                                     mipmapped:NO];
+        bc1.usage = MTLTextureUsageShaderRead;
+        id<MTLTexture> bc1_texture = [device newTextureWithDescriptor:bc1];
+        [bc1_texture replaceRegion:MTLRegionMake2D(0, 0, 4, 4)
+                       mipmapLevel:0
+                         withBytes:bc1_block
+                       bytesPerRow:8];
+        char bc_path[256];
+        snprintf(bc_path, sizeof bc_path, "%s/dump-bc-test.bgra",
+                 getenv("TMPDIR") ?: "/tmp");
+        ok = ok && eu4_gfx_dump_texture((__bridge void *)bc1_texture, bc_path) == 0;
+        ok = ok && eu4_gfx_dump_texture((__bridge void *)bc1_texture,
+                                        "/nonexistent-dir/dump-bc.bgra") != 0;
+        char sidecar[300];
+        snprintf(sidecar, sizeof sidecar, "%s.json", bc_path);
+        FILE *meta = fopen(sidecar, "rb");
+        ok = ok && meta != NULL;
+        if (meta != NULL) {
+            fclose(meta);
+        }
+        remove(bc_path);
+        remove(sidecar);
+    }
     printf("dump_texture=%d\n", ok);
     return ok ? 0 : 1;
 }
