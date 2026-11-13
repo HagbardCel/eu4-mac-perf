@@ -85,19 +85,22 @@ the rest of the frame and is independent of the title scene:
   reconstructed backend (menu-only checkpoint `0x103b3c8`, 280 s uptime guard),
   with zero refused draws, GPU completion and a presented backbuffer
   (`analysis/m6/live-title-starts.json`).
+- The complete live title scene renders: the animated world map behind the
+  EU4 logo, Paradox logo, Continue Game (Lubeck), Single Player, Multiplayer,
+  Tutorial, Exit, version text and icon row
+  (`analysis/m6/live-title-metal.png`).
 - The presented frame shows the full title UI rendered by the Metal backend:
   EU4 logo, Paradox logo, Continue Game (Lubeck, 25 January 1609), Single
   Player, Multiplayer, Tutorial, Exit, version text and the icon row.
-- Known gap: the animated map background is still the magenta backbuffer
-  clear. The composite's background is a `glCopyTexSubImage2D` of the previous
-  frame; the backend now preserves and feeds the previous presented frame
-  (sampled textures are non-zero), but the chain remains circular because fb0
-  only receives the composite itself while the map passes target render
-  targets. Identifying the operation that fills the composite's unit-0 map
-  texture in the captured GL frame is the remaining item. The automated live
-  checker (`automation/m6_live_accept.py`) validates capture/refusal/
-  presentation status; its UI-region similarity is dominated by the missing
-  map background.
+- Live acceptance (`analysis/m6/live-acceptance.json`): three clean starts,
+  every criterion passes — executed, GPU completed, presented, UI structure
+  matched (high-pass correlation 0.77 / 0.94 / 0.55 against the authentic
+  reference) and the map region carries real rendered structure. Missing or
+  invalid reference data is a hard failure.
+- The live map's palette differs from the single captured reference frame: the
+  menu map animates through its day/season cycle, so exact live pixel equality
+  against one reference frame is not a valid criterion and is not claimed.
+  The offline replay of the captured frame remains pixel-exact.
 - Live sampler state defaults to linear/clamp; the engine sampler objects are
   not decoded.
 
