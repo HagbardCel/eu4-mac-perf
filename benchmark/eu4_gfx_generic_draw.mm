@@ -48,6 +48,43 @@ static NSUInteger num(id value, NSUInteger fallback) {
 static float g_logged_positions[16];
 static int g_have_positions;
 
+/* Metal rejects binding a cube texture to a texture2d parameter (and vice
+   versa) even when the unit is not sampled. The engine's GL bindings include
+   such units; substitute a compatible 1x1 placeholder for the declared type so
+   the draw is not rejected. */
+static id<MTLTexture> generic_type_placeholder(id<MTLDevice> device, BOOL cube) {
+    static id<MTLTexture> flat;
+    static id<MTLTexture> cubemap;
+    static id<MTLDevice> cached_device;
+    if (device == nil) {
+        return nil;
+    }
+    if (cached_device != device) {
+        flat = nil;
+        cubemap = nil;
+        cached_device = device;
+    }
+    if (cube) {
+        if (cubemap == nil) {
+            MTLTextureDescriptor *descriptor =
+                [MTLTextureDescriptor textureCubeDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                      size:1
+                                                                 mipmapped:NO];
+            cubemap = [device newTextureWithDescriptor:descriptor];
+        }
+        return cubemap;
+    }
+    if (flat == nil) {
+        MTLTextureDescriptor *descriptor =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                 width:1
+                                                                height:1
+                                                             mipmapped:NO];
+        flat = [device newTextureWithDescriptor:descriptor];
+    }
+    return flat;
+}
+
 static const char *fail(char *reason, size_t capacity, const char *text) {
     if (reason != NULL && capacity > 0) {
         snprintf(reason, capacity, "%s", text);
@@ -942,6 +979,35 @@ static int generic_draw_encode_impl(const void *immediate_context,
             }
             if (texture == nil) {
                 texture = backend.fallback;
+            }
+            BOOL substituted = NO;
+            NSString *declared_type = sampler_entry[@"type"] ?: @"";
+            if (texture != nil && declared_type.length > 0) {
+                BOOL expects_cube =
+                    [declared_type rangeOfString:@"Cube" options:NSCaseInsensitiveSearch].location != NSNotFound;
+                BOOL is_cube = texture.textureType == MTLTextureTypeCube ||
+                               texture.textureType == MTLTextureTypeCubeArray;
+                if (expects_cube != is_cube) {
+                    id<MTLTexture> placeholder = generic_type_placeholder(device, expects_cube);
+                    if (placeholder != nil) {
+                        texture = placeholder;
+                        substituted = YES;
+                    }
+                    if (getenv("EU4_GFX_TEXTURE_TYPE_TRACE") != NULL) {
+                        char body[320];
+                        int length = snprintf(
+                            body, sizeof body,
+                            "{\"stage\":\"%s\",\"unit\":%lu,\"expected\":\"%s\","
+                            "\"bound_type\":%lu,\"substituted\":%d}\n",
+                            (((NSString *)stage[@"msl_file"]).UTF8String ?: ""),
+                            (unsigned long)unit,
+                            declared_type.UTF8String ?: "",
+                            (unsigned long)texture.textureType, substituted);
+                        if (length > 0 && (size_t)length < sizeof body) {
+                            (void)eu4_metal_events_append("texture-type-trace.jsonl", body);
+                        }
+                    }
+                }
             }
             if (texture == nil) {
                 [encoder endEncoding];

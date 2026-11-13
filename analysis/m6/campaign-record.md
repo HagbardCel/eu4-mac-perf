@@ -766,3 +766,17 @@ Fixes required:
    the correct texture type) for the affected map shader(s); the captured
    sampler metadata must carry the cube type through translation.
 2. Bind the sprite uniform buffer at index 1 for the 15 `sprite_vs` draws.
+
+## Texture-type substitution does not reach the failing draws (2026-11-13 13:55)
+
+The generic encoder now substitutes a 1x1 placeholder when a declared sampler's
+type (sampler2D/samplerCube) disagrees with the resolved Metal texture type.
+A validation run with a substitution trace produced **no trace entries** while
+still reporting 7,867 `tex7` cube-vs-2D draw errors. The failing draws therefore
+do not bind their textures through the generic encoder's sampler loop: the
+`tex7` cube binding comes from another path (legacy draw encoder or a binding
+whose unit/index mapping differs from the declared sampler binding).
+
+Next step: log the actual texture bindings per draw from every encoder path
+(generic, legacy, simple, sprite) and match the failing `main0` shader's Metal
+texture index 2 to the unit that encoder bound, then fix that path's binding.
