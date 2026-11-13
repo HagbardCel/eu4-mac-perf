@@ -518,6 +518,10 @@ def translate_command(args: argparse.Namespace) -> int:
 def replay_command(args: argparse.Namespace) -> int:
     frame_dir = Path(args.frame).expanduser().resolve()
     out = Path(args.out).expanduser().resolve()
+    if out == frame_dir or frame_dir in out.parents or out in frame_dir.parents:
+        raise FrameError(
+            "replay output must not overlap the captured source frame directory"
+        )
     shaders = (
         Path(args.shaders).expanduser().resolve()
         if args.shaders

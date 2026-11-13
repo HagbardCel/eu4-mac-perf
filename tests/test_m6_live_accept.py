@@ -62,18 +62,89 @@ class SummarizeRunsTests(unittest.TestCase):
 
 @unittest.skipUnless(_HAS_DEPS, "the live acceptance checker needs numpy")
 class ReferenceTests(unittest.TestCase):
-    def test_missing_reference_is_a_hard_error(self) -> None:
+    @staticmethod
+    def _reference(directory: Path, **overrides) -> None:
+        import hashlib
+        import json
+
+        width = int(overrides.pop("width", 4))
+        height = int(overrides.pop("height", 4))
+        pixels = bytes([10, 20, 30, 255]) * (width * height)
+        (directory / "frame-reference.bgra").write_bytes(pixels)
+        manifest = {
+            "complete": True,
+            "frame": {
+                "width": width,
+                "height": height,
+                "origin": "lower_left",
+                "reference": "frame-reference.bgra",
+                "reference_sha256": hashlib.sha256(pixels).hexdigest(),
+            },
+        }
+        for key, value in overrides.items():
+            if key == "frame":
+                manifest["frame"].update(value)
+            else:
+                manifest[key] = value
+        (directory / "frame-trace.json").write_text(json.dumps(manifest))
+
+    def test_valid_reference_loads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
+            self._reference(Path(tmp))
+            reference, error = m6_live_accept.load_reference(Path(tmp), (4, 4))
+        self.assertIsNotNone(reference)
+        self.assertEqual(error, "")
+
+    def test_missing_manifest_is_a_hard_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            reference, error = m6_live_accept.load_reference(Path(tmp), (4, 4))
+        self.assertIsNone(reference)
+        self.assertIn("manifest", error)
+
+    def test_missing_pixels_are_a_hard_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self._reference(Path(tmp))
+            (Path(tmp) / "frame-reference.bgra").unlink()
             reference, error = m6_live_accept.load_reference(Path(tmp), (4, 4))
         self.assertIsNone(reference)
         self.assertIn("missing", error)
 
-    def test_reference_size_must_match_the_policy(self) -> None:
+    def test_short_pixels_are_a_hard_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
+            self._reference(Path(tmp))
             (Path(tmp) / "frame-reference.bgra").write_bytes(b"\0" * 16)
             reference, error = m6_live_accept.load_reference(Path(tmp), (4, 4))
         self.assertIsNone(reference)
         self.assertTrue(error)
+
+    def test_digest_mismatch_is_a_hard_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self._reference(Path(tmp))
+            (Path(tmp) / "frame-reference.bgra").write_bytes(b"\0" * 64)
+            reference, error = m6_live_accept.load_reference(Path(tmp), (4, 4))
+        self.assertIsNone(reference)
+        self.assertIn("digest", error)
+
+    def test_manifest_extent_must_match_the_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self._reference(Path(tmp), frame={"width": 8, "height": 8})
+            reference, error = m6_live_accept.load_reference(Path(tmp), (4, 4))
+        self.assertIsNone(reference)
+        self.assertIn("extent", error)
+
+    def test_unsupported_origin_is_a_hard_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self._reference(Path(tmp), frame={"origin": "top_right"})
+            reference, error = m6_live_accept.load_reference(Path(tmp), (4, 4))
+        self.assertIsNone(reference)
+        self.assertIn("origin", error)
+
+    def test_incomplete_manifest_is_a_hard_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self._reference(Path(tmp), complete=False)
+            reference, error = m6_live_accept.load_reference(Path(tmp), (4, 4))
+        self.assertIsNone(reference)
+        self.assertIn("incomplete", error)
 
 
 @unittest.skipUnless(_HAS_DEPS, "the live acceptance checker needs numpy")

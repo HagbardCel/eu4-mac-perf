@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import json
 import math
 import sys
@@ -188,6 +189,22 @@ def _draw_inventory(trace: dict) -> dict:
     return {"draws": inventory}
 
 
+def _reject_alias(reference_path: Path, candidate_path: Path) -> None:
+    """The comparison must consume two independently produced files.
+
+    Equal contents (and therefore equal digests) are legitimate; the same
+    filesystem object, a symlink to it or a hard link to it are not, because a
+    readback written over the reference would compare the frame to itself.
+    """
+    try:
+        if reference_path.resolve() == candidate_path.resolve():
+            raise CompareError("reference and candidate pixels are the same file")
+        if os.path.samefile(reference_path, candidate_path):
+            raise CompareError("reference and candidate pixels alias the same file")
+    except OSError as exc:
+        raise CompareError(f"reference/candidate identity is unreadable: {exc}")
+
+
 def compare(
     reference_dir: Path, candidate_dir: Path, policy: dict
 ) -> dict:
@@ -249,6 +266,7 @@ def compare(
     if candidate_frame.get("raw_bytes") is not None:
         if candidate_path.stat().st_size != candidate_frame["raw_bytes"]:
             raise CompareError("candidate pixel size differs from its declaration")
+    _reject_alias(reference_path, candidate_path)
     candidate = _load_bgra(candidate_path, width, height)
 
     origin = frame.get("origin")

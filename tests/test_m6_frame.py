@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -384,6 +385,76 @@ class CompareTests(unittest.TestCase):
             }
             with self.assertRaises(m6_compare.CompareError):
                 m6_compare.compare(frame, replay, policy)
+
+    @staticmethod
+    def _policy() -> dict:
+        return {
+            "allowed_normalizations": ["row_origin"],
+            "alpha": {"ignored": False},
+            "thresholds": {
+                "max_channel_error": 0,
+                "mismatched_fraction": 0.0,
+                "mean_abs_error": 0.0,
+            },
+        }
+
+    def test_same_file_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            frame = Path(tmp) / "frame"
+            build_synthetic_trace(frame)
+            replay = Path(tmp) / "replay"
+            self._replay(replay, (frame / "frame-reference.bgra").read_bytes())
+            value = json.loads((replay / "replay.json").read_text())
+            value["frame"]["raw_file"] = str(frame / "frame-reference.bgra")
+            (replay / "replay.json").write_text(json.dumps(value))
+            with self.assertRaises(m6_compare.CompareError) as raised:
+                m6_compare.compare(frame, replay, self._policy())
+            self.assertIn("same file", str(raised.exception))
+
+    def test_symlink_alias_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            frame = Path(tmp) / "frame"
+            build_synthetic_trace(frame)
+            replay = Path(tmp) / "replay"
+            self._replay(replay, (frame / "frame-reference.bgra").read_bytes())
+            (replay / "metal-frame.bgra").unlink()
+            (replay / "metal-frame.bgra").symlink_to(frame / "frame-reference.bgra")
+            with self.assertRaises(m6_compare.CompareError) as raised:
+                m6_compare.compare(frame, replay, self._policy())
+            self.assertIn("same file", str(raised.exception))
+
+    def test_hard_link_alias_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            frame = Path(tmp) / "frame"
+            build_synthetic_trace(frame)
+            replay = Path(tmp) / "replay"
+            self._replay(replay, (frame / "frame-reference.bgra").read_bytes())
+            (replay / "metal-frame.bgra").unlink()
+            os.link(frame / "frame-reference.bgra", replay / "metal-frame.bgra")
+            with self.assertRaises(m6_compare.CompareError) as raised:
+                m6_compare.compare(frame, replay, self._policy())
+            self.assertIn("alias", str(raised.exception))
+
+    def test_independent_identical_files_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            frame = Path(tmp) / "frame"
+            build_synthetic_trace(frame)
+            replay = Path(tmp) / "replay"
+            self._replay(replay, (frame / "frame-reference.bgra").read_bytes())
+            report = m6_compare.compare(frame, replay, self._policy())
+            self.assertEqual(report["status"], "pass")
+
+    def test_pixel_difference_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            frame = Path(tmp) / "frame"
+            build_synthetic_trace(frame)
+            replay = Path(tmp) / "replay"
+            image = bytearray((frame / "frame-reference.bgra").read_bytes())
+            image[1] ^= 0xFF
+            self._replay(replay, bytes(image))
+            report = m6_compare.compare(frame, replay, self._policy())
+            self.assertEqual(report["status"], "fail")
+            self.assertGreater(report["statistics"]["mismatched_pixels"], 0)
 
     def test_exact_frame_passes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
