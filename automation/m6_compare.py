@@ -212,7 +212,9 @@ def compare(
         raise CompareError(f"candidate replay status {replay.get('status')!r}")
     if replay.get("command_status") != 4:
         raise CompareError("candidate GPU command did not complete")
-    if replay.get("failed") not in (0, None):
+    if "failed" not in replay:
+        raise CompareError("candidate replay does not report its failed count")
+    if replay.get("failed") != 0:
         raise CompareError("candidate replay reports failed draws")
     expected_events = manifest.get("event_count")
     if not isinstance(expected_events, int):

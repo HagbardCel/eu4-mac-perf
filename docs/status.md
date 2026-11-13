@@ -18,10 +18,11 @@ and icon row. [Qualification report](../analysis/m6/qualification-report.md),
   nonzero; the readback is now non-invasive. The authoritative capture is the
   menu-caller occurrence-300 frame (326 events, reference SHA-256 `ff2f4e2b…`,
   undirected corrected capture `92ea2167…`).
-- **Offline replay.** The corrected capture replays exactly: 326/326 events
-  encoded, zero failed, GPU completed, 0 differing pixels of 1,930,176,
-  identical reference and Metal SHA-256 (`92ea2167…`). The old `c3dab19c…`
-  evidence against the corrupted reference is superseded.
+- **Offline replay (not exact).** The earlier "exact" comparison had used a
+  reference aliased to the Metal readback; the honest re-comparison of the
+  corrected capture gives 707,776 differing pixels of 1,930,176 (mean 0.3,
+  max 56) with 326/326 events encoded and zero failed. Exactness is withdrawn
+  pending investigation; the old `c3dab19c…` evidence is void.
 - **Live acceptance.** Three clean starts, all `accepted`: executed,
   GPU-completed, presented, UI structural correlation 0.77 / 0.94 / 0.55 against
   the authentic reference, and a map region with real rendered structure.

@@ -341,6 +341,27 @@ class CompareTests(unittest.TestCase):
         value.update(overrides)
         (directory / "replay.json").write_text(json.dumps(value))
 
+    def test_replay_without_failed_field_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            frame = Path(tmp) / "frame"
+            build_synthetic_trace(frame)
+            replay = Path(tmp) / "replay"
+            self._replay(replay, (frame / "frame-reference.bgra").read_bytes())
+            value = json.loads((replay / "replay.json").read_text())
+            del value["failed"]
+            (replay / "replay.json").write_text(json.dumps(value))
+            policy = {
+                "thresholds": {
+                    "max_channel_error": 0,
+                    "mismatched_fraction": 0.0,
+                    "mean_abs_error": 0.0,
+                },
+                "alpha": {"ignored": False},
+                "allowed_normalizations": ["row_origin"],
+            }
+            with self.assertRaises(m6_compare.CompareError):
+                m6_compare.compare(frame, replay, policy)
+
     def test_truncated_replay_with_correct_pixels_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             frame = Path(tmp) / "frame"

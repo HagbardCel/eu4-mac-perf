@@ -1,15 +1,16 @@
 {
-  "schema": "m6-menu-frame-evidence/v1",
-  "reference": {
-    "frame_dir": ".local/m6/frames/menu-audit/frame",
-    "schema": "gfx-frame-trace/v1",
-    "supersedes": ".local/m6/frames/menu-15/frame (captured with the observer unit-0 corruption)",
+  "schema": "m6-menu-frame-evidence/v2",
+  "canonical_reference": {
+    "frame_dir": ".local/m6/frames/menu-occ300/frame",
     "selection": {
-      "callers": [],
+      "callers": [
+        "0x103b3c8"
+      ],
       "min_draws": 1,
-      "occurrence": 1,
-      "required": false
+      "occurrence": 300,
+      "required": true
     },
+    "events": 326,
     "frame": {
       "width": 1728,
       "height": 1117,
@@ -18,35 +19,36 @@
       "row_stride": 6912,
       "reference": "frame-reference.bgra",
       "reference_bytes": 7720704,
-      "reference_sha256": "888e0908d9645821debc622dec54e7c5a5f7196f954a02a12b2ca23b572cadd0"
+      "reference_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15"
     },
-    "gl": {
-      "vendor": "Apple",
-      "renderer": "Apple M5 Max",
-      "version": "2.1 Metal - 91.7"
-    },
-    "events_sha256": "acc0743f28a58e2754a39381131686153b9e2518727b71356d5a45737fdadc55",
-    "event_count": 326,
-    "active_unit_recorded": true
+    "raw_reference_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15",
+    "origin": "lower_left",
+    "note": "Captured with the corrected non-invasive observer at the same menu caller occurrence (300) used by the live checkpoint, so live and reference frames represent the same scene moment."
   },
-  "translation": {
-    "shader_cache_schema": "gfx-shader-cache/v1"
+  "superseded_references": {
+    "menu-15": "captured with the observer unit-0 corruption (raw c3dab19c\u2026)",
+    "menu-audit": "corrected but undirected capture (raw 888e0908\u2026)"
   },
-  "replay": {
-    "status": "ok",
+  "offline_replay": {
+    "frame_dir": ".local/m6/frames/menu-audit/frame",
+    "reference_raw_sha256": "888e0908d9645821debc622dec54e7c5a5f7196f954a02a12b2ca23b572cadd0",
+    "metal_raw_sha256": "92ea2167bf7a73ba1c67a425953a63cc0d7d402b3897ccb0cd89316d138449e5",
     "events": 326,
     "encoded": 326,
     "failed": 0,
-    "command_status": 4,
-    "metal_frame_sha256": "92ea2167bf7a73ba1c67a425953a63cc0d7d402b3897ccb0cd89316d138449e5"
+    "status": "fail",
+    "mismatched_pixels": 707776,
+    "max_channel_error": 56,
+    "mean_abs_error": [
+      0.310247874,
+      0.3968664,
+      0.511005214,
+      0.0
+    ],
+    "note": "The corrected capture does NOT replay pixel-exactly: 707,776 pixels differ (mean 0.3, max 56). The earlier exact claim compared the Metal frame against itself (reference file aliased to the readback); it is withdrawn."
   },
-  "comparison": {
-    "status": "pass",
-    "pixels": 1930176,
-    "mismatched_pixels": 0,
-    "alpha_different_pixels": 0,
-    "reference_sha256": "92ea2167bf7a73ba1c67a425953a63cc0d7d402b3897ccb0cd89316d138449e5",
-    "candidate_sha256": "92ea2167bf7a73ba1c67a425953a63cc0d7d402b3897ccb0cd89316d138449e5"
-  },
-  "note": "Captured with the corrected non-invasive observer. The replay is exact against this reference; the earlier menu-15 evidence was captured with observer-induced unit-0 corruption and is superseded."
+  "live_comparison": {
+    "reference": ".local/m6/frames/menu-occ300/frame",
+    "result": "visual_match=false (map palette affinity 0.42)"
+  }
 }

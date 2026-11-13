@@ -41,8 +41,28 @@ def _sha256(path: Path) -> str:
 
 
 def load_reference(reference: Path, logical: tuple[int, int]) -> tuple[np.ndarray | None, str]:
+    """Loads and audits the authentic reference: the manifest must be complete,
+    its declared extent must match the policy, the raw pixels must match their
+    declared digest, and the row origin must be the supported lower-left one."""
+    manifest_path = reference / "frame-trace.json"
     path = reference / "frame-reference.bgra"
     width, height = logical
+    if not manifest_path.is_file():
+        return None, f"reference manifest is missing: {manifest_path}"
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except (OSError, ValueError) as exc:
+        return None, f"reference manifest is unreadable: {exc}"
+    if manifest.get("complete") is not True:
+        return None, "reference manifest is incomplete"
+    frame = manifest.get("frame") or {}
+    if (frame.get("width"), frame.get("height")) != (width, height):
+        return None, (
+            f"reference manifest extent {frame.get('width')}x{frame.get('height')} "
+            f"does not match the policy {width}x{height}"
+        )
+    if frame.get("origin") != "lower_left":
+        return None, f"reference row origin {frame.get('origin')!r} is unsupported"
     if not path.is_file():
         return None, f"reference frame is missing: {path}"
     data = np.fromfile(path, dtype=np.uint8)
@@ -51,6 +71,8 @@ def load_reference(reference: Path, logical: tuple[int, int]) -> tuple[np.ndarra
             f"reference frame has {data.size} bytes, expected "
             f"{width * height * 4} for {width}x{height}"
         )
+    if hashlib.sha256(data.tobytes()).hexdigest() != frame.get("reference_sha256"):
+        return None, "reference pixels do not match their declared digest"
     picture = data.reshape(height, width, 4)
     return picture[::-1, :, [2, 1, 0]].astype(np.int16), ""
 
