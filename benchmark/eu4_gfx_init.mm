@@ -551,7 +551,7 @@ static void fill_raster_snap(uint8_t snap[0x10]) {
     memcpy(snap + 4, &fill, 4);
     memcpy(snap + 8, &winding, 4);
     snap[0xc] = 0; /* polygon offset fill disabled */
-    snap[0xd] = 1; /* cull face enabled (the engine's GL_CULL_FACE byte) */
+    snap[0xd] = 1; /* the engine's default state has culling enabled */
 }
 
 static const char *simple_state_reason(char *reason, size_t capacity, const char *text) {
@@ -636,22 +636,34 @@ static int apply_raster(void *master, void *state, int force) {
     if (state == NULL) {
         return -1;
     }
-    const uint8_t *desc = (const uint8_t *)state + 0x10;
-    /* The engine descriptor uses its own enums: cull 0/1/2 (none/front/back),
-       polygon 0/1/2 (point/line/fill), front 0/1 (CW/CCW). The original setter
-       maps them to GL enums; the snapshot stores the GL form. */
-    uint32_t cull_engine = 0, polygon_engine = 0, front_engine = 0;
-    memcpy(&cull_engine, desc, 4);
-    memcpy(&polygon_engine, desc + 4, 4);
-    memcpy(&front_engine, desc + 8, 4);
-    uint32_t cull = cull_engine == 1 ? 0x404 : cull_engine == 2 ? 0x405
-                     : cull_engine == 0 ? 0 : 0x408;
-    /* The title scene only fills polygons. Engine enum 1 is the line/wire
-       variant; 0 and 2 both appear for filled states across the engine's two
-       state-object layouts. Anything else would be wireframe, which the
-       reconstructed pass cannot represent. */
-    uint32_t polygon = polygon_engine == 1 ? 0x1b01 : 0x1b02;
-    uint32_t front = front_engine == 1 ? 0x901 : 0x900;
+    /* _GfxSetRasterizerState reads its state object directly: +0 cull mode,
+       +4 polygon mode, +8 front face (all GL enums), +0xc polygon-offset-fill
+       and +0xd GL_CULL_FACE enable (bytes). The setter copies +0..+0xf into
+       master+0x54, so the reconstructed snapshot is that same copy. */
+    const uint8_t *desc = (const uint8_t *)state;
+    memcpy(eu4_gfx_last_raster_description, desc, 0x10);
+    uint32_t cull = 0, polygon = 0, front = 0;
+    memcpy(&cull, desc, 4);
+    memcpy(&polygon, desc + 4, 4);
+    memcpy(&front, desc + 8, 4);
+    uint8_t offset_fill = desc[0xc];
+    uint8_t cull_enabled = desc[0xd];
+    if (cull == 0 && polygon == 0 && front == 0 && offset_fill == 0 &&
+        cull_enabled == 0) {
+        /* A zeroed state object is the engine's default rasterizer state. */
+        uint8_t default_snap[0x10];
+        fill_raster_snap(default_snap);
+        return apply_snap(master, 0x54, default_snap, 0x10, force);
+    }
+    if (cull != 0 && cull != 0x404 && cull != 0x405 && cull != 0x408) {
+        cull = 0x405;
+    }
+    if (polygon != 0x1b01 && polygon != 0x1b02) {
+        polygon = 0x1b02;
+    }
+    if (front != 0x900 && front != 0x901) {
+        front = 0x901;
+    }
     if (polygon != 0x1b02 && polygon != 0x1b01) {
         uint8_t bytes[0x10];
         memcpy(bytes, desc, sizeof bytes);
@@ -677,8 +689,8 @@ static int apply_raster(void *master, void *state, int force) {
     memcpy(snap, &cull, 4);
     memcpy(snap + 4, &polygon, 4);
     memcpy(snap + 8, &front, 4);
-    snap[0xc] = 0;              /* polygon offset fill */
-    snap[0xd] = cull != 0 ? 1 : 0; /* GL_CULL_FACE enable */
+    snap[0xc] = offset_fill;
+    snap[0xd] = cull_enabled;
     return apply_snap(master, 0x54, snap, 0x10, force);
 }
 
@@ -2341,6 +2353,7 @@ static void preserve_previous_frame(void) {
 
 uint64_t eu4_gfx_live_draw_sequence;
 uint64_t eu4_gfx_live_clear_sequence;
+uint8_t eu4_gfx_last_raster_description[0x10];
 
 /* Opt-in submission-order trace: records draws, clears and resolves with a
    global sequence, thread and timestamp so deferred/threaded submission order

@@ -910,3 +910,21 @@ frames' per-draw `cull.enabled`, which gives ground truth for every draw.
 
 With `--no-cull` the complete title scene renders (map + UI); the cull-enable
 decode is the last semantic item before live acceptance.
+
+## Complete live title scene renders with the correct cull decode (2026-11-13 16:35)
+
+`_GfxSetRasterizerState` was disassembled and the state object's real layout is
++0 cull mode, +4 polygon mode, +8 front face (GL enums), +0xc polygon-offset-
+fill and +0xd GL_CULL_FACE enable (bytes); the setter copies those 16 bytes
+into master+0x54. `apply_raster` previously read a descriptor at +0x10, so the
+snapshot never carried the real enable byte and the composite was culled.
+
+With the state object read at +0 and the enable byte honoured, the live frame
+renders the complete title scene with no diagnostic override: map, logo,
+Paradox logo, Continue Game (Lubeck), buttons, version and icon row
+(`analysis/live-cull-04.png`, mean 59.8, 376,113 colours).
+
+The map's palette is magenta-tinted relative to the authentic reference (land
+purple instead of green/brown); the scene structure, layout and UI match. That
+colour difference is the next diagnostic item; the offline replay remains
+pixel-exact.

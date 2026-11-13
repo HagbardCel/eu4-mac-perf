@@ -1252,6 +1252,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
              "\"primitive\":%d,\"positions\":\"%.3f,%.3f,%.3f,%.3f,"
              "%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\","
              "\"has_positions\":%d,"
+             "\"raster_desc\":\"%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\","
              "\"master\":\"%p\",\"master8\":%u,"
              "\"immediate\":\"%p\",\"immediate8\":%u,"
              "\"pid\":%d}\n",
@@ -1268,6 +1269,14 @@ static int generic_draw_encode_impl(const void *immediate_context,
             g_logged_positions[12], g_logged_positions[13], g_logged_positions[14],
             g_logged_positions[15], g_have_positions,
             (void *)master,
+            eu4_gfx_last_raster_description[0], eu4_gfx_last_raster_description[1],
+            eu4_gfx_last_raster_description[2], eu4_gfx_last_raster_description[3],
+            eu4_gfx_last_raster_description[4], eu4_gfx_last_raster_description[5],
+            eu4_gfx_last_raster_description[6], eu4_gfx_last_raster_description[7],
+            eu4_gfx_last_raster_description[8], eu4_gfx_last_raster_description[9],
+            eu4_gfx_last_raster_description[10], eu4_gfx_last_raster_description[11],
+            eu4_gfx_last_raster_description[12], eu4_gfx_last_raster_description[13],
+            eu4_gfx_last_raster_description[14], eu4_gfx_last_raster_description[15],
             master != NULL ? *(const uint32_t *)((const uint8_t *)master + 8) : 0,
             eu4_gfx_immediate_master(),
             eu4_gfx_immediate_master() != NULL
