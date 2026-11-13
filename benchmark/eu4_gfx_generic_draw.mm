@@ -47,6 +47,13 @@ static NSUInteger num(id value, NSUInteger fallback) {
 
 static float g_logged_positions[16];
 static int g_have_positions;
+typedef struct {
+    uint32_t location, type, size, normalized, divisor;
+    unsigned long slot, offset, stride, format;
+    int converted;
+} eu4_logged_element;
+static eu4_logged_element g_logged_elements[16];
+static int g_logged_element_count;
 
 /* Metal rejects binding a cube texture to a texture2d parameter (and vice
    versa) even when the unit is not sampled. The engine's GL bindings include
@@ -317,8 +324,12 @@ static NSData *pack_stage_uniforms(NSDictionary *stage, const uint8_t *master,
 
 /* Collects the engine vertex elements and builds a Metal vertex descriptor. */
 static BOOL glsl_type_is_float(NSString *type) {
-    return [type isEqualToString:@"float"] || [type isEqualToString:@"vec2"] ||
-           [type isEqualToString:@"vec3"] || [type isEqualToString:@"vec4"];
+    /* The cached stage metadata carries the translated MSL type names
+       (float/float2..float4); older entries use GLSL names. */
+    return [type isEqualToString:@"float"] || [type isEqualToString:@"float2"] ||
+           [type isEqualToString:@"float3"] || [type isEqualToString:@"float4"] ||
+           [type isEqualToString:@"vec2"] || [type isEqualToString:@"vec3"] ||
+           [type isEqualToString:@"vec4"];
 }
 
 static BOOL gl_type_is_integer(uint32_t type) {
@@ -529,6 +540,19 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
             return NO;
         }
         MTLVertexFormat format = vertex_format(type, size, normalized != 0);
+        if (g_logged_element_count < 16) {
+            eu4_logged_element *logged = &g_logged_elements[g_logged_element_count++];
+            logged->location = location;
+            logged->type = type;
+            logged->size = size;
+            logged->normalized = normalized;
+            logged->divisor = divisor;
+            logged->slot = slot;
+            logged->offset = offset;
+            logged->stride = stride;
+            logged->format = (unsigned long)format;
+            logged->converted = 0;
+        }
         if (format == 0) {
             fail(reason, capacity, "unsupported vertex element format");
             return NO;
@@ -559,6 +583,9 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
             bound_buffer = converted;
             bound_stride = converted_stride;
             bound_offset = 0;
+            if (g_logged_element_count > 0) {
+                g_logged_elements[g_logged_element_count - 1].converted = 1;
+            }
             if (location == 0 && converted.contents != NULL &&
                 converted.length >= 16 * sizeof(float)) {
                 memcpy(g_logged_positions, converted.contents,
@@ -798,6 +825,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
                                     eu4_gfx_simple_draw_state *state) {
     memset(g_logged_positions, 0, sizeof g_logged_positions);
     g_have_positions = 0;
+    g_logged_element_count = 0;
     if (reason != NULL && reason_capacity > 0) {
         reason[0] = 0;
     }
@@ -1183,6 +1211,29 @@ static int generic_draw_encode_impl(const void *immediate_context,
         char path[512];
         snprintf(path, sizeof path, "%s/after-composite.bgra", composite_dir);
         dump_texture_file(target, path);
+    }
+    if (getenv("EU4_GFX_ELEMENT_TRACE") != NULL && g_logged_element_count > 0) {
+        NSMutableString *elements = [NSMutableString string];
+        for (int i = 0; i < g_logged_element_count; i++) {
+            eu4_logged_element *e = &g_logged_elements[i];
+            [elements appendFormat:
+                @"%@{\"location\":%u,\"type\":%u,\"size\":%u,\"normalized\":%u,"
+                 "\"divisor\":%u,\"slot\":%lu,\"offset\":%lu,\"stride\":%lu,"
+                 "\"format\":%lu,\"converted\":%d}",
+                elements.length > 0 ? @"," : @"", e->location, e->type, e->size,
+                e->normalized, e->divisor, e->slot, e->offset, e->stride,
+                e->format, e->converted];
+        }
+        NSString *file = vertex_stage[@"msl_file"] ?: @"";
+        NSString *stem = file.lastPathComponent.stringByDeletingPathExtension;
+        if (stem.length > 16) {
+            stem = [stem substringToIndex:16];
+        }
+        NSString *json = [NSString stringWithFormat:
+            @"{\"schema\":\"gfx-elements/v1\",\"stage\":\"%s\",\"count\":%d,\"elements\":[%@]}\n",
+            file.UTF8String ?: "", call->count, elements];
+        NSString *name = [NSString stringWithFormat:@"elements-%@.json", stem];
+        (void)eu4_metal_events_write(name.UTF8String, json.UTF8String);
     }
     if (binding_log != nil) {
         NSString *vertex_file = vertex_stage[@"msl_file"] ?: @"";

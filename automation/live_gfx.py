@@ -1814,6 +1814,12 @@ def probe(args: argparse.Namespace) -> int:
         env["EU4_GFX_UNIFORM_DUMP"] = str(Path(output))
     if args.order_trace:
         env["EU4_GFX_ORDER_TRACE"] = "1"
+    if args.element_trace:
+        env["EU4_GFX_ELEMENT_TRACE"] = "1"
+    if args.sample_texture_dump:
+        env["EU4_GFX_SAMPLE_TEXTURE_DUMP"] = str(Path(output))
+        if args.sample_texture_stage:
+            env["EU4_GFX_SAMPLE_TEXTURE_STAGE"] = args.sample_texture_stage
     if args.texture_type_trace:
         env["EU4_GFX_TEXTURE_TYPE_TRACE"] = "1"
     if args.metal_validation:
@@ -2235,6 +2241,9 @@ def _parser() -> argparse.ArgumentParser:
     prb.add_argument("--order-trace", action="store_true")
     prb.add_argument("--metal-validation", action="store_true")
     prb.add_argument("--texture-type-trace", action="store_true")
+    prb.add_argument("--sample-texture-dump", action="store_true")
+    prb.add_argument("--element-trace", action="store_true")
+    prb.add_argument("--sample-texture-stage", default="")
     prb.add_argument(
         "--qualified-sources",
         default=str(ROOT / "analysis" / "gfx-shader" / "v0" / "qualified-sources.json"),

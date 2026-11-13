@@ -855,3 +855,20 @@ is the composite's vertex geometry/layout (positions read as normalised shorts
 or bound from the wrong buffer), not state or sampling. Next: log the actual
 position element layout (location/type/size/normalized) and the bound vertex
 bytes for the composite draw.
+
+## Integer attribute conversion was disabled by MSL type names (2026-11-13 15:40)
+
+The composite's vertex element is `GL_SHORT`x4 with the MSL declaring
+`float4 in_POSITION`, but `glsl_type_is_float()` only accepted GLSL names
+(`vec4`), while the cached stage metadata carries MSL names (`float4`). The
+integer->float conversion therefore never ran for the composite (or any other
+MSL-named integer attribute), and the shader read raw shorts as floats
+(degenerate geometry). The helper now accepts both naming schemes; the
+composite's element reports `converted=1`.
+
+The composite still does not appear in the presented frame even though its
+sampled textures now hold the real map (mean 28.28) and its state is blend- and
+depth-disabled with a full viewport. The `before/after-composite` dumps are
+inconclusive (the after dump is taken before the command buffer is committed).
+Next: diff the live generic encoding of this draw against the offline replay's
+encoding, which renders the same draw exactly.
