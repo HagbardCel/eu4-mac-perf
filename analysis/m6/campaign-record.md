@@ -489,3 +489,20 @@ all-zero textures; dumps confirmed `sample-u0` and `sample-u1` were entirely
 zero. `_GfxResolve` now performs the equivalent Metal blit from the current
 render target (or the backbuffer) into the header texture, with an optional
 `resolve.json` trace.
+
+## Map background: resolve timing / texture lifecycle (2026-11-13 05:40)
+
+Confirmed by correlated traces in one run:
+- `_GfxResolve` destination header/texture IS the composite's sampled unit-0
+  texture (1728x1117), and source is the game backbuffer (3456x2234).
+- The resolve runs (no pipeline error) but the composite's sample dump at the
+  draw is still all-zero: the engine samples the texture before this frame's
+  resolve fills it. The sampled render-target textures appear to be
+  created/used per frame, so a copy from the current backbuffer cannot satisfy
+  the same-frame composite.
+
+Remaining map work: establish the engine's sampled-texture lifecycle (reuse vs
+per-frame recreation) and fill the sample the frame will actually read (e.g.,
+persist the resolved map per logical target and resolve before the composite,
+or bind the rendered RT directly when the engine samples it).
+The title UI itself is presented correctly at the title scene.

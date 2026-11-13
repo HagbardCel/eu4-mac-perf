@@ -898,11 +898,12 @@ static int generic_draw_encode_impl(const void *immediate_context,
                 }
                 BOOL resolved = header != NULL &&
                     eu4_gfx_texture_for_header(header) != NULL;
-                [binding_log appendFormat:@"%@{\"unit\":%lu,\"stage\":\"%@\",\"header\":\"%p\",\"width\":%u,\"height\":%u,\"format\":%u,\"resolved\":%@}",
+                [binding_log appendFormat:@"%@{\"unit\":%lu,\"stage\":\"%@\",\"header\":\"%p\",\"width\":%u,\"height\":%u,\"format\":%u,\"resolved\":%@,\"texture\":\"%p\"}",
                                           binding_log.length > 0 ? @"," : @"",
                                           (unsigned long)unit, stage_name, header,
                                           width, height, format,
-                                          resolved ? @"true" : @"false"];
+                                          resolved ? @"true" : @"false",
+                                          (__bridge void *)(header != NULL ? (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(header) : nil)];
             }
             id<MTLSamplerState> sampler = generic_sampler(device, @"linear", NO);
             if ([stage_name isEqualToString:@"vertex"]) {

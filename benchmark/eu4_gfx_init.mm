@@ -1974,6 +1974,14 @@ static id<MTLRenderPipelineState> resolve_pipeline(id<MTLDevice> device) {
     id<MTLLibrary> library = [device newLibraryWithSource:
         [NSString stringWithUTF8String:kResolveMSL] options:nil error:&error];
     if (library == nil) {
+        char body[1024];
+        int n = snprintf(body, sizeof body,
+                         "{\"schema\":\"gfx-resolve-error/v1\",\"stage\":\"library\","
+                         "\"error\":\"%s\",\"pid\":%d}\n",
+                         error.localizedDescription.UTF8String ?: "", (int)getpid());
+        if (n > 0 && (size_t)n < sizeof body) {
+            (void)eu4_metal_events_write("resolve-scaled-error.json", body);
+        }
         return nil;
     }
     MTLRenderPipelineDescriptor *descriptor = [MTLRenderPipelineDescriptor new];
@@ -1983,6 +1991,15 @@ static id<MTLRenderPipelineState> resolve_pipeline(id<MTLDevice> device) {
     pipeline = [device newRenderPipelineStateWithDescriptor:descriptor error:&error];
     if (pipeline != nil) {
         cached_device = device;
+    } else {
+        char body[1024];
+        int n = snprintf(body, sizeof body,
+                         "{\"schema\":\"gfx-resolve-error/v1\",\"stage\":\"pipeline\","
+                         "\"error\":\"%s\",\"pid\":%d}\n",
+                         error.localizedDescription.UTF8String ?: "", (int)getpid());
+        if (n > 0 && (size_t)n < sizeof body) {
+            (void)eu4_metal_events_write("resolve-scaled-error.json", body);
+        }
     }
     return pipeline;
 }
