@@ -848,7 +848,10 @@ int eu4_gfx_decode_sampler(const void *sampler, eu4_gfx_sampler_state *out) {
         default:
             return -1;
     }
-    if (mip != 0x2600 && mip != 0x2601) {
+    /* The engine leaves the separate mip field at 0 when the min filter
+       already selects mipmapping (or when mipmapping is disabled). */
+    if (mip != 0 && mip != 0x2600 && mip != 0x2601 &&
+        mip != 0x2700 && mip != 0x2701 && mip != 0x2702 && mip != 0x2703) {
         return -1;
     }
     switch (wrap_t) {

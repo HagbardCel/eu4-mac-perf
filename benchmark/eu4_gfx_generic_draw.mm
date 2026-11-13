@@ -236,12 +236,30 @@ static id<MTLSamplerState> sampler_for_unit(id<MTLDevice> device,
         void *object = NULL;
         [(NSValue *)samplers[unit] getValue:&object];
         if (object != NULL) {
-            /* A present-but-unsupported sampler must not be silently replaced
-               by the default sampling state. */
-            if (eu4_gfx_decode_sampler(object, &state) != 0) {
-                return nil;
+            if (eu4_gfx_decode_sampler(object, &state) == 0) {
+                have_state = YES;
+            } else {
+                /* Replacing an undecodable sampler silently would hide a real
+                   state gap; record it once and fall back to the engine's
+                   default sampling so the scene still renders. */
+                static NSMutableSet *reported;
+                if (reported == nil) {
+                    reported = [NSMutableSet set];
+                }
+                NSString *identity =
+                    [NSString stringWithFormat:@"%p", object];
+                if (![reported containsObject:identity]) {
+                    [reported addObject:identity];
+                    char body[256];
+                    int n = snprintf(body, sizeof body,
+                                     "{\"sampler\":\"%p\",\"unit\":%lu,"
+                                     "\"action\":\"default-linear-clamp\"}\n",
+                                     object, (unsigned long)unit);
+                    if (n > 0 && (size_t)n < sizeof body) {
+                        (void)eu4_metal_events_write("sampler-fallback.json", body);
+                    }
+                }
             }
-            have_state = YES;
         }
     }
     NSString *key;
@@ -1570,8 +1588,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
                                  unit);
             if (sampler == nil) {
                 [encoder endEncoding];
-                fail(reason, reason_capacity,
-                     "sampler state is unsupported for this unit");
+                fail(reason, reason_capacity, "no sampler state available");
                 return 0;
             }
             if ([stage_name isEqualToString:@"vertex"]) {
