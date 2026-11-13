@@ -1064,3 +1064,15 @@ Sampler filtering/wrapping, uniform values, binding ranges and offsets, pixel
 formats and blending are excluded. The evidence points at the texture upload
 path (S3TC/compressed payload handling and/or the header-to-texture mapping),
 which is the next concrete item. M6 remains blocked.
+
+## Correction: the texture-content comparison was invalid for compressed payloads (2026-11-13 21:35)
+
+The terrain textures at units 0/2/8 are DXT5 and units 4/5 are a compressed
+"other" format. Both the captured GL blob and the live sampled-texture dump
+were interpreted as uncompressed BGRA rows, which is meaningless for compressed
+payloads; the apparent "live texture differs" conclusion is therefore not
+evidence of an upload bug. What remains established: terrain-draw uniforms
+match the capture exactly, and sampler/binding contracts are now correct.
+The next concrete step is a decompressed comparison of one D3D-compressed
+texture (GL payload vs the live Metal texture read back and decompressed) before
+changing the S3TC upload path. M6 remains blocked.
