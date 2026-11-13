@@ -596,3 +596,22 @@ The remaining work is therefore precise: identify the exact render target the
 engine's `glCopyTexSubImage2D` reads at the map resolve (bind order between the
 terrain pass, the resolve and the target restore), and preserve that target's
 content until the copy.
+
+## Next concrete step for the map source (2026-11-13)
+
+The only caller of `_GfxResolve` (0x15ece13) in the executable is RVA
+`0xed7921`, inside the graphical-map render code. The captured GL frame shows
+the destination texture already holding the terrain image, so the engine
+performs a `glCopyTexSubImage2D` from a framebuffer it binds at that point
+(most likely the terrain FBO via a direct `glBindFramebuffer(GL_READ_FRAMEBUFFER,
+...)` call, which the reconstructed backend does not track because only
+`_GfxSetRenderTarget` is replaced).
+
+Plan for the next round:
+1. Disassemble the 0xed7800-0xed7960 sequence to confirm the READ framebuffer
+   bind and the source target header.
+2. If it is a direct GL call, interpose the GLEW `glBindFramebuffer` pointer at
+   boot (the dylib already patches GLEW slots) and track the READ framebuffer
+   target header in the backend.
+3. Use that tracked READ target as the `_GfxResolve` source (a 1:1 Metal copy),
+   which should fill the composite's sampled map texture with the terrain pass.
