@@ -37,6 +37,12 @@
 @property (nonatomic, strong) id gameDepthTarget;
 @property (nonatomic, strong) id previousFrameTexture;
 @property (nonatomic, strong) id lastDrawTargetColor;
+@property (nonatomic, strong) id lastFullTargetColor;
+@property (nonatomic, strong) id lastBoundRTColor;
+@property (nonatomic) uint32_t lastBoundRTWidth;
+@property (nonatomic) uint32_t lastBoundRTHeight;
+@property (nonatomic) uint32_t lastFullTargetWidth;
+@property (nonatomic) uint32_t lastFullTargetHeight;
 @property (nonatomic) uint32_t lastDrawTargetWidth;
 @property (nonatomic) uint32_t lastDrawTargetHeight;
 /* Optional offscreen clear target. Shared BGRA8Unorm render target. */

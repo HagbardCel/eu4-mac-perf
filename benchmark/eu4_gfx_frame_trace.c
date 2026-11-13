@@ -1997,6 +1997,65 @@ void eu4_gfx_frame_trace_present_exit(eu4_gfx_capture_frame *frame,
     pthread_mutex_unlock(&g_lock);
 }
 
+/* _GfxResolve at 0x15ece13 (glCopyTexSubImage2D into the header's texture).
+   Records the framebuffers bound at the copy so the reconstructed backend can
+   use the same source. */
+void eu4_gfx_frame_trace_resolve_entry(eu4_gfx_capture_frame *frame,
+                                       eu4_gfx_observe_call *call) {
+    if (call != NULL) {
+        call->output_ok = 0;
+    }
+    if (frame == NULL || g.dir[0] == 0) {
+        return;
+    }
+    /* Resolves happen before the first draw of the captured frame, so this
+       observation is not gated on arming; the directory only exists once the
+       capture has been configured. */
+    GLint read_fbo = 0, draw_fbo = 0, fbo = 0;
+    GLint type = 0, name = 0, level = 0;
+    glGetIntegerv(0x8CAA, &read_fbo); /* GL_READ_FRAMEBUFFER_BINDING */
+    glGetIntegerv(0x8CA6, &draw_fbo); /* GL_DRAW_FRAMEBUFFER_BINDING */
+    glGetIntegerv(0x8D40, &fbo);      /* GL_FRAMEBUFFER_BINDING */
+    if (read_fbo != 0) {
+        GLint previous = 0;
+        glGetIntegerv(0x8CAA, &previous);
+        glBindFramebuffer(0x8CA8, (GLuint)read_fbo); /* GL_READ_FRAMEBUFFER */
+        glGetFramebufferAttachmentParameteriv(0x8CA8, 0x8CE0 /* COLOR_ATTACHMENT0 */,
+                                              0x8CD0 /* OBJECT_TYPE */, &type);
+        glGetFramebufferAttachmentParameteriv(0x8CA8, 0x8CE0,
+                                              0x8CD1 /* OBJECT_NAME */, &name);
+        if (type == 0x1702 /* GL_TEXTURE */) {
+            glGetFramebufferAttachmentParameteriv(0x8CA8, 0x8CE0,
+                                                  0x8CD2 /* TEXTURE_LEVEL */,
+                                                  &level);
+        }
+        glBindFramebuffer(0x8CA8, (GLuint)previous);
+    }
+    char *body = NULL;
+    size_t size = 0;
+    FILE *stream = open_memstream(&body, &size);
+    if (stream == NULL) {
+        return;
+    }
+    fprintf(stream,
+            "{\"event\":\"resolve\",\"header\":\"0x%llx\","
+            "\"read_fbo\":%d,\"draw_fbo\":%d,\"fbo\":%d,"
+            "\"color_type\":%d,\"color_name\":%d,\"color_level\":%d}\n",
+            (unsigned long long)(uintptr_t)frame->rsi, read_fbo, draw_fbo, fbo,
+            type, name, level);
+    fclose(stream);
+    if (body != NULL) {
+        char path[FTRACE_PATH];
+        snprintf(path, sizeof path, "%s/frame-resolve.jsonl", g.dir);
+        FILE *file = fopen(path, "ab");
+        if (file != NULL) {
+            fwrite(body, 1, strlen(body), file);
+            fclose(file);
+        }
+        free(body);
+    }
+}
+
 void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
                                      eu4_gfx_observe_call *call) {
     (void)frame;

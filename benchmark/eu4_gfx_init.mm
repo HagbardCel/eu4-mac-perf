@@ -2124,11 +2124,19 @@ void eu4_gfx_resolve_noop(void *unused, void *header) {
     /* The engine copies the previous frame's image here (GL's back buffer
        still holds it); the reconstructed single backbuffer is cleared before
        this point, so the preserved previous frame is the correct source. */
-    /* The engine copies the previous frame's image here; the preserved frame
-       is the correct source for the reconstructed single backbuffer. The last
-       full-surface render target is not a reliable source: the engine clears
-       or reuses it before this copy (the sampled source is all zero). */
-    id<MTLTexture> src = backend.previousFrameTexture;
+    /* _GfxResolve(mainRenderTargetTexture) copies the framebuffer the map
+       passes rendered into. Prefer the target of the most recent draw when its
+       size matches the sampled texture, then fall back to the preserved
+       previous frame. */
+    /* The engine's copy reads the framebuffer bound when the map scene ended;
+       that is the last render target bound with a non-null target. */
+    id<MTLTexture> src = backend.lastBoundRTColor;
+    if (src == nil || src.width != dst.width || src.height != dst.height) {
+        src = backend.lastDrawTargetColor;
+    }
+    if (src == nil || src.width != dst.width || src.height != dst.height) {
+        src = backend.previousFrameTexture;
+    }
     if (src == nil) {
         src = backend.currentTargetColor != nil
             ? backend.currentTargetColor : backend.gameColorTarget;
@@ -2669,6 +2677,9 @@ void eu4_gfx_set_render_target(void *handle, void *target) {
         memcpy(&height, (uint8_t *)target + 0x2c, 4);
         backend.currentTargetHeader = target;
         backend.currentTargetColor = color;
+        backend.lastBoundRTColor = color;
+        backend.lastBoundRTWidth = width;
+        backend.lastBoundRTHeight = height;
         backend.currentTargetDepth = depth;
         backend.currentTargetWidth = width;
         backend.currentTargetHeight = height;
