@@ -496,6 +496,7 @@ void main()
         self.assertIn("std140", error or "")
 
 
+@unittest.skipUnless(sys.platform == "darwin", "the trace host needs Apple OpenGL")
 class ManifestWriterTests(unittest.TestCase):
     def test_manifest_writer_emits_a_parseable_document(self) -> None:
         source = ROOT / "tests" / "gfx_frame_trace_host.c"
