@@ -2,7 +2,7 @@
   "schema": "m6-live-title-starts/v1",
   "runs": [
     {
-      "run": ".local/m6/live/accept-1",
+      "run": ".local/m6/live/final-1",
       "overall": "captured",
       "status": {
         "draw_reached": true,
@@ -12,15 +12,16 @@
         "presented": true,
         "reference_matched": null
       },
+      "launch_identity": "1794590270-11354",
+      "pid": 11420,
       "refused_draws": 0,
-      "swap_dump_sha256": "f9cce5e675ed943cf278c32039a07f116b3678b2c59cb781ea18e265e2490a7a",
+      "swap_dump_sha256": "ce80de96ef49970c43b6546d1c02375dd24c467384195770bc4e0e7211b48492",
       "swap_dump_bytes": 30882816,
-      "checkpoint": [
-        "checkpoint-after-draw-1.json"
-      ]
+      "window_capture": "window-fullscreen.png",
+      "window_capture_status": "captured"
     },
     {
-      "run": ".local/m6/live/accept-2",
+      "run": ".local/m6/live/final-2",
       "overall": "captured",
       "status": {
         "draw_reached": true,
@@ -30,15 +31,16 @@
         "presented": true,
         "reference_matched": null
       },
+      "launch_identity": "1794590620-11601",
+      "pid": 11667,
       "refused_draws": 0,
-      "swap_dump_sha256": "cfdbd9baa13b7cf1d887598dfd8b465ccea51f329814a9944be3ab9a89126596",
+      "swap_dump_sha256": "6eae2f713fbf20d5c5d6e8d0c6b5045f74a9f50a3b22cb62a8d553913a261f53",
       "swap_dump_bytes": 30882816,
-      "checkpoint": [
-        "checkpoint-after-draw-1.json"
-      ]
+      "window_capture": "window-fullscreen.png",
+      "window_capture_status": "captured"
     },
     {
-      "run": ".local/m6/live/accept-3",
+      "run": ".local/m6/live/final-3",
       "overall": "captured",
       "status": {
         "draw_reached": true,
@@ -48,15 +50,17 @@
         "presented": true,
         "reference_matched": null
       },
+      "launch_identity": "1794590968-11775",
+      "pid": 11853,
       "refused_draws": 0,
-      "swap_dump_sha256": "66f3bb2de7af226ca90f2c2005bffbe41c040f5b24d5231872730d19d401ecc7",
+      "swap_dump_sha256": "8df47484f268489ebf8e72c44ee43a6a9dd7b7e85788f1fce49c21846ae6769d",
       "swap_dump_bytes": 30882816,
-      "checkpoint": [
-        "checkpoint-after-draw-1.json"
-      ]
+      "window_capture": "window-fullscreen.png",
+      "window_capture_status": "captured"
     }
   ],
   "menu_caller": "0x103b3c8",
   "min_uptime_ms": 280000,
-  "note": "Three clean starts reach the title scene through the reconstructed Metal backend and present it. The title UI is visible; the animated map background is a known gap (sampled map textures are not yet filled before the composite)."
+  "checkpoint_occurrence": 300,
+  "note": "Three fresh launches reached the settled title scene through the Metal backend and presented it. All operational criteria pass; the map palette does not yet match the authentic static reference (palette affinity 0.617 vs 0.998), which is the remaining M6-blocking defect."
 }
