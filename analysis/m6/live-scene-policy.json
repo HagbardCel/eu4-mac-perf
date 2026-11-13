@@ -38,5 +38,6 @@
   "map_min_unique_colors": 500,
   "map_min_mean": 10.0,
   "map_min_std": 20.0,
-  "map_min_coherence": 0.5
+  "map_min_coherence": 0.5,
+  "map_min_color_similarity": 0.85
 }

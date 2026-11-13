@@ -106,6 +106,23 @@ class MapStructureTests(unittest.TestCase):
             )
         )
 
+    def test_palette_affinity_rejects_a_colorful_but_wrong_map(self) -> None:
+        y, x = np.mgrid[0:80, 0:120]
+        terrain = (np.sin(x / 9.0) * 40 + np.cos(y / 7.0) * 30 + 150).astype(np.uint8)
+        reference = np.stack([terrain, terrain, terrain - 20], axis=2)
+        self.assertGreater(
+            m6_live_accept.map_color_similarity(reference, reference), 0.99
+        )
+        pink = np.stack(
+            [
+                np.clip(terrain.astype(np.int16) + 30, 0, 255).astype(np.uint8),
+                np.clip(terrain.astype(np.int16) - 40, 0, 255).astype(np.uint8),
+                np.clip(terrain.astype(np.int16) + 20, 0, 255).astype(np.uint8),
+            ],
+            axis=2,
+        )
+        self.assertLess(m6_live_accept.map_color_similarity(pink, reference), 0.6)
+
     def test_spatially_coherent_map_passes(self) -> None:
         y, x = np.mgrid[0:80, 0:120]
         base = (np.sin(x / 9.0) * 60 + np.cos(y / 7.0) * 40 + 128).astype(np.uint8)

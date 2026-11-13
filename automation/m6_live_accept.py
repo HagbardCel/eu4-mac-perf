@@ -107,6 +107,26 @@ def high_pass(image: np.ndarray, region, radius: float = 6.0) -> np.ndarray:
     return window.astype(np.int16) - low
 
 
+def map_color_similarity(window: np.ndarray, reference: np.ndarray) -> float:
+    """Coarse 4x4x4 RGB histogram overlap with the reference map region.
+
+    The authentic menu map is static across captures (verified over 45 s), so a
+    materially different palette (for example a missing terrain layer that
+    leaves the political colours exposed) is a real rendering defect rather than
+    animation.
+    """
+    def histogram(patch: np.ndarray) -> np.ndarray:
+        q = patch[:, :, :3].astype(np.int32) * 4 // 256
+        index = (q[:, :, 0] << 4) | (q[:, :, 1] << 2) | q[:, :, 2]
+        counts = np.bincount(index.reshape(-1), minlength=64).astype(np.float64)
+        total = counts.sum()
+        return counts / total if total else counts
+
+    a = histogram(window)
+    b = histogram(reference)
+    return float(np.minimum(a, b).sum())
+
+
 def map_structure_ok(window: np.ndarray, policy: dict) -> bool:
     """Credible map content: real structure, not a flat colour or noise.
 
@@ -265,14 +285,19 @@ def check_run(run: Path, reference: np.ndarray | None, reference_error: str,
         map_unique = int(len(np.unique(window.reshape(-1, 3), axis=0)))
         map_mean = float(window.mean())
         structure = map_structure_ok(window, policy)
+        reference_window = reference[y0:y1, x0:x1]
+        color_similarity = map_color_similarity(window, reference_window)
+        min_color = float(policy.get("map_min_color_similarity", 0.85))
         details["map_unique_colors"] = map_unique
         details["map_mean"] = round(map_mean, 3)
         details["map_structure"] = structure
+        details["map_color_similarity"] = round(color_similarity, 3)
         map_ok = (
             map_unique >= int(policy["map_min_unique_colors"])
             and map_mean >= float(policy["map_min_mean"])
             and map_unique < int(0.5 * (y1 - y0) * (x1 - x0))
             and structure
+            and color_similarity >= min_color
         )
         details["ui_ok"] = ui_ok
         details["map_ok"] = map_ok

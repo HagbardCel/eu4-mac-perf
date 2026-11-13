@@ -956,3 +956,37 @@ Fixes that completed the scene, in order:
 5. candidate/reference orientation unified in the acceptance checker.
 The map's palette differs from the single captured reference frame (the menu
 map animates with the day/season cycle); structure and UI match.
+
+## PR review remediation and final-phase findings (2026-11-13 18:20)
+
+All five review findings were fixed with tests:
+1. Render-target clears decode the engine's flags (bit 0 colour, bit 1 depth,
+   bit 2 stencil) instead of GL mask bits; unrequested attachments are
+   preserved and no stencil support is claimed. Host test covers colour-only,
+   colour+depth and depth-only clears.
+2. The trace-generated runtime shader cache now carries each stage's
+   `attributes` declarations; trace serialization and live-merge paths are
+   tested.
+3. Depth testing reads only the enable byte at `master+0x30`; disabled testing
+   also suppresses depth writes (GL-compatible effective state, five cases
+   covered in the host).
+4. Generic draws apply the reconstructed scissor through the shared helper with
+   HiDPI scaling; empty rectangles are refused. Additive helper test included.
+5. The live checker requires three distinct canonical run paths and three
+   distinct launch identities; duplicate inputs/copied runs are tested not to
+   qualify. It also requires the candidate replay to process/encode exactly the
+   reference event count with zero failures, derives drawable dimensions from
+   the capture rather than a hardcoded list, requires credible map structure and
+   now a coarse per-palette affinity to the (static) authentic map.
+
+Map fidelity: the authentic menu map is static across 240 s and 285 s captures
+(identical mean RGB and pixel correlation 1.0), so the live map's palette is a
+real defect, not animation. The live checkpoint at the second menu frame caught
+a fade-in (dark purple, correlation 0.02); a settled frame (occurrence 300)
+correlates 0.39 structurally but is pink (RGB 158/123/148 vs 141/136/129,
+palette affinity 0.62 vs 0.998 for the authentic frame). The composite's
+second input (the 864x558 bloom/season render target) is near-black
+(mean 7.4 vs the authentic bright layer), so the terrain/brightness layer is
+missing and the political base colours dominate. This is M6-blocking and not
+yet resolved; the acceptance checker now rejects it via the palette-affinity
+criterion.
