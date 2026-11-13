@@ -851,6 +851,16 @@ int eu4_gfx_decode_sampler(const void *sampler, eu4_gfx_sampler_state *out) {
     if (mip != 0x2600 && mip != 0x2601) {
         return -1;
     }
+    switch (wrap_t) {
+        case 0x2900:
+        case 0x2901:
+        case 0x812D:
+        case 0x812F:
+        case 0x8370:
+            break;
+        default:
+            return -1;
+    }
     switch (wrap_s) {
         case 0x2900: /* GL_CLAMP */
         case 0x2901: /* GL_REPEAT */
@@ -872,7 +882,11 @@ int eu4_gfx_decode_sampler(const void *sampler, eu4_gfx_sampler_state *out) {
 
 void eu4_gfx_set_textures(void *handle, unsigned count, void *textures, unsigned flags,
                           unsigned base_unit, void *samplers) {
-    if (handle == NULL || textures == NULL || count == 0 || (flags & 1u) == 0) {
+    /* The engine binds one or both contiguous ranges: bit 0 at base_unit, bit 1
+       at base_unit + 0xf. Anything else is not a binding this backend can
+       represent, so the call is refused instead of claiming success. */
+    if (handle == NULL || textures == NULL || count == 0 ||
+        (flags & 3u) == 0 || (flags & ~3u) != 0) {
         return;
     }
     void *master = NULL;
@@ -891,7 +905,6 @@ void eu4_gfx_set_textures(void *handle, unsigned count, void *textures, unsigned
         /* The original substitutes the master's default texture at +0x98. */
         memcpy(&header, (uint8_t *)master + 0x98, sizeof header);
     }
-    backend.boundTexture0 = header;
     if (backend.boundTextures == nil) {
         backend.boundTextures = [NSMutableArray array];
     }
@@ -931,6 +944,13 @@ void eu4_gfx_set_textures(void *handle, unsigned count, void *textures, unsigned
             }
             backend.boundTextures[unit] = [NSValue valueWithPointer:entry];
             backend.boundSamplers[unit] = [NSValue valueWithPointer:sampler];
+            if (unit == 0) {
+                /* Only a bind that actually touches unit 0 replaces the
+                   single-texture accessor. */
+                void *unit0 = NULL;
+                [(NSValue *)backend.boundTextures[0] getValue:&unit0];
+                backend.boundTexture0 = unit0;
+            }
         }
     }
 }

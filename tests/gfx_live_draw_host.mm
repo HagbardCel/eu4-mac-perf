@@ -603,6 +603,67 @@ static int run_scissor_helper(void) {
     return ok ? 0 : 1;
 }
 
+static void *backend_array_value(NSArray *array, NSUInteger index) {
+    if (array == nil || index >= array.count) {
+        return NULL;
+    }
+    void *value = NULL;
+    [(NSValue *)array[index] getValue:&value];
+    return value;
+}
+
+static int run_texture_ranges(void) {
+    boot();
+    uint8_t *master = (uint8_t *)g_master;
+    uint8_t fallback_header[0x44];
+    memset(fallback_header, 0, sizeof fallback_header);
+    void *fallback = fallback_header;
+    memcpy(master + 0x98, &fallback, sizeof fallback);
+    static uint8_t headers[4][0x44];
+    for (int i = 0; i < 4; i++) {
+        memset(headers[i], 0, sizeof headers[i]);
+    }
+    void *a = headers[0], *b = headers[1], *c = headers[2];
+    void *textures[2] = {a, b};
+    void *handle = master;
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil) {
+        fail("texture range backend");
+    }
+    /* Bit 0 only. */
+    eu4_gfx_set_textures(&handle, 2, textures, 1, 0, NULL);
+    int ok = backend_array_value(backend.boundTextures, 0) == a &&
+             backend_array_value(backend.boundTextures, 1) == b &&
+             backend.boundTexture0 == a;
+    /* Bit 1 only leaves unit 0 alone and binds at base+0xf. */
+    void *single[1] = {c};
+    eu4_gfx_set_textures(&handle, 1, single, 2, 0, NULL);
+    ok = ok && backend_array_value(backend.boundTextures, 0) == a &&
+         backend_array_value(backend.boundTextures, 15) == c &&
+         backend.boundTexture0 == a;
+    /* Both ranges, nonzero base, preserving the earlier units. */
+    eu4_gfx_set_textures(&handle, 1, single, 3, 3, NULL);
+    ok = ok && backend_array_value(backend.boundTextures, 0) == a &&
+         backend_array_value(backend.boundTextures, 3) == c &&
+         backend_array_value(backend.boundTextures, 18) == c &&
+         backend.boundTexture0 == a;
+    /* Partial update keeps unrelated units. */
+    eu4_gfx_set_textures(&handle, 1, single, 1, 1, NULL);
+    ok = ok && backend_array_value(backend.boundTextures, 0) == a &&
+         backend_array_value(backend.boundTextures, 1) == c &&
+         backend_array_value(backend.boundTextures, 3) == c;
+    /* Null entries substitute the engine default header. */
+    void *nulls[1] = {NULL};
+    eu4_gfx_set_textures(&handle, 1, nulls, 1, 0, NULL);
+    ok = ok && backend_array_value(backend.boundTextures, 0) == fallback &&
+         backend.boundTexture0 == fallback;
+    /* Unsupported flags are refused without touching the bindings. */
+    eu4_gfx_set_textures(&handle, 1, single, 8, 0, NULL);
+    ok = ok && backend_array_value(backend.boundTextures, 0) == fallback;
+    printf("texture_ranges=%d\n", ok);
+    return ok ? 0 : 1;
+}
+
 static int run_sampler_decode(void) {
     boot();
     /* Linear filtering with repeat addressing, as the map/terrain draws use. */
@@ -785,6 +846,9 @@ int main(int argc, char **argv) {
     }
     if (argc >= 2 && strcmp(argv[1], "--sampler-decode") == 0) {
         return run_sampler_decode();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--texture-ranges") == 0) {
+        return run_texture_ranges();
     }
     if (argc >= 2 && strcmp(argv[1], "--scissor-helper") == 0) {
         return run_scissor_helper();

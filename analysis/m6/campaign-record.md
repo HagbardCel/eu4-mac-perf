@@ -1044,3 +1044,23 @@ slots or sampled texture contents); the captured trace does not record uniforms
 for the terrain draw (only the seed draw), so the next concrete step is a GL
 capture seeded on a map-producing caller (0x10ce96e) and a byte-level diff of
 that draw's constant data against the live packed uniform block.
+
+## Root-cause lead: live terrain textures differ from captured GL payloads (2026-11-13 21:30)
+
+Terrain-draw uniforms **match exactly**: the live packed block for the terrain
+stage starts with the same values as the capture's `UNIFORM0[0]` blob
+(1.5615, 0, 0, 0, 0, 0.0513, -1.001, -0.9998...), so constant packing is not the
+divergence.
+
+The per-unit texture bindings map to the same dimensions as the capture, but
+several texture **contents** differ materially:
+- unit 8 (512x512): GL payload is uniform grey (136.5, alpha 255); live upload
+  is dark green (31,34,17, alpha 15).
+- units 0/2 (1024x128 DXT5): GL mean (58.0,49.6,32.9, alpha 180.5); live upload
+  mean ~ (34,30,29, alpha 24).
+- units 4/5 (2816x1024): GL mean (79,88,103)/(82,99,118); live (14,15,16).
+
+Sampler filtering/wrapping, uniform values, binding ranges and offsets, pixel
+formats and blending are excluded. The evidence points at the texture upload
+path (S3TC/compressed payload handling and/or the header-to-texture mapping),
+which is the next concrete item. M6 remains blocked.

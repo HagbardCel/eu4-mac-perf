@@ -235,7 +235,12 @@ static id<MTLSamplerState> sampler_for_unit(id<MTLDevice> device,
     if (samplers != nil && unit < samplers.count) {
         void *object = NULL;
         [(NSValue *)samplers[unit] getValue:&object];
-        if (object != NULL && eu4_gfx_decode_sampler(object, &state) == 0) {
+        if (object != NULL) {
+            /* A present-but-unsupported sampler must not be silently replaced
+               by the default sampling state. */
+            if (eu4_gfx_decode_sampler(object, &state) != 0) {
+                return nil;
+            }
             have_state = YES;
         }
     }
@@ -257,7 +262,10 @@ static id<MTLSamplerState> sampler_for_unit(id<MTLDevice> device,
         uint32_t min = state.min_filter;
         BOOL min_linear = min == 0x2601 || min == 0x2701 || min == 0x2703;
         BOOL mip_none = min == 0x2600 || min == 0x2601;
-        BOOL mip_linear = min == 0x2702 || min == 0x2703;
+        /* The engine keeps the mip filter separately from the min enum; honour
+           it when the min enum itself does not select a mipmap mode. */
+        BOOL mip_linear = mip_none ? (state.mip_filter == 0x2601)
+                                   : (min == 0x2702 || min == 0x2703);
         descriptor.minFilter = min_linear ? MTLSamplerMinMagFilterLinear
                                           : MTLSamplerMinMagFilterNearest;
         descriptor.magFilter = state.mag_filter == 0x2601
@@ -1324,6 +1332,12 @@ static int generic_draw_encode_impl(const void *immediate_context,
             id<MTLSamplerState> sampler =
                 sampler_for_unit(device, backend != nil ? backend.boundSamplers : nil,
                                  unit);
+            if (sampler == nil) {
+                [encoder endEncoding];
+                fail(reason, reason_capacity,
+                     "sampler state is unsupported for this unit");
+                return 0;
+            }
             if ([stage_name isEqualToString:@"vertex"]) {
                 [encoder setVertexTexture:texture atIndex:texture_index];
                 [encoder setVertexSamplerState:sampler atIndex:sampler_index];

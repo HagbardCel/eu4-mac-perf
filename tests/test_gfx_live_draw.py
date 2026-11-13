@@ -66,6 +66,11 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertIn("present=1", ran.stdout)
         self.assertIn("gpu_failure=1", ran.stdout)
 
+    def test_texture_binding_ranges(self) -> None:
+        ran = self._run("--texture-ranges")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("texture_ranges=1", ran.stdout)
+
     def test_sampler_state_decode(self) -> None:
         ran = self._run("--sampler-decode")
         self.assertEqual(ran.returncode, 0, ran.stderr)
