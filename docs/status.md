@@ -26,6 +26,9 @@ and icon row. [Qualification report](../analysis/m6/qualification-report.md),
   cleared on depth clears; integer attribute conversion accepting MSL type
   names; rasterizer state decoded at the engine's real offsets (cull-enable at
   +0xd); `_GfxResolve` draining pending draws and copying the live backbuffer.
+- **Sprite validation (fixed).** Synthetic `sprite_vs` draws now receive the
+  engine's constant-slot-2 uniform block at buffer index 1; a settled
+  validation run reports zero draw errors.
 - **Blocking defect.** The live map's palette is materially wrong: the
   authentic map is static across captures, while the live map is pink and the
   composite's brightness/season input (the 864x558 render target) is
