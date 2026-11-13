@@ -7,6 +7,7 @@
 #import "eu4_gfx_checkpoint.h"
 #import "eu4_gfx_draw_route.h"
 #import "eu4_gfx_init.h"
+#import "eu4_gfx_generic_draw.h"
 #import "eu4_gfx_shader.h"
 #import "eu4_gfx_simple_draw.h"
 #import "eu4_gfx_texture.h"
@@ -521,7 +522,199 @@ static int run_frame_start(void) {
     return ok ? 0 : 1;
 }
 
+static void read_target_texture(id<MTLTexture> texture, id<MTLCommandQueue> queue,
+                                NSUInteger row_bytes, void *out) {
+    NSUInteger length = row_bytes * texture.height;
+    id<MTLBuffer> buffer = [texture.device newBufferWithLength:length
+                                                       options:MTLResourceStorageModeShared];
+    id<MTLCommandBuffer> command = [queue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    [blit copyFromTexture:texture
+              sourceSlice:0
+              sourceLevel:0
+             sourceOrigin:MTLOriginMake(0, 0, 0)
+               sourceSize:MTLSizeMake(texture.width, texture.height, 1)
+                 toBuffer:buffer
+        destinationOffset:0
+   destinationBytesPerRow:row_bytes
+ destinationBytesPerImage:length];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    memcpy(out, buffer.contents, length);
+}
+
+static int run_texture_type_decision(void) {
+    boot();
+    id<MTLDevice> device = (__bridge id<MTLDevice>)eu4_gfx_metal_device();
+    if (device == nil) {
+        return 1;
+    }
+    MTLTextureDescriptor *flat_descriptor =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                           width:2
+                                                          height:2
+                                                       mipmapped:NO];
+    MTLTextureDescriptor *cube_descriptor =
+        [MTLTextureDescriptor textureCubeDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                              size:2
+                                                         mipmapped:NO];
+    id<MTLTexture> flat = [device newTextureWithDescriptor:flat_descriptor];
+    id<MTLTexture> cube = [device newTextureWithDescriptor:cube_descriptor];
+    int substitute = -1;
+    int flat_ok = eu4_gfx_texture_binding_decision(0, (int)flat.textureType, 0,
+                                                   &substitute);
+    int cube_ok = eu4_gfx_texture_binding_decision(1, (int)cube.textureType, 0,
+                                                   &substitute);
+    int cube_in_2d_refused = eu4_gfx_texture_binding_decision(
+        0, (int)cube.textureType, 0, &substitute);
+    int cube_in_2d_allowed = eu4_gfx_texture_binding_decision(
+        0, (int)cube.textureType, 1, &substitute);
+    int substituted = substitute == 1;
+    int flat_in_cube_refused = eu4_gfx_texture_binding_decision(
+        1, (int)flat.textureType, 0, &substitute);
+    int ok = flat_ok == 1 && cube_ok == 1 && cube_in_2d_refused == 0 &&
+             cube_in_2d_allowed == 1 && substituted &&
+             flat_in_cube_refused == 0;
+    printf("texture_type_decision=%d\n", ok);
+    return ok ? 0 : 1;
+}
+
+static int run_scissor_helper(void) {
+    eu4_gfx_metal_scissor box = {0, 0, 0, 0};
+    /* Unset: the caller keeps its full-attachment default. */
+    int unset = eu4_gfx_scissor_for_attachment(0, 0, 0, 0, 0, 100, 50, &box);
+    /* Partial: GL lower-left box converted to the Metal top-left origin. */
+    eu4_gfx_metal_scissor partial = {0, 0, 0, 0};
+    int valid = eu4_gfx_scissor_for_attachment(1, 10, 5, 20, 10, 100, 50, &partial);
+    /* Empty: zero span. */
+    eu4_gfx_metal_scissor empty = {0, 0, 0, 0};
+    int empty_status = eu4_gfx_scissor_for_attachment(1, 10, 5, 0, 0, 100, 50, &empty);
+    /* Clipped: a box reaching past the attachment. */
+    eu4_gfx_metal_scissor clipped = {0, 0, 0, 0};
+    int clip_status = eu4_gfx_scissor_for_attachment(1, 90, 40, 20, 20, 100, 50, &clipped);
+    int ok = unset == EU4_GFX_SCISSOR_UNSET && valid == EU4_GFX_SCISSOR_VALID &&
+             partial.x == 10 && partial.y == 35 && partial.width == 20 &&
+             partial.height == 10 && empty_status == EU4_GFX_SCISSOR_EMPTY &&
+             clip_status == EU4_GFX_SCISSOR_VALID && clipped.x == 90 &&
+             clipped.y == 0 && clipped.width == 10 && clipped.height == 10;
+    printf("scissor_helper=%d\n", ok);
+    return ok ? 0 : 1;
+}
+
+static int run_depth_state(void) {
+    boot();
+    static const struct {
+        int has_depth;
+        uint8_t enable;
+        uint8_t write;
+        int test;
+        int write_on;
+    } cases[] = {
+        {1, 0, 0, 0, 0}, /* test off / write off */
+        {1, 0, 1, 0, 0}, /* test off / write mask on */
+        {1, 1, 0, 1, 0}, /* test on / write off */
+        {1, 1, 1, 1, 1}, /* test on / write on */
+        {0, 1, 1, 0, 0}, /* no attachment */
+    };
+    int ok = 1;
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        int test = -1, write_on = -1;
+        eu4_gfx_effective_depth_state(cases[i].has_depth, cases[i].enable,
+                                      cases[i].write, &test, &write_on);
+        if (test != cases[i].test || write_on != cases[i].write_on) {
+            ok = 0;
+        }
+    }
+    printf("depth_state=%d\n", ok);
+    return ok ? 0 : 1;
+}
+
+static int run_target_clear(void) {
+    boot();
+    void *handle = g_master;
+    id<MTLDevice> device = (__bridge id<MTLDevice>)eu4_gfx_metal_device();
+    id<MTLCommandQueue> queue = [device newCommandQueue];
+    void *rt = eu4_gfx_create_render_target_texture(handle, 16, 16, 0, 1, 0);
+    if (rt == NULL) {
+        fail("target texture creation");
+    }
+    eu4_gfx_set_render_target(handle, rt);
+    id<MTLTexture> color = (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(rt);
+    id<MTLTexture> depth = (__bridge id<MTLTexture>)eu4_gfx_depth_texture_for_header(rt);
+    if (color == nil || depth == nil) {
+        fail("target textures");
+    }
+    /* Known depth value so preservation is observable. */
+    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.depthAttachment.texture = depth;
+    pass.depthAttachment.loadAction = MTLLoadActionClear;
+    pass.depthAttachment.clearDepth = 0.25;
+    pass.depthAttachment.storeAction = MTLStoreActionStore;
+    id<MTLCommandBuffer> command = [queue commandBuffer];
+    id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
+    [encoder endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+
+    uint8_t pixels[16 * 16 * 4];
+    float depths[16 * 16];
+
+    /* Colour-only clear: colour changes, depth is preserved. */
+    float red[4] = {1.f, 0.f, 0.f, 1.f};
+    eu4_gfx_clear(handle, 1, red);
+    if (eu4_gfx_complete_game(handle, NULL) != EU4_GFX_CLEAR_OK) {
+        fail("target clear did not complete");
+    }
+    read_target_texture(color, queue, 16 * 4, pixels);
+    read_target_texture(depth, queue, 16 * 4, depths);
+    int color_cleared = pixels[0] == 0 && pixels[1] == 0 && pixels[2] == 0xff &&
+                        pixels[3] == 0xff;
+    int depth_preserved = fabsf(depths[0] - 0.25f) < 1e-6f;
+
+    /* Colour+depth clear: both attachments change. */
+    float green[4] = {0.f, 1.f, 0.f, 1.f};
+    eu4_gfx_clear(handle, 3, green);
+    if (eu4_gfx_complete_game(handle, NULL) != EU4_GFX_CLEAR_OK) {
+        fail("target clear did not complete");
+    }
+    read_target_texture(color, queue, 16 * 4, pixels);
+    read_target_texture(depth, queue, 16 * 4, depths);
+    int color_cleared2 = pixels[0] == 0 && pixels[1] == 0xff && pixels[2] == 0;
+    int depth_cleared = fabsf(depths[0] - 1.0f) < 1e-6f;
+
+    /* Depth+stencil only: colour is preserved. */
+    float blue[4] = {0.f, 0.f, 1.f, 1.f};
+    eu4_gfx_clear(handle, 6, blue);
+    if (eu4_gfx_complete_game(handle, NULL) != EU4_GFX_CLEAR_OK) {
+        fail("target clear did not complete");
+    }
+    read_target_texture(color, queue, 16 * 4, pixels);
+    int color_preserved = pixels[0] == 0 && pixels[1] == 0xff && pixels[2] == 0;
+
+    printf("target_clear=%d depth_preserved=%d depth_cleared=%d "
+           "color_preserved=%d\n",
+           color_cleared && color_cleared2, depth_preserved, depth_cleared,
+           color_preserved);
+    return color_cleared && color_cleared2 && depth_preserved && depth_cleared &&
+                   color_preserved
+               ? 0
+               : 1;
+}
+
 int main(int argc, char **argv) {
+    if (argc >= 2 && strcmp(argv[1], "--target-clear") == 0) {
+        return run_target_clear();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--depth-state") == 0) {
+        return run_depth_state();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--scissor-helper") == 0) {
+        return run_scissor_helper();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--texture-type-decision") == 0) {
+        return run_texture_type_decision();
+    }
     if (argc >= 2 && strcmp(argv[1], "--frame-start") == 0) {
         return run_frame_start();
     }

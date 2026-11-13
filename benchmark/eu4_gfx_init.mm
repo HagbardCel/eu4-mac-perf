@@ -2520,6 +2520,33 @@ int eu4_gfx_swap_window(void *window) {
     return 0;
 }
 
+/* The engine's clear mask: bit 0 colour, bit 1 depth, bit 2 stencil. The same
+   decoding is used for the default backbuffer and render-target clears. */
+void eu4_gfx_effective_depth_state(int has_depth, uint8_t enable, uint8_t write,
+                                   int *test_out, int *write_out) {
+    int test = has_depth && enable != 0;
+    int write_enabled = test && write != 0;
+    if (test_out != NULL) {
+        *test_out = test;
+    }
+    if (write_out != NULL) {
+        *write_out = write_enabled;
+    }
+}
+
+static void decode_engine_clear_flags(unsigned flags, bool *color, bool *depth,
+                                      bool *stencil) {
+    if (color != NULL) {
+        *color = (flags & 1u) != 0;
+    }
+    if (depth != NULL) {
+        *depth = (flags & 2u) != 0;
+    }
+    if (stencil != NULL) {
+        *stencil = (flags & 4u) != 0;
+    }
+}
+
 void eu4_gfx_clear(void *handle, unsigned flags, const float *color) {
     eu4_gfx_live_clear_sequence++;
     eu4_gfx_order_trace("clear", eu4_gfx_live_clear_sequence);
@@ -2530,12 +2557,29 @@ void eu4_gfx_clear(void *handle, unsigned flags, const float *color) {
         backend.currentTargetColor != nil && backend.queue != nil) {
         /* A render-target clear belongs to that target, not to the window
            backbuffer state machine. One command buffer keeps queue order with
-           the draws that follow. */
+           the draws that follow. `_GfxClear` receives the engine's clear flags
+           (bit 0 colour, bit 1 depth, bit 2 stencil), not GL mask bits. */
+        bool clear_color = false, clear_depth = false, clear_stencil = false;
+        decode_engine_clear_flags(flags, &clear_color, &clear_depth,
+                                  &clear_stencil);
+        if ((flags & ~7u) != 0) {
+            char body[256];
+            int length = snprintf(
+                body, sizeof body,
+                "{\"schema\":\"gfx-clear-rejected/v1\",\"flags\":%u,"
+                "\"pid\":%d}\n",
+                flags, (int)getpid());
+            if (length > 0 && (size_t)length < sizeof body) {
+                (void)eu4_metal_events_write("clear-rejected.json", body);
+            }
+            return;
+        }
+        (void)clear_stencil;
         id<MTLCommandBuffer> command = [backend.queue commandBuffer];
         if (command != nil) {
             MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
             pass.colorAttachments[0].texture = backend.currentTargetColor;
-            if ((flags & 0x4000u) != 0) {
+            if (clear_color) {
                 double r = 0.0, g = 0.0, b = 0.0, a = 1.0;
                 if (color != NULL) {
                     r = color[0];
@@ -2552,10 +2596,12 @@ void eu4_gfx_clear(void *handle, unsigned flags, const float *color) {
             if (backend.currentTargetDepth != nil) {
                 pass.depthAttachment.texture = backend.currentTargetDepth;
                 pass.depthAttachment.loadAction =
-                    (flags & 0x100u) != 0 ? MTLLoadActionClear : MTLLoadActionLoad;
+                    clear_depth ? MTLLoadActionClear : MTLLoadActionLoad;
                 pass.depthAttachment.clearDepth = 1.0;
                 pass.depthAttachment.storeAction = MTLStoreActionStore;
             }
+            /* No stencil attachment is reconstructed: bit 2 is accepted but
+               must not be claimed as cleared. */
             id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
             if (encoder != nil) {
                 [encoder endEncoding];

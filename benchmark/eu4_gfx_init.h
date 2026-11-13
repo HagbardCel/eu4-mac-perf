@@ -321,6 +321,13 @@ void eu4_gfx_resolve_noop(void *unused, void *header);
 void eu4_gfx_resolve_texture_noop(void *handle, void *source, void *target);
 
 void eu4_gfx_clear(void *handle, unsigned flags, const float *color);
+
+/* GL-compatible effective depth state: testing is active only when a depth
+   attachment exists and the engine's enable byte is set; depth writes only
+   happen while testing is active. `enable` and `write` are the separate bytes
+   at master+0x30 and master+0x31. */
+void eu4_gfx_effective_depth_state(int has_depth, uint8_t enable, uint8_t write,
+                                   int *test_out, int *write_out);
 /* Diagnostic offscreen only. Validate and commit without waiting. ok means
    submitted. Rejects a second clear while one is pending. Invalidates
    contentsKnown on submit. */

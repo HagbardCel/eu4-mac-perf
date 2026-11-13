@@ -66,6 +66,29 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertIn("present=1", ran.stdout)
         self.assertIn("gpu_failure=1", ran.stdout)
 
+    def test_effective_depth_state(self) -> None:
+        ran = self._run("--depth-state")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("depth_state=1", ran.stdout)
+
+    def test_texture_type_binding_decision(self) -> None:
+        ran = self._run("--texture-type-decision")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("texture_type_decision=1", ran.stdout)
+
+    def test_scissor_conversion_helper(self) -> None:
+        ran = self._run("--scissor-helper")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("scissor_helper=1", ran.stdout)
+
+    def test_target_clear_engine_flags(self) -> None:
+        ran = self._run("--target-clear")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("target_clear=1", ran.stdout)
+        self.assertIn("depth_preserved=1", ran.stdout)
+        self.assertIn("depth_cleared=1", ran.stdout)
+        self.assertIn("color_preserved=1", ran.stdout)
+
     def test_frame_start_reconstruction_and_texture_clear(self) -> None:
         ran = self._run("--frame-start")
         self.assertEqual(ran.returncode, 0, ran.stderr)
