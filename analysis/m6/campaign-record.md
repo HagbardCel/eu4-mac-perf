@@ -578,3 +578,21 @@ the menu starts (rendered during the loading-to-menu transition), while the
 live transition frame we capture shows the tip banner over the magenta clear.
 Finding where the original first renders the menu background map into the
 backbuffer (and why the live transition does not) is the remaining item.
+
+## Final map-background diagnosis (2026-11-13 07:40)
+
+The captured GL frame proves the composite's unit-0 texture (452, 1728x1117)
+already contains the full map image (mean 109.43, alpha 255, 358k colours) at
+draw time, i.e. it is the terrain pass copied into the sampled texture. In the
+live reconstruction the engine's `_GfxResolve` copies a 1728x1117 source that
+is **all zero**: the last full-surface render target it would copy has already
+been cleared or reused by the time of the copy, and the engine's real source is
+the terrain target at the moment of its own resolve. Preferring the previous
+presented frame keeps the sampled textures non-zero (a faithful "previous
+frame" background) but cannot introduce the map because the title-scene
+backbuffer never contained it.
+
+The remaining work is therefore precise: identify the exact render target the
+engine's `glCopyTexSubImage2D` reads at the map resolve (bind order between the
+terrain pass, the resolve and the target restore), and preserve that target's
+content until the copy.

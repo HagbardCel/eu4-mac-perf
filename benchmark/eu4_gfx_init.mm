@@ -2125,7 +2125,9 @@ void eu4_gfx_resolve_noop(void *unused, void *header) {
        still holds it); the reconstructed single backbuffer is cleared before
        this point, so the preserved previous frame is the correct source. */
     /* The engine copies the previous frame's image here; the preserved frame
-       is the correct source for the reconstructed single backbuffer. */
+       is the correct source for the reconstructed single backbuffer. The last
+       full-surface render target is not a reliable source: the engine clears
+       or reuses it before this copy (the sampled source is all zero). */
     id<MTLTexture> src = backend.previousFrameTexture;
     if (src == nil) {
         src = backend.currentTargetColor != nil
@@ -2199,6 +2201,22 @@ void eu4_gfx_resolve_texture_noop(void *handle, void *source, void *target) {
     id<MTLTexture> src = (__bridge id<MTLTexture>)texture_for_header(source);
     id<MTLTexture> dst = (__bridge id<MTLTexture>)texture_for_header(target);
     EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (getenv("EU4_GFX_RESOLVE_TRACE") != NULL) {
+        char body[512];
+        int n = snprintf(
+            body, sizeof body,
+            "{\"schema\":\"gfx-resolve-texture/v1\",\"source\":\"%p\","
+            "\"target\":\"%p\",\"src\":\"%p\",\"dst\":\"%p\","
+            "\"src_size\":[%lu,%lu],\"dst_size\":[%lu,%lu],\"pid\":%d}\n",
+            source, target, (__bridge void *)src, (__bridge void *)dst,
+            (unsigned long)(src != nil ? src.width : 0),
+            (unsigned long)(src != nil ? src.height : 0),
+            (unsigned long)(dst != nil ? dst.width : 0),
+            (unsigned long)(dst != nil ? dst.height : 0), (int)getpid());
+        if (n > 0 && (size_t)n < sizeof body) {
+            (void)eu4_metal_events_write("resolve-texture.json", body);
+        }
+    }
     if (getenv("EU4_GFX_RESOLVE_TRACE") != NULL) {
         char body[512];
         int n = snprintf(
