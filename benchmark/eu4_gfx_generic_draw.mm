@@ -755,6 +755,8 @@ static int generic_draw_encode_impl(const void *immediate_context,
     /* Textures: the engine binds units in the shader's sampler declaration
        order, which is the translated stage's binding order. */
     NSArray *bound = backend != nil ? backend.boundTextures : nil;
+    NSMutableString *binding_log = getenv("EU4_GFX_TEXTURE_BIND_TRACE") != NULL
+        ? [NSMutableString string] : nil;
     for (NSString *stage_name in @[@"vertex", @"pixel"]) {
         NSDictionary *stage = [stage_name isEqualToString:@"vertex"] ? vertex_stage : pixel_stage;
         NSArray *samplers = stage[@"samplers"];
@@ -783,6 +785,18 @@ static int generic_draw_encode_impl(const void *immediate_context,
                 ? num(binding[@"texture_index"], index) : index;
             NSUInteger sampler_index = binding != nil
                 ? num(binding[@"sampler_index"], index) : index;
+            if (binding_log != nil) {
+                uint32_t width = 0, height = 0, format = 0;
+                if (header != NULL) {
+                    memcpy(&width, (uint8_t *)header + 0x28, 4);
+                    memcpy(&height, (uint8_t *)header + 0x2c, 4);
+                    memcpy(&format, (uint8_t *)header + 0x30, 4);
+                }
+                [binding_log appendFormat:@"%@{\"unit\":%lu,\"stage\":\"%@\",\"header\":\"%p\",\"width\":%u,\"height\":%u,\"format\":%u}",
+                                          binding_log.length > 0 ? @"," : @"",
+                                          (unsigned long)unit, stage_name, header,
+                                          width, height, format];
+            }
             id<MTLSamplerState> sampler = generic_sampler(device, @"linear", NO);
             if ([stage_name isEqualToString:@"vertex"]) {
                 [encoder setVertexTexture:texture atIndex:texture_index];
@@ -867,6 +881,16 @@ static int generic_draw_encode_impl(const void *immediate_context,
                     vertexStart:(NSUInteger)(call->first > 0 ? call->first : 0)
                     vertexCount:(NSUInteger)call->count
                   instanceCount:instance_count];
+    }
+    if (binding_log != nil) {
+        NSString *json = [NSString stringWithFormat:
+            @"{\"schema\":\"gfx-texture-bind/v1\",\"stage\":\"%s\","
+             "\"bindings\":[%@],\"pid\":%d}\n",
+            [(vertex_stage[@"msl_file"] ?: @"") UTF8String],
+            binding_log, (int)getpid()];
+        if (json.length > 0) {
+            (void)eu4_metal_events_write("textures-bound.json", json.UTF8String);
+        }
     }
     [encoder endEncoding];
     g_generic_draws++;
