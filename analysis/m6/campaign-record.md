@@ -365,3 +365,30 @@ future slot-layout diagnostics.
   `EU4_GFX_SWAP_DUMP`, dumps the exact backbuffer blitted to the drawable
   (`probe --swap-dump`). This is independent evidence of the presented frame
   even when the window server cannot list the game window.
+
+## Menu reached via a menu-only caller (2026-11-13 02:35)
+
+The checkpoint caller must be menu-only: `0x15048ba` also fires for the loading
+tip banner, so earlier "menu" checkpoints were actually loading frames. The
+menu-only callers are `0x103b3c8`, `0x103bd43`, `0x103ba95`; running with
+`--caller-rva 0x103b3c8 --occurrence 2` reaches the title scene's render path
+and presents through `CGraphics::PresentScene` (game and drawable both
+3456x2234, destination acquired, backbuffer dumped).
+
+Presented frame (`swap-frame.bgra`, exact Metal backbuffer at the swap):
+magenta terrain clear + the loading/title logo strip, no map. The menu frame's
+sequence is:
+
+1. clear fb6 / fb0 black / fb1..3 white / fb9 / fb8,
+2. clear fb0 to magenta (event 342),
+3. full-screen composite (program 358, caller 0xed7dcd) to fb0,
+4. UI sprites/fonts to fb0.
+
+The composite is encoded (0 refusals) but its output is not visible; the
+presented frame is the magenta clear plus UI. The next diagnosis is the
+composite draw: verify its viewport, its source texture binding (RT headers),
+and its blend/depth state against the captured trace, where this draw is
+pixel-exact in the offline replay.
+
+Live path status: menu render path reached and presented; map composite not yet
+visible; three clean starts not yet qualified.
