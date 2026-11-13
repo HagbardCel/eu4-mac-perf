@@ -641,6 +641,15 @@ void eu4_gfx_initialize_render_target_texture(void *handle, void *header,
     if (backend.renderTargetDepths == nil) {
         backend.renderTargetDepths = [NSMutableDictionary dictionary];
     }
+    /* The engine may re-initialise the same render-target header every frame.
+       Replacing the texture would discard the map that the previous frame's
+       resolve produced; reuse the existing storage when the geometry matches. */
+    id<MTLTexture> existing = backend.textures[[NSValue valueWithPointer:header]];
+    if (existing != nil && existing.width == width && existing.height == height &&
+        existing.pixelFormat == render_target_format(format)) {
+        color = existing;
+        depth = backend.renderTargetDepths[[NSValue valueWithPointer:header]];
+    }
     backend.textures[[NSValue valueWithPointer:header]] = color;
     if (depth != nil) {
         backend.renderTargetDepths[[NSValue valueWithPointer:header]] = depth;
