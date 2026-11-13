@@ -2128,15 +2128,11 @@ void eu4_gfx_resolve_noop(void *unused, void *header) {
        passes rendered into. Prefer the target of the most recent draw when its
        size matches the sampled texture, then fall back to the preserved
        previous frame. */
-    /* The engine's copy reads the framebuffer bound when the map scene ended;
-       that is the last render target bound with a non-null target. */
-    id<MTLTexture> src = backend.lastBoundRTColor;
-    if (src == nil || src.width != dst.width || src.height != dst.height) {
-        src = backend.lastDrawTargetColor;
-    }
-    if (src == nil || src.width != dst.width || src.height != dst.height) {
-        src = backend.previousFrameTexture;
-    }
+    /* The engine's copy reads a framebuffer it binds outside the replaced
+       entries. The last bound render target is already empty at this point,
+       so the preserved previous frame is the faithful non-zero source. */
+    id<MTLTexture> src = backend.previousFrameTexture;
+    if (src == nil) {
     if (src == nil) {
         src = backend.currentTargetColor != nil
             ? backend.currentTargetColor : backend.gameColorTarget;
