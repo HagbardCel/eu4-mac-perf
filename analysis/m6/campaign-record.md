@@ -1097,3 +1097,23 @@ per-draw `active_unit` values are recorded in the trace.
 Consequence for M6: the old offline "exactness" was exact only against a
 corrupted reference; the offline replay must be regenerated against the
 corrected capture, and the live map comparison must use a same-scene reference.
+
+## Terrain pre/post capture and isolated replay attempt (2026-11-14 00:45)
+
+A targeted original-GL capture with `--pre-post-callers 0x10ce96e` now exists
+(`.local/m6/frames/menu-terrain/frame`): 252 terrain draws with 1728x1117
+pre/post images, and the first pre/post pair differs by 73 pixels (max 39), so
+the draw genuinely changes its target.
+
+The isolated Metal replay (`--only-event 20 --seed-marked --capture-post`)
+produced an all-black candidate while the GL pre/post images carry content, so
+the isolation setup did not reproduce the default-framebuffer pre-image (the
+replay's first target is a renderbuffer-backed framebuffer while the terrain
+draw targets framebuffer 0). The isolated comparison (1.36M mismatched pixels)
+is therefore a harness limitation, not a demonstrated renderer defect, and it
+does not qualify or disqualify the terrain draw.
+
+The replay-scope finding stands: the frame-level captured-state replay seeds the
+composite with captured textures and does not independently re-render the
+terrain pass (a terrain view-projection patch changes no pixels while a
+composite uniform patch changes 763,491).

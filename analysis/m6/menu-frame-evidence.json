@@ -98,5 +98,11 @@
   "replay_scope": {
     "finding": "Patching the terrain draw's UNIFORM0[0].x (view-projection) by +0.5 in a copied trace produced ZERO differing pixels, while patching the composite's first uniform changed 763,491 pixels. The offline replay therefore re-renders the captured seed composite against captured textures; it does not re-render the terrain pass from its recorded inputs.",
     "consequence": "The pixel-exact offline result qualifies a captured-state replay, not an independent reconstruction of the terrain draw. Live terrain differences cannot be excluded or explained by the offline replay; they must be compared against the captured draw's inputs directly."
+  },
+  "terrain_pre_post": {
+    "capture": ".local/m6/frames/menu-terrain/frame",
+    "terrain_draws_with_pre_post": 252,
+    "first_pair": "event 20: 73 differing pixels (max 39) between pre and post",
+    "isolated_replay": "all-black candidate; the isolator did not reproduce the default-framebuffer pre-image (first target is a renderbuffer-backed FBO, the terrain draw targets framebuffer 0). Inconclusive harness limitation, not a renderer finding."
   }
 }
