@@ -1814,6 +1814,7 @@ def probe(args: argparse.Namespace) -> int:
         env["EU4_GFX_UNIFORM_DUMP"] = str(Path(output))
     if args.resolve_trace:
         env["EU4_GFX_RESOLVE_TRACE"] = "1"
+        env["EU4_GFX_RESOLVE_DUMP"] = str(Path(output))
     if args.composite_dump:
         env["EU4_GFX_COMPOSITE_DUMP"] = str(Path(output))
         env["EU4_GFX_COMPOSITE_STAGE"] = "11a05cd9fd8f7533"

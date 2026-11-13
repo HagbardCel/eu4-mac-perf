@@ -289,28 +289,100 @@ static BOOL gl_type_is_integer(uint32_t type) {
 /* GL converts unnormalized integer vertex data to floats verbatim; Metal has
    no such vertex format, so the data is expanded to float32 once per
    (buffer, layout) and cached. */
+/* Converts an interleaved GL integer attribute stream to float32. Exported for
+   focused host tests. Returns the number of converted vertices; *out is
+   malloc'ed (caller frees) or NULL on failure. The final vertex is included
+   when its full component set fits in the buffer. */
+size_t eu4_gfx_convert_attribute(const uint8_t *raw, size_t length, size_t start,
+                                 size_t row, uint32_t gl_type,
+                                 uint32_t components, float **out) {
+    if (out != NULL) {
+        *out = NULL;
+    }
+    if (raw == NULL || out == NULL || components == 0 || components > 4 ||
+        row == 0) {
+        return 0;
+    }
+    size_t component_bytes = 4;
+    switch (gl_type) {
+        case 0x1401: component_bytes = 1; break;
+        case 0x1402:
+        case 0x1403: component_bytes = 2; break;
+        case 0x1404:
+        case 0x1405:
+        case 0x1406: component_bytes = 4; break;
+        default: return 0;
+    }
+    size_t vertices = 0;
+    while (start + vertices * row + (size_t)components * component_bytes <=
+           length) {
+        vertices++;
+    }
+    if (vertices == 0) {
+        return 0;
+    }
+    float *values = (float *)calloc(vertices, (size_t)components * sizeof(float));
+    if (values == NULL) {
+        return 0;
+    }
+    for (size_t i = 0; i < vertices; i++) {
+        const uint8_t *source = raw + start + i * row;
+        for (uint32_t c = 0; c < components; c++) {
+            const uint8_t *component = source + (size_t)c * component_bytes;
+            float value = 0.0f;
+            switch (gl_type) {
+                case 0x1401: /* GL_UNSIGNED_BYTE */
+                    value = (float)component[0];
+                    break;
+                case 0x1402: { /* GL_SHORT */
+                    int16_t v = 0;
+                    memcpy(&v, component, 2);
+                    value = (float)v;
+                    break;
+                }
+                case 0x1403: { /* GL_UNSIGNED_SHORT */
+                    uint16_t v = 0;
+                    memcpy(&v, component, 2);
+                    value = (float)v;
+                    break;
+                }
+                case 0x1404: { /* GL_INT (signed 32-bit) */
+                    int32_t v = 0;
+                    memcpy(&v, component, 4);
+                    value = (float)v;
+                    break;
+                }
+                case 0x1405: { /* GL_UNSIGNED_INT (unsigned 32-bit) */
+                    uint32_t v = 0;
+                    memcpy(&v, component, 4);
+                    value = (float)v;
+                    break;
+                }
+                case 0x1406: { /* GL_FLOAT */
+                    float v = 0.0f;
+                    memcpy(&v, component, 4);
+                    value = v;
+                    break;
+                }
+                default:
+                    break;
+            }
+            values[i * components + c] = value;
+        }
+    }
+    *out = values;
+    return vertices;
+}
+
+/* The conversion is rebuilt on every call: the same vertex-buffer header can
+   be updated with new contents, so a header-keyed cache would be stale. The
+   converted path only serves integer attributes (a handful of draws). */
 static id<MTLBuffer> converted_attribute_buffer(id<MTLDevice> device, void *header,
                                                 uint32_t element_offset,
                                                 uint32_t slot_offset,
                                                 uint32_t stride, uint32_t gl_type,
                                                 uint32_t components,
                                                 NSUInteger *out_stride) {
-    static NSMutableDictionary *cache;
-    if (cache == nil) {
-        cache = [NSMutableDictionary dictionary];
-    }
-    NSString *key = [NSString stringWithFormat:@"%p-%u-%u-%u-%u-%u", header,
-                     element_offset, slot_offset, stride, gl_type, components];
-    id<MTLBuffer> cached = cache[key];
-    if (cached != nil) {
-        if (out_stride != NULL) {
-            *out_stride = (NSUInteger)components * 4;
-        }
-        return cached;
-    }
-    if (cache.count > 128) {
-        [cache removeAllObjects];
-    }
     size_t length = eu4_gfx_vertex_buffer_length(header);
     if (length == (size_t)-1 || length == 0) {
         return nil;
@@ -329,42 +401,21 @@ static id<MTLBuffer> converted_attribute_buffer(id<MTLDevice> device, void *head
         free(raw);
         return nil;
     }
-    size_t vertices = (length - start) / row;
-    if (vertices == 0) {
-        free(raw);
+    float *out = NULL;
+    size_t vertices = eu4_gfx_convert_attribute(raw, length, start, row, gl_type,
+                                                components, &out);
+    free(raw);
+    if (vertices == 0 || out == NULL) {
+        free(out);
         return nil;
     }
     size_t out_row = (size_t)components * 4;
-    float *out = (float *)calloc(vertices, out_row);
-    if (out == NULL) {
-        free(raw);
-        return nil;
-    }
-    for (size_t i = 0; i < vertices; i++) {
-        const uint8_t *src = raw + start + i * row;
-        for (uint32_t c = 0; c < components && c < 4; c++) {
-            float value = 0.0f;
-            switch (gl_type) {
-                case 0x1401: value = (float)src[c]; break;
-                case 0x1402: { int16_t v = 0; memcpy(&v, src + c * 2, 2); value = (float)v; break; }
-                case 0x1403: { uint16_t v = 0; memcpy(&v, src + c * 2, 2); value = (float)v; break; }
-                case 0x1404: { uint32_t v = 0; memcpy(&v, src + c * 4, 4); value = (float)v; break; }
-                case 0x1405: { int32_t v = 0; memcpy(&v, src + c * 4, 4); value = (float)v; break; }
-                default: break;
-            }
-            out[i * components + c] = value;
-        }
-    }
-    free(raw);
     id<MTLBuffer> buffer = [device newBufferWithBytes:out
                                                length:vertices * out_row
                                               options:MTLResourceStorageModeManaged];
     free(out);
-    if (buffer != nil) {
-        cache[key] = buffer;
-        if (out_stride != NULL) {
-            *out_stride = (NSUInteger)out_row;
-        }
+    if (buffer != nil && out_stride != NULL) {
+        *out_stride = (NSUInteger)out_row;
     }
     return buffer;
 }
@@ -696,25 +747,25 @@ static void dump_texture_file(id<MTLTexture> texture, const char *path) {
 static int generic_draw_encode_impl(const void *immediate_context,
                                     const eu4_gfx_generic_call *call,
                                     const eu4_gfx_simple_draw_inputs *inputs,
-                                    void *command_buffer, const char **reason,
+                                    void *command_buffer, char *reason,
+                                    size_t reason_capacity,
                                     eu4_gfx_simple_draw_state *state) {
-    char local_reason[256] = "";
+    if (reason != NULL && reason_capacity > 0) {
+        reason[0] = 0;
+    }
     uint8_t *master = NULL;
     void *shader = NULL;
     NSDictionary *vertex_stage = nil;
     NSDictionary *pixel_stage = nil;
-    if (reason != NULL) {
-        *reason = local_reason;
-    }
     if (!prepare(immediate_context, call, inputs, &master, &shader, &vertex_stage,
-                 &pixel_stage, local_reason, sizeof(local_reason))) {
+                 &pixel_stage, reason, reason_capacity)) {
         return 0;
     }
     id<MTLDevice> device = inputs != NULL ? (__bridge id<MTLDevice>)inputs->device : nil;
     id<MTLCommandBuffer> command = (__bridge id<MTLCommandBuffer>)command_buffer;
     id<MTLTexture> target = (__bridge id<MTLTexture>)inputs->target;
     if (inputs == NULL || device == nil || command == nil || target == nil) {
-        fail(local_reason, sizeof(local_reason), "generic draw has no Metal target");
+        fail(reason, reason_capacity, "generic draw has no Metal target");
         return 0;
     }
     void *vertex_function = NULL;
@@ -722,21 +773,21 @@ static int generic_draw_encode_impl(const void *immediate_context,
     if (!eu4_gfx_shader_generic_functions(shader, (__bridge void *)device,
                                          &vertex_function, &fragment_function) ||
         vertex_function == NULL || fragment_function == NULL) {
-        fail(local_reason, sizeof(local_reason), "cached MSL did not compile");
+        fail(reason, reason_capacity, "cached MSL did not compile");
         return 0;
     }
     int instanced_draw = call->instance_count > 1;
     MTLVertexDescriptor *descriptor = [MTLVertexDescriptor vertexDescriptor];
     NSMutableDictionary *buffers = [NSMutableDictionary dictionary];
     if (!build_vertex_descriptor(shader, master, device, descriptor, buffers,
-                                 vertex_stage, instanced_draw, local_reason,
-                                 sizeof(local_reason))) {
+                                 vertex_stage, instanced_draw, reason,
+                                 reason_capacity)) {
         return 0;
     }
-    NSData *vertex_uniforms = pack_stage_uniforms(vertex_stage, master, local_reason,
-                                                  sizeof(local_reason));
-    NSData *pixel_uniforms = pack_stage_uniforms(pixel_stage, master, local_reason,
-                                                 sizeof(local_reason));
+    NSData *vertex_uniforms = pack_stage_uniforms(vertex_stage, master, reason,
+                                                  reason_capacity);
+    NSData *pixel_uniforms = pack_stage_uniforms(pixel_stage, master, reason,
+                                                 reason_capacity);
     if (vertex_uniforms == nil || pixel_uniforms == nil) {
         return 0;
     }
@@ -759,7 +810,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
                                           : MTLPixelFormatInvalid,
                      blend_snapshot, depth_test, depth_write, depth_compare);
     if (pipeline == nil) {
-        fail(local_reason, sizeof(local_reason), "generic pipeline creation failed");
+        fail(reason, reason_capacity, "generic pipeline creation failed");
         return 0;
     }
     BOOL composite_dump = NO;
@@ -799,7 +850,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
     }
     id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
     if (encoder == nil) {
-        fail(local_reason, sizeof(local_reason), "generic render encoder failed");
+        fail(reason, reason_capacity, "generic render encoder failed");
         return 0;
     }
     [encoder setRenderPipelineState:pipeline];
@@ -883,7 +934,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
             }
             if (texture == nil) {
                 [encoder endEncoding];
-                fail(local_reason, sizeof(local_reason), "sampled texture is absent");
+                fail(reason, reason_capacity, "sampled texture is absent");
                 return 0;
             }
             NSDictionary *binding = index < msl_samplers.count ? msl_samplers[index] : nil;
@@ -944,7 +995,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
         case 5: primitive = MTLPrimitiveTypeTriangleStrip; break;
         default:
             [encoder endEncoding];
-            fail(local_reason, sizeof(local_reason), "unsupported primitive mode");
+            fail(reason, reason_capacity, "unsupported primitive mode");
             return 0;
     }
     NSUInteger instance_count = call->instance_count > 0 ? (NSUInteger)call->instance_count : 1;
@@ -952,21 +1003,21 @@ static int generic_draw_encode_impl(const void *immediate_context,
         void *index_header = eu4_gfx_current_index_header();
         if (index_header == NULL) {
             [encoder endEncoding];
-            fail(local_reason, sizeof(local_reason), "indexed draw has no bound index buffer");
+            fail(reason, reason_capacity, "indexed draw has no bound index buffer");
             return 0;
         }
         size_t bytes = eu4_gfx_index_buffer_length(index_header);
         size_t needed = (size_t)call->count * 2;
         if (bytes == (size_t)-1 || bytes < needed || bytes == 0) {
             [encoder endEncoding];
-            fail(local_reason, sizeof(local_reason), "index buffer is too short");
+            fail(reason, reason_capacity, "index buffer is too short");
             return 0;
         }
         uint16_t *indices = (uint16_t *)malloc(bytes);
         if (indices == NULL || eu4_gfx_index_buffer_read(index_header, indices, bytes) != 0) {
             free(indices);
             [encoder endEncoding];
-            fail(local_reason, sizeof(local_reason), "index buffer read failed");
+            fail(reason, reason_capacity, "index buffer read failed");
             return 0;
         }
         NSMutableData *rewritten = [NSMutableData dataWithLength:needed * 2];
@@ -1029,11 +1080,13 @@ static int generic_draw_encode_impl(const void *immediate_context,
 int eu4_gfx_generic_draw_encode_into(const void *immediate_context,
                                      const eu4_gfx_generic_call *call,
                                      const eu4_gfx_simple_draw_inputs *inputs,
-                                     void *command_buffer, const char **reason,
+                                     void *command_buffer, char *reason,
+                                     size_t reason_capacity,
                                      eu4_gfx_simple_draw_state *state) {
     @try {
         return generic_draw_encode_impl(immediate_context, call, inputs,
-                                        command_buffer, reason, state);
+                                        command_buffer, reason, reason_capacity,
+                                        state);
     } @catch (NSException *exception) {
         char body[1024];
         int n = snprintf(
@@ -1046,8 +1099,9 @@ int eu4_gfx_generic_draw_encode_into(const void *immediate_context,
         if (n > 0 && (size_t)n < sizeof body) {
             (void)eu4_metal_events_write("generic-exception.json", body);
         }
-        if (reason != NULL) {
-            *reason = "Objective-C exception in the generic encoder";
+        if (reason != NULL && reason_capacity > 0) {
+            snprintf(reason, reason_capacity,
+                     "Objective-C exception in the generic encoder");
         }
         return 0;
     }

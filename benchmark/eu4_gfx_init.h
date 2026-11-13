@@ -38,6 +38,8 @@
 @property (nonatomic, strong) id previousFrameTexture;
 @property (nonatomic, strong) id lastDrawTargetColor;
 @property (nonatomic, strong) id lastFullTargetColor;
+extern uint64_t eu4_gfx_live_draw_sequence;
+extern uint64_t eu4_gfx_live_clear_sequence;
 @property (nonatomic, strong) id lastBoundRTColor;
 @property (nonatomic) uint32_t lastBoundRTWidth;
 @property (nonatomic) uint32_t lastBoundRTHeight;

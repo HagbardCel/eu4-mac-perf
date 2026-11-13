@@ -1,0 +1,86 @@
+{
+  "schema": "m6-live-acceptance/v1",
+  "reference": ".local/m6/frames/menu-15/frame",
+  "runs": [
+    {
+      "run": ".local/m6/live/accept-1",
+      "checks": {
+        "overall_captured": true,
+        "draw_reached": true,
+        "draw_encoded": true,
+        "gpu_completed": true,
+        "pixels_captured": true,
+        "presented": true,
+        "no_refused_draws": true,
+        "swap_dump": true,
+        "non_blank": true,
+        "dump_sha256": "f9cce5e675ed943cf278c32039a07f116b3678b2c59cb781ea18e265e2490a7a",
+        "ui_matches_reference": false
+      },
+      "ok": false,
+      "stats": {
+        "unique_colors": 307418,
+        "ui_region_mean_error": [
+          121.9579519755931,
+          124.00572567783094,
+          117.1191850941851
+        ],
+        "ui_max_region_error": 124.00572567783094
+      }
+    },
+    {
+      "run": ".local/m6/live/accept-2",
+      "checks": {
+        "overall_captured": true,
+        "draw_reached": true,
+        "draw_encoded": true,
+        "gpu_completed": true,
+        "pixels_captured": true,
+        "presented": true,
+        "no_refused_draws": true,
+        "swap_dump": true,
+        "non_blank": true,
+        "dump_sha256": "cfdbd9baa13b7cf1d887598dfd8b465ccea51f329814a9944be3ab9a89126596",
+        "ui_matches_reference": false
+      },
+      "ok": false,
+      "stats": {
+        "unique_colors": 292548,
+        "ui_region_mean_error": [
+          121.9579519755931,
+          124.00572567783094,
+          117.1191850941851
+        ],
+        "ui_max_region_error": 124.00572567783094
+      }
+    },
+    {
+      "run": ".local/m6/live/accept-3",
+      "checks": {
+        "overall_captured": true,
+        "draw_reached": true,
+        "draw_encoded": true,
+        "gpu_completed": true,
+        "pixels_captured": true,
+        "presented": true,
+        "no_refused_draws": true,
+        "swap_dump": true,
+        "non_blank": true,
+        "dump_sha256": "66f3bb2de7af226ca90f2c2005bffbe41c040f5b24d5231872730d19d401ecc7",
+        "ui_matches_reference": false
+      },
+      "ok": false,
+      "stats": {
+        "unique_colors": 281975,
+        "ui_region_mean_error": [
+          121.9579519755931,
+          124.3000259170654,
+          118.45564086814086
+        ],
+        "ui_max_region_error": 124.3000259170654
+      }
+    }
+  ],
+  "clean_starts": 0,
+  "ok": false
+}

@@ -2144,13 +2144,16 @@ void eu4_gfx_resolve_noop(void *unused, void *header) {
             "{\"schema\":\"gfx-resolve/v1\",\"header\":\"%p\","
             "\"src\":\"%p\",\"dst\":\"%p\","
             "\"current\":\"%p\",\"src_size\":[%lu,%lu],"
-            "\"dst_size\":[%lu,%lu],\"pid\":%d}\n",
+            "\"dst_size\":[%lu,%lu],\"draw_seq\":%llu,\"clear_seq\":%llu,"
+            "\"pid\":%d}\n",
             header, (__bridge void *)src, (__bridge void *)dst,
             backend.currentTargetColor,
             (unsigned long)(src != nil ? src.width : 0),
             (unsigned long)(src != nil ? src.height : 0),
             (unsigned long)(dst != nil ? dst.width : 0),
-            (unsigned long)(dst != nil ? dst.height : 0), (int)getpid());
+            (unsigned long)(dst != nil ? dst.height : 0),
+            (unsigned long long)eu4_gfx_live_draw_sequence,
+            (unsigned long long)eu4_gfx_live_clear_sequence, (int)getpid());
         if (n > 0 && (size_t)n < sizeof body) {
             (void)eu4_metal_events_write("resolve.json", body);
         }
@@ -2323,6 +2326,9 @@ static void preserve_previous_frame(void) {
     [command waitUntilCompleted];
 }
 
+uint64_t eu4_gfx_live_draw_sequence;
+uint64_t eu4_gfx_live_clear_sequence;
+
 void eu4_gfx_present_scene(void *self) {
     if (self == NULL) {
         return;
@@ -2457,6 +2463,7 @@ int eu4_gfx_swap_window(void *window) {
 }
 
 void eu4_gfx_clear(void *handle, unsigned flags, const float *color) {
+    eu4_gfx_live_clear_sequence++;
     void *master = master_from_handle(handle);
     __unsafe_unretained EU4GfxBackend *backend =
         (__bridge EU4GfxBackend *)backend_raw_for_master(master);

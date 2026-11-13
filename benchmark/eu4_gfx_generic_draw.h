@@ -27,11 +27,13 @@ typedef struct {
 } eu4_gfx_generic_call;
 
 /* Encodes one draw into a caller-owned command buffer. Returns 1 on success.
- * On failure it writes a reason and returns 0. */
+ * On failure it fills reason[0..capacity) and returns 0. The reason is owned by
+ * the caller, so it stays valid after this function returns. */
 int eu4_gfx_generic_draw_encode_into(const void *immediate_context,
                                      const eu4_gfx_generic_call *call,
                                      const eu4_gfx_simple_draw_inputs *inputs,
-                                     void *command_buffer, const char **reason,
+                                     void *command_buffer, char *reason,
+                                     size_t reason_capacity,
                                      eu4_gfx_simple_draw_state *state);
 
 /* 1 when this draw has everything the generic encoder needs; otherwise writes

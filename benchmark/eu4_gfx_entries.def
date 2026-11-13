@@ -32,6 +32,9 @@ GFX_ENTRY(initialize_texture, 0x15ec43b, 0x15ec61d, eu4_gfx_initialize_texture, 
 GFX_ENTRY(resolve, 0x15ece13, 0x15ece63, eu4_gfx_resolve_noop, "\x48\x85\xf6\x74\x4a")
 // _GfxResolveTexture. Multisample blit resolve; the Metal path is single-sample.
 GFX_ENTRY(resolve_texture, 0x15ece63, 0x15eceff, eu4_gfx_resolve_texture_noop, "\x55\x48\x89\xe5\x41\x57")
+// CGraphics::PresentScene. The frontend's frame boundary; the title scene does
+// not call _GfxPresent, so the reconstructed backend presents here.
+GFX_ENTRY(present_scene, 0x149daf0, 0x149db1c, eu4_gfx_present_scene, "\x55\x48\x89\xe5\x53\x50")
 // SDL's Cocoa video driver swaps through these functions; the public
 // SDL_GL_SwapWindow is not necessarily the call path.
 GFX_ENTRY(cocoa_swap_window, 0x1392740, 0x1392970, eu4_gfx_cocoa_swap_window, "\x55\x48\x89\xe5\x41\x57")

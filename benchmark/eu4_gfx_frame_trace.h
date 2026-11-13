@@ -53,6 +53,9 @@ void eu4_gfx_frame_trace_draw_exit(eu4_gfx_capture_frame *frame,
                                    eu4_gfx_observe_call *call);
 
 /* Direct entry/exit callbacks registered in eu4_gfx_observe_entries.def. */
+void eu4_gfx_frame_trace_resolve_entry(eu4_gfx_capture_frame *frame,
+                                       eu4_gfx_observe_call *call);
+
 void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
                                      eu4_gfx_observe_call *call);
 void eu4_gfx_frame_trace_clear_exit(eu4_gfx_capture_frame *frame,

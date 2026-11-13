@@ -216,12 +216,13 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
             call.count = count32;
             call.instance_count = (int32_t)raw->rdx > 0 ? (int32_t)raw->rdx : 1;
         }
-        const char *generic_reason = NULL;
+        char generic_reason[256] = "";
         if (!eu4_gfx_generic_draw_encode_into((const void *)handle, &call, &inputs,
                                               (__bridge void *)command,
-                                              &generic_reason, state)) {
+                                              generic_reason,
+                                              sizeof generic_reason, state)) {
             return refuse(EU4_GFX_DRAW_ROUTE_UNSUPPORTED, diagnostic, capacity,
-                          generic_reason != NULL && generic_reason[0] != 0
+                          generic_reason[0] != 0
                               ? generic_reason
                               : "generic encoder refused the draw");
         }
@@ -257,12 +258,13 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
             if (raw->which == 3) {
                 call.instance_count = (int32_t)raw->rdx > 0 ? (int32_t)raw->rdx : 1;
             }
-            const char *generic_reason = NULL;
+            char generic_reason[256] = "";
             if (!eu4_gfx_generic_draw_encode_into((const void *)handle, &call,
                                                   &inputs, (__bridge void *)command,
-                                                  &generic_reason, state)) {
+                                                  generic_reason,
+                                                  sizeof generic_reason, state)) {
                 return refuse(EU4_GFX_DRAW_ROUTE_UNSUPPORTED, diagnostic, capacity,
-                              generic_reason != NULL && generic_reason[0] != 0
+                              generic_reason[0] != 0
                                   ? generic_reason
                                   : "generic encoder refused the draw");
             }
@@ -282,9 +284,20 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
     backend.pendingGameGeneration = generation;
     backend.gameContentsKnown = NO;
     backend.readyForPresent = NO;
+    eu4_gfx_live_draw_sequence++;
     backend.lastDrawTargetColor = (__bridge id)inputs.target;
     backend.lastDrawTargetWidth = inputs.target_width;
     backend.lastDrawTargetHeight = inputs.target_height;
+    /* A draw whose viewport covers the whole target produces a full-surface
+       image (the map/terrain passes). Track the most recent one as the source
+       for the engine's 1:1 texture copy into the sampled background. */
+    if (backend.currentTargetHeader != NULL &&
+        viewport_width * 4 >= inputs.target_width * 3 &&
+        viewport_height * 4 >= inputs.target_height * 3) {
+        backend.lastFullTargetColor = (__bridge id)inputs.target;
+        backend.lastFullTargetWidth = inputs.target_width;
+        backend.lastFullTargetHeight = inputs.target_height;
+    }
 
     /* Record the handled route before the checkpoint may terminate the
        process. The capture layer would otherwise never observe the return. */
