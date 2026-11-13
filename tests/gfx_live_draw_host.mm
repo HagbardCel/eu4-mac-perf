@@ -747,10 +747,26 @@ static int run_bc_decode(void) {
     }
     free(decoded);
     decoded = NULL;
-    /* BC3 lays out the 8-byte alpha block first, then the colour block. The
-       alpha endpoints (0xFF, 0x00) with zero indices give alpha 255. */
-    const uint8_t bc3_block[16] = {0xFF, 0, 0, 0, 0, 0, 0, 0,
-                                   0x00, 0xF8, 0x00, 0x00, 0, 0, 0, 0};
+    /* BC3 lays out the 8-byte alpha block first, then the colour block. Use two
+       distinct alpha values: texel 0 selects endpoint 0xFF, the rest 0x00. */
+    uint8_t bc3_block[16];
+    memset(bc3_block, 0, sizeof bc3_block);
+    bc3_block[0] = 0xFF;
+    bc3_block[1] = 0x00;
+    {
+        uint8_t indices[6] = {0};
+        for (int texel = 0; texel < 16; texel++) {
+            int value = texel == 0 ? 0 : 1;
+            for (int bit = 0; bit < 3; bit++) {
+                int position = texel * 3 + bit;
+                indices[position / 8] |=
+                    (uint8_t)(((value >> bit) & 1) << (position % 8));
+            }
+        }
+        memcpy(bc3_block + 2, indices, sizeof indices);
+    }
+    bc3_block[8] = 0x00;
+    bc3_block[9] = 0xF8;
     MTLTextureDescriptor *bc3 = [MTLTextureDescriptor
         texture2DDescriptorWithPixelFormat:MTLPixelFormatBC3_RGBA
                                      width:4
@@ -767,9 +783,14 @@ static int run_bc_decode(void) {
     if (bc3_rc != 0) {
         ok = 0;
     } else {
+        /* Decoded rows are bottom-up: texture (0,0) lands at output row 3. */
+        if (decoded[(3 * 4 + 0) * 4 + 3] != 255 ||
+            decoded[(3 * 4 + 1) * 4 + 3] != 0) {
+            ok = 0;
+        }
         for (int i = 0; i < 16 && ok; i++) {
             const uint8_t *p = decoded + i * 4;
-            if (p[2] < 250 || p[3] != 255) {
+            if (p[2] < 250) {
                 ok = 0;
             }
         }

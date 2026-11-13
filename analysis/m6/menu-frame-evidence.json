@@ -38,7 +38,7 @@
     "encoded": 326,
     "failed": 0,
     "command_status": 4,
-    "metal_raw_sha256": null,
+    "metal_raw_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15",
     "status": "pass",
     "pixels": 1930176,
     "mismatched_pixels": 0,
@@ -56,10 +56,16 @@
     },
     "reference_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15",
     "candidate_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15",
-    "alias_rejection_active": true
+    "alias_rejection_active": true,
+    "reference_raw_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15"
   },
   "live_comparison": {
     "reference": ".local/m6/frames/menu-occ300/frame",
     "result": "visual_match=false (map palette affinity 0.42); three-run acceptance not valid"
+  },
+  "scene_alignment": {
+    "status": "not established",
+    "evidence": "Two authentic GL captures (menu-15 bright, menu-occ300 dark) differ in exactly two terrain uniform floats (index 89: 240.01 vs 220.03; index 108: 242.86 vs 220.76) and in map brightness (141/136/129 vs 74/76/66). The live terrain block differs from the canonical capture in the same fields (index 89: 518.49; index 108: 518.49, index 109: +1 vs -1). The map's appearance is therefore driven by run state that varies between launches, and caller occurrence alone does not align the scenes.",
+    "consequence": "The live-vs-reference palette comparison is not valid until the reference and live frames represent the same lighting/state; the live renderer's textures, uniforms (except these state values), sampler and binding ranges match their captured counterparts."
   }
 }

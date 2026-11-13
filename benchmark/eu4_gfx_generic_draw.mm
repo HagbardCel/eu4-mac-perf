@@ -914,6 +914,21 @@ int eu4_gfx_generic_draw_supported(const void *immediate_context,
 }
 
 
+static void *g_after_dump_target;
+static char g_after_dump_path[512];
+static int dump_texture_file(id<MTLTexture> texture, const char *path);
+
+void eu4_gfx_generic_after_dump(void) {
+    if (g_after_dump_target == NULL) {
+        return;
+    }
+    id<MTLTexture> target = (__bridge id<MTLTexture>)g_after_dump_target;
+    g_after_dump_target = NULL;
+    /* The draw was just committed as the pending game command. */
+    eu4_gfx_drain_pending();
+    dump_texture_file(target, g_after_dump_path);
+}
+
 static BOOL pixel_format_is_bc(MTLPixelFormat format) {
     switch (format) {
         case MTLPixelFormatBC1_RGBA:
@@ -1117,13 +1132,20 @@ static int dump_texture_file(id<MTLTexture> texture, const char *path) {
             if (n > 0 && (size_t)n < sizeof sidecar) {
                 FILE *meta = fopen(sidecar, "w");
                 if (meta != NULL) {
-                    fprintf(meta,
+                    unsigned long long digest = 1469598103934665603ULL;
+                for (NSUInteger i = 0; i < row * texture.height; i++) {
+                    digest ^= decoded[i];
+                    digest *= 1099511628211ULL;
+                }
+                fprintf(meta,
                             "{\"format\":\"BGRA8\",\"rows\":\"bottom_up\","
-                            "\"source_pixel_format\":%lu,\"width\":%lu,"
-                            "\"height\":%lu,\"mip\":0}\n",
+                            "\"resource\":\"%p\",\"source_pixel_format\":%lu,"
+                            "\"width\":%lu,\"height\":%lu,\"mip\":0,"
+                            "\"digest_fnv1a64\":\"%016llx\"}\n",
+                            (__bridge void *)texture,
                             (unsigned long)texture.pixelFormat,
                             (unsigned long)texture.width,
-                            (unsigned long)texture.height);
+                            (unsigned long)texture.height, digest);
                     fclose(meta);
                 }
             }
@@ -1558,9 +1580,10 @@ static int generic_draw_encode_impl(const void *immediate_context,
                         if (![dumped containsObject:key] && dumped.count < 12) {
                             [dumped addObject:key];
                             char path[512];
-                            snprintf(path, sizeof path, "%s/tex-u%lu-%lux%lu.bgra", sample_dir,
+                            snprintf(path, sizeof path, "%s/tex-u%lu-%lux%lu-%p.bgra", sample_dir,
                                      (unsigned long)unit, (unsigned long)texture.width,
-                                     (unsigned long)texture.height);
+                                     (unsigned long)texture.height,
+                                     (__bridge void *)texture);
                             if (dump_texture_file(texture, path) != 0) {
                                 dump_failures++;
                                 char failure[512];
@@ -1679,9 +1702,12 @@ static int generic_draw_encode_impl(const void *immediate_context,
                   instanceCount:instance_count];
     }
     if (composite_dump) {
-        char path[512];
-        snprintf(path, sizeof path, "%s/after-composite.bgra", composite_dir);
-        dump_texture_file(target, path);
+        /* The encoder ends and the caller commits this draw afterwards, so a
+           readback here would race with the draw itself. Arm a post-commit
+           snapshot instead; the route performs it once the command completes. */
+        snprintf(g_after_dump_path, sizeof g_after_dump_path,
+                 "%s/after-composite.bgra", composite_dir);
+        g_after_dump_target = (__bridge void *)target;
     }
     if (getenv("EU4_GFX_ELEMENT_TRACE") != NULL && g_logged_element_count > 0) {
         NSMutableString *elements = [NSMutableString string];

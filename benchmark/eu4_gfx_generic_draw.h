@@ -10,6 +10,10 @@
 extern "C" {
 #endif
 
+/* Performs a deferred after-composite diagnostic readback, once the committed
+   draw has completed. No effect unless a composite dump was armed. */
+void eu4_gfx_generic_after_dump(void);
+
 /* Decodes a selected Metal texture (including BC1/BC2/BC3) into a bottom-up
    BGRA8 image via nearest texel-centre sampling. Returns 0 on success and
    hands ownership of `out` to the caller. Diagnostic use only. */
