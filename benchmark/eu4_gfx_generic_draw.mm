@@ -660,7 +660,9 @@ static void dump_texture_file(id<MTLTexture> texture, const char *path) {
     if (buffer == nil) {
         return;
     }
-    id<MTLCommandQueue> queue = [device newCommandQueue];
+    EU4GfxBackend *dump_backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    id<MTLCommandQueue> queue = (dump_backend != nil && dump_backend.queue != nil)
+        ? dump_backend.queue : [device newCommandQueue];
     id<MTLCommandBuffer> command = [queue commandBuffer];
     id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
     [blit copyFromTexture:texture

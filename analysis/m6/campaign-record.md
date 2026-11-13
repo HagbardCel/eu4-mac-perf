@@ -654,3 +654,19 @@ fb0 map renders do not occur in the live path.
 The interposer is kept as an opt-in diagnostic source (removed from the default
 observer build to avoid destabilizing captures). The remaining map work is to
 identify the periodic fb0 map render and reproduce it.
+
+## Map feedback: the live backbuffer read is empty (2026-11-13 09:30)
+
+Diagnostics with the resolve readbacks moved onto the game queue (a separate
+queue does not serialize with the game's pending draws) show every one of the
+~1200 `_GfxResolve` sources in a live run is **all zero**, while the final swap
+dump of the same backbuffer texture contains the frame. The resolves therefore
+run before the frame's draws are visible in the backbuffer in the reconstructed
+path (the engine copies fb0 as a frame feedback; in GL the back buffer still
+holds the previous frame at that moment).
+
+Consequence: the menu background feedback is filled from an empty image, so the
+map never appears. The title UI presentation is unaffected. Resolving this
+needs the reconstructed submission/clear interplay to preserve the previous
+backbuffer content at the same point the engine copies it (GL's back-buffer
+retention semantics), which is the remaining map-background item.

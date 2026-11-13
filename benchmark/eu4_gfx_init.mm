@@ -1992,7 +1992,9 @@ static void dump_mtl_texture(id<MTLTexture> texture, const char *path) {
     if (buffer == nil) {
         return;
     }
-    id<MTLCommandQueue> queue = [texture.device newCommandQueue];
+    EU4GfxBackend *dump_backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    id<MTLCommandQueue> queue = (dump_backend != nil && dump_backend.queue != nil)
+        ? dump_backend.queue : [texture.device newCommandQueue];
     id<MTLCommandBuffer> command = [queue commandBuffer];
     id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
     [blit copyFromTexture:texture
@@ -2128,13 +2130,12 @@ void eu4_gfx_resolve_noop(void *unused, void *header) {
        passes rendered into. Prefer the target of the most recent draw when its
        size matches the sampled texture, then fall back to the preserved
        previous frame. */
-    /* The engine's copy reads a framebuffer it binds outside the replaced
-       entries. The last bound render target is already empty at this point,
-       so the preserved previous frame is the faithful non-zero source. */
-    id<MTLTexture> src = backend.previousFrameTexture;
+    /* The engine's copy reads the current default framebuffer (fb0): early in
+       the frame it holds the map passes, later it holds the complete frame.
+       Copy the live backbuffer every call, exactly like glCopyTexSubImage2D. */
+    id<MTLTexture> src = backend.gameColorTarget;
     if (src == nil) {
-        src = backend.currentTargetColor != nil
-            ? backend.currentTargetColor : backend.gameColorTarget;
+        src = backend.previousFrameTexture;
     }
     if (getenv("EU4_GFX_RESOLVE_TRACE") != NULL) {
         char body[512];
@@ -2158,10 +2159,11 @@ void eu4_gfx_resolve_noop(void *unused, void *header) {
         return;
     }
     const char *resolve_dir = getenv("EU4_GFX_RESOLVE_DUMP");
+    static unsigned resolve_count;
     if (resolve_dir != NULL && resolve_dir[0] != 0) {
         char path[512];
-        snprintf(path, sizeof path, "%s/resolve-source-%lux%lu.bgra", resolve_dir,
-                 (unsigned long)src.width, (unsigned long)src.height);
+        snprintf(path, sizeof path, "%s/resolve-source-%03u.bgra", resolve_dir,
+                 resolve_count++);
         dump_mtl_texture(src, path);
     }
     if (src.width != dst.width || src.height != dst.height) {
@@ -2240,10 +2242,11 @@ void eu4_gfx_resolve_texture_noop(void *handle, void *source, void *target) {
         return;
     }
     const char *resolve_dir = getenv("EU4_GFX_RESOLVE_DUMP");
+    static unsigned resolve_count;
     if (resolve_dir != NULL && resolve_dir[0] != 0) {
         char path[512];
-        snprintf(path, sizeof path, "%s/resolve-source-%lux%lu.bgra", resolve_dir,
-                 (unsigned long)src.width, (unsigned long)src.height);
+        snprintf(path, sizeof path, "%s/resolve-source-%03u.bgra", resolve_dir,
+                 resolve_count++);
         dump_mtl_texture(src, path);
     }
     if (src.width != dst.width || src.height != dst.height) {
