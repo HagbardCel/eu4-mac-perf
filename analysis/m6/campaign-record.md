@@ -1076,3 +1076,24 @@ match the capture exactly, and sampler/binding contracts are now correct.
 The next concrete step is a decompressed comparison of one D3D-compressed
 texture (GL payload vs the live Metal texture read back and decompressed) before
 changing the S3TC upload path. M6 remains blocked.
+
+## Reference-capture state corruption found and fixed (2026-11-13 21:50)
+
+`read_texture()` captured the binding from the active unit, switched to
+GL_TEXTURE0 and restored the saved binding on unit 0. At draw-capture time the
+active unit is nonzero for most draws (audit capture: unit 9 for 252 terrain
+draws, unit 15/11/2/1/13 for others), so the observer corrupted unit 0's
+binding for the draws it captured. The original menu-15 reference was therefore
+captured with observer-induced state corruption and is superseded.
+
+The readback now operates on the active unit (saving and restoring that unit's
+binding for the inspected target) without changing the active unit; a GL state
+regression host binds distinct textures on units 0 and 3, probes a third
+texture while unit 3 is active, and verifies both bindings and the active unit
+afterwards. A fresh capture with the fixed tracer (`menu-audit`) is the
+authoritative reference: its reference SHA differs from the old one and its
+per-draw `active_unit` values are recorded in the trace.
+
+Consequence for M6: the old offline "exactness" was exact only against a
+corrupted reference; the offline replay must be regenerated against the
+corrected capture, and the live map comparison must use a same-scene reference.

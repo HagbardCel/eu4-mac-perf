@@ -622,6 +622,29 @@ class ShaderCacheAttributeTests(unittest.TestCase):
 
 
 @unittest.skipUnless(sys.platform == "darwin", "the trace host needs Apple OpenGL")
+class TraceStateHostTests(unittest.TestCase):
+    def test_texture_probe_preserves_bindings_and_active_unit(self) -> None:
+        source = ROOT / "tests" / "gfx_trace_state_host.m"
+        trace_source = ROOT / "benchmark" / "eu4_gfx_frame_trace.c"
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = Path(tmp) / "gfx_trace_state_host"
+            built = subprocess.run(
+                [
+                    "clang", "-arch", "x86_64", "-O1", "-Wall", "-Wextra",
+                    "-fobjc-arc", "-I", str(ROOT / "benchmark"),
+                    "-o", str(binary), str(source), str(trace_source),
+                    "-framework", "OpenGL", "-framework", "AppKit",
+                ],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(built.returncode, 0, built.stderr)
+            ran = subprocess.run([str(binary)], capture_output=True, text=True,
+                                 check=False)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("trace_state=1", ran.stdout)
+
+
+@unittest.skipUnless(sys.platform == "darwin", "the trace host needs Apple OpenGL")
 class ManifestWriterTests(unittest.TestCase):
     def test_manifest_writer_emits_a_parseable_document(self) -> None:
         source = ROOT / "tests" / "gfx_frame_trace_host.c"

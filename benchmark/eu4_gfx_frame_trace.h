@@ -53,6 +53,11 @@ void eu4_gfx_frame_trace_draw_exit(eu4_gfx_capture_frame *frame,
                                    eu4_gfx_observe_call *call);
 
 /* Direct entry/exit callbacks registered in eu4_gfx_observe_entries.def. */
+/* State-restoration probe used by the tracer regression host: binds `name` to
+   the active unit for `target` and restores the previous binding and pack
+   state. Returns 0 when the bind took effect. */
+int eu4_gfx_frame_trace_texture_probe(unsigned target, unsigned name);
+
 void eu4_gfx_frame_trace_resolve_entry(eu4_gfx_capture_frame *frame,
                                        eu4_gfx_observe_call *call);
 

@@ -642,19 +642,45 @@ static int format_is_depth(GLenum internal) {
 
 /* Reads every mip level of `target`/`name` as normalized RGBA. Emits a JSON
  * member `"levels":[...]` (without a leading comma). */
-static int read_texture(GLenum target, GLuint name, json_out *out) {
-    GLint previous_active = 0;
-    GLint previous_alignment = 0;
-    GLint previous_row = 0;
-    glGetIntegerv(GL_ACTIVE_TEXTURE, &previous_active);
-    glGetIntegerv(GL_PACK_ALIGNMENT, &previous_alignment);
-    glGetIntegerv(GL_PACK_ROW_LENGTH, &previous_row);
-    GLint previous_binding = 0;
-    glGetIntegerv(texture_binding_query(target), &previous_binding);
+/* The texture readback must not disturb engine state. It operates on the
+   currently active unit (saving that unit's binding for the inspected target)
+   and restores it afterwards; the active unit itself is never changed. */
+static void capture_texture_begin(GLenum target, GLuint name, GLint *binding,
+                                  GLint *alignment, GLint *row_length) {
+    glGetIntegerv(texture_binding_query(target), binding);
+    glGetIntegerv(GL_PACK_ALIGNMENT, alignment);
+    glGetIntegerv(GL_PACK_ROW_LENGTH, row_length);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glPixelStorei(GL_PACK_ROW_LENGTH, 0);
-    glActiveTexture(GL_TEXTURE0);
     glBindTexture(target, name);
+}
+
+static void capture_texture_end(GLenum target, GLint binding, GLint alignment,
+                                GLint row_length) {
+    glBindTexture(target, (GLuint)binding);
+    glPixelStorei(GL_PACK_ALIGNMENT, alignment);
+    glPixelStorei(GL_PACK_ROW_LENGTH, row_length);
+    while (glGetError() != GL_NO_ERROR) {
+    }
+}
+
+/* Exported for the state-restoration regression host: performs the same
+   bind/restore round trip without reading pixels. */
+int eu4_gfx_frame_trace_texture_probe(GLenum target, GLuint name) {
+    GLint binding = 0, alignment = 0, row_length = 0;
+    capture_texture_begin(target, name, &binding, &alignment, &row_length);
+    GLint bound = 0;
+    glGetIntegerv(texture_binding_query(target), &bound);
+    capture_texture_end(target, binding, alignment, row_length);
+    return bound == (GLint)name ? 0 : -1;
+}
+
+static int read_texture(GLenum target, GLuint name, json_out *out) {
+    GLint previous_alignment = 0;
+    GLint previous_row = 0;
+    GLint previous_binding = 0;
+    capture_texture_begin(target, name, &previous_binding, &previous_alignment,
+                          &previous_row);
     while (glGetError() != GL_NO_ERROR) {
     }
 
@@ -763,12 +789,8 @@ static int read_texture(GLenum target, GLuint name, json_out *out) {
     if (failure) {
         jprintf(out, ",\"capture_error\":\"texture_read\"");
     }
-    glBindTexture(target, (GLuint)previous_binding);
-    glActiveTexture((GLenum)previous_active);
-    glPixelStorei(GL_PACK_ALIGNMENT, previous_alignment);
-    glPixelStorei(GL_PACK_ROW_LENGTH, previous_row);
-    while (glGetError() != GL_NO_ERROR) {
-    }
+    capture_texture_end(target, previous_binding, previous_alignment,
+                        previous_row);
     return failure ? -1 : 0;
 }
 
@@ -1517,6 +1539,11 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
             jprintf(out, "%s%d", slot > 0 ? "," : "", enabled ? 1 : 0);
         }
         jprintf(out, "]}");
+    }
+    {
+        GLint active_unit = 0;
+        glGetIntegerv(GL_ACTIVE_TEXTURE, &active_unit);
+        jprintf(out, ",\"active_unit\":%d", (int)active_unit - (int)GL_TEXTURE0);
     }
     jprintf(out, ",\"program\":{\"name\":%d", program);
     json_out sub = *out;
