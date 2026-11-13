@@ -278,13 +278,15 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
         }
     }
     [command commit];
-    eu4_gfx_generic_after_dump();
     /* pendingGameCommand now owns the last game submission. It is still one
        in-order queue: clear, every draw and the present blit are serialized by
        Metal. Present drains this last command; completion of the last command
        implies completion of every earlier one on the queue. */
     backend.pendingGameCommand = command;
     backend.pendingGameGeneration = generation;
+    /* The diagnostic post-draw readback must observe the command committed
+       above, so it runs after the pending registration and drains it. */
+    eu4_gfx_generic_after_dump();
     backend.gameContentsKnown = NO;
     backend.readyForPresent = NO;
     eu4_gfx_live_draw_sequence++;

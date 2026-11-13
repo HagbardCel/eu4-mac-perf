@@ -118,6 +118,11 @@ the rest of the frame and is independent of the title scene:
 - **Uniforms (verified):** the terrain draw's captured GL uniform block and the
   live packed block are byte-identical in value; uniform packing is excluded as
   a cause.
+- **Uniform semantics (identified):** terrain float 89 is `vFoWOpacity_Time.y`
+  (time) and floats 108/109 are `vTimeDirectionSeasonLerp.xy` (time direction /
+  season). A controlled replay that changed only these values in a copy of the
+  canonical trace produced a byte-identical map, so they do not explain the
+  live/reference palette difference; scene alignment remains unresolved.
 - **M6-blocking visual defect:** the live map's palette does not match the
   authentic map. The authentic menu map is static (a 240 s and a 285 s capture
   are identical), so this is not animation: the live map is pink

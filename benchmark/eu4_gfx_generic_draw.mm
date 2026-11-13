@@ -1176,6 +1176,9 @@ static int dump_texture_file(id<MTLTexture> texture, const char *path) {
     [blit endEncoding];
     [command commit];
     [command waitUntilCompleted];
+    if (command.status != MTLCommandBufferStatusCompleted) {
+        return -1;
+    }
     uint8_t *flipped = (uint8_t *)malloc(row * texture.height);
     if (flipped == NULL) {
         return -1;

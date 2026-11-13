@@ -67,5 +67,16 @@
     "status": "not established",
     "evidence": "Two authentic GL captures (menu-15 bright, menu-occ300 dark) differ in exactly two terrain uniform floats (index 89: 240.01 vs 220.03; index 108: 242.86 vs 220.76) and in map brightness (141/136/129 vs 74/76/66). The live terrain block differs from the canonical capture in the same fields (index 89: 518.49; index 108: 518.49, index 109: +1 vs -1). The map's appearance is therefore driven by run state that varies between launches, and caller occurrence alone does not align the scenes.",
     "consequence": "The live-vs-reference palette comparison is not valid until the reference and live frames represent the same lighting/state; the live renderer's textures, uniforms (except these state values), sampler and binding ranges match their captured counterparts."
+  },
+  "uniform_semantics": {
+    "source": "captured terrain GLSL (program 331) from menu-occ300",
+    "UNIFORM0[22]": "vFoWOpacity_Time (float 89 = .y, time)",
+    "UNIFORM1[4]": "vTimeDirectionSeasonLerp (floats 108/109 = .xy, time direction/season)",
+    "observed": {
+      "menu-15": "89=240.01, 108=242.86 (bright map)",
+      "menu-occ300": "89=220.03, 108=220.76, 109=-1 (dark map)",
+      "live": "89=518.49, 108=518.49, 109=+1"
+    },
+    "causality_experiment": "Patching only these values in a copy of the canonical trace and replaying produced a byte-identical map (affinity 1.0, unchanged means), so these uniforms do not drive the map brightness in this pass; the palette difference remains unexplained by them."
   }
 }
