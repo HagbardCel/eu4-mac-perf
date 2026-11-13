@@ -339,17 +339,20 @@ static void test_bc3(void) {
 }
 
 static void test_set_textures(void) {
+    /* A master with no backend (+0x180 == NULL) must stay untouched, including
+       for the offset-range bindings the engine also uses. */
     uint8_t object[0x198];
     uint8_t saved[0x198];
-    memset(object, 0x5a, sizeof object);
+    memset(object, 0, sizeof object);
     memcpy(saved, object, sizeof saved);
     void *handle = object;
+    void *list[2] = {NULL, NULL};
     void *invalid = reinterpret_cast<void *>(1);
     eu4_gfx_set_textures(&handle, 0, invalid, 0, 0, invalid);
     if (memcmp(object, saved, sizeof saved) != 0) {
         fail("set textures wrote the object");
     }
-    eu4_gfx_set_textures(&handle, 2, invalid, 3, 3, invalid);
+    eu4_gfx_set_textures(&handle, 2, list, 3, 3, NULL);
     if (memcmp(object, saved, sizeof saved) != 0) {
         fail("set textures wrote the object with flags");
     }

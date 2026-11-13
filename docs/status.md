@@ -26,6 +26,10 @@ and icon row. [Qualification report](../analysis/m6/qualification-report.md),
   cleared on depth clears; integer attribute conversion accepting MSL type
   names; rasterizer state decoded at the engine's real offsets (cull-enable at
   +0xd); `_GfxResolve` draining pending draws and copying the live backbuffer.
+- **Sampler state (fixed).** Per-unit sampler objects are decoded and bound
+  as cached Metal sampler states; partial/offset texture binds are applied.
+  The live map palette is unchanged by this, so the remaining divergence is in
+  the map passes' shader inputs.
 - **Sprite validation (fixed).** Synthetic `sprite_vs` draws now receive the
   engine's constant-slot-2 uniform block at buffer index 1; a settled
   validation run reports zero draw errors.
