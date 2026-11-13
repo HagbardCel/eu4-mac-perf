@@ -780,3 +780,17 @@ whose unit/index mapping differs from the declared sampler binding).
 Next step: log the actual texture bindings per draw from every encoder path
 (generic, legacy, simple, sprite) and match the failing `main0` shader's Metal
 texture index 2 to the unit that encoder bound, then fix that path's binding.
+
+## The failing cube binding is not from the generic encoder (2026-11-13 14:10)
+
+A full per-bind trace (2,566,231 entries in one menu run) shows the generic
+encoder **never binds a cube texture** (0 cube binds, 0 type mismatches, 0
+substitutions), including at Metal texture index 2 where validation reports the
+tex7 cube error. The type-substitution path is therefore inert: the draws that
+Metal rejects are encoded through a different path (or bind textures outside the
+generic sampler loop), even though their draw-ok identity is
+`generic-cache/v1`.
+
+Next step: instrument every encoder entry (legacy draw encoder, simple, sprite)
+with a stage identity marker, then correlate the validation error timestamps
+with the encoder that produced the failing `main0`/tex7 draws.

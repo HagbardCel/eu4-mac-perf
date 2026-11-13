@@ -980,35 +980,6 @@ static int generic_draw_encode_impl(const void *immediate_context,
             if (texture == nil) {
                 texture = backend.fallback;
             }
-            BOOL substituted = NO;
-            NSString *declared_type = sampler_entry[@"type"] ?: @"";
-            if (texture != nil && declared_type.length > 0) {
-                BOOL expects_cube =
-                    [declared_type rangeOfString:@"Cube" options:NSCaseInsensitiveSearch].location != NSNotFound;
-                BOOL is_cube = texture.textureType == MTLTextureTypeCube ||
-                               texture.textureType == MTLTextureTypeCubeArray;
-                if (expects_cube != is_cube) {
-                    id<MTLTexture> placeholder = generic_type_placeholder(device, expects_cube);
-                    if (placeholder != nil) {
-                        texture = placeholder;
-                        substituted = YES;
-                    }
-                    if (getenv("EU4_GFX_TEXTURE_TYPE_TRACE") != NULL) {
-                        char body[320];
-                        int length = snprintf(
-                            body, sizeof body,
-                            "{\"stage\":\"%s\",\"unit\":%lu,\"expected\":\"%s\","
-                            "\"bound_type\":%lu,\"substituted\":%d}\n",
-                            (((NSString *)stage[@"msl_file"]).UTF8String ?: ""),
-                            (unsigned long)unit,
-                            declared_type.UTF8String ?: "",
-                            (unsigned long)texture.textureType, substituted);
-                        if (length > 0 && (size_t)length < sizeof body) {
-                            (void)eu4_metal_events_append("texture-type-trace.jsonl", body);
-                        }
-                    }
-                }
-            }
             if (texture == nil) {
                 [encoder endEncoding];
                 fail(reason, reason_capacity, "sampled texture is absent");
@@ -1019,6 +990,37 @@ static int generic_draw_encode_impl(const void *immediate_context,
                 ? num(binding[@"texture_index"], index) : index;
             NSUInteger sampler_index = binding != nil
                 ? num(binding[@"sampler_index"], index) : index;
+            BOOL substituted = NO;
+            NSString *declared_type = sampler_entry[@"type"] ?: @"";
+            if (texture != nil && declared_type.length > 0) {
+                BOOL expects_cube =
+                    [declared_type rangeOfString:@"Cube" options:NSCaseInsensitiveSearch].location != NSNotFound;
+                BOOL is_cube = texture.textureType == MTLTextureTypeCube ||
+                               texture.textureType == MTLTextureTypeCubeArray;
+                BOOL mismatched = expects_cube != is_cube;
+                if (mismatched) {
+                    id<MTLTexture> placeholder = generic_type_placeholder(device, expects_cube);
+                    if (placeholder != nil) {
+                        texture = placeholder;
+                        substituted = YES;
+                    }
+                }
+                if (getenv("EU4_GFX_TEXTURE_TYPE_TRACE") != NULL) {
+                    char body[320];
+                    int length = snprintf(
+                        body, sizeof body,
+                        "{\"stage\":\"%s\",\"unit\":%lu,\"texture_index\":%lu,"
+                        "\"expected\":\"%s\",\"bound_type\":%lu,"
+                        "\"mismatched\":%d,\"substituted\":%d}\n",
+                        (((NSString *)stage[@"msl_file"]).UTF8String ?: ""),
+                        (unsigned long)unit, (unsigned long)texture_index,
+                        declared_type.UTF8String ?: "",
+                        (unsigned long)texture.textureType, mismatched, substituted);
+                    if (length > 0 && (size_t)length < sizeof body) {
+                        (void)eu4_metal_events_append("texture-type-trace.jsonl", body);
+                    }
+                }
+            }
             if (binding_log != nil) {
                 uint32_t width = 0, height = 0, format = 0;
                 if (header != NULL) {
