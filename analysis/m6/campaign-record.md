@@ -839,3 +839,19 @@ tested map fragments would then fail against a zero-filled depth buffer.
 `encode_color_clear` now attaches the game depth texture and clears it to 1.0
 when the engine's clear flags include the depth bit, matching the captured
 frame's frame-start clear.
+
+## Depth clear makes the map reach the feedback; composite draw still empty (2026-11-13 15:25)
+
+With the game depth attachment cleared to 1.0 on the engine's depth clear, the
+resolve's source and the composite's sampled textures now contain the real map
+(sample-u0 mean 28.28, 27,403 colours; u1 bloom mean 1.76). The frame-feedback
+chain works.
+
+The composite draw itself still changes nothing: `before-composite.bgra` and
+`after-composite.bgra` are identical (mean 191.25) even though its captured
+state has blend disabled and depth test disabled, the viewport is the full
+3456x2234 target, count=4, and both map textures are bound. The remaining cause
+is the composite's vertex geometry/layout (positions read as normalised shorts
+or bound from the wrong buffer), not state or sampling. Next: log the actual
+position element layout (location/type/size/normalized) and the bound vertex
+bytes for the composite draw.

@@ -1119,8 +1119,9 @@ static int generic_draw_encode_impl(const void *immediate_context,
         }
     }
     MTLPrimitiveType primitive = MTLPrimitiveTypeTriangle;
-    uint32_t primitive_mode = call->primitive != 0 ? call->primitive
-                                                   : load_u32(master, 0x08);
+    /* The engine's draw bodies read the primitive at execution time; the
+       entry-time snapshot can still hold the previous primitive. */
+    uint32_t primitive_mode = load_u32(master, 0x08);
     switch (primitive_mode) {
         case 0: primitive = MTLPrimitiveTypePoint; break;
         case 1: primitive = MTLPrimitiveTypeLine; break;
