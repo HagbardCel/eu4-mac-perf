@@ -825,10 +825,13 @@ static int generic_draw_encode_impl(const void *immediate_context,
                     memcpy(&height, (uint8_t *)header + 0x2c, 4);
                     memcpy(&format, (uint8_t *)header + 0x30, 4);
                 }
-                [binding_log appendFormat:@"%@{\"unit\":%lu,\"stage\":\"%@\",\"header\":\"%p\",\"width\":%u,\"height\":%u,\"format\":%u}",
+                BOOL resolved = header != NULL &&
+                    eu4_gfx_texture_for_header(header) != NULL;
+                [binding_log appendFormat:@"%@{\"unit\":%lu,\"stage\":\"%@\",\"header\":\"%p\",\"width\":%u,\"height\":%u,\"format\":%u,\"resolved\":%@}",
                                           binding_log.length > 0 ? @"," : @"",
                                           (unsigned long)unit, stage_name, header,
-                                          width, height, format];
+                                          width, height, format,
+                                          resolved ? @"true" : @"false"];
             }
             id<MTLSamplerState> sampler = generic_sampler(device, @"linear", NO);
             if ([stage_name isEqualToString:@"vertex"]) {
@@ -923,9 +926,9 @@ static int generic_draw_encode_impl(const void *immediate_context,
         }
         NSString *json = [NSString stringWithFormat:
             @"{\"schema\":\"gfx-texture-bind/v1\",\"stage\":\"%s\","
-             "\"bindings\":[%@],\"pid\":%d}\n",
+             "\"bindings\":[%@],\"count\":%d,\"instances\":%d,\"pid\":%d}\n",
             vertex_file.UTF8String ?: "",
-            binding_log, (int)getpid()];
+            binding_log, call->count, call->instance_count, (int)getpid()];
         NSString *name = [NSString stringWithFormat:@"bind-%@.json", stem];
         if (json.length > 0) {
             (void)eu4_metal_events_write(name.UTF8String, json.UTF8String);
