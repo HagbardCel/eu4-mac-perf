@@ -615,3 +615,21 @@ Plan for the next round:
    target header in the backend.
 3. Use that tracked READ target as the `_GfxResolve` source (a 1:1 Metal copy),
    which should fill the composite's sampled map texture with the terrain pass.
+
+## Round summary: map copy source investigation (2026-11-13 08:45)
+
+The only caller of `_GfxResolve` is `CEU3GraphicalMap::RenderPostEffects`
+(0xed78f0-0xed7921): after `_GfxEndScene` it calls
+`GetMainRenderTargetTexture()` and then `_GfxResolve(immediate, texture)`, i.e.
+a `glCopyTexSubImage2D` into the composite's sampled texture. The GL-side
+READ-framebuffer observation entry could not be installed through the current
+observer specification gateways (the resolve observation did not fire even when
+explicitly requested), so the exact READ framebuffer remains unidentified.
+Live probing showed the last bound render target and the last draw target are
+already empty at the copy, so the backend keeps the preserved previous frame as
+the faithful non-zero source (documented), and the map background remains the
+one known render-affecting gap.
+
+Tooling state: the observer registry was restored to its original entries and
+targets; the frame tracer retains the un-gated resolve hook for future use.
+Affected host suites pass again (33 tests OK).
