@@ -1118,7 +1118,7 @@ static int dump_texture_file(id<MTLTexture> texture, const char *path) {
                 FILE *meta = fopen(sidecar, "w");
                 if (meta != NULL) {
                     fprintf(meta,
-                            "{\"format\":\"RGBA8\",\"rows\":\"bottom_up\","
+                            "{\"format\":\"BGRA8\",\"rows\":\"bottom_up\","
                             "\"source_pixel_format\":%lu,\"width\":%lu,"
                             "\"height\":%lu,\"mip\":0}\n",
                             (unsigned long)texture.pixelFormat,

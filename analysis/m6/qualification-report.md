@@ -101,7 +101,16 @@ the rest of the frame and is independent of the title scene:
   hard failures.
 - **Sampler state (fixed):** per-unit sampler objects are decoded (filters,
   wrap, mip) and Metal samplers cached per effective state; `_GfxSetTextures`
-  honours partial/offset bind ranges. Two-configuration host test added.
+  honours partial/offset bind ranges. An over-strict "unsupported sampler"
+  refusal briefly rejected every live draw; it now tolerates the engine's
+  mip-0 encoding and records a `sampler-fallback` diagnostic instead. The final
+  live diagnostic run encoded 23 draws with zero refusals.
+- **Decoded texture diagnostics (fixed, host-tested):** texel-centre sampling,
+  BGRA8 output with a sidecar, identity-keyed bounded captures and GPU
+  completion before readback. The corrected DXT5 terrain textures (units 0/2,
+  1024x128) match the original-GL decoded blobs after row orientation
+  (mean 0.13-0.16/255; residual differences are BC decode rounding), so the
+  S3TC upload path is exonerated for those resources.
 - **Sprite uniform defect (fixed):** the generic fallback for synthetic
   `sprite_vs` stages now binds the engine's constant-slot-2 uniform block
   (96 bytes) at the legacy buffer index, through a helper shared with the
