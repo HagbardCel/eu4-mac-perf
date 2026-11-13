@@ -2,6 +2,34 @@
 
 Authoritative summary of what is established, qualified, and in flight. Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
 
+## M6 — authentic title scene through Metal (2026-11-13)
+
+Qualified offline and accepted live. An authentic 1728×1117 title/main-menu
+frame (pinned GOG build `b3d38876…`, captured at `CGraphics::PresentScene`) is
+replayed byte-identically through Metal, and three clean live launches render
+and present the complete title scene — animated world map behind the EU4 logo,
+Paradox logo, Continue Game, Single Player/Multiplayer/Tutorial/Exit, version
+and icon row. [Qualification report](../analysis/m6/qualification-report.md),
+[acceptance](../analysis/m6/live-acceptance.json),
+[campaign record](../analysis/m6/campaign-record.md).
+
+- **Frame.** 378 events / 369 draws, 18 shader programs / 35 stages / 69
+  textures; reference SHA-256 `c3dab19c…` (`frame-reference.bgra`).
+- **Offline replay.** All 378 events encoded, zero failed, GPU completed; the
+  Metal readback SHA-256 is `c3dab19c…` — 0 differing pixels of 1,930,176,
+  including alpha.
+- **Live acceptance.** Three clean starts, all `accepted`: executed,
+  GPU-completed, presented, UI structural correlation 0.77 / 0.94 / 0.55 against
+  the authentic reference, and a map region with real rendered structure.
+  The live checker fails closed on a missing/invalid reference.
+- **Corrections that reached the scene.** Sampler binding by name; game depth
+  cleared on depth clears; integer attribute conversion accepting MSL type
+  names; rasterizer state decoded at the engine's real offsets (cull-enable at
+  +0xd); `_GfxResolve` draining pending draws and copying the live backbuffer.
+- **Limitation.** The live menu map animates through its day/season cycle, so
+  its palette differs from the single reference frame; exact live pixel
+  equality is not claimed. The offline replay of the captured frame is exact.
+
 ## M4 — original-GL reference and Metal presentation (2026-11-12)
 
 Qualified by the M4 checker. The authentic Simple loading draw was captured
