@@ -2124,6 +2124,8 @@ void eu4_gfx_resolve_noop(void *unused, void *header) {
     /* The engine copies the previous frame's image here (GL's back buffer
        still holds it); the reconstructed single backbuffer is cleared before
        this point, so the preserved previous frame is the correct source. */
+    /* The engine copies the previous frame's image here; the preserved frame
+       is the correct source for the reconstructed single backbuffer. */
     id<MTLTexture> src = backend.previousFrameTexture;
     if (src == nil) {
         src = backend.currentTargetColor != nil

@@ -36,6 +36,9 @@
 @property (nonatomic, strong) NSMutableDictionary *renderTargetDepths;
 @property (nonatomic, strong) id gameDepthTarget;
 @property (nonatomic, strong) id previousFrameTexture;
+@property (nonatomic, strong) id lastDrawTargetColor;
+@property (nonatomic) uint32_t lastDrawTargetWidth;
+@property (nonatomic) uint32_t lastDrawTargetHeight;
 /* Optional offscreen clear target. Shared BGRA8Unorm render target. */
 @property (nonatomic, strong) id colorTarget;
 @property (nonatomic) uint32_t colorWidth;

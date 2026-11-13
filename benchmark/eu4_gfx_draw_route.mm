@@ -282,6 +282,9 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
     backend.pendingGameGeneration = generation;
     backend.gameContentsKnown = NO;
     backend.readyForPresent = NO;
+    backend.lastDrawTargetColor = (__bridge id)inputs.target;
+    backend.lastDrawTargetWidth = inputs.target_width;
+    backend.lastDrawTargetHeight = inputs.target_height;
 
     /* Record the handled route before the checkpoint may terminate the
        process. The capture layer would otherwise never observe the return. */
