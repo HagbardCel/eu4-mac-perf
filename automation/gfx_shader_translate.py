@@ -717,6 +717,7 @@ def write_shader_cache(report: dict, out_dir: Path) -> dict:
                 "msl_uniform_buffer": stage.get("msl_uniform_buffer"),
                 "msl_samplers": stage.get("msl_samplers") or [],
                 "attribute_locations": stage.get("attribute_locations") or {},
+                "attributes": stage.get("attributes") or [],
                 "varyings": stage.get("varyings") or [],
                 "uniforms": stage.get("uniforms") or [],
                 "samplers": stage.get("samplers") or [],

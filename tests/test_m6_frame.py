@@ -341,6 +341,29 @@ class CompareTests(unittest.TestCase):
         value.update(overrides)
         (directory / "replay.json").write_text(json.dumps(value))
 
+    def test_truncated_replay_with_correct_pixels_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            frame = Path(tmp) / "frame"
+            build_synthetic_trace(frame)
+            replay = Path(tmp) / "replay"
+            self._replay(
+                replay,
+                (frame / "frame-reference.bgra").read_bytes(),
+                events=1,
+                encoded=1,
+            )
+            policy = {
+                "thresholds": {
+                    "max_channel_error": 0,
+                    "mismatched_fraction": 0.0,
+                    "mean_abs_error": 0.0,
+                },
+                "alpha": {"ignored": False},
+                "allowed_normalizations": ["row_origin"],
+            }
+            with self.assertRaises(m6_compare.CompareError):
+                m6_compare.compare(frame, replay, policy)
+
     def test_exact_frame_passes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             frame = Path(tmp) / "frame"
@@ -497,6 +520,108 @@ void main()
 
 
 @unittest.skipUnless(sys.platform == "darwin", "the trace host needs Apple OpenGL")
+class ShaderCacheAttributeTests(unittest.TestCase):
+    def test_trace_cache_records_attribute_types(self) -> None:
+        import json
+
+        from automation import gfx_shader_translate as translate
+
+        report = {
+            "programs": [
+                {
+                    "program": 1,
+                    "status": "ok",
+                    "stages": {
+                        "vertex": {
+                            "stage": "vertex",
+                            "source_sha256": "a" * 64,
+                            "compiler_sha256": "b" * 64,
+                            "msl_file": "x.vert.metal",
+                            "msl_entry": "main0",
+                            "msl_uniform_buffer": 0,
+                            "msl_samplers": [],
+                            "attribute_locations": {"in_POSITION": 0,
+                                                    "in_COLOR": 1},
+                            "attributes": [
+                                {"name": "in_POSITION", "type": "float4"},
+                                {"name": "in_COLOR", "type": "int4"},
+                            ],
+                            "varyings": [],
+                            "uniforms": [],
+                            "samplers": [],
+                        },
+                        "pixel": {
+                            "stage": "pixel",
+                            "source_sha256": "c" * 64,
+                            "compiler_sha256": "d" * 64,
+                            "msl_file": "x.frag.metal",
+                            "msl_entry": "main0",
+                            "msl_uniform_buffer": 0,
+                            "msl_samplers": [],
+                            "attribute_locations": {},
+                            "attributes": [],
+                            "varyings": [],
+                            "uniforms": [],
+                            "samplers": [],
+                        },
+                    },
+                }
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = translate.write_shader_cache(report, Path(tmp))
+        vertex = cache["stages"]["b" * 64]
+        self.assertEqual(
+            vertex["attributes"],
+            [
+                {"name": "in_POSITION", "type": "float4"},
+                {"name": "in_COLOR", "type": "int4"},
+            ],
+        )
+        # The live loader reads the serialized document, not the in-memory dict.
+        with tempfile.TemporaryDirectory() as tmp:
+            translate.write_shader_cache(report, Path(tmp))
+            reloaded = json.loads((Path(tmp) / "shader-cache.json").read_text())
+        self.assertEqual(
+            reloaded["stages"]["b" * 64]["attributes"],
+            vertex["attributes"],
+        )
+
+    def test_live_merge_preserves_attribute_types(self) -> None:
+        from automation import gfx_shader_translate as translate
+
+        source = (
+            "#version 120\n"
+            "attribute vec4 in_POSITION;\n"
+            "void main() { gl_Position = in_POSITION; }\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            sources = tmp_path / "sources"
+            sources.mkdir()
+            (sources / "live-1-vs-abc.glsl").write_text(source)
+            prior = {
+                "schema": "gfx-shader-cache/v1",
+                "stages": {
+                    "e" * 64: {
+                        "stage": "vertex",
+                        "attributes": [{"name": "in_POSITION", "type": "float4"}],
+                    }
+                },
+                "programs": {},
+            }
+            (tmp_path / "prior.json").write_text(json.dumps(prior))
+            report = translate.translate_live_sources(
+                sources, tmp_path / "out", existing=tmp_path / "prior.json"
+            )
+            merged = report["stages"]
+        self.assertIn("e" * 64, merged)
+        self.assertEqual(
+            merged["e" * 64]["attributes"],
+            [{"name": "in_POSITION", "type": "float4"}],
+        )
+
+
 class ManifestWriterTests(unittest.TestCase):
     def test_manifest_writer_emits_a_parseable_document(self) -> None:
         source = ROOT / "tests" / "gfx_frame_trace_host.c"
