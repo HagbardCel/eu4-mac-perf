@@ -2,15 +2,24 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:  # pragma: no cover - the portable CI runner has no numpy
+    np = None
 
-from automation import m6_live_accept
+try:
+    from automation import m6_live_accept
+except ImportError:  # numpy is imported by the live checker
+    m6_live_accept = None
+
+_HAS_DEPS = np is not None and m6_live_accept is not None
 
 
 def _run(ok=True, canonical="/tmp/a", identity="one"):
     return {"ok": ok, "status": {}, "canonical": canonical, "identity": identity}
 
 
+@unittest.skipUnless(_HAS_DEPS, "the live acceptance checker needs numpy")
 class SummarizeRunsTests(unittest.TestCase):
     def test_three_distinct_runs_and_identities_qualify(self) -> None:
         runs = [_run(canonical=f"/tmp/{i}", identity=f"session-{i}") for i in range(3)]
@@ -51,6 +60,7 @@ class SummarizeRunsTests(unittest.TestCase):
         self.assertEqual(summary["clean_starts"], 2)
 
 
+@unittest.skipUnless(_HAS_DEPS, "the live acceptance checker needs numpy")
 class ReferenceTests(unittest.TestCase):
     def test_missing_reference_is_a_hard_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -66,6 +76,7 @@ class ReferenceTests(unittest.TestCase):
         self.assertIn("expected", error)
 
 
+@unittest.skipUnless(_HAS_DEPS, "the live acceptance checker needs numpy")
 class CandidateTests(unittest.TestCase):
     def test_dump_dimensions_are_derived_from_its_size(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -89,6 +100,7 @@ class CandidateTests(unittest.TestCase):
         self.assertIn("integer scale", error)
 
 
+@unittest.skipUnless(_HAS_DEPS, "the live acceptance checker needs numpy")
 class MapStructureTests(unittest.TestCase):
     POLICY = {"map_min_std": 20.0, "map_min_coherence": 0.5}
 
