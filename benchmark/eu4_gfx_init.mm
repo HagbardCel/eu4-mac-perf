@@ -566,6 +566,25 @@ static int apply_snap(void *master, int offset, const uint8_t *snap, int size, i
     return 0;
 }
 
+static void fail_blend(const uint8_t *desc, void *state) {
+    char hex[0x24 * 2 + 1];
+    static const char digits[] = "0123456789abcdef";
+    for (int i = 0; i < 0x24; i++) {
+        hex[i * 2] = digits[desc[i] >> 4];
+        hex[i * 2 + 1] = digits[desc[i] & 0xf];
+    }
+    hex[0x24 * 2] = 0;
+    char body[256];
+    int length = snprintf(
+        body, sizeof body,
+        "{\"schema\":\"gfx-blend-rejected/v1\",\"descriptor\":\"%s\","
+        "\"state\":\"%p\",\"pid\":%d}\n",
+        hex, state, (int)getpid());
+    if (length > 0 && (size_t)length < sizeof body) {
+        (void)eu4_metal_events_write("blend-rejected.json", body);
+    }
+}
+
 static int apply_blend(void *master, void *state, int force) {
     if (state == NULL) {
         return -1;
@@ -573,30 +592,19 @@ static int apply_blend(void *master, void *state, int force) {
     const uint8_t *desc = (const uint8_t *)state + 0x24;
     uint8_t snap[0x24];
     if (desc[0] == 0) {
-        /* Blend disabled: the engine writes a zero enable flag; the factors are
-           then immaterial (the observed descriptor is ONE/ZERO). */
+        /* Blend disabled: the engine writes a zero enable flag with the opaque
+           ONE/ZERO pair. Degenerate factor pairs stay fail-closed. */
+        if (!((desc[4] == 1 && desc[8] == 0) || (desc[4] == 4 && desc[8] == 5))) {
+            fail_blend(desc, state);
+            return -1;
+        }
         fill_blend_snap(snap);
     } else if (blend_supported(desc)) {
         fill_blend_snap(snap);
     } else if (blend_sprite_supported(desc)) {
         fill_sprite_blend_snap(snap);
     } else {
-        char hex[0x24 * 2 + 1];
-        static const char digits[] = "0123456789abcdef";
-        for (int i = 0; i < 0x24; i++) {
-            hex[i * 2] = digits[desc[i] >> 4];
-            hex[i * 2 + 1] = digits[desc[i] & 0xf];
-        }
-        hex[0x24 * 2] = 0;
-        char body[256];
-        int length = snprintf(
-            body, sizeof body,
-            "{\"schema\":\"gfx-blend-rejected/v1\",\"descriptor\":\"%s\","
-            "\"state\":\"%p\",\"pid\":%d}\n",
-            hex, state, (int)getpid());
-        if (length > 0 && (size_t)length < sizeof body) {
-            (void)eu4_metal_events_write("blend-rejected.json", body);
-        }
+        fail_blend(desc, state);
         return -1;
     }
     return apply_snap(master, 0xc, snap, 0x24, force);
@@ -1949,6 +1957,19 @@ eu4_gfx_clear_status eu4_gfx_read_offscreen(void *master, void *dest, size_t cap
    the layer's drawable and present it. */
 /* GL resolve helpers: the Metal targets are single-sample and already hold
    the resolved colour, so the GL resolve steps are no-ops. */
+/* Host lifecycle tests link this file without the texture module; resolve the
+   lookup at run time so those hosts still link. */
+typedef void *(*eu4_gfx_texture_lookup)(void *header);
+static void *texture_for_header(void *header) {
+    static eu4_gfx_texture_lookup lookup;
+    static int tried;
+    if (!tried) {
+        tried = 1;
+        lookup = (eu4_gfx_texture_lookup)dlsym(RTLD_DEFAULT, "eu4_gfx_texture_for_header");
+    }
+    return lookup != NULL ? lookup(header) : NULL;
+}
+
 static void dump_mtl_texture(id<MTLTexture> texture, const char *path) {
     if (texture == nil || path == NULL) {
         return;
@@ -2087,7 +2108,7 @@ void eu4_gfx_resolve_noop(void *unused, void *header) {
     if (backend == nil || backend.queue == nil) {
         return;
     }
-    id<MTLTexture> dst = (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(header);
+    id<MTLTexture> dst = (__bridge id<MTLTexture>)texture_for_header(header);
     /* The engine copies the previous frame's image here (GL's back buffer
        still holds it); the reconstructed single backbuffer is cleared before
        this point, so the preserved previous frame is the correct source. */
@@ -2161,8 +2182,8 @@ void eu4_gfx_resolve_texture_noop(void *handle, void *source, void *target) {
        (resolved) texture. The reconstructed targets are single-sample, so a
        Metal texture copy is the exact equivalent; skipping it left the
        composite sampling stale texture contents. */
-    id<MTLTexture> src = (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(source);
-    id<MTLTexture> dst = (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(target);
+    id<MTLTexture> src = (__bridge id<MTLTexture>)texture_for_header(source);
+    id<MTLTexture> dst = (__bridge id<MTLTexture>)texture_for_header(target);
     EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
     if (getenv("EU4_GFX_RESOLVE_TRACE") != NULL) {
         char body[512];
