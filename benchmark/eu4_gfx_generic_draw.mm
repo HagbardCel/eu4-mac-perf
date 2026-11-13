@@ -1061,6 +1061,36 @@ static int generic_draw_encode_impl(const void *immediate_context,
                                           resolved ? @"true" : @"false",
                                           (__bridge void *)(header != NULL ? (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(header) : nil)];
             }
+            {
+                /* Targeted sampled-texture dump: verifies whether a stage's
+                   inputs contain data (black inputs explain black outputs). */
+                const char *sample_stage = getenv("EU4_GFX_SAMPLE_TEXTURE_STAGE");
+                const char *sample_dir = getenv("EU4_GFX_SAMPLE_TEXTURE_DUMP");
+                if (sample_stage != NULL && sample_dir != NULL && sample_stage[0] != 0) {
+                    NSString *vfile = vertex_stage[@"msl_file"] ?: @"";
+                    NSString *pfile = pixel_stage[@"msl_file"] ?: @"";
+                    NSString *vstem = vfile.lastPathComponent.stringByDeletingPathExtension;
+                    NSString *pstem = pfile.lastPathComponent.stringByDeletingPathExtension;
+                    NSString *wanted = [NSString stringWithUTF8String:sample_stage];
+                    if ([vstem rangeOfString:wanted].location != NSNotFound ||
+                        [pstem rangeOfString:wanted].location != NSNotFound) {
+                        static NSMutableSet *dumped;
+                        if (dumped == nil) {
+                            dumped = [NSMutableSet set];
+                        }
+                        NSString *key = [NSString stringWithFormat:@"%lu-%lux%lu", (unsigned long)unit,
+                                         (unsigned long)texture.width, (unsigned long)texture.height];
+                        if (![dumped containsObject:key]) {
+                            [dumped addObject:key];
+                            char path[512];
+                            snprintf(path, sizeof path, "%s/tex-u%lu-%lux%lu.bgra", sample_dir,
+                                     (unsigned long)unit, (unsigned long)texture.width,
+                                     (unsigned long)texture.height);
+                            dump_texture_file(texture, path);
+                        }
+                    }
+                }
+            }
             id<MTLSamplerState> sampler = generic_sampler(device, @"linear", NO);
             if ([stage_name isEqualToString:@"vertex"]) {
                 [encoder setVertexTexture:texture atIndex:texture_index];

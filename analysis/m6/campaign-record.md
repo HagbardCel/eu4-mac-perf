@@ -826,3 +826,16 @@ Remaining candidates:
 Next step: dump the textures bound by the terrain stage at draw time and check
 whether the terrain/heightmap inputs contain data; if they are black, fix the
 texture upload/format path for those formats.
+
+## Map inputs have data; frame depth was never cleared (2026-11-13 14:55)
+
+A targeted sampled-texture dump of the terrain stage shows its inputs are real
+images (means 14-191, hundreds of colours), so black inputs are not the cause of
+the black map passes. The authentic frame's first default-framebuffer clear has
+`flags=7` (colour+depth+stencil) with depth 1.0, but the reconstructed default
+clear only cleared colour, leaving the depth attachment uninitialised; depth-
+tested map fragments would then fail against a zero-filled depth buffer.
+
+`encode_color_clear` now attaches the game depth texture and clears it to 1.0
+when the engine's clear flags include the depth bit, matching the captured
+frame's frame-start clear.

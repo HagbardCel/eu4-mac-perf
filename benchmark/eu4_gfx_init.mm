@@ -1620,7 +1620,7 @@ static eu4_gfx_clear_status drain_pending_game(__unsafe_unretained EU4GfxBackend
 
 static eu4_gfx_clear_status encode_color_clear(__unsafe_unretained EU4GfxBackend *backend,
                                                id<MTLTexture> target, const float *color,
-                                               id *out_command) {
+                                               unsigned flags, id *out_command) {
     static const float opaque_black[4] = {0.f, 0.f, 0.f, 1.f};
     const float *src = color != NULL ? color : opaque_black;
     id<MTLCommandQueue> queue = backend.queue;
@@ -1633,6 +1633,15 @@ static eu4_gfx_clear_status encode_color_clear(__unsafe_unretained EU4GfxBackend
     pass.colorAttachments[0].loadAction = MTLLoadActionClear;
     pass.colorAttachments[0].storeAction = MTLStoreActionStore;
     pass.colorAttachments[0].clearColor = MTLClearColorMake(src[0], src[1], src[2], src[3]);
+    BOOL clear_depth = (flags & 2u) != 0;
+    if (clear_depth && backend.gameDepthTarget != nil && target == backend.gameColorTarget) {
+        /* The engine's frame-start clear includes depth (flag bit 1) and
+           expects a fresh 1.0 depth buffer. */
+        pass.depthAttachment.texture = backend.gameDepthTarget;
+        pass.depthAttachment.loadAction = MTLLoadActionClear;
+        pass.depthAttachment.clearDepth = 1.0;
+        pass.depthAttachment.storeAction = MTLStoreActionStore;
+    }
     id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
     if (encoder == nil) {
         return EU4_GFX_CLEAR_FAILED;
@@ -1719,7 +1728,7 @@ eu4_gfx_clear_status eu4_gfx_clear_checked(void *handle, unsigned flags, const f
     }
     id command = nil;
     eu4_gfx_clear_status encoded =
-        encode_color_clear(backend, backend.colorTarget, color, &command);
+        encode_color_clear(backend, backend.colorTarget, color, flags, &command);
     if (encoded != EU4_GFX_CLEAR_OK) {
         return encoded;
     }
@@ -1839,7 +1848,7 @@ static eu4_gfx_clear_status clear_game_checked(void *handle, unsigned flags, con
     }
     id command = nil;
     eu4_gfx_clear_status encoded =
-        encode_color_clear(backend, backend.gameColorTarget, color, &command);
+        encode_color_clear(backend, backend.gameColorTarget, color, flags, &command);
     if (encoded != EU4_GFX_CLEAR_OK) {
         g_clear_reason = "clear command encoding failed";
         return encoded;
