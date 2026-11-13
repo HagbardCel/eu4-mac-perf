@@ -1951,7 +1951,57 @@ eu4_gfx_clear_status eu4_gfx_read_offscreen(void *master, void *dest, size_t cap
    the resolved colour, so the GL resolve steps are no-ops. */
 void eu4_gfx_resolve_noop(void *unused, void *header) {
     (void)unused;
-    (void)header;
+    /* _GfxResolve is glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h):
+       it copies the current framebuffer into the header's texture. The sampled
+       map textures are filled exactly here; a no-op left them empty. */
+    if (header == NULL) {
+        return;
+    }
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil || backend.queue == nil) {
+        return;
+    }
+    id<MTLTexture> dst = (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(header);
+    id<MTLTexture> src = backend.currentTargetColor != nil
+        ? backend.currentTargetColor : backend.gameColorTarget;
+    if (getenv("EU4_GFX_RESOLVE_TRACE") != NULL) {
+        char body[512];
+        int n = snprintf(
+            body, sizeof body,
+            "{\"schema\":\"gfx-resolve/v1\",\"header\":\"%p\","
+            "\"src\":\"%p\",\"dst\":\"%p\","
+            "\"current\":\"%p\",\"src_size\":[%lu,%lu],"
+            "\"dst_size\":[%lu,%lu],\"pid\":%d}\n",
+            header, (__bridge void *)src, (__bridge void *)dst,
+            backend.currentTargetColor,
+            (unsigned long)(src != nil ? src.width : 0),
+            (unsigned long)(src != nil ? src.height : 0),
+            (unsigned long)(dst != nil ? dst.width : 0),
+            (unsigned long)(dst != nil ? dst.height : 0), (int)getpid());
+        if (n > 0 && (size_t)n < sizeof body) {
+            (void)eu4_metal_events_write("resolve.json", body);
+        }
+    }
+    if (src == nil || dst == nil || src.width != dst.width ||
+        src.height != dst.height) {
+        return;
+    }
+    id<MTLCommandBuffer> command = [backend.queue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = command != nil ? [command blitCommandEncoder] : nil;
+    if (blit != nil) {
+        [blit copyFromTexture:src
+                  sourceSlice:0
+                  sourceLevel:0
+                 sourceOrigin:MTLOriginMake(0, 0, 0)
+                   sourceSize:MTLSizeMake(src.width, src.height, 1)
+                    toTexture:dst
+             destinationSlice:0
+             destinationLevel:0
+            destinationOrigin:MTLOriginMake(0, 0, 0)];
+        [blit endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+    }
 }
 
 void eu4_gfx_resolve_texture_noop(void *handle, void *source, void *target) {
@@ -1963,6 +2013,22 @@ void eu4_gfx_resolve_texture_noop(void *handle, void *source, void *target) {
     id<MTLTexture> src = (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(source);
     id<MTLTexture> dst = (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(target);
     EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (getenv("EU4_GFX_RESOLVE_TRACE") != NULL) {
+        char body[512];
+        int n = snprintf(
+            body, sizeof body,
+            "{\"schema\":\"gfx-resolve-texture/v1\",\"source\":\"%p\","
+            "\"target\":\"%p\",\"src\":\"%p\",\"dst\":\"%p\","
+            "\"src_size\":[%lu,%lu],\"dst_size\":[%lu,%lu],\"pid\":%d}\n",
+            source, target, (__bridge void *)src, (__bridge void *)dst,
+            (unsigned long)(src != nil ? src.width : 0),
+            (unsigned long)(src != nil ? src.height : 0),
+            (unsigned long)(dst != nil ? dst.width : 0),
+            (unsigned long)(dst != nil ? dst.height : 0), (int)getpid());
+        if (n > 0 && (size_t)n < sizeof body) {
+            (void)eu4_metal_events_write("resolve-texture.json", body);
+        }
+    }
     if (src == nil || dst == nil || backend == nil || backend.queue == nil) {
         return;
     }

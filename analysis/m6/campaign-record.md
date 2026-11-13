@@ -478,3 +478,14 @@ Remaining hypotheses, in order:
 
 Next diagnostics: dump the two sampled textures at the composite draw, and the
 backbuffer immediately after the composite, to separate sampling from ordering.
+
+## Root cause of the empty map textures (2026-11-13 05:00)
+
+`_GfxResolve` is `glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h)`:
+it copies the current framebuffer into the header's texture. The sampled map
+and bloom textures are filled exactly there. The Metal path had replaced it
+with a no-op, so the composite (which binds those sampled textures) read
+all-zero textures; dumps confirmed `sample-u0` and `sample-u1` were entirely
+zero. `_GfxResolve` now performs the equivalent Metal blit from the current
+render target (or the backbuffer) into the header texture, with an optional
+`resolve.json` trace.
