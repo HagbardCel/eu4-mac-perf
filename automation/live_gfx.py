@@ -1808,6 +1808,8 @@ def probe(args: argparse.Namespace) -> int:
         env["EU4_GFX_UNIFORM_TRACE"] = "1"
     if args.swap_dump:
         env["EU4_GFX_SWAP_DUMP"] = str(Path(output) / "swap-frame.bgra")
+    if args.dump_targets:
+        env["EU4_GFX_DUMP_TARGETS"] = str(Path(output))
     if args.shader_cache:
         env["EU4_GFX_SHADER_CACHE"] = str(
             Path(args.shader_cache).expanduser().resolve()
@@ -2205,6 +2207,7 @@ def _parser() -> argparse.ArgumentParser:
     prb.add_argument("--texture-diagnostics", action="store_true")
     prb.add_argument("--uniform-trace", action="store_true")
     prb.add_argument("--swap-dump", action="store_true")
+    prb.add_argument("--dump-targets", action="store_true")
     prb.add_argument(
         "--qualified-sources",
         default=str(ROOT / "analysis" / "gfx-shader" / "v0" / "qualified-sources.json"),

@@ -1959,6 +1959,27 @@ void eu4_gfx_resolve_texture_noop(void *handle, void *source, void *target) {
     (void)target;
 }
 
+/* CGraphics::PresentScene (0x149daf0). The frontend clears the present flag,
+   so the original only calls _GfxPresent on some frames; the title scene is
+   single-buffer style and needs a present at this frame boundary. */
+void eu4_gfx_present_scene(void *self) {
+    if (self == NULL) {
+        return;
+    }
+    uint8_t flag = 0;
+    memcpy(&flag, (uint8_t *)self + 0x4e8, 1);
+    if (flag != 0) {
+        void *master = NULL;
+        memcpy(&master, (uint8_t *)self + 0x80, sizeof master);
+        if (master != NULL) {
+            int ok = eu4_gfx_present(master);
+            uint8_t value = ok ? 1 : 0;
+            memcpy((uint8_t *)self + 0x4e8, &value, 1);
+        }
+    }
+    (void)eu4_gfx_swap_window(NULL);
+}
+
 int eu4_gfx_cocoa_swap_window(void *window) {
     return eu4_gfx_swap_window(window);
 }
@@ -2296,13 +2317,57 @@ void eu4_gfx_set_render_target(void *handle, void *target) {
         backend.currentTargetWidth = width;
         backend.currentTargetHeight = height;
         if (master != NULL) {
+            /* The engine stores the viewport height at +0xac and the width at
+               +0xb0 (see _GfxSetRenderTarget's default path). */
             uint8_t *bytes = (uint8_t *)master;
-            memcpy(bytes + 0xac, &width, 4);
-            memcpy(bytes + 0xb0, &height, 4);
+            memcpy(bytes + 0xac, &height, 4);
+            memcpy(bytes + 0xb0, &width, 4);
             memset(bytes + 0xbc, 0, 4);
             memcpy(bytes + 0x78, &target, sizeof target);
         }
         return;
+    }
+    if (backend != nil && backend.currentTargetColor != nil &&
+        getenv("EU4_GFX_DUMP_TARGETS") != NULL && backend.queue != nil) {
+        id<MTLTexture> color = backend.currentTargetColor;
+        NSUInteger row = (NSUInteger)color.width * 4;
+        id<MTLBuffer> buffer = [backend.device newBufferWithLength:row * color.height
+                                                           options:MTLResourceStorageModeShared];
+        if (buffer != nil) {
+            id<MTLCommandBuffer> command = [backend.queue commandBuffer];
+            id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+            if (blit != nil) {
+                [blit copyFromTexture:color
+                          sourceSlice:0
+                          sourceLevel:0
+                         sourceOrigin:MTLOriginMake(0, 0, 0)
+                           sourceSize:MTLSizeMake(color.width, color.height, 1)
+                             toBuffer:buffer
+                    destinationOffset:0
+               destinationBytesPerRow:row
+             destinationBytesPerImage:row * color.height];
+                [blit endEncoding];
+            }
+            [command commit];
+            [command waitUntilCompleted];
+            const char *dir = getenv("EU4_GFX_DUMP_TARGETS");
+            char path[512];
+            snprintf(path, sizeof path, "%s/rt-%p.bgra", dir, backend.currentTargetHeader);
+            uint8_t *flipped = (uint8_t *)malloc(row * color.height);
+            if (flipped != NULL) {
+                const uint8_t *src = (const uint8_t *)buffer.contents;
+                for (NSUInteger y = 0; y < color.height; y++) {
+                    memcpy(flipped + y * row,
+                           src + (color.height - 1 - y) * row, row);
+                }
+                FILE *file = fopen(path, "wb");
+                if (file != NULL) {
+                    fwrite(flipped, 1, row * color.height, file);
+                    fclose(file);
+                }
+                free(flipped);
+            }
+        }
     }
     if (backend != nil) {
         backend.currentTargetHeader = NULL;

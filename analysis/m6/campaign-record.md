@@ -422,3 +422,11 @@ with a float vertex format. The conversion applies only when the declared GLSL
 type is a float vector, the GL type is an integer, `normalized` is false, and
 the attribute is per-vertex. The composite quad now receives its exact GL
 coordinates.
+
+## Render-target viewport order (2026-11-13)
+
+`_GfxSetRenderTarget`'s original writes the target height to `master+0xac` and
+the width to `master+0xb0`; the replacement wrote them swapped, so every
+render-target pass used a transposed viewport (1728x1117 became 1117x1728) and
+the map RTs stayed at their clear colour. The switch now matches the original
+field order. The route already reads `+0xac` as height and `+0xb0` as width.
