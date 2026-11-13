@@ -740,7 +740,13 @@ int eu4_gfx_simple_state_supported(void *master, char *reason, size_t capacity) 
        depth attachment, so depth state cannot change the captured colour. */
     uint8_t expected_raster[0x10];
     fill_raster_snap(expected_raster);
-    if (memcmp((uint8_t *)master + 0x54, expected_raster, sizeof expected_raster) != 0) {
+    /* The cull-enable byte (+0xc) is part of the generic encoder's state and
+       may differ from the legacy default snapshot; the effective cull mode,
+       polygon mode, winding and validity are what these passes require. */
+    uint8_t actual_raster[0x10];
+    memcpy(actual_raster, (uint8_t *)master + 0x54, sizeof actual_raster);
+    if (memcmp(actual_raster, expected_raster, 0xc) != 0 ||
+        actual_raster[0xd] != expected_raster[0xd]) {
         simple_state_reason(reason, capacity,
                             "rasterizer state is not the backend default snapshot");
         return 0;
@@ -780,7 +786,13 @@ int eu4_gfx_sprite_state_supported(void *master, char *reason, size_t capacity) 
     }
     uint8_t expected_raster[0x10];
     fill_raster_snap(expected_raster);
-    if (memcmp((uint8_t *)master + 0x54, expected_raster, sizeof expected_raster) != 0) {
+    /* The cull-enable byte (+0xc) is part of the generic encoder's state and
+       may differ from the legacy default snapshot; the effective cull mode,
+       polygon mode, winding and validity are what these passes require. */
+    uint8_t actual_raster[0x10];
+    memcpy(actual_raster, (uint8_t *)master + 0x54, sizeof actual_raster);
+    if (memcmp(actual_raster, expected_raster, 0xc) != 0 ||
+        actual_raster[0xd] != expected_raster[0xd]) {
         simple_state_reason(reason, capacity,
                             "rasterizer state is not the backend default snapshot");
         return 0;
