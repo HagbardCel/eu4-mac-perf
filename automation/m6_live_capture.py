@@ -50,7 +50,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "timeout", "checkpoint": str(checkpoint), "pid": pid}))
         return 2
     time.sleep(args.settle)
-    result = live_gfx._window_capture(output, int(pid), None)
+    drawable = output / "swap-frame.bgra"
+    result = live_gfx._window_capture(output, int(pid), drawable if drawable.is_file() else None)
     record = {
         "schema": "m6-live-window-capture/v1",
         "probe_output": str(output),

@@ -214,6 +214,27 @@ def compare(
         raise CompareError("candidate GPU command did not complete")
     if replay.get("failed") not in (0, None):
         raise CompareError("candidate replay reports failed draws")
+    expected_events = manifest.get("event_count")
+    if not isinstance(expected_events, int):
+        # Older traces do not repeat the count in the manifest; the captured
+        # event log is the authoritative record.
+        events_path = reference_dir / "frame-events.jsonl"
+        if events_path.is_file():
+            expected_events = sum(
+                1 for line in events_path.read_text().splitlines() if line.strip()
+            )
+    if not isinstance(expected_events, int) or expected_events <= 0:
+        raise CompareError("reference event count is missing")
+    if replay.get("events") != expected_events:
+        raise CompareError(
+            f"candidate replay processed {replay.get('events')!r} events, "
+            f"expected {expected_events}"
+        )
+    if replay.get("encoded") != expected_events:
+        raise CompareError(
+            f"candidate replay encoded {replay.get('encoded')!r} events, "
+            f"expected {expected_events}"
+        )
     candidate_frame = replay.get("frame") or {}
     if (candidate_frame.get("width"), candidate_frame.get("height")) != (
         width,

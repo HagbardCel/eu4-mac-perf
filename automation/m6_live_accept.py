@@ -64,15 +64,21 @@ def load_candidate(path: Path, logical: tuple[int, int]) -> tuple[np.ndarray | N
     data = np.fromfile(path, dtype=np.uint8)
     if data.size % 4 != 0:
         return None, "presented frame dump is not 32-bit", details
-    physical = None
-    for candidate in ((3456, 2234), (1728, 1117), (2160, 1396), (2560, 1654)):
-        if candidate[0] * candidate[1] * 4 == data.size:
-            physical = candidate
-            break
-    if physical is None:
-        return None, f"presented frame dump has unexpected size {data.size}", details
-    details["physical"] = list(physical)
     width, height = logical
+    pixels = data.size // 4
+    scale = None
+    if pixels > 0 and width > 0 and height > 0 and pixels % (width * height) == 0:
+        scale = int(round((pixels / float(width * height)) ** 0.5))
+        if scale * scale * width * height != pixels:
+            scale = None
+    if scale is None:
+        return None, (
+            f"presented frame dump {data.size} bytes does not match the "
+            f"logical scene {width}x{height} at an integer scale"
+        ), details
+    physical = (width * scale, height * scale)
+    details["physical"] = list(physical)
+    details["scale"] = scale
     picture = data.reshape(physical[1], physical[0], 4)
     # The dump keeps the captured GL lower-left origin; flip it to the same
     # top-left convention as the reference before resizing.
@@ -101,6 +107,35 @@ def high_pass(image: np.ndarray, region, radius: float = 6.0) -> np.ndarray:
     return window.astype(np.int16) - low
 
 
+def map_structure_ok(window: np.ndarray, policy: dict) -> bool:
+    """Credible map content: real structure, not a flat colour or noise.
+
+    A map has spatial coherence (neighbouring pixels are similar) and a
+    non-trivial luminance spread. Random noise has the spread but no coherence;
+    a blank or single-colour fill has neither.
+    """
+    from PIL import Image
+
+    rgb = window[:, :, :3].astype(np.float32)
+    luminance = rgb.mean(axis=2)
+    if luminance.size == 0:
+        return False
+    coarse = np.asarray(
+        Image.fromarray(luminance.astype(np.uint8)).resize((64, 64), Image.LANCZOS),
+        dtype=np.float32,
+    )
+    spread = float(coarse.std())
+    if spread < float(policy.get("map_min_std", 20.0)):
+        return False
+    left = coarse[:, :-1]
+    right = coarse[:, 1:]
+    left = left - left.mean()
+    right = right - right.mean()
+    denominator = float(np.sqrt((left * left).sum() * (right * right).sum()))
+    coherence = float((left * right).sum() / denominator) if denominator else 0.0
+    return coherence >= float(policy.get("map_min_coherence", 0.5))
+
+
 def region_error(candidate: np.ndarray, reference: np.ndarray, region) -> float:
     """Diagnostic mean absolute difference of the raw regions."""
     y0, y1, x0, x1 = region
@@ -124,11 +159,54 @@ def region_correlation(candidate: np.ndarray, reference: np.ndarray,
     return float((a * b).sum() / denominator)
 
 
+def run_identity(run: Path, probe: dict) -> str:
+    """Stable per-launch identity recorded by the probe launcher."""
+    provenance = probe.get("provenance") or {}
+    identity = provenance.get("session") or provenance.get("pid")
+    if identity:
+        return str(identity)
+    metadata_path = run / "metadata.json"
+    if metadata_path.is_file():
+        try:
+            metadata = json.loads(metadata_path.read_text())
+            return str(metadata.get("pid") or "")
+        except (OSError, ValueError):
+            return ""
+    return ""
+
+
+def summarize_runs(runs: list[dict]) -> dict:
+    """Aggregates per-run results, requiring distinct paths and launches.
+
+    One successful capture can never satisfy the three-clean-start requirement
+    by being passed three times, even through copied directories or symlinks.
+    """
+    canonical = [item.get("canonical") or "" for item in runs]
+    identities = [item.get("identity") or "" for item in runs]
+    distinct_runs = len(set(canonical)) == len(runs) and all(canonical)
+    distinct_identities = (
+        len(set(identities)) == len(runs) and all(identities)
+    )
+    clean = sum(1 for item in runs if item.get("ok"))
+    ok = bool(
+        len(runs) == 3
+        and all(item.get("ok") for item in runs)
+        and distinct_runs
+        and distinct_identities
+    )
+    return {
+        "clean_starts": clean,
+        "distinct_runs": distinct_runs,
+        "distinct_identities": distinct_identities,
+        "ok": ok,
+    }
+
+
 def check_run(run: Path, reference: np.ndarray | None, reference_error: str,
               policy: dict) -> dict:
     logical = tuple(policy["reference"]["logical"])
     result: dict = {"run": str(run), "status": {}, "checks": {}, "stats": {},
-                    "ok": False}
+                    "canonical": str(run.resolve()), "identity": "", "ok": False}
     status = result["status"]
     checks = result["checks"]
 
@@ -137,6 +215,7 @@ def check_run(run: Path, reference: np.ndarray | None, reference_error: str,
         result["reason"] = "no probe-result.json"
         return result
     probe = json.loads(probe_path.read_text())
+    result["identity"] = run_identity(run, probe)
     probe_status = probe.get("status") or {}
     refused = sorted(run.glob("draw-refused-*.json"))
 
@@ -185,12 +264,15 @@ def check_run(run: Path, reference: np.ndarray | None, reference_error: str,
         window = candidate[y0:y1, x0:x1]
         map_unique = int(len(np.unique(window.reshape(-1, 3), axis=0)))
         map_mean = float(window.mean())
+        structure = map_structure_ok(window, policy)
         details["map_unique_colors"] = map_unique
         details["map_mean"] = round(map_mean, 3)
+        details["map_structure"] = structure
         map_ok = (
             map_unique >= int(policy["map_min_unique_colors"])
             and map_mean >= float(policy["map_min_mean"])
             and map_unique < int(0.5 * (y1 - y0) * (x1 - x0))
+            and structure
         )
         details["ui_ok"] = ui_ok
         details["map_ok"] = map_ok
@@ -218,14 +300,17 @@ def main(argv: list[str] | None = None) -> int:
     reference, reference_error = load_reference(Path(args.reference), logical)
     runs = [check_run(Path(item), reference, reference_error, policy)
             for item in args.run]
+    summary = summarize_runs(runs)
     report = {
         "schema": "m6-live-acceptance/v1",
         "reference": str(args.reference),
         "reference_ok": reference is not None,
         "reference_error": reference_error,
         "runs": runs,
-        "clean_starts": sum(1 for item in runs if item["ok"]),
-        "ok": len(runs) == 3 and all(item["ok"] for item in runs),
+        "clean_starts": summary["clean_starts"],
+        "distinct_runs": summary["distinct_runs"],
+        "distinct_identities": summary["distinct_identities"],
+        "ok": summary["ok"],
     }
     text = json.dumps(report, indent=2) + "\n"
     if args.out:
