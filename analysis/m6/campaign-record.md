@@ -339,3 +339,17 @@ last record before the crash identifies the exact slot without another guess.
 
 The stuck game holds the launch lease; clean up with
 `pkill -9 -x eu4; pkill -9 -f "CrashReporter.*eu4"` before the next probe.
+
+## Root cause of the water-pass crash: constant-slot stride
+
+The original draw bodies index the six constant slots with a byte offset that
+advances by 4 and address `0xc8 + rbx*4` / `0xd0 + rbx*4`, i.e. **16 bytes per
+slot**. The generic encoder packed uniforms with a 4-byte stride, so slots 1..5
+read unrelated master fields as the count/header, producing a wild data pointer
+and a SIGSEGV in `pack_stage_uniforms`. The packing now uses `0xc8 + 16*slot`
+and `0xd0 + 16*slot`, matching `_GfxDraw`/`_GfxDrawIndexed`/
+`_GfxDrawIndexedInstanced`.
+
+A uniform-pack trace (`EU4_GFX_UNIFORM_TRACE=1`, probe `--uniform-trace`)
+records the stage, slot, count, header/values pointers and copy ranges for
+future slot-layout diagnostics.

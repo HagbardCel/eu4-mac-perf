@@ -197,8 +197,11 @@ static NSData *pack_stage_uniforms(NSDictionary *stage, const uint8_t *master,
             fail(reason, capacity, "constant slot out of range");
             return nil;
         }
-        uint32_t count = load_u32(master, 0xc8 + slot * 4);
-        void *header = load_ptr(master, 0xd0 + slot * 4);
+        /* The engine's constant-slot records are 16 bytes apart: the original
+           draw bodies index them with a byte offset `rbx` that advances by 4
+           and address `0xc8 + rbx*4` / `0xd0 + rbx*4` (= 16*slot). */
+        uint32_t count = load_u32(master, 0xc8 + slot * 16);
+        void *header = load_ptr(master, 0xd0 + slot * 16);
         if (count == 0 || header == NULL) {
             continue;
         }
@@ -217,6 +220,22 @@ static NSData *pack_stage_uniforms(NSDictionary *stage, const uint8_t *master,
         }
         if (copy > data.length - member_offset) {
             copy = data.length - member_offset;
+        }
+        if (getenv("EU4_GFX_UNIFORM_TRACE") != NULL) {
+            char body[768];
+            int n = snprintf(
+                body, sizeof body,
+                "{\"schema\":\"gfx-uniform-pack/v1\","
+                "\"stage\":\"%s\",\"slot\":%u,\"count\":%u,"
+                "\"header\":\"%p\",\"values\":\"%p\","
+                "\"member_offset\":%lu,\"copy\":%lu,\"master\":\"%p\","
+                "\"pid\":%d}\n",
+                [[stage[@"msl_file"] description] UTF8String] ?: "",
+                slot, count, header, values, (unsigned long)member_offset,
+                (unsigned long)copy, master, (int)getpid());
+            if (n > 0 && (size_t)n < sizeof body) {
+                (void)eu4_metal_events_write("uniform-pack.json", body);
+            }
         }
         memcpy((uint8_t *)data.mutableBytes + member_offset, values, copy);
     }

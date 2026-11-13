@@ -1804,6 +1804,8 @@ def probe(args: argparse.Namespace) -> int:
     if args.texture_diagnostics:
         env["EU4_GFX_TEXTURE_TRACE"] = "1"
         env["EU4_GFX_TEXTURE_PLACEHOLDER"] = "1"
+    if args.uniform_trace:
+        env["EU4_GFX_UNIFORM_TRACE"] = "1"
     if args.shader_cache:
         env["EU4_GFX_SHADER_CACHE"] = str(
             Path(args.shader_cache).expanduser().resolve()
@@ -2199,6 +2201,7 @@ def _parser() -> argparse.ArgumentParser:
     prb.add_argument("--shader-cache")
     prb.add_argument("--skip-unsupported", action="store_true")
     prb.add_argument("--texture-diagnostics", action="store_true")
+    prb.add_argument("--uniform-trace", action="store_true")
     prb.add_argument(
         "--qualified-sources",
         default=str(ROOT / "analysis" / "gfx-shader" / "v0" / "qualified-sources.json"),
