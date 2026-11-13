@@ -106,6 +106,9 @@ the rest of the frame and is independent of the title scene:
   `sprite_vs` stages now binds the engine's constant-slot-2 uniform block
   (96 bytes) at the legacy buffer index, through a helper shared with the
   sprite encoder; a settled validation run reports zero draw errors.
+- **Uniforms (verified):** the terrain draw's captured GL uniform block and the
+  live packed block are byte-identical in value; uniform packing is excluded as
+  a cause.
 - **M6-blocking visual defect:** the live map's palette does not match the
   authentic map. The authentic menu map is static (a 240 s and a 285 s capture
   are identical), so this is not animation: the live map is pink

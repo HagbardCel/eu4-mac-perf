@@ -33,6 +33,9 @@ and icon row. [Qualification report](../analysis/m6/qualification-report.md),
 - **Sprite validation (fixed).** Synthetic `sprite_vs` draws now receive the
   engine's constant-slot-2 uniform block at buffer index 1; a settled
   validation run reports zero draw errors.
+- **Uniforms (verified).** The terrain pass's captured GL uniform block matches
+  the live packed block exactly; the remaining suspect is the compressed-texture
+  upload path.
 - **Blocking defect.** The live map's palette is materially wrong: the
   authentic map is static across captures, while the live map is pink and the
   composite's brightness/season input (the 864x558 render target) is
