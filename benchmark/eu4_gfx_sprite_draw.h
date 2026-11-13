@@ -54,3 +54,9 @@ const char *eu4_gfx_sprite_draw_status_name(eu4_gfx_sprite_draw_status status);
 #endif
 
 #endif
+
+/* Copies the legacy sprite uniform block (UNIFORM0[6], 96 bytes) from the
+   engine's constant slot 2 into `out`. Returns 0 on success and a negative
+   value when the slot is unset or declares fewer than 24 dwords. Shared by the
+   legacy sprite encoder and the generic fallback for synthetic sprite stages. */
+int eu4_gfx_sprite_uniform_data(void *master, void *out, size_t capacity);

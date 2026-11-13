@@ -1004,3 +1004,25 @@ defect rather than papered over.
 
 Together with the pink map palette (missing bright bloom/season layer), this
 means M6 live acceptance is not met and the PR must not merge.
+
+## Sprite uniform fix verified; map palette still open (2026-11-13 20:20)
+
+The sprite_vs validation defect is fixed at the shader/encoder contract: the
+legacy sprite uniform block (UNIFORM0[6], 96 bytes) is read from the engine's
+constant slot 2 through a shared helper reused by both the legacy sprite
+encoder and the generic fallback, keyed off the actual Metal vertex function
+name (`sprite_vs`). A host test verifies the helper (values, size, word-count
+refusal) and a settled validation run now reports **0 draw errors** (previously
+13-299 `missing Buffer binding at index 1`).
+
+Map palette: the two remaining hypotheses were tested and excluded.
+- Render-target pixel format: engine format 11 mapped to RGBA8 changed nothing
+  (the RT upload/resolve pipelines already convert channel order), reverted.
+- Blending: forcing blend off changed the map only marginally (palette
+  affinity 0.617 -> 0.639), so the pink is not a blend/background artifact.
+The composite's first input (the resolved map) is itself pink (RGB 136/101/120
+vs the authentic 103/111/114) while its second input is dark; the map passes'
+shader inputs (sampled terrain textures / uniforms) are therefore the
+remaining divergence. Terrain textures carry real data (RGB 14-191, several
+normal-map-like layers with alpha 255); the exact shader-input mismatch is not
+yet identified. M6 live acceptance remains blocked.

@@ -1,4 +1,5 @@
 #import "eu4_gfx_generic_draw.h"
+#import "eu4_gfx_sprite_draw.h"
 
 #import "eu4_gfx_buffers.h"
 #import "eu4_gfx_init.h"
@@ -906,6 +907,9 @@ static int generic_draw_encode_impl(const void *immediate_context,
     }
     uint8_t blend_snapshot[0x24];
     memcpy(blend_snapshot, master + 0xc, sizeof blend_snapshot);
+    if (getenv("EU4_GFX_NO_BLEND") != NULL) {
+        memset(blend_snapshot, 0, sizeof blend_snapshot);
+    }
     __unsafe_unretained EU4GfxBackend *backend =
         (__bridge EU4GfxBackend *)load_ptr(master, 0x180);
     id<MTLTexture> depth_texture = backend != nil ? backend.currentTargetDepth : nil;
@@ -1055,12 +1059,27 @@ static int generic_draw_encode_impl(const void *immediate_context,
     }
     NSUInteger vertex_uniform_buffer = num(vertex_stage[@"msl_uniform_buffer"], 0);
     NSUInteger pixel_uniform_buffer = num(pixel_stage[@"msl_uniform_buffer"], 0);
-    /* The synthetic legacy sprite_vs/main0 functions declare their uniform
-       block at buffer 1; cached stages carry their real index. */
-    if (vertex_stage[@"msl_uniform_buffer"] == nil) {
-        vertex_uniform_buffer = 1;
+    /* A synthetic legacy stage (no cached metadata) is the sprite_vs/sprite_fs
+       pair, whose uniform block lives at buffer 1 and is the engine's constant
+       slot 2 block. Pack the real engine values through the shared sprite
+       helper instead of binding nothing. */
+    BOOL sprite_function = NO;
+    if (vertex_function != NULL) {
+        NSString *name = [(__bridge id<MTLFunction>)vertex_function name];
+        sprite_function = [name isEqualToString:@"sprite_vs"];
     }
-    if (pixel_stage[@"msl_uniform_buffer"] == nil) {
+    if (sprite_function || vertex_stage[@"msl_uniform_buffer"] == nil) {
+        uint8_t sprite_uniform[EU4_GFX_SPRITE_CONSTANT_BYTES];
+        if (eu4_gfx_sprite_uniform_data(master, sprite_uniform,
+                                        sizeof sprite_uniform) != 0) {
+            fail(reason, reason_capacity,
+                 "synthetic stage has no engine uniform block");
+            return 0;
+        }
+        vertex_uniforms = [NSData dataWithBytes:sprite_uniform
+                                         length:sizeof sprite_uniform];
+        pixel_uniforms = vertex_uniforms;
+        vertex_uniform_buffer = 1;
         pixel_uniform_buffer = 1;
     }
     if (vertex_uniforms.length > 0) {

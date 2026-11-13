@@ -66,6 +66,11 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertIn("present=1", ran.stdout)
         self.assertIn("gpu_failure=1", ran.stdout)
 
+    def test_sprite_uniform_contract(self) -> None:
+        ran = self._run("--sprite-uniform")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("sprite_uniform=1", ran.stdout)
+
     def test_effective_depth_state(self) -> None:
         ran = self._run("--depth-state")
         self.assertEqual(ran.returncode, 0, ran.stderr)

@@ -10,6 +10,7 @@
 #import "eu4_gfx_generic_draw.h"
 #import "eu4_gfx_shader.h"
 #import "eu4_gfx_simple_draw.h"
+#import "eu4_gfx_sprite_draw.h"
 #import "eu4_gfx_texture.h"
 #import "eu4_metal_events.h"
 
@@ -602,6 +603,38 @@ static int run_scissor_helper(void) {
     return ok ? 0 : 1;
 }
 
+static int run_sprite_uniform(void) {
+    boot();
+    uint8_t *master = (uint8_t *)g_master;
+    static uint8_t slot[16];
+    static uint8_t block[96];
+    for (int i = 0; i < 96; i++) {
+        block[i] = (uint8_t)(i * 3 + 1);
+    }
+    uint32_t words = 24;
+    memcpy(slot, &words, 4);
+    void *data = block;
+    memcpy(slot + 8, &data, sizeof data);
+    void *slot_ptr = slot;
+    memcpy(master + EU4_GFX_MASTER_CONSTANT_SLOT2, &slot_ptr, sizeof slot_ptr);
+    uint8_t out[96];
+    memset(out, 0, sizeof out);
+    int ok = eu4_gfx_sprite_uniform_data(master, out, sizeof out) == 0 &&
+             memcmp(out, block, sizeof block) == 0;
+    /* The block is read as 24 dwords; the header stores word counts. */
+    memcpy(slot, &words, 4);
+    void *no_slot = NULL;
+    memcpy(master + EU4_GFX_MASTER_CONSTANT_SLOT2, &no_slot, sizeof no_slot);
+    int refused = eu4_gfx_sprite_uniform_data(master, out, sizeof out) != 0;
+    memcpy(master + EU4_GFX_MASTER_CONSTANT_SLOT2, &slot_ptr, sizeof slot_ptr);
+    uint32_t too_few = 23;
+    memcpy(slot, &too_few, 4);
+    int short_refused = eu4_gfx_sprite_uniform_data(master, out, sizeof out) != 0;
+    int ok_all = ok && refused && short_refused;
+    printf("sprite_uniform=%d\n", ok_all);
+    return ok_all ? 0 : 1;
+}
+
 static int run_depth_state(void) {
     boot();
     static const struct {
@@ -708,6 +741,9 @@ int main(int argc, char **argv) {
     }
     if (argc >= 2 && strcmp(argv[1], "--depth-state") == 0) {
         return run_depth_state();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--sprite-uniform") == 0) {
+        return run_sprite_uniform();
     }
     if (argc >= 2 && strcmp(argv[1], "--scissor-helper") == 0) {
         return run_scissor_helper();
