@@ -918,15 +918,33 @@ static void *g_after_dump_target;
 static char g_after_dump_path[512];
 static int dump_texture_file(id<MTLTexture> texture, const char *path);
 
-void eu4_gfx_generic_after_dump(void) {
+int eu4_gfx_generic_after_dump(void) {
     if (g_after_dump_target == NULL) {
-        return;
+        return 0;
     }
     id<MTLTexture> target = (__bridge id<MTLTexture>)g_after_dump_target;
     g_after_dump_target = NULL;
     /* The draw was just committed as the pending game command. */
     eu4_gfx_drain_pending();
-    dump_texture_file(target, g_after_dump_path);
+    int status = dump_texture_file(target, g_after_dump_path);
+    if (status != 0) {
+        char body[512];
+        int n = snprintf(body, sizeof body,
+                         "{\"schema\":\"gfx-diagnostic-failure/v1\","
+                         "\"capture\":\"after-composite\",\"path\":\"%s\"}\n",
+                         g_after_dump_path);
+        if (n > 0 && (size_t)n < sizeof body) {
+            (void)eu4_metal_events_write("diagnostic-failure.json", body);
+        }
+    }
+    return status;
+}
+
+int eu4_gfx_dump_texture(void *texture, const char *path) {
+    if (texture == NULL || path == NULL) {
+        return -1;
+    }
+    return dump_texture_file((__bridge id<MTLTexture>)texture, path);
 }
 
 static BOOL pixel_format_is_bc(MTLPixelFormat format) {
@@ -1125,8 +1143,12 @@ static int dump_texture_file(id<MTLTexture> texture, const char *path) {
         }
         FILE *file = fopen(path, "wb");
         if (file != NULL) {
-            fwrite(decoded, 1, row * texture.height, file);
-            fclose(file);
+            size_t written = fwrite(decoded, 1, row * texture.height, file);
+            int close_status = fclose(file);
+            if (written != row * texture.height || close_status != 0) {
+                free(decoded);
+                return -1;
+            }
             char sidecar[1024];
             int n = snprintf(sidecar, sizeof sidecar, "%s.json", path);
             if (n > 0 && (size_t)n < sizeof sidecar) {
@@ -1192,10 +1214,13 @@ static int dump_texture_file(id<MTLTexture> texture, const char *path) {
     if (file == NULL) {
         result = -1;
     } else {
-        if (fwrite(flipped, 1, row * texture.height, file) != row * texture.height) {
+        size_t written = fwrite(flipped, 1, row * texture.height, file);
+        if (written != row * texture.height) {
             result = -1;
         }
-        fclose(file);
+        if (fclose(file) != 0) {
+            result = -1;
+        }
     }
     free(flipped);
     return result;

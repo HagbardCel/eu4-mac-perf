@@ -664,6 +664,53 @@ static int run_texture_ranges(void) {
     return ok ? 0 : 1;
 }
 
+static int run_dump_texture(void) {
+    boot();
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil || backend.device == nil) {
+        fail("dump texture device");
+    }
+    id<MTLDevice> device = backend.device;
+    MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                     width:4
+                                    height:2
+                                 mipmapped:NO];
+    descriptor.usage = MTLTextureUsageShaderRead;
+    id<MTLTexture> texture = [device newTextureWithDescriptor:descriptor];
+    uint8_t pixels[4 * 2 * 4];
+    for (int i = 0; i < 4 * 2; i++) {
+        pixels[i * 4 + 0] = (uint8_t)(i * 8);
+        pixels[i * 4 + 1] = 64;
+        pixels[i * 4 + 2] = 128;
+        pixels[i * 4 + 3] = 255;
+    }
+    [texture replaceRegion:MTLRegionMake2D(0, 0, 4, 2)
+                mipmapLevel:0
+                  withBytes:pixels
+                bytesPerRow:16];
+    char path[256];
+    snprintf(path, sizeof path, "%s/dump-texture-test.bgra",
+             getenv("TMPDIR") ?: "/tmp");
+    int ok = eu4_gfx_dump_texture((__bridge void *)texture, path) == 0;
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) {
+        ok = 0;
+    } else {
+        fseek(file, 0, SEEK_END);
+        long size = ftell(file);
+        fclose(file);
+        if (size != 4 * 2 * 4) {
+            ok = 0;
+        }
+    }
+    remove(path);
+    ok = ok && eu4_gfx_dump_texture((__bridge void *)texture,
+                                    "/nonexistent-dir/dump-test.bgra") != 0;
+    printf("dump_texture=%d\n", ok);
+    return ok ? 0 : 1;
+}
+
 static int run_bc_decode(void) {
     boot();
     EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
@@ -985,6 +1032,9 @@ int main(int argc, char **argv) {
     }
     if (argc >= 2 && strcmp(argv[1], "--bc-decode") == 0) {
         return run_bc_decode();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--dump-texture") == 0) {
+        return run_dump_texture();
     }
     if (argc >= 2 && strcmp(argv[1], "--texture-ranges") == 0) {
         return run_texture_ranges();

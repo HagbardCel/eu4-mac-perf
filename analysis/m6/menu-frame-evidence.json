@@ -78,5 +78,21 @@
       "live": "89=518.49, 108=518.49, 109=+1"
     },
     "causality_experiment": "Patching only these values in a copy of the canonical trace and replaying produced a byte-identical map (affinity 1.0, unchanged means), so these uniforms do not drive the map brightness in this pass; the palette difference remains unexplained by them."
+  },
+  "controlled_uniform_experiments": {
+    "positive_control": {
+      "patch": "composite program 358 UNIFORM1[0].x 0.12981 -> 0.99 in a copied trace",
+      "result": "763,491 differing pixels (mean 1.76, max 52) vs the canonical reference",
+      "conclusion": "the injection path reliably changes the effective GPU input"
+    },
+    "time_season_patch": {
+      "patch": "terrain UNIFORM0[22].y and UNIFORM1[4].xy set to 518.49/518.49/+1 in a copied trace",
+      "result": "byte-identical map (affinity 1.0, unchanged means)",
+      "conclusion": "those time/season fields do not drive the observed map colours in this execution"
+    },
+    "capture_state_difference": {
+      "finding": "The bright menu-15 capture sampled engine texture 384 at terrain unit 0; the dark menu-occ300 capture sampled texture 382 (all other units identical). The map brightness difference between those authentic captures is therefore explained by a different unit-0 texture (scene state), not by the time uniforms.",
+      "live": "the live unit-0 decode matches the canonical 2c13... texture, so a genuine live renderer difference remains."
+    }
   }
 }

@@ -11,8 +11,13 @@ extern "C" {
 #endif
 
 /* Performs a deferred after-composite diagnostic readback, once the committed
-   draw has completed. No effect unless a composite dump was armed. */
-void eu4_gfx_generic_after_dump(void);
+   draw has completed. Returns 0 when nothing was armed or the write succeeded.
+   No effect unless a composite dump was armed. */
+int eu4_gfx_generic_after_dump(void);
+
+/* Diagnostic texture dump (BGRA8, bottom-up, BC-aware). Returns 0 only when the
+   pixel file was fully written. */
+int eu4_gfx_dump_texture(void *texture, const char *path);
 
 /* Decodes a selected Metal texture (including BC1/BC2/BC3) into a bottom-up
    BGRA8 image via nearest texel-centre sampling. Returns 0 on success and

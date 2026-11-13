@@ -284,11 +284,12 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
        implies completion of every earlier one on the queue. */
     backend.pendingGameCommand = command;
     backend.pendingGameGeneration = generation;
-    /* The diagnostic post-draw readback must observe the command committed
-       above, so it runs after the pending registration and drains it. */
-    eu4_gfx_generic_after_dump();
     backend.gameContentsKnown = NO;
     backend.readyForPresent = NO;
+    /* The diagnostic post-draw readback runs only after the normal post-submit
+       state transition above, so its drain cannot leave the backend without a
+       completion record or presentation readiness. */
+    (void)eu4_gfx_generic_after_dump();
     eu4_gfx_live_draw_sequence++;
     eu4_gfx_order_trace("draw", eu4_gfx_live_draw_sequence);
     backend.lastDrawTargetColor = (__bridge id)inputs.target;
