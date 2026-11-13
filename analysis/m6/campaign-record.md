@@ -506,3 +506,24 @@ per-frame recreation) and fill the sample the frame will actually read (e.g.,
 persist the resolved map per logical target and resolve before the composite,
 or bind the rendered RT directly when the engine samples it).
 The title UI itself is presented correctly at the title scene.
+
+## Three clean live title starts (2026-11-13 06:05)
+
+Three consecutive launches with the menu-only checkpoint (`0x103b3c8`,
+occurrence 1, 280 s uptime guard) each captured the title scene:
+
+| Run | Overall | Draw/GPU/Pixels/Presented | Refused | Swap dump SHA-256 |
+| --- | --- | --- | --- | --- |
+| accept-1 | captured | all true | 0 | 66f3bb2d… |
+| accept-2 | captured | all true | 0 | cfdbd9ba… |
+| accept-3 | captured | all true | 0 | (recorded) |
+
+Evidence: `analysis/m6/live-title-starts.json`; per-run outputs under
+`.local/m6/live/accept-{1,2,3}`. The presented frames show the title UI
+(logo, Continue Game, Single Player/Multiplayer/Tutorial/Exit, version, icon
+row) rendered by the reconstructed backend. The animated map background is the
+known remaining gap: the engine samples a render-target copy that is not yet
+filled before the composite (see the sampled-texture lifecycle finding).
+The automated checker `automation/m6_live_accept.py` validates capture status,
+refusals, non-blank dump and UI-region similarity; its UI-region metric is
+currently dominated by the missing map background.

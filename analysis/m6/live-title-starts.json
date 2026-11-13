@@ -1,0 +1,62 @@
+{
+  "schema": "m6-live-title-starts/v1",
+  "runs": [
+    {
+      "run": ".local/m6/live/accept-1",
+      "overall": "captured",
+      "status": {
+        "draw_reached": true,
+        "draw_encoded": true,
+        "gpu_completed": true,
+        "pixels_captured": true,
+        "presented": true,
+        "reference_matched": null
+      },
+      "refused_draws": 0,
+      "swap_dump_sha256": "f9cce5e675ed943cf278c32039a07f116b3678b2c59cb781ea18e265e2490a7a",
+      "swap_dump_bytes": 30882816,
+      "checkpoint": [
+        "checkpoint-after-draw-1.json"
+      ]
+    },
+    {
+      "run": ".local/m6/live/accept-2",
+      "overall": "captured",
+      "status": {
+        "draw_reached": true,
+        "draw_encoded": true,
+        "gpu_completed": true,
+        "pixels_captured": true,
+        "presented": true,
+        "reference_matched": null
+      },
+      "refused_draws": 0,
+      "swap_dump_sha256": "cfdbd9baa13b7cf1d887598dfd8b465ccea51f329814a9944be3ab9a89126596",
+      "swap_dump_bytes": 30882816,
+      "checkpoint": [
+        "checkpoint-after-draw-1.json"
+      ]
+    },
+    {
+      "run": ".local/m6/live/accept-3",
+      "overall": "captured",
+      "status": {
+        "draw_reached": true,
+        "draw_encoded": true,
+        "gpu_completed": true,
+        "pixels_captured": true,
+        "presented": true,
+        "reference_matched": null
+      },
+      "refused_draws": 0,
+      "swap_dump_sha256": "66f3bb2de7af226ca90f2c2005bffbe41c040f5b24d5231872730d19d401ecc7",
+      "swap_dump_bytes": 30882816,
+      "checkpoint": [
+        "checkpoint-after-draw-1.json"
+      ]
+    }
+  ],
+  "menu_caller": "0x103b3c8",
+  "min_uptime_ms": 280000,
+  "note": "Three clean starts reach the title scene through the reconstructed Metal backend and present it. The title UI is visible; the animated map background is a known gap (sampled map textures are not yet filled before the composite)."
+}

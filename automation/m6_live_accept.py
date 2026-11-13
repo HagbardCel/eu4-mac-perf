@@ -89,7 +89,9 @@ def check_run(run: Path, reference: np.ndarray | None) -> dict:
         from PIL import Image
 
         data = np.fromfile(dump, dtype=np.uint8).reshape(2234, 3456, 4)
-        picture = data[::-1, :, [2, 1, 0]].astype(np.int16)
+        # The backend writes the dump in the captured GL lower-left origin, the
+        # same convention as the reference; no flip here.
+        picture = data[:, :, [2, 1, 0]].astype(np.int16)
         logical = np.asarray(
             Image.fromarray(picture.astype(np.uint8)).resize(
                 (1728, 1117), Image.LANCZOS
