@@ -990,3 +990,17 @@ second input (the 864x558 bloom/season render target) is near-black
 missing and the political base colours dominate. This is M6-blocking and not
 yet resolved; the acceptance checker now rejects it via the palette-affinity
 criterion.
+
+## Final Metal-validation result (2026-11-13 19:10)
+
+A validation-enabled settled title frame still reports unresolved
+`Vertex Function(sprite_vs): missing Buffer binding at index 1 for u[0]`
+draw errors (299 in the last run; they scale with the number of legacy sprite
+draws in the captured window). A synthetic legacy `sprite_vs` stage has no
+packed uniform metadata in the generic fallback and the encoder therefore binds
+no uniform buffer at index 1. Supplying arbitrary zero data would silence the
+log without fixing the draw, so this is recorded as an unresolved correctness
+defect rather than papered over.
+
+Together with the pink map palette (missing bright bloom/season layer), this
+means M6 live acceptance is not met and the PR must not merge.

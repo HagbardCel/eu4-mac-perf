@@ -1055,6 +1055,14 @@ static int generic_draw_encode_impl(const void *immediate_context,
     }
     NSUInteger vertex_uniform_buffer = num(vertex_stage[@"msl_uniform_buffer"], 0);
     NSUInteger pixel_uniform_buffer = num(pixel_stage[@"msl_uniform_buffer"], 0);
+    /* The synthetic legacy sprite_vs/main0 functions declare their uniform
+       block at buffer 1; cached stages carry their real index. */
+    if (vertex_stage[@"msl_uniform_buffer"] == nil) {
+        vertex_uniform_buffer = 1;
+    }
+    if (pixel_stage[@"msl_uniform_buffer"] == nil) {
+        pixel_uniform_buffer = 1;
+    }
     if (vertex_uniforms.length > 0) {
         [encoder setVertexBytes:vertex_uniforms.bytes
                          length:vertex_uniforms.length
