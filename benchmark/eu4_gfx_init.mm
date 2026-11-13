@@ -1884,6 +1884,13 @@ eu4_gfx_clear_status eu4_gfx_complete_offscreen(void *master, int *command_statu
     return drain_pending_clear(backend, command_status);
 }
 
+void eu4_gfx_drain_pending(void) {
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend != nil && backend.pendingGameCommand != nil) {
+        (void)drain_pending_game(backend, NULL);
+    }
+}
+
 eu4_gfx_clear_status eu4_gfx_complete_game(void *master, int *command_status) {
     __unsafe_unretained EU4GfxBackend *backend =
         (__bridge EU4GfxBackend *)backend_raw_for_master(master);

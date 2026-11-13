@@ -10,6 +10,12 @@
 extern "C" {
 #endif
 
+/* Decodes a selected Metal texture (including BC1/BC2/BC3) into a bottom-up
+   BGRA8 image via nearest texel-centre sampling. Returns 0 on success and
+   hands ownership of `out` to the caller. Diagnostic use only. */
+int eu4_gfx_decode_texture_rgba8(void *texture, unsigned char **out,
+                                 size_t *row, size_t *height);
+
 /* Generic live encoder for shaders admitted from the translated runtime cache.
  *
  * The encoder reads the same engine state the original _GfxDraw* bodies read

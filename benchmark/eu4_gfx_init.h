@@ -352,6 +352,9 @@ eu4_gfx_clear_status eu4_gfx_read_game_target(void *master, void *dest, size_t c
 /* Wait for the pending game clear. On OK sets gameContentsKnown and
    readyForPresent only when the pending generation is still current. */
 eu4_gfx_clear_status eu4_gfx_complete_game(void *master, int *command_status);
+
+/* Drains the pending game submission (diagnostic readbacks only). */
+void eu4_gfx_drain_pending(void);
 int eu4_gfx_game_contents_known(void *master);
 int eu4_gfx_ready_for_present(void *master);
 /* _GfxSetRenderTarget at 0x15ed004. null selects the default game backbuffer.

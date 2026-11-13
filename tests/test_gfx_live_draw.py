@@ -71,6 +71,13 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertEqual(ran.returncode, 0, ran.stderr)
         self.assertIn("texture_ranges=1", ran.stdout)
 
+    def test_bc_texture_decode(self) -> None:
+        ran = self._run("--bc-decode")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertTrue(
+            "bc_decode=1" in ran.stdout or "bc_decode=skip" in ran.stdout
+        )
+
     def test_sampler_state_decode(self) -> None:
         ran = self._run("--sampler-decode")
         self.assertEqual(ran.returncode, 0, ran.stderr)

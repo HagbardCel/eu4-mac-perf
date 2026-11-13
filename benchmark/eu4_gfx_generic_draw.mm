@@ -923,7 +923,7 @@ static NSString *const kDecodeTextureMSL = @
     "                          constant DecodeUniforms &u [[buffer(0)]],\n"
     "                          texture2d<float> src [[texture(0)]],\n"
     "                          sampler s [[sampler(0)]]) {\n"
-    "    float2 uv = (in.position.xy + float2(0.5)) / u.size;\n"
+    "    float2 uv = in.position.xy / u.size;\n"
     "    return src.sample(s, uv);\n"
     "}\n";
 
@@ -967,6 +967,9 @@ static uint8_t *decode_texture_rgba8(id<MTLTexture> texture, NSUInteger *out_row
     if (texture == nil || out_row == NULL) {
         return NULL;
     }
+    /* Diagnostic readback only: make sure work the engine has not submitted is
+       visible before sampling a produced render target. */
+    eu4_gfx_drain_pending();
     id<MTLDevice> device = texture.device;
     BOOL srgb = texture.pixelFormat == MTLPixelFormatBC1_RGBA_sRGB ||
                 texture.pixelFormat == MTLPixelFormatBC2_RGBA_sRGB ||
@@ -1043,25 +1046,49 @@ static uint8_t *decode_texture_rgba8(id<MTLTexture> texture, NSUInteger *out_row
     }
     const uint8_t *src = (const uint8_t *)buffer.contents;
     for (NSUInteger y = 0; y < texture.height; y++) {
-        memcpy(flipped + y * row, src + (texture.height - 1 - y) * row, row);
+        const uint8_t *line = src + (texture.height - 1 - y) * row;
+        uint8_t *dest = flipped + y * row;
+        for (NSUInteger x = 0; x < texture.width; x++) {
+            dest[x * 4 + 0] = line[x * 4 + 2];
+            dest[x * 4 + 1] = line[x * 4 + 1];
+            dest[x * 4 + 2] = line[x * 4 + 0];
+            dest[x * 4 + 3] = line[x * 4 + 3];
+        }
     }
     *out_row = row;
     return flipped;
 }
 
-static void dump_texture_file(id<MTLTexture> texture, const char *path) {
+int eu4_gfx_decode_texture_rgba8(void *texture, unsigned char **out,
+                                 size_t *row, size_t *height) {
+    if (texture == NULL || out == NULL || row == NULL || height == NULL) {
+        return -1;
+    }
+    id<MTLTexture> metal = (__bridge id<MTLTexture>)texture;
+    NSUInteger row_bytes = 0;
+    uint8_t *decoded = decode_texture_rgba8(metal, &row_bytes);
+    if (decoded == NULL) {
+        return -1;
+    }
+    *out = decoded;
+    *row = (size_t)row_bytes;
+    *height = (size_t)metal.height;
+    return 0;
+}
+
+static int dump_texture_file(id<MTLTexture> texture, const char *path) {
     if (texture == nil || path == NULL) {
-        return;
+        return -1;
     }
     id<MTLDevice> device = texture.device;
     if (device == nil) {
-        return;
+        return -1;
     }
     if (pixel_format_is_bc(texture.pixelFormat)) {
         NSUInteger row = 0;
         uint8_t *decoded = decode_texture_rgba8(texture, &row);
         if (decoded == NULL) {
-            return;
+            return -1;
         }
         FILE *file = fopen(path, "wb");
         if (file != NULL) {
@@ -1084,13 +1111,13 @@ static void dump_texture_file(id<MTLTexture> texture, const char *path) {
             }
         }
         free(decoded);
-        return;
+        return 0;
     }
     NSUInteger row = texture.width * 4;
     id<MTLBuffer> buffer = [device newBufferWithLength:row * texture.height
                                               options:MTLResourceStorageModeShared];
     if (buffer == nil) {
-        return;
+        return -1;
     }
     EU4GfxBackend *dump_backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
     id<MTLCommandQueue> queue = (dump_backend != nil && dump_backend.queue != nil)
@@ -1111,18 +1138,24 @@ static void dump_texture_file(id<MTLTexture> texture, const char *path) {
     [command waitUntilCompleted];
     uint8_t *flipped = (uint8_t *)malloc(row * texture.height);
     if (flipped == NULL) {
-        return;
+        return -1;
     }
     const uint8_t *src = (const uint8_t *)buffer.contents;
     for (NSUInteger y = 0; y < texture.height; y++) {
         memcpy(flipped + y * row, src + (texture.height - 1 - y) * row, row);
     }
+    int result = 0;
     FILE *file = fopen(path, "wb");
-    if (file != NULL) {
-        fwrite(flipped, 1, row * texture.height, file);
+    if (file == NULL) {
+        result = -1;
+    } else {
+        if (fwrite(flipped, 1, row * texture.height, file) != row * texture.height) {
+            result = -1;
+        }
         fclose(file);
     }
     free(flipped);
+    return result;
 }
 
 static int generic_draw_encode_impl(const void *immediate_context,
@@ -1496,18 +1529,38 @@ static int generic_draw_encode_impl(const void *immediate_context,
                     if ([vstem rangeOfString:wanted].location != NSNotFound ||
                         [pstem rangeOfString:wanted].location != NSNotFound) {
                         static NSMutableSet *dumped;
+                        static int dump_failures;
                         if (dumped == nil) {
                             dumped = [NSMutableSet set];
                         }
-                        NSString *key = [NSString stringWithFormat:@"%lu-%lux%lu", (unsigned long)unit,
-                                         (unsigned long)texture.width, (unsigned long)texture.height];
-                        if (![dumped containsObject:key]) {
+                        /* Identity, not dimensions: different resources can share
+                           a size. Bounded so a diagnostic run cannot dump forever. */
+                        NSString *key =
+                            [NSString stringWithFormat:@"%p", (__bridge void *)texture];
+                        if (![dumped containsObject:key] && dumped.count < 12) {
                             [dumped addObject:key];
                             char path[512];
                             snprintf(path, sizeof path, "%s/tex-u%lu-%lux%lu.bgra", sample_dir,
                                      (unsigned long)unit, (unsigned long)texture.width,
                                      (unsigned long)texture.height);
-                            dump_texture_file(texture, path);
+                            if (dump_texture_file(texture, path) != 0) {
+                                dump_failures++;
+                                char failure[512];
+                                snprintf(failure, sizeof failure,
+                                         "%s/failed-%p.json", sample_dir,
+                                         (__bridge void *)texture);
+                                FILE *file = fopen(failure, "w");
+                                if (file != NULL) {
+                                    fprintf(file,
+                                            "{\"texture\":\"%p\",\"unit\":%lu,"
+                                            "\"width\":%lu,\"height\":%lu}\n",
+                                            (__bridge void *)texture,
+                                            (unsigned long)unit,
+                                            (unsigned long)texture.width,
+                                            (unsigned long)texture.height);
+                                    fclose(file);
+                                }
+                            }
                         }
                     }
                 }

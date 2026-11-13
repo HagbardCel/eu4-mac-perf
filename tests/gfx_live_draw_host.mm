@@ -664,6 +664,121 @@ static int run_texture_ranges(void) {
     return ok ? 0 : 1;
 }
 
+static int run_bc_decode(void) {
+    boot();
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil || backend.device == nil) {
+        fail("bc decode device");
+    }
+    id<MTLDevice> device = backend.device;
+    if (!device.supportsBCTextureCompression) {
+        printf("bc_decode=skip\n");
+        return 0;
+    }
+    int ok = 1;
+    /* Uncompressed RGBA8 with a unique value per texel, non-square extent. */
+    uint8_t texels[8 * 4 * 4];
+    for (int y = 0; y < 4; y++) {
+        for (int x = 0; x < 8; x++) {
+            uint8_t *p = texels + (y * 8 + x) * 4;
+            p[0] = (uint8_t)(x * 16 + y);
+            p[1] = (uint8_t)(x);
+            p[2] = (uint8_t)(y);
+            p[3] = 255;
+        }
+    }
+    MTLTextureDescriptor *rgba = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                     width:8
+                                    height:4
+                                 mipmapped:NO];
+    rgba.usage = MTLTextureUsageShaderRead;
+    id<MTLTexture> rgba_texture = [device newTextureWithDescriptor:rgba];
+    [rgba_texture replaceRegion:MTLRegionMake2D(0, 0, 8, 4)
+                    mipmapLevel:0
+                      withBytes:texels
+                    bytesPerRow:8 * 4];
+    unsigned char *decoded = NULL;
+    size_t row = 0, height = 0;
+    int rc = eu4_gfx_decode_texture_rgba8((__bridge void *)rgba_texture, &decoded,
+                                          &row, &height);
+    if (rc != 0 || row != 32 || height != 4) {
+        ok = 0;
+    } else {
+        /* Bottom-up rows: output row 0 is texture row 3. BGRA order. */
+        for (int y = 0; y < 4 && ok; y++) {
+            for (int x = 0; x < 8; x++) {
+                const uint8_t *p = decoded + (size_t)y * row + x * 4;
+                uint8_t expected = (uint8_t)(x * 16 + (3 - y));
+                if (p[0] != (uint8_t)(3 - y) || p[1] != (uint8_t)x ||
+                    p[2] != expected || p[3] != 255) {
+                    ok = 0;
+                    break;
+                }
+            }
+        }
+    }
+    free(decoded);
+    decoded = NULL;
+    /* BC1: a solid red block (565 red, zero indices). */
+    const uint8_t bc1_block[8] = {0x00, 0xF8, 0x00, 0x00, 0, 0, 0, 0};
+    MTLTextureDescriptor *bc1 = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatBC1_RGBA
+                                     width:4
+                                    height:4
+                                 mipmapped:NO];
+    bc1.usage = MTLTextureUsageShaderRead;
+    id<MTLTexture> bc1_texture = [device newTextureWithDescriptor:bc1];
+    [bc1_texture replaceRegion:MTLRegionMake2D(0, 0, 4, 4)
+                   mipmapLevel:0
+                     withBytes:bc1_block
+                   bytesPerRow:8];
+    int bc1_rc = eu4_gfx_decode_texture_rgba8((__bridge void *)bc1_texture, &decoded,
+                                             &row, &height);
+    if (bc1_rc != 0) {
+        ok = 0;
+    } else {
+        for (int i = 0; i < 16 && ok; i++) {
+            const uint8_t *p = decoded + i * 4;
+            if (p[2] < 250 || p[1] > 4 || p[0] > 4 || p[3] != 255) {
+                ok = 0;
+            }
+        }
+    }
+    free(decoded);
+    decoded = NULL;
+    /* BC3 lays out the 8-byte alpha block first, then the colour block. The
+       alpha endpoints (0xFF, 0x00) with zero indices give alpha 255. */
+    const uint8_t bc3_block[16] = {0xFF, 0, 0, 0, 0, 0, 0, 0,
+                                   0x00, 0xF8, 0x00, 0x00, 0, 0, 0, 0};
+    MTLTextureDescriptor *bc3 = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatBC3_RGBA
+                                     width:4
+                                    height:4
+                                 mipmapped:NO];
+    bc3.usage = MTLTextureUsageShaderRead;
+    id<MTLTexture> bc3_texture = [device newTextureWithDescriptor:bc3];
+    [bc3_texture replaceRegion:MTLRegionMake2D(0, 0, 4, 4)
+                   mipmapLevel:0
+                     withBytes:bc3_block
+                   bytesPerRow:16];
+    int bc3_rc = eu4_gfx_decode_texture_rgba8((__bridge void *)bc3_texture, &decoded,
+                                             &row, &height);
+    if (bc3_rc != 0) {
+        ok = 0;
+    } else {
+        for (int i = 0; i < 16 && ok; i++) {
+            const uint8_t *p = decoded + i * 4;
+            if (p[2] < 250 || p[3] != 255) {
+                ok = 0;
+            }
+        }
+    }
+    free(decoded);
+    printf("bc_decode=%d\n", ok);
+    return ok ? 0 : 1;
+}
+
 static int run_sampler_decode(void) {
     boot();
     /* Linear filtering with repeat addressing, as the map/terrain draws use. */
@@ -846,6 +961,9 @@ int main(int argc, char **argv) {
     }
     if (argc >= 2 && strcmp(argv[1], "--sampler-decode") == 0) {
         return run_sampler_decode();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--bc-decode") == 0) {
+        return run_bc_decode();
     }
     if (argc >= 2 && strcmp(argv[1], "--texture-ranges") == 0) {
         return run_texture_ranges();
