@@ -13,11 +13,15 @@ and icon row. [Qualification report](../analysis/m6/qualification-report.md),
 [acceptance](../analysis/m6/live-acceptance.json),
 [campaign record](../analysis/m6/campaign-record.md).
 
-- **Frame.** 378 events / 369 draws, 18 shader programs / 35 stages / 69
-  textures; reference SHA-256 `c3dab19c…` (`frame-reference.bgra`).
-- **Offline replay.** All 378 events encoded, zero failed, GPU completed; the
-  Metal readback SHA-256 is `c3dab19c…` — 0 differing pixels of 1,930,176,
-  including alpha.
+- **Frame (corrected reference).** The earlier reference was captured with an
+  observer defect that corrupted texture unit 0 whenever the active unit was
+  nonzero; the readback is now non-invasive. The authoritative capture is the
+  menu-caller occurrence-300 frame (326 events, reference SHA-256 `ff2f4e2b…`,
+  undirected corrected capture `92ea2167…`).
+- **Offline replay.** The corrected capture replays exactly: 326/326 events
+  encoded, zero failed, GPU completed, 0 differing pixels of 1,930,176,
+  identical reference and Metal SHA-256 (`92ea2167…`). The old `c3dab19c…`
+  evidence against the corrupted reference is superseded.
 - **Live acceptance.** Three clean starts, all `accepted`: executed,
   GPU-completed, presented, UI structural correlation 0.77 / 0.94 / 0.55 against
   the authentic reference, and a map region with real rendered structure.
