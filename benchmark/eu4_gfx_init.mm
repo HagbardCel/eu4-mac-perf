@@ -2133,7 +2133,6 @@ void eu4_gfx_resolve_noop(void *unused, void *header) {
        so the preserved previous frame is the faithful non-zero source. */
     id<MTLTexture> src = backend.previousFrameTexture;
     if (src == nil) {
-    if (src == nil) {
         src = backend.currentTargetColor != nil
             ? backend.currentTargetColor : backend.gameColorTarget;
     }
