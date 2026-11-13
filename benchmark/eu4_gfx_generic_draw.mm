@@ -883,13 +883,19 @@ static int generic_draw_encode_impl(const void *immediate_context,
                   instanceCount:instance_count];
     }
     if (binding_log != nil) {
+        NSString *vertex_file = vertex_stage[@"msl_file"] ?: @"";
+        NSString *stem = vertex_file.lastPathComponent.stringByDeletingPathExtension;
+        if (stem.length > 16) {
+            stem = [stem substringToIndex:16];
+        }
         NSString *json = [NSString stringWithFormat:
             @"{\"schema\":\"gfx-texture-bind/v1\",\"stage\":\"%s\","
              "\"bindings\":[%@],\"pid\":%d}\n",
-            [(vertex_stage[@"msl_file"] ?: @"") UTF8String],
+            vertex_file.UTF8String ?: "",
             binding_log, (int)getpid()];
+        NSString *name = [NSString stringWithFormat:@"bind-%@.json", stem];
         if (json.length > 0) {
-            (void)eu4_metal_events_write("textures-bound.json", json.UTF8String);
+            (void)eu4_metal_events_write(name.UTF8String, json.UTF8String);
         }
     }
     [encoder endEncoding];
