@@ -696,3 +696,15 @@ Acceptance tooling was tightened:
   map-region structure bounds.
 - The current three starts are honestly reported `visual_match=false`
   (map background missing), so they are not accepted.
+
+## Local evidence cleanup (2026-11-13 12:05)
+
+`.local` was reduced from 117 GB to 5.6 GB by removing reproducible
+diagnostics: the resolve-source dump runs (seq-01, map-08, map-09: ~101 GB),
+probe outputs and superseded frame traces, and build caches. Retained:
+- `.local/m6/frames/menu-15` (authoritative authentic menu frame),
+- `.local/m6/live/accept-{1,2,3}` (three clean live starts),
+- `.local/m6/live/comp-01` (latest composite bind diagnostics),
+- `.local/m6/live/shader-cache-full2` (live shader cache),
+- `.local/m5/experiments/sprite-gl-ref-09` (M5 sprite test reference),
+- `.local/launch-authority`, analysis images and recon notes.
