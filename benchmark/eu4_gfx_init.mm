@@ -262,6 +262,10 @@ const void *eu4_gfx_test_stop_caller(void) { return g_stop_caller; }
 
 const void *eu4_gfx_current_present_caller(void) { return g_present_caller; }
 
+void *eu4_gfx_immediate_master(void) {
+    return g_master;
+}
+
 void *eu4_gfx_backend_token(void) {
     if (!g_succeeded || g_master == NULL) {
         return NULL;

@@ -191,6 +191,7 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
     if (generic_ready && !legacy_preferred) {
         eu4_gfx_generic_call call = {0};
         call.instance_count = 1;
+        call.primitive = load_u32(master, 0x08);
         if (raw->which == 1) {
             call.indexed = 0;
             int32_t count32 = (int32_t)raw->rsi;
@@ -247,6 +248,7 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
         if (!encoded_ok && generic_ready) {
             eu4_gfx_generic_call call = {0};
             call.instance_count = 1;
+            call.primitive = load_u32(master, 0x08);
             call.indexed = raw->which != 1;
             int32_t count32 = (int32_t)raw->rsi;
             if (count32 <= 0) {
@@ -320,11 +322,14 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
         int n = snprintf(
             body, sizeof body,
             "{\"schema\":\"gfx-draw-ok/v1\",\"caller_rva\":\"0x%llx\","
-            "\"variant\":%u,\"count\":%d,\"target\":\"%p\","
-            "\"identity\":\"%s\",\"pid\":%d}\n",
+            "\"variant\":%u,\"count\":%d,\"call_count\":%d,"
+            "\"master64\":%u,\"master68\":%u,\"rsi\":%lld,"
+            "\"target\":\"%p\",\"identity\":\"%s\",\"pid\":%d}\n",
             (unsigned long long)caller_rva, raw->which,
             state != NULL ? state->count : (int32_t)raw->rsi,
-            inputs.target,
+            state != NULL ? state->count : (int32_t)raw->rsi,
+            (unsigned)load_u32(master, 0x64), (unsigned)load_u32(master, 0x68),
+            (long long)(int64_t)raw->rsi, inputs.target,
             eu4_gfx_shader_identity(current_shader) ?: "",
             (int)getpid());
         if (n > 0 && (size_t)n < sizeof body) {

@@ -708,3 +708,28 @@ probe outputs and superseded frame traces, and build caches. Retained:
 - `.local/m6/live/shader-cache-full2` (live shader cache),
 - `.local/m5/experiments/sprite-gl-ref-09` (M5 sprite test reference),
 - `.local/launch-authority`, analysis images and recon notes.
+
+## Map feedback: draw targets and counts are real (2026-11-13 12:40)
+
+Live draw-ok diagnostics with the real entry values show the map passes are not
+empty draws:
+
+| caller | variant | rsi | master+0x64 | master+0x68 | target |
+| --- | --- | --- | --- | --- | --- |
+| 0x10ce96e (terrain) | 2 (indexed) | 594 | 216810 | 6786 | backbuffer |
+| 0x10d4e50 | 2 | 24576 | 4225 | 24576 | RT |
+| 0x14f6c1b (UI) | 1 | 0 | 4 | 0 | backbuffer |
+| 0xed7dcd (composite) | 1 | 0 | 4 | 6 | backbuffer |
+
+Bind traces confirm the map stages encode real counts (594, 636, 918, 3960,
+24576) as triangle strips, and the terrain and composite draws target the same
+backbuffer texture. The composite's sampled textures are nevertheless all zero
+at draw time: `_GfxResolve` copies the current backbuffer, which is black (the
+frame-start clear) at every resolve. The authentic GL frame's feedback texture
+contains the map because GL's back buffer retains the previously presented
+image across the swap; the single-buffer reconstruction loses it.
+
+Remaining work: emulate the observed back-buffer retention across presentation
+(preserve the presented image and feed it to the resolve at the engine's copy
+point, including the loading-to-menu transition), rather than copying the
+current cleared backbuffer.

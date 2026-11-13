@@ -230,6 +230,7 @@ uint8_t *eu4_gfx_image(void);
 /* Borrowed device and the non-owning backend token at master+0x180. */
 void *eu4_gfx_metal_device(void);
 void *eu4_gfx_backend_token(void);
+void *eu4_gfx_immediate_master(void);
 
 int eu4_gfx_phase(void);
 int eu4_gfx_backend_releases(void);

@@ -24,6 +24,9 @@ typedef struct {
     int32_t first;        /* first vertex for arrays */
     int32_t base_vertex;  /* glDrawElementsBaseVertex base */
     int32_t instance_count;
+    /* Primitive mode captured at draw entry (engine state can also be
+       mutated by other rendering threads after the entry). */
+    uint32_t primitive;
 } eu4_gfx_generic_call;
 
 /* Encodes one draw into a caller-owned command buffer. Returns 1 on success.

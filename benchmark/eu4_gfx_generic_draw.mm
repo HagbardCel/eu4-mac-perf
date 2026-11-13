@@ -997,7 +997,9 @@ static int generic_draw_encode_impl(const void *immediate_context,
         }
     }
     MTLPrimitiveType primitive = MTLPrimitiveTypeTriangle;
-    switch (load_u32(master, 0x08)) {
+    uint32_t primitive_mode = call->primitive != 0 ? call->primitive
+                                                   : load_u32(master, 0x08);
+    switch (primitive_mode) {
         case 0: primitive = MTLPrimitiveTypePoint; break;
         case 1: primitive = MTLPrimitiveTypeLine; break;
         case 2: primitive = MTLPrimitiveTypeLineStrip; break;
@@ -1073,7 +1075,10 @@ static int generic_draw_encode_impl(const void *immediate_context,
              "\"scaled_viewport\":[%.1f,%.1f,%.1f,%.1f],"
              "\"primitive\":%d,\"positions\":\"%.3f,%.3f,%.3f,%.3f,"
              "%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\","
-             "\"has_positions\":%d,\"pid\":%d}\n",
+             "\"has_positions\":%d,"
+             "\"master\":\"%p\",\"master8\":%u,"
+             "\"immediate\":\"%p\",\"immediate8\":%u,"
+             "\"pid\":%d}\n",
             vertex_file.UTF8String ?: "",
             binding_log, call->count, call->instance_count, inputs->target,
             inputs->target_width, inputs->target_height, inputs->viewport_x,
@@ -1085,7 +1090,14 @@ static int generic_draw_encode_impl(const void *immediate_context,
             g_logged_positions[6], g_logged_positions[7], g_logged_positions[8],
             g_logged_positions[9], g_logged_positions[10], g_logged_positions[11],
             g_logged_positions[12], g_logged_positions[13], g_logged_positions[14],
-            g_logged_positions[15], g_have_positions, (int)getpid()];
+            g_logged_positions[15], g_have_positions,
+            (void *)master,
+            master != NULL ? *(const uint32_t *)((const uint8_t *)master + 8) : 0,
+            eu4_gfx_immediate_master(),
+            eu4_gfx_immediate_master() != NULL
+                ? *(const uint32_t *)((const uint8_t *)eu4_gfx_immediate_master() + 8)
+                : 0,
+            (int)getpid()];
         NSString *name = [NSString stringWithFormat:@"bind-%@.json", stem];
         if (json.length > 0) {
             (void)eu4_metal_events_write(name.UTF8String, json.UTF8String);
