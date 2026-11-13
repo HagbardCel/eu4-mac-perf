@@ -243,6 +243,99 @@ static NSData *pack_stage_uniforms(NSDictionary *stage, const uint8_t *master,
 }
 
 /* Collects the engine vertex elements and builds a Metal vertex descriptor. */
+static BOOL glsl_type_is_float(NSString *type) {
+    return [type isEqualToString:@"float"] || [type isEqualToString:@"vec2"] ||
+           [type isEqualToString:@"vec3"] || [type isEqualToString:@"vec4"];
+}
+
+static BOOL gl_type_is_integer(uint32_t type) {
+    return type == 0x1401 || type == 0x1402 || type == 0x1403 ||
+           type == 0x1404 || type == 0x1405;
+}
+
+/* GL converts unnormalized integer vertex data to floats verbatim; Metal has
+   no such vertex format, so the data is expanded to float32 once per
+   (buffer, layout) and cached. */
+static id<MTLBuffer> converted_attribute_buffer(id<MTLDevice> device, void *header,
+                                                uint32_t element_offset,
+                                                uint32_t slot_offset,
+                                                uint32_t stride, uint32_t gl_type,
+                                                uint32_t components,
+                                                NSUInteger *out_stride) {
+    static NSMutableDictionary *cache;
+    if (cache == nil) {
+        cache = [NSMutableDictionary dictionary];
+    }
+    NSString *key = [NSString stringWithFormat:@"%p-%u-%u-%u-%u-%u", header,
+                     element_offset, slot_offset, stride, gl_type, components];
+    id<MTLBuffer> cached = cache[key];
+    if (cached != nil) {
+        if (out_stride != NULL) {
+            *out_stride = (NSUInteger)components * 4;
+        }
+        return cached;
+    }
+    if (cache.count > 128) {
+        [cache removeAllObjects];
+    }
+    size_t length = eu4_gfx_vertex_buffer_length(header);
+    if (length == (size_t)-1 || length == 0) {
+        return nil;
+    }
+    uint8_t *raw = (uint8_t *)malloc(length);
+    if (raw == NULL) {
+        return nil;
+    }
+    if (eu4_gfx_vertex_buffer_read(header, raw, length) != 0) {
+        free(raw);
+        return nil;
+    }
+    size_t start = (size_t)slot_offset + element_offset;
+    size_t row = stride != 0 ? stride : (size_t)components * 4;
+    if (start >= length) {
+        free(raw);
+        return nil;
+    }
+    size_t vertices = (length - start) / row;
+    if (vertices == 0) {
+        free(raw);
+        return nil;
+    }
+    size_t out_row = (size_t)components * 4;
+    float *out = (float *)calloc(vertices, out_row);
+    if (out == NULL) {
+        free(raw);
+        return nil;
+    }
+    for (size_t i = 0; i < vertices; i++) {
+        const uint8_t *src = raw + start + i * row;
+        for (uint32_t c = 0; c < components && c < 4; c++) {
+            float value = 0.0f;
+            switch (gl_type) {
+                case 0x1401: value = (float)src[c]; break;
+                case 0x1402: { int16_t v = 0; memcpy(&v, src + c * 2, 2); value = (float)v; break; }
+                case 0x1403: { uint16_t v = 0; memcpy(&v, src + c * 2, 2); value = (float)v; break; }
+                case 0x1404: { uint32_t v = 0; memcpy(&v, src + c * 4, 4); value = (float)v; break; }
+                case 0x1405: { int32_t v = 0; memcpy(&v, src + c * 4, 4); value = (float)v; break; }
+                default: break;
+            }
+            out[i * components + c] = value;
+        }
+    }
+    free(raw);
+    id<MTLBuffer> buffer = [device newBufferWithBytes:out
+                                               length:vertices * out_row
+                                              options:MTLResourceStorageModeManaged];
+    free(out);
+    if (buffer != nil) {
+        cache[key] = buffer;
+        if (out_stride != NULL) {
+            *out_stride = (NSUInteger)out_row;
+        }
+    }
+    return buffer;
+}
+
 static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
                                     id<MTLDevice> device,
                                     MTLVertexDescriptor *descriptor,
@@ -257,6 +350,16 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
         return NO;
     }
     NSDictionary *locations = stage[@"attribute_locations"];
+    NSMutableDictionary *attribute_types = [NSMutableDictionary dictionary];
+    if ([stage[@"attributes"] isKindOfClass:[NSArray class]] &&
+        [locations isKindOfClass:[NSDictionary class]]) {
+        for (NSDictionary *attribute in stage[@"attributes"]) {
+            NSNumber *location = locations[attribute[@"name"]];
+            if (location != nil) {
+                attribute_types[location] = attribute[@"type"] ?: @"";
+            }
+        }
+    }
     NSMutableSet *declared = [NSMutableSet set];
     NSMutableSet *covered = [NSMutableSet set];
     /* Metal has 31 vertex buffer slots and one is the uniform block. Assign
@@ -308,10 +411,37 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
         }
         NSUInteger buffer_index = next_buffer++;
         MTLVertexAttributeDescriptor *attribute = descriptor.attributes[location];
+        NSString *declared_type = attribute_types[@(location)] ?: @"";
+        BOOL convert = glsl_type_is_float(declared_type) && gl_type_is_integer(type) &&
+                       normalized == 0 && size >= 1 && size <= 4 && divisor == 0;
+        id<MTLBuffer> bound_buffer = (__bridge id<MTLBuffer>)metal_buffer;
+        NSUInteger bound_stride = stride;
+        NSUInteger bound_offset = 0;
+        if (convert) {
+            NSUInteger converted_stride = 0;
+            id<MTLBuffer> converted = converted_attribute_buffer(
+                device, header, offset, slot_offset, stride, type, size,
+                &converted_stride);
+            if (converted == nil) {
+                fail(reason, capacity, "integer attribute conversion failed");
+                return NO;
+            }
+            switch (size) {
+                case 1: format = MTLVertexFormatFloat; break;
+                case 2: format = MTLVertexFormatFloat2; break;
+                case 3: format = MTLVertexFormatFloat3; break;
+                default: format = MTLVertexFormatFloat4; break;
+            }
+            bound_buffer = converted;
+            bound_stride = converted_stride;
+            bound_offset = 0;
+        } else {
+            bound_offset = offset + slot_offset;
+        }
         attribute.format = format;
-        attribute.offset = offset + slot_offset;
+        attribute.offset = bound_offset;
         attribute.bufferIndex = buffer_index;
-        descriptor.layouts[buffer_index].stride = stride;
+        descriptor.layouts[buffer_index].stride = bound_stride;
         if (instanced_draw && divisor > 0) {
             descriptor.layouts[buffer_index].stepFunction = MTLVertexStepFunctionPerInstance;
             descriptor.layouts[buffer_index].stepRate = divisor;
@@ -319,7 +449,7 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
             descriptor.layouts[buffer_index].stepFunction = MTLVertexStepFunctionPerVertex;
             descriptor.layouts[buffer_index].stepRate = 1;
         }
-        buffers[@(buffer_index)] = @{@"buffer": (__bridge id)metal_buffer,
+        buffers[@(buffer_index)] = @{@"buffer": bound_buffer,
                                      @"offset": @0};
         [covered addObject:@(location)];
     }

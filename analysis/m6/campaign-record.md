@@ -410,3 +410,15 @@ the live encoder converts integer source data to float32 at draw time (a
 generated vertex buffer) whenever the shader input is a float vector and the GL
 type is an integer type. The captured trace is unaffected (the offline replay
 binds the exact captured buffers and is already pixel-exact).
+
+## Integer vertex attributes converted to float (2026-11-13)
+
+The translated MSL declares float stage inputs (e.g. `float4 in_POSITION`), while
+the engine can bind unnormalized integer data (the menu composite uses
+`GL_SHORT` positions `(-1,1,0,0)..`). Metal has no unnormalized
+integer-to-float vertex format, so the encoder now expands such attributes to
+float32 once per (buffer, layout), caches the generated MTLBuffer, and binds it
+with a float vertex format. The conversion applies only when the declared GLSL
+type is a float vector, the GL type is an integer, `normalized` is false, and
+the attribute is per-vertex. The composite quad now receives its exact GL
+coordinates.
