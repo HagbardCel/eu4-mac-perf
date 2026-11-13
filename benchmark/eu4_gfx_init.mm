@@ -1949,6 +1949,47 @@ eu4_gfx_clear_status eu4_gfx_read_offscreen(void *master, void *dest, size_t cap
    the layer's drawable and present it. */
 /* GL resolve helpers: the Metal targets are single-sample and already hold
    the resolved colour, so the GL resolve steps are no-ops. */
+static void dump_mtl_texture(id<MTLTexture> texture, const char *path) {
+    if (texture == nil || path == NULL) {
+        return;
+    }
+    NSUInteger row = texture.width * 4;
+    id<MTLBuffer> buffer = [texture.device newBufferWithLength:row * texture.height
+                                                      options:MTLResourceStorageModeShared];
+    if (buffer == nil) {
+        return;
+    }
+    id<MTLCommandQueue> queue = [texture.device newCommandQueue];
+    id<MTLCommandBuffer> command = [queue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    [blit copyFromTexture:texture
+              sourceSlice:0
+              sourceLevel:0
+             sourceOrigin:MTLOriginMake(0, 0, 0)
+               sourceSize:MTLSizeMake(texture.width, texture.height, 1)
+                 toBuffer:buffer
+        destinationOffset:0
+   destinationBytesPerRow:row
+ destinationBytesPerImage:row * texture.height];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    uint8_t *flipped = (uint8_t *)malloc(row * texture.height);
+    if (flipped == NULL) {
+        return;
+    }
+    const uint8_t *src = (const uint8_t *)buffer.contents;
+    for (NSUInteger y = 0; y < texture.height; y++) {
+        memcpy(flipped + y * row, src + (texture.height - 1 - y) * row, row);
+    }
+    FILE *file = fopen(path, "wb");
+    if (file != NULL) {
+        fwrite(flipped, 1, row * texture.height, file);
+        fclose(file);
+    }
+    free(flipped);
+}
+
 static const char *kResolveMSL =
     "#include <metal_stdlib>\n"
     "using namespace metal;\n"
@@ -2047,8 +2088,14 @@ void eu4_gfx_resolve_noop(void *unused, void *header) {
         return;
     }
     id<MTLTexture> dst = (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(header);
-    id<MTLTexture> src = backend.currentTargetColor != nil
-        ? backend.currentTargetColor : backend.gameColorTarget;
+    /* The engine copies the previous frame's image here (GL's back buffer
+       still holds it); the reconstructed single backbuffer is cleared before
+       this point, so the preserved previous frame is the correct source. */
+    id<MTLTexture> src = backend.previousFrameTexture;
+    if (src == nil) {
+        src = backend.currentTargetColor != nil
+            ? backend.currentTargetColor : backend.gameColorTarget;
+    }
     if (getenv("EU4_GFX_RESOLVE_TRACE") != NULL) {
         char body[512];
         int n = snprintf(
@@ -2070,11 +2117,24 @@ void eu4_gfx_resolve_noop(void *unused, void *header) {
     if (src == nil || dst == nil) {
         return;
     }
+    const char *resolve_dir = getenv("EU4_GFX_RESOLVE_DUMP");
+    if (resolve_dir != NULL && resolve_dir[0] != 0) {
+        char path[512];
+        snprintf(path, sizeof path, "%s/resolve-source-%lux%lu.bgra", resolve_dir,
+                 (unsigned long)src.width, (unsigned long)src.height);
+        dump_mtl_texture(src, path);
+    }
     if (src.width != dst.width || src.height != dst.height) {
         /* The engine's default framebuffer is logical (1728x1117) in GL; the
            reconstructed backbuffer is the physical drawable, so a scaled copy
            is required to fill the sampled texture. */
         resolve_scaled(src, dst, backend.device, backend.queue);
+        if (resolve_dir != NULL && resolve_dir[0] != 0) {
+            char path[512];
+            snprintf(path, sizeof path, "%s/resolve-dest-%lux%lu.bgra", resolve_dir,
+                     (unsigned long)dst.width, (unsigned long)dst.height);
+            dump_mtl_texture(dst, path);
+        }
         return;
     }
     id<MTLCommandBuffer> command = [backend.queue commandBuffer];
@@ -2123,6 +2183,13 @@ void eu4_gfx_resolve_texture_noop(void *handle, void *source, void *target) {
     if (src == nil || dst == nil || backend == nil || backend.queue == nil) {
         return;
     }
+    const char *resolve_dir = getenv("EU4_GFX_RESOLVE_DUMP");
+    if (resolve_dir != NULL && resolve_dir[0] != 0) {
+        char path[512];
+        snprintf(path, sizeof path, "%s/resolve-source-%lux%lu.bgra", resolve_dir,
+                 (unsigned long)src.width, (unsigned long)src.height);
+        dump_mtl_texture(src, path);
+    }
     if (src.width != dst.width || src.height != dst.height) {
         return;
     }
@@ -2146,11 +2213,57 @@ void eu4_gfx_resolve_texture_noop(void *handle, void *source, void *target) {
     [blit endEncoding];
     [command commit];
     [command waitUntilCompleted];
+    if (resolve_dir != NULL && resolve_dir[0] != 0) {
+        char path[512];
+        snprintf(path, sizeof path, "%s/resolve-dest-%lux%lu.bgra", resolve_dir,
+                 (unsigned long)dst.width, (unsigned long)dst.height);
+        dump_mtl_texture(dst, path);
+    }
 }
 
 /* CGraphics::PresentScene (0x149daf0). The frontend clears the present flag,
    so the original only calls _GfxPresent on some frames; the title scene is
    single-buffer style and needs a present at this frame boundary. */
+static void preserve_previous_frame(void) {
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil || backend.queue == nil || backend.gameColorTarget == nil) {
+        return;
+    }
+    id<MTLTexture> source = backend.gameColorTarget;
+    id<MTLTexture> copy = backend.previousFrameTexture;
+    if (copy == nil || copy.width != source.width || copy.height != source.height) {
+        MTLTextureDescriptor *descriptor =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                               width:source.width
+                                                              height:source.height
+                                                           mipmapped:NO];
+        descriptor.usage = MTLTextureUsageShaderRead;
+        descriptor.storageMode = MTLStorageModePrivate;
+        copy = [backend.device newTextureWithDescriptor:descriptor];
+        backend.previousFrameTexture = copy;
+    }
+    if (copy == nil) {
+        return;
+    }
+    id<MTLCommandBuffer> command = [backend.queue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    if (blit == nil) {
+        return;
+    }
+    [blit copyFromTexture:source
+              sourceSlice:0
+              sourceLevel:0
+             sourceOrigin:MTLOriginMake(0, 0, 0)
+               sourceSize:MTLSizeMake(source.width, source.height, 1)
+                toTexture:copy
+         destinationSlice:0
+         destinationLevel:0
+        destinationOrigin:MTLOriginMake(0, 0, 0)];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+}
+
 void eu4_gfx_present_scene(void *self) {
     if (self == NULL) {
         return;
@@ -2167,6 +2280,7 @@ void eu4_gfx_present_scene(void *self) {
         }
     }
     (void)eu4_gfx_swap_window(NULL);
+    preserve_previous_frame();
 }
 
 int eu4_gfx_cocoa_swap_window(void *window) {

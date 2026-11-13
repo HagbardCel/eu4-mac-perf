@@ -35,6 +35,7 @@
 @property (nonatomic) uint32_t currentTargetHeight;
 @property (nonatomic, strong) NSMutableDictionary *renderTargetDepths;
 @property (nonatomic, strong) id gameDepthTarget;
+@property (nonatomic, strong) id previousFrameTexture;
 /* Optional offscreen clear target. Shared BGRA8Unorm render target. */
 @property (nonatomic, strong) id colorTarget;
 @property (nonatomic) uint32_t colorWidth;
@@ -298,6 +299,7 @@ int eu4_gfx_offscreen_contents_known(void *master);
    backbuffer when game mode is on and +0x78 is null; otherwise to the
    diagnostic offscreen when configured. A geometry-transition stale skip
    returns normally; unsupported or failed cases stop. */
+void eu4_gfx_present_scene(void *self);
 int eu4_gfx_swap_window(void *window);
 int eu4_gfx_cocoa_swap_window(void *window);
 int eu4_gfx_cocoa_gles_swap_window(void *window);
