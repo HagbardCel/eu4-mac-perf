@@ -4,6 +4,7 @@
 #import "eu4_gfx_init.h"
 #import "eu4_gfx_shader.h"
 #import "eu4_gfx_texture.h"
+#import "eu4_metal_events.h"
 
 #import <Metal/Metal.h>
 #import <Foundation/Foundation.h>
@@ -237,6 +238,7 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
     }
     NSDictionary *locations = stage[@"attribute_locations"];
     NSMutableSet *declared = [NSMutableSet set];
+    NSMutableSet *covered = [NSMutableSet set];
     if ([locations isKindOfClass:[NSDictionary class]]) {
         for (NSString *name in locations) {
             [declared addObject:locations[name]];
@@ -295,6 +297,24 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
         }
         buffers[@(buffer_index)] = @{@"buffer": (__bridge id)metal_buffer,
                                      @"offset": @0};
+        [covered addObject:@(location)];
+    }
+    /* Attributes the translated program declares but the engine's layout does
+       not provide are supplied as a constant generic value. Metal requires a
+       descriptor entry for every stage_in attribute. */
+    for (NSNumber *location in declared) {
+        if ([covered containsObject:location]) {
+            continue;
+        }
+        NSUInteger buffer_index = 8 + location.unsignedIntegerValue;
+        MTLVertexAttributeDescriptor *attribute = descriptor.attributes[location.unsignedIntegerValue];
+        attribute.format = MTLVertexFormatFloat4;
+        attribute.offset = 0;
+        attribute.bufferIndex = buffer_index;
+        descriptor.layouts[buffer_index].stride = 16;
+        descriptor.layouts[buffer_index].stepFunction = MTLVertexStepFunctionPerVertex;
+        descriptor.layouts[buffer_index].stepRate = 1;
+        buffers[@(buffer_index)] = @{@"constant": @[@0.0f, @0.0f, @0.0f, @1.0f]};
     }
     return YES;
 }
@@ -356,6 +376,19 @@ static id<MTLRenderPipelineState> pipeline_for(EU4GfxPipelineKey *unused,
                                                        error:&error];
     if (pipeline != nil) {
         cache[key] = pipeline;
+    } else {
+        NSString *description = error != nil ? error.localizedDescription : @"unknown";
+        char body[1024];
+        int n = snprintf(body, sizeof body,
+                         "{\"schema\":\"gfx-generic-pipeline-error/v1\","
+                         "\"error\":\"%s\",\"color_format\":%lu,"
+                         "\"depth_format\":%lu,\"pid\":%d}\n",
+                         description.UTF8String ?: "",
+                         (unsigned long)color_format, (unsigned long)depth_format,
+                         (int)getpid());
+        if (n > 0 && (size_t)n < sizeof body) {
+            (void)eu4_metal_events_write("generic-pipeline-error.json", body);
+        }
     }
     return pipeline;
 }
@@ -579,9 +612,20 @@ int eu4_gfx_generic_draw_encode_into(const void *immediate_context,
     }
     for (NSNumber *key in buffers) {
         NSDictionary *entry = buffers[key];
-        [encoder setVertexBuffer:entry[@"buffer"]
-                          offset:[entry[@"offset"] unsignedIntegerValue]
-                         atIndex:[key unsignedIntegerValue]];
+        if (entry[@"constant"] != nil) {
+            float values[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+            NSArray *constant = entry[@"constant"];
+            for (NSUInteger i = 0; i < 4 && i < constant.count; i++) {
+                values[i] = [constant[i] floatValue];
+            }
+            [encoder setVertexBytes:values
+                             length:sizeof values
+                            atIndex:[key unsignedIntegerValue]];
+        } else {
+            [encoder setVertexBuffer:entry[@"buffer"]
+                              offset:[entry[@"offset"] unsignedIntegerValue]
+                             atIndex:[key unsignedIntegerValue]];
+        }
     }
     MTLPrimitiveType primitive = MTLPrimitiveTypeTriangle;
     switch (load_u32(master, 0x08)) {

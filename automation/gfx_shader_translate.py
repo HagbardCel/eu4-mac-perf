@@ -630,6 +630,12 @@ def translate_live_sources(source_dir: Path, out_dir: Path,
             prior = {}
         for key, entry in (prior.get("stages") or {}).items():
             if isinstance(entry, dict):
+                locations = entry.get("attribute_locations") or {}
+                if any(int(value) >= 16 for value in locations.values()):
+                    # The captured stage did not see every attribute. A live
+                    # translation assigns declaration-order locations, which is
+                    # what the engine's linker/vertex layout uses.
+                    continue
                 stages[key] = entry
                 msl = entry.get("msl_file")
                 if msl:
@@ -652,7 +658,14 @@ def translate_live_sources(source_dir: Path, out_dir: Path,
         if digest in stages:
             continue
         try:
-            record = translate_stage(text, stage, out_dir, digest, None, None)
+            locations = None
+            if stage == "vertex":
+                normalized = _normalize_source(text, stage)
+                locations = {
+                    item["name"]: index
+                    for index, item in enumerate(normalized["attributes"])
+                }
+            record = translate_stage(text, stage, out_dir, digest, locations, None)
         except TranslationError as exc:
             failed.append({"file": name, "error": str(exc)})
             continue
