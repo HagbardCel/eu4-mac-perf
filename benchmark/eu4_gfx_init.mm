@@ -1949,6 +1949,74 @@ eu4_gfx_clear_status eu4_gfx_read_offscreen(void *master, void *dest, size_t cap
    the layer's drawable and present it. */
 /* GL resolve helpers: the Metal targets are single-sample and already hold
    the resolved colour, so the GL resolve steps are no-ops. */
+static const char *kResolveMSL =
+    "#include <metal_stdlib>\n"
+    "using namespace metal;\n"
+    "struct V { float4 pos [[position]]; float2 uv; };\n"
+    "vertex V resolve_vs(uint vid [[vertex_id]]) {\n"
+    "    float2 p[3] = {float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0)};\n"
+    "    V o; o.pos = float4(p[vid], 0.0, 1.0);\n"
+    "    o.uv = float2((p[vid].x + 1.0) * 0.5, (1.0 - p[vid].y) * 0.5);\n"
+    "    return o;\n"
+    "}\n"
+    "fragment float4 resolve_fs(V in [[stage_in]], texture2d<float> t [[texture(0)]]) {\n"
+    "    constexpr sampler s(coord::normalized, filter::linear, address::clamp_to_edge);\n"
+    "    return t.sample(s, in.uv);\n"
+    "}\n";
+
+static id<MTLRenderPipelineState> resolve_pipeline(id<MTLDevice> device) {
+    static id<MTLRenderPipelineState> pipeline;
+    static id<MTLDevice> cached_device;
+    if (pipeline != nil && cached_device == device) {
+        return pipeline;
+    }
+    NSError *error = nil;
+    id<MTLLibrary> library = [device newLibraryWithSource:
+        [NSString stringWithUTF8String:kResolveMSL] options:nil error:&error];
+    if (library == nil) {
+        return nil;
+    }
+    MTLRenderPipelineDescriptor *descriptor = [MTLRenderPipelineDescriptor new];
+    descriptor.vertexFunction = [library newFunctionWithName:@"resolve_vs"];
+    descriptor.fragmentFunction = [library newFunctionWithName:@"resolve_fs"];
+    descriptor.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+    pipeline = [device newRenderPipelineStateWithDescriptor:descriptor error:&error];
+    if (pipeline != nil) {
+        cached_device = device;
+    }
+    return pipeline;
+}
+
+static void resolve_scaled(id<MTLTexture> src, id<MTLTexture> dst,
+                           id<MTLDevice> device, id<MTLCommandQueue> queue) {
+    id<MTLRenderPipelineState> pipeline = resolve_pipeline(device);
+    if (pipeline == nil) {
+        return;
+    }
+    id<MTLSamplerState> sampler = nil;
+    MTLSamplerDescriptor *s = [MTLSamplerDescriptor new];
+    s.minFilter = MTLSamplerMinMagFilterLinear;
+    s.magFilter = MTLSamplerMinMagFilterLinear;
+    sampler = [device newSamplerStateWithDescriptor:s];
+    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.colorAttachments[0].texture = dst;
+    pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+    pass.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 0.0);
+    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLCommandBuffer> command = [queue commandBuffer];
+    id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
+    if (encoder == nil) {
+        return;
+    }
+    [encoder setRenderPipelineState:pipeline];
+    [encoder setFragmentTexture:src atIndex:0];
+    [encoder setFragmentSamplerState:sampler atIndex:0];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [encoder endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+}
+
 void eu4_gfx_resolve_noop(void *unused, void *header) {
     (void)unused;
     /* _GfxResolve is glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h):
@@ -1982,8 +2050,14 @@ void eu4_gfx_resolve_noop(void *unused, void *header) {
             (void)eu4_metal_events_write("resolve.json", body);
         }
     }
-    if (src == nil || dst == nil || src.width != dst.width ||
-        src.height != dst.height) {
+    if (src == nil || dst == nil) {
+        return;
+    }
+    if (src.width != dst.width || src.height != dst.height) {
+        /* The engine's default framebuffer is logical (1728x1117) in GL; the
+           reconstructed backbuffer is the physical drawable, so a scaled copy
+           is required to fill the sampled texture. */
+        resolve_scaled(src, dst, backend.device, backend.queue);
         return;
     }
     id<MTLCommandBuffer> command = [backend.queue commandBuffer];
