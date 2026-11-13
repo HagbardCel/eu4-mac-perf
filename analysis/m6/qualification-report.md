@@ -79,17 +79,23 @@ the rest of the frame and is independent of the title scene:
 | 354 / 357 / 359 / 361 / 365 | font | 2.5k-6.5k differing | 0 (full-frame) |
 | 362 / 363 | buttonstate | ~10k differing | 0 (full-frame) |
 
-## Live execution status (remaining M6 workstream)
+## Live execution status
 
-- Runtime shader cache loading and exact compiler-input admission work: a live
-  probe loads the cache, admits the title scene's stages, and keeps the existing
-  Simple/sprite identity dispatch.
-- The generic live encoder executes real engine draws through the translated
-  MSL (a font draw reached, encoded, GPU completed, pixels captured).
-- Texture format 16 (GL_LUMINANCE8) and 15 (GL_ALPHA8) are now reconstructed by
-  expanding to BGRA8 with the exact GL component semantics.
-- Not yet done: live render targets, sampler state decode, non-default blend and
-  raster descriptors, depth attachment, and three clean menu starts.
+- Three consecutive clean starts reach the title scene through the
+  reconstructed backend (menu-only checkpoint `0x103b3c8`, 280 s uptime guard),
+  with zero refused draws, GPU completion and a presented backbuffer
+  (`analysis/m6/live-title-starts.json`).
+- The presented frame shows the full title UI rendered by the Metal backend:
+  EU4 logo, Paradox logo, Continue Game (Lubeck, 25 January 1609), Single
+  Player, Multiplayer, Tutorial, Exit, version text and the icon row.
+- Known gap: the animated map background is still the magenta backbuffer
+  clear. The engine composites a resolved render-target copy; the sampled
+  texture is not filled before the composite (the sampled-texture lifecycle is
+  the open item). The automated live checker
+  (`automation/m6_live_accept.py`) validates capture/refusal/presentation
+  status; its UI-region similarity is dominated by the missing map background.
+- Live sampler state defaults to linear/clamp; the engine sampler objects are
+  not decoded.
 
 ## Not yet done
 
