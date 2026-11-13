@@ -809,3 +809,20 @@ Metal texture/sampler index. With this fix the same validation run reports
 **13** draw errors instead of 5,412 (down to the known `sprite_vs` uniform
 buffer cases). The composite still samples an empty feedback texture, so the
 resolve source/ordering remains the next item.
+
+## Map draws are valid but the backbuffer stays black (2026-11-13 14:45)
+
+After binding samplers by name (validation errors 5,412 -> 13), the terrain draw
+still targets the backbuffer (`draw-ok-0x10ce96e` target == resolve source) and
+the resolve happens after the frame's map draws (order trace: ~369 draws ->
+resolve -> clears -> composite). Yet the resolve source dump is still black
+(RGB 0, alpha 255) at every resolve, so the map draws write no colour.
+
+Remaining candidates:
+- the map fragment shaders sample textures that are black (uninitialised or
+  failed uploads for the terrain/heightmap textures);
+- a depth or blend state that discards the map fragments.
+
+Next step: dump the textures bound by the terrain stage at draw time and check
+whether the terrain/heightmap inputs contain data; if they are black, fix the
+texture upload/format path for those formats.
