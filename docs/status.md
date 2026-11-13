@@ -26,9 +26,13 @@ and icon row. [Qualification report](../analysis/m6/qualification-report.md),
   cleared on depth clears; integer attribute conversion accepting MSL type
   names; rasterizer state decoded at the engine's real offsets (cull-enable at
   +0xd); `_GfxResolve` draining pending draws and copying the live backbuffer.
-- **Limitation.** The live menu map animates through its day/season cycle, so
-  its palette differs from the single reference frame; exact live pixel
-  equality is not claimed. The offline replay of the captured frame is exact.
+- **Blocking defect.** The live map's palette is materially wrong: the
+  authentic map is static across captures, while the live map is pink and the
+  composite's brightness/season input (the 864x558 render target) is
+  near-black. Live acceptance reports `visual_match=false`; M6 is not
+  accepted and the PR is not merge-ready until this layer renders.
+- **Limitation (offline).** None: the replay of the captured frame is
+  byte-identical to the GL reference.
 
 ## M4 — original-GL reference and Metal presentation (2026-11-12)
 

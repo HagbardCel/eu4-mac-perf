@@ -92,15 +92,22 @@ the rest of the frame and is independent of the title scene:
 - The presented frame shows the full title UI rendered by the Metal backend:
   EU4 logo, Paradox logo, Continue Game (Lubeck, 25 January 1609), Single
   Player, Multiplayer, Tutorial, Exit, version text and the icon row.
-- Live acceptance (`analysis/m6/live-acceptance.json`): three clean starts,
-  every criterion passes — executed, GPU completed, presented, UI structure
-  matched (high-pass correlation 0.77 / 0.94 / 0.55 against the authentic
-  reference) and the map region carries real rendered structure. Missing or
-  invalid reference data is a hard failure.
-- The live map's palette differs from the single captured reference frame: the
-  menu map animates through its day/season cycle, so exact live pixel equality
-  against one reference frame is not a valid criterion and is not claimed.
-  The offline replay of the captured frame remains pixel-exact.
+- Live operational result (`analysis/m6/live-acceptance.json`,
+  `analysis/m6/live-title-starts.json`): three fresh, distinct launches
+  reached the settled title scene, executed the reconstructed backend with zero
+  refused draws, GPU-completed and presented; the UI structure matches the
+  authentic reference (high-pass correlation 0.76 / 0.80 / 0.52). Missing or
+  invalid reference data, duplicate runs and duplicated launch identities are
+  hard failures.
+- **M6-blocking visual defect:** the live map's palette does not match the
+  authentic map. The authentic menu map is static (a 240 s and a 285 s capture
+  are identical), so this is not animation: the live map is pink
+  (RGB 158/123/148 vs 141/136/129, palette affinity 0.617 vs 0.998) and the
+  composite's second (brightness/season) input is near-black (mean 7.4 vs the
+  authentic bright layer). The map passes render into the backbuffer and the
+  first composite input is correct, but the bloom/season render targets remain
+  dark. Live acceptance therefore reports `visual_match=false`; the milestone
+  is **not accepted** until this layer renders.
 - Live sampler state defaults to linear/clamp; the engine sampler objects are
   not decoded.
 
