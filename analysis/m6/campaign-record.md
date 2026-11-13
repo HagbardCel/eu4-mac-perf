@@ -892,3 +892,21 @@ Remaining: decode the engine's real cull-enable flag so culling is honoured
 per draw (not globally disabled), and compare the resulting map colours with
 the authentic reference (the no-cull frame has a magenta cast from the
 feedback/season composition).
+
+## Cull snapshot layout corrected; enable flag still to decode (2026-11-13 16:05)
+
+The engine's own `GetOpenGLContextRasterizerState` shows the snapshot layout:
++0 = cull mode, +4 = polygon mode, +8 = front face, +0xc =
+GL_POLYGON_OFFSET_FILL, +0xd = **glIsEnabled(GL_CULL_FACE)**. The encoder was
+reading +0xc as the cull enable; it now reads +0xd, and `apply_raster` writes
+the polygon-offset byte correctly.
+
+However `apply_raster` still derives the enable from the description's cull
+enum (`cull != 0`), so the composite (whose authentic state has culling
+disabled but mode back) is still culled. The description must carry a separate
+enable field; the next step is to log the raw 0x10-byte raster description for
+the composite and for a culled terrain draw and diff them against the captured
+frames' per-draw `cull.enabled`, which gives ground truth for every draw.
+
+With `--no-cull` the complete title scene renders (map + UI); the cull-enable
+decode is the last semantic item before live acceptance.

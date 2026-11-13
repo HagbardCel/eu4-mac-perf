@@ -550,8 +550,8 @@ static void fill_raster_snap(uint8_t snap[0x10]) {
     memcpy(snap, &back, 4);
     memcpy(snap + 4, &fill, 4);
     memcpy(snap + 8, &winding, 4);
-    snap[0xc] = 1; /* cull face enabled */
-    snap[0xd] = 1; /* valid snapshot */
+    snap[0xc] = 0; /* polygon offset fill disabled */
+    snap[0xd] = 1; /* cull face enabled (the engine's GL_CULL_FACE byte) */
 }
 
 static const char *simple_state_reason(char *reason, size_t capacity, const char *text) {
@@ -677,8 +677,8 @@ static int apply_raster(void *master, void *state, int force) {
     memcpy(snap, &cull, 4);
     memcpy(snap + 4, &polygon, 4);
     memcpy(snap + 8, &front, 4);
-    snap[0xc] = cull != 0 ? 1 : 0;
-    snap[0xd] = 1;
+    snap[0xc] = 0;              /* polygon offset fill */
+    snap[0xd] = cull != 0 ? 1 : 0; /* GL_CULL_FACE enable */
     return apply_snap(master, 0x54, snap, 0x10, force);
 }
 

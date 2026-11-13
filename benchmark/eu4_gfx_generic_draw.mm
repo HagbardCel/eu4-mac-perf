@@ -957,9 +957,9 @@ static int generic_draw_encode_impl(const void *immediate_context,
                                                        : MTLWindingCounterClockwise];
     if (getenv("EU4_GFX_NO_CULL") != NULL) {
         [encoder setCullMode:MTLCullModeNone];
-    } else if (raster[0xc] != 0 && cull_face == 0x405) {
+    } else if (raster[0xd] != 0 && cull_face == 0x405) {
         [encoder setCullMode:MTLCullModeBack];
-    } else if (raster[0xc] != 0 && cull_face == 0x404) {
+    } else if (raster[0xd] != 0 && cull_face == 0x404) {
         [encoder setCullMode:MTLCullModeFront];
     } else {
         [encoder setCullMode:MTLCullModeNone];
