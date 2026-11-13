@@ -392,3 +392,21 @@ pixel-exact in the offline replay.
 
 Live path status: menu render path reached and presented; map composite not yet
 visible; three clean starts not yet qualified.
+
+## Composite blocker detail: integer vertex data with a float shader input
+
+The menu's full-screen composite (program 358) uses
+`in_POSITION: float4 [[attribute(0)]]` in the translated MSL, but the engine's
+vertex layout for it is `GL_SHORT`, 4 components, stride 8, `normalized=false`,
+with positions `(-1,1,0,0) (1,1,1,0) (-1,-1,2,0) (1,-1,3,0)`. In GL these raw
+integers are converted to floats (-1.0 .. 1.0); Metal has no unnormalized
+integer-to-float vertex format, so binding `MTLVertexFormatShort4` cannot feed
+the `float4` stage input correctly. The composite therefore contributes no
+coverage and the presented frame keeps the magenta clear (UI sprites drawn
+after it are visible).
+
+Fix direction: the translator must expose each attribute's declared GLSL type;
+the live encoder converts integer source data to float32 at draw time (a
+generated vertex buffer) whenever the shader input is a float vector and the GL
+type is an integer type. The captured trace is unaffected (the offline replay
+binds the exact captured buffers and is already pixel-exact).
