@@ -895,12 +895,195 @@ int eu4_gfx_generic_draw_supported(const void *immediate_context,
     return 1;
 }
 
+
+static BOOL pixel_format_is_bc(MTLPixelFormat format) {
+    switch (format) {
+        case MTLPixelFormatBC1_RGBA:
+        case MTLPixelFormatBC1_RGBA_sRGB:
+        case MTLPixelFormatBC2_RGBA:
+        case MTLPixelFormatBC2_RGBA_sRGB:
+        case MTLPixelFormatBC3_RGBA:
+        case MTLPixelFormatBC3_RGBA_sRGB:
+            return YES;
+        default:
+            return NO;
+    }
+}
+
+static NSString *const kDecodeTextureMSL = @
+    "#include <metal_stdlib>\n"
+    "using namespace metal;\n"
+    "struct DecodeUniforms { float2 size; };\n"
+    "struct VSOut { float4 position [[position]]; };\n"
+    "vertex VSOut decode_vs(uint vid [[vertex_id]]) {\n"
+    "    float2 p[3] = { float2(-1.0, -3.0), float2(-1.0, 1.0), float2(3.0, 1.0) };\n"
+    "    VSOut out; out.position = float4(p[vid], 0.0, 1.0); return out;\n"
+    "}\n"
+    "fragment float4 decode_fs(VSOut in [[stage_in]],\n"
+    "                          constant DecodeUniforms &u [[buffer(0)]],\n"
+    "                          texture2d<float> src [[texture(0)]],\n"
+    "                          sampler s [[sampler(0)]]) {\n"
+    "    float2 uv = (in.position.xy + float2(0.5)) / u.size;\n"
+    "    return src.sample(s, uv);\n"
+    "}\n";
+
+static id<MTLRenderPipelineState> decode_texture_pipeline(id<MTLDevice> device,
+                                                          MTLPixelFormat format) {
+    static NSMutableDictionary *cache;
+    if (cache == nil) {
+        cache = [NSMutableDictionary dictionary];
+    }
+    NSString *key = [NSString stringWithFormat:@"%lu", (unsigned long)format];
+    id<MTLRenderPipelineState> cached = cache[key];
+    if (cached != nil) {
+        return cached;
+    }
+    NSError *error = nil;
+    id<MTLLibrary> library = [device newLibraryWithSource:kDecodeTextureMSL
+                                                  options:nil
+                                                    error:&error];
+    if (library == nil) {
+        return nil;
+    }
+    MTLRenderPipelineDescriptor *descriptor = [MTLRenderPipelineDescriptor new];
+    descriptor.vertexFunction =
+        [library newFunctionWithName:@"decode_vs"];
+    descriptor.fragmentFunction =
+        [library newFunctionWithName:@"decode_fs"];
+    descriptor.colorAttachments[0].pixelFormat = format;
+    id<MTLRenderPipelineState> pipeline =
+        [device newRenderPipelineStateWithDescriptor:descriptor error:&error];
+    if (pipeline != nil) {
+        cache[key] = pipeline;
+    }
+    return pipeline;
+}
+
+/* Decodes a (possibly BC-compressed) texture into a tightly packed RGBA8 image
+   by sampling it at texel centres with nearest filtering, then reading the
+   render target back with GPU completion. The output rows are flipped to the
+   bottom-up order used by the other texture dumps. Returns NULL on failure. */
+static uint8_t *decode_texture_rgba8(id<MTLTexture> texture, NSUInteger *out_row) {
+    if (texture == nil || out_row == NULL) {
+        return NULL;
+    }
+    id<MTLDevice> device = texture.device;
+    BOOL srgb = texture.pixelFormat == MTLPixelFormatBC1_RGBA_sRGB ||
+                texture.pixelFormat == MTLPixelFormatBC2_RGBA_sRGB ||
+                texture.pixelFormat == MTLPixelFormatBC3_RGBA_sRGB;
+    MTLPixelFormat target_format = srgb ? MTLPixelFormatRGBA8Unorm_sRGB
+                                        : MTLPixelFormatRGBA8Unorm;
+    id<MTLRenderPipelineState> pipeline =
+        decode_texture_pipeline(device, target_format);
+    if (pipeline == nil) {
+        return NULL;
+    }
+    MTLTextureDescriptor *descriptor =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:target_format
+                                                           width:texture.width
+                                                          height:texture.height
+                                                       mipmapped:NO];
+    descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    id<MTLTexture> target = [device newTextureWithDescriptor:descriptor];
+    if (target == nil) {
+        return NULL;
+    }
+    MTLSamplerDescriptor *sampler_descriptor = [MTLSamplerDescriptor new];
+    sampler_descriptor.minFilter = MTLSamplerMinMagFilterNearest;
+    sampler_descriptor.magFilter = MTLSamplerMinMagFilterNearest;
+    sampler_descriptor.mipFilter = MTLSamplerMipFilterNotMipmapped;
+    sampler_descriptor.sAddressMode = MTLSamplerAddressModeClampToEdge;
+    sampler_descriptor.tAddressMode = MTLSamplerAddressModeClampToEdge;
+    id<MTLSamplerState> sampler =
+        [device newSamplerStateWithDescriptor:sampler_descriptor];
+    float size[2] = {(float)texture.width, (float)texture.height};
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    id<MTLCommandQueue> queue = (backend != nil && backend.queue != nil)
+        ? backend.queue : [device newCommandQueue];
+    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.colorAttachments[0].texture = target;
+    pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+    pass.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 0.0);
+    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLCommandBuffer> command = [queue commandBuffer];
+    id<MTLRenderCommandEncoder> encoder =
+        [command renderCommandEncoderWithDescriptor:pass];
+    if (encoder == nil) {
+        return NULL;
+    }
+    [encoder setRenderPipelineState:pipeline];
+    [encoder setVertexBytes:&size length:sizeof size atIndex:0];
+    [encoder setFragmentBytes:&size length:sizeof size atIndex:0];
+    [encoder setFragmentTexture:texture atIndex:0];
+    [encoder setFragmentSamplerState:sampler atIndex:0];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [encoder endEncoding];
+    NSUInteger row = texture.width * 4;
+    id<MTLBuffer> buffer = [device newBufferWithLength:row * texture.height
+                                              options:MTLResourceStorageModeShared];
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    [blit copyFromTexture:target
+              sourceSlice:0
+              sourceLevel:0
+             sourceOrigin:MTLOriginMake(0, 0, 0)
+               sourceSize:MTLSizeMake(texture.width, texture.height, 1)
+                 toBuffer:buffer
+        destinationOffset:0
+   destinationBytesPerRow:row
+ destinationBytesPerImage:row * texture.height];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    if (command.status != MTLCommandBufferStatusCompleted) {
+        return NULL;
+    }
+    uint8_t *flipped = (uint8_t *)malloc(row * texture.height);
+    if (flipped == NULL) {
+        return NULL;
+    }
+    const uint8_t *src = (const uint8_t *)buffer.contents;
+    for (NSUInteger y = 0; y < texture.height; y++) {
+        memcpy(flipped + y * row, src + (texture.height - 1 - y) * row, row);
+    }
+    *out_row = row;
+    return flipped;
+}
+
 static void dump_texture_file(id<MTLTexture> texture, const char *path) {
     if (texture == nil || path == NULL) {
         return;
     }
     id<MTLDevice> device = texture.device;
     if (device == nil) {
+        return;
+    }
+    if (pixel_format_is_bc(texture.pixelFormat)) {
+        NSUInteger row = 0;
+        uint8_t *decoded = decode_texture_rgba8(texture, &row);
+        if (decoded == NULL) {
+            return;
+        }
+        FILE *file = fopen(path, "wb");
+        if (file != NULL) {
+            fwrite(decoded, 1, row * texture.height, file);
+            fclose(file);
+            char sidecar[1024];
+            int n = snprintf(sidecar, sizeof sidecar, "%s.json", path);
+            if (n > 0 && (size_t)n < sizeof sidecar) {
+                FILE *meta = fopen(sidecar, "w");
+                if (meta != NULL) {
+                    fprintf(meta,
+                            "{\"format\":\"RGBA8\",\"rows\":\"bottom_up\","
+                            "\"source_pixel_format\":%lu,\"width\":%lu,"
+                            "\"height\":%lu,\"mip\":0}\n",
+                            (unsigned long)texture.pixelFormat,
+                            (unsigned long)texture.width,
+                            (unsigned long)texture.height);
+                    fclose(meta);
+                }
+            }
+        }
+        free(decoded);
         return;
     }
     NSUInteger row = texture.width * 4;

@@ -1,5 +1,5 @@
 {
-  "schema": "m6-menu-frame-evidence/v2",
+  "schema": "m6-menu-frame-evidence/v3",
   "canonical_reference": {
     "frame_dir": ".local/m6/frames/menu-occ300/frame",
     "selection": {
@@ -10,7 +10,6 @@
       "occurrence": 300,
       "required": true
     },
-    "events": 326,
     "frame": {
       "width": 1728,
       "height": 1117,
@@ -21,34 +20,46 @@
       "reference_bytes": 7720704,
       "reference_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15"
     },
+    "events": 326,
+    "event_log_sha256": "47bda04c18194365d9cce66f3ffbe0901f40d0e1e2c81839e387cee016618b30",
     "raw_reference_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15",
     "origin": "lower_left",
-    "note": "Captured with the corrected non-invasive observer at the same menu caller occurrence (300) used by the live checkpoint, so live and reference frames represent the same scene moment."
+    "note": "Canonical corrected reference: menu caller 0x103b3c8 occurrence 300, the live checkpoint selection; captured with the non-invasive observer."
   },
   "superseded_references": {
-    "menu-15": "captured with the observer unit-0 corruption (raw c3dab19c\u2026)",
-    "menu-audit": "corrected but undirected capture (raw 888e0908\u2026)"
+    "menu-15": "observer unit-0 corruption (raw c3dab19c\u2026)",
+    "menu-audit": "corrected but undirected (raw 888e0908\u2026); replays with 707,776 differing pixels under an independent comparison, retained as diagnostic evidence only"
   },
   "offline_replay": {
-    "frame_dir": ".local/m6/frames/menu-audit/frame",
-    "reference_raw_sha256": "888e0908d9645821debc622dec54e7c5a5f7196f954a02a12b2ca23b572cadd0",
-    "metal_raw_sha256": "92ea2167bf7a73ba1c67a425953a63cc0d7d402b3897ccb0cd89316d138449e5",
+    "frame_dir": ".local/m6/frames/menu-occ300/frame",
+    "replay_dir": ".local/m6/frames/menu-occ300/replay-inst",
+    "independent_files": true,
     "events": 326,
     "encoded": 326,
     "failed": 0,
-    "status": "fail",
-    "mismatched_pixels": 707776,
-    "max_channel_error": 56,
+    "command_status": 4,
+    "metal_raw_sha256": null,
+    "status": "pass",
+    "pixels": 1930176,
+    "mismatched_pixels": 0,
+    "alpha_different_pixels": 0,
+    "max_channel_error": 0,
     "mean_abs_error": [
-      0.310247874,
-      0.3968664,
-      0.511005214,
+      0.0,
+      0.0,
+      0.0,
       0.0
     ],
-    "note": "The corrected capture does NOT replay pixel-exactly: 707,776 pixels differ (mean 0.3, max 56). The earlier exact claim compared the Metal frame against itself (reference file aliased to the readback); it is withdrawn."
+    "row_origin_normalization": {
+      "row_origin_flip": false,
+      "alpha": "compared"
+    },
+    "reference_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15",
+    "candidate_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15",
+    "alias_rejection_active": true
   },
   "live_comparison": {
     "reference": ".local/m6/frames/menu-occ300/frame",
-    "result": "visual_match=false (map palette affinity 0.42)"
+    "result": "visual_match=false (map palette affinity 0.42); three-run acceptance not valid"
   }
 }
