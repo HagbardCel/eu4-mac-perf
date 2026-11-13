@@ -430,3 +430,16 @@ the width to `master+0xb0`; the replacement wrote them swapped, so every
 render-target pass used a transposed viewport (1728x1117 became 1117x1728) and
 the map RTs stayed at their clear colour. The switch now matches the original
 field order. The route already reads `+0xac` as height and `+0xb0` as width.
+
+## Checkpoint minimum uptime (2026-11-13)
+
+Loading tips reuse many menu draw callers, so caller-only checkpoints can stop
+on a loading frame. `EU4_GFX_CHECKPOINT_MIN_UPTIME_MS` (probe
+`--min-uptime-ms`) suppresses the checkpoint until the process has been
+running that long; the occurrence counter only advances afterwards. With the
+menu appearing around 230-250 s, a 250 s guard plus a menu-only caller lands on
+the title scene.
+
+After the render-target viewport fix, the title frame's map targets contain
+content (a 1728x1117 target mean 63.75, an 864x558 bloom target mean 15.94),
+confirming the terrain and bloom passes now render.
