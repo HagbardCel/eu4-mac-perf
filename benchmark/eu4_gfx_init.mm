@@ -1,5 +1,6 @@
 #import "eu4_gfx_buffers.h"
 #import "eu4_gfx_init.h"
+#import "eu4_gfx_texture.h"
 
 /* Hosts that link this file without the shader module must still link; the
    runtime cache is optional for the lifecycle-only diagnostics, so it is
@@ -1955,8 +1956,39 @@ void eu4_gfx_resolve_noop(void *unused, void *header) {
 
 void eu4_gfx_resolve_texture_noop(void *handle, void *source, void *target) {
     (void)handle;
-    (void)source;
-    (void)target;
+    /* _GfxResolveTexture blits the source render target into the sampled
+       (resolved) texture. The reconstructed targets are single-sample, so a
+       Metal texture copy is the exact equivalent; skipping it left the
+       composite sampling stale texture contents. */
+    id<MTLTexture> src = (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(source);
+    id<MTLTexture> dst = (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(target);
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (src == nil || dst == nil || backend == nil || backend.queue == nil) {
+        return;
+    }
+    if (src.width != dst.width || src.height != dst.height) {
+        return;
+    }
+    id<MTLCommandBuffer> command = [backend.queue commandBuffer];
+    if (command == nil) {
+        return;
+    }
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    if (blit == nil) {
+        return;
+    }
+    [blit copyFromTexture:src
+              sourceSlice:0
+              sourceLevel:0
+             sourceOrigin:MTLOriginMake(0, 0, 0)
+               sourceSize:MTLSizeMake(src.width, src.height, 1)
+                toTexture:dst
+         destinationSlice:0
+         destinationLevel:0
+        destinationOrigin:MTLOriginMake(0, 0, 0)];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
 }
 
 /* CGraphics::PresentScene (0x149daf0). The frontend clears the present flag,

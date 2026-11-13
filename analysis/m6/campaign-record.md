@@ -458,3 +458,23 @@ targets do contain content).
 Per-caller draw logs (`draw-ok-<caller>.json`) are now written for every
 successful live draw to identify whether the composite (caller 0xed7dcd)
 executes and which target it uses.
+
+## Composite investigation (2026-11-13 04:30)
+
+The full-screen menu composite (program 358) is fully specified in the live
+run: count 4, target = game backbuffer, uniforms byte-identical to the captured
+trace (UNIFORM1[0] = 0.13, 0.13, 0.842, 0.842, 0, 0.626, ...), and its two
+sampled textures resolve to 1728x1117 and 864x558 Metal textures.
+`_GfxResolveTexture` is now a real Metal blit from the source target into the
+resolved texture (it was a no-op). The presented frame still shows the magenta
+backbuffer clear plus the full title UI.
+
+Remaining hypotheses, in order:
+1. The sampled (resolved) textures are filled from an empty/stale source; the
+   resolve may not be invoked for these headers, or the sampled header is a
+   distinct target the engine renders into directly.
+2. Draw ordering: the magenta fb0 clear may be applied after the composite
+   (deferred game-clear design), erasing it before the UI.
+
+Next diagnostics: dump the two sampled textures at the composite draw, and the
+backbuffer immediately after the composite, to separate sampling from ordering.
