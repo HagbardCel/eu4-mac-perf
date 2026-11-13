@@ -443,3 +443,18 @@ the title scene.
 After the render-target viewport fix, the title frame's map targets contain
 content (a 1728x1117 target mean 63.75, an 864x558 bloom target mean 15.94),
 confirming the terrain and bloom passes now render.
+
+## Title scene presented live (2026-11-13 03:29)
+
+With the render-target viewport fixed, the uptime-guarded checkpoint lands on
+the actual title scene. The presented backbuffer (game/drawable 3456x2234,
+exact Metal swap readback) shows the full title UI rendered through the
+reconstructed backend: EU4 logo, Paradox logo, "Continue Game" (Lubeck, 25
+January 1609), Single Player, Multiplayer, Tutorial, Exit, version text and the
+bottom-right icon row. The map background is still the fb0 magenta clear: the
+map composite does not contribute to that frame (terrain and bloom render
+targets do contain content).
+
+Per-caller draw logs (`draw-ok-<caller>.json`) are now written for every
+successful live draw to identify whether the composite (caller 0xed7dcd)
+executes and which target it uses.

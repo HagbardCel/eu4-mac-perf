@@ -297,6 +297,24 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
         g_have_last = 1;
     }
     eu4_gfx_draw_route_record("draw-route.json", "live", "", state, raw, caller_rva);
+    {
+        char name[96];
+        snprintf(name, sizeof name, "draw-ok-%llx.json", (unsigned long long)caller_rva);
+        char body[512];
+        int n = snprintf(
+            body, sizeof body,
+            "{\"schema\":\"gfx-draw-ok/v1\",\"caller_rva\":\"0x%llx\","
+            "\"variant\":%u,\"count\":%d,\"target\":\"%p\","
+            "\"identity\":\"%s\",\"pid\":%d}\n",
+            (unsigned long long)caller_rva, raw->which,
+            state != NULL ? state->count : (int32_t)raw->rsi,
+            inputs.target,
+            eu4_gfx_shader_identity(current_shader) ?: "",
+            (int)getpid());
+        if (n > 0 && (size_t)n < sizeof body) {
+            (void)eu4_metal_events_write(name, body);
+        }
+    }
     (void)eu4_gfx_logical_capture_from_env(
         (__bridge void *)backend.device, (__bridge void *)backend.queue,
         (const void *)handle, state != NULL ? state->count : (int32_t)raw->rsi,
