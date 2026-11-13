@@ -794,3 +794,18 @@ generic sampler loop), even though their draw-ok identity is
 Next step: instrument every encoder entry (legacy draw encoder, simple, sprite)
 with a stage identity marker, then correlate the validation error timestamps
 with the encoder that produced the failing `main0`/tex7 draws.
+
+## Root cause: texture-unit binding was positional (2026-11-13 14:25)
+
+The generic encoder bound textures by *array position* of the GL `samplers`
+list while the Metal `msl_samplers` list is a different order, keyed by sampler
+*name*. The cube `tex2` therefore landed in a `texture2d` Metal slot (and every
+other unit was similarly shifted), which Metal validation rejected: 5,412 draw
+errors per menu run.
+
+The encoder now binds by sampler name: it resolves each `msl_samplers` entry to
+the GL sampler of the same name, then binds that unit's texture at the entry's
+Metal texture/sampler index. With this fix the same validation run reports
+**13** draw errors instead of 5,412 (down to the known `sprite_vs` uniform
+buffer cases). The composite still samples an empty feedback texture, so the
+resolve source/ordering remains the next item.

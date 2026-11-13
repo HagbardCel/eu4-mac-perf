@@ -966,9 +966,33 @@ static int generic_draw_encode_impl(const void *immediate_context,
         NSDictionary *stage = [stage_name isEqualToString:@"vertex"] ? vertex_stage : pixel_stage;
         NSArray *samplers = stage[@"samplers"];
         NSArray *msl_samplers = stage[@"msl_samplers"];
-        for (NSUInteger index = 0; index < samplers.count; index++) {
-            NSDictionary *sampler_entry = samplers[index];
-            NSUInteger unit = num(sampler_entry[@"binding"], index);
+        /* msl_samplers is ordered by Metal binding; each entry names the GL
+           sampler it corresponds to. Bind by name, not by array position: the
+           names decide which texture unit feeds each Metal texture slot. */
+        NSMutableDictionary *sampler_by_name = [NSMutableDictionary dictionary];
+        for (NSDictionary *entry in samplers) {
+            NSString *name = entry[@"name"] ?: @"";
+            if (name.length > 0) {
+                sampler_by_name[name] = entry;
+            }
+        }
+        NSArray *bind_order = msl_samplers.count > 0 ? msl_samplers : samplers;
+        for (NSUInteger index = 0; index < bind_order.count; index++) {
+            NSDictionary *binding = bind_order[index];
+            NSDictionary *sampler_entry = nil;
+            NSUInteger unit = index;
+            NSUInteger texture_index = index;
+            NSUInteger sampler_index = index;
+            if (msl_samplers.count > 0) {
+                NSString *name = binding[@"name"] ?: @"";
+                sampler_entry = sampler_by_name[name] ?: @{};
+                unit = num(sampler_entry[@"binding"], index);
+                texture_index = num(binding[@"texture_index"], index);
+                sampler_index = num(binding[@"sampler_index"], index);
+            } else {
+                sampler_entry = binding;
+                unit = num(binding[@"binding"], index);
+            }
             void *header = NULL;
             if (bound != nil && unit < bound.count) {
                 [(NSValue *)bound[unit] getValue:&header];
@@ -985,13 +1009,12 @@ static int generic_draw_encode_impl(const void *immediate_context,
                 fail(reason, reason_capacity, "sampled texture is absent");
                 return 0;
             }
-            NSDictionary *binding = index < msl_samplers.count ? msl_samplers[index] : nil;
-            NSUInteger texture_index = binding != nil
-                ? num(binding[@"texture_index"], index) : index;
-            NSUInteger sampler_index = binding != nil
-                ? num(binding[@"sampler_index"], index) : index;
             BOOL substituted = NO;
             NSString *declared_type = sampler_entry[@"type"] ?: @"";
+            if (declared_type.length == 0 && msl_samplers.count > 0) {
+                declared_type = [binding[@"kind"] isEqualToString:@"texturecube"]
+                    ? @"samplerCube" : @"sampler2D";
+            }
             if (texture != nil && declared_type.length > 0) {
                 BOOL expects_cube =
                     [declared_type rangeOfString:@"Cube" options:NSCaseInsensitiveSearch].location != NSNotFound;
@@ -1006,9 +1029,9 @@ static int generic_draw_encode_impl(const void *immediate_context,
                     }
                 }
                 if (getenv("EU4_GFX_TEXTURE_TYPE_TRACE") != NULL) {
-                    char body[320];
+                    char type_body[320];
                     int length = snprintf(
-                        body, sizeof body,
+                        type_body, sizeof type_body,
                         "{\"stage\":\"%s\",\"unit\":%lu,\"texture_index\":%lu,"
                         "\"expected\":\"%s\",\"bound_type\":%lu,"
                         "\"mismatched\":%d,\"substituted\":%d}\n",
@@ -1016,8 +1039,8 @@ static int generic_draw_encode_impl(const void *immediate_context,
                         (unsigned long)unit, (unsigned long)texture_index,
                         declared_type.UTF8String ?: "",
                         (unsigned long)texture.textureType, mismatched, substituted);
-                    if (length > 0 && (size_t)length < sizeof body) {
-                        (void)eu4_metal_events_append("texture-type-trace.jsonl", body);
+                    if (length > 0 && (size_t)length < sizeof type_body) {
+                        (void)eu4_metal_events_append("texture-type-trace.jsonl", type_body);
                     }
                 }
             }
@@ -1030,9 +1053,10 @@ static int generic_draw_encode_impl(const void *immediate_context,
                 }
                 BOOL resolved = header != NULL &&
                     eu4_gfx_texture_for_header(header) != NULL;
-                [binding_log appendFormat:@"%@{\"unit\":%lu,\"stage\":\"%@\",\"header\":\"%p\",\"width\":%u,\"height\":%u,\"format\":%u,\"resolved\":%@,\"texture\":\"%p\"}",
+                [binding_log appendFormat:@"%@{\"unit\":%lu,\"stage\":\"%@\",\"texture_index\":%lu,\"header\":\"%p\",\"width\":%u,\"height\":%u,\"format\":%u,\"resolved\":%@,\"texture\":\"%p\"}",
                                           binding_log.length > 0 ? @"," : @"",
-                                          (unsigned long)unit, stage_name, header,
+                                          (unsigned long)unit, stage_name,
+                                          (unsigned long)texture_index, header,
                                           width, height, format,
                                           resolved ? @"true" : @"false",
                                           (__bridge void *)(header != NULL ? (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(header) : nil)];
