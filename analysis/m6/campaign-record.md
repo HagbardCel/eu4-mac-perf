@@ -733,3 +733,14 @@ Remaining work: emulate the observed back-buffer retention across presentation
 (preserve the presented image and feed it to the resolve at the engine's copy
 point, including the loading-to-menu transition), rather than copying the
 current cleared backbuffer.
+
+## Drain-before-resolve test (2026-11-13 12:45)
+
+`_GfxResolve` now drains the pending game submission before copying, matching
+GL's "the copy observes all prior commands" semantics. Live sampling is still
+all zero at the composite, so the pending-submission pointer is not the missing
+ordering: the engine's map draws are committed through a path not represented
+by `pendingGameCommand` at the copy point (multi-threaded/deferred submission),
+or the copy genuinely happens before those draws in the live execution order.
+The feedback texture therefore stays empty and the map background remains the
+one M6-blocking gap.
