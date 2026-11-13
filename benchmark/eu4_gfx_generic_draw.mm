@@ -9,6 +9,7 @@
 #import <Metal/Metal.h>
 #import <Foundation/Foundation.h>
 #import <string.h>
+#import <pthread.h>
 
 /* Generic live encoder for cached shaders. Game-independent: it reads engine
  * state, never caller RVAs, and has no scene-specific branches. */
@@ -239,6 +240,10 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
     NSDictionary *locations = stage[@"attribute_locations"];
     NSMutableSet *declared = [NSMutableSet set];
     NSMutableSet *covered = [NSMutableSet set];
+    /* Metal has 31 vertex buffer slots and one is the uniform block. Assign
+       compact indices instead of 8+location: locations can reach 30 (the
+       translator's collision-free range), which would exceed the table. */
+    NSUInteger next_buffer = 8;
     if ([locations isKindOfClass:[NSDictionary class]]) {
         for (NSString *name in locations) {
             [declared addObject:locations[name]];
@@ -282,7 +287,7 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
             fail(reason, capacity, "unsupported vertex element format");
             return NO;
         }
-        NSUInteger buffer_index = 8 + location;
+        NSUInteger buffer_index = next_buffer++;
         MTLVertexAttributeDescriptor *attribute = descriptor.attributes[location];
         attribute.format = format;
         attribute.offset = offset + slot_offset;
@@ -306,7 +311,7 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
         if ([covered containsObject:location]) {
             continue;
         }
-        NSUInteger buffer_index = 8 + location.unsignedIntegerValue;
+        NSUInteger buffer_index = next_buffer++;
         MTLVertexAttributeDescriptor *attribute = descriptor.attributes[location.unsignedIntegerValue];
         attribute.format = MTLVertexFormatFloat4;
         attribute.offset = 0;
@@ -335,6 +340,23 @@ static id<MTLRenderPipelineState> pipeline_for(EU4GfxPipelineKey *unused,
     if (cache == nil || cached_device != device) {
         cache = [NSMutableDictionary dictionary];
         cached_device = device;
+    }
+    NSMutableString *vertex_signature = [NSMutableString string];
+    /* Metal exposes attribute indices 0..30 (31 in total). */
+    for (NSUInteger i = 0; i < 31; i++) {
+        MTLVertexAttributeDescriptor *attribute = descriptor.attributes[i];
+        if (attribute.format != 0) {
+            [vertex_signature appendFormat:@"a%lu:%lu:%lu;", (unsigned long)i,
+                                           (unsigned long)attribute.format,
+                                           (unsigned long)attribute.bufferIndex];
+        }
+        MTLVertexBufferLayoutDescriptor *layout = descriptor.layouts[i];
+        if (layout.stride != 0) {
+            [vertex_signature appendFormat:@"l%lu:%lu:%lu:%lu;", (unsigned long)i,
+                                           (unsigned long)layout.stride,
+                                           (unsigned long)layout.stepFunction,
+                                           (unsigned long)layout.stepRate];
+        }
     }
     uint32_t enabled = load_u32(blend_snapshot, 0);
     uint32_t src = load_u32(blend_snapshot, 4);
@@ -442,11 +464,11 @@ int eu4_gfx_generic_draw_supported(const void *immediate_context,
     return 1;
 }
 
-int eu4_gfx_generic_draw_encode_into(const void *immediate_context,
-                                     const eu4_gfx_generic_call *call,
-                                     const eu4_gfx_simple_draw_inputs *inputs,
-                                     void *command_buffer, const char **reason,
-                                     eu4_gfx_simple_draw_state *state) {
+static int generic_draw_encode_impl(const void *immediate_context,
+                                    const eu4_gfx_generic_call *call,
+                                    const eu4_gfx_simple_draw_inputs *inputs,
+                                    void *command_buffer, const char **reason,
+                                    eu4_gfx_simple_draw_state *state) {
     char local_reason[256] = "";
     uint8_t *master = NULL;
     void *shader = NULL;
@@ -691,4 +713,31 @@ int eu4_gfx_generic_draw_encode_into(const void *immediate_context,
         memset(state, 0, sizeof *state);
     }
     return 1;
+}
+
+int eu4_gfx_generic_draw_encode_into(const void *immediate_context,
+                                     const eu4_gfx_generic_call *call,
+                                     const eu4_gfx_simple_draw_inputs *inputs,
+                                     void *command_buffer, const char **reason,
+                                     eu4_gfx_simple_draw_state *state) {
+    @try {
+        return generic_draw_encode_impl(immediate_context, call, inputs,
+                                        command_buffer, reason, state);
+    } @catch (NSException *exception) {
+        char body[1024];
+        int n = snprintf(
+            body, sizeof body,
+            "{\"schema\":\"gfx-generic-exception/v1\",\"name\":\"%s\","
+            "\"reason\":\"%s\",\"thread\":%llu,\"pid\":%d}\n",
+            exception.name.UTF8String ?: "",
+            exception.reason.UTF8String ?: "",
+            (unsigned long long)pthread_self(), (int)getpid());
+        if (n > 0 && (size_t)n < sizeof body) {
+            (void)eu4_metal_events_write("generic-exception.json", body);
+        }
+        if (reason != NULL) {
+            *reason = "Objective-C exception in the generic encoder";
+        }
+        return 0;
+    }
 }

@@ -302,3 +302,22 @@ can depth-test.
 
 Remaining: reach the menu with a complete shader cache, then validate the
 presented title scene and three clean starts.
+
+## Live generic encoder hardening (2026-11-13, late)
+
+- Pipeline keys use the effective vertex-layout signature (not a per-draw
+  descriptor pointer), so pipelines are cached across draws and the engine runs
+  at a usable rate.
+- Vertex descriptor buffer indices are compact (8..): Metal has 31 vertex
+  buffer slots, and `8 + location` overflows once the translator's
+  collision-free attribute range (16..30) is present.
+- Pipeline creation failures are logged with the Metal error; Objective-C
+  exceptions in the encoder are caught and returned as fail-closed refusals
+  with the exception name/reason logged.
+- A remaining abort in the water pass was localized to the generic encoder's
+  attribute/uniform packing path; the compact-index fix addresses the Metal
+  validation abort.
+
+Acceptance state: the engine reaches the map/water passes in the frontend
+scene; the menu caller has not yet been reached in a single run within the
+launch deadline. The offline captured-frame equivalence remains exact.
