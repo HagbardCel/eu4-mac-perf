@@ -33,16 +33,24 @@ pairing. An **offline 100-frame campaign with a controlled mirrored-text defect
 at frame 57** detects exactly that frame, builds a replayable case, and
 reproduces it without an EU4 launch (`tests/test_offline_campaign.py`).
 
-The real 100-frame **title-scene** demonstration is still open: under two
-concurrent GUI processes the background OpenGL reference was throttled to about
-0.3 fps and never reached the title draw count in the tested window, while the
-Metal candidate reached it. Metadata-only observation, phase-gated pairing and
-a **staggered reference-first** launch mode are implemented; the staggered live
-attempt was refused because the M6 agent held the host lease with a real EU4
-process (`pid 5618`), which is the intended coexistence behaviour. The
-reference-side loading/focus behaviour still needs a windowed/foreground
-configuration experiment before the live 100-frame and real title differential
-are claimed.
+The real 100-frame **title-scene** demonstration is still open. Two live
+attempts failed for different, now-understood reasons:
+
+1. The host lease was held by the M6 agent's real EU4 process; the harness
+   refused instead of interfering (intended coexistence).
+2. With the lease free, the passive OpenGL observer sealed at its 1024-event
+   quota after ~12 s and stopped emitting frame observations. A **frame-only
+   observer mode** (`EU4_GFX_FRAME_ONLY=1`) now installs only the present/draw/
+   clear hooks and bypasses the event-record quota; it streamed 20,000
+   metadata frames at ~112 fps. In that run the reference loading draw count
+   fluctuated between 17 and 81 and never reached the configured target of 100
+   before the phase deadline, while the staggered candidate was not started
+   (by design). The reference loading path/long-run behaviour therefore still
+   needs a windowed/foreground or user-dir isolation experiment; the live title
+   campaign is not claimed.
+
+Metadata-only observation, phase-gated pairing, staggered launch and pre-requested
+full-resolution windows are implemented and tested.
 
 **Lease preflight.** The agent surface now exposes `eu4_session lease`; on the
 current host it reports `busy`, holder worktree

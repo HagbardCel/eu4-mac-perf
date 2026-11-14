@@ -30,6 +30,7 @@ static const eu4_gfx_observe_spec kSpecs[] = {
 };
 
 static _Atomic uint32_t g_enabled;
+static _Atomic uint32_t g_frame_only;
 static _Atomic uint32_t g_installed;
 static _Atomic uint32_t g_max_events = EU4_GFX_OBSERVE_DEFAULT_MAX_EVENTS;
 static _Atomic uint32_t g_duration_ms = EU4_GFX_OBSERVE_DEFAULT_DURATION_MS;
@@ -416,32 +417,41 @@ static void on_entry(eu4_gfx_capture_frame *frame, uint64_t slot64) {
         refuse(slot);
         return;
     }
-    if (!atomic_load_explicit(&g_init_seen, memory_order_acquire)) {
-        refuse(slot);
-        return;
-    }
-    if (g_tls.depth >= EU4_GFX_OBSERVE_MAX_SPECS) {
-        refuse(slot);
-        return;
-    }
-    if (!eu4_gfx_startup_admit_hook()) {
-        refuse(slot);
-        return;
-    }
-    uint32_t retention =
-        atomic_load_explicit(&g_retention, memory_order_relaxed);
-    if (retention == EU4_GFX_OBSERVE_RETENTION_LEGACY) {
-        uint32_t admitted =
-            atomic_fetch_add_explicit(&g_admitted, 1, memory_order_relaxed) + 1;
-        if (admitted > atomic_load_explicit(&g_max_events, memory_order_relaxed) ||
-            admitted > atomic_load_explicit(&g_capacity, memory_order_relaxed)) {
-            atomic_fetch_sub_explicit(&g_admitted, 1, memory_order_relaxed);
-            eu4_gfx_startup_withdraw_hook();
+    int frame_only =
+        atomic_load_explicit(&g_frame_only, memory_order_relaxed) != 0;
+    if (!frame_only) {
+        if (!atomic_load_explicit(&g_init_seen, memory_order_acquire)) {
             refuse(slot);
             return;
         }
-    } else {
-        atomic_fetch_add_explicit(&g_observed, 1, memory_order_relaxed);
+        if (g_tls.depth >= EU4_GFX_OBSERVE_MAX_SPECS) {
+            refuse(slot);
+            return;
+        }
+        if (!eu4_gfx_startup_admit_hook()) {
+            refuse(slot);
+            return;
+        }
+        uint32_t retention =
+            atomic_load_explicit(&g_retention, memory_order_relaxed);
+        if (retention == EU4_GFX_OBSERVE_RETENTION_LEGACY) {
+            uint32_t admitted =
+                atomic_fetch_add_explicit(&g_admitted, 1, memory_order_relaxed) + 1;
+            if (admitted >
+                    atomic_load_explicit(&g_max_events, memory_order_relaxed) ||
+                admitted >
+                    atomic_load_explicit(&g_capacity, memory_order_relaxed)) {
+                atomic_fetch_sub_explicit(&g_admitted, 1, memory_order_relaxed);
+                eu4_gfx_startup_withdraw_hook();
+                refuse(slot);
+                return;
+            }
+        } else {
+            atomic_fetch_add_explicit(&g_observed, 1, memory_order_relaxed);
+        }
+    } else if (g_tls.depth >= EU4_GFX_OBSERVE_MAX_SPECS) {
+        refuse(slot);
+        return;
     }
     uint32_t active =
         atomic_fetch_add_explicit(&g_active, 1, memory_order_relaxed) + 1;
@@ -506,6 +516,11 @@ static void on_exit(eu4_gfx_capture_frame *frame, uint64_t slot64) {
     const eu4_gfx_observe_spec *spec = g_selected[slot];
     if (spec->on_exit != NULL) {
         spec->on_exit(frame, &entry->call, &record);
+    }
+    if (atomic_load_explicit(&g_frame_only, memory_order_relaxed)) {
+        atomic_fetch_sub_explicit(&g_active, 1, memory_order_relaxed);
+        eu4_gfx_startup_finish_hook();
+        return;
     }
     record.slot = slot;
     record.call_id = entry->call.call_id;
@@ -590,6 +605,27 @@ static void on_exit(eu4_gfx_capture_frame *frame, uint64_t slot64) {
 }
 
 bool eu4_gfx_observe_configure_from_env(void) {
+    const char *frame_only = getenv("EU4_GFX_FRAME_ONLY");
+    if (frame_only != NULL && strcmp(frame_only, "1") == 0) {
+        static const char *wanted[] = {"PresentScene", "_GfxDraw", "_GfxClear",
+                                       "_GfxPresent"};
+        size_t count = 0;
+        for (size_t w = 0; w < sizeof wanted / sizeof wanted[0]; w++) {
+            for (size_t i = 0; i < sizeof(kSpecs) / sizeof(kSpecs[0]); i++) {
+                if (strcmp(kSpecs[i].symbol, wanted[w]) == 0) {
+                    g_selected[count++] = &kSpecs[i];
+                    break;
+                }
+            }
+        }
+        if (count == 0) {
+            return false;
+        }
+        g_selected_count = count;
+        atomic_store_explicit(&g_frame_only, 1, memory_order_relaxed);
+        atomic_store_explicit(&g_enabled, 1, memory_order_relaxed);
+        return true;
+    }
     const char *targets = getenv("EU4_GFX_OPS_TARGETS");
     if (targets == NULL || targets[0] == '\0') {
         atomic_store_explicit(&g_enabled, 0, memory_order_relaxed);
@@ -861,7 +897,8 @@ bool eu4_gfx_observe_install_specs(const eu4_gfx_observe_spec *specs,
 void eu4_gfx_observe_poll(void) {}
 
 bool eu4_gfx_observe_should_stop(void) {
-    if (!atomic_load_explicit(&g_enabled, memory_order_relaxed)) {
+    if (!atomic_load_explicit(&g_enabled, memory_order_relaxed) ||
+        atomic_load_explicit(&g_frame_only, memory_order_relaxed)) {
         return false;
     }
     if (atomic_load_explicit(&g_stop_policy, memory_order_relaxed) ==

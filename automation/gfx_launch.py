@@ -171,6 +171,7 @@ def prepare(role: str, config: LaunchConfig, run_dir: Path,
         env["EU4_GFX_OPS_RETENTION"] = "legacy"
         if config.metadata_only:
             env["EU4_GFX_FRAME_METADATA"] = "1"
+        env["EU4_GFX_FRAME_ONLY"] = "1"
     else:
         env["DYLD_INSERT_LIBRARIES"] = str(library)
         env["EU4_METAL_BOOT_MODE"] = "metal_init"

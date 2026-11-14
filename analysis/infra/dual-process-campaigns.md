@@ -175,12 +175,15 @@ the M6 worktree held a real EU4 process; no interference occurred.  This is the
 coexistence contract working as designed, and the staggered live run can be
 retried when the lease is free.
 
-Real limitation observed: with two concurrent GUI apps, the background OpenGL
-reference ran at roughly 0.3 fps and did not reach the title draw count in the
-tested window, while the Metal candidate did.  Phase pairing never started and
-the run correctly reported zero compared frames rather than comparing loading
-progress.  A windowed/foreground configuration experiment is required before
-the live title-scene campaign.
+Real limitation observed: the passive OpenGL observer originally sealed at its
+1024-event quota after ~12 s, which silently stopped the frame stream.  A
+frame-only observer mode now bypasses that quota; it streamed 20,000 metadata
+frames at ~112 fps with the lease free.  The reference loading draw count still
+fluctuated between 17 and 81 and did not reach the configured target of 100
+before the phase deadline (the staggered candidate was intentionally not
+started yet).  The reference loading path/long-run behaviour needs a
+windowed/foreground or user-dir isolation experiment before the live title
+campaign is claimed.
 
 ## Limits carried into PR 3
 
