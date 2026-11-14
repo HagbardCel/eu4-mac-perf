@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from automation import gfx_align, gfx_artifacts, gfx_diagnostics, gfx_frame_compare
+from automation import gfx_align, gfx_artifacts, gfx_diagnostics, gfx_flight, gfx_frame_compare
 from automation import gfx_launch, gfx_scenario
 from automation import gfx_session, gfx_wait, launch_ledger, launch_lease
 
@@ -274,6 +274,26 @@ def _request_dumps(launched: dict, indices: list[int]) -> Path | None:
                                 "frames": sorted(set(indices))}) + "\n",
                     encoding="utf-8")
     return path
+
+
+
+def _prune_dumps(launched: dict, keep_indices: list[int]) -> None:
+    """Keep the run directory bounded to the recent paired raws.
+
+    A preserved failure pair has already been copied into the artifact store, so
+    deleting older live dumps does not discard established evidence.
+    """
+    keep = {str(index) for index in keep_indices}
+    captured = Path(launched["observe_dir"]) / "captured"
+    if not captured.is_dir():
+        return
+    for path in captured.glob("frame-*"):
+        stem = path.stem.split("-", 1)[-1]
+        if stem not in keep:
+            try:
+                path.unlink()
+            except OSError:
+                pass
 
 
 def _release(launched: dict, indices: list[int]) -> None:
@@ -716,6 +736,8 @@ def run_campaign(
     store = gfx_artifacts.ArtifactStore(
         session.run_dir / "artifacts", max_bytes=128 * 1024 * 1024
     )
+    flight = gfx_flight.FlightRecorder(max_frames=min(256, max(16, max_frames)),
+                                       max_events=512)
     try:
         tokens = launch_ledger.claim_many(
             ledger_path,
@@ -854,10 +876,41 @@ def run_campaign(
                 state.cand_by_index[record.index] = record
                 _record_health(record, health)
             pairs = align_streams(state)
+            for pair in pairs:
+                flight.frame({
+                    "frame_index": pair.get("frame_index"),
+                    "candidate_frame_index": pair.get("candidate_frame_index"),
+                    "status": pair.get("status"),
+                    "exact_equal": pair.get("exact_equal"),
+                    "preview": pair.get("preview"),
+                    "comparison": (
+                        {key: pair["comparison"].get(key)
+                         for key in ("status", "reasons", "mirrored_regions")}
+                        if isinstance(pair.get("comparison"), dict) else None
+                    ),
+                })
             if mode == "lockstep" and pairs:
                 for pair in pairs:
                     ref_index = pair["frame_index"]
                     cand_index = pair.get("candidate_frame_index", ref_index)
+                    settle_draws = int((scenario.get("settle") or {}).get("min_draws", 0))
+                    pair_draws = (
+                        (pair.get("reference") or {}).get("draws") or 0,
+                        (pair.get("candidate") or {}).get("draws") or 0,
+                    )
+                    if settle_draws and min(pair_draws) < settle_draws:
+                        # Loading progress is not comparable; release the pair
+                        # without paying for a full-resolution dump.
+                        _release({"observe_dir": launched["reference"].observe_dir},
+                                 [ref_index])
+                        _release({"observe_dir": launched["candidate"].observe_dir},
+                                 [cand_index])
+                        pair["comparison"] = {
+                            "status": "not_compared",
+                            "reason": f"below settle draw threshold {pair_draws} < {settle_draws}",
+                        }
+                        state.lockstep_stops += 1
+                        continue
                     _request_dumps({"observe_dir": launched["reference"].observe_dir},
                                    [ref_index])
                     _request_dumps({"observe_dir": launched["candidate"].observe_dir},
@@ -894,6 +947,16 @@ def run_campaign(
                              [ref_index])
                     _release({"observe_dir": launched["candidate"].observe_dir},
                              [cand_index])
+                    recent = state.pairs[-2:]
+                    _prune_dumps(
+                        {"observe_dir": launched["reference"].observe_dir},
+                        [pair["frame_index"] for pair in recent],
+                    )
+                    _prune_dumps(
+                        {"observe_dir": launched["candidate"].observe_dir},
+                        [pair.get("candidate_frame_index", pair["frame_index"])
+                         for pair in recent],
+                    )
                     state.lockstep_stops += 1
                     if stop_reason:
                         break
@@ -944,6 +1007,11 @@ def run_campaign(
             "observed_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         result["stop"] = stop
+        flight.freeze(stop_reason)
+        flight_path = flight.write(session.run_dir / "flight-recorder.json")
+        result["flight_recorder"] = str(flight_path)
+        store.put_file(flight_path, kind="flight", preserved=True,
+                       logical_name="flight-recorder")
 
         dump_count = int(scenario["observation"]["dump_on_stop"])
         selected = state.pairs[-dump_count:] if dump_count and state.pairs else []
@@ -994,6 +1062,11 @@ def run_campaign(
     except _Finished:
         pass
     except BaseException as exc:  # noqa: BLE001 - every launch must be accounted for
+        flight.freeze("exception")
+        try:
+            flight.write(session.run_dir / "flight-recorder.json")
+        except Exception:  # noqa: BLE001
+            pass
         result["result"] = "failed"
         result["error"] = f"{type(exc).__name__}: {exc}"
         result.setdefault("stop", {"reason": "exception", "trigger": result["error"]})
