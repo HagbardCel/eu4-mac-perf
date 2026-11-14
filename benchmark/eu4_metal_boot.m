@@ -380,6 +380,16 @@ static void ensure_visible_on_main(void) {
         probe.zPosition = 100.0f;
         [content.layer addSublayer:probe];
     }
+    const char *display_mode = getenv("EU4_DISPLAY_MODE");
+    if (display_mode != NULL && strcmp(display_mode, "background") == 0) {
+        /* Background sessions attach the layer but must not activate, make the
+           window key, or repeatedly raise it.  The window is already on the
+           selected virtual display from the SDL creation call. */
+        if (!window.isVisible) {
+            [window orderFront:nil];
+        }
+        return;
+    }
     [NSApp activateIgnoringOtherApps:YES];
     [window makeKeyAndOrderFront:nil];
     [window orderFrontRegardless];
@@ -596,7 +606,9 @@ void *eu4_metal_boot_on_create(const char *title, int x, int y, int w, int h, ui
         finish("metal_window_boot_failed", "incoming_flags_lack_opengl", incoming, incoming, 0, 0,
                0, 0, 0, 0, NULL, -1);
     }
-    uint32_t passed = incoming & ~(uint32_t)kOpenGL;
+    /* background_window_geometry may have cleared fullscreen flags; propagate
+       the modified set.  Keep ``incoming`` unchanged for diagnostics. */
+    uint32_t passed = flags & ~(uint32_t)kOpenGL;
     if (g_clear_error != NULL) {
         g_clear_error();
     }
