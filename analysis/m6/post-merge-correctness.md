@@ -35,6 +35,26 @@ were introduced.
 | Shadow cache lifetime | Marked a shadow valid when the flip was encoded, even if the command was later abandoned; a failed conversion could fall back to the raw top-left texture; resolve/clear writes were not all invalidating. | Shadows have a pending-command state promoted only by command completion; abandoned commands leave them invalid and the next draw re-encodes. Conversion failure refuses the draw instead of binding the raw resource. Draw, clear, initialize and both resolve paths invalidate the relevant generation. |
 | Shadow tests | Initial conversion and ordinary-texture preservation only. | Native lifecycle test covers initial conversion, repeated sampling, modification, abandoned-command recovery, conversion failure and ordinary-texture preservation. |
 
+## Vertex attribute capacity
+
+The `0x15ea970`/`0x15ebf41` bodies do not impose a 16-attribute limit:
+`SShaderOpenGL::EnableVertexAttribArrays` iterates the shader's full element
+count (`SShaderOpenGL+0x18`, guarded at 64 by the generic encoder) across the
+four vertex-buffer slots, using element location `+0xc`, offset `+0x18`,
+divisor `+0x20` and the slot offset. The 16-entry array was a diagnostic cap,
+not an engine contract. Correctness tracking now covers all 31 Metal attribute
+locations (`0..30`); the shared capacity guard checks the attribute location
+and the next vertex-buffer index (`8..30`), refusing with
+`vertex attribute location exceeds Metal capacity` or
+`vertex descriptor buffer capacity exceeded`. Conversion to FloatN updates the
+tracked format on the attribute's own record, and no code mutates the previous
+entry when tracking is full.
+
+Regression coverage: 17 valid attributes accepted; the 17th out of bounds
+refused; the 16th out of bounds with a valid 17th refused (proving no overwrite
+of the 16th record); capacity guard accepts `next_buffer=25, location=30` and
+refuses `31`/`location=31` with diagnostics.
+
 ## Regression tests added/updated
 
 - `tests/gfx_live_draw_host.mm --draw-semantics`: topology mapping, Metal
@@ -55,7 +75,9 @@ were introduced.
   A test-only conversion counter proves the pending path was entered.
 - `tests/gfx_live_draw_host.mm --production-bounds`: the production attribute
   bounds validator with tight 72/80-byte buffers, 71/79-byte rejects, nonzero
-  slot/element offsets, instance-rate divisors and unsupported formats.
+  slot/element offsets, instance-rate divisors, unsupported formats, 17 active
+  attributes (including the 16th/17th ordering cases) and the descriptor
+  capacity guard.
 - `tests/gfx_live_draw_host.mm --production-pipeline`: the production pipeline
   cache with all/alpha colour masks, cache separation and rendered channel
   preservation.

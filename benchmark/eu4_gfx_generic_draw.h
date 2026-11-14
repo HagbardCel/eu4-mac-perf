@@ -69,6 +69,10 @@ int eu4_gfx_generic_draw_supported(const void *immediate_context,
 /* Production-bound tests. These call the same attribute-range validator and
    pipeline cache used by the generic encoder; the outer draw routing is not
    re-created. Arrays are indexed by attribute. */
+int eu4_gfx_generic_descriptor_capacity_test(uint32_t next_buffer,
+                                                 uint32_t location,
+                                                 char *reason,
+                                                 size_t capacity);
 int eu4_gfx_generic_bounds_test(const uint32_t *formats,
                                 const uint64_t *bound_offsets,
                                 const uint64_t *bound_strides,

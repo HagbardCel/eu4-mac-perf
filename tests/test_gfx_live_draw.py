@@ -125,6 +125,8 @@ class GfxLiveDrawTests(unittest.TestCase):
         ran = self._run("--production-bounds")
         self.assertEqual(ran.returncode, 0, ran.stderr)
         self.assertIn("production_bounds=1", ran.stdout)
+        self.assertIn("attributes_17=1", ran.stdout)
+        self.assertIn("capacity=1", ran.stdout)
 
     def test_production_pipeline_mask_cache_separation(self) -> None:
         ran = self._run("--production-pipeline")

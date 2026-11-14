@@ -1332,7 +1332,47 @@ static int run_production_bounds(void) {
     ok &= eu4_gfx_generic_bounds_test(formats, offsets, strides, lengths,
                                       divisors, 1, 3, 1, reason,
                                       sizeof reason) == 0;
-    printf("production_bounds=%d\n", ok);
+
+    /* All 17 admitted attributes participate in validation. */
+    uint32_t formats17[17];
+    uint64_t offsets17[17];
+    uint64_t strides17[17];
+    uint64_t lengths17[17];
+    uint32_t divisors17[17];
+    for (int i = 0; i < 17; i++) {
+        formats17[i] = float3;
+        offsets17[i] = 0;
+        strides17[i] = 20;
+        lengths17[i] = 72;
+        divisors17[i] = 0;
+    }
+    int attributes17_ok = eu4_gfx_generic_bounds_test(
+        formats17, offsets17, strides17, lengths17, divisors17, 17, 3, 1,
+        reason, sizeof reason) == 1;
+    lengths17[16] = 71;
+    attributes17_ok &= eu4_gfx_generic_bounds_test(
+        formats17, offsets17, strides17, lengths17, divisors17, 17, 3, 1,
+        reason, sizeof reason) == 0;
+    lengths17[16] = 72;
+    lengths17[15] = 71;
+    attributes17_ok &= eu4_gfx_generic_bounds_test(
+        formats17, offsets17, strides17, lengths17, divisors17, 17, 3, 1,
+        reason, sizeof reason) == 0;
+    lengths17[15] = 72;
+
+    /* Metal capacity guard: 17 attributes from base slot 8 fit (next_buffer
+       25); 31/32 and location 31 are refused with diagnostics. */
+    char capacity_reason[256] = "";
+    int capacity_ok =
+        eu4_gfx_generic_descriptor_capacity_test(25, 30, capacity_reason,
+                                                 sizeof capacity_reason) == 1 &&
+        eu4_gfx_generic_descriptor_capacity_test(31, 30, capacity_reason,
+                                                 sizeof capacity_reason) == 0 &&
+        eu4_gfx_generic_descriptor_capacity_test(25, 31, capacity_reason,
+                                                 sizeof capacity_reason) == 0;
+    ok &= attributes17_ok && capacity_ok;
+    printf("production_bounds=%d attributes_17=%d capacity=%d\n",
+           ok, attributes17_ok, capacity_ok);
     return ok ? 0 : 1;
 }
 

@@ -54,13 +54,18 @@ static id<MTLSamplerState> sampler_for_unit(id<MTLDevice> device,
 
 static float g_logged_positions[16];
 static int g_have_positions;
+/* Metal exposes attribute locations 0..30 and vertex buffer indices 0..30.
+   Correctness tracking must cover every admitted attribute; diagnostics may
+   print fewer but must never cap validation. */
+#define EU4_GFX_MAX_TRACKED_ATTRIBUTES 31
+#define EU4_GFX_MAX_VERTEX_BUFFER_SLOTS 31
 typedef struct {
     uint32_t location, type, size, normalized, divisor;
     unsigned long slot, offset, stride, format;
     unsigned long bound_offset, bound_stride, bound_length, slot_offset;
     int converted;
 } eu4_logged_element;
-static eu4_logged_element g_logged_elements[16];
+static eu4_logged_element g_logged_elements[EU4_GFX_MAX_TRACKED_ATTRIBUTES];
 static int g_logged_element_count;
 
 /* Storage width of the Metal vertex format used by the descriptor. Converted
@@ -109,6 +114,24 @@ static size_t metal_vertex_format_size(MTLVertexFormat format) {
         case MTLVertexFormatUChar4Normalized: return 4;
         default: return 0;
     }
+}
+
+/* Shared descriptor-capacity guard: Metal attribute locations and vertex
+   buffer indices are 0..30. Keep this in one place so the production builder
+   and the capacity regression test agree. */
+static int descriptor_capacity_ok(uint32_t next_buffer, uint32_t location,
+                                  char *reason, size_t capacity) {
+    if (location >= EU4_GFX_MAX_TRACKED_ATTRIBUTES) {
+        snprintf(reason, capacity,
+                 "vertex attribute location exceeds Metal capacity");
+        return 0;
+    }
+    if (next_buffer >= EU4_GFX_MAX_VERTEX_BUFFER_SLOTS) {
+        snprintf(reason, capacity,
+                 "vertex descriptor buffer capacity exceeded");
+        return 0;
+    }
+    return 1;
 }
 
 /* Validates the exact bytes read by every attribute for a draw. A tightly
@@ -752,14 +775,18 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
         memcpy(&slot, element + 0x1c, 4);
         divisor = element[0x20];
         normalized = element[0x21];
-        if (location >= 31 || slot < 0 || slot >= EU4_GFX_VERTEX_SLOTS) {
-            fail(reason, capacity, "vertex element location or slot out of range");
+        if (slot < 0 || slot >= EU4_GFX_VERTEX_SLOTS) {
+            fail(reason, capacity, "vertex element slot out of range");
             return NO;
         }
         if ([declared count] > 0 && ![declared containsObject:@(location)]) {
             /* The engine layout can carry attributes the linked program does
                not consume; they are not part of the Metal descriptor. */
             continue;
+        }
+        if (!descriptor_capacity_ok((uint32_t)next_buffer, location, reason,
+                                    capacity)) {
+            return NO;
         }
         void *header = load_ptr(master, 0x130 + (size_t)slot * 8);
         uint32_t slot_offset = load_u32(master, 0x150 + (size_t)slot * 4);
@@ -774,23 +801,26 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
             return NO;
         }
         MTLVertexFormat format = vertex_format(type, size, normalized != 0);
-        if (g_logged_element_count < 16) {
-            eu4_logged_element *logged = &g_logged_elements[g_logged_element_count++];
-            logged->location = location;
-            logged->type = type;
-            logged->size = size;
-            logged->normalized = normalized;
-            logged->divisor = divisor;
-            logged->slot = slot;
-            logged->offset = offset;
-            logged->stride = stride;
-            logged->format = (unsigned long)format;
-            logged->bound_offset = 0;
-            logged->bound_stride = 0;
-            logged->bound_length = 0;
-            logged->slot_offset = 0;
-            logged->converted = 0;
+        if (g_logged_element_count >= EU4_GFX_MAX_TRACKED_ATTRIBUTES) {
+            fail(reason, capacity, "vertex attribute tracking capacity exceeded");
+            return NO;
         }
+        eu4_logged_element *logged =
+            &g_logged_elements[g_logged_element_count++];
+        logged->location = location;
+        logged->type = type;
+        logged->size = size;
+        logged->normalized = normalized;
+        logged->divisor = divisor;
+        logged->slot = slot;
+        logged->offset = offset;
+        logged->stride = stride;
+        logged->format = (unsigned long)format;
+        logged->bound_offset = 0;
+        logged->bound_stride = 0;
+        logged->bound_length = 0;
+        logged->slot_offset = 0;
+        logged->converted = 0;
         if (format == 0) {
             fail(reason, capacity, "unsupported vertex element format");
             return NO;
@@ -821,9 +851,8 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
             bound_buffer = converted;
             bound_stride = converted_stride;
             bound_offset = 0;
-            if (g_logged_element_count > 0) {
-                g_logged_elements[g_logged_element_count - 1].converted = 1;
-            }
+            logged->converted = 1;
+            logged->format = (unsigned long)format;
             if (location == 0 && converted.contents != NULL &&
                 converted.length >= 16 * sizeof(float)) {
                 memcpy(g_logged_positions, converted.contents,
@@ -833,13 +862,11 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
         } else {
             bound_offset = offset + slot_offset;
         }
-        if (g_logged_element_count > 0) {
-            eu4_logged_element *logged = &g_logged_elements[g_logged_element_count - 1];
-            logged->bound_offset = bound_offset;
-            logged->bound_stride = bound_stride;
-            logged->bound_length = bound_buffer.length;
-            logged->slot_offset = convert ? 0 : slot_offset;
-        }
+        logged->bound_offset = bound_offset;
+        logged->bound_stride = bound_stride;
+        logged->bound_length = bound_buffer.length;
+        logged->slot_offset = convert ? 0 : slot_offset;
+        logged->format = (unsigned long)format;
         attribute.format = format;
         attribute.offset = bound_offset;
         attribute.bufferIndex = buffer_index;
@@ -898,6 +925,11 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
     for (NSNumber *location in declared) {
         if ([covered containsObject:location]) {
             continue;
+        }
+        if (!descriptor_capacity_ok((uint32_t)next_buffer,
+                                    (uint32_t)location.unsignedIntegerValue,
+                                    reason, capacity)) {
+            return NO;
         }
         NSUInteger buffer_index = next_buffer++;
         MTLVertexAttributeDescriptor *attribute = descriptor.attributes[location.unsignedIntegerValue];
@@ -1078,6 +1110,13 @@ static int generic_effective_state_supported(const uint8_t *master,
     return 1;
 }
 
+int eu4_gfx_generic_descriptor_capacity_test(uint32_t next_buffer,
+                                                 uint32_t location,
+                                                 char *reason,
+                                                 size_t capacity) {
+    return descriptor_capacity_ok(next_buffer, location, reason, capacity);
+}
+
 int eu4_gfx_generic_bounds_test(const uint32_t *formats,
                                 const uint64_t *bound_offsets,
                                 const uint64_t *bound_strides,
@@ -1085,7 +1124,8 @@ int eu4_gfx_generic_bounds_test(const uint32_t *formats,
                                 const uint32_t *divisors, int count,
                                 uint32_t last_vertex, uint32_t instance_count,
                                 char *reason, size_t capacity) {
-    if (count < 0 || count > 16 || formats == NULL || bound_offsets == NULL ||
+    if (count < 0 || count > EU4_GFX_MAX_TRACKED_ATTRIBUTES ||
+        formats == NULL || bound_offsets == NULL ||
         bound_strides == NULL || bound_lengths == NULL || divisors == NULL) {
         return 0;
     }
