@@ -28,6 +28,17 @@ static NSMutableDictionary<NSString *, id> *g_samplers;
 static NSMutableDictionary<NSNumber *, NSMutableDictionary *> *g_targets;
 static NSMutableDictionary<NSString *, NSMutableDictionary *> *g_render_targets;
 static NSMutableDictionary<NSString *, id> *g_alpha_textures;
+static NSMutableDictionary<NSString *, id> *g_orientation_textures;
+static id<MTLComputePipelineState> g_orientation_pipeline;
+/* Provenance of every texture binding and of replay-time checkpoint reads.
+   The coordinator uses this to distinguish external captured inputs from
+   renderer-generated targets, so a replay that silently consumed a captured
+   intermediate cannot be reported as complete. */
+static NSMutableArray *g_provenance;
+static NSMutableDictionary *g_provenance_seen;
+static NSDictionary *g_checkpoints_by_event;
+static NSMutableArray *g_checkpoint_results;
+static NSUInteger g_current_event;
 /* Metal's vertex buffer table is shared with vertex-stage constant buffers, so
    vertex streams start above the translated uniform block indices. */
 static const NSUInteger kVertexBufferBase = 8;
@@ -120,6 +131,95 @@ static id<MTLComputePipelineState> alpha_pipeline(NSError **error) {
         *error = compile_error;
     }
     return g_alpha_pipeline;
+}
+
+static NSString *const kOrientationKernelMSL =
+    @"#include <metal_stdlib>\n"
+     "using namespace metal;\n"
+     "kernel void orient(texture2d<float, access::read> source [[texture(0)]],\n"
+     "                   texture2d<float, access::write> destination [[texture(1)]],\n"
+     "                   constant uint &flags [[buffer(0)]],\n"
+     "                   uint2 gid [[thread_position_in_grid]]) {\n"
+     "    uint y = (flags & 1u) != 0u ? (source.get_height() - 1u - gid.y) : gid.y;\n"
+     "    float4 value = source.read(uint2(gid.x, y));\n"
+     "    if ((flags & 2u) != 0u) value.a = 1.0;\n"
+     "    destination.write(value, gid);\n"
+     "}\n";
+
+static id<MTLComputePipelineState> orientation_pipeline(NSError **error) {
+    if (g_orientation_pipeline != nil) {
+        return g_orientation_pipeline;
+    }
+    NSError *compile_error = nil;
+    id<MTLLibrary> library = [g_device newLibraryWithSource:kOrientationKernelMSL
+                                                    options:nil
+                                                      error:&compile_error];
+    id<MTLFunction> function = [library newFunctionWithName:@"orient"];
+    if (function != nil) {
+        g_orientation_pipeline =
+            [g_device newComputePipelineStateWithFunction:function
+                                                    error:&compile_error];
+    }
+    if (g_orientation_pipeline == nil && error != NULL) {
+        *error = compile_error;
+    }
+    return g_orientation_pipeline;
+}
+
+/* A Metal render target stores GL row 0 at the opposite end of the texture
+ * from a GL-uploaded asset.  Sampling it with the engine's GL texture
+ * coordinates therefore needs a V flip; an RGB target additionally needs
+ * alpha forced to 1.0.  The transform is cached per target generation. */
+static id<MTLTexture> sample_ready_target(id<MTLTexture> source,
+                                          NSNumber *generation,
+                                          BOOL force_alpha, BOOL flip_y,
+                                          NSError **error) {
+    if (source == nil || (!force_alpha && !flip_y)) {
+        return source;
+    }
+    NSString *key = [NSString stringWithFormat:@"%p-%@-%d-%d", source,
+                     generation, force_alpha ? 1 : 0, flip_y ? 1 : 0];
+    id<MTLTexture> cached = g_orientation_textures[key];
+    if (cached != nil) {
+        return cached;
+    }
+    MTLTextureDescriptor *descriptor = [MTLTextureDescriptor new];
+    descriptor.textureType = MTLTextureType2D;
+    descriptor.pixelFormat = source.pixelFormat;
+    descriptor.width = source.width;
+    descriptor.height = source.height;
+    descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+    descriptor.storageMode = MTLStorageModePrivate;
+    id<MTLTexture> destination =
+        [g_device newTextureWithDescriptor:descriptor];
+    id<MTLComputePipelineState> pipeline = orientation_pipeline(error);
+    if (destination == nil || pipeline == nil) {
+        return nil;
+    }
+    uint32_t flags = (flip_y ? 1u : 0u) | (force_alpha ? 2u : 0u);
+    id<MTLCommandBuffer> command = [g_queue commandBuffer];
+    id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+    [encoder setComputePipelineState:pipeline];
+    [encoder setTexture:source atIndex:0];
+    [encoder setTexture:destination atIndex:1];
+    [encoder setBytes:&flags length:sizeof(flags) atIndex:0];
+    MTLSize threads_per_group = MTLSizeMake(8, 8, 1);
+    MTLSize groups = MTLSizeMake((source.width + 7) / 8,
+                                 (source.height + 7) / 8, 1);
+    [encoder dispatchThreadgroups:groups threadsPerThreadgroup:threads_per_group];
+    [encoder endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    if (command.status != MTLCommandBufferStatusCompleted) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:67
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"target orientation pass failed"}];
+        }
+        return nil;
+    }
+    g_orientation_textures[key] = destination;
+    return destination;
 }
 
 /* Samples of a GL RGB render target expose alpha = 1.0 because the texture has
@@ -261,6 +361,19 @@ static NSUInteger enum_value(id value, NSUInteger fallback) {
 
 static NSString *string_value(id value) {
     return [value isKindOfClass:[NSString class]] ? value : nil;
+}
+
+/* GL texture names are recorded as JSON numbers.  They are logical resource
+   identities, not pointers: the same decimal name must map to the same Metal
+   render target that later passes sample. */
+static NSString *texture_key(id value) {
+    if ([value isKindOfClass:[NSString class]]) {
+        return value;
+    }
+    if ([value isKindOfClass:[NSNumber class]]) {
+        return [value stringValue];
+    }
+    return nil;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -585,7 +698,7 @@ static id<MTLTexture> build_texture(NSDictionary *texture, NSString *frameDir,
 
 static NSString *texture_cache_key(NSDictionary *texture) {
     NSMutableString *key = [NSMutableString string];
-    [key appendFormat:@"%@-%@-%lu", string_value(texture[@"name"]) ?: @"",
+    [key appendFormat:@"%@-%@-%lu", texture_key(texture[@"name"]) ?: @"",
                        string_value(texture[@"target"]) ?: @"",
                        (unsigned long)number(texture[@"width"], 0)];
     for (NSDictionary *level in texture[@"levels"] ?: @[]) {
@@ -1327,9 +1440,20 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
 
         /* Textures and samplers by MSL name. */
         NSMutableDictionary *texture_by_name = [NSMutableDictionary dictionary];
+        NSMutableDictionary *texture_by_unit = [NSMutableDictionary dictionary];
         for (NSDictionary *texture in event[@"textures"] ?: @[]) {
             texture_by_name[string_value(texture[@"sampler_name"]) ?: @""] = texture;
+            NSNumber *unit = texture[@"unit"];
+            if (unit != nil) {
+                texture_by_unit[unit] = texture;
+            }
         }
+        const char *shift_env = getenv("EU4_FRAME_REPLAY_SAMPLER_SHIFT");
+        NSInteger sampler_shift =
+            shift_env != NULL ? (NSInteger)strtol(shift_env, NULL, 10) : 0;
+        const char *shift_min_env = getenv("EU4_FRAME_REPLAY_SAMPLER_SHIFT_MIN");
+        NSInteger shift_min = shift_min_env != NULL
+            ? (NSInteger)strtol(shift_min_env, NULL, 10) : 7;
         for (NSString *stage_name in @[@"vertex", @"pixel"]) {
             NSDictionary *stage = [stage_name isEqualToString:@"vertex"] ? vs : fs;
             for (NSDictionary *binding in stage[@"msl_samplers"] ?: @[]) {
@@ -1345,20 +1469,67 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                     [encoder endEncoding];
                     return NO;
                 }
-                /* A texture that is also a render target in this frame must use
-                   the live target contents so composition is preserved. */
+                NSString *expected_texture_name =
+                    texture_key(texture[@"name"]) ?: @"";
+                NSDictionary *selected_texture = texture;
+                NSInteger selected_engine_unit = -1;
+                BOOL shifted = NO;
+                BOOL replacement_missing = NO;
+                /* Controlled fault injection only (Phase 5): reproduce the
+                   historical missing-tex6 selection defect.  The shader and
+                   Metal slot are unchanged; the payload is taken from the
+                   neighbouring engine texture unit, exactly as a
+                   declaration-order unit table would select it. */
+                if (sampler_shift != 0 && [name hasPrefix:@"tex"]) {
+                    NSString *suffix = [name substringFromIndex:3];
+                    NSInteger unit_number = suffix.integerValue;
+                    if (suffix.length > 0 && unit_number >= shift_min) {
+                        NSInteger requested = unit_number + sampler_shift;
+                        if (requested >= 0) {
+                            NSDictionary *replacement = texture_by_unit[@(requested)];
+                            selected_engine_unit = requested;
+                            shifted = YES;
+                            if (replacement != nil) {
+                                selected_texture = replacement;
+                                texture = replacement;
+                            } else {
+                                replacement_missing = YES;
+                            }
+                            /* A missing unit is exactly the historical
+                               missing-tex6 case: the shader would sample the
+                               default texture.  Keep the expected payload and
+                               record the missing unit rather than silently
+                               falling back to the correct texture. */
+                        }
+                    }
+                }
                 id<MTLTexture> metal_texture = nil;
-                NSString *cache_name = string_value(texture[@"name"]);
+                NSString *cache_name = texture_key(texture[@"name"]);
                 NSMutableDictionary *render_target = g_render_targets[cache_name];
                 if (render_target != nil) {
                     NSString *format = string_value(render_target[@"format"]) ?: @"";
-                    if ([format isEqualToString:@"RGB8"] ||
-                        [format isEqualToString:@"SRGB8_ALPHA8"]) {
-                        metal_texture = alpha_normalized(
-                            render_target[@"color"],
-                            render_target[@"generation"], command, error);
-                    } else {
-                        metal_texture = render_target[@"color"];
+                    BOOL rgb_source = [format isEqualToString:@"RGB8"] ||
+                                      [format isEqualToString:@"SRGB8_ALPHA8"];
+                    /* Renderer-generated targets are stored with GL row 0 at
+                       the opposite end of the texture from a GL-uploaded
+                       asset.  The replay must flip V when sampling them; this
+                       is the contract the production resolve also implements.
+                       The disabling switch exists only for controlled
+                       divergence experiments. */
+                    const char *disable_flip =
+                        getenv("EU4_FRAME_REPLAY_DISABLE_RT_FLIP");
+                    BOOL flip_y = !(disable_flip != NULL && disable_flip[0] == '1');
+                    metal_texture = sample_ready_target(
+                        render_target[@"color"], render_target[@"generation"],
+                        rgb_source, flip_y, error);
+                    if (metal_texture == nil) {
+                        if (error != NULL) {
+                            *error = [NSError errorWithDomain:kErrorDomain code:68
+                                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                                    @"render target sampling preparation failed"}];
+                        }
+                        [encoder endEncoding];
+                        return NO;
                     }
                 } else {
                     NSString *key = texture_cache_key(texture);
@@ -1372,12 +1543,47 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                         g_textures[key] = metal_texture;
                     }
                 }
+                NSUInteger texture_index =
+                    number(binding[@"texture_index"], 0);
+                NSUInteger sampler_index =
+                    number(binding[@"sampler_index"], 0);
+                NSNumber *generation = render_target != nil
+                    ? render_target[@"generation"] : @(-1);
+                NSMutableDictionary *sample = [@{
+                    @"event": @(g_current_event),
+                    @"stage": stage_name,
+                    @"texture": cache_name ?: @"",
+                    @"sampler": name ?: @"",
+                    @"unit": @(texture_index),
+                    @"source": render_target != nil
+                        ? @"metal_render_target" : @"external_capture",
+                    @"generation": generation,
+                    @"fault_sampler_shift": @(shifted ? sampler_shift : 0),
+                    @"fault_shader_unit": @(number(binding[@"texture_index"], 0)),
+                    @"fault_bound_unit": @(texture_index),
+                    @"expected_texture": expected_texture_name,
+                    @"selected_engine_unit": @(selected_engine_unit),
+                    @"selected_texture": texture_key(selected_texture[@"name"]) ?: @"",
+                    @"fault_missing_engine_unit": @(replacement_missing
+                        ? selected_engine_unit : -1),
+                } mutableCopy];
+                if (render_target != nil) {
+                    sample[@"width"] = render_target[@"width"] ?: @0;
+                    sample[@"height"] = render_target[@"height"] ?: @0;
+                    sample[@"format"] = render_target[@"format"] ?: @"";
+                    if (number(generation, -1) == 0 &&
+                        g_provenance_seen[cache_name] == nil) {
+                        g_provenance_seen[cache_name] = @YES;
+                        sample[@"first_sample_before_any_write"] = @YES;
+                    }
+                }
+                [g_provenance addObject:sample];
                 if ([stage_name isEqualToString:@"vertex"]) {
                     [encoder setVertexTexture:metal_texture
-                                      atIndex:number(binding[@"texture_index"], 0)];
+                                      atIndex:texture_index];
                 } else {
                     [encoder setFragmentTexture:metal_texture
-                                        atIndex:number(binding[@"texture_index"], 0)];
+                                        atIndex:texture_index];
                 }
                 NSDictionary *sampler_state = texture[@"sampler"] ?: @{};
                 NSString *sampler_key = [NSString stringWithFormat:@"%@-%@-%@-%@-%@",
@@ -1432,10 +1638,10 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                 }
                 if ([stage_name isEqualToString:@"vertex"]) {
                     [encoder setVertexSamplerState:sampler
-                                           atIndex:number(binding[@"sampler_index"], 0)];
+                                           atIndex:sampler_index];
                 } else {
                     [encoder setFragmentSamplerState:sampler
-                                             atIndex:number(binding[@"sampler_index"], 0)];
+                                             atIndex:sampler_index];
                 }
             }
         }
@@ -1774,6 +1980,7 @@ int main(int argc, const char *argv[]) {
         BOOL capture_post_images = NO;
         BOOL capture_pre_images = NO;
         BOOL depth_from_prefix = NO;
+        NSString *checkpoint_path = nil;
         for (int index = 1; index < argc; index++) {
             if (strcmp(argv[index], "--frame") == 0 && index + 1 < argc) {
                 frame_path = @(argv[++index]);
@@ -1793,6 +2000,8 @@ int main(int argc, const char *argv[]) {
                 capture_pre_images = YES;
             } else if (strcmp(argv[index], "--depth-from-prefix") == 0) {
                 depth_from_prefix = YES;
+            } else if (strcmp(argv[index], "--checkpoints") == 0 && index + 1 < argc) {
+                checkpoint_path = @(argv[++index]);
             }
         }
         if (frame_path.length == 0 || shader_path.length == 0 ||
@@ -1820,6 +2029,10 @@ int main(int argc, const char *argv[]) {
         g_targets = [NSMutableDictionary dictionary];
         g_render_targets = [NSMutableDictionary dictionary];
         g_alpha_textures = [NSMutableDictionary dictionary];
+        g_orientation_textures = [NSMutableDictionary dictionary];
+        g_provenance = [NSMutableArray array];
+        g_provenance_seen = [NSMutableDictionary dictionary];
+        g_checkpoint_results = [NSMutableArray array];
 
         NSError *error = nil;
         NSDictionary *manifest = read_json(
@@ -1839,6 +2052,30 @@ int main(int argc, const char *argv[]) {
         if (shader_report == nil) {
             fprintf(stderr, "shaders: %s\n", error.localizedDescription.UTF8String);
             return 4;
+        }
+        if (checkpoint_path.length > 0) {
+            NSDictionary *document = read_json(checkpoint_path, &error);
+            if (document == nil) {
+                fprintf(stderr, "checkpoints: %s\n",
+                        error.localizedDescription.UTF8String);
+                return 4;
+            }
+            NSMutableDictionary *by_event = [NSMutableDictionary dictionary];
+            for (NSDictionary *item in document[@"checkpoints"] ?: @[]) {
+                NSNumber *event_index = item[@"event"];
+                NSString *target = item[@"target"];
+                NSString *file = item[@"file"];
+                if (event_index == nil || target.length == 0 || file.length == 0) {
+                    continue;
+                }
+                NSMutableArray *bucket = by_event[event_index];
+                if (bucket == nil) {
+                    bucket = [NSMutableArray array];
+                    by_event[event_index] = bucket;
+                }
+                [bucket addObject:item];
+            }
+            g_checkpoints_by_event = by_event;
         }
         NSMutableDictionary *programs = [NSMutableDictionary dictionary];
         for (NSDictionary *entry in shader_report[@"programs"] ?: @[]) {
@@ -1886,7 +2123,7 @@ int main(int argc, const char *argv[]) {
             if (info == nil) {
                 continue;
             }
-            NSString *attachment_name = string_value(attachment[@"name"]);
+            NSString *attachment_name = texture_key(attachment[@"name"]);
             if (attachment_name.length == 0) {
                 continue;
             }
@@ -1946,6 +2183,56 @@ int main(int argc, const char *argv[]) {
         for (NSUInteger index = 0; index < events.count; index++) {
             if (stop_after >= 0 && (NSInteger)encoded >= stop_after) {
                 break;
+            }
+            g_current_event = index;
+            /* Execute one event per submission.  Render-target sampling may
+               need a compute pass in its own command buffer; that pass must
+               observe every prior event as completed or it reads stale
+               contents.  Serializing also makes replay checkpoints exact. */
+            if (encoded > 0) {
+                [command commit];
+                if (!wait_for_transfer(command, @"event boundary", &error)) {
+                    fprintf(stderr, "event boundary: %s\n",
+                            error.localizedDescription.UTF8String);
+                    return 7;
+                }
+                command = [g_queue commandBuffer];
+            }
+            NSArray *due_checkpoints =
+                isolated ? nil : g_checkpoints_by_event[@(index)];
+            if (due_checkpoints.count > 0) {
+                /* The checkpoint observes the state left by all prior events,
+                   before this event executes. */
+                command = [g_queue commandBuffer];
+                for (NSDictionary *item in due_checkpoints) {
+                    NSString *target_name = item[@"target"];
+                    NSMutableDictionary *info = g_render_targets[target_name];
+                    NSMutableDictionary *checkpoint = [@{
+                        @"event": @(index),
+                        @"target": target_name,
+                        @"file": item[@"file"],
+                        @"reference_file": item[@"reference_file"] ?: @"",
+                        @"reference_sha256": item[@"reference_sha256"] ?: @"",
+                        @"ok": @NO,
+                    } mutableCopy];
+                    if (info == nil) {
+                        checkpoint[@"error"] = @"target was not created";
+                        [g_checkpoint_results addObject:checkpoint];
+                        continue;
+                    }
+                    checkpoint[@"width"] = info[@"width"] ?: @0;
+                    checkpoint[@"height"] = info[@"height"] ?: @0;
+                    checkpoint[@"format"] = info[@"format"] ?: @"";
+                    checkpoint[@"generation"] = info[@"generation"] ?: @0;
+                    NSString *path = [output_path stringByAppendingPathComponent:
+                                          item[@"file"]];
+                    if (capture_target_to_file(info, path)) {
+                        checkpoint[@"ok"] = @YES;
+                    } else {
+                        checkpoint[@"error"] = @"checkpoint readback failed";
+                    }
+                    [g_checkpoint_results addObject:checkpoint];
+                }
             }
             BOOL is_selected = isolated && (NSInteger)index == only_event;
             if (isolated && !is_selected) {
@@ -2147,6 +2434,60 @@ int main(int argc, const char *argv[]) {
                 };
                 free(readback);
             }
+        }
+        NSUInteger external_bindings = 0, target_bindings = 0;
+        NSMutableSet *external_textures = [NSMutableSet set];
+        NSMutableSet *target_textures = [NSMutableSet set];
+        NSMutableArray *uninitialized = [NSMutableArray array];
+        for (NSDictionary *sample in g_provenance) {
+            if ([sample[@"source"] isEqualToString:@"metal_render_target"]) {
+                target_bindings++;
+                if ([sample[@"texture"] length] > 0) {
+                    [target_textures addObject:sample[@"texture"]];
+                }
+            } else {
+                external_bindings++;
+                if ([sample[@"texture"] length] > 0) {
+                    [external_textures addObject:sample[@"texture"]];
+                }
+            }
+            if (sample[@"first_sample_before_any_write"] != nil) {
+                [uninitialized addObject:@{
+                    @"event": sample[@"event"],
+                    @"texture": sample[@"texture"],
+                    @"sampler": sample[@"sampler"],
+                }];
+            }
+        }
+        result[@"provenance"] = @{
+            @"schema": @"gfx-metal-replay-provenance/v1",
+            @"bindings": @(g_provenance.count),
+            @"metal_render_target_bindings": @(target_bindings),
+            @"external_capture_bindings": @(external_bindings),
+            @"external_textures": [external_textures.allObjects
+                sortedArrayUsingSelector:@selector(compare:)],
+            @"render_target_textures": [target_textures.allObjects
+                sortedArrayUsingSelector:@selector(compare:)],
+            @"first_sample_before_any_write": uninitialized,
+        };
+        {
+            NSMutableData *lines = [NSMutableData data];
+            for (NSDictionary *sample in g_provenance) {
+                NSData *line = [NSJSONSerialization dataWithJSONObject:sample
+                                                               options:0
+                                                                 error:NULL];
+                if (line != nil) {
+                    [lines appendData:line];
+                    [lines appendBytes:"\n" length:1];
+                }
+            }
+            [lines writeToFile:[output_path
+                                   stringByAppendingPathComponent:
+                                       @"replay-provenance.jsonl"]
+                    atomically:YES];
+        }
+        if (g_checkpoints_by_event != nil) {
+            result[@"checkpoints"] = g_checkpoint_results;
         }
         result[@"readback"] = @(readback_ok);
         result[@"status"] = readback_ok && failed == 0 ? @"ok" : @"failed";
