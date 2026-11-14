@@ -58,16 +58,23 @@ passed**, so M6 is not accepted and PR #189 remains Draft.
   filter only when the bound texture has mip levels; a native regression
   covers the mapping. Palette affinity improved only marginally
   (0.435 -> 0.452), so this is a correctness fix, not the map root cause.
-- **Remaining blocker: frame composition.** The live terrain draw at caller
-  `0x10ce96e` has vertex data byte-identical to captured event 24, and its
-  textures, uniforms, shader and state match. The resolve is correct. A
-  caller-level order trace shows the live and reference frames do not share
-  the same map update composition: live 231 terrain draws + 9 map-layer draws,
-  reference 252 + 6, stable at 280 s and 320 s uptime. MainScene is a faithful
-  copy of the live (beige) current batch, so the pixel comparison is not
-  aligned to equivalent scene state. Palette affinity is 0.452 against 0.85
-  and the Paradox-logo UI region is 0.484 (floor 0.5). Live acceptance reports
-  `visual_match=false`; the three-clean-start gate is not met.
+- **Composition (resolved).** The 231/9 versus 252/6 difference was a
+  partially loaded first menu frame. A settle gate waits for 252 terrain calls;
+  the settled frame has 252 terrain + 12 map-layer calls (6 default + 6
+  offscreen), equivalent to the reference. The missing/repeated-operations
+  hypothesis is rejected.
+- **Shader capability (fixed).** The live backend reported
+  `GLEW_ARB_shader_texture_lod` as absent (`master+0x18e=0`), so the engine
+  compiled the `NO_SHADER_TEXTURE_LOD` fallback with flat normals. The
+  authentic GL context advertises the extension. Reporting it as present makes
+  the live sources match the captured variant (78/78); regression added.
+- **Remaining blocker.** The settle-gated live frame is operationally clean
+  (252 terrain calls, authentic shader sources, zero refused draws, no failed
+  resolves), but the map is still beige (mean 143.0 vs 71.9, palette affinity
+  0.454) and the Paradox-logo UI region is 0.482 (floor 0.5). All compared
+  per-draw inputs and the resolve match; the remaining color divergence is not
+  yet identified. Live acceptance reports `visual_match=false`; the
+  three-clean-start gate is not met.
 
 ## M4 — original-GL reference and Metal presentation (2026-11-12)
 

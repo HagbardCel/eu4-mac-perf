@@ -43,6 +43,13 @@ void eu4_gfx_order_trace(const char *operation, unsigned long long value);
 /* Same trace with an operation-specific JSON detail object (already escaped). */
 void eu4_gfx_order_trace_detail(const char *operation, unsigned long long value,
                                 const char *detail);
+
+/* Optional capture-state settle gate: count calls to a diagnostic caller
+   within the current frame (reset by the frame-start black default clear) and
+   report whether the configured minimum has been reached. No effect unless
+   EU4_GFX_CHECKPOINT_SETTLE_CALLER and ..._MIN_DRAWS are set. */
+int eu4_gfx_frame_ready_for_checkpoint(void);
+void eu4_gfx_frame_note_draw_caller(uint64_t caller_rva);
 extern uint8_t eu4_gfx_last_raster_description[0x10];
 extern uint64_t eu4_gfx_live_draw_sequence;
 extern uint64_t eu4_gfx_live_clear_sequence;

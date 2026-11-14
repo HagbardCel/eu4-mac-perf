@@ -136,6 +136,7 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertIn("current_cleared=1", ran.stdout)
         self.assertIn("blend_default=1", ran.stdout)
         self.assertIn("clear_texture=1", ran.stdout)
+        self.assertIn("texture_lod=1", ran.stdout)
 
     def test_two_frame_prefix_resets_stale_target_contents(self) -> None:
         ran = self._run("--prefix-two-frames")

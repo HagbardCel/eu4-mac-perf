@@ -1,5 +1,5 @@
 {
-  "schema": "m6-menu-frame-evidence/v6",
+  "schema": "m6-menu-frame-evidence/v7",
   "canonical_reference": {
     "frame_dir": ".local/m6/frames/menu-occ300/frame",
     "selection": {
@@ -129,41 +129,32 @@
     "consequence": "The pixel-exact offline result qualifies a captured-state replay, not an independent reconstruction of the terrain draw. Live terrain differences cannot be excluded or explained by the offline replay; they must be compared against the captured draw's inputs directly."
   },
   "live_verification": {
-    "run": ".local/m6/live-verify2/run-1",
-    "identity": "1794640399-68635",
-    "pid": 68709,
+    "run": ".local/m6/live-lod/run-1",
     "operational": {
       "executed": true,
       "gpu_completed": true,
       "presented": true,
-      "refused_draws": 0
+      "refused_draws": 0,
+      "failed_resolves": 0
     },
     "visual": {
       "visual_match": false,
       "ui_region_correlation": [
         0.757,
         0.825,
-        0.484
+        0.482
       ],
-      "map_mean": 143.406,
-      "map_color_similarity": 0.452,
+      "map_mean": 143.044,
+      "map_color_similarity": 0.454,
       "map_structure": true
     },
-    "change_after_offscreen_viewport_fix": "The magenta/pink palette disappeared and the secondary 864x558 input gained full coverage.",
-    "change_after_sampler_fix": "The live sampler had been using no mipmap for mipmapped textures. The effective min filter now follows the bound texture's mip levels; the palette affinity improved slightly (0.435 -> 0.452) but the map remains far too bright (mean 143.4 vs 71.9).",
-    "remaining_divergence": {
-      "stage": "cumulative terrain draw batch, upstream of the resolve",
-      "evidence": [
-        "The first _GfxResolve (seq 1, draw_seq 737) already copies a beige source: source and MainScene means are both 113/112/113 with alpha 247.",
-        "The preceding frame-start default clear is valid: flags 7, color black, status 0, geometry/clear generation 1, and it targets the same gameColorTarget pointer as the terrain draws.",
-        "The live terrain draw at caller 0x10ce96e has vertex positions/UVs byte-identical to captured event 24 (position offset 1439536, UV offset 1439548, stride 28), and its textures, uniforms and depth/blend/raster state match the capture.",
-        "A single isolated terrain draw (event 24) replayed with the live time/season uniforms still has the same mean colour; the time/season fields change only ~244 pixels.",
-        "Therefore the resolve copy is faithful; the beige map is produced by the multi-draw terrain batch (blend order/state or an overlay pass), not by a previous composite being fed back."
-      ],
-      "interpretation": "The earlier 'composited frame fed back as MainScene' interpretation is superseded. The render-target lifecycle is behaving as implemented: clear -> terrain batch -> resolve. The remaining defect is inside the live execution of the terrain batch across draws.",
-      "not_yet_fixed": true
+    "composition": {
+      "terrain_draws": 252,
+      "map_layer_total": 12,
+      "map_layer_default": 6,
+      "shader_sources_with_extension": 78
     },
-    "ui_artifacts": "The Paradox-logo/UI region still fails (0.484 < 0.5) and some legacy text/sprite composition remains visibly wrong."
+    "remaining": "The map remains beige despite an equivalent settled composition, matching per-draw vertex/texture/uniform/state inputs, the authentic shader variant and a faithful resolve. The remaining divergence is not yet identified."
   },
   "live_start_policy": {
     "required_clean_starts": 3,
@@ -205,6 +196,16 @@
       "finding": "The remaining live palette divergence is a frame/reference alignment issue, not a demonstrated renderer defect.",
       "status": "blocking",
       "evidence": "same 231/9 composition at 280 s and 320 s; first resolve source is the beige current batch; resolve and single-draw contracts match"
+    },
+    {
+      "finding": "The live engine compiled the NO_SHADER_TEXTURE_LOD fallback because GLEW_ARB_shader_texture_lod was reported absent.",
+      "status": "confirmed",
+      "evidence": "master+0x18e was 0; fixed to 1; 78 live sources now carry the extension; regression added"
+    },
+    {
+      "finding": "The 231/9 versus 252/6 draw difference was a partially loaded frame/capture boundary, not missing/repeated operations.",
+      "status": "confirmed",
+      "evidence": "settled frame has 252 terrain and 12 map-layer calls = 6 default + 6 offscreen; caller/count order matches the captured terrain order"
     }
   ],
   "sampler_effective_state": {
@@ -268,19 +269,29 @@
     "conclusion": "No invalid resolve or copy was observed. The beige MainScene is the faithful copy of a beige current backbuffer produced by the terrain batch. The batch composition differs from the reference frame, so the pixel comparison is not aligned."
   },
   "frame_composition": {
-    "reference_frame": {
-      "source": ".local/m6/frames/menu-occ300/frame/frame-events.jsonl",
-      "draws_between_default_clear_and_composite": 276,
-      "terrain_caller_0x10ce96e": 252,
-      "map_layer_caller_0x10d4e50": 6
+    "reference": {
+      "terrain_0x10ce96e": 252,
+      "map_layer_0x10d4e50_default": 6,
+      "note": "batch after the fb0 clear, before composite"
     },
-    "live_frame": {
-      "source": ".local/m6/live-order/diag-1/order.jsonl",
-      "draws_between_default_clear_and_resolve": 256,
-      "terrain_caller_0x10ce96e": 231,
-      "map_layer_caller_0x10d4e50": 9
+    "live_first_menu_frame": {
+      "terrain": 231,
+      "map_layer_total": 9,
+      "note": "partially loaded frame; 3 of the 9 map-layer calls are offscreen/fb6"
     },
-    "stability": "The same 231/9 composition was observed with 280 s and 320 s minimum uptime; it is not a startup transient.",
-    "first_divergence": "The live and reference frames are not the same map update composition: the live terrain batch has 231 terrain draws and 9 map-layer draws, the reference has 252 and 6. The resolve is faithful to the live batch; a single live terrain draw matches captured event 24. The failure is therefore frame/scene alignment, not resolve-copy or single-draw rendering."
+    "live_settled_frame": {
+      "terrain": 252,
+      "map_layer_total": 12,
+      "map_layer_default": 6,
+      "map_layer_offscreen": 6,
+      "note": "equivalent to the reference when the offscreen fb6 draws are excluded"
+    },
+    "conclusion": "The 231/9 versus 252/6 difference was a capture-boundary/loading artifact, not missing or repeated live operations. A settle gate (252 terrain calls) now captures the fully loaded composition."
+  },
+  "shader_capability": {
+    "defect": "The live backend reported master+0x18e (GLEW_ARB_shader_texture_lod) as 0, so the engine compiled the NO_SHADER_TEXTURE_LOD fallback for the terrain/map shaders: flat normals, no explicit-LOD path. The authentic GL context advertises the extension (captured driver source has '#extension GL_ARB_shader_texture_lod : enable').",
+    "fix": "Report texture_lod=1 at master+0x18e, matching the authentic GL context. The live sources now carry the extension (78/78 in the settled run) and use the normal-map branch.",
+    "regression": "tests.test_gfx_live_draw::test_frame_start_reconstruction_and_texture_clear asserts texture_lod=1.",
+    "residual": "The live map is still beige after this correction, so the fallback shader was a real but not sufficient divergence."
   }
 }

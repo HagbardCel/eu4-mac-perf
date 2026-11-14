@@ -603,6 +603,21 @@ void main()
         self.assertIn("out vec4 fragColor;", normalized["source"])
         self.assertIn("fragColor = vec4(1.0);", normalized["source"])
 
+    def test_compiler_input_keeps_texture_lod_extension(self) -> None:
+        source = (
+            "#version 120\n"
+            "#extension GL_ARB_shader_texture_lod : enable\n"
+            "#ifdef NO_SHADER_TEXTURE_LOD\n"
+            "float3 normal = float3(0, 1, 0);\n"
+            "#else\n"
+            "float3 normal = tex2Dlod(normalTex, uv).rgb;\n"
+            "#endif\n"
+        )
+        compiled = translate.compiler_input(source)
+        self.assertIn("#extension GL_ARB_shader_texture_lod : enable", compiled)
+        self.assertNotIn("#define NO_SHADER_TEXTURE_LOD", compiled)
+        self.assertIn("tex2Dlod(normalTex, uv)", compiled)
+
     def test_std140_rejects_scalar_array(self) -> None:
         members, error = translate._std140_layout(
             [{"name": "X", "type": "float", "elements": 2, "array": True}]

@@ -1847,6 +1847,9 @@ def probe(args: argparse.Namespace) -> int:
         env["EU4_GFX_COMPOSITE_STAGE"] = "11a05cd9fd8f7533"
     if args.min_uptime_ms:
         env["EU4_GFX_CHECKPOINT_MIN_UPTIME_MS"] = str(int(args.min_uptime_ms))
+    if args.settle_caller:
+        env["EU4_GFX_CHECKPOINT_SETTLE_CALLER"] = args.settle_caller
+        env["EU4_GFX_CHECKPOINT_MIN_SETTLE_DRAWS"] = str(max(0, args.min_settle_draws))
     if args.dump_targets:
         env["EU4_GFX_DUMP_TARGETS"] = str(Path(output))
     if args.shader_cache:
@@ -2262,6 +2265,8 @@ def _parser() -> argparse.ArgumentParser:
     prb.add_argument("--sampler-trace", action="store_true")
     prb.add_argument("--vertex-trace", action="store_true")
     prb.add_argument("--vertex-trace-stage", default="")
+    prb.add_argument("--settle-caller", default="")
+    prb.add_argument("--min-settle-draws", type=int, default=0)
     prb.add_argument("--no-cull", action="store_true")
     prb.add_argument("--no-blend", action="store_true")
     prb.add_argument("--sample-texture-stage", default="")

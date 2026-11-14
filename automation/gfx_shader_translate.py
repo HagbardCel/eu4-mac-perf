@@ -185,18 +185,31 @@ LEGACY_TEXTURE_FUNCTIONS = [
 ]
 
 
-def compiler_input(source: str) -> str:
-    """The exact bytes the engine passes to _GfxAddVertexShader/_GfxAddPixelShader.
+def legacy_compiler_input(source: str) -> str:
+    """Fallback for shaders the extension variant cannot compile.
 
-    The GL driver-visible source (glGetShaderSource) carries the
-    GL_ARB_shader_texture_lod extension line; BuildGLSL hands the compiler the
-    NO_SHADER_TEXTURE_LOD define instead. The live shader cache must be keyed by
-    that compiler input, not by the driver copy.
-    """
+    Some legacy sources only compile with the engine's NO_SHADER_TEXTURE_LOD
+    branch. The live translator prefers the authentic extension source and
+    falls back to this substitution only when translation fails."""
     return source.replace(
         "#extension GL_ARB_shader_texture_lod : enable",
         "#define NO_SHADER_TEXTURE_LOD",
     )
+
+
+def compiler_input(source: str) -> str:
+    """The bytes the engine's GL program was compiled from.
+
+    The captured driver-visible source carries the
+    ``GL_ARB_shader_texture_lod`` extension line, and the authentic GL frame was
+    compiled with that extension enabled: its terrain shader uses explicit-LOD
+    sampling and the normal-map branch guarded by
+    ``#ifdef NO_SHADER_TEXTURE_LOD`` is inactive. Replacing the extension with
+    that define (the previous behavior) compiled a different shader variant:
+    flat normals, no explicit LOD, and a visibly washed-out/beige map. The live
+    cache must therefore key and compile the driver-visible source unchanged.
+    """
+    return source
 
 
 def _stage_kind(stage: str) -> str:
@@ -667,8 +680,24 @@ def translate_live_sources(source_dir: Path, out_dir: Path,
                 }
             record = translate_stage(text, stage, out_dir, digest, locations, None)
         except TranslationError as exc:
-            failed.append({"file": name, "error": str(exc)})
-            continue
+            legacy = legacy_compiler_input(text)
+            if legacy == text:
+                failed.append({"file": name, "error": str(exc)})
+                continue
+            try:
+                record = translate_stage(
+                    legacy, stage, out_dir, digest, locations, None
+                )
+                record["compiler_input_variant"] = "legacy_no_shader_texture_lod"
+            except TranslationError as legacy_exc:
+                failed.append(
+                    {
+                        "file": name,
+                        "error": str(exc),
+                        "legacy_error": str(legacy_exc),
+                    }
+                )
+                continue
         stages[digest] = record
         translated += 1
     report = {

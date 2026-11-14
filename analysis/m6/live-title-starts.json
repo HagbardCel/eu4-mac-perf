@@ -2,8 +2,8 @@
   "schema": "m6-live-title-starts/v2",
   "runs": [
     {
-      "run": ".local/m6/live-verify2/run-1",
-      "phase": "post-sampler-fix verification",
+      "run": ".local/m6/live-lod/run-1",
+      "phase": "post-LOD-capability and settle verification",
       "overall": "captured",
       "status": {
         "draw_reached": true,
@@ -13,10 +13,10 @@
         "presented": true,
         "reference_matched": null
       },
-      "launch_identity": "1794640399-68635",
-      "pid": 68709,
+      "launch_identity": "1794646964-77420",
+      "pid": 77485,
       "refused_draws": 0,
-      "swap_dump_sha256": "e9a86e5c6c33488e2c9f0ded6bc9e24e8e243ecca1f5947ab3341b15a4004640",
+      "swap_dump_sha256": "547e6e4de6748fa548824557d4d069971f76f7576cfad0cc481c53fedcffcaaf",
       "swap_dump_bytes": 30882816,
       "acceptance": {
         "executed": true,
@@ -29,6 +29,11 @@
     }
   ],
   "historical_runs": [
+    {
+      "run": ".local/m6/live-verify2/run-1",
+      "phase": "post-sampler-fix",
+      "status": "historical"
+    },
     {
       "run": ".local/m6/live-final/verify-1",
       "phase": "pre-sampler-fix",
@@ -58,5 +63,5 @@
   "distinct_runs": true,
   "distinct_identities": true,
   "ok": false,
-  "note": "One post-sampler-fix launch reached the settled title scene and presented with zero refused draws. The visual gate still fails; the three-clean-start requirement is not met."
+  "note": "One post-LOD/settle launch reached the settled title scene and presented with zero refused draws and no failed resolves. The visual gate still fails; three clean starts are not claimed."
 }

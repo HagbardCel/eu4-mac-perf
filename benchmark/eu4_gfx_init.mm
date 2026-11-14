@@ -1078,8 +1078,14 @@ static int fill_master(void *master, void *handle) {
        silently changes engine-computed UVs and the persisted setting. */
     uint8_t legacy_caps_byte = 1;
     memcpy((uint8_t *)master + 0x18c, &legacy_caps_byte, sizeof legacy_caps_byte);
-    /* 0x15e985e sets +0x18e only when ___GLEW_ARB_shader_texture_lod is 1. */
-    uint8_t texture_lod = 0;
+    /* 0x15e985e sets +0x18e only when ___GLEW_ARB_shader_texture_lod is 1.
+       The authentic original GL context on this machine advertises
+       GL_ARB_shader_texture_lod (the captured driver source enables the
+       extension), so the engine compiled the full terrain shader with
+       explicit-LOD sampling and the normal-map branch. Reporting 0 here made
+       the engine compile the NO_SHADER_TEXTURE_LOD fallback: flat normals and
+       a washed-out/beige map. Reproduce the authentic capability. */
+    uint8_t texture_lod = 1;
     memcpy((uint8_t *)master + 0x18e, &texture_lod, sizeof texture_lod);
 
     uint8_t *blend = (uint8_t *)alloc_zero(0x48);
@@ -2369,6 +2375,34 @@ static void preserve_previous_frame(void) {
 
 uint64_t eu4_gfx_live_draw_sequence;
 uint64_t eu4_gfx_live_clear_sequence;
+static uint32_t g_frame_settle_draws;
+
+void eu4_gfx_frame_note_draw_caller(uint64_t caller_rva) {
+    const char *wanted = getenv("EU4_GFX_CHECKPOINT_SETTLE_CALLER");
+    if (wanted == NULL || wanted[0] == 0) {
+        return;
+    }
+    char *end = NULL;
+    unsigned long long value = strtoull(wanted, &end, 0);
+    if (end == NULL || *end != 0 || caller_rva != (uint64_t)value) {
+        return;
+    }
+    g_frame_settle_draws++;
+}
+
+int eu4_gfx_frame_ready_for_checkpoint(void) {
+    const char *wanted = getenv("EU4_GFX_CHECKPOINT_SETTLE_CALLER");
+    const char *minimum = getenv("EU4_GFX_CHECKPOINT_MIN_SETTLE_DRAWS");
+    if (wanted == NULL || wanted[0] == 0 || minimum == NULL || minimum[0] == 0) {
+        return 1;
+    }
+    char *end = NULL;
+    unsigned long long need = strtoull(minimum, &end, 0);
+    if (end == NULL || *end != 0 || need == 0) {
+        return 1;
+    }
+    return g_frame_settle_draws >= (uint32_t)need;
+}
 uint8_t eu4_gfx_last_raster_description[0x10];
 
 /* Opt-in submission-order trace: records draws, clears and resolves with a
@@ -2669,6 +2703,12 @@ void eu4_gfx_clear(void *handle, unsigned flags, const float *color) {
         return;
     }
     if (status == EU4_GFX_CLEAR_OK && backend != nil && backend.gameWindow) {
+        const char *settle = getenv("EU4_GFX_CHECKPOINT_SETTLE_CALLER");
+        if (settle != NULL && settle[0] != 0 && (flags & 1u) != 0 &&
+            color != NULL && color[0] <= 0.001f && color[1] <= 0.001f &&
+            color[2] <= 0.001f) {
+            g_frame_settle_draws = 0;
+        }
         eu4_gfx_logical_capture_set_clear(color);
         eu4_gfx_logical_capture_reset();
     }

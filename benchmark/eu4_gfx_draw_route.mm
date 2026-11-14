@@ -324,9 +324,13 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
         eu4_metal_events_describe((const void *)(uintptr_t)raw->retaddr, NULL, 0,
                                   &trace_caller, &trace_inside, &trace_thread,
                                   &trace_pid);
-        char detail[128];
-        snprintf(detail, sizeof detail, "{\"caller\":\"0x%llx\"}",
-                 (unsigned long long)trace_caller);
+        char detail[256];
+        snprintf(detail, sizeof detail,
+                 "{\"caller\":\"0x%llx\",\"variant\":%u,\"count\":%lld,"
+                 "\"first\":%lld,\"instances\":%lld}",
+                 (unsigned long long)trace_caller, raw->which,
+                 (long long)raw->rsi, (long long)raw->rdx,
+                 (long long)(raw->which == 3 ? raw->rdx : 1));
         eu4_gfx_order_trace_detail("draw", eu4_gfx_live_draw_sequence, detail);
     }
     backend.lastDrawTargetColor = (__bridge id)inputs.target;
@@ -351,6 +355,7 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
     int pid = 0;
     eu4_metal_events_describe((const void *)(uintptr_t)raw->retaddr, NULL, 0,
                               &caller_rva, &inside, &thread, &pid);
+    eu4_gfx_frame_note_draw_caller(caller_rva);
     if (state != NULL) {
         g_last_state = *state;
         g_last_caller_rva = caller_rva;

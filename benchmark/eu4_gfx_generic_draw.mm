@@ -760,7 +760,7 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
                 [NSString stringWithUTF8String:vertex_trace_stage]].location != NSNotFound;
         if (getenv("EU4_GFX_VERTEX_TRACE") != NULL && vertex_trace_match) {
             static int vertex_trace_count;
-            if (vertex_trace_count < 64 && bound_buffer.contents != NULL) {
+            if (vertex_trace_count < 1024 && bound_buffer.contents != NULL) {
                 vertex_trace_count++;
                 NSUInteger byte_count = 4 * size * 4;
                 if (bound_offset + byte_count > bound_buffer.length) {

@@ -5,7 +5,7 @@
   "reference_error": "",
   "runs": [
     {
-      "run": ".local/m6/live-verify2/run-1",
+      "run": ".local/m6/live-lod/run-1",
       "status": {
         "executed": true,
         "gpu_completed": true,
@@ -24,7 +24,7 @@
         "frame_dump": true,
         "presented_flag": true,
         "non_blank": true,
-        "frame_sha256": "e9a86e5c6c33488e2c9f0ded6bc9e24e8e243ecca1f5947ab3341b15a4004640",
+        "frame_sha256": "547e6e4de6748fa548824557d4d069971f76f7576cfad0cc481c53fedcffcaaf",
         "ui_regions": false,
         "map_region": false
       },
@@ -35,28 +35,28 @@
         ],
         "scale": 2,
         "resampled": true,
-        "unique_colors": 244108,
+        "unique_colors": 244023,
         "ui_region_error": [
-          27.958,
-          34.256,
-          95.327
+          27.864,
+          34.156,
+          94.935
         ],
         "ui_region_correlation": [
           0.757,
           0.825,
-          0.484
+          0.482
         ],
-        "map_unique_colors": 94113,
-        "map_mean": 143.406,
+        "map_unique_colors": 94120,
+        "map_mean": 143.044,
         "map_structure": true,
-        "map_color_similarity": 0.452,
+        "map_color_similarity": 0.454,
         "ui_ok": false,
         "map_ok": false
       },
-      "canonical": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m6/live-verify2/run-1",
-      "identity": "1794640399-68635",
+      "canonical": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m6/live-lod/run-1",
+      "identity": "1794646964-77420",
       "ok": false,
-      "phase": "post-sampler-fix verification"
+      "phase": "post-LOD-capability and settle verification"
     }
   ],
   "clean_starts": 0,
@@ -65,31 +65,32 @@
   "ok": false,
   "historical_runs": [
     {
+      "run": ".local/m6/live-verify2/run-1",
+      "phase": "post-sampler-fix",
+      "status": "historical"
+    },
+    {
       "run": ".local/m6/live-final/verify-1",
       "phase": "pre-sampler-fix",
-      "status": "historical",
-      "note": "map palette affinity 0.435"
+      "status": "historical"
     },
     {
       "run": ".local/m6/live/final-1",
       "phase": "pre-viewport-fix",
-      "status": "historical",
-      "note": "pink palette"
+      "status": "historical"
     },
     {
       "run": ".local/m6/live/final-2",
       "phase": "pre-viewport-fix",
-      "status": "historical",
-      "note": "pink palette"
+      "status": "historical"
     },
     {
       "run": ".local/m6/live/final-3",
       "phase": "pre-viewport-fix",
-      "status": "historical",
-      "note": "pink palette"
+      "status": "historical"
     }
   ],
-  "note": "One post-sampler-fix live verification reached the settled title scene, executed, GPU-completed and presented with zero refused draws and no failed resolves, but visual_match=false. The resolve copy is faithful (the first resolve source is the current beige terrain batch); the remaining defect is inside the multi-draw terrain batch. Three clean starts are not claimed.",
+  "note": "Post-LOD-capability, settle-gated verification: 252 terrain draws, 12 map-layer calls (6 default + 6 offscreen), 78 shader sources with the authentic texture-LOD extension. Operational gates pass; visual_match=false (map mean 143.0 vs 71.9, palette affinity 0.454, UI 0.757/0.825/0.482).",
   "qualified_clean_starts": 0,
   "required_clean_starts": 3
 }

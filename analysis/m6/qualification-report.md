@@ -177,6 +177,34 @@ Regression:
 This improved palette affinity only marginally (0.435 -> 0.452), so it is a
 correctness fix, not the root cause of the beige map.
 
+
+### Settled composition and shader capability
+
+The 231/9 versus 252/6 difference was a capture-boundary/loading artifact. A
+settle gate waits until the frame's terrain-call count reaches 252 before the
+checkpoint fires. The settled live frame then has **252 terrain calls and 12
+map-layer calls**, which is 6 default-target + 6 offscreen/fb6 calls: the same
+operations as the reference once the offscreen calls (executed before the fb0
+clear in GL) are excluded. Caller/count order matches the captured terrain
+order. The "missing/repeated operations" hypothesis is rejected.
+
+The live backend had also reported `master+0x18e`
+(`GLEW_ARB_shader_texture_lod`) as 0. The authentic GL context advertises the
+extension, and its captured driver source contains
+`#extension GL_ARB_shader_texture_lod : enable`; the terrain normal-map branch
+is therefore active. Setting the byte to 1 makes the engine compile the
+authentic variant: the settled run has 78 shader sources with the extension.
+Regression: `test_frame_start_reconstruction_and_texture_clear` asserts
+`texture_lod=1`. This was a real graphics-contract correction, but the map
+remains beige, so it is not sufficient.
+
+The remaining map divergence is still unexplained: settled composition,
+per-draw vertex data, textures, uniforms, depth/blend/raster state, shader
+variant and the resolve copy all match. Live and offline terrain batches now
+use the same source variant; the offline batch is green (mean 73/76/65) while
+the live batch is beige (mean 113/112/113). No further renderer change was made
+without a demonstrated boundary.
+
 ### Latest live verification
 
 Run `.local/m6/live-verify2/run-1`, identity `1794640399-68635`:

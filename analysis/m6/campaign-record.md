@@ -1265,3 +1265,29 @@ status/generations, sampler effective-state trace, and first-vertex data trace
 with a stage filter. The acceptance checker now fails `executed` on any failed
 or malformed resolve and the selected-event comparator requires a valid
 matching replay, GPU completion, verified pre-image and a defined depth policy.
+
+## Settled composition, LOD capability and remaining map divergence (2026-11-14, fourth pass)
+
+The 231/9 versus 252/6 draw-count difference was a capture-boundary/loading
+artifact. A frame settle gate (`EU4_GFX_CHECKPOINT_SETTLE_CALLER` +
+`..._MIN_SETTLE_DRAWS`) waits until the frame contains 252 terrain calls. The
+settled live frame has 252 terrain calls and 12 map-layer calls: 6 default +
+6 offscreen/fb6, equivalent to the reference once the offscreen calls that GL
+executes before the fb0 clear are excluded. Caller/count order matches the
+captured terrain order. Missing/repeated operations are rejected.
+
+The live backend also reported `master+0x18e` (GLEW_ARB_shader_texture_lod) as
+0. The authentic GL context advertises the extension, so the authentic shaders
+enable explicit-LOD sampling and the normal-map branch. Setting the byte to 1
+made the engine compile the authentic variant: 78 settled sources carry the
+extension, and the regression `test_frame_start_reconstruction_and_texture_clear`
+now asserts `texture_lod=1`. The translator prefers the extension source and
+falls back to the legacy `NO_SHADER_TEXTURE_LOD` only when a shader cannot
+compile; `compiler_input` preserves the authentic extension.
+
+The map is still beige after these corrections. Settled composition, per-draw
+vertex data, textures, uniforms, depth/blend/raster state, shader variant and
+the resolve all match; the offline terrain batch is green (73/76/65) while the
+live batch is beige (113/112/113). The remaining divergence is not yet
+identified. No brightness or global color change was made. Three clean starts
+are not claimed; PR #189 remains Draft.

@@ -438,6 +438,9 @@ void eu4_gfx_checkpoint_after_draw(void *master, const eu4_gfx_draw_raw *raw,
     if (g_min_uptime_ms != 0 && monotonic_ms() - g_configure_ms < g_min_uptime_ms) {
         return;
     }
+    if (!eu4_gfx_frame_ready_for_checkpoint()) {
+        return;
+    }
     const void *caller = (const void *)(uintptr_t)raw->retaddr;
     uint64_t caller_rva = 0;
     int inside = 0;

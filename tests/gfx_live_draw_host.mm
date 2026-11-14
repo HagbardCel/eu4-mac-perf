@@ -487,6 +487,7 @@ static int run_frame_start(void) {
     }
     void *fake_current = (void *)0x1234;
     memcpy(master + 0x70, &fake_current, sizeof fake_current);
+    int texture_lod = master[0x18e];
     int begin = eu4_gfx_begin_scene(master);
     void *current = NULL;
     memcpy(&current, master + 0x70, sizeof current);
@@ -517,9 +518,11 @@ static int run_frame_start(void) {
                    *(uint32_t *)(header + 0xc) == 0 &&
                    *(uint32_t *)(header + 4) == 0 &&
                    eu4_gfx_texture_for_header(header) == NULL;
-    int ok = begin == 1 && current == NULL && blend_ok && clear_ok;
-    printf("begin_scene=%d current_cleared=%d blend_default=%d clear_texture=%d\n",
-           begin == 1, current == NULL, blend_ok, clear_ok);
+    int ok = begin == 1 && current == NULL && blend_ok && clear_ok &&
+             texture_lod == 1;
+    printf("begin_scene=%d current_cleared=%d blend_default=%d clear_texture=%d "
+           "texture_lod=%d\n",
+           begin == 1, current == NULL, blend_ok, clear_ok, texture_lod);
     return ok ? 0 : 1;
 }
 
