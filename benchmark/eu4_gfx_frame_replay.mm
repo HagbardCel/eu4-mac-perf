@@ -13,6 +13,7 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import "eu4_gfx_draw_semantics.h"
+#include "eu4_gfx_replay_semantics.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -757,7 +758,7 @@ static NSMutableDictionary *target_for(NSDictionary *target, NSError **error) {
     if (target[@"depth_attachment"] != nil || framebuffer == 0) {
         MTLTextureDescriptor *depth_descriptor = [MTLTextureDescriptor new];
         depth_descriptor.textureType = MTLTextureType2D;
-        depth_descriptor.pixelFormat = MTLPixelFormatDepth32Float;
+        depth_descriptor.pixelFormat = MTLPixelFormatDepth32Float_Stencil8;
         depth_descriptor.width = width;
         depth_descriptor.height = height;
         depth_descriptor.usage = MTLTextureUsageRenderTarget;
@@ -1319,7 +1320,10 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             descriptor.colorAttachments[0].pixelFormat =
                 ((id<MTLTexture>)target_info[@"color"]).pixelFormat;
             if (target_info[@"depth"] != nil) {
-                descriptor.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+                descriptor.depthAttachmentPixelFormat =
+                    MTLPixelFormatDepth32Float_Stencil8;
+                descriptor.stencilAttachmentPixelFormat =
+                    MTLPixelFormatDepth32Float_Stencil8;
             }
             MTLRenderPipelineColorAttachmentDescriptor *color =
                 descriptor.colorAttachments[0];
@@ -1381,6 +1385,9 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             pass.depthAttachment.texture = target_info[@"depth"];
             pass.depthAttachment.loadAction = MTLLoadActionLoad;
             pass.depthAttachment.storeAction = MTLStoreActionStore;
+            pass.stencilAttachment.texture = target_info[@"depth"];
+            pass.stencilAttachment.loadAction = MTLLoadActionLoad;
+            pass.stencilAttachment.storeAction = MTLStoreActionStore;
         }
         id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
         if (encoder == nil) {
@@ -1796,16 +1803,27 @@ static BOOL encode_clear(NSDictionary *event, NSString *frameDir,
     if (target_info == nil) {
         return NO;
     }
-    target_info[@"generation"] = @(number(target_info[@"generation"], 0) + 1);
     NSUInteger flags = number(event[@"flags"], 1);
-    BOOL before_first = number(event[@"before_first_draw"], 0) != 0;
+    BOOL clear_color = eu4_gfx_clear_color((uint32_t)flags) != 0;
+    BOOL clear_depth = eu4_gfx_clear_depth((uint32_t)flags) != 0;
+    BOOL clear_stencil = eu4_gfx_clear_stencil((uint32_t)flags) != 0;
+    if (clear_stencil && target_info[@"depth"] == nil) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:70
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"stencil clear has no stencil attachment"}];
+        }
+        return NO;
+    }
+    if (clear_color) {
+        target_info[@"generation"] =
+            @(number(target_info[@"generation"], 0) + 1);
+    }
     NSArray *color = event[@"color"];
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
     pass.colorAttachments[0].texture = target_info[@"color"];
     pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-    if (before_first || (flags & 1) == 0) {
-        pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
-    } else {
+    if (clear_color) {
         pass.colorAttachments[0].loadAction = MTLLoadActionClear;
         double r = 0, g = 0, b = 0, a = 1;
         if ([color isKindOfClass:[NSArray class]] && color.count == 4) {
@@ -1815,18 +1833,31 @@ static BOOL encode_clear(NSDictionary *event, NSString *frameDir,
             a = double_number(color[3], 1);
         }
         pass.colorAttachments[0].clearColor = MTLClearColorMake(r, g, b, a);
+    } else {
+        pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
     }
-    if (target_info[@"depth"] != nil && (flags & 7) != 0) {
+    if (target_info[@"depth"] != nil) {
         pass.depthAttachment.texture = target_info[@"depth"];
         pass.depthAttachment.storeAction = MTLStoreActionStore;
-        if ((flags & 3) != 0) {
+        pass.stencilAttachment.texture = target_info[@"depth"];
+        pass.stencilAttachment.storeAction = MTLStoreActionStore;
+        if (clear_depth) {
             pass.depthAttachment.loadAction = MTLLoadActionClear;
-            pass.depthAttachment.clearDepth = double_number(event[@"depth"], 1.0);
+            pass.depthAttachment.clearDepth =
+                double_number(event[@"depth"], 1.0);
         } else {
             pass.depthAttachment.loadAction = MTLLoadActionLoad;
         }
+        if (clear_stencil) {
+            pass.stencilAttachment.loadAction = MTLLoadActionClear;
+            pass.stencilAttachment.clearStencil =
+                (uint32_t)number(event[@"stencil"], 0);
+        } else {
+            pass.stencilAttachment.loadAction = MTLLoadActionLoad;
+        }
     }
-    id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
+    id<MTLRenderCommandEncoder> encoder =
+        [command renderCommandEncoderWithDescriptor:pass];
     if (encoder == nil) {
         if (error != NULL) {
             *error = [NSError errorWithDomain:kErrorDomain code:70

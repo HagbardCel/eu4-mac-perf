@@ -225,7 +225,9 @@ def replay_provenance(*, seeded=False, generation=2):
         "source": "external_capture", "generation": -1,
         "expected_texture": "1", "selected_texture": "1",
     }
-    return [asset, sample]
+    asset3 = dict(asset)
+    asset3["event"] = 3
+    return [asset, asset3, sample]
 
 
 def fake_replay(**overrides):
@@ -304,6 +306,30 @@ class ReplayContractTests(unittest.TestCase):
         stale = value["seeded_intermediates"][0]["stale"]
         self.assertEqual(stale[0]["event"], 6)
         self.assertEqual(stale[0]["expected_generation"], 3)
+
+    def test_missing_second_consumer_is_rejected(self):
+        fixture = self.fixture
+        fixture.events.append(draw(4, 10, [fixture.asset], program=2))
+        fixture.events.append(draw(5, None, [fixture.rt], program=3))
+        fixture.write()
+        manifest = json.loads((fixture.frame / "frame-trace.json").read_text())
+        manifest["events"] = len(fixture.events)
+        (fixture.frame / "frame-trace.json").write_text(json.dumps(manifest))
+        graph = gfx_frame_graph.build(fixture.frame)
+        replay = fake_replay()
+        replay["_provenance_samples"] = [
+            {"event": 1, "texture": "1", "sampler": "tex1", "unit": 1,
+             "source": "external_capture", "generation": -1,
+             "expected_texture": "1", "selected_texture": "1"},
+            {"event": 4, "texture": "10", "sampler": "tex10", "unit": 10,
+             "source": "metal_render_target", "generation": 2,
+             "expected_texture": "10", "selected_texture": "10"},
+        ]
+        value = gfx_frame_graph.evaluate_replay(graph, replay)
+        self.assertEqual(value["status"], "invalid")
+        problems = value["consumer_validation"]["problems"]
+        self.assertTrue(any(item["kind"] == "missing_consumer"
+                            and item["event"] == 6 for item in problems), problems)
 
     def test_missing_metal_binding_is_invalid(self):
         replay = fake_replay()

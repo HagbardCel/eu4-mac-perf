@@ -505,8 +505,71 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
     if samples is None:
         samples = []
     by_texture: dict[str, list[dict]] = {}
+    by_consumer: dict[tuple, list[dict]] = {}
     for sample in samples:
         by_texture.setdefault(str(sample.get("texture") or ""), []).append(sample)
+        by_consumer.setdefault(
+            (int(sample.get("event") or -1), str(sample.get("sampler") or "")),
+            []).append(sample)
+
+    # Every captured consumer must be represented exactly once per
+    # (event, sampler), with the captured resource and required generation.
+    consumer_problems: list[dict] = []
+    resources = graph.get("resources") or {}
+    for key, resource in resources.items():
+        name = key.split(":", 1)[1] if key.startswith("tex:") else key
+        required_by_event = {
+            int(row["event"]): int(row["required_generation"])
+            for row in resource.get("consumer_generations") or []
+        }
+        for consumer in resource.get("consumers") or []:
+            event = int(consumer.get("event") or -1)
+            sampler = str(consumer.get("sampler") or "")
+            rows = by_consumer.get((event, sampler), [])
+            if not rows:
+                consumer_problems.append({
+                    "event": event, "sampler": sampler, "resource": key,
+                    "kind": "missing_consumer"})
+                continue
+            textures = {str(row.get("texture") or "") for row in rows}
+            if len(textures) != 1:
+                consumer_problems.append({
+                    "event": event, "sampler": sampler, "resource": key,
+                    "kind": "ambiguous_consumer", "textures": sorted(textures)})
+                continue
+            if textures != {name}:
+                consumer_problems.append({
+                    "event": event, "sampler": sampler, "resource": key,
+                    "kind": "wrong_resource",
+                    "actual_texture": next(iter(textures))})
+                continue
+            for row in rows:
+                source = row.get("source")
+                if key.startswith("fb:"):
+                    continue
+                if resource.get("origin") == GENERATED:
+                    if source != "metal_render_target":
+                        consumer_problems.append({
+                            "event": event, "sampler": sampler,
+                            "resource": key,
+                            "kind": "captured_intermediate_substitution"})
+                    required = required_by_event.get(event)
+                    if required is not None and int(
+                            row.get("generation") or 0) != required:
+                        consumer_problems.append({
+                            "event": event, "sampler": sampler,
+                            "resource": key, "kind": "stale_generation",
+                            "expected_generation": required,
+                            "actual_generation": int(row.get("generation") or 0)})
+                elif resource.get("origin") == EXTERNAL:
+                    if source != "external_capture":
+                        consumer_problems.append({
+                            "event": event, "sampler": sampler,
+                            "resource": key, "kind": "external_not_captured"})
+    if consumer_problems:
+        reasons.append(
+            f"{len(consumer_problems)} expected consumer binding(s) failed")
+        status = "invalid"
     seeded: list[dict] = []
     for key in graph.get("renderer_generated_sampled") or []:
         name = key.split(":", 1)[1]
@@ -571,6 +634,12 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
         "status": status,
         "reasons": reasons,
         "seeded_intermediates": seeded,
+        "consumer_validation": {
+            "expected": sum(len(value.get("consumers") or [])
+                            for value in resources.values()),
+            "problems": consumer_problems[:100],
+            "problems_count": len(consumer_problems),
+        },
         "provenance": {
             "bindings": provenance.get("bindings"),
             "metal_render_target_bindings": provenance.get(
