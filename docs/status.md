@@ -69,7 +69,12 @@ Lockstep timeouts invalidate synchronization. GL readback no longer consumes
 pending engine errors. Ring dumps retain the selected frame's immutable
 metadata, and capture requests use request IDs with explicit acknowledgements.
 Region-specific policies (including text) now affect acceptance. See
-[qualification contract](infra/qualification-contract.md).
+[qualification contract](infra/qualification-contract.md). The first GL/GL
+consistency experiment (same Venice save, two processes) produced 20 pairs but
+zero aligned comparisons: draw counts were 373 vs 361 and the caller signatures
+differed. The save keeps running, so the processes are not at the same update;
+this fails Experiment A and blocks GL/Metal qualification until an
+engine-level update identity or a paused/static scenario is available.
 
 **Lease preflight.** The agent surface now exposes `eu4_session lease`; on the
 current host it reports `busy`, holder worktree

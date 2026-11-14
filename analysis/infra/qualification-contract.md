@@ -45,6 +45,13 @@ No engine-level update/tick identity is implemented yet. Stability is measured
 from consecutive full-frame digests, not from draw count or background
 similarity. Loading screens therefore cannot qualify.
 
+A loaded-save OpenGL/OpenGL consistency experiment exposed this limitation
+directly: two processes loading the same Venice save produced 373 vs 361 draws
+and different caller signatures, so all 20 pairs were `ambiguous`. The save
+continues running, so the two processes are not at the same update. Experiment A
+therefore failed before any GL/Metal comparison; this is recorded as an
+`alignment_failure`, not as a renderer difference.
+
 ## Comparison policy
 
 - `exact`: a scale-normalized comparison cannot be exactly qualified. If it
