@@ -1,7 +1,10 @@
 # Differential debugging infrastructure — index
 
-Stacked implementation on top of PR #189 (`f2cd8f9`), in separate branches in
-the `wt_infra` worktree. The M6 branch/worktree was not modified.
+Stacked implementation on top of PR #189, rebased onto the latest M6 head
+`35d13b2` (the only intervening M6 change was documentation: the UI label
+transform description and status text). The rebase was clean; the M6
+branch/worktree was not modified. Follow-up hardening commits after the five
+PR snapshots are consolidated on the `infrastructure` integration branch.
 
 | PR | Branch | Focus |
 | --- | --- | --- |
