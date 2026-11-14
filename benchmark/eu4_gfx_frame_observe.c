@@ -12,6 +12,7 @@
 #include <mach-o/dyld.h>
 #include <mach/mach.h>
 #include <mach/vm_map.h>
+#include <mach/mach_vm.h>
 #include <dlfcn.h>
 #include <time.h>
 #include <unistd.h>
@@ -52,6 +53,7 @@ static char g_request[OBS_MAX_PATH];
 static char g_ack_path[OBS_MAX_PATH];
 static int g_pause_at_draws;
 static int g_pause_at_first_game_day;
+static int g_pause_by_speed_zero;
 static _Atomic int g_pause_sent;
 static uint64_t g_request_id;
 static uint64_t g_pending_frames[OBS_MAX_DUMPS];
@@ -342,6 +344,8 @@ int eu4_gfx_frame_observe_init(const char *backend, const char *dir,
     g_pause_at_draws = pause_at != NULL ? atoi(pause_at) : 0;
     const char *pause_first = getenv("EU4_GFX_PAUSE_AT_FIRST_GAME_DAY");
     g_pause_at_first_game_day = pause_first != NULL && strcmp(pause_first, "1") == 0;
+    const char *pause_speed = getenv("EU4_GFX_PAUSE_BY_GAME_SPEED_ZERO");
+    g_pause_by_speed_zero = pause_speed != NULL && strcmp(pause_speed, "1") == 0;
     snprintf(g_ready, sizeof g_ready, "%s/ready", dir);
     snprintf(g_release, sizeof g_release, "%s/release", dir);
     snprintf(g_lockstep_timeout_path, sizeof g_lockstep_timeout_path,
@@ -548,13 +552,50 @@ static void dump_ring(obs_ring_slot *slot) {
    SDL keyboard space event to the game's own event loop; no general input
    automation is added.  If SDL is not reachable, the request is recorded as
    unavailable and normal observation continues. */
+
+static int write_game_speed_zero(void) {
+    const uintptr_t header = (uintptr_t)_dyld_get_image_header(0);
+    if (header == 0) return 0;
+    uintptr_t instance = 0;
+    vm_size_t copied = 0;
+    if (vm_read_overwrite(mach_task_self(),
+                          (vm_address_t)(header + 0x2244620),
+                          sizeof(instance), (vm_address_t)&instance,
+                          &copied) != KERN_SUCCESS ||
+        copied != sizeof(instance) || instance == 0) {
+        return 0;
+    }
+    uint32_t zero = 0;
+    if (mach_vm_write(mach_task_self(),
+                      (mach_vm_address_t)(instance + 0x1d50),
+                      (vm_offset_t)&zero, sizeof(zero)) != KERN_SUCCESS) {
+        return 0;
+    }
+    return 1;
+}
+
 static void maybe_request_pause(uint32_t draws, int game_day) {
     int due = (g_pause_at_draws > 0 && (int)draws >= g_pause_at_draws)
-              || (g_pause_at_first_game_day && game_day != 0);
+              || (g_pause_at_first_game_day && game_day != 0)
+              || (g_pause_by_speed_zero && g_pause_at_draws > 0
+                  && (int)draws >= g_pause_at_draws);
     if (!due) {
         return;
     }
     if (atomic_exchange_explicit(&g_pause_sent, 1, memory_order_acq_rel)) {
+        return;
+    }
+    if (g_pause_by_speed_zero) {
+        int ok = write_game_speed_zero();
+        char path[OBS_MAX_PATH];
+        snprintf(path, sizeof path, "%s/pause-requested.json", g_dir);
+        char body[256];
+        int n = snprintf(
+            body, sizeof body,
+            "{\"schema\":\"gfx-pause-request/v1\",\"status\":\"%s\","
+            "\"method\":\"game_speed_zero\",\"draws\":%u}\n",
+            ok ? "requested" : "rejected", draws);
+        if (n > 0 && (size_t)n < sizeof body) (void)write_atomic(path, body, (size_t)n);
         return;
     }
     typedef struct {

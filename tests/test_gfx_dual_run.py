@@ -103,6 +103,12 @@ class ScenarioTests(unittest.TestCase):
                 gfx_scenario.normalize(scenario(**overrides))
             self.assertEqual(caught.exception.kind, "unsupported_scenario_feature")
 
+    def test_game_speed_zero_pause_mode_is_valid(self):
+        value = gfx_scenario.normalize(scenario(
+            start={"kind": "save", "save": "continuelastsave",
+                   "pause": True, "pause_mode": "game_speed_zero"}))
+        self.assertEqual(value["start"]["pause_mode"], "game_speed_zero")
+
     def test_pause_is_supported_as_a_single_native_request(self):
         value = gfx_scenario.normalize(scenario(
             start={"kind": "save", "save": "continuelastsave", "pause": True}))
@@ -387,6 +393,14 @@ class LaunchPreparationTests(unittest.TestCase):
             libraries={"reference": self.library, "candidate": self.library},
         )
         self.assertEqual(env["EU4_GFX_PAUSE_AT_DRAWS"], "100")
+
+    def test_game_speed_zero_pause_is_passed_to_the_observer(self):
+        self.config.pause_by_game_speed_zero = True
+        env, _run_dir, _observe = gfx_launch.prepare(
+            "reference", self.config, self.root / "speed-zero",
+            libraries={"reference": self.library, "candidate": self.library},
+        )
+        self.assertEqual(env["EU4_GFX_PAUSE_BY_GAME_SPEED_ZERO"], "1")
 
     def test_first_game_day_pause_is_passed_to_the_observer(self):
         self.config.pause_at_first_game_day = True

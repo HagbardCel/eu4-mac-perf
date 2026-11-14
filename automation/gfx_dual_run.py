@@ -1101,7 +1101,8 @@ def run_campaign(
             metadata_only=True,
             session_id=session.session_id,
             pause_at_draws=(
-                int(scenario["settle"]["min_draws"])
+                int((scenario.get("start") or {}).get("pause_at_draws")
+                    or scenario["settle"]["min_draws"])
                 if (scenario.get("start") or {}).get("pause")
                 and not (scenario.get("start") or {}).get("pause_at_first_game_day")
                 and int(scenario["settle"]["min_draws"]) > 0
@@ -1110,6 +1111,10 @@ def run_campaign(
             pause_at_first_game_day=bool(
                 (scenario.get("start") or {}).get("pause")
                 and (scenario.get("start") or {}).get("pause_at_first_game_day")
+            ),
+            pause_by_game_speed_zero=bool(
+                (scenario.get("start") or {}).get("pause")
+                and (scenario.get("start") or {}).get("pause_mode") == "game_speed_zero"
             ),
         )
         lease = launch_lease.acquire(executable, output=session.run_dir)
@@ -1268,6 +1273,32 @@ def run_campaign(
                 time.sleep(0.02)
         if (scenario.get("start") or {}).get("pause"):
             pause_failures = _pause_failures(launched)
+            if not pause_failures:
+                baseline = {
+                    "reference": (lambda item: item.value.get("game_day") if item else None)(
+                        _latest(state.ref_stream)),
+                    "candidate": (lambda item: item.value.get("game_day") if item else None)(
+                        _latest(state.cand_stream)),
+                }
+                confirm_deadline = time.monotonic() + float(
+                    (scenario.get("settle") or {}).get("pause_confirm_seconds", 2.0))
+                while time.monotonic() < confirm_deadline:
+                    for record in state.ref_stream.poll():
+                        state.ref_by_index[record.index] = record
+                    for record in state.cand_stream.poll():
+                        state.cand_by_index[record.index] = record
+                    for role, stream in (("reference", state.ref_stream),
+                                         ("candidate", state.cand_stream)):
+                        latest = _latest(stream)
+                        day = latest.value.get("game_day") if latest else None
+                        if day is not None and day != baseline[role]:
+                            pause_failures.append(
+                                f"{role}: game day advanced after pause "
+                                f"({baseline[role]} -> {day})")
+                            break
+                    if pause_failures:
+                        break
+                    time.sleep(0.05)
             if pause_failures:
                 result["stop"] = {"reason": "pause_failed",
                                   "trigger": "; ".join(pause_failures)}

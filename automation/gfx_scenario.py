@@ -100,7 +100,8 @@ def normalize(value: dict) -> dict:
     if not isinstance(start, dict):
         raise ScenarioError("type", "start must be an object")
     _check_keys(start, {"kind", "save", "pause", "game_speed",
-                        "pause_at_first_game_day"}, "start")
+                        "pause_at_first_game_day", "pause_at_draws",
+                        "pause_mode"}, "start")
     kind = start.get("kind", "frontend")
     if kind not in STARTS:
         raise ScenarioError("enum", f"start.kind must be one of {STARTS}")
@@ -146,6 +147,8 @@ def normalize(value: dict) -> dict:
             "unsupported_scenario_feature",
             "game_config overrides are not implemented; remove game_config",
         )
+    if start.get("pause_mode", "input") not in ("input", "game_speed_zero"):
+        raise ScenarioError("enum", "start.pause_mode must be input or game_speed_zero")
     if kind == "save" and save != "continuelastsave":
         raise ScenarioError(
             "unsupported_scenario_feature",
@@ -156,7 +159,8 @@ def normalize(value: dict) -> dict:
     if not isinstance(settle, dict):
         raise ScenarioError("type", "settle must be an object")
     _check_keys(settle, {"min_frames", "stable_frames", "timeout_seconds",
-                         "min_draws", "draw_tolerance"}, "settle")
+                         "min_draws", "draw_tolerance",
+                         "pause_confirm_seconds"}, "settle")
     min_frames = _optional(settle.get("min_frames"), int, "settle.min_frames", 3,
                            minimum=1, maximum=10000)
     stable_frames = _optional(settle.get("stable_frames"), int, "settle.stable_frames",
@@ -169,6 +173,9 @@ def normalize(value: dict) -> dict:
     settle_draw_tolerance = _optional(settle.get("draw_tolerance"), float,
                                       "settle.draw_tolerance", 0.25,
                                       minimum=0.0, maximum=1.0)
+    pause_confirm_seconds = _optional(
+        settle.get("pause_confirm_seconds"), float,
+        "settle.pause_confirm_seconds", 2.0, minimum=0.0, maximum=30.0)
 
     observation = value.get("observation", {})
     if not isinstance(observation, dict):
@@ -292,6 +299,11 @@ def normalize(value: dict) -> dict:
         "pause_at_first_game_day": _optional(
             start.get("pause_at_first_game_day"), bool,
             "start.pause_at_first_game_day", False),
+        "pause_at_draws": _optional(start.get("pause_at_draws"), int,
+                                    "start.pause_at_draws", 0,
+                                    minimum=0, maximum=100000),
+        "pause_mode": _optional(start.get("pause_mode"), str,
+                                "start.pause_mode", "input"),
             "game_speed": speed,
         },
         "game_config": game_config,
@@ -302,6 +314,7 @@ def normalize(value: dict) -> dict:
             "timeout_seconds": settle_timeout,
             "min_draws": settle_min_draws,
             "draw_tolerance": settle_draw_tolerance,
+            "pause_confirm_seconds": pause_confirm_seconds,
         },
         "observation": {
             "max_frames": max_frames,

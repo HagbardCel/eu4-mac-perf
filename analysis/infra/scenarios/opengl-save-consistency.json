@@ -18,6 +18,9 @@
     "kind": "save",
     "save": "continuelastsave",
     "pause": true,
+    "pause_at_first_game_day": false,
+    "pause_at_draws": 500,
+    "pause_mode": "game_speed_zero",
     "game_speed": 1
   },
   "game_config": {},
@@ -27,7 +30,8 @@
     "stable_frames": 1,
     "timeout_seconds": 420.0,
     "min_draws": 100,
-    "draw_tolerance": 0.3
+    "draw_tolerance": 0.3,
+    "pause_confirm_seconds": 2.0
   },
   "observation": {
     "max_frames": 20,
@@ -63,10 +67,13 @@
         "policy": "tolerant"
       }
     },
-    "require_aligned": true
+    "require_aligned": true,
+    "stop_on_first": true,
+    "weak_identity_guard": true,
+    "weak_identity_min_correlation": 0.35
   },
   "mode": "streaming",
   "profile": "targeted",
   "authorization": null,
-  "digest": "ca17a879af7a4c0a453d33cfd0b914f95ab4cdf2e2fcd2d3b106d2a387a82e6d"
+  "digest": "68d044273ca114b920f6eeaea64415b9f524370158494fbea4fb3779003e070f"
 }

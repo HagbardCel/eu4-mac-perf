@@ -68,3 +68,20 @@ are day-only and caller signatures differ. In that follow-up the guard would
 have refused the comparison instead of reporting an 85% rendering difference.
 This deliberately trades away detection of a catastrophically corrupted image
 until a stronger tick identity exists.
+
+
+## Follow-up: game-speed-zero pause freezes simulation
+
+An opt-in `pause_mode=game_speed_zero` writes the game speed field to 0 at the
+configured draw threshold. In session `20261114T183243Z-191dd168` both observers
+recorded `method=game_speed_zero` at 506 draws, and both streams stayed on
+`game_day=56456976`.
+
+- 20 paired attempts, **15 aligned, 5 not aligned**
+- **0 valid comparisons**: the raw dumps were missing. The only capture request
+  left in each observe directory was the stop-time two-frame request; the
+  phase-entry window had already been pruned.
+- health healthy; classification `alignment_failure`.
+
+This is the first configuration that froze the simulation deterministically
+without an input event, but the raw-payload window is now the blocking bug.
