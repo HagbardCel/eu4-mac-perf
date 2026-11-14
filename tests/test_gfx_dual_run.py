@@ -11,8 +11,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from automation import (gfx_align, gfx_artifacts, gfx_diagnostics, gfx_dual_run,
-                        gfx_launch, gfx_scenario)  # noqa: E402
+from automation import (gfx_align, gfx_artifacts, gfx_diagnostics, gfx_display,
+                        gfx_dual_run, gfx_launch, gfx_scenario)  # noqa: E402
 
 try:
     import numpy as np
@@ -801,6 +801,135 @@ class CleanupFailureTests(unittest.TestCase):
             terminal = json.loads(
                 (Path(result["run_dir"]) / "terminal-status.json").read_text())
             self.assertEqual(terminal["status"], gfx_session.FAILED)
+
+
+class BackgroundLifecycleOrderTests(unittest.TestCase):
+    def make_case(self):
+        from automation import gfx_launch, launch_ledger
+        import eu4_benchmark
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        user = root / "user"
+        user.mkdir()
+        settings = user / "settings.txt"
+        settings.write_text("graphics={\n\tfullScreen=yes\n}\n")
+        scenario = gfx_scenario.normalize({
+            "schema": gfx_scenario.SCHEMA,
+            "name": "background-order",
+            "executable_sha256": eu4_benchmark.gog_identity()["executable_sha256"],
+            "logical_extent": [1728, 1117],
+            "observation": {"max_frames": 2, "max_runtime_seconds": 30},
+            "comparison": {"policy": "exact"},
+            "mode": "streaming", "profile": "early",
+        })
+        ledger = root / "authority.json"
+        launch_ledger.create_ledger(
+            ledger, workflow_id="background-order", limit=2,
+            deadline_seconds=60.0,
+            executable={"path": eu4_benchmark.gog_identity()["executable"],
+                        "sha256": eu4_benchmark.gog_identity()["executable_sha256"]},
+            output_root=str(root))
+        libraries = {}
+        for role in ("reference", "candidate"):
+            path = root / f"{role}.dylib"
+            path.write_bytes(role.encode())
+            libraries[role] = path
+        return temporary, root, user, settings, scenario, ledger, libraries
+
+    class FakeDisplay:
+        def __init__(self, settings: Path, original: str):
+            self.settings = settings
+            self.original = original
+            self.env = {"EU4_DISPLAY_MODE": "background"}
+            self.record = {}
+            self.isolation_library = None
+            self.restored = False
+
+        def as_dict(self):
+            return {"mode": "background"}
+
+        def restore(self):
+            self.restored = True
+            self.settings.write_text(self.original)
+            return {"restored": True}
+
+    def test_settings_are_untouched_before_the_lease_and_restored_after(self):
+        from unittest import mock
+        from automation import gfx_launch, launch_lease, launch_ledger
+        import eu4_benchmark
+        temporary, root, user, settings, scenario, ledger, libraries = self.make_case()
+        original = settings.read_text()
+        observed = []
+        real_acquire = launch_lease.acquire
+        fake_display = self.FakeDisplay(settings, original)
+
+        def acquire(*args, **kwargs):
+            observed.append(settings.read_text())
+            return real_acquire(*args, **kwargs)
+
+        def activate(plan, run_dir):
+            settings.write_text("graphics={\n\tfullScreen=no\n}\n")
+            return fake_display
+
+        try:
+            with mock.patch.dict("os.environ",
+                                 {"EU4_LAUNCH_LEASE_DIR": str(root / "lease")}), \
+                 mock.patch.object(gfx_launch, "preflight_user_data",
+                                   return_value={"writable": True,
+                                                 "user_data": str(user)}), \
+                 mock.patch.object(gfx_launch, "build_libraries",
+                                   return_value=libraries), \
+                 mock.patch.object(launch_lease, "manual_game_pids",
+                                   return_value=[]), \
+                 mock.patch.object(launch_lease, "acquire", acquire), \
+                 mock.patch.object(gfx_dual_run.gfx_display, "plan_background",
+                                   return_value=mock.Mock(as_dict=lambda: {})), \
+                 mock.patch.object(gfx_dual_run.gfx_display,
+                                   "activate_background", activate), \
+                 mock.patch.object(gfx_launch, "spawn",
+                                   side_effect=RuntimeError("spawn failed")):
+                result = gfx_dual_run.run_campaign(
+                    scenario, run_root=root, ledger_path=ledger,
+                    shader_cache=None, qualified_sources=None, max_frames=2,
+                    session_root=root / "sessions", background=True)
+        except BaseException:
+            raise
+        self.assertEqual(observed, [original])
+        self.assertEqual(settings.read_text(), original)
+        self.assertTrue(fake_display.restored)
+        self.assertEqual(result["result"], "failed")
+
+    def test_activation_failure_after_lease_writes_no_settings(self):
+        from unittest import mock
+        from automation import gfx_launch, launch_lease
+        temporary, root, user, settings, scenario, ledger, libraries = self.make_case()
+        original = settings.read_text()
+        try:
+            with mock.patch.dict("os.environ",
+                                 {"EU4_LAUNCH_LEASE_DIR": str(root / "lease")}), \
+                 mock.patch.object(gfx_launch, "preflight_user_data",
+                                   return_value={"writable": True,
+                                                 "user_data": str(user)}), \
+                 mock.patch.object(gfx_launch, "build_libraries",
+                                   return_value=libraries), \
+                 mock.patch.object(launch_lease, "manual_game_pids",
+                                   return_value=[]), \
+                 mock.patch.object(gfx_dual_run.gfx_display, "plan_background",
+                                   return_value=mock.Mock(as_dict=lambda: {})), \
+                 mock.patch.object(gfx_dual_run.gfx_display,
+                                   "activate_background",
+                                   side_effect=gfx_display.DisplayError(
+                                       "display_offline", "injected")):
+                result = gfx_dual_run.run_campaign(
+                    scenario, run_root=root, ledger_path=ledger,
+                    shader_cache=None, qualified_sources=None, max_frames=2,
+                    session_root=root / "sessions", background=True)
+        except BaseException:
+            raise
+        self.assertEqual(settings.read_text(), original)
+        self.assertEqual(result["result"], "failed")
+        self.assertIn("display_offline", result.get("error", ""))
 
 
 class CleanupActionFailureTests(unittest.TestCase):

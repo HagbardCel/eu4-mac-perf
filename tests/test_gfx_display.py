@@ -378,6 +378,96 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(caught.exception.kind, "settings_missing")
 
 
+class SettingsLifecycleTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.user_data = self.root / "user"
+        self.user_data.mkdir()
+        self.settings = self.user_data / "settings.txt"
+        self.settings.write_text(SETTINGS, encoding="utf-8")
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def test_planning_does_not_touch_shared_settings(self):
+        from unittest import mock
+        calls = []
+        display = gfx_display.Display(
+            display_id=7, name="EU4 Test", origin_x=0.0, origin_y=0.0,
+            width=1920.0, height=1200.0, pixel_width=1920, pixel_height=1200,
+            hidpi=False, main=True,
+        )
+        with mock.patch.object(gfx_display, "_cli", return_value="/bin/true"), \
+             mock.patch.object(gfx_display, "main_display", return_value=display), \
+             mock.patch.object(gfx_display, "_run_cli",
+                               side_effect=lambda *a, **k: calls.append(a) or ""):
+            plan = gfx_display.plan_background(self.user_data)
+        self.assertEqual(self.settings.read_text(encoding="utf-8"), SETTINGS)
+        self.assertEqual(calls, [])
+        self.assertEqual(plan.window_size, gfx_display.DEFAULT_WINDOW)
+
+    def test_failure_after_settings_write_rolls_back(self):
+        from unittest import mock
+        display = gfx_display.Display(
+            display_id=7, name="EU4 Test", origin_x=0.0, origin_y=0.0,
+            width=1920.0, height=1200.0, pixel_width=1920, pixel_height=1200,
+            hidpi=False, main=False,
+        )
+        plan = gfx_display.BackgroundPlan(
+            user_data=str(self.user_data), name="EU4 Test",
+            window_size=(1728, 1117), width=1920, height=1200,
+            focus_guard=False,
+        )
+        real_prepare = gfx_display.BackgroundSession.prepare_settings
+
+        def prepare_then_fail(session, user_data, run_dir):
+            real_prepare(session, user_data, run_dir)
+            raise OSError("injected display-session write failure")
+
+        with mock.patch.object(gfx_display, "ensure_display",
+                               return_value={"display": display.as_dict()}), \
+             mock.patch.object(gfx_display.BackgroundSession,
+                               "prepare_settings", prepare_then_fail):
+            with self.assertRaises(OSError):
+                gfx_display.activate_background(plan, self.root / "run")
+        self.assertEqual(self.settings.read_text(encoding="utf-8"), SETTINGS)
+
+    def test_restore_accepts_a_game_rewrite_of_our_windowed_intent(self):
+        record = gfx_display.prepare_windowed_settings(
+            self.user_data, run_dir=self.root / "run")
+        # The game rewrites settings at startup but preserves our intent.
+        self.settings.write_text(SETTINGS.replace("fullScreen=yes",
+                                                  "fullScreen=no")
+                                 .replace("x=1728", "x=1728")
+                                 .replace("y=1117", "y=1117")
+                                 + "extra=1\n", encoding="utf-8")
+        result = gfx_display.restore_settings(record)
+        self.assertTrue(result["restored"])
+        self.assertEqual(result["reason"], "game_rewrote_windowed_settings")
+        self.assertEqual(self.settings.read_text(encoding="utf-8"), SETTINGS)
+
+    def test_restore_accepts_already_original_file(self):
+        record = gfx_display.prepare_windowed_settings(
+            self.user_data, run_dir=self.root / "run")
+        self.settings.write_text(SETTINGS, encoding="utf-8")
+        result = gfx_display.restore_settings(record)
+        self.assertTrue(result["restored"])
+        self.assertEqual(result["reason"], "already_original")
+
+    def test_restore_refuses_to_overwrite_another_actor(self):
+        record = gfx_display.prepare_windowed_settings(
+            self.user_data, run_dir=self.root / "run")
+        self.assertTrue(record["changed"])
+        self.settings.write_text("actor=someone-else\n", encoding="utf-8")
+        result = gfx_display.restore_settings(record)
+        self.assertFalse(result["restored"])
+        self.assertTrue(result["conflict"])
+        self.assertEqual(self.settings.read_text(encoding="utf-8"),
+                         "actor=someone-else\n")
+        self.assertTrue(Path(record["backup"]).is_file())
+
+
 class SessionDisplayTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

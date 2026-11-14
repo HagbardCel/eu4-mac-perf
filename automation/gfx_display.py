@@ -119,7 +119,7 @@ def ensure_isolation_library(force: bool = False) -> Path:
     built = subprocess.run(
         [
             "clang", "-arch", "x86_64", "-dynamiclib", "-O2",
-            "-Wall", "-Wextra",
+            "-Wall", "-Wextra", "-fblocks",
             "-fobjc-arc", "-framework", "AppKit", "-framework",
             "CoreGraphics", "-framework", "Foundation",
             "-o", str(ISOLATE), str(ISOLATE_SOURCE),
@@ -599,8 +599,10 @@ def verify_window(
         }
     rect = _window_rect(window) or (0, 0, 0, 0)
     contained = display.contains(rect)
-    width_ok = rect[2] >= window_size[0]
-    height_ok = rect[3] >= window_size[1]
+    # The drawable extent must not change.  Allow window decorations, but
+    # reject a fullscreen window that silently adopted the display mode.
+    width_ok = abs(rect[2] - window_size[0]) <= 64
+    height_ok = window_size[1] <= rect[3] <= window_size[1] + 120
     expected_origin = window_origin(display, window_size)
     origin_error = (
         abs(rect[0] - expected_origin[0]) + abs(rect[1] - expected_origin[1])
@@ -630,6 +632,86 @@ def verify_window(
         "samples": samples,
         "physical_main_unchanged": True,
     }
+
+
+class WindowMonitor:
+    """Sample window/display/focus for the whole session without input."""
+
+    def __init__(self, pid: int, display: Display,
+                 window_size: tuple[int, int], *, interval: float = 0.5):
+        self.pid = pid
+        self.display = display
+        self.window_size = window_size
+        self.interval = interval
+        self.samples = 0
+        self.activations: list[dict] = []
+        self.disconnects: list[dict] = []
+        self.window_issues: list[dict] = []
+        self._stop = False
+        self._thread = None
+
+    def start(self):
+        import threading
+
+        def run():
+            while not self._stop:
+                self.sample_once()
+                time.sleep(self.interval)
+
+        self._thread = threading.Thread(target=run, daemon=True)
+        self._thread.start()
+        return self
+
+    def sample_once(self) -> dict:
+        self.samples += 1
+        try:
+            payload = snapshot(self.pid)
+        except DisplayError as exc:
+            self.window_issues.append({"at": _now(), "error": str(exc)})
+            return {}
+        if int(payload.get("frontmost_pid") or 0) == self.pid:
+            self.activations.append({"at": _now(), "frontmost_pid": self.pid})
+        active_ids = {
+            int(item.get("display_id") or 0)
+            for item in payload.get("displays") or []
+        }
+        if self.display.display_id not in active_ids:
+            self.disconnects.append({
+                "at": _now(), "display_id": self.display.display_id,
+            })
+        owned = [
+            item for item in payload.get("windows") or []
+            if int(item.get("owner_pid") or 0) == self.pid and _window_rect(item)
+        ]
+        if owned:
+            window = max(
+                owned, key=lambda item: (item["width"] or 0) * (item["height"] or 0))
+            rect = _window_rect(window) or (0, 0, 0, 0)
+            if not self.display.contains(rect):
+                self.window_issues.append({
+                    "at": _now(), "kind": "outside_display",
+                    "window_rect": list(rect),
+                })
+        else:
+            self.window_issues.append({"at": _now(), "kind": "window_absent"})
+        return payload
+
+    def stop(self) -> dict:
+        self._stop = True
+        if self._thread is not None:
+            self._thread.join(timeout=max(1.0, self.interval * 2))
+        return self.summary()
+
+    def summary(self) -> dict:
+        return {
+            "schema": "gfx-window-monitor/v1",
+            "samples": self.samples,
+            "activations": self.activations,
+            "disconnects": self.disconnects,
+            "window_issues": self.window_issues[:64],
+            "unexpected_activation": bool(self.activations),
+            "display_disconnected": bool(self.disconnects),
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -681,6 +763,37 @@ def _rewrite_graphics(text: str, width: int, height: int) -> tuple[str, dict]:
     return "".join(lines), changed
 
 
+def _atomic_write(path: Path, payload: bytes) -> None:
+    """Durably replace a shared configuration file."""
+    temporary = path.with_name(path.name + ".harness-tmp")
+    with temporary.open("wb") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+    try:
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except OSError:
+        pass
+
+
+def _matches_windowed_intent(payload: bytes, width: int, height: int) -> bool:
+    """Whether a rewritten settings file still expresses our windowed intent."""
+    try:
+        text = payload.decode("utf-8", errors="surrogateescape")
+    except Exception:
+        return False
+    return (
+        re.search(r"^\s*fullScreen\s*=\s*no\s*$", text, re.M) is not None
+        and re.search(rf"^\s*x\s*=\s*{width}\s*$", text, re.M) is not None
+        and re.search(rf"^\s*y\s*=\s*{height}\s*$", text, re.M) is not None
+    )
+
+
 def prepare_windowed_settings(
     user_data: Path | str,
     *,
@@ -700,19 +813,23 @@ def prepare_windowed_settings(
             "original_sha256": _sha256_bytes(original),
             "settings_sha256": _sha256_bytes(original),
         }
-    backup = None
-    if run_dir is not None:
-        backup_dir = Path(run_dir) / "display"
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        backup = backup_dir / "settings.txt.original"
-        backup.write_bytes(original)
-    path.write_bytes(rewritten.encode("utf-8", errors="surrogateescape"))
+    if run_dir is None:
+        raise DisplayError(
+            "settings_backup_required",
+            "a session run directory is required to modify the shared settings",
+        )
+    backup_dir = Path(run_dir) / "display"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup = backup_dir / "settings.txt.original"
+    _atomic_write(backup, original)
+    modified = rewritten.encode("utf-8", errors="surrogateescape")
+    _atomic_write(path, modified)
     return {
         "changed": True,
         "path": str(path),
-        "backup": str(backup) if backup else None,
+        "backup": str(backup),
         "original_sha256": _sha256_bytes(original),
-        "settings_sha256": _sha256_bytes(rewritten.encode("utf-8", errors="surrogateescape")),
+        "settings_sha256": _sha256_bytes(modified),
         "previous": changed,
         "windowed": {"width": width, "height": height},
     }
@@ -729,9 +846,46 @@ def restore_settings(record: dict) -> dict:
     original = Path(backup).read_bytes()
     if _sha256_bytes(original) != record.get("original_sha256"):
         raise DisplayError("settings_backup_corrupt", f"backup digest mismatch for {path}")
-    path.write_bytes(original)
+    try:
+        current = path.read_bytes()
+    except OSError as exc:
+        raise DisplayError("settings_unreadable", str(exc)) from exc
+    current_digest = _sha256_bytes(current)
+    original_digest = _sha256_bytes(original)
+    if current_digest == original_digest:
+        return {
+            "restored": True,
+            "reason": "already_original",
+            "path": str(path),
+            "sha256": original_digest,
+        }
+    if current_digest != record.get("settings_sha256"):
+        windowed = record.get("windowed") or {}
+        game_rewrite = (
+            isinstance(windowed.get("width"), int)
+            and isinstance(windowed.get("height"), int)
+            and _matches_windowed_intent(
+                current, windowed["width"], windowed["height"])
+        )
+        if not game_rewrite:
+            # Another actor edited the shared file.  Do not overwrite their
+            # work; preserve the backup and report the conflict.
+            return {
+                "restored": False,
+                "conflict": True,
+                "path": str(path),
+                "backup": str(backup),
+                "expected_sha256": record.get("settings_sha256"),
+                "current_sha256": current_digest,
+                "original_sha256": record.get("original_sha256"),
+            }
+        reason = "game_rewrote_windowed_settings"
+    else:
+        reason = "restored"
+    _atomic_write(path, original)
     return {
         "restored": True,
+        "reason": reason,
         "path": str(path),
         "sha256": _sha256_bytes(original),
     }
@@ -800,6 +954,77 @@ class BackgroundSession:
         return dict(self.record)
 
 
+@dataclasses.dataclass(frozen=True)
+class BackgroundPlan:
+    """Validated background request; does not touch shared game settings."""
+
+    user_data: str
+    name: str
+    window_size: tuple[int, int]
+    width: int
+    height: int
+    focus_guard: bool
+
+    def as_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "user_data": self.user_data,
+            "window_size": list(self.window_size),
+            "mode": [self.width, self.height],
+            "focus_guard": self.focus_guard,
+        }
+
+
+def plan_background(
+    user_data: Path | str,
+    *,
+    name: str = DEFAULT_NAME,
+    window_size: tuple[int, int] = DEFAULT_WINDOW,
+    width: int = DEFAULT_MODE[0],
+    height: int = DEFAULT_MODE[1],
+    focus_guard: bool = False,
+) -> BackgroundPlan:
+    """Validate the display request without modifying any shared file.
+
+    This runs before the host-wide launch lease is acquired.  It checks the
+    BetterDisplay service and the physical primary display, but creates or
+    reconfigures nothing and never writes ``settings.txt``.
+    """
+    _cli()
+    physical = main_display()
+    if physical.main is not True:
+        raise DisplayError("main_display", "the physical display is not primary")
+    find_user_settings(user_data)
+    return BackgroundPlan(
+        user_data=str(Path(user_data)),
+        name=name,
+        window_size=tuple(window_size),
+        width=int(width),
+        height=int(height),
+        focus_guard=bool(focus_guard),
+    )
+
+
+def activate_background(plan: BackgroundPlan, run_dir: Path | str) -> BackgroundSession:
+    """Prepare the display, back up settings, then switch the game to windowed."""
+    qualified = ensure_display(plan.name, width=plan.width, height=plan.height)
+    display = Display(**qualified["display"])
+    session = BackgroundSession(display, plan.window_size,
+                                 focus_guard=plan.focus_guard)
+    session.record["qualified"] = qualified
+    try:
+        session.prepare_settings(plan.user_data, run_dir)
+        path = Path(run_dir) / "display" / "display-session.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(session.as_dict(), indent=2) + "\n", encoding="utf-8")
+    except BaseException:
+        # A settings write may have succeeded before a later step failed.
+        session.restore()
+        raise
+    return session
+
+
 def prepare_background(
     user_data: Path | str,
     run_dir: Path | str,
@@ -810,13 +1035,9 @@ def prepare_background(
     height: int = DEFAULT_MODE[1],
     focus_guard: bool = False,
 ) -> BackgroundSession:
-    """Discover/qualify the display and switch settings for one session."""
-    qualified = ensure_display(name, width=width, height=height)
-    display = Display(**qualified["display"])
-    session = BackgroundSession(display, window_size, focus_guard=focus_guard)
-    session.record["qualified"] = qualified
-    session.prepare_settings(user_data, run_dir)
-    path = Path(run_dir) / "display" / "display-session.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(session.as_dict(), indent=2) + "\n", encoding="utf-8")
-    return session
+    """Compatibility wrapper: plan and activate in one call."""
+    plan = plan_background(
+        user_data, name=name, window_size=window_size, width=width,
+        height=height, focus_guard=focus_guard,
+    )
+    return activate_background(plan, run_dir)

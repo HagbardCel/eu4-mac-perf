@@ -439,6 +439,10 @@ class Session:
     def display_env(self) -> dict:
         return dict(self._display.env) if self._display is not None else {}
 
+    def restore_display(self) -> dict | None:
+        """Restore shared display settings; safe to call before and at close."""
+        return self._restore_display()
+
     def _restore_display(self) -> dict | None:
         if self._display is None:
             return None

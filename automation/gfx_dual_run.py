@@ -1086,6 +1086,9 @@ def classify_campaign(result: dict, scenario: dict, *, max_frames: int) -> dict:
     elif _process_failure(result):
         classification = "process_failure"
         reasons.append("an owned game process exited abnormally")
+    elif (result.get("display") or {}).get("monitor_failed"):
+        classification = "incomplete"
+        reasons.append("background window/focus verification failed during the run")
     elif health.get("verdict") == "failed":
         classification = "gpu_execution_failure"
         reasons.append((health.get("first_failure") or {}).get("message")
@@ -1226,16 +1229,18 @@ def run_campaign(
     )
     window_size = display_window or tuple(scenario["logical_extent"])
     display_qualified = None
+    display_plan = None
     if background:
+        # Validation only: no virtual-screen creation and no shared settings
+        # write before launch authorization and the host-wide lease.
         try:
-            display_qualified = gfx_display.prepare_background(
-                preflight["user_data"], session.run_dir, name=display_name,
+            display_plan = gfx_display.plan_background(
+                preflight["user_data"], name=display_name,
                 window_size=window_size, focus_guard=display_focus_guard,
             )
         except gfx_display.DisplayError as exc:
             session.fail(f"display_{exc.kind}", extra={"display_error": str(exc)})
             raise gfx_launch.LaunchError("display", f"{exc.kind}: {exc}") from exc
-        session.attach_display(display_qualified)
     result: dict = {
         "schema": SCHEMA,
         "session_id": session.session_id,
@@ -1254,6 +1259,7 @@ def run_campaign(
         "build": {},
         "processes": {},
         "preflight": preflight,
+        "display_plan": display_plan.as_dict() if display_plan else None,
         "frames": {},
         "health": {},
         "dumps": {},
@@ -1262,6 +1268,7 @@ def run_campaign(
         "terminations": [],
         "result": "incomplete",
     }
+    display_monitors: dict = {}
     campaign_start = time.monotonic()
     tokens: list[str] = []
     lease = None
@@ -1334,6 +1341,18 @@ def run_campaign(
             "executable_sha256": config.executable_sha256,
         }
         lease = launch_lease.acquire(executable, output=session.run_dir)
+        if background and display_plan is not None:
+            # The lease is held: the virtual display may now be prepared and
+            # the shared settings changed.  Any failure here restores first.
+            try:
+                display_qualified = gfx_display.activate_background(
+                    display_plan, session.run_dir)
+                session.attach_display(display_qualified)
+            except BaseException:
+                if display_qualified is not None:
+                    display_qualified.restore()
+                session.fail("display_activation_failed")
+                raise
         # Start both backends before waiting on either one's readiness.
         health = gfx_diagnostics.GpuHealth()
         prelaunched_ref_stream = None
@@ -1433,6 +1452,7 @@ def run_campaign(
             stage="startup",
         )
         result["readiness"] = readiness.as_dict()
+        display_monitors = {}
         if background and display_qualified is not None:
             window_checks = {}
             for role, item in launched.items():
@@ -1440,6 +1460,9 @@ def run_campaign(
                     item.process.pid, display_qualified.display, window_size,
                     timeout=display_timeout,
                 )
+                display_monitors[role] = gfx_display.WindowMonitor(
+                    item.process.pid, display_qualified.display, window_size,
+                ).start()
             result["display"] = {
                 "display": display_qualified.as_dict(),
                 "windows": window_checks,
@@ -1998,6 +2021,23 @@ def run_campaign(
                     lambda item=item, role=role: result.setdefault(
                         "processes", {}).setdefault(role, {}).update(
                             {"exit_code": item.process.poll()}))
+        # Shared settings are restored after all owned processes are gone and
+        # before the host-wide lease is released.
+        if display_monitors:
+            monitor_summary = {
+                role: monitor.stop() for role, monitor in display_monitors.items()
+            }
+            result.setdefault("display", {})["monitor"] = monitor_summary
+            if any(item.get("unexpected_activation") or
+                   item.get("display_disconnected")
+                   for item in monitor_summary.values()):
+                result.setdefault("display", {})["monitor_failed"] = True
+        display_restore = attempt("restore-display", session.restore_display)
+        if display_restore is not None:
+            result["display_restore"] = display_restore
+            if display_restore.get("conflict"):
+                cleanup_errors.append(
+                    "display settings changed by another actor; backup preserved")
         if lease is not None:
             attempt("release-lease", lambda: lease.release())
             lease = None
