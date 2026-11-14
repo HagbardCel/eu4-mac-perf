@@ -12,6 +12,7 @@
 #include <pthread.h>
 
 static pthread_mutex_t g_sampling_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t g_sampling_conversion_count;
 
 
 /* Bytes per pixel for formats 7..23, from the table at RVA 0x1a793a0. */
@@ -841,6 +842,10 @@ void *eu4_gfx_texture_for_header(void *header) {
     return texture != nil ? (__bridge void *)texture : NULL;
 }
 
+uint64_t eu4_gfx_sampling_conversion_count(void) {
+    return __atomic_load_n(&g_sampling_conversion_count, __ATOMIC_RELAXED);
+}
+
 void eu4_gfx_note_render_target_write(void *header) {
     if (header == NULL) {
         return;
@@ -981,7 +986,14 @@ int eu4_gfx_prepare_sampled_textures(void *command_buffer,
         id<MTLTexture> source =
             (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(header);
         if (source == nil) {
-            continue;
+            /* A nonnull render-target header without backing storage cannot be
+               substituted safely: the fallback would hide a missing target. */
+            if (reason != NULL && capacity > 0) {
+                snprintf(reason, capacity,
+                         "render-target header has no backing texture");
+            }
+            pthread_mutex_unlock(&g_sampling_lock);
+            return 0;
         }
         NSValue *key = [NSValue valueWithPointer:header];
         NSNumber *generation = backend.renderTargetGenerations[key] ?: @(0);
@@ -1016,6 +1028,7 @@ int eu4_gfx_prepare_sampled_textures(void *command_buffer,
             pthread_mutex_unlock(&g_sampling_lock);
             return 0;
         }
+        __atomic_add_fetch(&g_sampling_conversion_count, 1, __ATOMIC_RELAXED);
         backend.sampledRenderTargetPendingTokens[key] = @(token);
         backend.sampledRenderTargetPendingGenerations[key] = generation;
         __weak EU4GfxBackend *prepared_backend = backend;
