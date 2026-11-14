@@ -647,6 +647,60 @@ class CleanupFailureTests(unittest.TestCase):
             self.assertEqual(terminal["status"], gfx_session.FAILED)
 
 
+class CleanupActionFailureTests(unittest.TestCase):
+    def test_termination_failure_does_not_skip_ledger_or_session_cleanup(self):
+        from unittest import mock
+        from automation import gfx_launch, gfx_session, launch_lease, launch_ledger
+        import eu4_benchmark
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scenario = gfx_scenario.normalize({
+                "schema": gfx_scenario.SCHEMA, "name": "cleanup-failure",
+                "executable_sha256": eu4_benchmark.gog_identity()["executable_sha256"],
+                "logical_extent": [1728, 1117],
+                "observation": {"max_frames": 2, "max_runtime_seconds": 30},
+                "comparison": {"policy": "exact"}, "mode": "streaming",
+                "profile": "early",
+            })
+            ledger = root / "authority.json"
+            launch_ledger.create_ledger(
+                ledger, workflow_id="cleanup-failure", limit=2,
+                deadline_seconds=60.0,
+                executable={"path": eu4_benchmark.gog_identity()["executable"],
+                            "sha256": eu4_benchmark.gog_identity()["executable_sha256"]},
+                output_root=str(root))
+            libraries = {}
+            for role in ("reference", "candidate"):
+                path = root / f"{role}.dylib"
+                path.write_bytes(role.encode())
+                libraries[role] = path
+            with mock.patch.dict("os.environ",
+                                 {"EU4_LAUNCH_LEASE_DIR": str(root / "lease")}), \
+                 mock.patch.object(gfx_launch, "preflight_user_data",
+                                   return_value={"writable": True}), \
+                 mock.patch.object(gfx_launch, "build_libraries",
+                                   return_value=libraries), \
+                 mock.patch.object(gfx_launch, "spawn",
+                                   side_effect=RuntimeError("spawn failed")), \
+                 mock.patch.object(launch_lease, "manual_game_pids",
+                                   return_value=[]), \
+                 mock.patch.object(gfx_dual_run, "_stop_processes",
+                                   side_effect=RuntimeError("termination broke")):
+                result = gfx_dual_run.run_campaign(
+                    scenario, run_root=root, ledger_path=ledger,
+                    shader_cache=None, qualified_sources=None, max_frames=2,
+                    session_root=root / "sessions")
+            errors = " ".join(result.get("cleanup_errors") or [])
+            self.assertIn("termination broke", errors)
+            value = launch_ledger.load_ledger(ledger)
+            self.assertEqual({row["status"] for row in value["launches"]},
+                             {"failed"})
+            terminal = json.loads(
+                (Path(result["run_dir"]) / "terminal-status.json").read_text())
+            self.assertEqual(terminal["status"], gfx_session.FAILED)
+
+
 class PostReferenceCleanupTests(unittest.TestCase):
     def test_candidate_spawn_failure_terminates_reference_and_finishes_tokens(self):
         from unittest import mock
