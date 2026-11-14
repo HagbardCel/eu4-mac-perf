@@ -12,6 +12,7 @@
 #import "eu4_gfx_simple_draw.h"
 #import "eu4_gfx_sprite_draw.h"
 #import "eu4_gfx_texture.h"
+#import "eu4_gfx_draw_semantics.h"
 #import "eu4_metal_events.h"
 
 #import <CommonCrypto/CommonDigest.h>
@@ -1061,6 +1062,280 @@ static int run_resolve_orientation(void) {
     return ok ? 0 : 1;
 }
 
+static int run_color_write_mask(void) {
+    /* The engine records the four channel enables at master+0x2c. This host
+       applies the shared conversion to Metal's colour-write mask and checks
+       that disabled channels keep their destination values. */
+    boot();
+    id<MTLDevice> device = (__bridge id<MTLDevice>)eu4_gfx_metal_device();
+    if (device == nil) {
+        fail("colour mask device");
+    }
+    NSString *source = @
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct VOut { float4 position [[position]]; };\n"
+        "vertex VOut v_main(uint vid [[vertex_id]]) {\n"
+        "  float2 p[3] = {float2(-1.0,-1.0), float2(3.0,-1.0), float2(-1.0,3.0)};\n"
+        "  VOut o; o.position = float4(p[vid], 0.0, 1.0); return o;\n"
+        "}\n"
+        "fragment float4 f_main() { return float4(0.0, 1.0, 0.0, 1.0); }\n";
+    NSError *error = nil;
+    id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
+    if (library == nil) {
+        fail("colour mask library");
+    }
+    MTLTextureDescriptor *td =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                           width:2 height:2 mipmapped:NO];
+    td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    td.storageMode = MTLStorageModeShared;
+    id<MTLCommandQueue> queue = [device newCommandQueue];
+    const uint8_t masks[5] = {15, 0, 1, 14, 10};
+    int ok = 1;
+    for (int m = 0; m < 5; m++) {
+        MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
+        pd.vertexFunction = [library newFunctionWithName:@"v_main"];
+        pd.fragmentFunction = [library newFunctionWithName:@"f_main"];
+        pd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+        const uint8_t bytes[4] = {(uint8_t)((masks[m] & 8) != 0), /* R */
+                                  (uint8_t)((masks[m] & 4) != 0), /* G */
+                                  (uint8_t)((masks[m] & 2) != 0), /* B */
+                                  (uint8_t)((masks[m] & 1) != 0)}; /* A */
+        pd.colorAttachments[0].writeMask =
+            (MTLColorWriteMask)eu4_gfx_color_write_mask(bytes);
+        id<MTLRenderPipelineState> pipeline =
+            [device newRenderPipelineStateWithDescriptor:pd error:&error];
+        if (pipeline == nil) {
+            ok = 0;
+            continue;
+        }
+        id<MTLTexture> target = [device newTextureWithDescriptor:td];
+        const uint8_t initial[4] = {10, 20, 30, 40};
+        uint8_t fill[2 * 2 * 4];
+        for (int i = 0; i < 4; i++) {
+            memcpy(fill + i * 4, initial, 4);
+        }
+        [target replaceRegion:MTLRegionMake2D(0, 0, 2, 2) mipmapLevel:0
+                    withBytes:fill bytesPerRow:2 * 4];
+        id<MTLCommandBuffer> command = [queue commandBuffer];
+        MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+        pass.colorAttachments[0].texture = target;
+        pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
+        pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
+        [encoder setRenderPipelineState:pipeline];
+        [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+        [encoder endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+        if (command.status != MTLCommandBufferStatusCompleted) {
+            ok = 0;
+            continue;
+        }
+        uint32_t pixels[4];
+        read_target_texture(target, queue, 2 * 4, pixels);
+        const uint8_t *pixel = (const uint8_t *)&pixels[0];
+        /* Memory order is B,G,R,A; MTLColorWriteMask is alpha/blues/green/red. */
+        const uint8_t want[4] = {
+            (uint8_t)((masks[m] & 2) ? 0 : 10),   /* B from green is 0 */
+            (uint8_t)((masks[m] & 4) ? 255 : 20), /* G */
+            (uint8_t)((masks[m] & 8) ? 0 : 30),   /* R from green is 0 */
+            (uint8_t)((masks[m] & 1) ? 255 : 40), /* A */
+        };
+        for (int c = 0; c < 4; c++) {
+            if (abs((int)pixel[c] - (int)want[c]) > 1) {
+                fprintf(stderr, "FAIL: mask %u channel %d got %u want %u\n",
+                        masks[m], c, pixel[c], want[c]);
+                ok = 0;
+            }
+        }
+    }
+    printf("color_write_mask=%d masks=5\n", ok);
+    return ok ? 0 : 1;
+}
+
+static int run_indexed_base_vertex(void) {
+    /* glDrawElementsBaseVertex adds a signed base. This host draws the same
+       three indices with base 4 and base 0 through Metal's native baseVertex
+       overload and checks the actually fetched vertex colours. The merged
+       #189 path rewrote index-base (clamping negatives), which selects the
+       wrong vertices. */
+    boot();
+    id<MTLDevice> device = (__bridge id<MTLDevice>)eu4_gfx_metal_device();
+    if (device == nil) {
+        fail("base vertex device");
+    }
+    NSString *source = @
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct VIn { float4 position [[attribute(0)]]; float4 color [[attribute(1)]]; };\n"
+        "struct VOut { float4 position [[position]]; float4 color; };\n"
+        "vertex VOut v_main(VIn in [[stage_in]]) { VOut o; o.position = in.position; o.color = in.color; return o; }\n"
+        "fragment float4 f_main(VOut in [[stage_in]]) { return in.color; }\n";
+    NSError *error = nil;
+    id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
+    if (library == nil) {
+        fail("base vertex library");
+    }
+    MTLVertexDescriptor *vd = [MTLVertexDescriptor vertexDescriptor];
+    vd.attributes[0].format = MTLVertexFormatFloat4;
+    vd.attributes[0].offset = 0;
+    vd.attributes[0].bufferIndex = 0;
+    vd.attributes[1].format = MTLVertexFormatFloat4;
+    vd.attributes[1].offset = 16;
+    vd.attributes[1].bufferIndex = 0;
+    vd.layouts[0].stride = 32;
+    vd.layouts[0].stepFunction = MTLVertexStepFunctionPerVertex;
+    vd.layouts[0].stepRate = 1;
+    MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
+    pd.vertexFunction = [library newFunctionWithName:@"v_main"];
+    pd.fragmentFunction = [library newFunctionWithName:@"f_main"];
+    pd.vertexDescriptor = vd;
+    pd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+    id<MTLRenderPipelineState> pipeline =
+        [device newRenderPipelineStateWithDescriptor:pd error:&error];
+    if (pipeline == nil) {
+        fail("base vertex pipeline");
+    }
+    typedef struct { float p[4]; float c[4]; } vertex;
+    vertex vertices[8];
+    memset(vertices, 0, sizeof vertices);
+    const float positions[3][2] = {{-1.0f, -1.0f}, {3.0f, -1.0f}, {-1.0f, 3.0f}};
+    for (int i = 0; i < 3; i++) {
+        vertices[i].p[0] = positions[i][0];
+        vertices[i].p[1] = positions[i][1];
+        vertices[i].p[2] = 0.0f;
+        vertices[i].p[3] = 1.0f;
+        vertices[i].c[0] = 1.0f; /* red */
+        vertices[i].c[3] = 1.0f;
+        vertices[4 + i].p[0] = positions[i][0];
+        vertices[4 + i].p[1] = positions[i][1];
+        vertices[4 + i].p[2] = 0.0f;
+        vertices[4 + i].p[3] = 1.0f;
+        vertices[4 + i].c[1] = 1.0f; /* green */
+        vertices[4 + i].c[3] = 1.0f;
+    }
+    id<MTLBuffer> vb = [device newBufferWithBytes:vertices length:sizeof vertices
+                                          options:MTLResourceStorageModeShared];
+    const uint16_t indices[3] = {0, 1, 2};
+    id<MTLBuffer> ib = [device newBufferWithBytes:indices length:sizeof indices
+                                          options:MTLResourceStorageModeShared];
+    MTLTextureDescriptor *td =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                           width:4 height:4 mipmapped:NO];
+    td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    td.storageMode = MTLStorageModeShared;
+    id<MTLCommandQueue> queue = [device newCommandQueue];
+    int ok = 1;
+    BOOL saw_green = NO, saw_red = NO;
+    for (int pass = 0; pass < 2; pass++) {
+        NSInteger base = pass == 0 ? 4 : 0;
+        id<MTLTexture> target = [device newTextureWithDescriptor:td];
+        id<MTLCommandBuffer> command = [queue commandBuffer];
+        MTLRenderPassDescriptor *pass_descriptor = [MTLRenderPassDescriptor renderPassDescriptor];
+        pass_descriptor.colorAttachments[0].texture = target;
+        pass_descriptor.colorAttachments[0].loadAction = MTLLoadActionClear;
+        pass_descriptor.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
+        pass_descriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> encoder =
+            [command renderCommandEncoderWithDescriptor:pass_descriptor];
+        [encoder setRenderPipelineState:pipeline];
+        [encoder setVertexBuffer:vb offset:0 atIndex:0];
+        [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                            indexCount:3
+                             indexType:MTLIndexTypeUInt16
+                           indexBuffer:ib
+                     indexBufferOffset:0
+                         instanceCount:1
+                            baseVertex:base
+                          baseInstance:0];
+        [encoder endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+        if (command.status != MTLCommandBufferStatusCompleted) {
+            ok = 0;
+            continue;
+        }
+        uint32_t pixels[16];
+        read_target_texture(target, queue, 4 * 4, pixels);
+        const uint8_t *pixel = (const uint8_t *)&pixels[10];
+        if (pass == 0 && pixel[1] > 200 && pixel[2] < 40) {
+            saw_green = YES;
+        }
+        if (pass == 1 && pixel[2] > 200 && pixel[1] < 40) {
+            saw_red = YES;
+        }
+    }
+    ok = ok && saw_green && saw_red;
+    printf("indexed_base_vertex=%d base4_green=%d base0_red=%d\n",
+           ok, saw_green, saw_red);
+    return ok ? 0 : 1;
+}
+
+static int run_draw_semantics(void) {
+    int ok = 1;
+    ok &= eu4_gfx_metal_topology(0) == 0; /* point */
+    ok &= eu4_gfx_metal_topology(1) == 1; /* line */
+    ok &= eu4_gfx_metal_topology(3) == 2; /* line strip */
+    ok &= eu4_gfx_metal_topology(4) == 3; /* triangle */
+    ok &= eu4_gfx_metal_topology(5) == 4; /* triangle strip */
+    ok &= eu4_gfx_metal_topology(2) == -1; /* line loop refused */
+    ok &= eu4_gfx_metal_topology(6) == -1;
+    const uint8_t all[4] = {1, 1, 1, 1};
+    const uint8_t none[4] = {0, 0, 0, 0};
+    const uint8_t alpha[4] = {0, 0, 0, 1};
+    const uint8_t rgb[4] = {1, 1, 1, 0};
+    const uint8_t partial[4] = {1, 0, 1, 0};
+    ok &= eu4_gfx_color_write_mask(all) == 15;
+    ok &= eu4_gfx_color_write_mask(none) == 0;
+    ok &= eu4_gfx_color_write_mask(alpha) == 1;
+    ok &= eu4_gfx_color_write_mask(rgb) == 14;
+    ok &= eu4_gfx_color_write_mask(partial) == 10;
+    const uint16_t zero[3] = {0, 1, 2};
+    const uint16_t positioned[3] = {2, 3, 4};
+    const uint16_t sparse[3] = {0, 4, 7};
+    const uint16_t max_index[1] = {65535};
+    const uint16_t negative[3] = {0, 1, 2};
+    int32_t first = 0, last = 0;
+    ok &= eu4_gfx_indexed_range(zero, 3, 0, &first, &last) == 0 &&
+          first == 0 && last == 2;
+    ok &= eu4_gfx_indexed_range(zero, 3, 4, &first, &last) == 0 &&
+          first == 4 && last == 6;
+    ok &= eu4_gfx_indexed_range(positioned, 3, -2, &first, &last) == 0 &&
+          first == 0 && last == 2;
+    ok &= eu4_gfx_indexed_range(sparse, 3, 3, &first, &last) == 0 &&
+          first == 3 && last == 10;
+    ok &= eu4_gfx_indexed_range(max_index, 1, 0, &first, &last) == 0 &&
+          first == 65535 && last == 65535;
+    ok &= eu4_gfx_indexed_range(negative, 3, -1, &first, &last) == -1;
+    ok &= eu4_gfx_replay_index(3, 4, 2) == 5;
+    ok &= eu4_gfx_replay_index(2, -2, 0) == 0;
+    printf("draw_semantics=%d\n", ok);
+    return ok ? 0 : 1;
+}
+
+static int shadow_matches(id<MTLTexture> shadow, id<MTLCommandQueue> queue,
+                          const uint32_t pattern[16]) {
+    if (shadow == nil) {
+        return 0;
+    }
+    uint32_t converted[16];
+    read_target_texture(shadow, queue, 4 * 4, converted);
+    for (uint32_t y = 0; y < 4; y++) {
+        for (uint32_t x = 0; x < 4; x++) {
+            uint32_t want = pattern[(3 - y) * 4 + x] & 0x00ffffffu;
+            uint32_t got = converted[y * 4 + x] & 0x00ffffffu;
+            if (got != want) {
+                fprintf(stderr, "FAIL: shadow row %u col %u got %08x want %08x\n",
+                        y, x, got, want);
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
 static int run_sampled_render_target_orientation(void) {
     /* The menu labels are directly sampled render-target textures. Metal
        stores render targets top-left, while the engine's GL UVs address row 0
@@ -1102,7 +1377,13 @@ static int run_sampled_render_target_orientation(void) {
     [backend.boundTextures removeAllObjects];
     [backend.boundTextures addObject:[NSValue valueWithPointer:header]];
     id<MTLCommandBuffer> flip_command = [backend.queue commandBuffer];
-    eu4_gfx_prepare_sampled_textures((__bridge void *)flip_command);
+    char prepare_reason[256] = "";
+    if (!eu4_gfx_prepare_sampled_textures((__bridge void *)flip_command,
+                                          prepare_reason,
+                                          sizeof prepare_reason)) {
+        fprintf(stderr, "FAIL: initial shadow conversion: %s\n", prepare_reason);
+        return 1;
+    }
     [flip_command commit];
     [flip_command waitUntilCompleted];
     if (flip_command.status != MTLCommandBufferStatusCompleted) {
@@ -1113,21 +1394,88 @@ static int run_sampled_render_target_orientation(void) {
         fprintf(stderr, "FAIL: render target was not converted for sampling\n");
         return 1;
     }
-    uint32_t converted[16];
-    read_target_texture((__bridge id<MTLTexture>)sampled, backend.queue,
-                        4 * 4, converted);
-    int flipped = 1;
-    for (uint32_t y = 0; y < 4; y++) {
-        for (uint32_t x = 0; x < 4; x++) {
-            uint32_t want = pattern[(3 - y) * 4 + x] & 0x00ffffffu;
-            uint32_t got = converted[y * 4 + x] & 0x00ffffffu;
-            if (got != want) {
-                fprintf(stderr, "FAIL: RT row %u col %u got %08x want %08x\n",
-                        y, x, got, want);
-                flipped = 0;
-            }
-        }
+    int flipped = shadow_matches((__bridge id<MTLTexture>)sampled,
+                                 backend.queue, pattern);
+
+    /* Repeated sampling without a write reuses the same committed shadow. */
+    id<MTLCommandBuffer> repeat_command = [backend.queue commandBuffer];
+    if (!eu4_gfx_prepare_sampled_textures((__bridge void *)repeat_command,
+                                          prepare_reason,
+                                          sizeof prepare_reason)) {
+        fail("repeated shadow prepare");
     }
+    [repeat_command commit];
+    [repeat_command waitUntilCompleted];
+    void *repeated = eu4_gfx_texture_for_sampling(header);
+    int repeated_ok = repeated == sampled &&
+        shadow_matches((__bridge id<MTLTexture>)repeated, backend.queue, pattern);
+
+    /* A write invalidates the shadow; the next sample converts the new rows. */
+    uint32_t modified[16];
+    for (int i = 0; i < 16; i++) {
+        modified[i] = pattern[(i + 4) % 16];
+    }
+    [target replaceRegion:MTLRegionMake2D(0, 0, 4, 4) mipmapLevel:0
+                withBytes:modified bytesPerRow:4 * 4];
+    eu4_gfx_note_render_target_write(header);
+    id<MTLCommandBuffer> modify_command = [backend.queue commandBuffer];
+    if (!eu4_gfx_prepare_sampled_textures((__bridge void *)modify_command,
+                                          prepare_reason,
+                                          sizeof prepare_reason)) {
+        fail("modified shadow prepare");
+    }
+    [modify_command commit];
+    [modify_command waitUntilCompleted];
+    void *modified_sample = eu4_gfx_texture_for_sampling(header);
+    int modified_ok = shadow_matches((__bridge id<MTLTexture>)modified_sample,
+                                     backend.queue, modified);
+
+    /* An abandoned command must not make its shadow permanently valid. */
+    uint32_t second[16];
+    for (int i = 0; i < 16; i++) {
+        second[i] = pattern[(i + 8) % 16];
+    }
+    [target replaceRegion:MTLRegionMake2D(0, 0, 4, 4) mipmapLevel:0
+                withBytes:second bytesPerRow:4 * 4];
+    eu4_gfx_note_render_target_write(header);
+    id<MTLCommandBuffer> abandoned = [backend.queue commandBuffer];
+    if (!eu4_gfx_prepare_sampled_textures((__bridge void *)abandoned,
+                                          prepare_reason,
+                                          sizeof prepare_reason)) {
+        fail("abandoned shadow prepare");
+    }
+    /* Do not commit `abandoned`; the recovery command must re-encode. */
+    id<MTLCommandBuffer> recovery = [backend.queue commandBuffer];
+    if (!eu4_gfx_prepare_sampled_textures((__bridge void *)recovery,
+                                          prepare_reason,
+                                          sizeof prepare_reason)) {
+        fail("recovery shadow prepare");
+    }
+    [recovery commit];
+    [recovery waitUntilCompleted];
+    void *recovered = eu4_gfx_texture_for_sampling(header);
+    int abandoned_ok = shadow_matches((__bridge id<MTLTexture>)recovered,
+                                      backend.queue, second);
+
+    /* A depth render-target header has no colour conversion; fail closed. */
+    uint8_t depth_header[0x44];
+    memset(depth_header, 0, sizeof depth_header);
+    depth_header[0x19] = 1;
+    MTLTextureDescriptor *dd =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
+                                                           width:4 height:4 mipmapped:NO];
+    dd.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    dd.storageMode = MTLStorageModeShared;
+    id<MTLTexture> depth_texture = [device newTextureWithDescriptor:dd];
+    backend.textures[[NSValue valueWithPointer:depth_header]] = depth_texture;
+    [backend.boundTextures removeAllObjects];
+    [backend.boundTextures addObject:[NSValue valueWithPointer:depth_header]];
+    char failure_reason[256] = "";
+    id<MTLCommandBuffer> failure_command = [backend.queue commandBuffer];
+    int refused = !eu4_gfx_prepare_sampled_textures((__bridge void *)failure_command,
+                                                    failure_reason,
+                                                    sizeof failure_reason);
+    int cache_ok = repeated_ok && modified_ok && abandoned_ok && refused;
 
     /* A previously correct ordinary texture keeps its exact rows. */
     uint8_t normal_header[0x44];
@@ -1150,7 +1498,11 @@ static int run_sampled_render_target_orientation(void) {
     [backend.boundTextures removeAllObjects];
     [backend.boundTextures addObject:[NSValue valueWithPointer:normal_header]];
     id<MTLCommandBuffer> normal_command = [backend.queue commandBuffer];
-    eu4_gfx_prepare_sampled_textures((__bridge void *)normal_command);
+    if (!eu4_gfx_prepare_sampled_textures((__bridge void *)normal_command,
+                                          prepare_reason,
+                                          sizeof prepare_reason)) {
+        fail("ordinary texture prepare");
+    }
     [normal_command commit];
     [normal_command waitUntilCompleted];
     void *normal_sampled = eu4_gfx_texture_for_sampling(normal_header);
@@ -1162,9 +1514,11 @@ static int run_sampled_render_target_orientation(void) {
             preserved = 0;
         }
     }
-    printf("sampled_rt_orientation=%d rt_flip=%d normal_preserved=%d\n",
-           flipped && preserved, flipped, preserved);
-    return flipped && preserved ? 0 : 1;
+    printf("sampled_rt_orientation=%d rt_flip=%d normal_preserved=%d "
+           "shadow_cache=%d repeated=%d modified=%d abandoned=%d refused=%d\n",
+           flipped && preserved && cache_ok, flipped, preserved, cache_ok,
+           repeated_ok, modified_ok, abandoned_ok, refused);
+    return flipped && preserved && cache_ok ? 0 : 1;
 }
 
 static int run_offscreen_viewport(void) {
@@ -1330,6 +1684,15 @@ int main(int argc, char **argv) {
     }
     if (argc >= 2 && strcmp(argv[1], "--sampled-rt-orientation") == 0) {
         return run_sampled_render_target_orientation();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--draw-semantics") == 0) {
+        return run_draw_semantics();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--indexed-base-vertex") == 0) {
+        return run_indexed_base_vertex();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--color-write-mask") == 0) {
+        return run_color_write_mask();
     }
     if (argc >= 2 && strcmp(argv[1], "--depth-state") == 0) {
         return run_depth_state();

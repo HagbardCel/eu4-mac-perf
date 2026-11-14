@@ -920,7 +920,7 @@ fragment FOut test_fragment(float4 position [[position]]) {
             "attributes": [],
             "draw": {
                 "entry": "_GfxDraw",
-                "mode": 3,
+                "mode": 5,  # GL_TRIANGLE_STRIP; mode 3 is a line strip
                 "first": 0,
                 "count": 4,
                 "instance_count": 1,

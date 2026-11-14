@@ -1,4 +1,5 @@
 #import "eu4_gfx_generic_draw.h"
+#import "eu4_gfx_draw_semantics.h"
 #import "eu4_gfx_sprite_draw.h"
 
 #import "eu4_gfx_buffers.h"
@@ -56,10 +57,31 @@ static int g_have_positions;
 typedef struct {
     uint32_t location, type, size, normalized, divisor;
     unsigned long slot, offset, stride, format;
+    unsigned long bound_offset, bound_stride, bound_length, slot_offset;
     int converted;
 } eu4_logged_element;
 static eu4_logged_element g_logged_elements[16];
 static int g_logged_element_count;
+
+/* Smallest complete-vertex count across per-vertex attributes. The engine's
+   index values are absolute within the bound buffers, so an effective index
+   outside this count would read past the attribute storage. */
+static size_t indexed_vertex_limit(void) {
+    size_t limit = (size_t)-1;
+    for (int i = 0; i < g_logged_element_count; i++) {
+        const eu4_logged_element *e = &g_logged_elements[i];
+        if (e->divisor != 0 || e->bound_stride == 0 ||
+            e->slot_offset > e->bound_length) {
+            continue;
+        }
+        size_t vertices = (size_t)((e->bound_length - e->slot_offset) /
+                                   e->bound_stride);
+        if (vertices < limit) {
+            limit = vertices;
+        }
+    }
+    return limit;
+}
 
 /* Metal rejects binding a cube texture to a texture2d parameter (and vice
    versa) even when the unit is not sampled. The engine's GL bindings include
@@ -705,6 +727,10 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
             logged->offset = offset;
             logged->stride = stride;
             logged->format = (unsigned long)format;
+            logged->bound_offset = 0;
+            logged->bound_stride = 0;
+            logged->bound_length = 0;
+            logged->slot_offset = 0;
             logged->converted = 0;
         }
         if (format == 0) {
@@ -748,6 +774,13 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
             }
         } else {
             bound_offset = offset + slot_offset;
+        }
+        if (g_logged_element_count > 0) {
+            eu4_logged_element *logged = &g_logged_elements[g_logged_element_count - 1];
+            logged->bound_offset = bound_offset;
+            logged->bound_stride = bound_stride;
+            logged->bound_length = bound_buffer.length;
+            logged->slot_offset = convert ? 0 : slot_offset;
         }
         attribute.format = format;
         attribute.offset = bound_offset;
@@ -862,12 +895,13 @@ static id<MTLRenderPipelineState> pipeline_for(EU4GfxPipelineKey *unused,
     uint32_t src_a = load_u32(blend_snapshot, 0x10);
     uint32_t dst_a = load_u32(blend_snapshot, 0x14);
     uint32_t equation_a = load_u32(blend_snapshot, 0x18);
-    NSString *key = [NSString stringWithFormat:@"%p-%p-%lu-%lu-%u-%u-%u-%u-%u-%u-%u-%u-%d-%d-%u",
+    uint32_t color_mask = load_u32(blend_snapshot, 0x20);
+    NSString *key = [NSString stringWithFormat:@"%p-%p-%lu-%lu-%u-%u-%u-%u-%u-%u-%u-%u-%d-%d-%u-%u",
                      (__bridge void *)vertex, (__bridge void *)fragment,
                      (unsigned long)color_format, (unsigned long)depth_format, enabled, src, dst, equation,
                      src_a, dst_a, equation_a, depth_test ? 1u : 0u,
                      depth_write ? 1 : 0, (unsigned)depth_compare,
-                     (unsigned)descriptor.hash];
+                     (unsigned)descriptor.hash, color_mask];
     static uint64_t pipeline_hits;
     static uint64_t pipeline_misses;
     id<MTLRenderPipelineState> pipeline = cache[key];
@@ -898,6 +932,8 @@ static id<MTLRenderPipelineState> pipeline_for(EU4GfxPipelineKey *unused,
         pipeline_descriptor.depthAttachmentPixelFormat = depth_format;
     }
     MTLRenderPipelineColorAttachmentDescriptor *color = pipeline_descriptor.colorAttachments[0];
+    color.writeMask = (MTLColorWriteMask)eu4_gfx_color_write_mask(
+        (const uint8_t *)blend_snapshot + 0x20);
     if (enabled != 0) {
         color.blendingEnabled = YES;
         color.sourceRGBBlendFactor = blend_factor(src);
@@ -962,6 +998,28 @@ static int prepare(const void *immediate_context,
     return 1;
 }
 
+/* Effective state the Metal generic encoder cannot reproduce faithfully.
+   The merged #189 path ignored these fields and silently rendered a different
+   state; refuse them instead. Unused bytes of equivalent disabled states are
+   deliberately ignored. */
+static int generic_effective_state_supported(const uint8_t *master,
+                                              char *reason, size_t capacity) {
+    if (master[0x38] != 0) {
+        fail(reason, capacity, "stencil test is not reconstructed");
+        return 0;
+    }
+    uint32_t polygon_mode = load_u32(master, 0x58);
+    if (polygon_mode != 0x1b02) { /* GL_FILL */
+        fail(reason, capacity, "non-fill polygon mode is not reconstructed");
+        return 0;
+    }
+    if (master[0x60] != 0) {
+        fail(reason, capacity, "polygon offset is not reconstructed");
+        return 0;
+    }
+    return 1;
+}
+
 int eu4_gfx_generic_draw_supported(const void *immediate_context,
                                    const eu4_gfx_generic_call *call,
                                    char *reason, size_t capacity) {
@@ -975,7 +1033,7 @@ int eu4_gfx_generic_draw_supported(const void *immediate_context,
     }
     (void)vertex_stage;
     (void)pixel_stage;
-    return 1;
+    return generic_effective_state_supported(master, reason, capacity);
 }
 
 
@@ -1318,6 +1376,9 @@ static int generic_draw_encode_impl(const void *immediate_context,
                  &pixel_stage, reason, reason_capacity)) {
         return 0;
     }
+    if (!generic_effective_state_supported(master, reason, reason_capacity)) {
+        return 0;
+    }
     id<MTLDevice> device = inputs != NULL ? (__bridge id<MTLDevice>)inputs->device : nil;
     id<MTLCommandBuffer> command = (__bridge id<MTLCommandBuffer>)command_buffer;
     id<MTLTexture> target = (__bridge id<MTLTexture>)inputs->target;
@@ -1351,7 +1412,8 @@ static int generic_draw_encode_impl(const void *immediate_context,
     uint8_t blend_snapshot[0x24];
     memcpy(blend_snapshot, master + 0xc, sizeof blend_snapshot);
     if (getenv("EU4_GFX_NO_BLEND") != NULL) {
-        memset(blend_snapshot, 0, sizeof blend_snapshot);
+        /* The diagnostic disables blending, not the engine's colour writes. */
+        memset(blend_snapshot, 0, 0x20);
     }
     __unsafe_unretained EU4GfxBackend *backend =
         (__bridge EU4GfxBackend *)load_ptr(master, 0x180);
@@ -1451,7 +1513,10 @@ static int generic_draw_encode_impl(const void *immediate_context,
     /* Render-target textures are converted to GL row order into this command
        buffer before the draw encoder opens, so the flip pass precedes the draw
        pass and no separate command buffer is committed. */
-    eu4_gfx_prepare_sampled_textures((__bridge void *)command);
+    if (!eu4_gfx_prepare_sampled_textures((__bridge void *)command, reason,
+                                          reason_capacity)) {
+        return 0;
+    }
     id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
     if (encoder == nil) {
         fail(reason, reason_capacity, "generic render encoder failed");
@@ -1818,18 +1883,15 @@ static int generic_draw_encode_impl(const void *immediate_context,
     /* The engine's draw bodies read the primitive at execution time; the
        entry-time snapshot can still hold the previous primitive. */
     uint32_t primitive_mode = load_u32(master, 0x08);
-    switch (primitive_mode) {
-        case 0: primitive = MTLPrimitiveTypePoint; break;
-        case 1: primitive = MTLPrimitiveTypeLine; break;
-        case 2: primitive = MTLPrimitiveTypeLineStrip; break;
-        case 3: primitive = MTLPrimitiveTypeTriangleStrip; break;
-        case 4: primitive = MTLPrimitiveTypeTriangle; break;
-        case 5: primitive = MTLPrimitiveTypeTriangleStrip; break;
-        default:
-            [encoder endEncoding];
-            fail(reason, reason_capacity, "unsupported primitive mode");
-            return 0;
+    int topology = eu4_gfx_metal_topology(primitive_mode);
+    if (topology < 0) {
+        [encoder endEncoding];
+        fail(reason, reason_capacity,
+             primitive_mode == 2 ? "line-loop primitive is unsupported"
+                                 : "unsupported primitive mode");
+        return 0;
     }
+    primitive = (MTLPrimitiveType)topology;
     NSUInteger instance_count = call->instance_count > 0 ? (NSUInteger)call->instance_count : 1;
     if (call->indexed) {
         void *index_header = eu4_gfx_current_index_header();
@@ -1852,23 +1914,47 @@ static int generic_draw_encode_impl(const void *immediate_context,
             fail(reason, reason_capacity, "index buffer read failed");
             return 0;
         }
-        NSMutableData *rewritten = [NSMutableData dataWithLength:needed * 2];
-        uint32_t *destination = (uint32_t *)rewritten.mutableBytes;
-        for (int32_t i = 0; i < call->count; i++) {
-            uint32_t value = indices[i];
-            destination[i] = value >= (uint32_t)call->base_vertex
-                ? value - (uint32_t)call->base_vertex : 0;
+        int32_t first_effective = 0, last_effective = 0;
+        int range_status = eu4_gfx_indexed_range(indices, call->count,
+                                                 call->base_vertex,
+                                                 &first_effective,
+                                                 &last_effective);
+        if (range_status == -1) {
+            free(indices);
+            [encoder endEncoding];
+            fail(reason, reason_capacity, "indexed draw has a negative effective vertex");
+            return 0;
         }
+        if (range_status != 0) {
+            free(indices);
+            [encoder endEncoding];
+            fail(reason, reason_capacity, "indexed draw has no readable indices");
+            return 0;
+        }
+        size_t vertex_limit = indexed_vertex_limit();
+        if (vertex_limit != (size_t)-1 &&
+            (uint64_t)last_effective >= (uint64_t)vertex_limit) {
+            free(indices);
+            [encoder endEncoding];
+            fail(reason, reason_capacity,
+                 "indexed draw reads past the bound vertex attributes");
+            return 0;
+        }
+        /* Preserve the engine's 16-bit indices and let Metal apply the signed
+           base vertex exactly like glDrawElementsBaseVertex. */
+        id<MTLBuffer> index_buffer =
+            [device newBufferWithBytes:indices
+                                length:(NSUInteger)needed
+                               options:MTLResourceStorageModeManaged];
         free(indices);
-        id<MTLBuffer> index_buffer = [device newBufferWithBytes:rewritten.bytes
-                                                         length:rewritten.length
-                                                        options:MTLResourceStorageModeManaged];
         [encoder drawIndexedPrimitives:primitive
                             indexCount:(NSUInteger)call->count
-                             indexType:MTLIndexTypeUInt32
+                             indexType:MTLIndexTypeUInt16
                            indexBuffer:index_buffer
                      indexBufferOffset:0
-                         instanceCount:instance_count];
+                         instanceCount:instance_count
+                            baseVertex:(NSInteger)call->base_vertex
+                          baseInstance:0];
     } else {
         [encoder drawPrimitives:primitive
                     vertexStart:(NSUInteger)(call->first > 0 ? call->first : 0)

@@ -2362,7 +2362,10 @@ void eu4_gfx_resolve_texture_noop(void *handle, void *source, void *target) {
     [blit endEncoding];
     [command commit];
     [command waitUntilCompleted];
-    resolve_dump_checkpoint(dst, resolve_dir, "dest", seq);
+    if (command.status == MTLCommandBufferStatusCompleted) {
+        eu4_gfx_note_render_target_write(target);
+        resolve_dump_checkpoint(dst, resolve_dir, "dest", seq);
+    }
     resolve_emit("_GfxResolveTexture", target, src, dst, nil, seq,
                  command.status == MTLCommandBufferStatusCompleted ? "copy_ok"
                                                                   : "copy_failed");
@@ -2707,6 +2710,9 @@ void eu4_gfx_clear(void *handle, unsigned flags, const float *color) {
             id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
             if (encoder != nil) {
                 [encoder endEncoding];
+                if (clear_color) {
+                    eu4_gfx_note_render_target_write(backend.currentTargetHeader);
+                }
                 [command commit];
                 backend.pendingGameCommand = command;
                 backend.pendingGameGeneration = backend.geometryGeneration;

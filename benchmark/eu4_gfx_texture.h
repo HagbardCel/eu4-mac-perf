@@ -1,6 +1,7 @@
 #ifndef EU4_GFX_TEXTURE_H
 #define EU4_GFX_TEXTURE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -87,7 +88,8 @@ void eu4_gfx_note_render_target_write(void *header);
    current draw into command_buffer. Must run before the draw's render encoder
    is opened so the flip pass precedes the draw pass in the same command buffer.
    Idempotent; ordinary textures are ignored. */
-void eu4_gfx_prepare_sampled_textures(void *command_buffer);
+int eu4_gfx_prepare_sampled_textures(void *command_buffer, char *reason,
+                                     size_t capacity);
 
 /* Borrowed MTLTexture for the engine header bound to unit 0 by the replacement
    _GfxSetTextures. A header substituted for a null entry (master+0x98) resolves
