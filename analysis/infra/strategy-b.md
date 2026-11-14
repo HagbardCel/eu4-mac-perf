@@ -299,3 +299,51 @@ unchanged in their qualification claims.
 - **Tests.** 196 tests across the touched modules pass, including PR #190's
   native draw tests, the settings lifecycle regressions, dependency/outcome
   tests, agent request tests and portable-case verification.
+
+## 12. Final closure experiments (2026-11-14, post-fe0e151)
+
+- **PR #190 final delta.** `61f3b9a` (missing render-target rejection, stale
+  shadow conversion validation, no destructive GL error drain) merged without
+  undoing the earlier draw/topology/colour-mask/attribute corrections. Native
+  `test_gfx_live_draw` regressions pass.
+- **Deterministic SDL placement.** The engine's SDL_CreateWindow call requested
+  `x=y=0x30000002` (SDL undefined/centred) and `flags=7`
+  (`FULLSCREEN|OPENGL|SHOWN`). A reference-only dylib patches the call site
+  (`RVA 0x13cc1d7`) and clears fullscreen flags while forcing the virtual-screen
+  origin. The Metal boot wrapper now applies the same rule. This explains both
+  previous failures: fullscreen mode adopted the 1920x1200 display mode, and
+  SDL's centred/undefined coordinates ignored `SDL_VIDEO_WINDOW_POS`.
+- **Five-launch background acceptance (OpenGL).** Five consecutive launches on
+  `EU4 Test` (1920x1200, 60 Hz, 1x, non-main) passed:
+  - window `1728x1145` frame / `1728x1117` drawable, entirely on the virtual display;
+  - physical display unchanged;
+  - 179-200 frame observations in the 20 s interval;
+  - zero activations, zero placement issues, zero disconnections;
+  - clean owned termination and settings restore on every launch.
+  The focus guard suppresses SDL's activation calls and yields any residual
+  activation to the prior application.
+- **Metal background.** Placement succeeds (1694x1123 visible window inside the
+  virtual screen, correct 1728x1117 drawable), the process initializes and
+  produces observations, but the candidate still becomes frontmost (36 monitor
+  samples). Metal background focus is **not qualified**.
+- **Fail-closed outcomes.** `qualification_exit_code()` is shared by the replay
+  CLI and portable case: 0 qualified, 2 executed-but-unqualified, 3 deliberate
+  fault injection, 1 invalid. The agent `eu4_replay` envelope reports the same
+  dimensions and no longer calls a partial/semantic-divergent replay `ok`.
+- **Per-consumer generations.** Each consumer carries
+  `required_generation`; provenance must match exactly. A second sample using
+  the earlier generation is rejected (regression added).
+- **Settings restore.** Restoration now reverts only harness-controlled fields
+  when the game rewrote unrelated settings; controlled-field equality is
+  accepted as already restored; unrelated edits are preserved and reported.
+- **Monitoring.** `WindowMonitor` starts immediately after spawn, ignores
+  zero-size startup helpers, and records late movement, wrong display, changed
+  dimensions, absence after first sight, activation and disconnection. Any of
+  these marks the campaign incomplete.
+- **Remaining blocker.** Texture 442 is still unproven. Resolve/copy events are
+  rejected by the replay host; no fresh capture with ordered resolve events was
+  obtained. The canonical frame remains `coverage=partial, pixels=match,
+  qualified=false`.
+
+Targeted tests: 201 pass across display, campaign, graph, replay-case, agent,
+M6 frame and PR #190 draw suites; 6/6 DSH plugin tests pass.

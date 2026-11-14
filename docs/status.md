@@ -25,13 +25,13 @@ pixels do not change. Replay outcome is reported as separate `execution`,
 draw semantics are merged into the infrastructure branch.
 
 BetterDisplay `EU4 Test` (1920x1200, 1x, non-main) is created once and reused.
-The shared-settings lifecycle is now lease-ordered, with durable backup,
-rollback, and conditional restore that preserves unrelated edits. Live
-placement/focus is still **not qualified**: observed guarded launches either
-left the main window on the physical display or produced a fullscreen
-1920x1200 window on the virtual screen, changing the drawable extent, and EU4
-still took focus. Background mode stays opt-in; foreground remains the
-fallback. Five-launch acceptance is not claimed.
+The shared-settings lifecycle is lease-ordered, with durable backup, rollback,
+monitor coverage and field-level restore. Deterministic SDL call-site placement
+(clearing the engine's requested fullscreen flags) fixed the window geometry:
+**five consecutive OpenGL background launches passed** placement, focus,
+frame progress and settings restoration. Metal background placement works but
+the candidate still becomes frontmost, so Metal background focus is
+**unqualified**. Background remains opt-in.
 
 Evidence: [Strategy B report](../analysis/infra/strategy-b.md). Tools:
 `eu4_capture graph`, `eu4_replay independent`, `eu4_case_inspect` for Strategy B

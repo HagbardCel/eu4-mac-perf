@@ -1,22 +1,25 @@
 {
   "schema": "gfx-strategy-b-metrics/v1",
   "canonical_frame": "menu-occ300",
-  "authentic_eu4_launches": 4,
-  "background_launches": 4,
+  "authentic_eu4_launches": 12,
+  "background_launches": 9,
   "background_launches_qualified": 0,
   "live_launch_time_seconds": [
     35,
-    38,
     33,
-    36
+    32,
+    32,
+    33,
+    15,
+    15
   ],
   "live_captures": 0,
   "captured_frames": 1,
   "captured_frames_complete": 0,
   "captured_frames_partial": 1,
-  "offline_replay_attempts": 8,
+  "offline_replay_attempts": 12,
   "offline_replay_seconds": 4.12,
-  "deterministic_replays": 2,
+  "deterministic_replays": 4,
   "final_mismatched_pixels": 0,
   "final_pixels": 1930176,
   "first_divergence_localized": true,
@@ -31,8 +34,23 @@
   "eu4_launch_to_title_seconds_observed": 340,
   "replay_time_ratio": "~1/80 of a title-launch",
   "notes": [
-    "Launches 2-4 were guard experiments; they rendered (820-1484 observations) but their windows were not visible to the window server.",
-    "The single unguarded launch placed the window on the physical display and took focus.",
-    "Offline replay timing excludes the ~1 s replay-host build."
-  ]
+    "Five consecutive OpenGL background launches passed placement, focus, progress and restoration on EU4 Test.",
+    "SDL create call requested flags=7 (fullscreen|opengl|shown) with undefined coordinates; deterministic placement cleared fullscreen and set 1752,24, preserving 1728x1117.",
+    "Metal background placement passed, but the candidate still became frontmost; Metal focus remains unqualified.",
+    "Canonical frame remains partial: texture 442 has no proved producer; resolve/copy replay fails closed."
+  ],
+  "reviewed_head": "fe0e151",
+  "pr190_final_merged": "61f3b9a",
+  "background_opengl_five_launch_passed": 5,
+  "background_metal_launches": 2,
+  "background_metal_focus_qualified": 0,
+  "semantic_divergence_event": 14,
+  "render_target_vflip_divergence_event": 291,
+  "portable_case_files": 1242,
+  "portable_case_replay": "pass",
+  "metal_live_initialized": true,
+  "metal_live_observations": 74,
+  "metal_live_focus_qualified": false,
+  "tests_touched": 201,
+  "dsh_tests": 6
 }
