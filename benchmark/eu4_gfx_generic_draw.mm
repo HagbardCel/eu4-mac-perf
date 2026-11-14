@@ -48,7 +48,8 @@ static NSUInteger num(id value, NSUInteger fallback) {
 
 static id<MTLSamplerState> sampler_for_unit(id<MTLDevice> device,
                                             NSArray *samplers,
-                                            NSUInteger unit);
+                                            NSUInteger unit,
+                                            BOOL has_mip_levels);
 
 static float g_logged_positions[16];
 static int g_have_positions;
@@ -223,7 +224,8 @@ static MTLSamplerAddressMode metal_address_mode(uint32_t gl_wrap) {
    sampler object (the engine's default texture state). */
 static id<MTLSamplerState> sampler_for_unit(id<MTLDevice> device,
                                             NSArray *samplers,
-                                            NSUInteger unit) {
+                                            NSUInteger unit,
+                                            BOOL has_mip_levels) {
     static NSMutableDictionary *cache;
     static id<MTLDevice> cached_device;
     if (cache == nil || cached_device != device) {
@@ -238,6 +240,30 @@ static id<MTLSamplerState> sampler_for_unit(id<MTLDevice> device,
         if (object != NULL) {
             if (eu4_gfx_decode_sampler(object, &state) == 0) {
                 have_state = YES;
+                if (getenv("EU4_GFX_SAMPLER_TRACE") != NULL) {
+                    static int sampler_trace_count;
+                    if (sampler_trace_count < 4096) {
+                        sampler_trace_count++;
+                        char raw[2 * 0x2c + 1];
+                        const uint8_t *raw_bytes = (const uint8_t *)object;
+                        for (size_t i = 0; i < 0x2c; i++) {
+                            snprintf(raw + i * 2, 3, "%02x", raw_bytes[i]);
+                        }
+                        char body[512];
+                        int length = snprintf(
+                            body, sizeof body,
+                            "{\"unit\":%lu,\"min\":%u,\"mag\":%u,"
+                            "\"mip\":%u,\"wrap_s\":%u,\"wrap_t\":%u,"
+                            "\"wrap_r\":%u,\"raw\":\"%s\",\"pid\":%d}\n",
+                            (unsigned long)unit, state.min_filter,
+                            state.mag_filter, state.mip_filter, state.wrap_s,
+                            state.wrap_t, state.wrap_r, raw, (int)getpid());
+                        if (length > 0 && (size_t)length < sizeof body) {
+                            (void)eu4_metal_events_append("sampler-trace.jsonl",
+                                                          body);
+                        }
+                    }
+                }
             } else {
                 /* Replacing an undecodable sampler silently would hide a real
                    state gap; record it once and fall back to the engine's
@@ -262,11 +288,13 @@ static id<MTLSamplerState> sampler_for_unit(id<MTLDevice> device,
             }
         }
     }
+    uint32_t effective_min =
+        eu4_gfx_effective_min_filter(&state, has_mip_levels ? 1 : 0);
     NSString *key;
     if (have_state) {
-        key = [NSString stringWithFormat:@"s%u-%u-%u-%u-%u",
-                                         state.min_filter, state.mag_filter,
-                                         state.mip_filter, state.wrap_s,
+        key = [NSString stringWithFormat:@"s%u-%u-%d-%u-%u",
+                                         effective_min, state.mag_filter,
+                                         has_mip_levels ? 1 : 0, state.wrap_s,
                                          state.wrap_t];
     } else {
         key = @"default-linear-clamp";
@@ -277,13 +305,13 @@ static id<MTLSamplerState> sampler_for_unit(id<MTLDevice> device,
     }
     MTLSamplerDescriptor *descriptor = [MTLSamplerDescriptor new];
     if (have_state) {
-        uint32_t min = state.min_filter;
+        uint32_t min = effective_min;
         BOOL min_linear = min == 0x2601 || min == 0x2701 || min == 0x2703;
-        BOOL mip_none = min == 0x2600 || min == 0x2601;
-        /* The engine keeps the mip filter separately from the min enum; honour
-           it when the min enum itself does not select a mipmap mode. */
-        BOOL mip_linear = mip_none ? (state.mip_filter == 0x2601)
-                                   : (min == 0x2702 || min == 0x2703);
+        BOOL mip_none = !(min == 0x2700 || min == 0x2701 ||
+                          min == 0x2702 || min == 0x2703);
+        /* The effective min enum carries the mip mode for mipmapped textures;
+           single-level textures use the base linear/nearest filter. */
+        BOOL mip_linear = min == 0x2702 || min == 0x2703;
         descriptor.minFilter = min_linear ? MTLSamplerMinMagFilterLinear
                                           : MTLSamplerMinMagFilterNearest;
         descriptor.magFilter = state.mag_filter == 0x2601
@@ -724,6 +752,43 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
         attribute.format = format;
         attribute.offset = bound_offset;
         attribute.bufferIndex = buffer_index;
+        const char *vertex_trace_stage = getenv("EU4_GFX_VERTEX_TRACE_STAGE");
+        NSString *vertex_trace_file = stage[@"msl_file"] ?: @"";
+        BOOL vertex_trace_match =
+            vertex_trace_stage == NULL || vertex_trace_stage[0] == 0 ||
+            [vertex_trace_file rangeOfString:
+                [NSString stringWithUTF8String:vertex_trace_stage]].location != NSNotFound;
+        if (getenv("EU4_GFX_VERTEX_TRACE") != NULL && vertex_trace_match) {
+            static int vertex_trace_count;
+            if (vertex_trace_count < 64 && bound_buffer.contents != NULL) {
+                vertex_trace_count++;
+                NSUInteger byte_count = 4 * size * 4;
+                if (bound_offset + byte_count > bound_buffer.length) {
+                    byte_count = bound_buffer.length > bound_offset
+                        ? bound_buffer.length - bound_offset : 0;
+                }
+                char values[4 * 4 * 8 + 1];
+                values[0] = 0;
+                const uint8_t *bytes =
+                    (const uint8_t *)bound_buffer.contents + bound_offset;
+                for (NSUInteger i = 0; i < byte_count; i++) {
+                    snprintf(values + i * 2, 3, "%02x", bytes[i]);
+                }
+                char body[1024];
+                int length = snprintf(
+                    body, sizeof body,
+                    "{\"stage\":\"%s\",\"location\":%u,\"size\":%u,"
+                    "\"offset\":%lu,\"stride\":%lu,\"bytes\":%lu,"
+                    "\"values\":\"%s\",\"pid\":%d}\n",
+                    ([stage[@"msl_file"] description] ?: @"").UTF8String ?: "",
+                    location, size, (unsigned long)bound_offset,
+                    (unsigned long)stride, (unsigned long)byte_count, values,
+                    (int)getpid());
+                if (length > 0 && (size_t)length < sizeof body) {
+                    (void)eu4_metal_events_append("vertex-trace.jsonl", body);
+                }
+            }
+        }
         descriptor.layouts[buffer_index].stride = bound_stride;
         if (instanced_draw && divisor > 0) {
             descriptor.layouts[buffer_index].stepFunction = MTLVertexStepFunctionPerInstance;
@@ -1678,7 +1743,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
             }
             id<MTLSamplerState> sampler =
                 sampler_for_unit(device, backend != nil ? backend.boundSamplers : nil,
-                                 unit);
+                                 unit, texture.mipmapLevelCount > 1);
             if (sampler == nil) {
                 [encoder endEncoding];
                 fail(reason, reason_capacity, "no sampler state available");

@@ -98,32 +98,85 @@ regression:
 (1024/1024 pixels covered; fails with the old route inputs).
 
 After this fix the magenta/pink map palette is gone. The remaining divergence
-is later in the chain:
+is the beige/snowy map itself: the live composite MainScene is already the
+season-colour-balanced image (mean 112/112/113), while the authentic MainScene
+is the uncomposited green terrain map (mean 65/76/73). The resolve trace below
+shows this is not a previous-frame feedback bug; the resolve faithfully copies
+a current but already-beige terrain batch. The first resolve source is beige
+from the first menu resolve onward.
 
-- the live composite's MainScene input is already the season-colour-balanced
-  (beige) image, mean 112/112/113;
-- the authentic composite MainScene is the uncomposited green terrain map,
-  mean 65/76/73;
-- the presented live map is therefore about twice as bright as the reference
-  (map mean 144 vs 72, palette affinity 0.435 against a 0.85 floor).
+## Post-fix live verification and MainScene lifecycle (Phases 4–6)
 
-That is consistent with a render-target lifecycle/resolve-order defect in
-which a previously composited frame is fed back as MainScene and the bloom add
-compounds brightness. It is recorded as the remaining blocker; no speculative
-brightness adjustment was applied.
+The first post-viewport-fix run removed the magenta palette but still failed the
+visual gate. The follow-up investigation used the existing `verify-1` artifacts
+plus one targeted resolve/order launch before changing code again.
 
-## Post-fix live verification (Phase 6)
+### Resolve sequence (observed, not inferred)
 
-Run `.local/m6/live-final/verify-1`, identity `1794635347-64349`, pid 64418:
+The targeted trace records 1,753 `_GfxResolve` calls. The first call is:
+
+| Field | Value |
+| --- | --- |
+| Sequence | 1 (draw sequence 737, clear sequence 113) |
+| Source | gameColorTarget, 3456 x 2234, BGRA8Unorm |
+| Destination | MainScene header, 1728 x 1117, BGRA8Unorm |
+| Status | `scaled_ok` |
+| Source mean | 113.17 / 112.21 / 113.04, alpha 247.13 |
+| Destination mean | 113.23 / 112.26 / 113.06, alpha 247.13 |
+
+The destination hash equals the MainScene sample at the composite. The
+frame-start default clear immediately preceding the terrain batch is valid:
+sequence 109, flags 7, color `[0,0,0,1]`, status 0, geometry/clear generation
+1, and it targets the same `gameColorTarget` pointer as the terrain draws.
+There is no missing clear, failed resolve or wrong-frame source in this
+interval.
+
+### What the terrain draw does
+
+The live terrain draw at caller `0x10ce96e` has vertex positions and UVs
+byte-identical to captured event 24:
+
+- position offset 1,439,536, UV offset 1,439,548, stride 28;
+- first live position `(2719.0, 32.8, 1188.0)` and UV `(0,0,1)` match the
+  captured event 24 values exactly.
+
+Its textures, uniforms, depth/blend/raster state and shader translation also
+match the capture. Replaying event 24 with the live time/season uniforms
+changes only ~244 pixels and leaves its mean colour unchanged.
+
+### Corrected interpretation
+
+The earlier hypothesis that MainScene was a previous composite fed back is
+**not supported** by the resolve trace. The resolve faithfully copies a beige
+*current* backbuffer; the beige is produced inside the multi-draw terrain
+batch. A single draw matches, so the remaining difference is in the cumulative
+execution of the terrain pass (blend order/state or an overlay pass), not in
+the resolve copy or a missing frame clear. This is the precise remaining
+blocker.
+
+### Sampler effective state (fixed)
+
+The live sampler decode conflated the engine's base min filter and mip filter:
+every unit decoded as min `0x2601`, mip `0x2701`, and the encoder disabled
+mipmapping for all textures. The capture uses `GL_LINEAR_MIPMAP_NEAREST`
+(`0x2701`) exactly for textures with more than one level and `GL_LINEAR` for
+single-level textures. `eu4_gfx_effective_min_filter` now selects the engine
+mip filter when the bound texture has mip levels and the base min otherwise.
+Regression:
+`test_sampler_effective_min_filter_uses_texture_mip_state`.
+This improved palette affinity only marginally (0.435 -> 0.452), so it is a
+correctness fix, not the root cause of the beige map.
+
+### Latest live verification
+
+Run `.local/m6/live-verify2/run-1`, identity `1794640399-68635`:
 
 - executed, draw encoded, GPU completed, presented, zero refused draws;
-- UI high-pass correlations 0.755 / 0.821 / 0.482 (logo region below 0.5);
-- map mean 144.023, structure present, palette affinity 0.435;
+- UI high-pass correlations 0.757 / 0.825 / 0.484 (logo below 0.5);
+- map mean 143.4 vs 71.9, palette affinity 0.452 (floor 0.85);
 - `visual_match=false`, `accepted=false`.
 
-The run was not repeated blindly. The three clean-start qualification was
-therefore not attempted and is not claimed. The pre-fix `final-1..3` runs are
-historical (pink palette) and must not be reused.
+The three clean-start qualification was not attempted and is not claimed.
 
 ## Offline captured-state qualification
 
@@ -134,8 +187,8 @@ The final implementation was re-run against the canonical frame:
 - reference and candidate SHA-256 both `ff2f4e2b…`;
 - independent files, alias rejection active.
 
-This is a captured-state replay. It does not validate live terrain
-reconstruction, the resolve, or the composite lifecycle.
+This is a captured-state replay. It does not validate the live terrain batch,
+the resolve, or the composite lifecycle.
 
 ## Tests run on the final head
 
@@ -151,6 +204,7 @@ reconstruction, the resolve, or the composite lifecycle.
 **DO NOT MERGE.** The harness ordering defect and the offscreen viewport defect
 are fixed and regression-tested, and the isolated terrain draws are now
 credible evidence. Live M6 acceptance still fails on the map colour/brightness
-and the Paradox-logo UI correlation. The next work is the resolve/composite
-lifecycle (why MainScene is a composited beige frame), followed by the legacy
-sprite/text composition defect, then three new clean starts.
+and the Paradox-logo UI correlation. The resolve copy is faithful; the next
+work is the cumulative live terrain batch (blend order/state or an overlay
+pass) that turns a correct single draw into a beige map, followed by the
+legacy sprite/text composition defect, then three new clean starts.

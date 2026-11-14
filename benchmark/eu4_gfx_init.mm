@@ -2112,11 +2112,11 @@ static id<MTLRenderPipelineState> resolve_pipeline(id<MTLDevice> device) {
     return pipeline;
 }
 
-static void resolve_scaled(id<MTLTexture> src, id<MTLTexture> dst,
-                           id<MTLDevice> device, id<MTLCommandQueue> queue) {
+static int resolve_scaled(id<MTLTexture> src, id<MTLTexture> dst,
+                          id<MTLDevice> device, id<MTLCommandQueue> queue) {
     id<MTLRenderPipelineState> pipeline = resolve_pipeline(device);
     if (pipeline == nil) {
-        return;
+        return -1;
     }
     id<MTLSamplerState> sampler = nil;
     MTLSamplerDescriptor *s = [MTLSamplerDescriptor new];
@@ -2129,9 +2129,12 @@ static void resolve_scaled(id<MTLTexture> src, id<MTLTexture> dst,
     pass.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 0.0);
     pass.colorAttachments[0].storeAction = MTLStoreActionStore;
     id<MTLCommandBuffer> command = [queue commandBuffer];
+    if (command == nil) {
+        return -1;
+    }
     id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
     if (encoder == nil) {
-        return;
+        return -1;
     }
     [encoder setRenderPipelineState:pipeline];
     [encoder setFragmentTexture:src atIndex:0];
@@ -2140,6 +2143,65 @@ static void resolve_scaled(id<MTLTexture> src, id<MTLTexture> dst,
     [encoder endEncoding];
     [command commit];
     [command waitUntilCompleted];
+    return command.status == MTLCommandBufferStatusCompleted ? 0 : -1;
+}
+
+static uint64_t g_resolve_sequence;
+
+static void resolve_trace_write(const char *op, uint64_t seq, void *header,
+                                id<MTLTexture> src, id<MTLTexture> dst,
+                                id current, const char *status) {
+    if (getenv("EU4_GFX_RESOLVE_TRACE") == NULL) {
+        return;
+    }
+    char body[768];
+    int n = snprintf(
+        body, sizeof body,
+        "{\"schema\":\"gfx-resolve-trace/v1\",\"seq\":%llu,"
+        "\"op\":\"%s\",\"header\":\"%p\",\"src\":\"%p\","
+        "\"dst\":\"%p\",\"current\":\"%p\","
+        "\"src_size\":[%lu,%lu],\"dst_size\":[%lu,%lu],"
+        "\"src_format\":%lu,\"dst_format\":%lu,"
+        "\"draw_seq\":%llu,\"clear_seq\":%llu,"
+        "\"src_is_game\":%d,\"src_is_previous\":%d,"
+        "\"status\":\"%s\",\"pid\":%d}\n",
+        (unsigned long long)seq, op, header,
+        (__bridge void *)src, (__bridge void *)dst, (__bridge void *)current,
+        (unsigned long)(src != nil ? src.width : 0),
+        (unsigned long)(src != nil ? src.height : 0),
+        (unsigned long)(dst != nil ? dst.width : 0),
+        (unsigned long)(dst != nil ? dst.height : 0),
+        (unsigned long)(src != nil ? src.pixelFormat : 0),
+        (unsigned long)(dst != nil ? dst.pixelFormat : 0),
+        (unsigned long long)eu4_gfx_live_draw_sequence,
+        (unsigned long long)eu4_gfx_live_clear_sequence,
+        (unsigned long long)(src != nil &&
+                             src == ((__bridge EU4GfxBackend *)eu4_gfx_backend_token()).gameColorTarget),
+        (unsigned long long)(src != nil &&
+                             src == ((__bridge EU4GfxBackend *)eu4_gfx_backend_token()).previousFrameTexture),
+        status, (int)getpid());
+    if (n > 0 && (size_t)n < sizeof body) {
+        (void)eu4_metal_events_append("resolve-trace.jsonl", body);
+    }
+}
+
+/* Bounded, sequence-named checkpoints so successive resolves cannot overwrite
+   one another. Only enabled by the explicit resolve-dump diagnostic. */
+static void resolve_dump_checkpoint(id<MTLTexture> texture, const char *directory,
+                                    const char *kind, uint64_t seq) {
+    if (texture == nil || directory == NULL || directory[0] == 0 || seq > 8) {
+        return;
+    }
+    char path[512];
+    snprintf(path, sizeof path, "%s/resolve-%04llu-%s.bgra", directory,
+             (unsigned long long)seq, kind);
+    dump_mtl_texture(texture, path);
+}
+
+static void resolve_emit(const char *op, void *header, id<MTLTexture> src,
+                         id<MTLTexture> dst, id current, uint64_t seq,
+                         const char *status) {
+    resolve_trace_write(op, seq, header, src, dst, current, status);
 }
 
 void eu4_gfx_resolve_noop(void *unused, void *header) {
@@ -2154,13 +2216,15 @@ void eu4_gfx_resolve_noop(void *unused, void *header) {
     if (backend == nil || backend.queue == nil) {
         return;
     }
+    uint64_t seq = ++g_resolve_sequence;
     id<MTLTexture> dst = (__bridge id<MTLTexture>)texture_for_header(header);
-    /* glCopyTexSubImage2D observes every command issued before it. Record the
-       sequence and drain the pending submission so the copy cannot read a
-       backbuffer whose draws are still pending. */
-    eu4_gfx_order_trace("resolve", eu4_gfx_live_draw_sequence);
+    eu4_gfx_order_trace_detail("resolve", eu4_gfx_live_draw_sequence, "{}");
     if (backend.pendingGameCommand != nil) {
-        (void)drain_pending_game(backend, NULL);
+        if (drain_pending_game(backend, NULL) != EU4_GFX_CLEAR_OK) {
+            resolve_emit("_GfxResolve", header, nil, dst, backend.currentTargetColor,
+                         seq, "drain_failed");
+            return;
+        }
     }
     /* The engine's copy reads the current default framebuffer (fb0): early in
        the frame it holds the map passes, later it holds the complete frame.
@@ -2169,130 +2233,25 @@ void eu4_gfx_resolve_noop(void *unused, void *header) {
     if (src == nil) {
         src = backend.previousFrameTexture;
     }
-    if (getenv("EU4_GFX_RESOLVE_TRACE") != NULL) {
-        char body[512];
-        int n = snprintf(
-            body, sizeof body,
-            "{\"schema\":\"gfx-resolve/v1\",\"header\":\"%p\","
-            "\"src\":\"%p\",\"dst\":\"%p\","
-            "\"current\":\"%p\",\"src_size\":[%lu,%lu],"
-            "\"dst_size\":[%lu,%lu],\"draw_seq\":%llu,\"clear_seq\":%llu,"
-            "\"pid\":%d}\n",
-            header, (__bridge void *)src, (__bridge void *)dst,
-            backend.currentTargetColor,
-            (unsigned long)(src != nil ? src.width : 0),
-            (unsigned long)(src != nil ? src.height : 0),
-            (unsigned long)(dst != nil ? dst.width : 0),
-            (unsigned long)(dst != nil ? dst.height : 0),
-            (unsigned long long)eu4_gfx_live_draw_sequence,
-            (unsigned long long)eu4_gfx_live_clear_sequence, (int)getpid());
-        if (n > 0 && (size_t)n < sizeof body) {
-            (void)eu4_metal_events_write("resolve.json", body);
-        }
-    }
     if (src == nil || dst == nil) {
+        resolve_emit("_GfxResolve", header, src, dst, backend.currentTargetColor,
+                     seq, src == nil ? "missing_source" : "missing_destination");
         return;
     }
     const char *resolve_dir = getenv("EU4_GFX_RESOLVE_DUMP");
-    static unsigned resolve_count;
-    if (resolve_dir != NULL && resolve_dir[0] != 0) {
-        char path[512];
-        snprintf(path, sizeof path, "%s/resolve-source-%03u.bgra", resolve_dir,
-                 resolve_count++);
-        dump_mtl_texture(src, path);
-    }
+    resolve_dump_checkpoint(src, resolve_dir, "source", seq);
     if (src.width != dst.width || src.height != dst.height) {
-        /* The engine's default framebuffer is logical (1728x1117) in GL; the
-           reconstructed backbuffer is the physical drawable, so a scaled copy
-           is required to fill the sampled texture. */
-        resolve_scaled(src, dst, backend.device, backend.queue);
-        if (resolve_dir != NULL && resolve_dir[0] != 0) {
-            char path[512];
-            snprintf(path, sizeof path, "%s/resolve-dest-%lux%lu.bgra", resolve_dir,
-                     (unsigned long)dst.width, (unsigned long)dst.height);
-            dump_mtl_texture(dst, path);
-        }
+        int status = resolve_scaled(src, dst, backend.device, backend.queue);
+        resolve_dump_checkpoint(dst, resolve_dir, "dest", seq);
+        resolve_emit("_GfxResolve", header, src, dst, backend.currentTargetColor,
+                     seq, status == 0 ? "scaled_ok" : "scaled_failed");
         return;
     }
     id<MTLCommandBuffer> command = [backend.queue commandBuffer];
     id<MTLBlitCommandEncoder> blit = command != nil ? [command blitCommandEncoder] : nil;
-    if (blit != nil) {
-        [blit copyFromTexture:src
-                  sourceSlice:0
-                  sourceLevel:0
-                 sourceOrigin:MTLOriginMake(0, 0, 0)
-                   sourceSize:MTLSizeMake(src.width, src.height, 1)
-                    toTexture:dst
-             destinationSlice:0
-             destinationLevel:0
-            destinationOrigin:MTLOriginMake(0, 0, 0)];
-        [blit endEncoding];
-        [command commit];
-        [command waitUntilCompleted];
-    }
-}
-
-void eu4_gfx_resolve_texture_noop(void *handle, void *source, void *target) {
-    (void)handle;
-    /* _GfxResolveTexture blits the source render target into the sampled
-       (resolved) texture. The reconstructed targets are single-sample, so a
-       Metal texture copy is the exact equivalent; skipping it left the
-       composite sampling stale texture contents. */
-    id<MTLTexture> src = (__bridge id<MTLTexture>)texture_for_header(source);
-    id<MTLTexture> dst = (__bridge id<MTLTexture>)texture_for_header(target);
-    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
-    if (getenv("EU4_GFX_RESOLVE_TRACE") != NULL) {
-        char body[512];
-        int n = snprintf(
-            body, sizeof body,
-            "{\"schema\":\"gfx-resolve-texture/v1\",\"source\":\"%p\","
-            "\"target\":\"%p\",\"src\":\"%p\",\"dst\":\"%p\","
-            "\"src_size\":[%lu,%lu],\"dst_size\":[%lu,%lu],\"pid\":%d}\n",
-            source, target, (__bridge void *)src, (__bridge void *)dst,
-            (unsigned long)(src != nil ? src.width : 0),
-            (unsigned long)(src != nil ? src.height : 0),
-            (unsigned long)(dst != nil ? dst.width : 0),
-            (unsigned long)(dst != nil ? dst.height : 0), (int)getpid());
-        if (n > 0 && (size_t)n < sizeof body) {
-            (void)eu4_metal_events_write("resolve-texture.json", body);
-        }
-    }
-    if (getenv("EU4_GFX_RESOLVE_TRACE") != NULL) {
-        char body[512];
-        int n = snprintf(
-            body, sizeof body,
-            "{\"schema\":\"gfx-resolve-texture/v1\",\"source\":\"%p\","
-            "\"target\":\"%p\",\"src\":\"%p\",\"dst\":\"%p\","
-            "\"src_size\":[%lu,%lu],\"dst_size\":[%lu,%lu],\"pid\":%d}\n",
-            source, target, (__bridge void *)src, (__bridge void *)dst,
-            (unsigned long)(src != nil ? src.width : 0),
-            (unsigned long)(src != nil ? src.height : 0),
-            (unsigned long)(dst != nil ? dst.width : 0),
-            (unsigned long)(dst != nil ? dst.height : 0), (int)getpid());
-        if (n > 0 && (size_t)n < sizeof body) {
-            (void)eu4_metal_events_write("resolve-texture.json", body);
-        }
-    }
-    if (src == nil || dst == nil || backend == nil || backend.queue == nil) {
-        return;
-    }
-    const char *resolve_dir = getenv("EU4_GFX_RESOLVE_DUMP");
-    static unsigned resolve_count;
-    if (resolve_dir != NULL && resolve_dir[0] != 0) {
-        char path[512];
-        snprintf(path, sizeof path, "%s/resolve-source-%03u.bgra", resolve_dir,
-                 resolve_count++);
-        dump_mtl_texture(src, path);
-    }
-    if (src.width != dst.width || src.height != dst.height) {
-        return;
-    }
-    id<MTLCommandBuffer> command = [backend.queue commandBuffer];
-    if (command == nil) {
-        return;
-    }
-    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
     if (blit == nil) {
+        resolve_emit("_GfxResolve", header, src, dst, backend.currentTargetColor,
+                     seq, "command_failed");
         return;
     }
     [blit copyFromTexture:src
@@ -2307,12 +2266,62 @@ void eu4_gfx_resolve_texture_noop(void *handle, void *source, void *target) {
     [blit endEncoding];
     [command commit];
     [command waitUntilCompleted];
-    if (resolve_dir != NULL && resolve_dir[0] != 0) {
-        char path[512];
-        snprintf(path, sizeof path, "%s/resolve-dest-%lux%lu.bgra", resolve_dir,
-                 (unsigned long)dst.width, (unsigned long)dst.height);
-        dump_mtl_texture(dst, path);
+    resolve_dump_checkpoint(dst, resolve_dir, "dest", seq);
+    resolve_emit("_GfxResolve", header, src, dst, backend.currentTargetColor, seq,
+                 command.status == MTLCommandBufferStatusCompleted ? "copy_ok"
+                                                                  : "copy_failed");
+}
+
+void eu4_gfx_resolve_texture_noop(void *handle, void *source, void *target) {
+    (void)handle;
+    /* _GfxResolveTexture blits the source render target into the sampled
+       (resolved) texture. The reconstructed targets are single-sample, so a
+       Metal texture copy is the exact equivalent; skipping it left the
+       composite sampling stale texture contents. */
+    uint64_t seq = ++g_resolve_sequence;
+    id<MTLTexture> src = (__bridge id<MTLTexture>)texture_for_header(source);
+    id<MTLTexture> dst = (__bridge id<MTLTexture>)texture_for_header(target);
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (src == nil || dst == nil || backend == nil || backend.queue == nil) {
+        resolve_emit("_GfxResolveTexture", target, src, dst, nil, seq,
+                     src == nil ? "missing_source" : "missing_destination");
+        return;
     }
+    const char *resolve_dir = getenv("EU4_GFX_RESOLVE_DUMP");
+    resolve_dump_checkpoint(src, resolve_dir, "source", seq);
+    if (src.width != dst.width || src.height != dst.height) {
+        resolve_emit("_GfxResolveTexture", target, src, dst, nil, seq,
+                     "size_mismatch");
+        return;
+    }
+    id<MTLCommandBuffer> command = [backend.queue commandBuffer];
+    if (command == nil) {
+        resolve_emit("_GfxResolveTexture", target, src, dst, nil, seq,
+                     "command_failed");
+        return;
+    }
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    if (blit == nil) {
+        resolve_emit("_GfxResolveTexture", target, src, dst, nil, seq,
+                     "command_failed");
+        return;
+    }
+    [blit copyFromTexture:src
+              sourceSlice:0
+              sourceLevel:0
+             sourceOrigin:MTLOriginMake(0, 0, 0)
+               sourceSize:MTLSizeMake(src.width, src.height, 1)
+                toTexture:dst
+         destinationSlice:0
+         destinationLevel:0
+        destinationOrigin:MTLOriginMake(0, 0, 0)];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    resolve_dump_checkpoint(dst, resolve_dir, "dest", seq);
+    resolve_emit("_GfxResolveTexture", target, src, dst, nil, seq,
+                 command.status == MTLCommandBufferStatusCompleted ? "copy_ok"
+                                                                  : "copy_failed");
 }
 
 /* CGraphics::PresentScene (0x149daf0). The frontend clears the present flag,
@@ -2365,33 +2374,35 @@ uint8_t eu4_gfx_last_raster_description[0x10];
 /* Opt-in submission-order trace: records draws, clears and resolves with a
    global sequence, thread and timestamp so deferred/threaded submission order
    can be compared with the engine's CPU order. */
-void eu4_gfx_order_trace(const char *operation, unsigned long long value) {
+void eu4_gfx_order_trace_detail(const char *operation, unsigned long long value,
+                                const char *detail) {
     if (getenv("EU4_GFX_ORDER_TRACE") == NULL) {
         return;
     }
     static uint64_t sequence;
-    static int enabled_check;
-    if (!enabled_check) {
-        enabled_check = 1;
-    }
     uint64_t seq = __atomic_fetch_add(&sequence, 1, __ATOMIC_RELAXED) + 1;
     if (seq > 20000) {
         return;
     }
-    char body[256];
+    char body[768];
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     uint64_t thread = 0;
     (void)pthread_threadid_np(NULL, &thread);
     int n = snprintf(body, sizeof body,
                      "{\"seq\":%llu,\"op\":\"%s\",\"value\":%llu,"
-                     "\"thread\":%llu,\"ns\":%llu}\n",
+                     "\"thread\":%llu,\"ns\":%llu,\"detail\":%s}\n",
                      (unsigned long long)seq, operation, value,
                      (unsigned long long)thread,
-                     (unsigned long long)(ts.tv_sec * 1000000000ull + ts.tv_nsec));
+                     (unsigned long long)(ts.tv_sec * 1000000000ull + ts.tv_nsec),
+                     detail != NULL && detail[0] != 0 ? detail : "{}");
     if (n > 0 && (size_t)n < sizeof body) {
         (void)eu4_metal_events_append("order.jsonl", body);
     }
+}
+
+void eu4_gfx_order_trace(const char *operation, unsigned long long value) {
+    eu4_gfx_order_trace_detail(operation, value, NULL);
 }
 
 void eu4_gfx_present_scene(void *self) {
@@ -2556,10 +2567,22 @@ static void decode_engine_clear_flags(unsigned flags, bool *color, bool *depth,
 
 void eu4_gfx_clear(void *handle, unsigned flags, const float *color) {
     eu4_gfx_live_clear_sequence++;
-    eu4_gfx_order_trace("clear", eu4_gfx_live_clear_sequence);
     void *master = master_from_handle(handle);
     __unsafe_unretained EU4GfxBackend *backend =
         (__bridge EU4GfxBackend *)backend_raw_for_master(master);
+    {
+        char detail[256];
+        snprintf(detail, sizeof detail,
+                 "{\"target\":\"%p\",\"current\":\"%p\",\"flags\":%u,"
+                 "\"default_target\":%d,\"color\":[%.6f,%.6f,%.6f,%.6f]}",
+                 backend != nil ? (__bridge void *)backend.currentTargetColor : NULL,
+                 backend != nil ? (__bridge void *)backend.currentTargetColor : NULL,
+                 flags,
+                 backend != nil && backend.currentTargetColor == nil ? 1 : 0,
+                 color != NULL ? color[0] : 0.0f, color != NULL ? color[1] : 0.0f,
+                 color != NULL ? color[2] : 0.0f, color != NULL ? color[3] : 1.0f);
+        eu4_gfx_order_trace_detail("clear", eu4_gfx_live_clear_sequence, detail);
+    }
     if (backend != nil && backend.currentTargetHeader != NULL &&
         backend.currentTargetColor != nil && backend.queue != nil) {
         /* A render-target clear belongs to that target, not to the window
@@ -2626,6 +2649,20 @@ void eu4_gfx_clear(void *handle, unsigned flags, const float *color) {
         status = clear_game_checked(handle, flags, color);
     } else {
         status = eu4_gfx_clear_checked(handle, flags, color);
+    }
+    if (getenv("EU4_GFX_ORDER_TRACE") != NULL) {
+        char detail[320];
+        snprintf(detail, sizeof detail,
+                 "{\"status\":%d,\"game_color\":\"%p\",\"current\":\"%p\","
+                 "\"geometry_generation\":%llu,\"clear_generation\":%llu,"
+                 "\"pending\":%d}",
+                 (int)status,
+                 backend != nil ? (__bridge void *)backend.gameColorTarget : NULL,
+                 backend != nil ? (__bridge void *)backend.currentTargetColor : NULL,
+                 backend != nil ? (unsigned long long)backend.geometryGeneration : 0ull,
+                 backend != nil ? (unsigned long long)backend.gameClearGeneration : 0ull,
+                 backend != nil && backend.pendingGameCommand != nil ? 1 : 0);
+        eu4_gfx_order_trace_detail("clear-status", eu4_gfx_live_clear_sequence, detail);
     }
     if (status == EU4_GFX_CLEAR_GEOMETRY_STALE) {
         /* A geometry transition is a normal no-op, not a fatal clear. */
@@ -2769,6 +2806,15 @@ void eu4_gfx_set_render_target(void *handle, void *target) {
     }
     __unsafe_unretained EU4GfxBackend *backend =
         master != NULL ? (__bridge EU4GfxBackend *)load_ptr(master, 0x180) : nil;
+    {
+        char detail[192];
+        snprintf(detail, sizeof detail,
+                 "{\"target\":\"%p\",\"previous\":\"%p\",\"default_target\":%d}",
+                 target,
+                 backend != nil ? (__bridge void *)backend.currentTargetColor : NULL,
+                 target == NULL ? 1 : 0);
+        eu4_gfx_order_trace_detail("set-render-target", 0, detail);
+    }
     if (target != NULL) {
         dump_render_target(master, target);
         if (backend == nil) {

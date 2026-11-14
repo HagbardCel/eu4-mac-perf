@@ -116,6 +116,13 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertIn("depth_cleared=1", ran.stdout)
         self.assertIn("color_preserved=1", ran.stdout)
 
+    def test_sampler_effective_min_filter_uses_texture_mip_state(self) -> None:
+        ran = self._run("--sampler-effective")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("sampler_effective=1", ran.stdout)
+        self.assertIn("with_mips=9985", ran.stdout)
+        self.assertIn("without_mips=9729", ran.stdout)
+
     def test_offscreen_viewport_is_not_hidpi_scaled(self) -> None:
         ran = self._run("--offscreen-viewport")
         self.assertEqual(ran.returncode, 0, ran.stderr)

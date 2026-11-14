@@ -1824,6 +1824,12 @@ def probe(args: argparse.Namespace) -> int:
         env["EU4_GFX_ELEMENT_TRACE"] = "1"
     if args.depth_trace:
         env["EU4_GFX_DEPTH_TRACE"] = "1"
+    if args.sampler_trace:
+        env["EU4_GFX_SAMPLER_TRACE"] = "1"
+    if args.vertex_trace:
+        env["EU4_GFX_VERTEX_TRACE"] = "1"
+        if args.vertex_trace_stage:
+            env["EU4_GFX_VERTEX_TRACE_STAGE"] = args.vertex_trace_stage
     if args.sample_texture_dump:
         env["EU4_GFX_SAMPLE_TEXTURE_DUMP"] = str(Path(output))
         if args.sample_texture_stage:
@@ -2253,6 +2259,9 @@ def _parser() -> argparse.ArgumentParser:
     prb.add_argument("--sample-texture-dump", action="store_true")
     prb.add_argument("--element-trace", action="store_true")
     prb.add_argument("--depth-trace", action="store_true")
+    prb.add_argument("--sampler-trace", action="store_true")
+    prb.add_argument("--vertex-trace", action="store_true")
+    prb.add_argument("--vertex-trace-stage", default="")
     prb.add_argument("--no-cull", action="store_true")
     prb.add_argument("--no-blend", action="store_true")
     prb.add_argument("--sample-texture-stage", default="")

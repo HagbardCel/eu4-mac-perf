@@ -975,6 +975,25 @@ static int run_depth_state(void) {
     return ok ? 0 : 1;
 }
 
+static int run_sampler_effective(void) {
+    eu4_gfx_sampler_state state = {0};
+    state.min_filter = 0x2601;
+    state.mag_filter = 0x2601;
+    state.mip_filter = 0x2701;
+    uint32_t with_mips = eu4_gfx_effective_min_filter(&state, 1);
+    uint32_t without_mips = eu4_gfx_effective_min_filter(&state, 0);
+    eu4_gfx_sampler_state explicit_min = {0};
+    explicit_min.min_filter = 0x2703;
+    explicit_min.mag_filter = 0x2600;
+    explicit_min.mip_filter = 0;
+    uint32_t explicit_result = eu4_gfx_effective_min_filter(&explicit_min, 1);
+    int ok = with_mips == 0x2701 && without_mips == 0x2601 &&
+             explicit_result == 0x2703;
+    printf("sampler_effective=%d with_mips=%u without_mips=%u explicit=%u\n",
+           ok, with_mips, without_mips, explicit_result);
+    return ok ? 0 : 1;
+}
+
 static int run_offscreen_viewport(void) {
     /* An offscreen target is allocated at the engine's logical size. The
        window is 64x64 (HiDPI would scale the backbuffer), but the target is
@@ -1129,6 +1148,9 @@ int main(int argc, char **argv) {
     }
     if (argc >= 2 && strcmp(argv[1], "--offscreen-viewport") == 0) {
         return run_offscreen_viewport();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--sampler-effective") == 0) {
+        return run_sampler_effective();
     }
     if (argc >= 2 && strcmp(argv[1], "--depth-state") == 0) {
         return run_depth_state();

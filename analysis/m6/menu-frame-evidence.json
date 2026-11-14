@@ -1,5 +1,5 @@
 {
-  "schema": "m6-menu-frame-evidence/v4",
+  "schema": "m6-menu-frame-evidence/v5",
   "canonical_reference": {
     "frame_dir": ".local/m6/frames/menu-occ300/frame",
     "selection": {
@@ -129,8 +129,9 @@
     "consequence": "The pixel-exact offline result qualifies a captured-state replay, not an independent reconstruction of the terrain draw. Live terrain differences cannot be excluded or explained by the offline replay; they must be compared against the captured draw's inputs directly."
   },
   "live_verification": {
-    "run": ".local/m6/live-final/verify-1",
-    "identity": "1794635347-64349",
+    "run": ".local/m6/live-verify2/run-1",
+    "identity": "1794640399-68635",
+    "pid": 68709,
     "operational": {
       "executed": true,
       "gpu_completed": true,
@@ -140,23 +141,29 @@
     "visual": {
       "visual_match": false,
       "ui_region_correlation": [
-        0.755,
-        0.821,
-        0.482
+        0.757,
+        0.825,
+        0.484
       ],
-      "map_mean": 144.023,
-      "map_color_similarity": 0.435,
+      "map_mean": 143.406,
+      "map_color_similarity": 0.452,
       "map_structure": true
     },
-    "change_after_viewport_fix": "The magenta/pink map palette disappeared. The composite's second (864x558) input went from near-black and one-quarter coverage to full coverage (mean 112/112/113, alpha 255). The map now renders terrain colours, confirming the offscreen viewport defect was the first material divergence.",
+    "change_after_offscreen_viewport_fix": "The magenta/pink palette disappeared and the secondary 864x558 input gained full coverage.",
+    "change_after_sampler_fix": "The live sampler had been using no mipmap for mipmapped textures. The effective min filter now follows the bound texture's mip levels; the palette affinity improved slightly (0.435 -> 0.452) but the map remains far too bright (mean 143.4 vs 71.9).",
     "remaining_divergence": {
-      "stage": "map render-target / resolve into the sampled MainScene texture",
-      "evidence": "The live composite input MainScene (1728x1117) is already the season-colour-balanced (beige) image (mean 112/112/113), while the authentic captured MainScene is the uncomposited green terrain map (mean 65/76/73). The live presented map is about twice as bright as the authentic reference (map mean 144 vs 72; colour affinity 0.435 < 0.85).",
-      "interpretation": "The live resolve/composite chain is feeding a previously composited frame back as MainScene instead of the current terrain render; the bloom add then compounds brightness. The remaining defect is in the render-target lifecycle/resolve ordering, not in the terrain draw, which now matches under equivalent inputs.",
+      "stage": "cumulative terrain draw batch, upstream of the resolve",
+      "evidence": [
+        "The first _GfxResolve (seq 1, draw_seq 737) already copies a beige source: source and MainScene means are both 113/112/113 with alpha 247.",
+        "The preceding frame-start default clear is valid: flags 7, color black, status 0, geometry/clear generation 1, and it targets the same gameColorTarget pointer as the terrain draws.",
+        "The live terrain draw at caller 0x10ce96e has vertex positions/UVs byte-identical to captured event 24 (position offset 1439536, UV offset 1439548, stride 28), and its textures, uniforms and depth/blend/raster state match the capture.",
+        "A single isolated terrain draw (event 24) replayed with the live time/season uniforms still has the same mean colour; the time/season fields change only ~244 pixels.",
+        "Therefore the resolve copy is faithful; the beige map is produced by the multi-draw terrain batch (blend order/state or an overlay pass), not by a previous composite being fed back."
+      ],
+      "interpretation": "The earlier 'composited frame fed back as MainScene' interpretation is superseded. The render-target lifecycle is behaving as implemented: clear -> terrain batch -> resolve. The remaining defect is inside the live execution of the terrain batch across draws.",
       "not_yet_fixed": true
     },
-    "ui_artifacts": "Some legacy text/sprite draws still show mirrored or white-box glyph composition (e.g. Credits/Options and the Paradox logo region); UI region correlation is 0.482 for the logo region, below the 0.5 policy floor.",
-    "pid": 64418
+    "ui_artifacts": "The Paradox-logo/UI region still fails (0.484 < 0.5) and some legacy text/sprite composition remains visibly wrong."
   },
   "live_start_policy": {
     "required_clean_starts": 3,
@@ -180,9 +187,79 @@
       "evidence": "live sample-u1 coverage was exactly 25% before the fix and 100% after; regression test added"
     },
     {
-      "finding": "The remaining live palette divergence is in the map resolve/composite lifecycle (composited frame fed back as MainScene).",
+      "finding": "Mipmapped textures used no mipmap live because the engine's base min and mip fields were conflated.",
+      "status": "confirmed",
+      "evidence": "live sampler trace min=0x2601/mip=0x2701 for every unit; captured min=0x2701 exactly for textures with >1 level; regression added"
+    },
+    {
+      "finding": "The MainScene resolve was claimed to read a previous composite.",
+      "status": "superseded",
+      "evidence": "the frame-start clear is valid and targets the same texture; the first resolve source is the beige current terrain batch, not a previous composite"
+    },
+    {
+      "finding": "The remaining live palette divergence is produced inside the multi-draw terrain batch, although a single terrain draw's inputs and output match the capture.",
       "status": "blocking",
-      "evidence": "live MainScene is already season-colour-balanced while the authentic MainScene is the uncomposited green terrain map"
+      "evidence": "first resolve source is already beige; single draw 24 vertex/texture/uniform/state match; time/season change is not material"
     }
-  ]
+  ],
+  "sampler_effective_state": {
+    "defect": "The engine sampler object stores base min=0x2601 and mip=0x2701 separately. The live encoder used the base min and disabled mipmapping for every texture, while GL uses GL_LINEAR_MIPMAP_NEAREST for textures with >1 mip level (captured min 0x2701) and GL_LINEAR for single-level textures.",
+    "fix": "eu4_gfx_effective_min_filter(state, has_mip_levels) selects the engine's mip filter when the bound texture has mip levels and the base min otherwise. sampler_for_unit uses it.",
+    "regression": "tests/test_gfx_live_draw.py::GfxLiveDrawTests.test_sampler_effective_min_filter_uses_texture_mip_state"
+  },
+  "resolve_sequence": {
+    "trace": ".local/m6/live-resolve/diag-2/resolve-trace.jsonl",
+    "first_seq": {
+      "seq": 1,
+      "op": "_GfxResolve",
+      "src": "gameColorTarget",
+      "src_size": [
+        3456,
+        2234
+      ],
+      "dst_size": [
+        1728,
+        1117
+      ],
+      "src_format": 80,
+      "dst_format": 80,
+      "draw_seq": 737,
+      "clear_seq": 113,
+      "status": "scaled_ok"
+    },
+    "first_source_mean": [
+      113.17,
+      112.21,
+      113.04,
+      247.13
+    ],
+    "first_dest_mean": [
+      113.23,
+      112.26,
+      113.06,
+      247.13
+    ],
+    "clear_before_terrain": {
+      "seq": 109,
+      "flags": 7,
+      "color": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "status": 0,
+      "default_target": true,
+      "same_target_as_terrain": true
+    },
+    "terrain_vertex_match": {
+      "event": 24,
+      "count": 594,
+      "position_offset": 1439536,
+      "texcoord_offset": 1439548,
+      "stride": 28,
+      "values_match_capture": true
+    },
+    "conclusion": "No invalid resolve or copy was observed. The beige MainScene is the faithful copy of a beige current backbuffer produced by the terrain batch."
+  }
 }

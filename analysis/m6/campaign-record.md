@@ -1187,3 +1187,54 @@ completed, 0 differing pixels including alpha. Tests on the final head: M6
 frame 26/26, live draw 21/21, M4/M5/M6 acceptance 41/41, texture 1/1.
 
 **Verdict: DO NOT MERGE.** Live visual acceptance is not met.
+
+## MainScene resolve sequence and sampler effective state (2026-11-14, second pass)
+
+The earlier reading that MainScene was a previous composite fed back is
+superseded by a sequenced resolve trace.
+
+### Resolve sequence
+
+The targeted trace records 1,753 `_GfxResolve` calls. The first one:
+
+- sequence 1, draw 737, clear 113;
+- source `gameColorTarget` 3456x2234 BGRA8Unorm, destination MainScene
+  1728x1117 BGRA8Unorm;
+- status `scaled_ok`;
+- source and destination both mean ~113/112/113 with alpha 247, and the
+  destination hash equals the composite's MainScene sample.
+
+The frame-start default clear immediately before the terrain batch is valid:
+flags 7, black, status 0, geometry/clear generation 1, and it targets the same
+`gameColorTarget` pointer as the terrain draws. No missing clear, failed
+resolve, wrong-frame source or dimension mismatch was observed. Bounded,
+sequence-named resolve checkpoints (`resolve-0001-source/dest.bgra`) replace
+the old dimension-named dumps and the duplicated `_GfxResolveTexture` trace.
+
+### Terrain draw input match
+
+The live terrain draw at caller `0x10ce96e` matches captured event 24 exactly
+for vertex data: position offset 1,439,536, UV offset 1,439,548, stride 28,
+first position `(2719.0, 32.8, 1188.0)` and UV `(0,0,1)`. Textures, uniforms,
+depth/blend/raster state and the translated shader also match. Replaying event
+24 with the live time/season uniforms changed ~244 pixels and did not change
+its mean colour.
+
+### Sampler effective state
+
+The engine sampler object stores base min `0x2601` and mip `0x2701` separately;
+the live encoder used the base min and disabled mipmapping for all textures.
+The capture uses `0x2701` exactly for textures with more than one mip level and
+`0x2601` for single-level textures. `eu4_gfx_effective_min_filter` now selects
+the engine mip filter when the bound texture has mip levels. Regression:
+`test_sampler_effective_min_filter_uses_texture_mip_state`. Palette affinity
+moved only 0.435 -> 0.452.
+
+### Latest live verification
+
+`live-verify2/run-1` (identity `1794640399-68635`) executed, GPU-completed and
+presented with zero refused draws. `visual_match=false`: UI correlations
+0.757/0.825/0.484, map mean 143.4 vs 71.9, palette affinity 0.452. The
+remaining defect is inside the cumulative terrain batch (blend order/state or
+an overlay pass); the resolve copy is faithful. Three clean starts are not
+claimed. **Verdict remains DO NOT MERGE.**

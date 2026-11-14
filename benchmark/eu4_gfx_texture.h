@@ -97,6 +97,13 @@ typedef struct {
    state the reconstructed backend cannot represent. */
 int eu4_gfx_decode_sampler(const void *sampler, eu4_gfx_sampler_state *out);
 
+/* The engine stores the base min filter and the mip filter separately. The
+   effective GL min filter follows the bound texture: a texture with mip levels
+   uses the engine's mip filter; a single-level texture uses the base min.
+   Returns a GL min-filter enum (GL_LINEAR_MIPMAP_NEAREST when mipmapped). */
+uint32_t eu4_gfx_effective_min_filter(const eu4_gfx_sampler_state *state,
+                                      int has_mip_levels);
+
 /* _GfxSetTextures at 0x15ecbf2. rdi is the handle and (%rdi) is the state object.
    esi is the count. rdx is the texture-pointer array. ecx bit 0 binds from r8d,
    and bit 1 binds from r8d + 0xf. r9 is an optional sampler-pointer array. A null

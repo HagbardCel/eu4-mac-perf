@@ -41,19 +41,33 @@ passed**, so M6 is not accepted and PR #189 remains Draft.
   now gives the backbuffer its window extent and each offscreen target its own
   extent; the native offscreen-viewport regression fails under the old
   behaviour and passes after the fix.
-- **Live result after the fix.** One post-fix launch (`verify-1`, identity
-  `1794635347-64349`) executed, GPU-completed and presented the complete title
-  scene with zero refused draws. The magenta/pink palette disappeared and the
-  secondary composite input is now full-size and non-black.
-- **Remaining blocker.** The live composite's MainScene input is already the
-  season-colour-balanced beige image (mean 112/112/113), while the authentic
-  MainScene is the uncomposited green terrain map (mean 65/76/73). The
-  presented map is about twice as bright as the reference (map mean 144 vs 72,
-  palette affinity 0.435 against a 0.85 floor) and the Paradox-logo UI region
-  correlates 0.482 (floor 0.5). The evidence points to a resolve/composite
-  lifecycle defect that feeds a previously composited frame back as MainScene;
-  no speculative brightness adjustment was applied. Live acceptance reports
-  `visual_match=false` and the three-clean-start gate is not met.
+- **Live result after the fixes.** The post-sampler-fix launch
+  (`live-verify2/run-1`, identity `1794640399-68635`) executed, GPU-completed
+  and presented the complete title scene with zero refused draws. The
+  magenta/pink palette disappeared and the secondary composite input is
+  full-size and non-black.
+- **MainScene lifecycle (observed).** The resolve trace shows the first
+  `_GfxResolve` (draw 737) copies the current `gameColorTarget` (3456x2234)
+  into MainScene (1728x1117) with `scaled_ok`; the destination hash equals the
+  composite's MainScene sample. The preceding default clear is valid (flags 7,
+  black, status 0) and targets the same texture. The earlier
+  previous-composite-feedback interpretation is superseded.
+- **Sampler effective state (fixed).** The live filter decode conflated the
+  engine's base min filter and its separate mip filter, disabling mipmapping
+  for every texture. `eu4_gfx_effective_min_filter` now uses the engine mip
+  filter only when the bound texture has mip levels; a native regression
+  covers the mapping. Palette affinity improved only marginally
+  (0.435 -> 0.452), so this is a correctness fix, not the map root cause.
+- **Remaining blocker.** The live terrain draw at caller `0x10ce96e` has
+  vertex data byte-identical to captured event 24, and its textures, uniforms,
+  shader and state match; replaying it with the live time/season uniforms
+  changes its mean colour by less than one channel step. Nevertheless the
+  cumulative terrain batch is beige (MainScene mean 143.4 vs 71.9; palette
+  affinity 0.452 against 0.85) and the Paradox-logo UI region correlates 0.484
+  (floor 0.5). The defect is therefore inside the multi-draw terrain pass
+  (blend order/state or an overlay pass), not in a single draw or the resolve
+  copy. Live acceptance reports `visual_match=false` and the three-clean-start
+  gate is not met.
 
 ## M4 — original-GL reference and Metal presentation (2026-11-12)
 

@@ -5,7 +5,7 @@
   "reference_error": "",
   "runs": [
     {
-      "run": ".local/m6/live-final/verify-1",
+      "run": ".local/m6/live-verify2/run-1",
       "status": {
         "executed": true,
         "gpu_completed": true,
@@ -23,7 +23,7 @@
         "frame_dump": true,
         "presented_flag": true,
         "non_blank": true,
-        "frame_sha256": "99061a1585becbe18c83044580fb94d5db0ea96ac31bd514b309d55d89bf367e",
+        "frame_sha256": "e9a86e5c6c33488e2c9f0ded6bc9e24e8e243ecca1f5947ab3341b15a4004640",
         "ui_regions": false,
         "map_region": false
       },
@@ -34,28 +34,28 @@
         ],
         "scale": 2,
         "resampled": true,
-        "unique_colors": 241352,
+        "unique_colors": 244108,
         "ui_region_error": [
-          28.422,
-          33.996,
-          95.395
+          27.958,
+          34.256,
+          95.327
         ],
         "ui_region_correlation": [
-          0.755,
-          0.821,
-          0.482
+          0.757,
+          0.825,
+          0.484
         ],
-        "map_unique_colors": 92367,
-        "map_mean": 144.023,
+        "map_unique_colors": 94113,
+        "map_mean": 143.406,
         "map_structure": true,
-        "map_color_similarity": 0.435,
+        "map_color_similarity": 0.452,
         "ui_ok": false,
         "map_ok": false
       },
-      "canonical": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m6/live-final/verify-1",
-      "identity": "1794635347-64349",
+      "canonical": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m6/live-verify2/run-1",
+      "identity": "1794640399-68635",
       "ok": false,
-      "phase": "post-viewport-fix verification"
+      "phase": "post-sampler-fix verification"
     }
   ],
   "clean_starts": 0,
@@ -64,25 +64,31 @@
   "ok": false,
   "historical_runs": [
     {
+      "run": ".local/m6/live-final/verify-1",
+      "phase": "pre-sampler-fix",
+      "status": "historical",
+      "note": "map palette affinity 0.435"
+    },
+    {
       "run": ".local/m6/live/final-1",
       "phase": "pre-viewport-fix",
       "status": "historical",
-      "note": "pink palette; not valid qualification evidence"
+      "note": "pink palette"
     },
     {
       "run": ".local/m6/live/final-2",
       "phase": "pre-viewport-fix",
       "status": "historical",
-      "note": "pink palette; not valid qualification evidence"
+      "note": "pink palette"
     },
     {
       "run": ".local/m6/live/final-3",
       "phase": "pre-viewport-fix",
       "status": "historical",
-      "note": "pink palette; not valid qualification evidence"
+      "note": "pink palette"
     }
   ],
-  "note": "One post-fix live verification pass: executed, GPU-completed, presented, zero refused draws, but visual_match=false. The magenta palette was removed by the offscreen-viewport correction; the remaining map brightness/colour divergence is in the resolve/composite lifecycle (the composited frame is fed back as MainScene). Three clean starts are not claimed.",
+  "note": "One post-sampler-fix live verification reached the settled title scene, executed, GPU-completed and presented with zero refused draws, but visual_match=false. The resolve copy is faithful (the first resolve source is the current beige terrain batch); the remaining defect is inside the multi-draw terrain batch. Three clean starts are not claimed.",
   "qualified_clean_starts": 0,
   "required_clean_starts": 3
 }

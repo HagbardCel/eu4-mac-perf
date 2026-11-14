@@ -2,8 +2,8 @@
   "schema": "m6-live-title-starts/v2",
   "runs": [
     {
-      "run": ".local/m6/live-final/verify-1",
-      "phase": "post-fix verification",
+      "run": ".local/m6/live-verify2/run-1",
+      "phase": "post-sampler-fix verification",
       "overall": "captured",
       "status": {
         "draw_reached": true,
@@ -13,10 +13,10 @@
         "presented": true,
         "reference_matched": null
       },
-      "launch_identity": "1794635347-64349",
-      "pid": 64418,
+      "launch_identity": "1794640399-68635",
+      "pid": 68709,
       "refused_draws": 0,
-      "swap_dump_sha256": "99061a1585becbe18c83044580fb94d5db0ea96ac31bd514b309d55d89bf367e",
+      "swap_dump_sha256": "e9a86e5c6c33488e2c9f0ded6bc9e24e8e243ecca1f5947ab3341b15a4004640",
       "swap_dump_bytes": 30882816,
       "acceptance": {
         "executed": true,
@@ -30,25 +30,24 @@
   ],
   "historical_runs": [
     {
+      "run": ".local/m6/live-final/verify-1",
+      "phase": "pre-sampler-fix",
+      "status": "historical"
+    },
+    {
       "run": ".local/m6/live/final-1",
       "phase": "pre-viewport-fix",
-      "launch_identity": "1794590270-11354",
-      "status": "historical",
-      "note": "pink palette; superseded by the viewport correction and not reusable"
+      "status": "historical"
     },
     {
       "run": ".local/m6/live/final-2",
       "phase": "pre-viewport-fix",
-      "launch_identity": "1794590620-11601",
-      "status": "historical",
-      "note": "pink palette; superseded by the viewport correction and not reusable"
+      "status": "historical"
     },
     {
       "run": ".local/m6/live/final-3",
       "phase": "pre-viewport-fix",
-      "launch_identity": "1794590968-11775",
-      "status": "historical",
-      "note": "pink palette; superseded by the viewport correction and not reusable"
+      "status": "historical"
     }
   ],
   "menu_caller": "0x103b3c8",
@@ -59,5 +58,5 @@
   "distinct_runs": true,
   "distinct_identities": true,
   "ok": false,
-  "note": "One post-fix launch reached the settled title scene, executed, GPU-completed and presented with zero refused draws. It does not pass the visual gate, so the three-clean-start requirement is not met. The three pre-fix launches are historical and must not be reused."
+  "note": "One post-sampler-fix launch reached the settled title scene and presented with zero refused draws. The visual gate still fails; the three-clean-start requirement is not met."
 }

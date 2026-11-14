@@ -822,6 +822,22 @@ void *eu4_gfx_texture_for_header(void *header) {
     return texture != nil ? (__bridge void *)texture : NULL;
 }
 
+static int sampler_min_is_mipmapped(uint32_t filter) {
+    return filter == 0x2700 || filter == 0x2701 || filter == 0x2702 ||
+           filter == 0x2703;
+}
+
+uint32_t eu4_gfx_effective_min_filter(const eu4_gfx_sampler_state *state,
+                                      int has_mip_levels) {
+    if (state == NULL) {
+        return 0x2601;
+    }
+    if (has_mip_levels && sampler_min_is_mipmapped(state->mip_filter)) {
+        return state->mip_filter;
+    }
+    return state->min_filter;
+}
+
 int eu4_gfx_decode_sampler(const void *sampler, eu4_gfx_sampler_state *out) {
     if (sampler == NULL || out == NULL) {
         return -1;

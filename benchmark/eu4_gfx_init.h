@@ -40,6 +40,9 @@
 @property (nonatomic, strong) id lastDrawTargetColor;
 @property (nonatomic, strong) id lastFullTargetColor;
 void eu4_gfx_order_trace(const char *operation, unsigned long long value);
+/* Same trace with an operation-specific JSON detail object (already escaped). */
+void eu4_gfx_order_trace_detail(const char *operation, unsigned long long value,
+                                const char *detail);
 extern uint8_t eu4_gfx_last_raster_description[0x10];
 extern uint64_t eu4_gfx_live_draw_sequence;
 extern uint64_t eu4_gfx_live_clear_sequence;
