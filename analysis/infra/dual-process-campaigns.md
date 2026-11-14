@@ -183,7 +183,10 @@ fluctuated between 17 and 81 and did not reach the configured target of 100
 before the phase deadline (the staggered candidate was intentionally not
 started yet).  The reference loading path/long-run behaviour needs a
 windowed/foreground or user-dir isolation experiment before the live title
-campaign is claimed.
+campaign is claimed. A long frame-only run streamed 35,234 frames over 302 s
+(draws 17-81, still loading) and was then killed externally with SIGKILL; the
+historical M6 title capture took about 5m40s, so the run had not reached the
+scene. The observation cap is now 120,000 frames.
 
 A further staggered run with a 40-draw phase threshold paired 110 observations,
 but every pair was `ambiguous`: the reference had 46 draws while the candidate

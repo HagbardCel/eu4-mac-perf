@@ -42,12 +42,14 @@ attempts failed for different, now-understood reasons:
    quota after ~12 s and stopped emitting frame observations. A **frame-only
    observer mode** (`EU4_GFX_FRAME_ONLY=1`) now installs only the present/draw/
    clear hooks and bypasses the event-record quota; it streamed 20,000
-   metadata frames at ~112 fps. In that run the reference loading draw count
-   fluctuated between 17 and 81 and never reached the configured target of 100
-   before the phase deadline, while the staggered candidate was not started
-   (by design). The reference loading path/long-run behaviour therefore still
-   needs a windowed/foreground or user-dir isolation experiment; the live title
-   campaign is not claimed.
+   metadata frames at ~112 fps. A later long run streamed **35,234 frames over
+   302 s** (draws 17-81, still loading) before the reference process was killed
+   externally with SIGKILL; the historical M6 title evidence took about 5m40s
+   from launch, so the 302 s run had not yet reached the title. The live title
+   campaign is therefore not claimed; the remaining unknowns are the long
+   reference loading time and the external kill. The frame cap is raised to
+   120,000 observations, and phase readiness now also requires similar draw
+   counts.
 
 Metadata-only observation, phase-gated pairing, staggered launch and pre-requested
 full-resolution windows are implemented and tested. A later real run did reach
