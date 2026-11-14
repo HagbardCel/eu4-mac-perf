@@ -876,6 +876,10 @@ def classify_campaign(result: dict, scenario: dict, *, max_frames: int) -> dict:
     elif (result.get("stability") or {}).get("status") != "verified":
         classification = "incomplete"
         reasons.append("no verified static scene; correspondence is weak")
+    elif health.get("verdict") != "healthy":
+        classification = "incomplete"
+        reasons.append(
+            f"GPU health is {health.get('verdict', 'unknown')}, not healthy")
     else:
         classification = "match"
     return {
@@ -1073,6 +1077,9 @@ def run_campaign(
             role: gfx_diagnostics.IncrementalHealth(item.run_dir, health)
             for role, item in launched.items()
         }
+        health.add("health_check",
+                   "observer startup and owned processes healthy at readiness",
+                   severity="info", signature="health_check:readiness")
 
         def abort_for_exit() -> bool:
             return any(item.process.poll() is not None for item in launched.values())

@@ -462,7 +462,7 @@ class QualificationTests(unittest.TestCase):
                     if failed else None,
                 },
             },
-            "health": health or {"verdict": "unknown", "first_failure": None,
+            "health": health or {"verdict": "healthy", "first_failure": None,
                                   "instrumentation_failures": []},
             "processes": processes or {"reference": {"exit_code": 0},
                                         "candidate": {"exit_code": 0}},
@@ -479,6 +479,13 @@ class QualificationTests(unittest.TestCase):
         return gfx_dual_run.classify_campaign(
             result, self.scenario(kwargs.pop("policy", "tolerant")),
             max_frames=kwargs.pop("max_frames", 100))
+
+    def test_unknown_health_cannot_match(self):
+        value = self.classify(self.result(
+            health={"verdict": "unknown", "first_failure": None,
+                    "instrumentation_failures": []}))
+        self.assertEqual(value["status"], "incomplete")
+        self.assertFalse(value["qualified"])
 
     def test_full_passing_coverage_is_match(self):
         value = self.classify(self.result())
