@@ -29,9 +29,9 @@ The shared-settings lifecycle is lease-ordered, with durable backup, rollback,
 monitor coverage and field-level restore. Deterministic SDL call-site placement
 (clearing the engine's requested fullscreen flags) fixed the window geometry:
 **five consecutive OpenGL background launches passed** placement, focus,
-frame progress and settings restoration. Metal background placement works but
-the candidate still becomes frontmost, so Metal background focus is
-**unqualified**. Background remains opt-in.
+frame progress and settings restoration. Metal background is likewise **5/5 qualified**: background
+flags are propagated after clearing fullscreen and `ensure_visible_on_main()`
+no longer activates or raises the window. Background remains opt-in.
 
 Evidence: [Strategy B report](../analysis/infra/strategy-b.md). Tools:
 `eu4_capture graph`, `eu4_replay independent`, `eu4_case_inspect` for Strategy B

@@ -347,3 +347,38 @@ unchanged in their qualification claims.
 
 Targeted tests: 201 pass across display, campaign, graph, replay-case, agent,
 M6 frame and PR #190 draw suites; 6/6 DSH plugin tests pass.
+
+## 13. Final closure (2026-11-14, post-19fb671)
+
+- **Metal background qualified.** `eu4_metal_boot_on_create()` now propagates the
+  background-modified flags (`passed = flags & ~OPENGL`) instead of rebuilding
+  from the original `incoming` value, and `ensure_visible_on_main()` attaches
+  the child layer without `activateIgnoringOtherApps`, `makeKeyAndOrderFront` or
+  `orderFrontRegardless` in background mode. Five consecutive Metal launches
+  passed: correct 1728x1117 drawable, window entirely on `EU4 Test`, zero
+  activations, 78-80 observations each, clean termination, settings restored.
+  OpenGL remains 5/5 from the previous qualification.
+- **Clear semantics corrected.** Clear bits are now treated as the engine's
+  `color=1, depth=2, stencil=4`, not GLbitfield. Color-only preserves depth,
+  depth-only preserves color and does not advance the color generation, and
+  stencil clears use a `Depth32Float_Stencil8` attachment. Native regression
+  `tests/test_gfx_replay_semantics.py` covers the flag mapping.
+- **Every expected consumer validated.** The evaluator reconstructs
+  `(event, sampler, texture, required_generation)` from the graph and rejects
+  missing, ambiguous, wrong-resource, captured-intermediate and stale-generation
+  bindings. A missing second sample after a rewrite is a regression test.
+- **Texture 442 lifecycle evidence.** A new GL interposer records ordered
+  `glCopyTexSubImage2D` events. In a live run it observed **5,618 copies into
+  texture 442**, all 1728x1117, all with `read_fbo=0` (the default framebuffer).
+  This establishes that 442 is a per-frame backbuffer copy, not a CPU upload or
+  an unrelated alias.
+- **Resolve replay implemented.** The Metal host now allocates resolve
+  destinations, executes the copy through a compute pass with GL-row-preserving
+  orientation and correct destination generation, and fails closed on unknown
+  variants. A synthetic native test (`tests/test_resolve_replay.py`) copies a
+  red default target into texture 10 and samples it back exactly.
+- **Capture attempts.** Three authenticated background capture attempts exited
+  before occurrence 300 and produced no frame. The 442 copy evidence is real,
+  but the exact copy position relative to the canonical frame boundary is still
+  unproven, so 442 is not declared a boundary input and the frame remains
+  `coverage=partial`.
