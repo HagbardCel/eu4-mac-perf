@@ -69,8 +69,10 @@ deterministic day counter.
 
 Experiment A after those fixes produced 20 pairs but only 13 aligned. The
 streams had equal `game_day`/`update_identity`; the pair dict simply omitted
-both fields, so alignment could not use them. Pair records now carry identity,
-and a unit test asserts it. This has not been re-run live. The save
+both fields, so alignment could not use them. Pair records now carry identity, and a unit test asserts it. Replaying the
+recorded Experiment A observation window offline through the fixed alignment
+gives **20 aligned, 0 ambiguous** pairs; the real window is committed as a
+regression fixture. Pixel comparison still needs a live re-run. The save
 continues running, so the two processes are not at the same update. Experiment A
 therefore failed before any GL/Metal comparison; this is recorded as an
 `alignment_failure`, not as a renderer difference.

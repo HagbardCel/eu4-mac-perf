@@ -819,6 +819,20 @@ class PostReferenceCleanupTests(unittest.TestCase):
             self.assertEqual(terminal["status"], gfx_session.FAILED)
 
 
+class RealIdentityAlignmentTests(unittest.TestCase):
+    def test_recorded_gl_gl_window_aligns_on_game_update(self):
+        fixture = (Path(__file__).resolve().parent / "fixtures"
+                   / "identity-alignment")
+        reference = json.loads((fixture / "reference.json").read_text())
+        candidate = json.loads((fixture / "candidate.json").read_text())
+        result = gfx_align.align_sequences(reference, candidate)
+        self.assertEqual(result["aligned"], 20)
+        self.assertEqual(result["ambiguous"], 0)
+        self.assertEqual(result["not_aligned"], 0)
+        self.assertTrue(all("game_update" in pair["evidence"]
+                            for pair in result["pairs"]))
+
+
 class CaptureRequestTests(unittest.TestCase):
     def test_request_ids_and_acks_are_correlated(self):
         with tempfile.TemporaryDirectory() as temporary:
