@@ -388,6 +388,14 @@ class LaunchPreparationTests(unittest.TestCase):
         )
         self.assertEqual(env["EU4_GFX_PAUSE_AT_DRAWS"], "100")
 
+    def test_first_game_day_pause_is_passed_to_the_observer(self):
+        self.config.pause_at_first_game_day = True
+        env, _run_dir, _observe = gfx_launch.prepare(
+            "reference", self.config, self.root / "first-day",
+            libraries={"reference": self.library, "candidate": self.library},
+        )
+        self.assertEqual(env["EU4_GFX_PAUSE_AT_FIRST_GAME_DAY"], "1")
+
     def test_inherited_instrumentation_is_cleared(self):
         import os
         from unittest import mock
@@ -484,6 +492,24 @@ class PairComparisonTests(unittest.TestCase):
             self.pair(), reference, candidate, scenario)
         self.assertEqual(result["status"], "not_compared")
         self.assertIn("intra-day state", result["reason"])
+
+    def test_weak_day_identity_rejects_uncorroborated_scene(self):
+        scenario = dict(self.scenario)
+        scenario["settle"] = {"draw_tolerance": 0.5}
+        scenario["comparison"] = dict(scenario["comparison"],
+                                      weak_identity_guard=True,
+                                      weak_identity_min_correlation=0.9)
+        noise = np.random.default_rng(11).integers(
+            0, 255, size=(8, 8, 4), dtype=np.uint8)
+        self.candidate_path.write_bytes(noise.tobytes())
+        reference = dict(self.meta["reference"], draws=300,
+                         update_identity="0x10")
+        candidate = dict(self.meta["candidate"], draws=350,
+                         caller_signature="0xdef", update_identity="0x10")
+        result = gfx_dual_run._compare_pair(
+            self.pair(), reference, candidate, scenario)
+        self.assertEqual(result["status"], "not_compared")
+        self.assertIn("day-level identity", result["reason"])
 
     def test_ambiguous_composition_is_not_compared(self):
         candidate = dict(self.meta["candidate"], caller_signature="0xdef")

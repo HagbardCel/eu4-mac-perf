@@ -50,6 +50,7 @@ class LaunchConfig:
     metadata_only: bool = False
     session_id: str = ""
     pause_at_draws: int = 0
+    pause_at_first_game_day: bool = False
 
 
 @dataclass
@@ -175,6 +176,8 @@ def prepare(role: str, config: LaunchConfig, run_dir: Path,
         env["EU4_GFX_FRAME_ONLY"] = "1"
         if config.pause_at_draws > 0:
             env["EU4_GFX_PAUSE_AT_DRAWS"] = str(config.pause_at_draws)
+        if config.pause_at_first_game_day:
+            env["EU4_GFX_PAUSE_AT_FIRST_GAME_DAY"] = "1"
     else:
         env["DYLD_INSERT_LIBRARIES"] = str(library)
         env["EU4_METAL_BOOT_MODE"] = "metal_init"

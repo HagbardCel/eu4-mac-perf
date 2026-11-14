@@ -690,10 +690,24 @@ def _compare_pair(pair: dict, reference_meta: dict | None,
         )
     except Exception as exc:  # noqa: BLE001
         content = {"status": "unavailable", "reason": f"{type(exc).__name__}: {exc}"}
-    # Coarse image correlation is diagnostic only.  A catastrophically wrong
-    # Metal image can correlate poorly while both games render the same frame;
-    # suppressing that comparison would hide the very defect under test.
+    # A day-only identity is weaker than a tick identity.  In that case coarse
+    # content corroboration prevents two different loading/scene phases from
+    # being reported as a rendering difference.  A strong tick identity would
+    # not need this guard.
     alignment["content"] = content
+    weak_guard = bool(policy.get("weak_identity_guard", True))
+    min_correlation = float(policy.get("weak_identity_min_correlation", 0.35))
+    correlation = content.get("normal_correlation")
+    if (weak_guard and identity_equal and reference_signature != candidate_signature
+            and (correlation is None or correlation < min_correlation)):
+        return {
+            "status": "not_compared",
+            "reason": (
+                "day-level identity and content do not corroborate the same "
+                f"scene (correlation {correlation} < {min_correlation})"
+            ),
+            "alignment": alignment,
+        }
     compare_policy = {
         "policy": policy["policy"],
         "pixel_tolerance": policy["max_channel_error"],
@@ -1089,8 +1103,13 @@ def run_campaign(
             pause_at_draws=(
                 int(scenario["settle"]["min_draws"])
                 if (scenario.get("start") or {}).get("pause")
+                and not (scenario.get("start") or {}).get("pause_at_first_game_day")
                 and int(scenario["settle"]["min_draws"]) > 0
                 else 0
+            ),
+            pause_at_first_game_day=bool(
+                (scenario.get("start") or {}).get("pause")
+                and (scenario.get("start") or {}).get("pause_at_first_game_day")
             ),
         )
         lease = launch_lease.acquire(executable, output=session.run_dir)

@@ -99,7 +99,8 @@ def normalize(value: dict) -> dict:
     start = value.get("start", {"kind": "frontend"})
     if not isinstance(start, dict):
         raise ScenarioError("type", "start must be an object")
-    _check_keys(start, {"kind", "save", "pause", "game_speed"}, "start")
+    _check_keys(start, {"kind", "save", "pause", "game_speed",
+                        "pause_at_first_game_day"}, "start")
     kind = start.get("kind", "frontend")
     if kind not in STARTS:
         raise ScenarioError("enum", f"start.kind must be one of {STARTS}")
@@ -198,7 +199,7 @@ def normalize(value: dict) -> dict:
     _check_keys(comparison, {
         "policy", "max_channel_error", "max_mismatched_fraction",
         "max_mean_abs_error", "regions", "require_aligned",
-        "stop_on_first",
+        "stop_on_first", "weak_identity_guard", "weak_identity_min_correlation",
     }, "comparison")
     policy = comparison.get("policy", "exact")
     if policy not in POLICIES:
@@ -244,6 +245,12 @@ def normalize(value: dict) -> dict:
                                 "comparison.require_aligned", True)
     stop_on_first = _optional(comparison.get("stop_on_first"), bool,
                               "comparison.stop_on_first", True)
+    weak_identity_guard = _optional(comparison.get("weak_identity_guard"), bool,
+                                    "comparison.weak_identity_guard", True)
+    weak_identity_min_correlation = _optional(
+        comparison.get("weak_identity_min_correlation"), float,
+        "comparison.weak_identity_min_correlation", 0.35,
+        minimum=0.0, maximum=1.0)
 
     mode = value.get("mode", "streaming")
     if mode not in MODES:
@@ -282,6 +289,9 @@ def normalize(value: dict) -> dict:
             "kind": kind,
             "save": save,
             "pause": pause,
+        "pause_at_first_game_day": _optional(
+            start.get("pause_at_first_game_day"), bool,
+            "start.pause_at_first_game_day", False),
             "game_speed": speed,
         },
         "game_config": game_config,
@@ -310,6 +320,8 @@ def normalize(value: dict) -> dict:
             "regions": normalized_regions,
             "require_aligned": require_aligned,
             "stop_on_first": stop_on_first,
+            "weak_identity_guard": weak_identity_guard,
+            "weak_identity_min_correlation": weak_identity_min_correlation,
         },
         "mode": mode,
         "profile": wait_profile,

@@ -51,6 +51,7 @@ static char g_captured[OBS_MAX_PATH];
 static char g_request[OBS_MAX_PATH];
 static char g_ack_path[OBS_MAX_PATH];
 static int g_pause_at_draws;
+static int g_pause_at_first_game_day;
 static _Atomic int g_pause_sent;
 static uint64_t g_request_id;
 static uint64_t g_pending_frames[OBS_MAX_DUMPS];
@@ -339,6 +340,8 @@ int eu4_gfx_frame_observe_init(const char *backend, const char *dir,
     snprintf(g_ack_path, sizeof g_ack_path, "%s/capture-ack.json", dir);
     const char *pause_at = getenv("EU4_GFX_PAUSE_AT_DRAWS");
     g_pause_at_draws = pause_at != NULL ? atoi(pause_at) : 0;
+    const char *pause_first = getenv("EU4_GFX_PAUSE_AT_FIRST_GAME_DAY");
+    g_pause_at_first_game_day = pause_first != NULL && strcmp(pause_first, "1") == 0;
     snprintf(g_ready, sizeof g_ready, "%s/ready", dir);
     snprintf(g_release, sizeof g_release, "%s/release", dir);
     snprintf(g_lockstep_timeout_path, sizeof g_lockstep_timeout_path,
@@ -545,8 +548,10 @@ static void dump_ring(obs_ring_slot *slot) {
    SDL keyboard space event to the game's own event loop; no general input
    automation is added.  If SDL is not reachable, the request is recorded as
    unavailable and normal observation continues. */
-static void maybe_request_pause(uint32_t draws) {
-    if (g_pause_at_draws <= 0 || (int)draws < g_pause_at_draws) {
+static void maybe_request_pause(uint32_t draws, int game_day) {
+    int due = (g_pause_at_draws > 0 && (int)draws >= g_pause_at_draws)
+              || (g_pause_at_first_game_day && game_day != 0);
+    if (!due) {
         return;
     }
     if (atomic_exchange_explicit(&g_pause_sent, 1, memory_order_acq_rel)) {
@@ -811,7 +816,7 @@ int eu4_gfx_frame_observe_emit(const uint8_t *bgra, uint32_t width,
     int game_day = 0;
     uint64_t update_identity = 0;
     game_state_identity(&game_day, &update_identity);
-    maybe_request_pause(draws);
+    maybe_request_pause(draws, game_day);
     ring_store(bgra, width, height, frame_index, draws, signature,
                distinct_callers, gpu_completed, capture_valid,
                origin != NULL ? origin : "top_left", full_digest,
@@ -879,7 +884,7 @@ int eu4_gfx_frame_observe_emit_metadata(uint32_t width, uint32_t height,
     int game_day = 0;
     uint64_t update_identity = 0;
     game_state_identity(&game_day, &update_identity);
-    maybe_request_pause(draws);
+    maybe_request_pause(draws, game_day);
     pthread_mutex_lock(&g_lock);
     if (g_emitted >= OBS_MAX_FRAMES) {
         g_dropped += 1;

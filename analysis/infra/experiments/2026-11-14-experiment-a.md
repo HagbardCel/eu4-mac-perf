@@ -53,3 +53,18 @@ guarantee the same simulation moment.
 
 Next requirement: pause before the simulation advances (or coordinate the pause
 on the engine update identity), not merely at a render-workload threshold.
+
+
+## Follow-up: first-game-day pause is too early
+
+Requesting the pause on the first non-zero game day posted the SDL event at only
+6 draws, while the game was still loading. The event did not produce a paused
+in-game state; the processes later rendered different scenes (loading vs map)
+on the same game day. The day-level identity plus a comparable draw count was
+not sufficient.
+
+A weak-identity guard now requires coarse content corroboration when identities
+are day-only and caller signatures differ. In that follow-up the guard would
+have refused the comparison instead of reporting an 85% rendering difference.
+This deliberately trades away detection of a catastrophically corrupted image
+until a stronger tick identity exists.
