@@ -29,7 +29,14 @@ SCHEMA = "gfx-frame-alignment/v1"
 
 
 def _int(value, default: int = 0) -> int:
-    return value if type(value) is int else default
+    if type(value) is int:
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value, 0)
+        except ValueError:
+            return default
+    return default
 
 
 def _signature(record: dict) -> str:

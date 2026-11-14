@@ -143,8 +143,8 @@ class CampaignState:
         item["max_streak"] = max(item["max_streak"], item["streak"])
 
     def note_identity(self, reference: dict, candidate: dict) -> None:
-        ref = int(reference.get("update_identity") or 0)
-        cand = int(candidate.get("update_identity") or 0)
+        ref = _identity_value(reference)
+        cand = _identity_value(candidate)
         if not ref or ref != cand:
             self.identity_streak = 0
             return
@@ -219,6 +219,18 @@ def _record_health(record: FrameRecord, health: gfx_diagnostics.GpuHealth) -> No
             draw=str(record.index),
             signature=f"capture:skipped_frames:{record.backend}",
         )
+
+
+def _identity_value(record) -> int:
+    if record is None:
+        return 0
+    value = record.value.get("update_identity") if hasattr(record, "value") else record.get("update_identity")
+    if isinstance(value, str):
+        try:
+            return int(value, 0)
+        except ValueError:
+            return 0
+    return int(value or 0)
 
 
 def _phase_ready(reference_draws: int, candidate_draws: int,
@@ -1136,10 +1148,8 @@ def run_campaign(
                     "draw_tolerance", 0.25))
                 if _phase_ready(
                     ref_draws, cand_draws, minimum_draws, tolerance,
-                    int(latest_ref.value.get("update_identity") or 0)
-                    if latest_ref else 0,
-                    int(latest_cand.value.get("update_identity") or 0)
-                    if latest_cand else 0,
+                    _identity_value(latest_ref),
+                    _identity_value(latest_cand),
                 ):
                     break
                 if any(item.process.poll() is not None for item in launched.values()):
@@ -1152,7 +1162,7 @@ def run_campaign(
             latest_ref = _latest(state.ref_stream)
             latest_cand = _latest(state.cand_stream)
             if latest_ref is not None and latest_cand is not None:
-                window = 32
+                window = max(32, max_frames + 8)
                 _request_dumps(
                     {"observe_dir": launched["reference"].observe_dir},
                     list(range(latest_ref.index + 1, latest_ref.index + 1 + window)),
@@ -1252,8 +1262,8 @@ def run_campaign(
                     "draw_tolerance", 0.25))
                 if latest_ref is not None and latest_cand is not None and _phase_ready(
                     ref_draws, cand_draws, minimum_draws, tolerance,
-                    int(latest_ref.value.get("update_identity") or 0),
-                    int(latest_cand.value.get("update_identity") or 0),
+                    _identity_value(latest_ref),
+                    _identity_value(latest_cand),
                 ):
                     state.begin_pairing()
                     state.released_ref.add(latest_ref.index)
@@ -1330,20 +1340,19 @@ def run_campaign(
                                      [cand_index])
                             state.lockstep_stops += 1
                         continue
-                    _request_dumps({"observe_dir": launched["reference"].observe_dir},
-                                   [ref_index])
-                    _request_dumps({"observe_dir": launched["candidate"].observe_dir},
-                                   [cand_index])
-                    if ref_index % 32 == 0:
+                    if mode == "lockstep":
+                        # The paused frame cannot advance on its own; request
+                        # exactly this pair's payloads before releasing it.
                         _request_dumps(
                             {"observe_dir": launched["reference"].observe_dir},
-                            list(range(ref_index, ref_index + 32)),
-                        )
+                            [ref_index])
                         _request_dumps(
                             {"observe_dir": launched["candidate"].observe_dir},
-                            list(range(cand_index, cand_index + 32)),
-                        )
-                    dump_timeout = 4.0 if mode == "lockstep" else 1.5
+                            [cand_index])
+                    # In streaming mode the phase-entry window was requested
+                    # once.  Issuing another request here would overwrite that
+                    # pending window and lose already-declared frames.
+                    dump_timeout = 4.0 if mode == "lockstep" else 0.5
                     reference_dump = _await_dump_meta(
                         {"observe_dir": launched["reference"].observe_dir}, [ref_index],
                         timeout=dump_timeout)

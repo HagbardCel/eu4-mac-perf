@@ -76,8 +76,12 @@ differed. The save keeps running, so the processes are not at the same update;
 this fails Experiment A and blocks GL/Metal qualification until an
 engine-level update identity or a paused/static scenario is available. The observer now emits that identity from `CCurrentGameState::_pInstance` (date
 block at `+0x1d18`, read with `vm_read_overwrite`), and alignment rejects unequal
-identities; a live probe was blocked by the M6 agent holding the launch lease,
-so the identity has not yet been observed in a real process. Replay tool
+identities; the identity has now been observed live in a `--continuelastsave` reference
+(`game_day=43808760`, `update_identity=0x0de0dd22eab200f0` at frame 5). A
+identity-gated GL/GL run aligned 20 pairs (380/380 draws, equal identity) but
+produced zero comparisons because per-pair requests overwrote the phase-entry
+capture window; streaming now issues a single pre-requested window and the fix
+still needs a live re-run. Replay tool
 envelopes now distinguish successful replay execution from the reproduced
 comparison outcome, and metrics count executable renderer reproductions
 separately from image-comparison cases.

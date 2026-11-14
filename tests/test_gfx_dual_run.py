@@ -515,6 +515,15 @@ class QualificationTests(unittest.TestCase):
         result = gfx_align.align_sequences([reference], [candidate])
         self.assertEqual(result["pairs"][0]["status"], gfx_align.ALIGNED)
 
+    def test_hex_encoded_game_update_is_parsed(self):
+        reference = {"frame_index": 1, "width": 100, "height": 100,
+                     "draws": 20, "caller_signature": "0x1",
+                     "update_identity": "0x0de0dd22eab200f0"}
+        candidate = dict(reference, caller_signature="0x2")
+        score, evidence = gfx_align.match_score(reference, candidate)
+        self.assertIn("game_update", evidence)
+        self.assertGreaterEqual(score, 6)
+
     def test_different_game_update_is_not_aligned(self):
         reference = {"frame_index": 1, "width": 100, "height": 100,
                      "draws": 20, "caller_signature": "0x1",
