@@ -204,13 +204,17 @@ def build(frame_dir: Path | str) -> dict:
         elif kind in ("resolve", "copy"):
             source = _name(event.get("source") or event.get("source_texture"))
             destination = _name(event.get("destination"))
-            if source:
+            source_fbo = event.get("source_framebuffer")
+            if source in ("", "0") or source_fbo == 0:
+                source_key = "fb:0"
+            else:
                 source_key = f"tex:{source}"
-                sampled = _resource(resources, source_key, kind="texture")
-                sampled["consumers"].append(
-                    {"event": index, "unit": None, "sampler": kind})
-                row["samples"].append({"resource": source_key,
-                                       "unit": None, "sampler": kind})
+            sampled = _resource(resources, source_key, kind="framebuffer"
+                                if source_key.startswith("fb:") else "texture")
+            sampled["consumers"].append(
+                {"event": index, "unit": None, "sampler": kind})
+            row["samples"].append({"resource": source_key,
+                                   "unit": None, "sampler": kind})
             if destination:
                 dest_key = f"tex:{destination}"
                 resource = _resource(resources, dest_key, kind="texture",
@@ -525,6 +529,10 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
         for consumer in resource.get("consumers") or []:
             event = int(consumer.get("event") or -1)
             sampler = str(consumer.get("sampler") or "")
+            if sampler in ("resolve", "copy"):
+                # Resolve/copy execution is validated by the ordered event
+                # stream, not by a texture-unit binding.
+                continue
             rows = by_consumer.get((event, sampler), [])
             if not rows:
                 consumer_problems.append({

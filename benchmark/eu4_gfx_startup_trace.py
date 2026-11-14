@@ -67,6 +67,7 @@ def build_library() -> Path:
         str(BENCH / "eu4_gfx_observe_viewport.c"),
         str(BENCH / "eu4_gfx_frame_trace.c"),
         str(BENCH / "eu4_gfx_frame_observe.c"),
+        str(BENCH / "eu4_gfx_gl_interpose.c"),
         str(BENCH / "eu4_gfx_observe_gateway.S"),
         str(BENCH / "eu4_gfx_startup_trace.c"),
         str(BENCH / "eu4_gfx_startup_trace_detour.c"),
@@ -101,6 +102,7 @@ def build_host() -> Path:
         str(BENCH / "eu4_gfx_observe_viewport.c"),
         str(BENCH / "eu4_gfx_frame_trace.c"),
         str(BENCH / "eu4_gfx_frame_observe.c"),
+        str(BENCH / "eu4_gfx_gl_interpose.c"),
         str(BENCH / "eu4_gfx_observe_gateway.S"),
         str(BENCH / "eu4_gfx_startup_trace.c"),
         str(BENCH / "eu4_gfx_startup_trace_detour.c"),
@@ -174,7 +176,15 @@ def run(*, authorize_live: bool, wait_seconds: float = 180.0) -> dict:
     session = str(uuid.uuid4())
     launcher = json.loads(base.GOG_LAUNCHER.read_text())
     env = os.environ.copy()
-    env["DYLD_INSERT_LIBRARIES"] = str(LIBRARY)
+    inserted = []
+    if env.get("EU4_DISPLAY_MODE") == "background":
+        for key in ("EU4_DISPLAY_PLACEMENT_LIBRARY",
+                    "EU4_DISPLAY_ISOLATE_LIBRARY"):
+            value = env.get(key)
+            if value:
+                inserted.append(value)
+    inserted.append(str(LIBRARY))
+    env["DYLD_INSERT_LIBRARIES"] = ":".join(inserted)
     env["EU4_GFX_STARTUP_DIR"] = str(run_dir)
     env["EU4_GFX_STARTUP_ID"] = session
     env["EU4_GFX_EXPECTED_EXE"] = str(base.GOG_EXE)
@@ -190,7 +200,7 @@ def run(*, authorize_live: bool, wait_seconds: float = 180.0) -> dict:
     lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
     try:
         game = subprocess.Popen(
-            ["./eu4", *launcher["exeArgs"]],
+            ["./eu4", *launcher["exeArgs"], *(game_args or [])],
             cwd=base.GOG_EXE.parent,
             env=env,
             stdout=stdout,
@@ -396,6 +406,7 @@ def run_ops(
     gl_reference: bool = False,
     env_extra: dict | None = None,
     retention: str | None = None,
+    game_args: list[str] | None = None,
 ) -> dict:
     """Launch one bounded original-process observation session."""
     if not authorize_live:
@@ -421,7 +432,15 @@ def run_ops(
     session = str(uuid.uuid4())
     launcher = json.loads(base.GOG_LAUNCHER.read_text())
     env = os.environ.copy()
-    env["DYLD_INSERT_LIBRARIES"] = str(LIBRARY)
+    inserted = []
+    if env.get("EU4_DISPLAY_MODE") == "background":
+        for key in ("EU4_DISPLAY_PLACEMENT_LIBRARY",
+                    "EU4_DISPLAY_ISOLATE_LIBRARY"):
+            value = env.get(key)
+            if value:
+                inserted.append(value)
+    inserted.append(str(LIBRARY))
+    env["DYLD_INSERT_LIBRARIES"] = ":".join(inserted)
     env["EU4_GFX_STARTUP_DIR"] = str(run_dir)
     env["EU4_GFX_STARTUP_ID"] = session
     env["EU4_GFX_EXPECTED_EXE"] = str(base.GOG_EXE)
@@ -471,7 +490,7 @@ def run_ops(
     lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
     try:
         game = subprocess.Popen(
-            ["./eu4", *launcher["exeArgs"]],
+            ["./eu4", *launcher["exeArgs"], *(game_args or [])],
             cwd=base.GOG_EXE.parent,
             env=env,
             stdout=stdout,

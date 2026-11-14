@@ -32,6 +32,9 @@ static NSMutableDictionary<NSString *, NSMutableDictionary *> *g_render_targets;
 static NSMutableDictionary<NSString *, id> *g_alpha_textures;
 static NSMutableDictionary<NSString *, id> *g_orientation_textures;
 static id<MTLComputePipelineState> g_orientation_pipeline;
+static id<MTLComputePipelineState> g_copy_pipeline;
+static NSUInteger g_virtual_target_id = 100000;
+static NSMutableDictionary *target_for(NSDictionary *target, NSError **error);
 /* Provenance of every texture binding and of replay-time checkpoint reads.
    The coordinator uses this to distinguish external captured inputs from
    renderer-generated targets, so a replay that silently consumed a captured
@@ -147,6 +150,76 @@ static NSString *const kOrientationKernelMSL =
      "    if ((flags & 2u) != 0u) value.a = 1.0;\n"
      "    destination.write(value, gid);\n"
      "}\n";
+
+static NSString *const kCopyKernelMSL =
+    @"#include <metal_stdlib>\n"
+     "using namespace metal;\n"
+     "kernel void copy_rect(texture2d<float, access::read> source [[texture(0)]],\n"
+     "                      texture2d<float, access::write> destination [[texture(1)]],\n"
+     "                      constant int4 &rect [[buffer(0)]],\n"
+     "                      uint2 gid [[thread_position_in_grid]]) {\n"
+     "    int x = rect.x + (int)gid.x;\n"
+     "    int y = rect.y + (int)gid.y;\n"
+     "    int dx = rect.z + (int)gid.x;\n"
+     "    int dy = rect.w + (int)gid.y;\n"
+     "    if (x < 0 || y < 0 || dx < 0 || dy < 0) return;\n"
+     "    if (x >= (int)source.get_width() || y >= (int)source.get_height()) return;\n"
+     "    if (dx >= (int)destination.get_width() || dy >= (int)destination.get_height()) return;\n"
+     "    destination.write(source.read(uint2((uint)x, (uint)y)), uint2((uint)dx, (uint)dy));\n"
+     "}\n";
+
+static id<MTLComputePipelineState> copy_pipeline(NSError **error) {
+    if (g_copy_pipeline != nil) {
+        return g_copy_pipeline;
+    }
+    NSError *compile_error = nil;
+    id<MTLLibrary> library = [g_device newLibraryWithSource:kCopyKernelMSL
+                                                    options:nil
+                                                      error:&compile_error];
+    id<MTLFunction> function = [library newFunctionWithName:@"copy_rect"];
+    if (function != nil) {
+        g_copy_pipeline = [g_device newComputePipelineStateWithFunction:function
+                                                                  error:&compile_error];
+    }
+    if (g_copy_pipeline == nil && error != NULL) {
+        *error = compile_error;
+    }
+    return g_copy_pipeline;
+}
+
+static NSString *target_format_name(int internal_format) {
+    switch (internal_format) {
+        case 0x8058: return @"RGBA8"; /* GL_RGBA8 */
+        case 0x8051: return @"RGB8";  /* GL_RGB8 */
+        case 0x8814: return @"RGBA32F";
+        case 0x8815: return @"RGB32F";
+        case 0x881A: return @"RGBA16F";
+        case 0x881B: return @"RGB16F";
+        default: return @"other";
+    }
+}
+
+static NSMutableDictionary *target_for_texture(NSString *name, NSUInteger width,
+                                               NSUInteger height,
+                                               NSString *format,
+                                               NSError **error) {
+    NSUInteger key_value = g_virtual_target_id++;
+    NSDictionary *target = @{
+        @"framebuffer": @(key_value),
+        @"width": @(width),
+        @"height": @(height),
+        @"color_attachment": @{
+            @"internal_format": format ?: @"other",
+            @"width": @(width),
+            @"height": @(height),
+        },
+    };
+    NSMutableDictionary *info = target_for(target, error);
+    if (info != nil) {
+        info[@"virtual_name"] = name ?: @"";
+    }
+    return info;
+}
 
 static id<MTLComputePipelineState> orientation_pipeline(NSError **error) {
     if (g_orientation_pipeline != nil) {
@@ -1796,6 +1869,114 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
     }
 }
 
+static BOOL encode_copy_event(NSDictionary *event, NSString *frameDir,
+                             NSError **error) {
+    (void)frameDir;
+    NSString *operation = string_value(event[@"operation"]);
+    if (operation != nil &&
+        ![operation isEqualToString:@"glCopyTexSubImage2D"]) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:96
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"unsupported resolve/copy variant"}];
+        }
+        return NO;
+    }
+    NSString *destination = texture_key(event[@"destination"]);
+    NSMutableDictionary *destination_info = g_render_targets[destination];
+    if (destination_info == nil) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:97
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"resolve destination target missing"}];
+        }
+        return NO;
+    }
+    NSString *source_name = texture_key(event[@"source"]);
+    NSMutableDictionary *source_info = nil;
+    if (source_name.length > 0 && ![source_name isEqualToString:@"0"]) {
+        source_info = g_render_targets[source_name];
+    } else {
+        source_info = target_for(@{@"framebuffer": @0,
+                                   @"width": @(g_default_target.width),
+                                   @"height": @(g_default_target.height)},
+                                 error);
+    }
+    if (source_info == nil) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:98
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"resolve source target missing"}];
+        }
+        return NO;
+    }
+    NSArray *rect = event[@"source_rect"];
+    NSArray *offset = event[@"destination_offset"];
+    if (rect.count != 4 || offset.count != 4 - 2) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:99
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"resolve rectangle is malformed"}];
+        }
+        return NO;
+    }
+    NSInteger x = number(rect[0], 0);
+    NSInteger y = number(rect[1], 0);
+    NSInteger width = number(rect[2], 0);
+    NSInteger height = number(rect[3], 0);
+    NSInteger dx = number(offset[0], 0);
+    NSInteger dy = number(offset[1], 0);
+    id<MTLTexture> source_texture = source_info[@"color"];
+    id<MTLTexture> destination_texture = destination_info[@"color"];
+    if (width <= 0 || height <= 0 ||
+        x < 0 || y < 0 || dx < 0 || dy < 0 ||
+        x + width > (NSInteger)source_texture.width ||
+        y + height > (NSInteger)source_texture.height ||
+        dx + width > (NSInteger)destination_texture.width ||
+        dy + height > (NSInteger)destination_texture.height) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:100
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"resolve rectangle is outside its resources"}];
+        }
+        return NO;
+    }
+    id<MTLComputePipelineState> pipeline = copy_pipeline(error);
+    if (pipeline == nil) {
+        return NO;
+    }
+    /* Both render targets store GL row 0 at the opposite end of the texture,
+       so the copy preserves the stored row order. */
+    int32_t copy_rect[4] = {(int32_t)x,
+                      (int32_t)(source_texture.height - (NSUInteger)y - (NSUInteger)height),
+                      (int32_t)dx,
+                      (int32_t)(destination_texture.height - (NSUInteger)dy - (NSUInteger)height)};
+    id<MTLCommandBuffer> command = [g_queue commandBuffer];
+    id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+    [encoder setComputePipelineState:pipeline];
+    [encoder setTexture:source_texture atIndex:0];
+    [encoder setTexture:destination_texture atIndex:1];
+    [encoder setBytes:copy_rect length:sizeof(copy_rect) atIndex:0];
+    MTLSize threads_per_group = MTLSizeMake(8, 8, 1);
+    MTLSize groups = MTLSizeMake(((NSUInteger)width + 7) / 8,
+                                 ((NSUInteger)height + 7) / 8, 1);
+    [encoder dispatchThreadgroups:groups threadsPerThreadgroup:threads_per_group];
+    [encoder endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    if (command.status != MTLCommandBufferStatusCompleted) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:101
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"resolve copy command failed"}];
+        }
+        return NO;
+    }
+    destination_info[@"generation"] =
+        @(number(destination_info[@"generation"], 0) + 1);
+    return YES;
+}
+
 static BOOL encode_clear(NSDictionary *event, NSString *frameDir,
                          id<MTLCommandBuffer> command, NSError **error) {
     (void)frameDir;
@@ -2242,6 +2423,35 @@ int main(int argc, const char *argv[]) {
                 g_render_targets[attachment_name] = info;
             }
         }
+        /* Resolve/copy destinations are not framebuffer colour attachments in
+           a draw event, so allocate their Metal targets from the captured
+           destination metadata before execution. */
+        for (NSDictionary *event in events) {
+            NSString *kind = event[@"kind"];
+            if (![kind isEqualToString:@"resolve"] &&
+                ![kind isEqualToString:@"copy"]) {
+                continue;
+            }
+            NSString *destination = texture_key(event[@"destination"]);
+            if (destination.length == 0 ||
+                g_render_targets[destination] != nil) {
+                continue;
+            }
+            NSUInteger width = number(event[@"destination_width"],
+                                      number(event[@"width"], 0));
+            NSUInteger height = number(event[@"destination_height"],
+                                       number(event[@"height"], 0));
+            if (width == 0 || height == 0) {
+                continue;
+            }
+            NSMutableDictionary *info = target_for_texture(
+                destination, width, height,
+                target_format_name((int)number(event[@"internal_format"], 0)),
+                NULL);
+            if (info != nil) {
+                g_render_targets[destination] = info;
+            }
+        }
         id<MTLCommandBuffer> command = [g_queue commandBuffer];
         NSUInteger encoded = 0;
         NSUInteger failed = 0;
@@ -2419,13 +2629,7 @@ int main(int argc, const char *argv[]) {
                 ok = encode_clear(event, frame_path, command, &event_error);
             } else if ([kind isEqualToString:@"resolve"] ||
                        [kind isEqualToString:@"copy"]) {
-                /* The graph recognizes resolve/copy events, but this host does
-                   not yet execute them.  Count them as failures: an unsupported
-                   operation must never be encoded as a silent no-op. */
-                ok = NO;
-                event_error = [NSError errorWithDomain:kErrorDomain code:95
-                                             userInfo:@{NSLocalizedDescriptionKey:
-                                                            @"captured resolve/copy event is not reconstructed"}];
+                ok = encode_copy_event(event, frame_path, &event_error);
             } else if ([kind isEqualToString:@"draw"]) {
                 NSNumber *program = event[@"program"][@"name"];
                 NSDictionary *entry = programs[program];

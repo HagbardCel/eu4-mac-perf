@@ -13,6 +13,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "eu4_gfx_frame_trace.h"
+
 typedef void (*copy_fn)(GLenum, GLint, GLint, GLint, GLint, GLint, GLsizei,
                         GLsizei);
 
@@ -74,6 +76,9 @@ static void eu4_gfx_interposed_copy_tex_sub_image(GLenum target, GLint level,
     if (length > 0 && (size_t)length < sizeof body) {
         write_line(body);
     }
+    eu4_gfx_frame_trace_copy_event(0, read_fbo, color_name, color_level,
+                                   bound_texture, level, x, y, width, height,
+                                   xoffset, yoffset);
     g_real(target, level, xoffset, yoffset, x, y, width, height);
 }
 

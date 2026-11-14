@@ -59,6 +59,11 @@ void eu4_gfx_frame_trace_draw_exit(eu4_gfx_capture_frame *frame,
 int eu4_gfx_frame_trace_texture_probe(unsigned target, unsigned name);
 int eu4_gfx_frame_trace_readback_probe(void);
 
+void eu4_gfx_frame_trace_copy_event(int is_blit, int src_fbo, int src_texture,
+                                    int src_level, int dst_texture,
+                                    int dst_level, int x, int y, int width,
+                                    int height, int dx, int dy);
+
 void eu4_gfx_frame_trace_resolve_entry(eu4_gfx_capture_frame *frame,
                                        eu4_gfx_observe_call *call);
 

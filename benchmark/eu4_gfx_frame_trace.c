@@ -262,6 +262,47 @@ static void texture_cache_put(const char *key, const char *levels) {
 }
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
+static void emit_event(const char *json);
+
+/* Ordered copy/resolve event from the GL interposer.  Only captured frames are
+   recorded; a copy before the selected frame belongs to the frame boundary. */
+void eu4_gfx_frame_trace_copy_event(int is_blit, int src_fbo, int src_texture,
+                                    int src_level, int dst_texture,
+                                    int dst_level, int x, int y, int width,
+                                    int height, int dx, int dy) {
+    pthread_mutex_lock(&g_lock);
+    if (!g.armed || g.events == NULL ||
+        g.event_count >= (int)g.max_draws) {
+        pthread_mutex_unlock(&g_lock);
+        return;
+    }
+    GLint destination_width = 0, destination_height = 0, internal_format = 0;
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, dst_level, GL_TEXTURE_WIDTH,
+                             &destination_width);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, dst_level, GL_TEXTURE_HEIGHT,
+                             &destination_height);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, dst_level, GL_TEXTURE_INTERNAL_FORMAT,
+                             &internal_format);
+    char body[1024];
+    int length = snprintf(
+        body, sizeof body,
+        "{\"kind\":\"resolve\",\"operation\":\"%s\","
+        "\"source_framebuffer\":%d,\"source\":\"%d\","
+        "\"source_level\":%d,\"destination\":\"%d\","
+        "\"destination_level\":%d,\"source_rect\":[%d,%d,%d,%d],"
+        "\"destination_offset\":[%d,%d],\"width\":%d,\"height\":%d,"
+        "\"destination_width\":%d,\"destination_height\":%d,"
+        "\"internal_format\":%d}",
+        is_blit ? "glBlitFramebuffer" : "glCopyTexSubImage2D",
+        src_fbo, src_texture, src_level, dst_texture, dst_level,
+        x, y, width, height, dx, dy, width, height,
+        destination_width, destination_height, internal_format);
+    if (length > 0 && (size_t)length < sizeof body) {
+        emit_event(body);
+        g.event_count++;
+    }
+    pthread_mutex_unlock(&g_lock);
+}
 
 /* Entry-side draw arguments. The gateway's exit frame holds post-call
  * registers, so every engine argument the packet needs is captured here. */
