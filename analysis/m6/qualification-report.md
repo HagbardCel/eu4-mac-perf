@@ -207,11 +207,13 @@ without a demonstrated boundary.
 
 ### Latest live verification
 
-Run `.local/m6/live-verify2/run-1`, identity `1794640399-68635`:
+Run `.local/m6/live-lod/run-1` (post-LOD capability, settle-gated):
 
 - executed, draw encoded, GPU completed, presented, zero refused draws;
-- UI high-pass correlations 0.757 / 0.825 / 0.484 (logo below 0.5);
-- map mean 143.4 vs 71.9, palette affinity 0.452 (floor 0.85);
+- 252 terrain calls, 12 map-layer calls (6 default + 6 offscreen), 78 shader
+  sources with the authentic texture-LOD extension;
+- UI high-pass correlations 0.757 / 0.825 / 0.482 (logo below 0.5);
+- map mean 143.0 vs 71.9, palette affinity 0.454 (floor 0.85);
 - `visual_match=false`, `accepted=false`.
 
 The three clean-start qualification was not attempted and is not claimed.
