@@ -144,15 +144,25 @@ Its textures, uniforms, depth/blend/raster state and shader translation also
 match the capture. Replaying event 24 with the live time/season uniforms
 changes only ~244 pixels and leaves its mean colour unchanged.
 
-### Corrected interpretation
+### Corrected interpretation: frame composition
 
 The earlier hypothesis that MainScene was a previous composite fed back is
 **not supported** by the resolve trace. The resolve faithfully copies a beige
-*current* backbuffer; the beige is produced inside the multi-draw terrain
-batch. A single draw matches, so the remaining difference is in the cumulative
-execution of the terrain pass (blend order/state or an overlay pass), not in
-the resolve copy or a missing frame clear. This is the precise remaining
-blocker.
+*current* backbuffer. A caller-level order trace shows why the live frame is
+not equivalent to the reference:
+
+| Batch | Reference (`menu-occ300`) | Live (`live-order`, 280 s and 320 s) |
+| --- | --- | --- |
+| Draws before resolve/composite | 276 | 256 |
+| Terrain caller `0x10ce96e` | 252 | 231 |
+| Map-layer caller `0x10d4e50` | 6 | 9 |
+
+The composition is stable at both 280 s and 320 s minimum uptime: it is not a
+startup transient. The live terrain draw inputs and a single isolated draw
+match the capture, and the resolve is correct; the frames simply do not
+represent the same map update composition/state. The remaining acceptance
+failure is therefore **frame/reference alignment**, not a demonstrated resolve
+or single-draw rendering defect. No speculative renderer change was applied.
 
 ### Sampler effective state (fixed)
 

@@ -1,5 +1,5 @@
 {
-  "schema": "m6-menu-frame-evidence/v5",
+  "schema": "m6-menu-frame-evidence/v6",
   "canonical_reference": {
     "frame_dir": ".local/m6/frames/menu-occ300/frame",
     "selection": {
@@ -194,12 +194,17 @@
     {
       "finding": "The MainScene resolve was claimed to read a previous composite.",
       "status": "superseded",
-      "evidence": "the frame-start clear is valid and targets the same texture; the first resolve source is the beige current terrain batch, not a previous composite"
+      "evidence": "the frame-start clear is valid and targets the same texture; the first resolve source is the current terrain batch"
     },
     {
-      "finding": "The remaining live palette divergence is produced inside the multi-draw terrain batch, although a single terrain draw's inputs and output match the capture.",
+      "finding": "The live and reference frames do not share the same map update composition (231/9 vs 252/6 draw calls), stably across uptime.",
       "status": "blocking",
-      "evidence": "first resolve source is already beige; single draw 24 vertex/texture/uniform/state match; time/season change is not material"
+      "evidence": "caller-level order trace; single-draw inputs and output match; resolve status scaled_ok"
+    },
+    {
+      "finding": "The remaining live palette divergence is a frame/reference alignment issue, not a demonstrated renderer defect.",
+      "status": "blocking",
+      "evidence": "same 231/9 composition at 280 s and 320 s; first resolve source is the beige current batch; resolve and single-draw contracts match"
     }
   ],
   "sampler_effective_state": {
@@ -260,6 +265,22 @@
       "stride": 28,
       "values_match_capture": true
     },
-    "conclusion": "No invalid resolve or copy was observed. The beige MainScene is the faithful copy of a beige current backbuffer produced by the terrain batch."
+    "conclusion": "No invalid resolve or copy was observed. The beige MainScene is the faithful copy of a beige current backbuffer produced by the terrain batch. The batch composition differs from the reference frame, so the pixel comparison is not aligned."
+  },
+  "frame_composition": {
+    "reference_frame": {
+      "source": ".local/m6/frames/menu-occ300/frame/frame-events.jsonl",
+      "draws_between_default_clear_and_composite": 276,
+      "terrain_caller_0x10ce96e": 252,
+      "map_layer_caller_0x10d4e50": 6
+    },
+    "live_frame": {
+      "source": ".local/m6/live-order/diag-1/order.jsonl",
+      "draws_between_default_clear_and_resolve": 256,
+      "terrain_caller_0x10ce96e": 231,
+      "map_layer_caller_0x10d4e50": 9
+    },
+    "stability": "The same 231/9 composition was observed with 280 s and 320 s minimum uptime; it is not a startup transient.",
+    "first_divergence": "The live and reference frames are not the same map update composition: the live terrain batch has 231 terrain draws and 9 map-layer draws, the reference has 252 and 6. The resolve is faithful to the live batch; a single live terrain draw matches captured event 24. The failure is therefore frame/scene alignment, not resolve-copy or single-draw rendering."
   }
 }

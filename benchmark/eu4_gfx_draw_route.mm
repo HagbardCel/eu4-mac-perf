@@ -316,7 +316,19 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
        completion record or presentation readiness. */
     (void)eu4_gfx_generic_after_dump();
     eu4_gfx_live_draw_sequence++;
-    eu4_gfx_order_trace("draw", eu4_gfx_live_draw_sequence);
+    {
+        uint64_t trace_caller = 0;
+        int trace_inside = 0;
+        uint64_t trace_thread = 0;
+        int trace_pid = 0;
+        eu4_metal_events_describe((const void *)(uintptr_t)raw->retaddr, NULL, 0,
+                                  &trace_caller, &trace_inside, &trace_thread,
+                                  &trace_pid);
+        char detail[128];
+        snprintf(detail, sizeof detail, "{\"caller\":\"0x%llx\"}",
+                 (unsigned long long)trace_caller);
+        eu4_gfx_order_trace_detail("draw", eu4_gfx_live_draw_sequence, detail);
+    }
     backend.lastDrawTargetColor = (__bridge id)inputs.target;
     backend.lastDrawTargetWidth = inputs.target_width;
     backend.lastDrawTargetHeight = inputs.target_height;

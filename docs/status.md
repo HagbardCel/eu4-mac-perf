@@ -58,16 +58,16 @@ passed**, so M6 is not accepted and PR #189 remains Draft.
   filter only when the bound texture has mip levels; a native regression
   covers the mapping. Palette affinity improved only marginally
   (0.435 -> 0.452), so this is a correctness fix, not the map root cause.
-- **Remaining blocker.** The live terrain draw at caller `0x10ce96e` has
-  vertex data byte-identical to captured event 24, and its textures, uniforms,
-  shader and state match; replaying it with the live time/season uniforms
-  changes its mean colour by less than one channel step. Nevertheless the
-  cumulative terrain batch is beige (MainScene mean 143.4 vs 71.9; palette
-  affinity 0.452 against 0.85) and the Paradox-logo UI region correlates 0.484
-  (floor 0.5). The defect is therefore inside the multi-draw terrain pass
-  (blend order/state or an overlay pass), not in a single draw or the resolve
-  copy. Live acceptance reports `visual_match=false` and the three-clean-start
-  gate is not met.
+- **Remaining blocker: frame composition.** The live terrain draw at caller
+  `0x10ce96e` has vertex data byte-identical to captured event 24, and its
+  textures, uniforms, shader and state match. The resolve is correct. A
+  caller-level order trace shows the live and reference frames do not share
+  the same map update composition: live 231 terrain draws + 9 map-layer draws,
+  reference 252 + 6, stable at 280 s and 320 s uptime. MainScene is a faithful
+  copy of the live (beige) current batch, so the pixel comparison is not
+  aligned to equivalent scene state. Palette affinity is 0.452 against 0.85
+  and the Paradox-logo UI region is 0.484 (floor 0.5). Live acceptance reports
+  `visual_match=false`; the three-clean-start gate is not met.
 
 ## M4 — original-GL reference and Metal presentation (2026-11-12)
 

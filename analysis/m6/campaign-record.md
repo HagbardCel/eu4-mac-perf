@@ -1238,3 +1238,30 @@ presented with zero refused draws. `visual_match=false`: UI correlations
 remaining defect is inside the cumulative terrain batch (blend order/state or
 an overlay pass); the resolve copy is faithful. Three clean starts are not
 claimed. **Verdict remains DO NOT MERGE.**
+
+## Frame composition divergence (2026-11-14, third pass)
+
+A caller-level draw-order trace (draw events now carry the caller RVA) shows
+that the live and reference frames do not share the same map update
+composition:
+
+| Batch | Reference menu-occ300 | Live (280 s and 320 s) |
+| --- | --- | --- |
+| Draws before resolve/composite | 276 | 256 |
+| Terrain caller 0x10ce96e | 252 | 231 |
+| Map-layer caller 0x10d4e50 | 6 | 9 |
+
+The composition is identical at 280 s and 320 s minimum uptime, so it is not a
+startup transient. The first `_GfxResolve` faithfully copies the live current
+backbuffer; a single live terrain draw matches captured event 24; the resolve
+status is `scaled_ok`. The remaining pixel comparison therefore compares
+different scene/update states, not two executions of the same frame. The
+blocker is frame/reference alignment. No speculative brightness or renderer
+change was applied.
+
+The diagnostic additions are opt-in and bounded: resolve trace with monotonic
+sequence and sequence-named checkpoints, caller-level order trace, clear
+status/generations, sampler effective-state trace, and first-vertex data trace
+with a stage filter. The acceptance checker now fails `executed` on any failed
+or malformed resolve and the selected-event comparator requires a valid
+matching replay, GPU completion, verified pre-image and a defined depth policy.
