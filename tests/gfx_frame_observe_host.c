@@ -46,6 +46,24 @@ int main(int argc, char **argv) {
         fclose(file);
     }
     int frames = strcmp(mode, "gap") == 0 ? 4 : 10;
+    if (strcmp(mode, "metadata") == 0) {
+        for (int index = 1; index <= 5; index++) {
+            eu4_gfx_frame_observe_note_draw(0xedfcd1);
+            uint32_t draws = 0, distinct = 0;
+            uint64_t signature = 0;
+            eu4_gfx_frame_observe_take_stats(&draws, &signature, &distinct);
+            if (eu4_gfx_frame_observe_emit_metadata(
+                    1728, 1117, "lower_left", (uint32_t)index, draws,
+                    signature, distinct, 1, "") != 0) {
+                return 5;
+            }
+        }
+        printf("wants3=%d wants4=%d dropped=%u\n",
+               eu4_gfx_frame_observe_wants(3),
+               eu4_gfx_frame_observe_wants(4),
+               eu4_gfx_frame_observe_dropped());
+        return 0;
+    }
     for (int index = 1; index <= frames; index++) {
         int logical = strcmp(mode, "gap") == 0 && index == 3 ? 5 : index;
         fill(pixels, width, height, logical);

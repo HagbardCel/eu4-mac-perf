@@ -95,6 +95,21 @@ class FrameObserveHostTests(unittest.TestCase):
         self.assertEqual([row["frame_index"] for row in records], [1, 2, 5, 4])
         self.assertEqual(records[2]["skipped_before"], 2)
 
+    def test_metadata_stream_has_no_pixels_and_honours_requests(self):
+        directory, ran = self.run_host("metadata")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        records = [json.loads(line) for line in
+                   (directory / "frame-observe.jsonl").read_text().splitlines()]
+        self.assertEqual(len(records), 5)
+        self.assertTrue(all(row["content"] == "metadata" for row in records))
+        self.assertTrue(all(row["sha256"] == "" for row in records))
+        self.assertTrue(all(row["width"] == 1728 and row["height"] == 1117
+                            for row in records))
+        self.assertIn("wants3=1", ran.stdout)
+        self.assertIn("wants4=0", ran.stdout)
+        self.assertEqual(list((directory / "captured").glob("frame-*")), [])
+        self.assertEqual(list((directory / "previews").iterdir()), [])
+
     def test_disabled_stream_writes_nothing(self):
         directory, ran = self.run_host("disabled")
         self.assertEqual(ran.returncode, 0, ran.stderr)
