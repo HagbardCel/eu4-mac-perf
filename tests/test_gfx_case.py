@@ -172,6 +172,15 @@ class CaseBuilderTests(unittest.TestCase):
         packaged = gfx_case.build_case(self.run)
         self.assertEqual(packaged["classification"], gfx_case.GPU_FAILURE)
 
+    def test_process_crash_is_classified_before_pixels(self):
+        self.result["processes"]["candidate"]["exit_code"] = 11
+        self.result["frames"] = {"comparison": {}, "last_pair": None}
+        (self.run / "result.json").write_text(json.dumps(self.result))
+        packaged = gfx_case.build_case(self.run)
+        self.assertEqual(packaged["classification"], gfx_case.PROCESS_FAILURE)
+        analysis = (Path(packaged["case_dir"]) / "analysis.md").read_text()
+        self.assertIn("execution failure", analysis)
+
     def test_unaligned_pair_is_not_a_rendering_difference(self):
         pair = dict(self.pair, comparison={"status": "not_compared",
                                            "reason": "alignment is ambiguous"})

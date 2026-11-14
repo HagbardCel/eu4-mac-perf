@@ -1289,6 +1289,9 @@ def run_campaign(
                 if pending:
                     _release({"observe_dir": item.observe_dir}, pending[-4:])
         result["terminations"] = _stop_processes(session, resume_first=mode == "lockstep")
+        for role, item in launched.items():
+            result.setdefault("processes", {}).setdefault(role, {})[
+                "exit_code"] = item.process.poll()
         if lease is not None:
             lease.release()
             lease = None

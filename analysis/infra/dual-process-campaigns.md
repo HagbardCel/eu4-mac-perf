@@ -191,7 +191,9 @@ scene. The observation cap is now 120,000 frames.  Loading the Venice save with
 candidate stopped emitting after 72 frames (~52 s, 4,089 draws peak), hung, and
 exited 11 on termination.  A campaign-level stall detector (default 45 s with no
 new observation while both owned processes are alive) now reports
-`observation_stall` instead of consuming the full deadline.
+`observation_stall` instead of consuming the full deadline. The run's case
+package classifies `process_failure` from the candidate exit code, not from a
+pixel difference.
 
 A further staggered run with a 40-draw phase threshold paired 110 observations,
 but every pair was `ambiguous`: the reference had 46 draws while the candidate

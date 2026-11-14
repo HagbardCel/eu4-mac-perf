@@ -22,6 +22,7 @@ SCHEMA = "gfx-diagnostic-case/v1"
 CONFIRMED_RENDERING = "rendering_difference"
 UNALIGNED = "unaligned"
 GPU_FAILURE = "gpu_execution_failure"
+PROCESS_FAILURE = "process_failure"
 INSTRUMENTATION = "instrumentation_failure"
 INCOMPLETE = "incomplete_evidence"
 MATCH = "match"
@@ -55,6 +56,18 @@ def _copy(src: Path, dest: Path) -> dict:
 
 
 def _classify(result: dict, pair: dict | None, comparison: dict | None) -> str:
+    for role, process in sorted((result.get("processes") or {}).items()):
+        if not isinstance(process, dict):
+            continue
+        code = process.get("exit_code")
+        if type(code) is int and code not in (0, -15):
+            return PROCESS_FAILURE
+    for termination in result.get("terminations") or []:
+        if not isinstance(termination, dict):
+            continue
+        code = termination.get("returncode")
+        if type(code) is int and code not in (0, -15):
+            return PROCESS_FAILURE
     health = result.get("health") or {}
     if health.get("verdict") == "failed":
         return GPU_FAILURE
@@ -138,6 +151,9 @@ def _analysis(result: dict, pair: dict | None, comparison: dict | None,
             )
     else:
         lines.append("- No paired frame with preserved raw payloads was available.")
+        for role, process in sorted((result.get("processes") or {}).items()):
+            if isinstance(process, dict) and process.get("exit_code") is not None:
+                lines.append(f"- {role} process exit code: {process.get('exit_code')}.")
     lines += [
         f"- GPU health verdict: `{health.get('verdict')}`; first failure: "
         f"`{(health.get('first_failure') or {}).get('kind')}`.",
@@ -173,6 +189,13 @@ def _analysis(result: dict, pair: dict | None, comparison: dict | None,
         lines += [
             "- The first actionable GPU/API failure is recorded in `gpu/`; visual "
             "debugging would be premature until it is corrected.",
+        ]
+    elif classification == PROCESS_FAILURE:
+        lines += [
+            "- A game process terminated abnormally; this is an execution failure, "
+            "not an established pixel difference.",
+            "- Inspect the process exit code, the last observation and the native "
+            "crash/log evidence before comparing pixels.",
         ]
     else:
         lines += [
