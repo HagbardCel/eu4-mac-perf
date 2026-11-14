@@ -2,6 +2,9 @@
 
 Date: 2026-11-14. Worktree: `wt_infra`, branch `infrastructure`, based on the
 reviewed integration head `485bb92955ad10231726ba16ba3466dd73836bf4`.
+Follow-up commits: `eb814a6` (background display and capture hardening),
+`fd4f175` (independent Metal intermediates), `beca74b` (agent tools),
+`5d8bb6e` (portable case verification and evidence).
 
 This is the acceptance record for the capture-once/replay-independently
 workflow. It is deliberately explicit about what is qualified and what is not.
@@ -194,6 +197,12 @@ python3.14 -m automation.gfx_replay_case replay --case . --out replay-rerun
   request rejection. The replay host builds with `-Wall -Wextra`.
 - DSH plugin: 6/6 Node tests pass; schemas and argument mapping cover the new
   graph/independent/fault operations.
+- Full Python discovery: 2,814 tests, 11 failures. All 11 reproduce at the
+  reviewed base `485bb92` in a detached worktree (Metal init capability span,
+  shadow-worker texture-LOD state, live-capture native canonical bytes and
+  process/worker host tests), so they are pre-existing environment/build-cache
+  failures rather than Strategy B regressions. The 221 tests covering the
+  touched areas pass.
 - No test launches EU4.
 
 ## 9. Remaining limitations
