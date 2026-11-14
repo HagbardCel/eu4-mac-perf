@@ -67,6 +67,15 @@ class ScenarioTests(unittest.TestCase):
         with self.assertRaises(gfx_scenario.ScenarioError):
             gfx_scenario.normalize(scenario(start={"kind": "save"}))
 
+    def test_region_thresholds_survive_normalization(self):
+        value = gfx_scenario.normalize(scenario(comparison={
+            "regions": {"text": {"rect": [0, 8, 0, 16], "policy": "tolerant",
+                                 "max_mismatched_fraction": 0.0,
+                                 "min_structural_correlation": 0.75}}}))
+        text = value["comparison"]["regions"]["text"]
+        self.assertEqual(text["max_mismatched_fraction"], 0.0)
+        self.assertEqual(text["min_structural_correlation"], 0.75)
+
     def test_committed_acceptance_scenarios_are_valid(self):
         directory = (Path(__file__).resolve().parents[1]
                      / "analysis" / "infra" / "scenarios")
@@ -834,6 +843,14 @@ class CaptureRequestTests(unittest.TestCase):
                 launched, [7, 9], timeout=0.5, request_id=request_id)
             self.assertEqual(sorted(value["found"]), [7])
             self.assertEqual(value["missing"], [9])
+
+    def test_request_ids_are_strictly_increasing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            launched = {"observe_dir": Path(temporary)}
+            values = [gfx_dual_run._request_dumps(launched, [index])
+                      for index in (1, 2, 3)]
+            self.assertEqual(len(set(values)), 3)
+            self.assertEqual(values, sorted(values))
 
     def test_stale_ack_is_not_used(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -141,6 +141,39 @@ class ToolTests(unittest.TestCase):
                       ("pass", "fail", "unverified"),
                       msg=json.dumps(value)[:2000])
 
+    def test_diff_run_tool_success_is_separate_from_qualification(self):
+        from unittest import mock
+        from automation import gfx_dual_run
+        scenario = self.root / "scenario.json"
+        scenario.write_text(json.dumps({
+            "schema": "gfx-dual-scenario/v1",
+            "executable_sha256": json.loads(
+                (ROOT / "reverse_engineering" / "target.json").read_text())["sha256"],
+            "logical_extent": [64, 64],
+        }))
+        result = {
+            "schema": "gfx-dual-run/v1", "result": "completed",
+            "run_dir": str(self.run_fixture()),
+            "frames": {"paired": 100, "comparison": {"compared": 0}},
+            "stop": {"reason": "frame_limit"},
+            "qualification": {"status": "incomplete", "qualified": False},
+        }
+        scenario_value = {
+            "observation": {"max_frames": 100},
+            "comparison": {"policy": "tolerant"},
+        }
+        with mock.patch.object(gfx_dual_run, "run_campaign", return_value=result), \
+             mock.patch.object(gfx_dual_run.gfx_scenario, "load",
+                               return_value=scenario_value):
+            code, value = self.call([
+                "eu4_diff_run", "--scenario", str(scenario),
+                "--run-root", str(self.root), "--ledger",
+                str(self.root / "missing.json")])
+        self.assertEqual(code, 0)
+        self.assertTrue(value["ok"])
+        self.assertEqual(value["result"]["classification"], "incomplete")
+        self.assertFalse(value["result"]["qualified"])
+
     def test_diff_run_without_ledger_is_an_error_envelope(self):
         scenario = self.root / "scenario.json"
         scenario.write_text(json.dumps({
@@ -164,8 +197,8 @@ class ToolTests(unittest.TestCase):
         except Exception:  # noqa: BLE001
             self.skipTest("numpy is required")
         run = self.root / "case-run"
-        (run / "reference").mkdir(parents=True)
-        (run / "candidate").mkdir(parents=True)
+        (run / "reference").mkdir(parents=True, exist_ok=True)
+        (run / "candidate").mkdir(parents=True, exist_ok=True)
         reference = np.full((6, 8, 4), 20, dtype=np.uint8)
         reference[0:2, 0:2, :3] = 200
         candidate = np.repeat(np.repeat(reference, 2, axis=0), 2, axis=1)

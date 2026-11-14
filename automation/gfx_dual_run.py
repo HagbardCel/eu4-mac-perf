@@ -12,6 +12,7 @@ being faked from command-buffer completion.
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import signal
@@ -357,10 +358,13 @@ def _tail(run_dir: Path) -> dict:
     }
 
 
+_REQUEST_IDS = itertools.count(time.time_ns())
+
+
 def _request_dumps(launched: dict, indices: list[int]) -> int | None:
     if not indices:
         return None
-    request_id = time.time_ns()
+    request_id = next(_REQUEST_IDS)
     path = Path(launched["observe_dir"]) / "capture-request.json"
     temporary = path.with_name(path.name + ".tmp")
     temporary.write_text(json.dumps({
