@@ -67,6 +67,23 @@ class ScenarioTests(unittest.TestCase):
         with self.assertRaises(gfx_scenario.ScenarioError):
             gfx_scenario.normalize(scenario(start={"kind": "save"}))
 
+    def test_committed_acceptance_scenarios_are_valid(self):
+        directory = (Path(__file__).resolve().parents[1]
+                     / "analysis" / "infra" / "scenarios")
+        values = {path.name: gfx_scenario.load(path)
+                  for path in sorted(directory.glob("*.json"))}
+        self.assertIn("opengl-save-consistency.json", values)
+        self.assertIn("metal-frontend-consistency.json", values)
+        self.assertIn("mixed-frontend-differential.json", values)
+        for value in values.values():
+            self.assertTrue(value["digest"])
+            if value["experiment"] == "consistency":
+                self.assertEqual(value["reference_backend"],
+                                 value["candidate_backend"])
+            else:
+                self.assertNotEqual(value["reference_backend"],
+                                    value["candidate_backend"])
+
     def test_unimplemented_scenario_controls_fail_closed(self):
         for overrides in (
             {"start": {"kind": "frontend", "pause": True}},

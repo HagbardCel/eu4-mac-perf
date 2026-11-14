@@ -1,0 +1,72 @@
+{
+  "schema": "gfx-dual-scenario/v1",
+  "name": "metal-frontend-consistency",
+  "executable": null,
+  "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "args": [
+    "-enabletelemetry",
+    "-gdpr-compliant"
+  ],
+  "experiment": "consistency",
+  "reference_backend": "metal",
+  "candidate_backend": "metal",
+  "logical_extent": [
+    1728,
+    1117
+  ],
+  "start": {
+    "kind": "frontend",
+    "save": null,
+    "pause": false,
+    "game_speed": 1
+  },
+  "game_config": {},
+  "input_events": [],
+  "settle": {
+    "min_frames": 5,
+    "stable_frames": 1,
+    "timeout_seconds": 240.0,
+    "min_draws": 100,
+    "draw_tolerance": 0.35
+  },
+  "observation": {
+    "max_frames": 20,
+    "max_runtime_seconds": 420.0,
+    "ring": 8,
+    "capture_every_frame": false,
+    "preview": true,
+    "dump_on_stop": 2,
+    "stall_seconds": 90.0
+  },
+  "comparison": {
+    "policy": "tolerant",
+    "max_channel_error": 8,
+    "max_mismatched_fraction": 0.01,
+    "max_mean_abs_error": 1.5,
+    "regions": {
+      "ui": {
+        "rect": [
+          700,
+          1117,
+          0,
+          1728
+        ],
+        "policy": "tolerant"
+      },
+      "map": {
+        "rect": [
+          0,
+          700,
+          0,
+          1728
+        ],
+        "policy": "tolerant"
+      }
+    },
+    "require_aligned": true
+  },
+  "mode": "streaming",
+  "profile": "targeted",
+  "authorization": null,
+  "digest": "e224e4ab472276b5556a39bedaa9729f5c5cb2c5578e1f51ac8b0c00b85726c8"
+}

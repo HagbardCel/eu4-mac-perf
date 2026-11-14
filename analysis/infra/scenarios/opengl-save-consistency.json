@@ -1,0 +1,72 @@
+{
+  "schema": "gfx-dual-scenario/v1",
+  "name": "opengl-save-consistency",
+  "executable": null,
+  "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "args": [
+    "-enabletelemetry",
+    "-gdpr-compliant"
+  ],
+  "experiment": "consistency",
+  "reference_backend": "opengl",
+  "candidate_backend": "opengl",
+  "logical_extent": [
+    1728,
+    1117
+  ],
+  "start": {
+    "kind": "save",
+    "save": "continuelastsave",
+    "pause": false,
+    "game_speed": 1
+  },
+  "game_config": {},
+  "input_events": [],
+  "settle": {
+    "min_frames": 5,
+    "stable_frames": 1,
+    "timeout_seconds": 180.0,
+    "min_draws": 100,
+    "draw_tolerance": 0.3
+  },
+  "observation": {
+    "max_frames": 20,
+    "max_runtime_seconds": 300.0,
+    "ring": 8,
+    "capture_every_frame": false,
+    "preview": true,
+    "dump_on_stop": 2,
+    "stall_seconds": 60.0
+  },
+  "comparison": {
+    "policy": "tolerant",
+    "max_channel_error": 8,
+    "max_mismatched_fraction": 0.01,
+    "max_mean_abs_error": 1.5,
+    "regions": {
+      "ui": {
+        "rect": [
+          700,
+          1117,
+          0,
+          1728
+        ],
+        "policy": "tolerant"
+      },
+      "map": {
+        "rect": [
+          0,
+          700,
+          0,
+          1728
+        ],
+        "policy": "tolerant"
+      }
+    },
+    "require_aligned": true
+  },
+  "mode": "streaming",
+  "profile": "targeted",
+  "authorization": null,
+  "digest": "e99d15759ac3e634374b4937d27fcb4b5a59719cc4be32e3643f64395ce01433"
+}

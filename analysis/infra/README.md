@@ -15,6 +15,8 @@ PR snapshots are consolidated on the `infrastructure` integration branch.
 | 5 | `infra/pr5-agent-tools` | [agent integration and efficiency](agent-integration-and-efficiency.md) |
 
 Correction contract: [qualification lifecycle](qualification-contract.md).
+Live experiments: [runbook](live-experiment-runbook.md) and the committed
+[acceptance scenarios](scenarios).
 
 Machine-readable evidence:
 [feasibility](dual-process-feasibility.json),
