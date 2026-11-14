@@ -212,7 +212,7 @@ class WindowPlacementTests(unittest.TestCase):
             hidpi=False, main=False,
         )
         env = gfx_display.launch_environment(display)
-        self.assertEqual(env["SDL_VIDEO_WINDOW_POS"], "-1896,24")
+        self.assertEqual(env["SDL_VIDEO_WINDOW_POS"], "-1893,27")
         self.assertEqual(env["EU4_DISPLAY_MODE"], "background")
         self.assertEqual(env["EU4_DISPLAY_ID"], "7")
         self.assertEqual(env["EU4_DISPLAY_WINDOW_SIZE"], "1728x1117")
@@ -378,6 +378,63 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(caught.exception.kind, "settings_missing")
 
 
+class WindowMonitorTests(unittest.TestCase):
+    def setUp(self):
+        self.display = gfx_display.Display(
+            display_id=7, name="EU4 Test", origin_x=0.0, origin_y=0.0,
+            width=1920.0, height=1200.0, pixel_width=1920, pixel_height=1200,
+            hidpi=False, main=False,
+        )
+
+    def payload(self, rect, front=100):
+        return {
+            "main_display_id": 1,
+            "displays": [display_record(1, main=1, origin_x=0.0,
+                                        width=1728.0, height=1117.0, hidpi=1),
+                         display_record(7, origin_x=0.0)],
+            "frontmost_pid": front,
+            "windows": [{"owner_pid": 4242, "x": rect[0], "y": rect[1],
+                         "width": rect[2], "height": rect[3]}],
+        }
+
+    def test_late_relocation_and_dimension_change_fail_placement(self):
+        payloads = [
+            self.payload((24, 24, 1728, 1145)),
+            self.payload((3000, 24, 1728, 1145)),
+            self.payload((24, 24, 1920, 1200)),
+        ]
+        original = gfx_display.snapshot
+        gfx_display.snapshot = lambda pid=None: payloads.pop(0)
+        try:
+            monitor = gfx_display.WindowMonitor(4242, self.display,
+                                                (1728, 1117))
+            for _ in range(3):
+                monitor.sample_once()
+        finally:
+            gfx_display.snapshot = original
+        summary = monitor.summary()
+        self.assertTrue(summary["placement_failed"])
+        kinds = {item["kind"] for item in summary["window_issues"]}
+        self.assertIn("outside_display", kinds)
+        self.assertIn("dimension_changed", kinds)
+
+    def test_window_absence_after_first_seen_is_an_issue(self):
+        payloads = [
+            self.payload((24, 24, 1728, 1145)),
+            {**self.payload((24, 24, 1728, 1145)), "windows": []},
+        ]
+        original = gfx_display.snapshot
+        gfx_display.snapshot = lambda pid=None: payloads.pop(0)
+        try:
+            monitor = gfx_display.WindowMonitor(4242, self.display,
+                                                (1728, 1117))
+            monitor.sample_once()
+            monitor.sample_once()
+        finally:
+            gfx_display.snapshot = original
+        self.assertTrue(monitor.summary()["placement_failed"])
+
+
 class SettingsLifecycleTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -433,6 +490,16 @@ class SettingsLifecycleTests(unittest.TestCase):
                 gfx_display.activate_background(plan, self.root / "run")
         self.assertEqual(self.settings.read_text(encoding="utf-8"), SETTINGS)
 
+    def test_restore_accepts_game_return_to_original_controlled_fields(self):
+        record = gfx_display.prepare_windowed_settings(
+            self.user_data, run_dir=self.root / "run")
+        self.settings.write_text(SETTINGS + "unrelated=1\n", encoding="utf-8")
+        result = gfx_display.restore_settings(record)
+        self.assertTrue(result["restored"])
+        self.assertEqual(result["reason"], "controlled_fields_already_original")
+        self.assertTrue(result["preserved_unrelated_changes"])
+        self.assertIn("unrelated=1", self.settings.read_text(encoding="utf-8"))
+
     def test_restore_accepts_a_game_rewrite_of_our_windowed_intent(self):
         record = gfx_display.prepare_windowed_settings(
             self.user_data, run_dir=self.root / "run")
@@ -444,8 +511,11 @@ class SettingsLifecycleTests(unittest.TestCase):
                                  + "extra=1\n", encoding="utf-8")
         result = gfx_display.restore_settings(record)
         self.assertTrue(result["restored"])
-        self.assertEqual(result["reason"], "game_rewrote_windowed_settings")
-        self.assertEqual(self.settings.read_text(encoding="utf-8"), SETTINGS)
+        self.assertEqual(result["reason"], "controlled_fields_restored")
+        self.assertTrue(result["preserved_unrelated_changes"])
+        restored = self.settings.read_text(encoding="utf-8")
+        self.assertIn("fullScreen=yes", restored)
+        self.assertIn("extra=1", restored)
 
     def test_restore_accepts_already_original_file(self):
         record = gfx_display.prepare_windowed_settings(

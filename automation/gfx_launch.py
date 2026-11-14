@@ -221,12 +221,17 @@ def spawn(role: str, config: LaunchConfig, run_dir: Path, *, lease: launch_lease
     # creates its SDL window.  The injected library, process group and lease
     # are unchanged; only the window position environment differs.
     env.update(session.display_env())
-    if session.display is not None and session.display.isolation_library:
-        isolate = session.display.isolation_library
-        existing = env.get("DYLD_INSERT_LIBRARIES") or ""
-        env["DYLD_INSERT_LIBRARIES"] = (
-            f"{isolate}:{existing}" if existing else str(isolate)
-        )
+    if session.display is not None:
+        insertion: list[str] = []
+        if backend == "opengl":
+            insertion.append(str(session.display.placement_library))
+        if session.display.isolation_library:
+            insertion.append(str(session.display.isolation_library))
+        if insertion:
+            existing = env.get("DYLD_INSERT_LIBRARIES") or ""
+            if existing:
+                insertion.append(existing)
+            env["DYLD_INSERT_LIBRARIES"] = ":".join(insertion)
         (run_dir / "display-env.json").write_text(
             json.dumps({key: value for key, value in env.items()
                         if key.startswith("EU4_DISPLAY_")

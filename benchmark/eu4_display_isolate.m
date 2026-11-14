@@ -36,6 +36,7 @@ typedef BOOL (*SetPolicyIMP)(id, SEL, NSApplicationActivationPolicy);
 typedef void (*WindowOrderIMP)(id, SEL, id);
 typedef void (*SetFrameIMP)(id, SEL, NSRect, BOOL);
 typedef void (*OrderRegardlessIMP)(id, SEL, id);
+typedef BOOL (*CanBecomeIMP)(id, SEL);
 
 static ActivateIgnoringIMP g_activate_ignoring_original;
 static ActivateIMP g_activate_original;
@@ -46,6 +47,8 @@ static WindowOrderIMP g_make_key_original;
 static WindowOrderIMP g_order_front_regardless_original;
 static SetFrameIMP g_set_frame_original;
 static OrderRegardlessIMP g_order_regardless_original;
+static CanBecomeIMP g_can_become_key_original;
+static CanBecomeIMP g_can_become_main_original;
 static BOOL g_in_place;
 static NSRunningApplication *g_previous_application;
 
@@ -153,6 +156,18 @@ static void guard_order_front(id self, SEL _cmd, id sender) {
     if (g_order_front_original != NULL) {
         g_order_front_original(self, _cmd, sender);
     }
+}
+
+static BOOL guard_can_become_key(id self, SEL _cmd) {
+    return g_enabled ? NO : (g_can_become_key_original != NULL
+                                 ? g_can_become_key_original(self, _cmd)
+                                 : YES);
+}
+
+static BOOL guard_can_become_main(id self, SEL _cmd) {
+    return g_enabled ? NO : (g_can_become_main_original != NULL
+                                 ? g_can_become_main_original(self, _cmd)
+                                 : YES);
 }
 
 static void guard_make_key(id self, SEL _cmd, id sender) {

@@ -35,11 +35,13 @@ PROBE_SOURCE = ROOT / "benchmark" / "eu4_display_probe.m"
 PROBE = ROOT / "benchmark" / ".build" / "eu4_display_probe"
 ISOLATE_SOURCE = ROOT / "benchmark" / "eu4_display_isolate.m"
 ISOLATE = ROOT / "benchmark" / ".build" / "libeu4_display_isolate.dylib"
+PLACEMENT_SOURCE = ROOT / "benchmark" / "eu4_display_placement.c"
+PLACEMENT = ROOT / "benchmark" / ".build" / "libeu4_display_placement.dylib"
 SCHEMA = "gfx-display-session/v1"
 DEFAULT_NAME = "EU4 Test"
 DEFAULT_MODE = (1920, 1200)
 DEFAULT_WINDOW = (1728, 1117)
-DEFAULT_MARGIN = 24
+DEFAULT_MARGIN = 27
 PHYSICAL_LABEL = "Built-in Display"
 
 
@@ -131,6 +133,30 @@ def ensure_isolation_library(force: bool = False) -> Path:
             "isolate_build", (built.stderr or "display guard build failed").strip()
         )
     return ISOLATE
+
+
+def ensure_placement_library(force: bool = False) -> Path:
+    """Build the SDL call-site placement dylib (x86_64, like EU4)."""
+    if sys.platform != "darwin":
+        raise DisplayError("platform", "display placement requires macOS")
+    if PLACEMENT.is_file() and not force:
+        if PLACEMENT.stat().st_mtime >= PLACEMENT_SOURCE.stat().st_mtime:
+            return PLACEMENT
+    PLACEMENT.parent.mkdir(parents=True, exist_ok=True)
+    built = subprocess.run(
+        [
+            "clang", "-arch", "x86_64", "-dynamiclib", "-O2",
+            "-Wall", "-Wextra", "-I", str(ROOT / "benchmark"),
+            "-framework", "CoreGraphics", "-framework", "Foundation",
+            "-o", str(PLACEMENT), str(PLACEMENT_SOURCE),
+            str(ROOT / "benchmark" / "eu4_metal_boot_patch.c"),
+        ],
+        capture_output=True, text=True, check=False, timeout=120,
+    )
+    if built.returncode != 0:
+        raise DisplayError(
+            "placement_build", (built.stderr or "placement build failed").strip())
+    return PLACEMENT
 
 
 def _probe(operation: str, pid: int | None = None, *, timeout: float = 15.0) -> dict:
@@ -579,7 +605,9 @@ def verify_window(
         owned = [
             item
             for item in payload.get("windows") or []
-            if int(item.get("owner_pid") or 0) == pid and _window_rect(item)
+            if int(item.get("owner_pid") or 0) == pid
+            and (rect := _window_rect(item)) is not None
+            and rect[2] >= 100 and rect[3] >= 100
         ]
         if owned:
             window = max(
@@ -647,6 +675,7 @@ class WindowMonitor:
         self.activations: list[dict] = []
         self.disconnects: list[dict] = []
         self.window_issues: list[dict] = []
+        self.seen_window = False
         self._stop = False
         self._thread = None
 
@@ -681,18 +710,31 @@ class WindowMonitor:
             })
         owned = [
             item for item in payload.get("windows") or []
-            if int(item.get("owner_pid") or 0) == self.pid and _window_rect(item)
+            if int(item.get("owner_pid") or 0) == self.pid
+            and (rect := _window_rect(item)) is not None
+            and rect[2] >= 100 and rect[3] >= 100
         ]
         if owned:
+            self.seen_window = True
             window = max(
                 owned, key=lambda item: (item["width"] or 0) * (item["height"] or 0))
             rect = _window_rect(window) or (0, 0, 0, 0)
+            if rect[2] < 800 or rect[3] < 600:
+                return payload
             if not self.display.contains(rect):
                 self.window_issues.append({
                     "at": _now(), "kind": "outside_display",
                     "window_rect": list(rect),
                 })
-        else:
+            expected_w, expected_h = self.window_size
+            if not (abs(rect[2] - expected_w) <= 64
+                    and expected_h <= rect[3] <= expected_h + 120):
+                self.window_issues.append({
+                    "at": _now(), "kind": "dimension_changed",
+                    "window_rect": list(rect),
+                    "expected_size": [expected_w, expected_h],
+                })
+        elif self.seen_window:
             self.window_issues.append({"at": _now(), "kind": "window_absent"})
         return payload
 
@@ -711,6 +753,7 @@ class WindowMonitor:
             "window_issues": self.window_issues[:64],
             "unexpected_activation": bool(self.activations),
             "display_disconnected": bool(self.disconnects),
+            "placement_failed": bool(self.window_issues),
         }
 
 
@@ -779,6 +822,72 @@ def _atomic_write(path: Path, payload: bytes) -> None:
             os.close(directory)
     except OSError:
         pass
+
+
+def _graphics_values(text: str) -> dict:
+    """Read the controlled graphics fields from a settings file."""
+    values = {"fullScreen": None, "x": None, "y": None}
+    in_graphics = False
+    in_size = False
+    depth = 0
+    for line in text.splitlines():
+        stripped = line.strip()
+        if re.match(r"^graphics\s*=\s*\{", stripped):
+            in_graphics = True
+            depth = stripped.count("{") - stripped.count("}")
+            continue
+        if not in_graphics:
+            continue
+        if re.match(r"^size\s*=\s*\{", stripped):
+            in_size = True
+            depth += stripped.count("{") - stripped.count("}")
+            continue
+        if in_size and re.match(r"^x\s*=", stripped):
+            values["x"] = stripped.split("=", 1)[1].strip()
+        elif in_size and re.match(r"^y\s*=", stripped):
+            values["y"] = stripped.split("=", 1)[1].strip()
+        elif re.match(r"^fullScreen\s*=", stripped):
+            values["fullScreen"] = stripped.split("=", 1)[1].strip()
+        if in_size and stripped.startswith("}"):
+            in_size = False
+        depth += stripped.count("{") - stripped.count("}")
+        if depth <= 0:
+            in_graphics = False
+    return values
+
+
+def _restore_controlled_fields(current: str, original: str) -> str:
+    """Return current with only fullscreen/size replaced by original values."""
+    wanted = _graphics_values(original)
+    lines = current.splitlines(keepends=True)
+    in_graphics = False
+    in_size = False
+    depth = 0
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if re.match(r"^graphics\s*=\s*\{", stripped):
+            in_graphics = True
+            depth = stripped.count("{") - stripped.count("}")
+            continue
+        if not in_graphics:
+            continue
+        ending = "\n" if line.endswith("\n") else ""
+        if re.match(r"^size\s*=\s*\{", stripped):
+            in_size = True
+            depth += stripped.count("{") - stripped.count("}")
+            continue
+        if in_size and re.match(r"^x\s*=", stripped) and wanted["x"] is not None:
+            lines[index] = re.sub(r"^(\s*x\s*=\s*).*$", rf"\g<1>{wanted['x']}", line.rstrip("\n")) + ending
+        elif in_size and re.match(r"^y\s*=", stripped) and wanted["y"] is not None:
+            lines[index] = re.sub(r"^(\s*y\s*=\s*).*$", rf"\g<1>{wanted['y']}", line.rstrip("\n")) + ending
+        elif re.match(r"^fullScreen\s*=", stripped) and wanted["fullScreen"] is not None:
+            lines[index] = re.sub(r"^(\s*fullScreen\s*=\s*).*$", rf"\g<1>{wanted['fullScreen']}", line.rstrip("\n")) + ending
+        if in_size and stripped.startswith("}"):
+            in_size = False
+        depth += stripped.count("{") - stripped.count("}")
+        if depth <= 0:
+            in_graphics = False
+    return "".join(lines)
 
 
 def _matches_windowed_intent(payload: bytes, width: int, height: int) -> bool:
@@ -860,6 +969,22 @@ def restore_settings(record: dict) -> dict:
             "sha256": original_digest,
         }
     if current_digest != record.get("settings_sha256"):
+        try:
+            current_values = _graphics_values(
+                current.decode("utf-8", errors="surrogateescape"))
+            original_values = _graphics_values(
+                original.decode("utf-8", errors="surrogateescape"))
+        except UnicodeError:
+            current_values = original_values = None
+        if current_values is not None and current_values == original_values:
+            return {
+                "restored": True,
+                "reason": "controlled_fields_already_original",
+                "preserved_unrelated_changes": current != original,
+                "path": str(path),
+                "sha256": current_digest,
+                "original_sha256": original_digest,
+            }
         windowed = record.get("windowed") or {}
         game_rewrite = (
             isinstance(windowed.get("width"), int)
@@ -879,7 +1004,25 @@ def restore_settings(record: dict) -> dict:
                 "current_sha256": current_digest,
                 "original_sha256": record.get("original_sha256"),
             }
-        reason = "game_rewrote_windowed_settings"
+        # The game preserved our windowed intent but may have changed other
+        # fields.  Revert only the fields this harness controls.
+        try:
+            merged_text = _restore_controlled_fields(
+                current.decode("utf-8", errors="surrogateescape"),
+                original.decode("utf-8", errors="surrogateescape"),
+            )
+        except (UnicodeError, ValueError) as exc:
+            raise DisplayError("settings_merge", str(exc)) from exc
+        merged = merged_text.encode("utf-8", errors="surrogateescape")
+        _atomic_write(path, merged)
+        return {
+            "restored": True,
+            "reason": "controlled_fields_restored",
+            "preserved_unrelated_changes": merged != original,
+            "path": str(path),
+            "sha256": _sha256_bytes(merged),
+            "original_sha256": original_digest,
+        }
     else:
         reason = "restored"
     _atomic_write(path, original)
@@ -908,8 +1051,12 @@ class BackgroundSession:
         self.isolation_library = (
             ensure_isolation_library() if self.focus_guard else None
         )
+        self.placement_library = ensure_placement_library()
         self.record = {
             "focus_guard": self.focus_guard,
+            "placement_library": str(self.placement_library),
+            "placement_library_sha256": _sha256_bytes(
+                self.placement_library.read_bytes()),
             "isolation_library": (
                 str(self.isolation_library) if self.isolation_library else None
             ),
@@ -1011,6 +1158,10 @@ def activate_background(plan: BackgroundPlan, run_dir: Path | str) -> Background
     display = Display(**qualified["display"])
     session = BackgroundSession(display, plan.window_size,
                                  focus_guard=plan.focus_guard)
+    session.env["EU4_DISPLAY_WINDOW_TRACE"] = str(
+        Path(run_dir) / "display" / "window-trace.jsonl")
+    session.env["EU4_DISPLAY_TRACE"] = str(
+        Path(run_dir) / "display" / "appkit-trace.jsonl")
     session.record["qualified"] = qualified
     try:
         session.prepare_settings(plan.user_data, run_dir)

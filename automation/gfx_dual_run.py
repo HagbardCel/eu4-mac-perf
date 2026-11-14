@@ -1361,6 +1361,11 @@ def run_campaign(
             lease=lease, session=session, token=tokens[0], libraries=libraries,
             backend=scenario.get("reference_backend", "opengl"),
         )
+        if background and display_qualified is not None:
+            display_monitors["reference"] = gfx_display.WindowMonitor(
+                launched["reference"].process.pid, display_qualified.display,
+                window_size,
+            ).start()
         launch_ledger.start(ledger_path, launched["reference"].token,
                             launched["reference"].process.pid)
         result["processes"]["reference"] = launched["reference"].as_dict()
@@ -1403,6 +1408,11 @@ def run_campaign(
             lease=lease, session=session, token=tokens[1], libraries=libraries,
             backend=scenario.get("candidate_backend", "metal"),
         )
+        if background and display_qualified is not None:
+            display_monitors["candidate"] = gfx_display.WindowMonitor(
+                launched["candidate"].process.pid, display_qualified.display,
+                window_size,
+            ).start()
         launch_ledger.start(ledger_path, launched["candidate"].token,
                             launched["candidate"].process.pid)
         result["processes"]["candidate"] = launched["candidate"].as_dict()
@@ -1460,9 +1470,6 @@ def run_campaign(
                     item.process.pid, display_qualified.display, window_size,
                     timeout=display_timeout,
                 )
-                display_monitors[role] = gfx_display.WindowMonitor(
-                    item.process.pid, display_qualified.display, window_size,
-                ).start()
             result["display"] = {
                 "display": display_qualified.as_dict(),
                 "windows": window_checks,
@@ -2029,7 +2036,8 @@ def run_campaign(
             }
             result.setdefault("display", {})["monitor"] = monitor_summary
             if any(item.get("unexpected_activation") or
-                   item.get("display_disconnected")
+                   item.get("display_disconnected") or
+                   item.get("placement_failed")
                    for item in monitor_summary.values()):
                 result.setdefault("display", {})["monitor_failed"] = True
         display_restore = attempt("restore-display", session.restore_display)
