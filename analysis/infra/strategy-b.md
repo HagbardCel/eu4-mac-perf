@@ -4,7 +4,9 @@ Date: 2026-11-14. Worktree: `wt_infra`, branch `infrastructure`, based on the
 reviewed integration head `485bb92955ad10231726ba16ba3466dd73836bf4`.
 Follow-up commits: `eb814a6` (background display and capture hardening),
 `fd4f175` (independent Metal intermediates), `beca74b` (agent tools),
-`5d8bb6e` (portable case verification and evidence).
+`5d8bb6e` (portable case verification and evidence), `a6a1570` (PR #190
+corrected M6 draw/capture semantics), and the final review corrections
+described below.
 
 This is the acceptance record for the capture-once/replay-independently
 workflow. It is deliberately explicit about what is qualified and what is not.
@@ -239,3 +241,61 @@ focused follow-up commits. The frame should be labeled **partial** until
 resolve/copy capture is added. Background mode should remain opt-in and
 unqualified; the existing foreground path and the dual-process runner are
 unchanged in their qualification claims.
+
+## 11. Final review corrections (2026-11-14)
+
+- **Shared-settings lifecycle (critical).** Background preparation is split into
+  `plan_background()` (validation only) and `activate_background()` (display
+  preparation, durable backup, atomic settings write). The campaign acquires
+  launch authorization and the host-wide lease before activation, terminates
+  owned processes before restore, restores before releasing the lease, and
+  rolls back on activation/attach failure. Restore is conditional: it accepts
+  the already-original file, a game rewrite that preserves the windowed
+  intent, or the exact modified file; an unrelated edit is preserved and
+  reported as a conflict. Failure-injection tests cover planning, rollback,
+  conflict, already-original and game-rewrite paths.
+- **PR #190 integrated.** `fix/m6-post-merge-correctness@4d24754` was reviewed
+  and merged as `a6a1570`. The replay host now uses signed additive base
+  vertex, captured vertex origin, UInt16 indices, corrected topology, color
+  write masks, unsupported stencil/raster rejection and attribute range
+  checks. The canonical 326-event replay still produces 0 differing pixels.
+- **Outcome dimensions separated.** A replay now reports independent
+  `execution`, `coverage`, `pixels`, `semantic` and `qualified` fields. A
+  partial capture with matching pixels is `coverage=partial, pixels=match,
+  qualified=false`; a complete capture that differs is
+  `confirmed_rendering_difference`; an overdrawn sampler defect is
+  `semantic_divergence` even when pixels match.
+- **First divergence includes semantics.** `binding_audit()` now feeds
+  `first_divergence()`; the injected `tex7` defect is reported at event 14 as
+  `kind=semantic`, not hidden by matching final pixels.
+- **Capture request protocol.** `eu4_capture request` uses the existing
+  `gfx_dual_run._request_dumps()` mechanism, including monotonic request IDs,
+  the 256-frame capacity bound and refusal of oversized requests.
+- **Portable case checkpoint files.** The packager copies
+  `checkpoint["metal_file"]` (the comparison field) and verifies every
+  packaged file. The final case was moved and replayed from packaged inputs
+  only; all 1,242 hashes verify and the result is unchanged.
+- **Resource classification.** External classification now records an explicit
+  basis (no in-frame producer, captured content at every consumer, not an
+  in-frame target). Full-extent resources without a producer are marked as a
+  possible missing producer. Expected generation counts are checked so a stale
+  nonzero generation cannot pass provenance.
+- **Resolve/copy.** The replay host now **fails closed** on `resolve`/`copy`
+  events instead of counting them as successful no-ops. It does not execute
+  them yet, so a frame containing them is `invalid`. The canonical frame still
+  has no resolve/copy events, and texture 442 remains unproven; the frame stays
+  partial.
+- **Background display remains unqualified.** The guard now installs all
+  advertised hooks, places windows through `setFrame`/order paths, records a
+  trace and yields focus back to the previously frontmost application.
+  Observed launches still either left the main window on the physical display
+  or produced a fullscreen 1920x1200 window on the virtual screen, changing the
+  drawable extent; focus was still taken. Background mode stays opt-in and
+  unqualified. No five-launch acceptance is claimed.
+- **Session-long verification.** `WindowMonitor` samples window, display and
+  frontmost identity for the whole campaign; activation/disconnection marks
+  the campaign incomplete. It was not exercised live because background
+  isolation did not qualify.
+- **Tests.** 196 tests across the touched modules pass, including PR #190's
+  native draw tests, the settings lifecycle regressions, dependency/outcome
+  tests, agent request tests and portable-case verification.

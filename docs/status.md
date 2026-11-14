@@ -15,19 +15,23 @@ match exactly; the GL-RGB8/Metal-BGRA8 checkpoint 433 is diagnostic.
 
 The capture is **partial**, not complete: sampled full-extent texture 442 has no
 captured producer because resolve/copy operations are not recorded by the frame
-trace. A controlled V-flip fault localizes the earliest divergence to event 291
+trace. Resolve/copy events are now rejected by the replay host rather than
+counted as successful no-ops; executing them remains open. A controlled V-flip fault localizes the earliest divergence to event 291
 (producer 289, program 349). The historical `tex7` defect is injected offline
 and the binding audit identifies the exact wrong engine unit at event 14 (842
 state mismatches) even though the title frame's terrain is overdrawn and its
-pixels do not change.
+pixels do not change. Replay outcome is reported as separate `execution`,
+`coverage`, `pixels`, `semantic` and `qualified` fields; PR #190's corrected
+draw semantics are merged into the infrastructure branch.
 
 BetterDisplay `EU4 Test` (1920x1200, 1x, non-main) is created once and reused.
-One real original-OpenGL background launch produced 820 observations, restored
-`settings.txt` byte-for-byte and terminated cleanly, but the window was placed
-on the physical display and EU4 took focus. Background focus/placement is
-therefore **not qualified**; the opt-in AppKit guard is disabled by default and
-foreground remains the fallback. Five-launch acceptance was not performed
-because the launch lease was held by the parallel M6 worktree.
+The shared-settings lifecycle is now lease-ordered, with durable backup,
+rollback, and conditional restore that preserves unrelated edits. Live
+placement/focus is still **not qualified**: observed guarded launches either
+left the main window on the physical display or produced a fullscreen
+1920x1200 window on the virtual screen, changing the drawable extent, and EU4
+still took focus. Background mode stays opt-in; foreground remains the
+fallback. Five-launch acceptance is not claimed.
 
 Evidence: [Strategy B report](../analysis/infra/strategy-b.md). Tools:
 `eu4_capture graph`, `eu4_replay independent`, `eu4_case_inspect` for Strategy B
