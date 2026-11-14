@@ -20,7 +20,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from automation import gfx_artifacts, gfx_diagnostics, gfx_launch, gfx_scenario
+from automation import gfx_align, gfx_artifacts, gfx_diagnostics, gfx_frame_compare
+from automation import gfx_launch, gfx_scenario
 from automation import gfx_session, gfx_wait, launch_ledger, launch_lease
 
 import eu4_benchmark as base_benchmark
@@ -195,14 +196,27 @@ def align_streams(state: CampaignState) -> list[dict]:
         ref_valid = ref.value.get("capture_valid") is True
         cand_valid = cand.value.get("capture_valid") is True
         extent = _extent_relation(ref, cand)
+        reference_signature = gfx_align._signature(ref.value)
+        candidate_signature = gfx_align._signature(cand.value)
+        same_draws = (
+            type(ref.value.get("draws")) is int
+            and ref.value.get("draws") == cand.value.get("draws")
+            and ref.value.get("draws") > 0
+        )
+        strong = (
+            extent["normalized"]
+            and same_draws
+            and reference_signature
+            and reference_signature == candidate_signature
+        )
         if not ref_valid or not cand_valid:
             status = NOT_ALIGNED
-        elif not extent["normalized"]:
+        elif not strong:
             status = AMBIGUOUS
         elif ref.digest and ref.digest == cand.digest:
             status = ALIGNED
         else:
-            status = ALIGNED if ref.digest and cand.digest else AMBIGUOUS
+            status = ALIGNED
         pair = {
             "frame_index": ref_index,
             "candidate_frame_index": cand_index,
@@ -399,6 +413,228 @@ def _preview_stats(reference: FrameRecord, candidate: FrameRecord) -> dict:
     }
 
 
+
+def _compare_pair(pair: dict, reference_meta: dict | None,
+                  candidate_meta: dict | None, scenario: dict) -> dict:
+    """Compare one lockstep pair from its preserved raw dumps.
+
+    A pair whose alignment evidence is too weak is not compared; a pixel
+    difference is only a rendering verdict for a strong alignment.
+    """
+    if not reference_meta or not candidate_meta:
+        return {
+            "status": "not_compared",
+            "reason": "one or both paired raw frames are unavailable",
+        }
+    reference_record = {
+        "frame_index": pair["frame_index"],
+        "width": reference_meta.get("width"),
+        "height": reference_meta.get("height"),
+        "origin": reference_meta.get("origin"),
+        "caller_signature": reference_meta.get("caller_signature"),
+        "draws": reference_meta.get("draws"),
+    }
+    candidate_record = {
+        "frame_index": pair.get("candidate_frame_index"),
+        "width": candidate_meta.get("width"),
+        "height": candidate_meta.get("height"),
+        "origin": candidate_meta.get("origin"),
+        "caller_signature": candidate_meta.get("caller_signature"),
+        "draws": candidate_meta.get("draws"),
+    }
+    score, evidence = gfx_align.match_score(reference_record, candidate_record)
+    relation = gfx_align.extent_relation(reference_record, candidate_record)
+    reference_signature = gfx_align._signature(reference_record)
+    candidate_signature = gfx_align._signature(candidate_record)
+    same_draws = (
+        type(reference_record.get("draws")) is int
+        and reference_record.get("draws") == candidate_record.get("draws")
+        and reference_record.get("draws") > 0
+    )
+    strong = (
+        relation["normalized"]
+        and "scene_mismatch" not in evidence
+        and same_draws
+        and (
+            (reference_signature and reference_signature == candidate_signature)
+            or "scene" in evidence
+        )
+    )
+    alignment = {
+        "score": score,
+        "evidence": evidence,
+        "extent": relation,
+        "draw_counts": [reference_record.get("draws"),
+                        candidate_record.get("draws")],
+        "signatures": [reference_signature, candidate_signature],
+        "status": gfx_align.ALIGNED if strong else gfx_align.AMBIGUOUS,
+    }
+    if alignment["status"] != gfx_align.ALIGNED:
+        return {"status": "not_compared", "reason": "alignment is ambiguous",
+                "alignment": alignment}
+    policy = scenario["comparison"]
+    minimum_draws = int((scenario.get("settle") or {}).get("min_draws", 0))
+    if minimum_draws > 0 and min(
+        reference_record.get("draws") or 0,
+        candidate_record.get("draws") or 0,
+    ) < minimum_draws:
+        return {
+            "status": "not_compared",
+            "reason": "scene has not reached the settle draw threshold "
+                      f"({reference_record.get('draws')}/"
+                      f"{candidate_record.get('draws')} < {minimum_draws})",
+            "alignment": alignment,
+        }
+    try:
+        content = _content_corroboration(
+            Path(reference_meta["raw_file"]), reference_meta,
+            Path(candidate_meta["raw_file"]), candidate_meta,
+            policy,
+        )
+    except Exception as exc:  # noqa: BLE001
+        content = {"status": "unavailable", "reason": f"{type(exc).__name__}: {exc}"}
+    if content.get("veto"):
+        alignment["status"] = gfx_align.AMBIGUOUS
+        alignment["content"] = content
+        return {
+            "status": "not_compared",
+            "reason": "coarse content does not corroborate the semantic alignment",
+            "alignment": alignment,
+        }
+    alignment["content"] = content
+    compare_policy = {
+        "policy": policy["policy"],
+        "pixel_tolerance": policy["max_channel_error"],
+        "max_mismatched_fraction": policy["max_mismatched_fraction"],
+        "max_mean_abs_error": policy["max_mean_abs_error"],
+        "allow_scale_normalization": True,
+    }
+    try:
+        reference_payload = Path(reference_meta["raw_file"]).read_bytes()
+        candidate_payload = Path(candidate_meta["raw_file"]).read_bytes()
+        result = gfx_frame_compare.compare_payloads(
+            reference_payload, reference_meta, candidate_payload, candidate_meta,
+            policy=compare_policy, regions=policy["regions"],
+        )
+    except (OSError, gfx_frame_compare.CompareError) as exc:
+        return {"status": gfx_frame_compare.UNVERIFIED,
+                "reason": f"{type(exc).__name__}: {exc}",
+                "alignment": alignment}
+    result["alignment"] = alignment
+    return result
+
+
+
+def _content_corroboration(reference_path: Path, reference_meta: dict,
+                           candidate_path: Path, candidate_meta: dict,
+                           policy: dict) -> dict:
+    """Use coarse content as a *veto* on a semantic alignment, never as proof.
+
+    Caller signatures can repeat across loading/menu frames.  If the normalized
+    images correlate far too weakly to be the same scene, the pair is an
+    alignment problem rather than a rendering verdict.  A strongly mirrored
+    image is not vetoed: that is exactly the orientation failure the comparator
+    must detect.
+    """
+    try:
+        import numpy as np
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("numpy is required") from exc
+    reference = gfx_frame_compare.decode_frame(
+        reference_path.read_bytes(), int(reference_meta["width"]),
+        int(reference_meta["height"]),
+        origin=str(reference_meta.get("origin", "top_left")),
+        pixel_format=str(reference_meta.get("pixel_format", "BGRA8")),
+    )
+    candidate = gfx_frame_compare.decode_frame(
+        candidate_path.read_bytes(), int(candidate_meta["width"]),
+        int(candidate_meta["height"]),
+        origin=str(candidate_meta.get("origin", "top_left")),
+        pixel_format=str(candidate_meta.get("pixel_format", "BGRA8")),
+    )
+    candidate, _normalization = gfx_frame_compare.normalize_candidate(
+        reference, candidate, policy={"allow_scale_normalization": True},
+        candidate_meta=candidate_meta,
+    )
+    height, width = reference.shape[:2]
+
+    def coarse(image):
+        gray = image[:, :, :3].astype(np.float32).mean(axis=2)
+        rows = 41
+        columns = 64
+        y_edges = np.linspace(0, height, rows + 1).astype(int)
+        x_edges = np.linspace(0, width, columns + 1).astype(int)
+        out = np.zeros((rows, columns), dtype=np.float32)
+        for row in range(rows):
+            for column in range(columns):
+                block = gray[y_edges[row]:max(y_edges[row] + 1, y_edges[row + 1]),
+                             x_edges[column]:max(x_edges[column] + 1, x_edges[column + 1])]
+                out[row, column] = float(block.mean()) if block.size else 0.0
+        return out
+
+    left = coarse(reference).reshape(-1)
+    right = coarse(candidate).reshape(-1)
+    flipped = coarse(candidate[:, ::-1, :]).reshape(-1)
+    normal_correlation = gfx_frame_compare._correlation(left, right) or 0.0
+    flipped_correlation = gfx_frame_compare._correlation(left, flipped) or 0.0
+    threshold = float(policy.get("alignment_min_correlation", 0.35))
+    mirrored_signal = (
+        flipped_correlation > normal_correlation + 0.10
+        and flipped_correlation >= threshold
+    )
+    veto = normal_correlation < threshold and not mirrored_signal
+    return {
+        "status": "compared",
+        "normal_correlation": round(normal_correlation, 6),
+        "flipped_correlation": round(flipped_correlation, 6),
+        "threshold": threshold,
+        "mirrored_signal": bool(mirrored_signal),
+        "veto": bool(veto),
+    }
+
+
+def _preserve_pair(store: gfx_artifacts.ArtifactStore, launched: dict,
+                   pair: dict) -> None:
+    for role, key in (("reference", "reference"), ("candidate", "candidate")):
+        meta = (pair.get("dumps") or {}).get(key, {}).get("found", {})
+        for index, value in meta.items():
+            raw = Path(value.get("raw_file", ""))
+            if raw.is_file():
+                store.put_file(raw, kind="frame", preserved=True,
+                               logical_name=f"{role}-frame-{index}")
+
+
+
+def _comparison_summary(pairs: list[dict], scenario: dict) -> dict:
+    compared = [pair for pair in pairs if isinstance(pair.get("comparison"), dict)
+                and pair["comparison"].get("status") in
+                (gfx_frame_compare.PASS, gfx_frame_compare.FAIL,
+                 gfx_frame_compare.DIAGNOSTIC, gfx_frame_compare.UNVERIFIED)]
+    failures = [pair for pair in compared
+                if pair["comparison"].get("status") == gfx_frame_compare.FAIL]
+    unverified = [pair for pair in compared
+                  if pair["comparison"].get("status") == gfx_frame_compare.UNVERIFIED]
+    return {
+        "status": (
+            gfx_frame_compare.FAIL if failures
+            else (gfx_frame_compare.UNVERIFIED if unverified
+                  else (gfx_frame_compare.PASS if compared else "not_run"))
+        ),
+        "policy": scenario["comparison"]["policy"],
+        "compared": len(compared),
+        "passed": sum(1 for pair in compared
+                      if pair["comparison"].get("status") == gfx_frame_compare.PASS),
+        "failed": len(failures),
+        "unverified": len(unverified),
+        "first_failure": failures[0] if failures else None,
+        "not_compared": sum(
+            1 for pair in pairs
+            if isinstance(pair.get("comparison"), dict)
+            and pair["comparison"].get("status") == "not_compared"
+        ),
+    }
+
+
 def _stop_processes(session: gfx_session.Session, *, resume_first: bool = False) -> list[dict]:
     if resume_first:
         for identity in session.processes.values():
@@ -461,6 +697,7 @@ def run_campaign(
             "profile": wait_profile.name,
             "logical_extent": scenario["logical_extent"],
             "comparison_policy": scenario["comparison"]["policy"],
+            "comparison": scenario["comparison"],
         },
         "build": {},
         "processes": {},
@@ -518,10 +755,12 @@ def run_campaign(
         launched["reference"] = gfx_launch.spawn(
             "reference", config, session.run_dir / "reference",
             lease=lease, session=session, token=tokens[0], libraries=libraries,
+            backend=scenario.get("reference_backend", "opengl"),
         )
         launched["candidate"] = gfx_launch.spawn(
             "candidate", config, session.run_dir / "candidate",
             lease=lease, session=session, token=tokens[1], libraries=libraries,
+            backend=scenario.get("candidate_backend", "metal"),
         )
         for role, item in launched.items():
             launch_ledger.start(ledger_path, item.token, item.process.pid)
@@ -631,11 +870,35 @@ def run_campaign(
                         "reference": reference_dump,
                         "candidate": candidate_dump,
                     }
+                    comparison = _compare_pair(
+                        pair, reference_dump.get("found", {}).get(ref_index),
+                        candidate_dump.get("found", {}).get(cand_index),
+                        scenario,
+                    )
+                    pair["comparison"] = comparison
+                    if comparison.get("status") in (gfx_frame_compare.FAIL,
+                                                    gfx_frame_compare.UNVERIFIED):
+                        stop_reason = "frame_difference" if comparison.get("status") == gfx_frame_compare.FAIL else "comparison_unverified"
+                        stop_trigger = (
+                            f"frame {ref_index}/{cand_index}: "
+                            + "; ".join(comparison.get("reasons", [])[:3])
+                        )
+                        if comparison.get("status") == gfx_frame_compare.FAIL:
+                            _preserve_pair(store, launched, pair)
+                        _release({"observe_dir": launched["reference"].observe_dir},
+                                 [ref_index])
+                        _release({"observe_dir": launched["candidate"].observe_dir},
+                                 [cand_index])
+                        break
                     _release({"observe_dir": launched["reference"].observe_dir},
                              [ref_index])
                     _release({"observe_dir": launched["candidate"].observe_dir},
                              [cand_index])
                     state.lockstep_stops += 1
+                    if stop_reason:
+                        break
+            if stop_reason:
+                break
             if results := [pair for pair in pairs if pair["status"] == NOT_ALIGNED]:
                 stop_reason = "alignment_failure"
                 stop_trigger = f"frame {results[0]['frame_index']} is not aligned"
@@ -673,10 +936,7 @@ def run_campaign(
             "first_pair": state.first_pair,
             "last_pair": state.last_pair,
             "policy": scenario["comparison"]["policy"],
-            "comparison": {
-                "status": "not_run",
-                "reason": "PR 2 runner: pixel comparison is supplied by the PR 3 layer",
-            },
+            "comparison": _comparison_summary(state.pairs, scenario),
         }
         stop = {
             "reason": stop_reason,

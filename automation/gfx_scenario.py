@@ -18,6 +18,7 @@ from typing import Any
 
 SCHEMA = "gfx-dual-scenario/v1"
 MODES = ("streaming", "lockstep")
+EXPERIMENTS = ("differential", "consistency")
 POLICIES = ("exact", "tolerant", "diagnostic")
 PROFILES = ("early", "targeted", "qualification")
 STARTS = ("frontend", "save")
@@ -71,7 +72,7 @@ def normalize(value: dict) -> dict:
         "schema", "name", "executable_sha256", "executable", "args",
         "reference_backend", "candidate_backend", "logical_extent",
         "start", "game_config", "input_events", "settle", "observation",
-        "comparison", "mode", "profile", "authorization", "digest",
+        "comparison", "mode", "profile", "authorization", "digest", "experiment",
     }, "scenario")
 
     executable = value.get("executable")
@@ -133,7 +134,8 @@ def normalize(value: dict) -> dict:
     settle = value.get("settle", {})
     if not isinstance(settle, dict):
         raise ScenarioError("type", "settle must be an object")
-    _check_keys(settle, {"min_frames", "stable_frames", "timeout_seconds"}, "settle")
+    _check_keys(settle, {"min_frames", "stable_frames", "timeout_seconds",
+                         "min_draws"}, "settle")
     min_frames = _optional(settle.get("min_frames"), int, "settle.min_frames", 3,
                            minimum=1, maximum=10000)
     stable_frames = _optional(settle.get("stable_frames"), int, "settle.stable_frames",
@@ -141,6 +143,8 @@ def normalize(value: dict) -> dict:
     settle_timeout = _optional(settle.get("timeout_seconds"), float,
                                "settle.timeout_seconds", 90.0, minimum=1.0,
                                maximum=3600.0)
+    settle_min_draws = _optional(settle.get("min_draws"), int, "settle.min_draws",
+                                 0, minimum=0, maximum=100000)
 
     observation = value.get("observation", {})
     if not isinstance(observation, dict):
@@ -206,10 +210,21 @@ def normalize(value: dict) -> dict:
     if wait_profile not in PROFILES:
         raise ScenarioError("enum", f"profile must be one of {PROFILES}")
 
+    experiment = value.get("experiment", "differential")
+    if experiment not in EXPERIMENTS:
+        raise ScenarioError("enum", f"experiment must be one of {EXPERIMENTS}")
     reference_backend = value.get("reference_backend", "opengl")
     candidate_backend = value.get("candidate_backend", "metal")
-    if reference_backend != "opengl" or candidate_backend != "metal":
-        raise ScenarioError("backend", "reference must be opengl and candidate metal")
+    if reference_backend not in ("opengl", "metal") or candidate_backend not in (
+            "opengl", "metal"):
+        raise ScenarioError("backend", "backends must be opengl or metal")
+    if experiment == "differential":
+        if reference_backend != "opengl" or candidate_backend != "metal":
+            raise ScenarioError("backend", "reference must be opengl and candidate metal")
+    elif reference_backend != candidate_backend:
+        raise ScenarioError(
+            "backend", "consistency experiments require the same backend on both sides"
+        )
 
     normalized = {
         "schema": SCHEMA,
@@ -217,6 +232,7 @@ def normalize(value: dict) -> dict:
         "executable": executable,
         "executable_sha256": sha.lower(),
         "args": args,
+        "experiment": experiment,
         "reference_backend": reference_backend,
         "candidate_backend": candidate_backend,
         "logical_extent": [width, height],
@@ -232,6 +248,7 @@ def normalize(value: dict) -> dict:
             "min_frames": min_frames,
             "stable_frames": stable_frames,
             "timeout_seconds": settle_timeout,
+            "min_draws": settle_min_draws,
         },
         "observation": {
             "max_frames": max_frames,

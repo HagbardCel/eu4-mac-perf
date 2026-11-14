@@ -137,19 +137,26 @@ def _common_observation_env(env: dict, run_dir: Path, config: LaunchConfig,
 
 
 def prepare(role: str, config: LaunchConfig, run_dir: Path,
-            libraries: dict | None = None) -> tuple[dict, Path, Path]:
+            libraries: dict | None = None,
+            backend: str | None = None) -> tuple[dict, Path, Path]:
     """Build the environment and directories for one backend role."""
     if role not in ("reference", "candidate"):
         raise LaunchError("role", role)
+    if backend is None:
+        backend = "opengl" if role == "reference" else "metal"
+    if backend not in ("opengl", "metal"):
+        raise LaunchError("backend", backend)
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=False)
-    library = (libraries or build_libraries())[role]
+    library = (libraries or build_libraries())[
+        "reference" if backend == "opengl" else "candidate"
+    ]
     env = _clean_environment()
     env["EU4_GFX_STARTUP_ID"] = config.session_id or f"session-{os.getpid()}"
     env["EU4_GFX_EXPECTED_EXE"] = str(config.executable)
     env["EU4_GFX_EXECUTABLE_SHA256"] = config.executable_sha256
     observe = _common_observation_env(env, run_dir, config, role)
-    if role == "reference":
+    if backend == "opengl":
         env["DYLD_INSERT_LIBRARIES"] = str(library)
         env["EU4_GFX_STARTUP_DIR"] = str(run_dir)
         env["EU4_GFX_STARTUP_DEADLINE_S"] = str(int(config.deadline_seconds) + 30)
@@ -186,8 +193,11 @@ def prepare(role: str, config: LaunchConfig, run_dir: Path,
 
 def spawn(role: str, config: LaunchConfig, run_dir: Path, *, lease: launch_lease.ProcessLease,
           session: gfx_session.Session, token: str = "",
-          libraries: dict | None = None) -> Launched:
-    env, run_dir, observe = prepare(role, config, run_dir, libraries)
+          libraries: dict | None = None,
+          backend: str | None = None) -> Launched:
+    if backend is None:
+        backend = "opengl" if role == "reference" else "metal"
+    env, run_dir, observe = prepare(role, config, run_dir, libraries, backend=backend)
     stdout = (run_dir / "game.stdout").open("wb")
     stderr = (run_dir / "game.stderr").open("wb")
     argv = ["./eu4", *config.args]
@@ -212,7 +222,7 @@ def spawn(role: str, config: LaunchConfig, run_dir: Path, *, lease: launch_lease
     identity = session.register(role, process, token=token or None)
     return Launched(
         role=role,
-        backend="opengl" if role == "reference" else "metal",
+        backend=backend,
         run_dir=run_dir,
         observe_dir=observe,
         process=process,

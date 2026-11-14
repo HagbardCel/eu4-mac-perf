@@ -101,6 +101,8 @@ def write_record(path: Path, index: int, *, sha: str, valid: bool = True,
         "sha256": sha,
         "capture_valid": valid,
         "gpu_completed": True,
+        "caller_signature": "0xabc",
+        "draws": 2,
         "preview_file": f"preview-{index}.bgra" if preview is not None else "",
     }
     with path.open("a", encoding="utf-8") as target:
@@ -255,3 +257,89 @@ class LaunchPreparationTests(unittest.TestCase):
             env, _run_dir, _observe = self.prepare("reference")
         self.assertNotIn("EU4_GFX_LEAK", env)
         self.assertEqual(env["DYLD_INSERT_LIBRARIES"], str(self.library))
+
+
+class PairComparisonTests(unittest.TestCase):
+    def setUp(self):
+        try:
+            import numpy as np
+        except Exception:  # noqa: BLE001
+            self.skipTest("numpy is required")
+        self.np = np
+        self._temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self._temporary.name)
+        self.image = np.full((4, 4, 4), 20, dtype=np.uint8)
+        self.image[0:2, 0:2, :3] = 200
+        self.reference_path = self.root / "ref.bgra"
+        self.reference_path.write_bytes(self.image[::-1, :, [2, 1, 0, 3]].tobytes())
+        self.candidate_path = self.root / "cand.bgra"
+        self.candidate_path.write_bytes(
+            np.repeat(np.repeat(self.image, 2, axis=0), 2, axis=1).tobytes())
+        self.scenario = {
+            "comparison": {
+                "policy": "tolerant",
+                "max_channel_error": 4,
+                "max_mismatched_fraction": 0.0,
+                "max_mean_abs_error": 0.0,
+                "regions": {"all": {"rect": [0, 4, 0, 4]}},
+            }
+        }
+        self.meta = {
+            "reference": {"width": 4, "height": 4, "origin": "lower_left",
+                          "pixel_format": "BGRA8", "sha256": "a" * 64,
+                          "raw_file": str(self.reference_path),
+                          "caller_signature": "0xabc", "draws": 6},
+            "candidate": {"width": 8, "height": 8, "origin": "top_left",
+                          "pixel_format": "BGRA8", "sha256": "b" * 64,
+                          "raw_file": str(self.candidate_path),
+                          "caller_signature": "0xabc", "draws": 6},
+        }
+
+    def tearDown(self):
+        self._temporary.cleanup()
+
+    def pair(self):
+        return {"frame_index": 3, "candidate_frame_index": 3}
+
+    def test_scaled_matching_pair_passes(self):
+        result = gfx_dual_run._compare_pair(
+            self.pair(), self.meta["reference"], self.meta["candidate"],
+            self.scenario,
+        )
+        self.assertEqual(result["status"], "pass", result)
+        self.assertEqual(result["normalization"]["scale"], 2)
+        self.assertEqual(result["statistics"]["mismatched_pixels"], 0)
+
+    def test_mirrored_pair_fails_with_region(self):
+        mirrored = self.image[:, ::-1, :]
+        candidate = self.np.repeat(self.np.repeat(mirrored, 2, axis=0), 2, axis=1)
+        self.candidate_path.write_bytes(candidate.tobytes())
+        result = gfx_dual_run._compare_pair(
+            self.pair(), self.meta["reference"], self.meta["candidate"],
+            self.scenario,
+        )
+        self.assertEqual(result["status"], "fail", result)
+        self.assertIn("all", result["mirrored_regions"])
+
+    def test_ambiguous_composition_is_not_compared(self):
+        candidate = dict(self.meta["candidate"], caller_signature="0xdef")
+        result = gfx_dual_run._compare_pair(
+            self.pair(), self.meta["reference"], candidate, self.scenario,
+        )
+        self.assertEqual(result["status"], "not_compared")
+        self.assertIn("ambiguous", result["reason"])
+
+    def test_below_settle_draw_threshold_is_not_compared(self):
+        scenario = dict(self.scenario)
+        scenario["settle"] = {"min_draws": 50}
+        result = gfx_dual_run._compare_pair(
+            self.pair(), self.meta["reference"], self.meta["candidate"], scenario,
+        )
+        self.assertEqual(result["status"], "not_compared")
+        self.assertIn("settle draw threshold", result["reason"])
+
+    def test_missing_raw_is_not_compared(self):
+        result = gfx_dual_run._compare_pair(
+            self.pair(), self.meta["reference"], None, self.scenario,
+        )
+        self.assertEqual(result["status"], "not_compared")

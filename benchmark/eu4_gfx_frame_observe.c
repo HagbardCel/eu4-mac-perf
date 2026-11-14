@@ -39,6 +39,7 @@ static char g_release[OBS_MAX_PATH];
 static int g_lockstep;
 static uint32_t g_lockstep_timeout_ms = 8000;
 static uint64_t g_lockstep_timeouts;
+static char g_origin[16] = "top_left";
 static uint32_t g_ring_size = 8;
 static uint64_t g_last_index;
 static uint64_t g_skipped;
@@ -49,10 +50,10 @@ static obs_ring_slot g_ring[OBS_MAX_RING];
 static int g_ring_next;
 
 static uint32_t g_frame_draws;
-static uint64_t g_frame_signature;
+static uint64_t g_frame_signature = 1469598103934665603ULL;
 static uint32_t g_frame_distinct;
-static uint64_t g_last_caller;
-static uint32_t g_last_caller_count;
+#define OBS_MAX_CALLERS 32
+static uint64_t g_frame_callers[OBS_MAX_CALLERS];
 
 /* --- SHA-256 ------------------------------------------------------------ */
 
@@ -312,16 +313,19 @@ void eu4_gfx_frame_observe_note_draw(uint64_t caller_rva) {
         return;
     }
     g_frame_draws += 1;
-    if (caller_rva != g_last_caller) {
-        g_frame_distinct += 1;
-        g_last_caller = caller_rva;
-        g_last_caller_count = 1;
-    } else {
-        g_last_caller_count += 1;
+    /* The original-GL observer records the unique caller set in encounter
+       order.  Using the same signature over the same set makes the two
+       backends' composition signatures comparable for alignment. */
+    for (uint32_t i = 0; i < g_frame_distinct; i++) {
+        if (g_frame_callers[i] == caller_rva) {
+            return;
+        }
     }
-    /* FNV-1a over caller and its run length. */
-    uint64_t value = caller_rva ^ ((uint64_t)g_last_caller_count << 40);
-    g_frame_signature ^= value;
+    if (g_frame_distinct >= OBS_MAX_CALLERS) {
+        return;
+    }
+    g_frame_callers[g_frame_distinct++] = caller_rva;
+    g_frame_signature ^= caller_rva;
     g_frame_signature *= 1099511628211ULL;
 }
 
@@ -337,10 +341,9 @@ void eu4_gfx_frame_observe_take_stats(uint32_t *draws, uint64_t *signature,
         *distinct_callers = g_frame_distinct;
     }
     g_frame_draws = 0;
-    g_frame_signature = 0;
+    g_frame_signature = 1469598103934665603ULL;
     g_frame_distinct = 0;
-    g_last_caller = 0;
-    g_last_caller_count = 0;
+    memset(g_frame_callers, 0, sizeof g_frame_callers);
 }
 
 /* --- ring and dumps ----------------------------------------------------- */
@@ -432,12 +435,13 @@ static void dump_ring(obs_ring_slot *slot, uint32_t frame_draws,
         body, sizeof body,
         "{\"schema\":\"gfx-frame-dump/v1\",\"backend\":\"%s\",\"session\":\"%s\","
         "\"pid\":%d,\"frame_index\":%llu,\"width\":%u,\"height\":%u,"
-        "\"pixel_format\":\"BGRA8\",\"row_stride\":%u,\"raw_file\":\"%s\","
+        "\"origin\":\"%s\",\"pixel_format\":\"BGRA8\",\"row_stride\":%u,"
+        "\"raw_file\":\"%s\","
         "\"raw_bytes\":%zu,\"sha256\":\"%s\",\"draws\":%u,"
         "\"caller_signature\":\"0x%016llx\",\"gpu_completed\":%s,"
         "\"capture_valid\":%s,\"source\":\"ring\"}\n",
         g_backend, g_session, (int)getpid(), (unsigned long long)slot->index,
-        slot->width, slot->height, slot->width * 4, raw_path,
+        slot->width, slot->height, g_origin, slot->width * 4, raw_path,
         (size_t)slot->width * slot->height * 4, digest, frame_draws,
         (unsigned long long)signature, gpu_completed ? "true" : "false",
         capture_valid ? "true" : "false");
@@ -564,6 +568,9 @@ int eu4_gfx_frame_observe_emit(const uint8_t *bgra, uint32_t width,
     }
     if (frame_index == 0 || frame_index > OBS_MAX_FRAMES) {
         return -1;
+    }
+    if (origin != NULL && origin[0] != 0) {
+        snprintf(g_origin, sizeof g_origin, "%s", origin);
     }
     char full_digest[65];
     char preview_digest[65];
