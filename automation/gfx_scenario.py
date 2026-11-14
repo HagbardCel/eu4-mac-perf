@@ -154,7 +154,7 @@ def normalize(value: dict) -> dict:
         raise ScenarioError("type", "observation must be an object")
     _check_keys(observation, {
         "max_frames", "max_runtime_seconds", "ring", "capture_every_frame",
-        "preview", "dump_on_stop",
+        "preview", "dump_on_stop", "stall_seconds",
     }, "observation")
     max_frames = _optional(observation.get("max_frames"), int, "observation.max_frames",
                            100, minimum=1, maximum=100000)
@@ -168,6 +168,9 @@ def normalize(value: dict) -> dict:
     preview = _optional(observation.get("preview"), bool, "observation.preview", True)
     dump_on_stop = _optional(observation.get("dump_on_stop"), int,
                              "observation.dump_on_stop", 4, minimum=0, maximum=32)
+    stall_seconds = _optional(observation.get("stall_seconds"), float,
+                              "observation.stall_seconds", 45.0,
+                              minimum=5.0, maximum=1800.0)
 
     comparison = value.get("comparison", {})
     if not isinstance(comparison, dict):
@@ -261,6 +264,7 @@ def normalize(value: dict) -> dict:
             "capture_every_frame": capture_every,
             "preview": preview,
             "dump_on_stop": dump_on_stop,
+            "stall_seconds": stall_seconds,
         },
         "comparison": {
             "policy": policy,

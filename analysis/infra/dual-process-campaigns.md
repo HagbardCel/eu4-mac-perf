@@ -186,7 +186,12 @@ windowed/foreground or user-dir isolation experiment before the live title
 campaign is claimed. A long frame-only run streamed 35,234 frames over 302 s
 (draws 17-81, still loading) and was then killed externally with SIGKILL; the
 historical M6 title capture took about 5m40s, so the run had not reached the
-scene. The observation cap is now 120,000 frames.
+scene. The observation cap is now 120,000 frames.  Loading the Venice save with
+`--continuelastsave` made the reference reach the map (506 draws), but the Metal
+candidate stopped emitting after 72 frames (~52 s, 4,089 draws peak), hung, and
+exited 11 on termination.  A campaign-level stall detector (default 45 s with no
+new observation while both owned processes are alive) now reports
+`observation_stall` instead of consuming the full deadline.
 
 A further staggered run with a 40-draw phase threshold paired 110 observations,
 but every pair was `ambiguous`: the reference had 46 draws while the candidate

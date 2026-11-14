@@ -989,6 +989,10 @@ def run_campaign(
         }
         stop_reason = ""
         stop_trigger = ""
+        last_progress_at = time.monotonic()
+        last_counts = (0, 0)
+        stall_seconds = float((scenario.get("observation") or {}).get(
+            "stall_seconds", 45.0))
         while time.monotonic() < deadline:
             new_ref = state.ref_stream.poll()
             new_cand = state.cand_stream.poll()
@@ -998,6 +1002,18 @@ def run_campaign(
             for record in new_cand:
                 state.cand_by_index[record.index] = record
                 _record_health(record, health)
+            counts = (len(state.ref_stream.records), len(state.cand_stream.records))
+            if counts != last_counts:
+                last_counts = counts
+                last_progress_at = time.monotonic()
+            if (not stop_reason and time.monotonic() - last_progress_at >= stall_seconds
+                    and all(item.process.poll() is None for item in launched.values())):
+                stop_reason = "observation_stall"
+                stop_trigger = (
+                    f"no new frame for {stall_seconds:g}s; "
+                    f"reference={counts[0]} candidate={counts[1]} observations"
+                )
+                break
             if not state.pairing and mode == "lockstep":
                 latest_ref = _latest(state.ref_stream)
                 latest_cand = _latest(state.cand_stream)
