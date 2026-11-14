@@ -18,6 +18,25 @@ static const eu4_gfx_draw_raw *g_refusal_raw;
 static uint64_t g_last_caller_rva;
 static int g_have_last;
 
+void eu4_gfx_draw_route_logical_extent(
+    int offscreen_target, uint32_t target_width, uint32_t target_height,
+    uint32_t window_width, uint32_t window_height,
+    uint32_t *logical_width, uint32_t *logical_height) {
+    if (logical_width == NULL || logical_height == NULL) {
+        return;
+    }
+    if (offscreen_target) {
+        /* Render targets are allocated at the engine's logical size; the
+           viewport is already expressed in their pixels. Applying the window's
+           HiDPI ratio here would render only a corner of the target. */
+        *logical_width = target_width != 0 ? target_width : window_width;
+        *logical_height = target_height != 0 ? target_height : window_height;
+        return;
+    }
+    *logical_width = window_width;
+    *logical_height = window_height;
+}
+
 int eu4_gfx_draw_route_last(eu4_gfx_simple_draw_state *state,
                             uint64_t *caller_rva) {
     if (!g_have_last) {
@@ -164,8 +183,14 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
         ? backend.currentTargetWidth : backend.gameWidth;
     inputs.target_height = backend.currentTargetColor != nil
         ? backend.currentTargetHeight : backend.gameHeight;
-    inputs.logical_width = backend.logicalWidth;
-    inputs.logical_height = backend.logicalHeight;
+    uint32_t logical_width = 0;
+    uint32_t logical_height = 0;
+    eu4_gfx_draw_route_logical_extent(
+        backend.currentTargetColor != nil, inputs.target_width,
+        inputs.target_height, backend.logicalWidth, backend.logicalHeight,
+        &logical_width, &logical_height);
+    inputs.logical_width = logical_width;
+    inputs.logical_height = logical_height;
     inputs.viewport_x = viewport_x;
     inputs.viewport_y = viewport_y;
     inputs.viewport_width = viewport_width;

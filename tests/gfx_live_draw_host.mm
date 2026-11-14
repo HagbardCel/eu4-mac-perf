@@ -975,6 +975,82 @@ static int run_depth_state(void) {
     return ok ? 0 : 1;
 }
 
+static int run_offscreen_viewport(void) {
+    /* An offscreen target is allocated at the engine's logical size. The
+       window is 64x64 (HiDPI would scale the backbuffer), but the target is
+       32x32 and its full-viewport draw must cover all of it. Before the route
+       fix the backbuffer scale (32/64) shrank the viewport to a 16x16 corner. */
+    boot();
+    void *shader = make_simple_shader();
+    uint8_t quad[96];
+    make_quad(quad);
+    void *vertex_header = eu4_gfx_create_vertex_buffer(NULL, quad, 4, 24, 0);
+    if (vertex_header == NULL) {
+        fail("offscreen vertex buffer");
+    }
+    uint8_t red_bgr[4 * 4 * 3];
+    for (int i = 0; i < 4 * 4; i++) {
+        red_bgr[i * 3 + 0] = 0;
+        red_bgr[i * 3 + 1] = 0;
+        red_bgr[i * 3 + 2] = 0xff;
+    }
+    uint8_t texture_header[0x44];
+    make_texture(4, 4, red_bgr, texture_header);
+    float matrix[16];
+    fill_matrix(matrix);
+    uint8_t constant[0x10];
+    memset(constant, 0, sizeof constant);
+    uint32_t words = 16;
+    memcpy(constant, &words, 4);
+    void *constant_data = matrix;
+    memcpy(constant + 8, &constant_data, sizeof constant_data);
+
+    void *rt = eu4_gfx_create_render_target_texture(g_master, 32, 32, 0, 1, 0);
+    if (rt == NULL) {
+        fail("offscreen render target");
+    }
+    struct {
+        void *master;
+    } ctx = {g_master};
+    uint32_t window_rect[6] = {64, 64, 0x3f800000u, 0, 0, 0};
+    eu4_gfx_set_viewport(g_master, window_rect);
+    const float black[4] = {0.f, 0.f, 0.f, 1.f};
+    eu4_gfx_clear(&ctx, 1, black);
+    if (eu4_gfx_complete_game(g_master, NULL) != EU4_GFX_CLEAR_OK) {
+        fail("offscreen frame clear");
+    }
+    eu4_gfx_set_render_target(g_master, rt);
+    install_geometry(shader, vertex_header, constant, texture_header);
+    uint32_t rect[6] = {32, 32, 0x3f800000u, 0, 0, 0};
+    eu4_gfx_set_viewport(g_master, rect);
+
+    eu4_gfx_draw_raw raw = draw_frame(&ctx);
+    char diagnostic[256];
+    if (eu4_gfx_draw_route_live(&raw, NULL, diagnostic, sizeof diagnostic) !=
+        EU4_GFX_DRAW_ROUTE_HANDLED) {
+        fail(diagnostic[0] != 0 ? diagnostic : "offscreen draw route");
+    }
+    if (eu4_gfx_complete_game(g_master, NULL) != EU4_GFX_CLEAR_OK) {
+        fail("offscreen draw completion");
+    }
+    id<MTLTexture> color =
+        (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(rt);
+    id<MTLDevice> device = (__bridge id<MTLDevice>)eu4_gfx_metal_device();
+    id<MTLCommandQueue> queue = [device newCommandQueue];
+    uint8_t pixels[32 * 32 * 4];
+    read_target_texture(color, queue, 32 * 4, pixels);
+    int covered = 0;
+    for (int i = 0; i < 32 * 32; i++) {
+        if (pixels[i * 4 + 2] > 200 && pixels[i * 4 + 1] < 60 &&
+            pixels[i * 4 + 0] < 60) {
+            covered++;
+        }
+    }
+    printf("offscreen_viewport=%d covered=%d of=%d\n", covered == 32 * 32,
+           covered, 32 * 32);
+    return covered == 32 * 32 ? 0 : 1;
+}
+
 static int run_target_clear(void) {
     boot();
     void *handle = g_master;
@@ -1050,6 +1126,9 @@ static int run_target_clear(void) {
 int main(int argc, char **argv) {
     if (argc >= 2 && strcmp(argv[1], "--target-clear") == 0) {
         return run_target_clear();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--offscreen-viewport") == 0) {
+        return run_offscreen_viewport();
     }
     if (argc >= 2 && strcmp(argv[1], "--depth-state") == 0) {
         return run_depth_state();

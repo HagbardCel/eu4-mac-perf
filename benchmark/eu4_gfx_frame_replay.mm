@@ -1553,6 +1553,24 @@ static BOOL encode_clear(NSDictionary *event, NSString *frameDir,
     return YES;
 }
 
+/* A transfer that did not complete leaves the attachment undefined; reporting
+   success would turn a harness failure into an apparent renderer difference. */
+static BOOL wait_for_transfer(id<MTLCommandBuffer> buffer, NSString *operation,
+                              NSError **error) {
+    [buffer waitUntilCompleted];
+    if (buffer.status != MTLCommandBufferStatusCompleted) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:82
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    [NSString stringWithFormat:
+                                                         @"%@ did not complete (status %ld)",
+                                                         operation, (long)buffer.status]}];
+        }
+        return NO;
+    }
+    return YES;
+}
+
 static BOOL upload_seed(NSString *frameDir, NSDictionary *seed,
                         NSDictionary *first_target, NSError **error) {
     if (seed == nil || first_target == nil) {
@@ -1617,7 +1635,9 @@ static BOOL upload_seed(NSString *frameDir, NSDictionary *seed,
                destinationOrigin:MTLOriginMake(0, 0, 0)];
         [encoder endEncoding];
         [blit commit];
-        [blit waitUntilCompleted];
+        if (!wait_for_transfer(blit, @"frame seed upload", error)) {
+            return NO;
+        }
         return YES;
     }
     uint8_t *flipped = (uint8_t *)malloc(pixels.length);
@@ -1689,7 +1709,9 @@ static BOOL upload_image_to_target(NSString *frameDir, NSDictionary *image,
            destinationOrigin:MTLOriginMake(0, 0, 0)];
     [encoder endEncoding];
     [blit commit];
-    [blit waitUntilCompleted];
+    if (!wait_for_transfer(blit, @"pre-image upload", error)) {
+        return NO;
+    }
     return YES;
 }
 
@@ -1725,6 +1747,18 @@ static BOOL capture_target_to_file(NSDictionary *target_info, NSString *path) {
     return [data writeToFile:path atomically:YES];
 }
 
+/* GL_NEVER and GL_ALWAYS make the depth buffer irrelevant to the result: the
+   selected draw either rejects every fragment or accepts every fragment
+   regardless of the stored depth. */
+static BOOL draw_depth_matters(NSDictionary *event) {
+    NSDictionary *depth = (event[@"state"] ?: @{})[@"depth"] ?: @{};
+    if (number(depth[@"test"], 0) == 0) {
+        return NO;
+    }
+    NSUInteger func = enum_value(depth[@"func"], 0x203);
+    return func != 0x0200 && func != 0x0207;
+}
+
 /* ------------------------------------------------------------------------- */
 /* Main                                                                       */
 /* ------------------------------------------------------------------------- */
@@ -1738,6 +1772,8 @@ int main(int argc, const char *argv[]) {
         NSInteger only_event = -1;
         BOOL seed_marked = NO;
         BOOL capture_post_images = NO;
+        BOOL capture_pre_images = NO;
+        BOOL depth_from_prefix = NO;
         for (int index = 1; index < argc; index++) {
             if (strcmp(argv[index], "--frame") == 0 && index + 1 < argc) {
                 frame_path = @(argv[++index]);
@@ -1753,6 +1789,10 @@ int main(int argc, const char *argv[]) {
                 seed_marked = YES;
             } else if (strcmp(argv[index], "--capture-post") == 0) {
                 capture_post_images = YES;
+            } else if (strcmp(argv[index], "--capture-pre") == 0) {
+                capture_pre_images = YES;
+            } else if (strcmp(argv[index], "--depth-from-prefix") == 0) {
+                depth_from_prefix = YES;
             }
         }
         if (frame_path.length == 0 || shader_path.length == 0 ||
@@ -1859,16 +1899,112 @@ int main(int argc, const char *argv[]) {
         NSUInteger failed = 0;
         NSMutableArray *failures = [NSMutableArray array];
         NSDictionary *first_target = first_draw[@"target"];
+
+        /* Isolated mode consumes the authentic GL pre-image as the color
+           attachment. Attachments are initialized first, the image is uploaded
+           and verified second, and only then is the selected draw encoded, so
+           no later clear can destroy the supplied pre-image. */
+        BOOL isolated = only_event >= 0;
+        BOOL isolated_pre_supplied = NO;
+        BOOL isolated_depth_matters = NO;
+        BOOL isolated_pre_capture_ok = NO;
+        NSString *isolated_pre_capture = @"";
+        NSString *color_initialization = @"not_isolated";
+        NSString *depth_contents = @"not_isolated";
+        NSDictionary *isolated_event = nil;
+        NSDictionary *isolated_target_info = nil;
+        NSUInteger isolated_prefix_events = 0;
+        if (isolated) {
+            if (only_event >= (NSInteger)events.count) {
+                fprintf(stderr, "only-event %ld is outside the frame (%lu events)\n",
+                        (long)only_event, (unsigned long)events.count);
+                return 7;
+            }
+            isolated_event = events[(NSUInteger)only_event];
+            isolated_target_info = target_for(isolated_event[@"target"] ?: @{}, &error);
+            if (isolated_target_info == nil) {
+                fprintf(stderr, "isolated target: %s\n",
+                        error.localizedDescription.UTF8String);
+                return 7;
+            }
+            isolated_pre_supplied = seed_marked && isolated_event[@"pre_image"] != nil;
+            isolated_depth_matters = draw_depth_matters(isolated_event);
+            if (isolated_pre_supplied) {
+                color_initialization = @"supplied_pre_image";
+            } else {
+                color_initialization = @"synthetic_black";
+            }
+            if (!isolated_depth_matters) {
+                depth_contents = @"not_required";
+            } else if (depth_from_prefix && isolated_pre_supplied) {
+                depth_contents = @"replayed_prefix";
+            } else {
+                depth_contents = @"cleared_unverified";
+            }
+        }
+
         for (NSUInteger index = 0; index < events.count; index++) {
             if (stop_after >= 0 && (NSInteger)encoded >= stop_after) {
                 break;
             }
-            NSDictionary *event = events[index];
-            if (only_event >= 0 && (NSInteger)index != only_event) {
-                continue;
+            BOOL is_selected = isolated && (NSInteger)index == only_event;
+            if (isolated && !is_selected) {
+                /* Prior events are replayed only when their attachment contents
+                   (depth) are an input to the selected draw. */
+                if (!(depth_from_prefix && isolated_pre_supplied &&
+                      (NSInteger)index < only_event)) {
+                    continue;
+                }
+                isolated_prefix_events++;
             }
-            if (only_event >= 0 && (NSInteger)index == only_event) {
-                /* Give the isolated draw a defined black target. */
+            NSDictionary *event = events[index];
+            if (is_selected && isolated_pre_supplied) {
+                if (isolated_depth_matters && !depth_from_prefix) {
+                    /* Defined depth, but not the authentic prior contents. */
+                    NSDictionary *depth_event = @{
+                        @"kind": @"clear",
+                        @"flags": @6, /* depth only; the color is loaded */
+                        @"depth": @1,
+                        @"target": event[@"target"] ?: @{},
+                    };
+                    if (!encode_clear(depth_event, frame_path, command, &error)) {
+                        fprintf(stderr, "depth initialization: %s\n",
+                                error.localizedDescription.UTF8String);
+                        return 7;
+                    }
+                }
+                /* Drain every prior command before the upload: an uncommitted
+                   clear encoded earlier would otherwise execute afterwards. */
+                [command commit];
+                if (!wait_for_transfer(command, @"attachment initialization",
+                                       &error)) {
+                    fprintf(stderr, "attachment initialization: %s\n",
+                            error.localizedDescription.UTF8String);
+                    return 7;
+                }
+                command = [g_queue commandBuffer];
+                if (!upload_image_to_target(frame_path, event[@"pre_image"],
+                                            isolated_target_info, &error)) {
+                    fprintf(stderr, "pre-image upload: %s\n",
+                            error.localizedDescription.UTF8String);
+                    return 7;
+                }
+                if (capture_pre_images) {
+                    NSString *name = [NSString stringWithFormat:
+                                          @"isolated-pre-%lu.bgra",
+                                          (unsigned long)index];
+                    NSString *path =
+                        [output_path stringByAppendingPathComponent:name];
+                    if (!capture_target_to_file(isolated_target_info, path)) {
+                        fprintf(stderr, "pre-image readback failed\n");
+                        return 7;
+                    }
+                    isolated_pre_capture_ok = YES;
+                    isolated_pre_capture = name;
+                }
+            } else if (is_selected) {
+                /* Explicit black-target diagnostic. It is never combined with
+                   an authentic pre-image. */
                 NSDictionary *clear_event = @{
                     @"kind": @"clear",
                     @"flags": @7,
@@ -1895,34 +2031,34 @@ int main(int argc, const char *argv[]) {
                                                                      program]}];
                 } else {
                     NSDictionary *target_info = target_for(event[@"target"] ?: @{}, NULL);
-                    if (seed_marked && event[@"pre_image"] != nil &&
-                        target_info != nil) {
-                        if (!upload_image_to_target(frame_path, event[@"pre_image"],
-                                                    target_info, &event_error)) {
-                            ok = NO;
-                        }
-                    }
                     if (ok) {
                         ok = encode_draw(event, entry, frame_path, shader_path,
                                          command, &event_error);
                     }
                     if (ok && capture_post_images && event[@"post_image"] != nil &&
-                        target_info != nil) {
+                        target_info != nil && (!isolated || is_selected)) {
                         /* The draw was encoded into the frame command buffer; commit
                            and drain it so the isolated post-image includes this draw
                            and no later event. */
                         [command commit];
-                        [command waitUntilCompleted];
-                        command = [g_queue commandBuffer];
-                        NSString *name = [NSString stringWithFormat:@"isolated-post-%lu.bgra",
-                                          (unsigned long)index];
-                        NSString *path = [output_path stringByAppendingPathComponent:name];
-                        if (!capture_target_to_file(target_info, path)) {
+                        if (!wait_for_transfer(command, @"post-draw completion",
+                                               &event_error)) {
                             ok = NO;
-                            event_error = [NSError errorWithDomain:kErrorDomain
-                                                              code:101
-                                                          userInfo:@{NSLocalizedDescriptionKey:
-                                                                         @"post readback failed"}];
+                        }
+                        command = [g_queue commandBuffer];
+                        if (ok) {
+                            NSString *name = [NSString stringWithFormat:
+                                                  @"isolated-post-%lu.bgra",
+                                                  (unsigned long)index];
+                            NSString *path =
+                                [output_path stringByAppendingPathComponent:name];
+                            if (!capture_target_to_file(target_info, path)) {
+                                ok = NO;
+                                event_error = [NSError errorWithDomain:kErrorDomain
+                                                                  code:101
+                                                              userInfo:@{NSLocalizedDescriptionKey:
+                                                                             @"post readback failed"}];
+                            }
                         }
                     }
                 }
@@ -1952,6 +2088,26 @@ int main(int argc, const char *argv[]) {
             @"manifest_reference_sha256":
                 (manifest[@"frame"] ?: @{})[@"reference_sha256"] ?: @"",
         } mutableCopy];
+        if (isolated) {
+            result[@"isolated"] = @{
+                @"event": @(only_event),
+                @"kind": isolated_event[@"kind"] ?: @"unknown",
+                @"caller": isolated_event[@"draw"][@"caller_rva"] ?: @"",
+                @"program": isolated_event[@"program"][@"name"] ?: @0,
+                @"pre_image": isolated_event[@"pre_image"] ?: @{},
+                @"pre_image_supplied": @(isolated_pre_supplied),
+                @"pre_capture": isolated_pre_capture,
+                @"pre_capture_ok": @(isolated_pre_capture_ok),
+                @"color_initialization": color_initialization,
+                @"depth_matters": @(isolated_depth_matters),
+                @"depth_contents": depth_contents,
+                @"prefix_events": @(isolated_prefix_events),
+                @"exact": @(isolated_pre_supplied &&
+                            isolated_pre_capture_ok &&
+                            (!isolated_depth_matters ||
+                             [depth_contents isEqualToString:@"replayed_prefix"])),
+            };
+        }
         BOOL readback_ok = NO;
         if (failed == 0) {
             NSUInteger width = g_default_target.width;

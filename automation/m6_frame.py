@@ -527,6 +527,56 @@ def replay_command(args: argparse.Namespace) -> int:
         if args.shaders
         else frame_dir / "shaders"
     )
+    if args.only_event is not None:
+        try:
+            trace = load_trace(frame_dir)
+        except FrameError as exc:
+            print(json.dumps({"status": "invalid", "reason": str(exc)}, indent=2))
+            return 1
+        events = trace.get("_events") or []
+        if not 0 <= args.only_event < len(events):
+            print(
+                json.dumps(
+                    {
+                        "status": "invalid",
+                        "reason": (
+                            f"event {args.only_event} is outside the "
+                            f"{len(events)}-event frame"
+                        ),
+                    },
+                    indent=2,
+                )
+            )
+            return 1
+        selected = events[args.only_event]
+        if selected.get("kind") != "draw":
+            print(
+                json.dumps(
+                    {
+                        "status": "invalid",
+                        "reason": (
+                            f"event {args.only_event} is a "
+                            f"{selected.get('kind')} event, not a draw"
+                        ),
+                    },
+                    indent=2,
+                )
+            )
+            return 1
+        if not selected.get("pre_image"):
+            print(
+                json.dumps(
+                    {
+                        "status": "invalid",
+                        "reason": (
+                            f"event {args.only_event} has no authentic GL "
+                            "pre-image"
+                        ),
+                    },
+                    indent=2,
+                )
+            )
+            return 1
     if out.exists() and not args.force:
         print(f"replay output already exists: {out}", file=sys.stderr)
         return 2
@@ -553,6 +603,12 @@ def replay_command(args: argparse.Namespace) -> int:
         command.append("--seed-marked")
     if args.capture_post:
         command.append("--capture-post")
+    if args.only_event is not None:
+        command += ["--only-event", str(args.only_event)]
+        command.append("--capture-pre")
+        command.append("--capture-post")
+    if args.depth_from_prefix:
+        command.append("--depth-from-prefix")
     ran = subprocess.run(command, capture_output=True, text=True, check=False, timeout=1200)
     result_path = out / "replay.json"
     if ran.returncode != 0 or not result_path.is_file():
@@ -576,6 +632,7 @@ def replay_command(args: argparse.Namespace) -> int:
         "command_status": result.get("command_status"),
         "readback": result.get("readback"),
         "frame": result.get("frame"),
+        "isolated": result.get("isolated"),
         "failures": (result.get("failures") or [])[:8],
     }
     print(json.dumps(summary, indent=2))
@@ -632,12 +689,163 @@ def compare_command(args: argparse.Namespace) -> int:
     return 0 if report["status"] == "pass" else 2
 
 
+def _bytes_sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def selected_event_report(
+    frame_dir: Path, candidate: Path, event_index: int
+) -> dict:
+    """One selected draw's authentic GL pre/post versus its isolated Metal run."""
+    from automation import m6_compare
+
+    try:
+        trace = load_trace(frame_dir)
+    except FrameError as exc:
+        return {"status": "invalid", "reason": str(exc)}
+    events = trace.get("_events") or []
+    if not 0 <= event_index < len(events):
+        return {
+            "status": "invalid",
+            "reason": f"event {event_index} is outside the {len(events)}-event frame",
+        }
+    event = events[event_index]
+    if event.get("kind") != "draw":
+        return {
+            "status": "invalid",
+            "reason": f"event {event_index} is a {event.get('kind')} event",
+        }
+    pre = event.get("pre_image")
+    post = event.get("post_image")
+    if not isinstance(pre, dict) or not isinstance(post, dict):
+        return {
+            "status": "missing_pre_post",
+            "reason": f"event {event_index} has no GL pre/post pair",
+        }
+    width = int(post.get("width") or pre.get("width") or 0)
+    height = int(post.get("height") or pre.get("height") or 0)
+    gl_pre_path = frame_dir / "blobs" / str(pre.get("file") or "")
+    gl_post_path = frame_dir / "blobs" / str(post.get("file") or "")
+    metal_pre_path = candidate / f"isolated-pre-{event_index}.bgra"
+    metal_post_path = candidate / f"isolated-post-{event_index}.bgra"
+    missing = [
+        str(path)
+        for path in (
+            gl_pre_path,
+            gl_post_path,
+            metal_pre_path,
+            metal_post_path,
+        )
+        if not path.is_file()
+    ]
+    if missing:
+        return {
+            "status": "missing",
+            "reason": "missing image files",
+            "missing": missing,
+            "event": {
+                "index": event_index,
+                "caller": (event.get("draw") or {}).get("caller_rva"),
+            },
+        }
+    gl_pre = gl_pre_path.read_bytes()
+    gl_post = gl_post_path.read_bytes()
+    metal_pre = metal_pre_path.read_bytes()
+    metal_post = metal_post_path.read_bytes()
+    if width <= 0 or height <= 0:
+        return {"status": "invalid", "reason": "non-positive image dimensions"}
+    size = width * height * 4
+    for name, data in (
+        ("gl_pre", gl_pre),
+        ("gl_post", gl_post),
+        ("metal_pre", metal_pre),
+        ("metal_post", metal_post),
+    ):
+        if len(data) != size:
+            return {
+                "status": "invalid",
+                "reason": f"{name} size {len(data)} does not match {size}",
+            }
+    replay_path = candidate / "replay.json"
+    replay = {}
+    if replay_path.is_file():
+        try:
+            replay = json.loads(replay_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            replay = {}
+    isolated = replay.get("isolated") or {}
+    gl_change = m6_compare.compare_images(gl_pre, gl_post, width, height)
+    metal_change = m6_compare.compare_images(metal_pre, metal_post, width, height)
+    pre_match = gl_pre == metal_pre
+    post_match = gl_post == metal_post
+    post_difference = m6_compare.compare_images(
+        gl_post, metal_post, width, height
+    )
+    target = event.get("target") or {}
+    attachment = target.get("color_attachment") or {}
+    report = {
+        "schema": "gfx-isolated-event-differential/v1",
+        "frame": str(frame_dir),
+        "candidate": str(candidate),
+        "status": "compared",
+        "event": {
+            "index": event_index,
+            "caller": (event.get("draw") or {}).get("caller_rva"),
+            "program": (event.get("program") or {}).get("name"),
+            "draw": event.get("draw") or {},
+            "target": {
+                "framebuffer": target.get("framebuffer"),
+                "name": attachment.get("name"),
+                "internal_format": attachment.get("internal_format"),
+                "width": width,
+                "height": height,
+            },
+            "pre_image": {
+                "gl_sha256": _bytes_sha256(gl_pre),
+                "metal_sha256": _bytes_sha256(metal_pre),
+                "sha256": pre.get("sha256"),
+                "match": pre_match,
+                "bytes": len(gl_pre),
+            },
+            "post_image": {
+                "gl_sha256": _bytes_sha256(gl_post),
+                "metal_sha256": _bytes_sha256(metal_post),
+                "sha256": post.get("sha256"),
+            },
+            "changed_pixels": {
+                "gl": gl_change["mismatched_pixels"],
+                "metal": metal_change["mismatched_pixels"],
+            },
+            "gl_pre_to_post": gl_change,
+            "metal_pre_to_post": metal_change,
+            "post_difference": post_difference,
+            "pre_match": pre_match,
+            "post_match": post_match,
+            "exact_isolated_replay": bool(isolated.get("exact")),
+            "depth": {
+                "matters": isolated.get("depth_matters"),
+                "contents": isolated.get("depth_contents"),
+            },
+            "color_initialization": isolated.get("color_initialization"),
+        },
+        "ok": pre_match and post_match,
+    }
+    (candidate / f"isolated-event-{event_index}.json").write_text(
+        json.dumps(report, indent=2) + "\n"
+    )
+    return report
+
+
 def isolate_command(args: argparse.Namespace) -> int:
-    """Compares the isolated replay of marked draws with their GL post-images."""
+    """Compares isolated replay output with authentic GL pre/post images."""
     from automation import m6_compare
 
     frame_dir = Path(args.frame).expanduser().resolve()
     candidate = Path(args.candidate).expanduser().resolve()
+    if args.event is not None:
+        report = selected_event_report(frame_dir, candidate, args.event)
+        print(json.dumps(report, indent=2))
+        return 0 if report.get("ok") else 2
     try:
         trace = load_trace(frame_dir)
     except FrameError as exc:
@@ -805,11 +1013,28 @@ def _parser() -> argparse.ArgumentParser:
     rep.add_argument("--force-build", action="store_true")
     rep.add_argument("--seed-marked", action="store_true")
     rep.add_argument("--capture-post", action="store_true")
+    rep.add_argument(
+        "--only-event",
+        type=int,
+        default=None,
+        help="replay one selected draw against its authentic GL pre-image",
+    )
+    rep.add_argument(
+        "--depth-from-prefix",
+        action="store_true",
+        help="replay preceding events so the selected draw's depth input is defined",
+    )
     rep.set_defaults(handler=replay_command)
 
     iso = sub.add_parser("isolate", help="isolated marked-draw differential")
     iso.add_argument("--frame", required=True)
     iso.add_argument("--candidate", required=True)
+    iso.add_argument(
+        "--event",
+        type=int,
+        default=None,
+        help="compare one selected event (keeps the all-events mode when omitted)",
+    )
     iso.set_defaults(handler=isolate_command)
 
     cmp = sub.add_parser("compare", help="full-frame differential")

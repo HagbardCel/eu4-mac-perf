@@ -1,10 +1,13 @@
-# M6 qualification report — complete title/main-menu frame (interim)
+# M6 qualification report — title scene through Metal (interim)
 
-Status: **full-frame pixel equivalence passed.** The complete authentic
-title/main-menu frame replays through the reconstructed Metal backend with zero
-differing pixels under the exact comparison policy. Live in-game Metal
-presentation of the title scene is the remaining M6 workstream and is recorded
-separately below.
+Status: **offline captured-state replay passes; live visual acceptance is not
+met.** The canonical 326-event title-menu frame replays byte-identically
+through Metal, and the isolated terrain draw now starts from the authentic GL
+pre-image and reproduces its contribution to within a handful of channel
+steps. A post-fix live launch renders the complete title scene and removes the
+magenta palette, but its map is roughly twice as bright as the authentic
+reference and the UI gate is also below threshold, so M6 is **not accepted**
+and PR #189 remains Draft.
 
 ## Reference scene
 
@@ -14,133 +17,140 @@ separately below.
 | Executable SHA-256 | `b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d` |
 | Build | EU4 v1.37.5.0 Inca (491d), GOG, x86-64 |
 | GL identity | Apple M5 Max, `2.1 Metal - 91.7` |
-| Frame boundary | `CGraphics::PresentScene` entry/exit (`0x149daf0`) |
-| Selection | first frame after 240 s (the menu replaces the loading screen) |
-| Frame | 1728 x 1117, BGRA8, lower-left, `frame-reference.bgra` |
-| Reference SHA-256 | `c3dab19c…` |
-| Events / draws | 378 / 369 (323 indexed, 46 arrays) |
-| Shader pairs | 35 (18 programs, 62 stage sources) |
-| Textures | 69 distinct |
-| Trace | `.local/m6/frames/menu-15/frame` (gitignored) |
+| Canonical trace | `.local/m6/frames/menu-occ300/frame` |
+| Frame | 1728 x 1117, BGRA8, lower-left, reference SHA-256 `ff2f4e2b…` |
+| Events / draws | 326 / 315 |
+| Superseded | `menu-15` (observer unit-0 corruption) and `menu-audit` (undirected) |
 
-The raw trace is machine-readable (`gfx-frame-trace/v1`) and its manifest,
-event payloads and reference digest validate (`m6_frame.load_trace`); coverage
-reports `ok` with no missing dependency.
+The canonical trace is the corrected menu-caller occurrence-300 capture with
+the non-invasive observer. It remains the only valid pixel reference.
 
-## Tooling (reusable)
+## Harness correction (PR #189, Phase 1)
 
-- `benchmark/eu4_gfx_frame_trace.{c,h}` — complete original-GL frame trace with
-  effective per-draw GL state and resources, content-addressed blobs, per-frame
-  caches, and two frame-boundary modes (present, scene).
-- `benchmark/eu4_gfx_frame_replay.mm` — offline Metal execution of a captured
-  frame through the shared encoder, one render pass per event, persistent
-  targets, GL/MTL state mapping and readback.
-- `automation/m6_frame.py` — capture/translate/replay/compare orchestration.
-- `automation/gfx_shader_translate.py` — GLSL 1.20 → MSL (glslang + SPIRV-Cross)
-  with explicit layouts and a hash-keyed runtime shader cache.
-- `automation/m6_compare.py` — fail-closed differential with region attribution.
+`benchmark/eu4_gfx_frame_replay.mm` encoded a synthetic black clear into an
+uncommitted command buffer, uploaded the authentic pre-image in a separately
+committed blit, and committed the clear-bearing buffer afterwards. GPU order
+became upload -> clear -> draw, destroying the pre-image. That defect produced
+the earlier all-black isolated terrain candidate.
 
-## Full-frame Metal execution
+The isolated path now:
 
-378/378 events encoded, 0 failed draws, `MTLCommandBufferStatusCompleted`,
-readback of the engine logical extent (1728 x 1117 BGRA8).
+1. initializes required attachments (and optionally replays the recorded
+   prefix for depth) and drains them;
+2. uploads the authentic pre-image and fails clearly if the transfer does not
+   complete;
+3. captures the pre-draw image so the caller can verify it;
+4. encodes the selected draw and drains it;
+5. captures the post-draw image.
 
-## Differential (exact policy, row-origin normalization only)
+A supplied pre-image is never followed by a color clear. A synthetic black
+clear remains only for the explicit no-pre-image diagnostic. Depth is
+inspected: disabled/`GL_NEVER`/`GL_ALWAYS` tests need no reconstruction; a
+relevant test without recorded prior depth is reported as
+`cleared_unverified`; `--depth-from-prefix` replays the recorded events so the
+test has a defined input.
 
-| Metric | Value |
-| --- | --- |
-| Pixels | 1,930,176 |
-| Exact pixels | 1,930,176 (100%) |
-| Mismatched | 0 |
-| Max channel error | 0 |
-| Mean max-channel error | 0 |
-| Mean absolute error (B,G,R,A) | 0, 0, 0, 0 |
-| Alpha | compared; equal |
-| Replay determinism | two independent runs produce the reference SHA-256 |
+Regression:
+`tests/test_m6_frame.py::IsolationOrderingTests.test_pre_image_survives_the_selected_draw`
+uploads a distinctive texture, paints a 2x2 region, and requires every other
+pixel to survive. It fails under the old ordering and passes after the fix.
 
-The Metal readback is byte-identical to the original-GL `GL_BACK` reference:
-Metal `metal-frame.bgra` SHA-256 equals the GL reference digest
-`c3dab19c…`. The remaining discrepancy was traced to a state-decoding bug:
-recorded GL enums are JSON strings, and the replay's numeric-only helper fell
-back to linear filtering for every sampler. Parsing both string and numeric
-forms selects the captured filter/wrap/compare state and closes the frame
-exactly.
+## Selected-event interface (Phase 2)
 
-## Isolated draw evidence (reusable capability)
+`automation/m6_frame.py replay --only-event N [--depth-from-prefix]` drives the
+native host, captures both sides, and records the isolated metadata.
+`automation/m6_frame.py isolate --event N` reports the event/caller/target,
+GL and Metal pre/post digests, both changed-pixel counts, and the GL–Metal
+post-image statistics. The all-events mode is unchanged.
 
-The frame tracer can capture per-draw pre/post target images for selected
-callers, and the replay can seed a marked draw with its authentic GL pre-image
-and read the isolated result back. This separates one draw's contribution from
-the rest of the frame and is independent of the title scene:
+## Terrain isolated evidence (Phase 3)
 
-| Draw | Program | Result before the enum fix | Result after |
-| --- | --- | --- | --- |
-| 348 | font (texture 7) | 0 differing pixels | 0 |
-| 354 / 357 / 359 / 361 / 365 | font | 2.5k-6.5k differing | 0 (full-frame) |
-| 362 / 363 | buttonstate | ~10k differing | 0 (full-frame) |
+The 252 terrain pre/post pairs in `.local/m6/frames/menu-terrain/frame` were
+reused; no new EU4 capture was taken.
 
-## Live execution status
+| Event | Program | GL pre = Metal pre | Changed pixels GL / Metal | Post difference |
+| --- | --- | --- | --- | --- |
+| 20 | 331 | yes (`ecd15f85…`) | 73 / 73 | 18 pixels, max 1/255 |
+| 92 | 331 | yes (`8e94fe58…`) | 2177 / 2177 | 685 pixels, max 8/255 |
 
-- Three consecutive clean starts reach the title scene through the
-  reconstructed backend (menu-only checkpoint `0x103b3c8`, 280 s uptime guard),
-  with zero refused draws, GPU completion and a presented backbuffer
-  (`analysis/m6/live-title-starts.json`).
-- The complete live title scene renders: the animated world map behind the
-  EU4 logo, Paradox logo, Continue Game (Lubeck), Single Player, Multiplayer,
-  Tutorial, Exit, version text and icon row
-  (`analysis/m6/live-title-metal.png`).
-- The presented frame shows the full title UI rendered by the Metal backend:
-  EU4 logo, Paradox logo, Continue Game (Lubeck, 25 January 1609), Single
-  Player, Multiplayer, Tutorial, Exit, version text and the icon row.
-- Live operational result (`analysis/m6/live-acceptance.json`,
-  `analysis/m6/live-title-starts.json`): three fresh, distinct launches
-  reached the settled title scene, executed the reconstructed backend with zero
-  refused draws, GPU-completed and presented; the UI structure matches the
-  authentic reference (high-pass correlation 0.76 / 0.80 / 0.52). Missing or
-  invalid reference data, duplicate runs and duplicated launch identities are
-  hard failures.
-- **Sampler state (fixed):** per-unit sampler objects are decoded (filters,
-  wrap, mip) and Metal samplers cached per effective state; `_GfxSetTextures`
-  honours partial/offset bind ranges. An over-strict "unsupported sampler"
-  refusal briefly rejected every live draw; it now tolerates the engine's
-  mip-0 encoding and records a `sampler-fallback` diagnostic instead. The final
-  live diagnostic run encoded 23 draws with zero refusals.
-- **Decoded texture diagnostics (fixed, host-tested):** texel-centre sampling,
-  BGRA8 output with a sidecar, identity-keyed bounded captures and GPU
-  completion before readback. The corrected DXT5 terrain textures (units 0/2,
-  1024x128) match the original-GL decoded blobs after row orientation
-  (mean 0.13-0.16/255; residual differences are BC decode rounding), so the
-  S3TC upload path is exonerated for those resources.
-- **Sprite uniform defect (fixed):** the generic fallback for synthetic
-  `sprite_vs` stages now binds the engine's constant-slot-2 uniform block
-  (96 bytes) at the legacy buffer index, through a helper shared with the
-  sprite encoder; a settled validation run reports zero draw errors.
-- **Uniforms (verified):** the terrain draw's captured GL uniform block and the
-  live packed block are byte-identical in value; uniform packing is excluded as
-  a cause.
-- **Uniform semantics (identified):** terrain float 89 is `vFoWOpacity_Time.y`
-  (time) and floats 108/109 are `vTimeDirectionSeasonLerp.xy` (time direction /
-  season). Controlled replay experiments: patching the composite's first
-  uniform changes 763,491 pixels (positive control, the injection path works),
-  while patching only the time/season fields leaves the map byte-identical, so
-  they do not drive the observed colours. The bright `menu-15` and dark
-  `menu-occ300` captures differ at terrain texture unit 0 (texture 384 vs 382,
-  all other units identical), explaining their brightness difference as scene
-  state; the live unit-0 decode matches the canonical texture, so a genuine
-  live rendering difference remains.
-- **M6-blocking visual defect:** the live map's palette does not match the
-  authentic map. The authentic menu map is static (a 240 s and a 285 s capture
-  are identical), so this is not animation: the live map is pink
-  (RGB 158/123/148 vs 141/136/129, palette affinity 0.617 vs 0.998) and the
-  composite's second (brightness/season) input is near-black (mean 7.4 vs the
-  authentic bright layer). The map passes render into the backbuffer and the
-  first composite input is correct, but the bloom/season render targets remain
-  dark. Live acceptance therefore reports `visual_match=false`; the milestone
-  is **not accepted** until this layer renders.
-- Live sampler state defaults to linear/clamp; the engine sampler objects are
-  not decoded.
+Both draws have depth testing enabled with the authentic pre-image and replay
+the recorded prefix for depth. The exact pre-image match and the near-identical
+post-images are an interpretable differential for these draws. This qualifies
+those draws only; it does **not** certify the whole terrain pipeline, and the
+captured-state full-frame replay still does not independently re-render the
+terrain pass.
 
-## Not yet done
+## First live material divergence (Phase 4)
 
-- Live EU4 Metal execution of the title scene (three clean starts).
-- The campaign checker, final evidence manifest and PR set.
+The live generic route applied the backbuffer HiDPI ratio
+(`target/logical`) to every target, including offscreen render targets. The
+864x558 bloom/season target is allocated at its logical size, so a full-target
+viewport was scaled to 432x279 and rendered into the top-left quarter:
+
+- before: `sample-u1` content covered exactly 25% of the target, alpha mean
+  63.75, near-black;
+- after the correction: 100% coverage, alpha mean 255, mean 112/112/113.
+
+Correction: `eu4_gfx_draw_route_logical_extent` gives the backbuffer its
+window logical extent and every offscreen target its own extent. Native
+regression:
+`tests/test_gfx_live_draw.py::GfxLiveDrawTests.test_offscreen_viewport_is_not_hidpi_scaled`
+(1024/1024 pixels covered; fails with the old route inputs).
+
+After this fix the magenta/pink map palette is gone. The remaining divergence
+is later in the chain:
+
+- the live composite's MainScene input is already the season-colour-balanced
+  (beige) image, mean 112/112/113;
+- the authentic composite MainScene is the uncomposited green terrain map,
+  mean 65/76/73;
+- the presented live map is therefore about twice as bright as the reference
+  (map mean 144 vs 72, palette affinity 0.435 against a 0.85 floor).
+
+That is consistent with a render-target lifecycle/resolve-order defect in
+which a previously composited frame is fed back as MainScene and the bloom add
+compounds brightness. It is recorded as the remaining blocker; no speculative
+brightness adjustment was applied.
+
+## Post-fix live verification (Phase 6)
+
+Run `.local/m6/live-final/verify-1`, identity `1794635347-64349`, pid 64418:
+
+- executed, draw encoded, GPU completed, presented, zero refused draws;
+- UI high-pass correlations 0.755 / 0.821 / 0.482 (logo region below 0.5);
+- map mean 144.023, structure present, palette affinity 0.435;
+- `visual_match=false`, `accepted=false`.
+
+The run was not repeated blindly. The three clean-start qualification was
+therefore not attempted and is not claimed. The pre-fix `final-1..3` runs are
+historical (pink palette) and must not be reused.
+
+## Offline captured-state qualification
+
+The final implementation was re-run against the canonical frame:
+
+- 326/326 events encoded, 0 failed, `MTLCommandBufferStatusCompleted`;
+- 1,930,176 pixels compared, 0 differing, alpha equal;
+- reference and candidate SHA-256 both `ff2f4e2b…`;
+- independent files, alias rejection active.
+
+This is a captured-state replay. It does not validate live terrain
+reconstruction, the resolve, or the composite lifecycle.
+
+## Tests run on the final head
+
+- `tests.test_m6_frame` — 26 passed.
+- `tests.test_gfx_live_draw` — 21 passed (including the offscreen viewport
+  regression).
+- `tests.test_m4_accept`, `tests.test_m5_accept`, `tests.test_m5_replay_cache`,
+  `tests.test_m6_live_accept` — 41 passed.
+- `tests.test_gfx_texture` — 1 passed.
+
+## Verdict
+
+**DO NOT MERGE.** The harness ordering defect and the offscreen viewport defect
+are fixed and regression-tested, and the isolated terrain draws are now
+credible evidence. Live M6 acceptance still fails on the map colour/brightness
+and the Paradox-logo UI correlation. The next work is the resolve/composite
+lifecycle (why MainScene is a composited beige frame), followed by the legacy
+sprite/text composition defect, then three new clean starts.

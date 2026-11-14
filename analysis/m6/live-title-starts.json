@@ -1,8 +1,9 @@
 {
-  "schema": "m6-live-title-starts/v1",
+  "schema": "m6-live-title-starts/v2",
   "runs": [
     {
-      "run": ".local/m6/live/final-1",
+      "run": ".local/m6/live-final/verify-1",
+      "phase": "post-fix verification",
       "overall": "captured",
       "status": {
         "draw_reached": true,
@@ -12,55 +13,51 @@
         "presented": true,
         "reference_matched": null
       },
-      "launch_identity": "1794590270-11354",
-      "pid": 11420,
+      "launch_identity": "1794635347-64349",
+      "pid": 64418,
       "refused_draws": 0,
-      "swap_dump_sha256": "ce80de96ef49970c43b6546d1c02375dd24c467384195770bc4e0e7211b48492",
+      "swap_dump_sha256": "99061a1585becbe18c83044580fb94d5db0ea96ac31bd514b309d55d89bf367e",
       "swap_dump_bytes": 30882816,
-      "window_capture": "window-fullscreen.png",
-      "window_capture_status": "captured"
+      "acceptance": {
+        "executed": true,
+        "gpu_completed": true,
+        "presented": true,
+        "visual_match": false,
+        "accepted": false
+      },
+      "note": "visual_match=false; not a qualified start"
+    }
+  ],
+  "historical_runs": [
+    {
+      "run": ".local/m6/live/final-1",
+      "phase": "pre-viewport-fix",
+      "launch_identity": "1794590270-11354",
+      "status": "historical",
+      "note": "pink palette; superseded by the viewport correction and not reusable"
     },
     {
       "run": ".local/m6/live/final-2",
-      "overall": "captured",
-      "status": {
-        "draw_reached": true,
-        "draw_encoded": true,
-        "gpu_completed": true,
-        "pixels_captured": true,
-        "presented": true,
-        "reference_matched": null
-      },
+      "phase": "pre-viewport-fix",
       "launch_identity": "1794590620-11601",
-      "pid": 11667,
-      "refused_draws": 0,
-      "swap_dump_sha256": "6eae2f713fbf20d5c5d6e8d0c6b5045f74a9f50a3b22cb62a8d553913a261f53",
-      "swap_dump_bytes": 30882816,
-      "window_capture": "window-fullscreen.png",
-      "window_capture_status": "captured"
+      "status": "historical",
+      "note": "pink palette; superseded by the viewport correction and not reusable"
     },
     {
       "run": ".local/m6/live/final-3",
-      "overall": "captured",
-      "status": {
-        "draw_reached": true,
-        "draw_encoded": true,
-        "gpu_completed": true,
-        "pixels_captured": true,
-        "presented": true,
-        "reference_matched": null
-      },
+      "phase": "pre-viewport-fix",
       "launch_identity": "1794590968-11775",
-      "pid": 11853,
-      "refused_draws": 0,
-      "swap_dump_sha256": "8df47484f268489ebf8e72c44ee43a6a9dd7b7e85788f1fce49c21846ae6769d",
-      "swap_dump_bytes": 30882816,
-      "window_capture": "window-fullscreen.png",
-      "window_capture_status": "captured"
+      "status": "historical",
+      "note": "pink palette; superseded by the viewport correction and not reusable"
     }
   ],
   "menu_caller": "0x103b3c8",
   "min_uptime_ms": 280000,
   "checkpoint_occurrence": 300,
-  "note": "Three fresh launches reached the settled title scene through the Metal backend and presented it. All operational criteria pass; the map palette does not yet match the authentic static reference (palette affinity 0.617 vs 0.998), which is the remaining M6-blocking defect."
+  "clean_starts": 0,
+  "required_clean_starts": 3,
+  "distinct_runs": true,
+  "distinct_identities": true,
+  "ok": false,
+  "note": "One post-fix launch reached the settled title scene, executed, GPU-completed and presented with zero refused draws. It does not pass the visual gate, so the three-clean-start requirement is not met. The three pre-fix launches are historical and must not be reused."
 }

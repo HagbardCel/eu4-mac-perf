@@ -1117,3 +1117,73 @@ The replay-scope finding stands: the frame-level captured-state replay seeds the
 composite with captured textures and does not independently re-render the
 terrain pass (a terrain view-projection patch changes no pixels while a
 composite uniform patch changes 763,491).
+
+## M6 final phase: harness ordering, viewport correction and live blocker (2026-11-14)
+
+Historical note: the earlier `menu-15` reference is invalid, the corrected
+canonical trace has 326 events, and the earlier all-black isolated terrain
+candidate was a harness defect rather than a renderer finding.
+
+### Isolation harness
+
+The `--only-event --seed-marked` path encoded a synthetic clear into the
+uncommitted frame command buffer, uploaded the authentic pre-image in a
+separate committed blit, then committed the clear-bearing buffer afterwards.
+The GPU therefore saw upload -> clear -> draw and destroyed the pre-image.
+Attachments and depth are now initialized and drained first, the pre-image
+upload is status-checked, a pre-draw readback is captured, and only then is the
+draw encoded. A supplied pre-image is never followed by a color clear.
+`tests/test_m6_frame.py::IsolationOrderingTests` fails under the old ordering
+and passes after the correction.
+
+### Selected terrain draws
+
+Using the existing 252 pre/post pairs (no new capture):
+
+| Event | Pre-image | Changed GL/Metal | Post difference |
+| --- | --- | --- | --- |
+| 20 | exact `ecd15f85…` | 73 / 73 | 18 pixels, max 1 |
+| 92 | exact `8e94fe58…` | 2177 / 2177 | 685 pixels, max 8 |
+
+Both use `--depth-from-prefix` because the selected draws test against depth
+written by earlier map passes. The residual is consistent with compressed
+texture/lighting rounding. These results qualify the selected draws only; the
+captured-state full-frame replay still does not re-render the terrain pass.
+
+### Offscreen viewport defect
+
+The live generic route passed the window logical extent for every target. The
+864x558 bloom/season target therefore received a 432x279 viewport (25%
+coverage). The live `sample-u1` dump before the fix had exactly 120,528 of
+482,112 non-zero alpha pixels (25%) and was near-black; after the fix it has
+full coverage and mean 112/112/113. `eu4_gfx_draw_route_logical_extent` now
+uses the target extent for offscreen targets, and
+`tests/test_gfx_live_draw.py::test_offscreen_viewport_is_not_hidpi_scaled`
+fails with the old route inputs and passes with the correction.
+
+### Post-fix live verification
+
+One authorized post-fix launch (`verify-1`, identity `1794635347-64349`)
+reached the settled title scene, executed, GPU-completed, presented and
+recorded zero refused draws. The magenta palette is gone. The visual gate still
+fails:
+
+- UI high-pass correlation 0.755 / 0.821 / 0.482 (logo below 0.5);
+- map mean 144.0 vs reference 71.9; palette affinity 0.435 vs 0.85 floor;
+- live composite MainScene is the season-balanced beige image
+  (112/112/113), while the authentic MainScene is the uncomposited green map
+  (65/76/73).
+
+The remaining defect is in the map resolve/composite lifecycle: a previously
+composited frame is fed back as MainScene and the bloom add compounds
+brightness. No speculative color adjustment was applied. The three clean
+starts are not claimed; the pre-fix `final-1..3` runs are historical and must
+not be reused.
+
+### Offline qualification and tests
+
+The canonical captured-state replay remains 326/326 encoded, 0 failed, GPU
+completed, 0 differing pixels including alpha. Tests on the final head: M6
+frame 26/26, live draw 21/21, M4/M5/M6 acceptance 41/41, texture 1/1.
+
+**Verdict: DO NOT MERGE.** Live visual acceptance is not met.

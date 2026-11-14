@@ -1,11 +1,11 @@
 {
-  "schema": "m6-live-acceptance/v1",
-  "reference": ".local/m6/frames/menu-15/frame",
+  "schema": "m6-live-acceptance/v2",
+  "reference": ".local/m6/frames/menu-occ300/frame",
   "reference_ok": true,
   "reference_error": "",
   "runs": [
     {
-      "run": ".local/m6/live/final-1",
+      "run": ".local/m6/live-final/verify-1",
       "status": {
         "executed": true,
         "gpu_completed": true,
@@ -23,8 +23,8 @@
         "frame_dump": true,
         "presented_flag": true,
         "non_blank": true,
-        "frame_sha256": "ce80de96ef49970c43b6546d1c02375dd24c467384195770bc4e0e7211b48492",
-        "ui_regions": true,
+        "frame_sha256": "99061a1585becbe18c83044580fb94d5db0ea96ac31bd514b309d55d89bf367e",
+        "ui_regions": false,
         "map_region": false
       },
       "stats": {
@@ -34,135 +34,55 @@
         ],
         "scale": 2,
         "resampled": true,
-        "unique_colors": 301924,
+        "unique_colors": 241352,
         "ui_region_error": [
-          27.542,
-          38.653,
-          34.173
+          28.422,
+          33.996,
+          95.395
         ],
         "ui_region_correlation": [
-          0.762,
-          0.799,
-          0.524
+          0.755,
+          0.821,
+          0.482
         ],
-        "map_unique_colors": 112632,
-        "map_mean": 142.87,
+        "map_unique_colors": 92367,
+        "map_mean": 144.023,
         "map_structure": true,
-        "map_color_similarity": 0.617,
-        "ui_ok": true,
+        "map_color_similarity": 0.435,
+        "ui_ok": false,
         "map_ok": false
       },
-      "canonical": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m6/live/final-1",
-      "identity": "1794590270-11354",
-      "ok": false
-    },
-    {
-      "run": ".local/m6/live/final-2",
-      "status": {
-        "executed": true,
-        "gpu_completed": true,
-        "presented": true,
-        "visual_match": false,
-        "accepted": false
-      },
-      "checks": {
-        "probe_captured": true,
-        "draw_reached": true,
-        "draw_encoded": true,
-        "pixels_captured": true,
-        "no_refused_draws": true,
-        "gpu_completed": true,
-        "frame_dump": true,
-        "presented_flag": true,
-        "non_blank": true,
-        "frame_sha256": "6eae2f713fbf20d5c5d6e8d0c6b5045f74a9f50a3b22cb62a8d553913a261f53",
-        "ui_regions": true,
-        "map_region": false
-      },
-      "stats": {
-        "physical": [
-          3456,
-          2234
-        ],
-        "scale": 2,
-        "resampled": true,
-        "unique_colors": 301845,
-        "ui_region_error": [
-          27.546,
-          38.656,
-          34.171
-        ],
-        "ui_region_correlation": [
-          0.762,
-          0.799,
-          0.524
-        ],
-        "map_unique_colors": 112626,
-        "map_mean": 142.884,
-        "map_structure": true,
-        "map_color_similarity": 0.617,
-        "ui_ok": true,
-        "map_ok": false
-      },
-      "canonical": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m6/live/final-2",
-      "identity": "1794590620-11601",
-      "ok": false
-    },
-    {
-      "run": ".local/m6/live/final-3",
-      "status": {
-        "executed": true,
-        "gpu_completed": true,
-        "presented": true,
-        "visual_match": false,
-        "accepted": false
-      },
-      "checks": {
-        "probe_captured": true,
-        "draw_reached": true,
-        "draw_encoded": true,
-        "pixels_captured": true,
-        "no_refused_draws": true,
-        "gpu_completed": true,
-        "frame_dump": true,
-        "presented_flag": true,
-        "non_blank": true,
-        "frame_sha256": "8df47484f268489ebf8e72c44ee43a6a9dd7b7e85788f1fce49c21846ae6769d",
-        "ui_regions": true,
-        "map_region": false
-      },
-      "stats": {
-        "physical": [
-          3456,
-          2234
-        ],
-        "scale": 2,
-        "resampled": true,
-        "unique_colors": 301768,
-        "ui_region_error": [
-          27.537,
-          38.653,
-          34.173
-        ],
-        "ui_region_correlation": [
-          0.762,
-          0.799,
-          0.524
-        ],
-        "map_unique_colors": 112663,
-        "map_mean": 142.872,
-        "map_structure": true,
-        "map_color_similarity": 0.617,
-        "ui_ok": true,
-        "map_ok": false
-      },
-      "canonical": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m6/live/final-3",
-      "identity": "1794590968-11775",
-      "ok": false
+      "canonical": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m6/live-final/verify-1",
+      "identity": "1794635347-64349",
+      "ok": false,
+      "phase": "post-viewport-fix verification"
     }
   ],
   "clean_starts": 0,
   "distinct_runs": true,
   "distinct_identities": true,
-  "ok": false
+  "ok": false,
+  "historical_runs": [
+    {
+      "run": ".local/m6/live/final-1",
+      "phase": "pre-viewport-fix",
+      "status": "historical",
+      "note": "pink palette; not valid qualification evidence"
+    },
+    {
+      "run": ".local/m6/live/final-2",
+      "phase": "pre-viewport-fix",
+      "status": "historical",
+      "note": "pink palette; not valid qualification evidence"
+    },
+    {
+      "run": ".local/m6/live/final-3",
+      "phase": "pre-viewport-fix",
+      "status": "historical",
+      "note": "pink palette; not valid qualification evidence"
+    }
+  ],
+  "note": "One post-fix live verification pass: executed, GPU-completed, presented, zero refused draws, but visual_match=false. The magenta palette was removed by the offscreen-viewport correction; the remaining map brightness/colour divergence is in the resolve/composite lifecycle (the composited frame is fed back as MainScene). Three clean starts are not claimed.",
+  "qualified_clean_starts": 0,
+  "required_clean_starts": 3
 }

@@ -1302,6 +1302,41 @@ static int generic_draw_encode_impl(const void *immediate_context,
     if (depth_compare == 0) {
         depth_compare = 0x0207;
     }
+    if (getenv("EU4_GFX_DEPTH_TRACE") != NULL) {
+        static int depth_trace_count;
+        NSString *pixel_file = pixel_stage[@"msl_file"] ?: @"";
+        uint32_t blend_enabled = load_u32(master, 0xc);
+        uint32_t blend_src = load_u32(master, 0x10);
+        uint32_t blend_dst = load_u32(master, 0x14);
+        uint32_t blend_eq = load_u32(master, 0x18);
+        uint32_t color_mask = load_u32(master, 0x2c);
+        uint32_t cull_mode = load_u32(master, 0x54);
+        uint32_t cull_front = load_u32(master, 0x5c);
+        uint32_t cull_enabled = ((const uint8_t *)master)[0x61];
+        char body[768];
+        int length = snprintf(
+            body, sizeof body,
+            "{\"stage\":\"%s\",\"stage_kind\":\"pixel\",\"target_default\":%d,"
+            "\"depth_texture\":%d,\"game_depth\":%d,\"enable_byte\":%u,"
+            "\"write_byte\":%u,\"compare\":%u,\"effective_test\":%d,"
+            "\"effective_write\":%d,\"blend_enabled\":%u,\"blend_src\":%u,"
+            "\"blend_dst\":%u,\"blend_eq\":%u,\"color_mask\":%u,"
+            "\"cull_mode\":%u,\"cull_front\":%u,\"cull_enabled\":%u,"
+            "\"viewport\":[%u,%u,%u,%u],\"pid\":%d}\n",
+            pixel_file.UTF8String ?: "",
+            target == backend.gameColorTarget ? 1 : 0,
+            depth_texture != nil ? 1 : 0,
+            backend != nil && backend.gameDepthTarget != nil ? 1 : 0,
+            ((const uint8_t *)master)[0x30], ((const uint8_t *)master)[0x31],
+            depth_compare, effective_test, effective_write, blend_enabled,
+            blend_src, blend_dst, blend_eq, color_mask, cull_mode, cull_front,
+            cull_enabled, inputs->viewport_x, inputs->viewport_y,
+            inputs->viewport_width, inputs->viewport_height, (int)getpid());
+        if (length > 0 && (size_t)length < sizeof body && depth_trace_count < 4096) {
+            depth_trace_count++;
+            (void)eu4_metal_events_append("depth-trace.jsonl", body);
+        }
+    }
     id<MTLRenderPipelineState> pipeline =
         pipeline_for(NULL, device, (__bridge id<MTLFunction>)vertex_function,
                      (__bridge id<MTLFunction>)fragment_function, descriptor,

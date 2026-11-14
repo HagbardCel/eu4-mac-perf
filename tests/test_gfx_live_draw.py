@@ -116,6 +116,12 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertIn("depth_cleared=1", ran.stdout)
         self.assertIn("color_preserved=1", ran.stdout)
 
+    def test_offscreen_viewport_is_not_hidpi_scaled(self) -> None:
+        ran = self._run("--offscreen-viewport")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("offscreen_viewport=1", ran.stdout)
+        self.assertIn("covered=1024 of=1024", ran.stdout)
+
     def test_frame_start_reconstruction_and_texture_clear(self) -> None:
         ran = self._run("--frame-start")
         self.assertEqual(ran.returncode, 0, ran.stderr)

@@ -1,5 +1,5 @@
 {
-  "schema": "m6-menu-frame-evidence/v3",
+  "schema": "m6-menu-frame-evidence/v4",
   "canonical_reference": {
     "frame_dir": ".local/m6/frames/menu-occ300/frame",
     "selection": {
@@ -27,82 +27,162 @@
     "note": "Canonical corrected reference: menu caller 0x103b3c8 occurrence 300, the live checkpoint selection; captured with the non-invasive observer."
   },
   "superseded_references": {
-    "menu-15": "observer unit-0 corruption (raw c3dab19c\u2026)",
-    "menu-audit": "corrected but undirected (raw 888e0908\u2026); replays with 707,776 differing pixels under an independent comparison, retained as diagnostic evidence only"
+    "menu-15": "observer unit-0 corruption (raw c3dab19c\u2026); invalid as an authentic pixel reference",
+    "menu-audit": "corrected but undirected (raw 888e0908\u2026); diagnostic only",
+    "menu-terrain-old-isolated": "the earlier all-black isolated result was produced by the harness ordering defect, not by the renderer; superseded"
   },
   "offline_replay": {
     "frame_dir": ".local/m6/frames/menu-occ300/frame",
-    "replay_dir": ".local/m6/frames/menu-occ300/replay-inst",
+    "replay_dir": ".local/m6/frames/menu-occ300/replay-final",
     "independent_files": true,
     "events": 326,
     "encoded": 326,
     "failed": 0,
     "command_status": 4,
-    "metal_raw_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15",
     "status": "pass",
     "pixels": 1930176,
     "mismatched_pixels": 0,
     "alpha_different_pixels": 0,
     "max_channel_error": 0,
-    "mean_abs_error": [
-      0.0,
-      0.0,
-      0.0,
-      0.0
-    ],
-    "row_origin_normalization": {
-      "row_origin_flip": false,
-      "alpha": "compared"
-    },
     "reference_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15",
     "candidate_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15",
     "alias_rejection_active": true,
-    "reference_raw_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15"
+    "note": "Captured-state replay only. It does not independently re-render the upstream terrain pass."
   },
-  "live_comparison": {
-    "reference": ".local/m6/frames/menu-occ300/frame",
-    "result": "visual_match=false (map palette affinity 0.42); three-run acceptance not valid"
+  "isolation_harness": {
+    "source": "benchmark/eu4_gfx_frame_replay.mm",
+    "defect": "In --only-event --seed-marked, a synthetic black clear was encoded into the uncommitted frame command buffer, the authentic pre-image was uploaded in a separately committed blit, and the frame command buffer (carrying the clear) was committed afterwards. GPU order was upload -> clear -> draw, destroying the authentic pre-image.",
+    "fix": "Attachments are initialized and drained first, the authentic pre-image is uploaded and its transfer status checked, the pre-draw image is captured for verification, and only then is the selected draw encoded. Color is never cleared after a valid pre-image. Synthetic black remains only for the no-pre-image diagnostic. Depth is inspected: irrelevant for GL_NEVER/GL_ALWAYS or disabled tests; otherwise depth is cleared and marked unverified, or replayed from the recorded prefix when --depth-from-prefix is requested.",
+    "regression": "tests/test_m6_frame.py::IsolationOrderingTests.test_pre_image_survives_the_selected_draw (verified to fail under the old route ordering and pass after the fix)",
+    "python_interface": "automation/m6_frame.py replay --only-event N --depth-from-prefix; isolate --event N"
   },
-  "scene_alignment": {
-    "status": "not established",
-    "evidence": "Two authentic GL captures (menu-15 bright, menu-occ300 dark) differ in exactly two terrain uniform floats (index 89: 240.01 vs 220.03; index 108: 242.86 vs 220.76) and in map brightness (141/136/129 vs 74/76/66). The live terrain block differs from the canonical capture in the same fields (index 89: 518.49; index 108: 518.49, index 109: +1 vs -1). The map's appearance is therefore driven by run state that varies between launches, and caller occurrence alone does not align the scenes.",
-    "consequence": "The live-vs-reference palette comparison is not valid until the reference and live frames represent the same lighting/state; the live renderer's textures, uniforms (except these state values), sampler and binding ranges match their captured counterparts."
-  },
-  "uniform_semantics": {
-    "source": "captured terrain GLSL (program 331) from menu-occ300",
-    "UNIFORM0[22]": "vFoWOpacity_Time (float 89 = .y, time)",
-    "UNIFORM1[4]": "vTimeDirectionSeasonLerp (floats 108/109 = .xy, time direction/season)",
-    "observed": {
-      "menu-15": "89=240.01, 108=242.86 (bright map)",
-      "menu-occ300": "89=220.03, 108=220.76, 109=-1 (dark map)",
-      "live": "89=518.49, 108=518.49, 109=+1"
-    },
-    "causality_experiment": "Patching only these values in a copy of the canonical trace and replaying produced a byte-identical map (affinity 1.0, unchanged means), so these uniforms do not drive the map brightness in this pass; the palette difference remains unexplained by them."
-  },
-  "controlled_uniform_experiments": {
-    "positive_control": {
-      "patch": "composite program 358 UNIFORM1[0].x 0.12981 -> 0.99 in a copied trace",
-      "result": "763,491 differing pixels (mean 1.76, max 52) vs the canonical reference",
-      "conclusion": "the injection path reliably changes the effective GPU input"
-    },
-    "time_season_patch": {
-      "patch": "terrain UNIFORM0[22].y and UNIFORM1[4].xy set to 518.49/518.49/+1 in a copied trace",
-      "result": "byte-identical map (affinity 1.0, unchanged means)",
-      "conclusion": "those time/season fields do not drive the observed map colours in this execution"
-    },
-    "capture_state_difference": {
-      "finding": "The bright menu-15 capture sampled engine texture 384 at terrain unit 0; the dark menu-occ300 capture sampled texture 382 (all other units identical). The map brightness difference between those authentic captures is therefore explained by a different unit-0 texture (scene state), not by the time uniforms.",
-      "live": "the live unit-0 decode matches the canonical 2c13... texture, so a genuine live renderer difference remains."
-    }
+  "terrain_pre_post": {
+    "capture": ".local/m6/frames/menu-terrain/frame",
+    "terrain_draws_with_pre_post": 252,
+    "selected_events": [
+      {
+        "event": 20,
+        "caller": "0x10ce96e",
+        "program": 331,
+        "target": {
+          "framebuffer": 0,
+          "width": 1728,
+          "height": 1117
+        },
+        "changed_pixels": {
+          "gl": 73,
+          "metal": 73
+        },
+        "pre_match": true,
+        "gl_pre_sha256": "ecd15f8594bca205596fb0b6b0a3e597bac98df4e632a62c52ac520a60065c0a",
+        "metal_pre_sha256": "ecd15f8594bca205596fb0b6b0a3e597bac98df4e632a62c52ac520a60065c0a",
+        "gl_post_sha256": "4185cbd2f2d49c7a4e0f707da20cad0b8489c921aac5b0bb264b2ce0992c7417",
+        "metal_post_sha256": "113b3c0968c303cc084feb2769e3c88682fe28dbed87d0e0c0fd6fa0fc2aa64d",
+        "post_difference": {
+          "pixels": 1930176,
+          "mismatched_pixels": 18,
+          "max_channel_error": 1,
+          "alpha_different_pixels": 0
+        },
+        "depth": {
+          "matters": true,
+          "contents": "replayed_prefix"
+        },
+        "interpretation": "The authentic pre-image is reproduced exactly and both sides change 73 pixels; the post-image differs on 18 pixels by at most one channel step."
+      },
+      {
+        "event": 92,
+        "caller": "0x10ce96e",
+        "program": 331,
+        "target": {
+          "framebuffer": 0,
+          "width": 1728,
+          "height": 1117
+        },
+        "changed_pixels": {
+          "gl": 2177,
+          "metal": 2177
+        },
+        "pre_match": true,
+        "gl_pre_sha256": "8e94fe58c72933b63597be6f0a1f8d1418d09175c8c9efe6a0ae450aa53de66f",
+        "metal_pre_sha256": "8e94fe58c72933b63597be6f0a1f8d1418d09175c8c9efe6a0ae450aa53de66f",
+        "gl_post_sha256": "22ba59174a5efce5a6da86a66b5ce996794ba45a85f0a54d95a61ae003f5a3c2",
+        "metal_post_sha256": "7e88c1bc2dd18d995979e505106714276c7b9e5a30f2e43e665d87738e9434d5",
+        "post_difference": {
+          "pixels": 1930176,
+          "mismatched_pixels": 685,
+          "max_channel_error": 8,
+          "alpha_different_pixels": 0,
+          "mean_max_channel_error": 0.000358517
+        },
+        "depth": {
+          "matters": true,
+          "contents": "replayed_prefix"
+        },
+        "interpretation": "A substantive terrain-producing draw (2177 changed pixels) with an exact pre-image and a near-identical post-image (685 pixels, max 8/255). The residual is consistent with compressed-texture/lighting rounding, not a contract failure. This qualifies this draw only, not the whole terrain pipeline."
+      }
+    ],
+    "note": "The earlier evidence that event 20 was an all-black candidate is superseded by the harness ordering correction."
   },
   "replay_scope": {
     "finding": "Patching the terrain draw's UNIFORM0[0].x (view-projection) by +0.5 in a copied trace produced ZERO differing pixels, while patching the composite's first uniform changed 763,491 pixels. The offline replay therefore re-renders the captured seed composite against captured textures; it does not re-render the terrain pass from its recorded inputs.",
     "consequence": "The pixel-exact offline result qualifies a captured-state replay, not an independent reconstruction of the terrain draw. Live terrain differences cannot be excluded or explained by the offline replay; they must be compared against the captured draw's inputs directly."
   },
-  "terrain_pre_post": {
-    "capture": ".local/m6/frames/menu-terrain/frame",
-    "terrain_draws_with_pre_post": 252,
-    "first_pair": "event 20: 73 differing pixels (max 39) between pre and post",
-    "isolated_replay": "all-black candidate; the isolator did not reproduce the default-framebuffer pre-image (first target is a renderbuffer-backed FBO, the terrain draw targets framebuffer 0). Inconclusive harness limitation, not a renderer finding."
-  }
+  "live_verification": {
+    "run": ".local/m6/live-final/verify-1",
+    "identity": "1794635347-64349",
+    "operational": {
+      "executed": true,
+      "gpu_completed": true,
+      "presented": true,
+      "refused_draws": 0
+    },
+    "visual": {
+      "visual_match": false,
+      "ui_region_correlation": [
+        0.755,
+        0.821,
+        0.482
+      ],
+      "map_mean": 144.023,
+      "map_color_similarity": 0.435,
+      "map_structure": true
+    },
+    "change_after_viewport_fix": "The magenta/pink map palette disappeared. The composite's second (864x558) input went from near-black and one-quarter coverage to full coverage (mean 112/112/113, alpha 255). The map now renders terrain colours, confirming the offscreen viewport defect was the first material divergence.",
+    "remaining_divergence": {
+      "stage": "map render-target / resolve into the sampled MainScene texture",
+      "evidence": "The live composite input MainScene (1728x1117) is already the season-colour-balanced (beige) image (mean 112/112/113), while the authentic captured MainScene is the uncomposited green terrain map (mean 65/76/73). The live presented map is about twice as bright as the authentic reference (map mean 144 vs 72; colour affinity 0.435 < 0.85).",
+      "interpretation": "The live resolve/composite chain is feeding a previously composited frame back as MainScene instead of the current terrain render; the bloom add then compounds brightness. The remaining defect is in the render-target lifecycle/resolve ordering, not in the terrain draw, which now matches under equivalent inputs.",
+      "not_yet_fixed": true
+    },
+    "ui_artifacts": "Some legacy text/sprite draws still show mirrored or white-box glyph composition (e.g. Credits/Options and the Paradox logo region); UI region correlation is 0.482 for the logo region, below the 0.5 policy floor.",
+    "pid": 64418
+  },
+  "live_start_policy": {
+    "required_clean_starts": 3,
+    "qualified_clean_starts": 0,
+    "reason": "One post-fix live verification was run; visual_match is false. Per the task rules the run was not repeated blindly and no qualification starts were claimed.",
+    "do_not_reuse": [
+      "final-1",
+      "final-2",
+      "final-3"
+    ]
+  },
+  "root_cause_history": [
+    {
+      "finding": "The original isolated terrain failure (all-black candidate) was caused by the harness pre-image/clear ordering defect.",
+      "status": "confirmed",
+      "evidence": "event 20 and 92 pre-images now match exactly"
+    },
+    {
+      "finding": "Offscreen render targets were viewport-scaled by the backbuffer HiDPI ratio (864x558 rendered into a 432x279 corner).",
+      "status": "confirmed",
+      "evidence": "live sample-u1 coverage was exactly 25% before the fix and 100% after; regression test added"
+    },
+    {
+      "finding": "The remaining live palette divergence is in the map resolve/composite lifecycle (composited frame fed back as MainScene).",
+      "status": "blocking",
+      "evidence": "live MainScene is already season-colour-balanced while the authentic MainScene is the uncomposited green terrain map"
+    }
+  ]
 }

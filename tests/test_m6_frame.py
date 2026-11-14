@@ -772,5 +772,210 @@ class ManifestWriterTests(unittest.TestCase):
             self.assertEqual(manifest["schema"], m6_frame.TRACE_SCHEMA)
 
 
+@unittest.skipUnless(sys.platform == "darwin", "the replay host needs Metal")
+class IsolationOrderingTests(unittest.TestCase):
+    """The isolated draw must start from the supplied GL image, not a clear.
+
+    A four-pixel triangle strip paints one 2x2 block; every other pixel must
+    retain the distinctive pre-image values. The pre-fix harness encoded a
+    black clear into the frame command buffer and committed it after the
+    pre-image blit, so the unaffected pixels became black.
+    """
+
+    VERTEX = """#include <metal_stdlib>
+using namespace metal;
+struct VOut { float4 position [[position]]; };
+vertex VOut test_vertex(uint vid [[vertex_id]]) {
+    float2 p[4] = { float2(-1.0, -1.0), float2(1.0, -1.0),
+                    float2(-1.0, 1.0), float2(1.0, 1.0) };
+    VOut out;
+    out.position = float4(p[vid], 0.0, 1.0);
+    return out;
+}
+"""
+
+    FRAGMENT = """#include <metal_stdlib>
+using namespace metal;
+struct FOut { float4 color [[color(0)]]; };
+fragment FOut test_fragment(float4 position [[position]]) {
+    uint x = uint(position.x);
+    uint y = uint(position.y);
+    if (x >= 2 && x < 4 && y >= 2 && y < 4) {
+        FOut out;
+        out.color = float4(1.0, 0.0, 0.0, 1.0);
+        return out;
+    }
+    discard_fragment();
+}
+"""
+
+    WIDTH = 8
+    HEIGHT = 6
+
+    def _write(self, path: Path, data: bytes) -> dict:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return {
+            "file": path.name,
+            "bytes": len(data),
+            "sha256": _sha(data),
+        }
+
+    def _frame(self, root: Path) -> tuple[Path, Path, bytes]:
+        frame = root / "frame"
+        blobs = frame / "blobs"
+        width, height = self.WIDTH, self.HEIGHT
+        pre = bytearray()
+        for y in range(height):
+            for x in range(width):
+                pre += bytes([(x * 7 + y * 3) & 0xFF, (x * 5 + y * 11) & 0xFF,
+                              180 + x, 255])
+        pre = bytes(pre)
+        pre_member = self._write(blobs / "pre-image.bin", pre)
+        post_member = self._write(blobs / "post-image.bin", pre)
+        reference = bytes([9, 8, 7, 255] * (width * height))
+        (frame / "frame-reference.bgra").write_bytes(reference)
+        event = {
+            "kind": "draw",
+            "index": 0,
+            "pre_image": {
+                "width": width,
+                "height": height,
+                "file": pre_member["file"],
+                "sha256": pre_member["sha256"],
+            },
+            "post_image": {
+                "width": width,
+                "height": height,
+                "file": post_member["file"],
+                "sha256": post_member["sha256"],
+            },
+            "state": {
+                "blend": {"enabled": False},
+                "color_mask": [1, 1, 1, 1],
+                "depth": {"test": False, "func": "0x203", "write": False},
+                "stencil": {"test": False},
+                "cull": {"enabled": False, "mode": "0x405", "front": "0x901"},
+                "scissor": {"enabled": False, "box": [0, 0, width, height]},
+                "viewport": [0, 0, width, height],
+            },
+            "program_diagnostics": {
+                "active_attributes": 0,
+                "active_uniforms": 0,
+                "link": True,
+                "enabled_bits": [0] * 16,
+            },
+            "program": {"name": 1, "shaders": [], "uniforms": []},
+            "textures": [],
+            "target": {
+                "framebuffer": 0,
+                "width": width,
+                "height": height,
+                "viewport": [0, 0, width, height],
+            },
+            "attributes": [],
+            "draw": {
+                "entry": "_GfxDraw",
+                "mode": 3,
+                "first": 0,
+                "count": 4,
+                "instance_count": 1,
+                "indexed": False,
+                "base_vertex": 0,
+                "caller_rva": "0x123",
+            },
+        }
+        manifest = {
+            "schema": m6_frame.TRACE_SCHEMA,
+            "complete": True,
+            "reason": "present",
+            "truncated": False,
+            "pid": 1,
+            "present_index": 1,
+            "events": 1,
+            "gl": {"vendor": "Apple", "renderer": "test", "version": "2.1"},
+            "frame": {
+                "width": width,
+                "height": height,
+                "origin": "lower_left",
+                "pixel_format": "BGRA8",
+                "row_stride": width * 4,
+                "reference": "frame-reference.bgra",
+                "reference_bytes": len(reference),
+                "reference_sha256": _sha(reference),
+            },
+            "selection": {"callers": ["0x123"], "min_draws": 1,
+                          "occurrence": 1, "required": True},
+            "seed": {"width": width, "height": height},
+            "blobs": 1,
+        }
+        (frame / "frame-trace.json").write_text(json.dumps(manifest))
+        (frame / "frame-events.jsonl").write_text(json.dumps(event) + "\n")
+        shaders = root / "shaders"
+        shaders.mkdir()
+        (shaders / "test.vert.metal").write_text(self.VERTEX)
+        (shaders / "test.frag.metal").write_text(self.FRAGMENT)
+        (shaders / "shaders.json").write_text(json.dumps({
+            "programs": [{
+                "program": 1,
+                "status": "ok",
+                "stages": {
+                    "vertex": {
+                        "msl_file": "test.vert.metal",
+                        "msl_entry": "test_vertex",
+                        "attributes": [],
+                        "attribute_locations": {},
+                        "uniforms": [],
+                    },
+                    "pixel": {
+                        "msl_file": "test.frag.metal",
+                        "msl_entry": "test_fragment",
+                        "attributes": [],
+                        "attribute_locations": {},
+                        "uniforms": [],
+                    },
+                },
+            }]
+        }))
+        return frame, shaders, pre
+
+    def test_pre_image_survives_the_selected_draw(self) -> None:
+        host = m6_frame.build_replay_host(force=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            frame, shaders, pre = self._frame(root)
+            out = root / "replay"
+            ran = subprocess.run(
+                [
+                    str(host), "--frame", str(frame), "--shaders", str(shaders),
+                    "--out", str(out), "--only-event", "0", "--seed-marked",
+                    "--capture-pre", "--capture-post",
+                ],
+                capture_output=True, text=True, check=False, timeout=120,
+            )
+            self.assertEqual(ran.returncode, 0, ran.stderr + ran.stdout)
+            replay = json.loads((out / "replay.json").read_text())
+            isolated = replay["isolated"]
+            self.assertEqual(isolated["color_initialization"], "supplied_pre_image")
+            self.assertTrue(isolated["pre_capture_ok"], isolated)
+            self.assertEqual(isolated["depth_contents"], "not_required")
+            pre_capture = (out / "isolated-pre-0.bgra").read_bytes()
+            post_capture = (out / "isolated-post-0.bgra").read_bytes()
+            self.assertEqual(pre_capture, pre)
+            width, height = self.WIDTH, self.HEIGHT
+            self.assertEqual(len(post_capture), width * height * 4)
+            changed = 0
+            for pixel in range(width * height):
+                before = pre[pixel * 4:pixel * 4 + 4]
+                after = post_capture[pixel * 4:pixel * 4 + 4]
+                if before == after:
+                    continue
+                changed += 1
+                self.assertEqual(after, bytes([0, 0, 255, 255]), pixel)
+            self.assertEqual(changed, 4)
+            self.assertEqual(isolated["pre_image"]["sha256"],
+                             hashlib.sha256(pre).hexdigest())
+
+
 if __name__ == "__main__":
     unittest.main()

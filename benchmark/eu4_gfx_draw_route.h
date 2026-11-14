@@ -2,6 +2,7 @@
 #define EU4_GFX_DRAW_ROUTE_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "eu4_gfx_draw_capture.h"
 #include "eu4_gfx_simple_draw.h"
@@ -44,6 +45,16 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
    Returns 0 when no draw has been handled in this process. */
 int eu4_gfx_draw_route_last(eu4_gfx_simple_draw_state *state,
                             uint64_t *caller_rva);
+
+/* Coordinate space of the engine viewport for one draw target. Only the game
+   backbuffer is physically scaled relative to the window's logical extent
+   (HiDPI); an offscreen render target is allocated at the engine's logical
+   size, so its viewport is already in target pixels. Exposed for the host
+   regression that pins the offscreen case. */
+void eu4_gfx_draw_route_logical_extent(
+    int offscreen_target, uint32_t target_width, uint32_t target_height,
+    uint32_t window_width, uint32_t window_height,
+    uint32_t *logical_width, uint32_t *logical_height);
 
 #ifdef __cplusplus
 }
