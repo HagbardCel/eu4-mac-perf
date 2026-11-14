@@ -41,13 +41,22 @@ draw/extent correspondence is otherwise established. Conversely, a `match`
 requires a verified static scene; animated or weakly identified scenes remain
 `incomplete` with an explicit weak-correspondence reason.
 
-No engine-level update/tick identity is implemented yet. Stability is measured
-from consecutive full-frame digests, not from draw count or background
-similarity. Loading screens therefore cannot qualify.
+An engine-level update identity is now emitted per observation. The observer
+reads the exported `CCurrentGameState::_pInstance` singleton at RVA `0x2244620`
+and hashes the date block at `+0x1d18` (the fields written by
+`CGameState::SetCurrentDate`), emitting `game_day` and `update_identity`. When
+both sides have a non-zero identity, equality is weighted as independent
+alignment evidence and a mismatch makes the pair `not_aligned`; the target-phase
+gate also refuses unequal identities. If the singleton is not live, identity is
+zero and correspondence is explicitly weak.
 
-A loaded-save OpenGL/OpenGL consistency experiment exposed this limitation
-directly: two processes loading the same Venice save produced 373 vs 361 draws
-and different caller signatures, so all 20 pairs were `ambiguous`. The save
+Stability is also measured from consecutive full-frame digests. Loading screens
+therefore cannot qualify.
+
+A loaded-save OpenGL/OpenGL consistency experiment showed the same limitation
+before update identity existed: two processes loading the same Venice save
+produced 373 vs 361 draws and different caller signatures, so all 20 pairs were
+`ambiguous`. The save
 continues running, so the two processes are not at the same update. Experiment A
 therefore failed before any GL/Metal comparison; this is recorded as an
 `alignment_failure`, not as a renderer difference.

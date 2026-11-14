@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <mach-o/dyld.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -28,6 +29,8 @@ typedef struct {
     int gpu_completed;
     int capture_valid;
     uint64_t ts_ms;
+    int game_day;
+    uint64_t update_identity;
     char origin[16];
     char sha256[65];
 } obs_ring_slot;
@@ -259,6 +262,32 @@ static uint64_t now_ms(void) {
     return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
 }
 
+/* The pinned binary exports CCurrentGameState::_pInstance.  The date block at
+   +0x1d18 is written by CGameState::SetCurrentDate; hashing it gives both
+   renderers the same update identity without touching game behaviour.  This is
+   best-effort: if the singleton is not live, identity is zero (weak). */
+static void game_state_identity(int *day, uint64_t *fingerprint) {
+    *day = 0;
+    *fingerprint = 0;
+    const uintptr_t header = (uintptr_t)_dyld_get_image_header(0);
+    if (header == 0) return;
+    volatile uintptr_t *singleton =
+        (volatile uintptr_t *)(header + (uintptr_t)0x2244620);
+    uintptr_t instance = *singleton;
+    if (instance < (uintptr_t)0x100000000ULL ||
+        instance > (uintptr_t)0x7fffffffffffULL) {
+        return;
+    }
+    const uint8_t *date = (const uint8_t *)(instance + 0x1d18);
+    *day = *(const int *)date;
+    uint64_t hash = 1469598103934665603ULL;
+    for (int i = 0; i < 0x28; i++) {
+        hash ^= date[i];
+        hash *= 1099511628211ULL;
+    }
+    *fingerprint = hash;
+}
+
 /* --- initialization ----------------------------------------------------- */
 
 int eu4_gfx_frame_observe_init(const char *backend, const char *dir,
@@ -371,7 +400,8 @@ static void ring_store(const uint8_t *bgra, uint32_t width, uint32_t height,
                        uint64_t index, uint32_t draws, uint64_t signature,
                        uint32_t distinct_callers, int gpu_completed,
                        int capture_valid, const char *origin,
-                       const char *digest) {
+                       const char *digest, int game_day,
+                       uint64_t update_identity) {
     if (g_ring_size == 0) {
         return;
     }
@@ -400,6 +430,8 @@ static void ring_store(const uint8_t *bgra, uint32_t width, uint32_t height,
     slot->gpu_completed = gpu_completed;
     slot->capture_valid = capture_valid;
     slot->ts_ms = now_ms();
+    slot->game_day = game_day;
+    slot->update_identity = update_identity;
     snprintf(slot->origin, sizeof slot->origin, "%s",
              origin != NULL ? origin : "top_left");
     snprintf(slot->sha256, sizeof slot->sha256, "%s", digest != NULL ? digest : "");
@@ -473,7 +505,8 @@ static void dump_ring(obs_ring_slot *slot) {
         (size_t)slot->width * slot->height * 4, slot->sha256, slot->draws,
         (unsigned long long)slot->signature,
         slot->gpu_completed ? "true" : "false",
-        slot->capture_valid ? "true" : "false");
+        slot->capture_valid ? "true" : "false", slot->game_day,
+        (unsigned long long)slot->update_identity);
     if (length <= 0 || (size_t)length >= sizeof body ||
         write_atomic(json_path, body, (size_t)length) != 0) {
         g_dropped += 1;
@@ -688,9 +721,13 @@ int eu4_gfx_frame_observe_emit(const uint8_t *bgra, uint32_t width,
         gap = frame_index - g_last_index - 1;
         g_skipped += gap;
     }
+    int game_day = 0;
+    uint64_t update_identity = 0;
+    game_state_identity(&game_day, &update_identity);
     ring_store(bgra, width, height, frame_index, draws, signature,
                distinct_callers, gpu_completed, capture_valid,
-               origin != NULL ? origin : "top_left", full_digest);
+               origin != NULL ? origin : "top_left", full_digest,
+               game_day, update_identity);
     handle_request();
 
     char line[1400];
@@ -702,12 +739,14 @@ int eu4_gfx_frame_observe_emit(const uint8_t *bgra, uint32_t width,
         "\"preview_file\":\"previews/%s.bgra\",\"preview_width\":%u,"
         "\"preview_height\":%u,\"preview_sha256\":\"%s\",\"draws\":%u,"
         "\"caller_signature\":\"0x%016llx\",\"distinct_callers\":%u,"
+        "\"game_day\":%d,\"update_identity\":\"0x%016llx\","
         "\"skipped_before\":%llu,\"gpu_completed\":%s,\"capture_valid\":%s,"
         "\"error\":\"%s\",\"ts_ms\":%llu}\n",
         EU4_GFX_FRAME_OBSERVE_SCHEMA, g_backend, g_session, (int)getpid(),
         frame_index, width, height, origin != NULL ? origin : "top_left",
         width * 4, full_digest, preview_digest, preview_w, preview_h,
         preview_digest, draws, (unsigned long long)signature, distinct_callers,
+        game_day, (unsigned long long)update_identity,
         (unsigned long long)gap, gpu_completed ? "true" : "false",
         capture_valid ? "true" : "false", error != NULL ? error : "",
         (unsigned long long)now_ms());
@@ -749,6 +788,9 @@ int eu4_gfx_frame_observe_emit_metadata(uint32_t width, uint32_t height,
     }
     g_last_draws = draws;
     g_last_signature = signature;
+    int game_day = 0;
+    uint64_t update_identity = 0;
+    game_state_identity(&game_day, &update_identity);
     pthread_mutex_lock(&g_lock);
     if (g_emitted >= OBS_MAX_FRAMES) {
         g_dropped += 1;
@@ -760,7 +802,7 @@ int eu4_gfx_frame_observe_emit_metadata(uint32_t width, uint32_t height,
         gap = frame_index - g_last_index - 1;
         g_skipped += gap;
     }
-    char line[900];
+    char line[1200];
     int length = snprintf(
         line, sizeof line,
         "{\"schema\":\"%s\",\"backend\":\"%s\",\"session\":\"%s\","
@@ -769,11 +811,13 @@ int eu4_gfx_frame_observe_emit_metadata(uint32_t width, uint32_t height,
         "\"sha256\":\"\",\"preview_file\":\"\",\"preview_width\":0,"
         "\"preview_height\":0,\"content\":\"metadata\",\"draws\":%u,"
         "\"caller_signature\":\"0x%016llx\",\"distinct_callers\":%u,"
+        "\"game_day\":%d,\"update_identity\":\"0x%016llx\","
         "\"skipped_before\":%llu,\"gpu_completed\":%s,"
         "\"capture_valid\":true,\"error\":\"%s\",\"ts_ms\":%llu}\n",
         EU4_GFX_FRAME_OBSERVE_SCHEMA, g_backend, g_session, (int)getpid(),
         frame_index, width, height, origin != NULL ? origin : "top_left",
         width * 4, draws, (unsigned long long)signature, distinct_callers,
+        game_day, (unsigned long long)update_identity,
         (unsigned long long)gap, gpu_completed ? "true" : "false",
         error != NULL ? error : "", (unsigned long long)now_ms());
     if (length <= 0 || (size_t)length >= sizeof line ||

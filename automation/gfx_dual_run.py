@@ -127,6 +127,9 @@ class CampaignState:
         "reference": {"last_digest": None, "streak": 0, "max_streak": 0},
         "candidate": {"last_digest": None, "streak": 0, "max_streak": 0},
     })
+    identity_streak: int = 0
+    identity_max_streak: int = 0
+    last_identity: int = 0
 
     def note_digest(self, role: str, digest: str | None) -> None:
         if not digest:
@@ -139,14 +142,31 @@ class CampaignState:
             item["streak"] = 1
         item["max_streak"] = max(item["max_streak"], item["streak"])
 
+    def note_identity(self, reference: dict, candidate: dict) -> None:
+        ref = int(reference.get("update_identity") or 0)
+        cand = int(candidate.get("update_identity") or 0)
+        if not ref or ref != cand:
+            self.identity_streak = 0
+            return
+        if ref == self.last_identity:
+            self.identity_streak += 1
+        else:
+            self.last_identity = ref
+            self.identity_streak = 1
+        self.identity_max_streak = max(self.identity_max_streak,
+                                       self.identity_streak)
+
     def stability_summary(self, required: int) -> dict:
         if required <= 1:
-            return {"status": "weak", "required_frames": required, "roles": self.stability}
-        verified = all(item["max_streak"] >= required
-                       for item in self.stability.values())
+            required = 2
+        verified = (
+            all(item["max_streak"] >= required for item in self.stability.values())
+            or self.identity_max_streak >= required
+        )
         return {
             "status": "verified" if verified else "weak",
             "required_frames": required,
+            "identity_max_streak": self.identity_max_streak,
             "roles": {key: dict(value) for key, value in self.stability.items()},
         }
 
@@ -202,7 +222,11 @@ def _record_health(record: FrameRecord, health: gfx_diagnostics.GpuHealth) -> No
 
 
 def _phase_ready(reference_draws: int, candidate_draws: int,
-                 minimum: int, tolerance: float) -> bool:
+                 minimum: int, tolerance: float,
+                 reference_update: int = 0,
+                 candidate_update: int = 0) -> bool:
+    if reference_update and candidate_update and reference_update != candidate_update:
+        return False
     if minimum > 0 and (reference_draws < minimum or candidate_draws < minimum):
         return False
     if reference_draws <= 0 or candidate_draws <= 0:
@@ -1110,7 +1134,13 @@ def run_campaign(
                 cand_draws = (latest_cand.value.get("draws") if latest_cand else 0) or 0
                 tolerance = float((scenario.get("settle") or {}).get(
                     "draw_tolerance", 0.25))
-                if _phase_ready(ref_draws, cand_draws, minimum_draws, tolerance):
+                if _phase_ready(
+                    ref_draws, cand_draws, minimum_draws, tolerance,
+                    int(latest_ref.value.get("update_identity") or 0)
+                    if latest_ref else 0,
+                    int(latest_cand.value.get("update_identity") or 0)
+                    if latest_cand else 0,
+                ):
                     break
                 if any(item.process.poll() is not None for item in launched.values()):
                     break
@@ -1221,7 +1251,9 @@ def run_campaign(
                 tolerance = float((scenario.get("settle") or {}).get(
                     "draw_tolerance", 0.25))
                 if latest_ref is not None and latest_cand is not None and _phase_ready(
-                    ref_draws, cand_draws, minimum_draws, tolerance
+                    ref_draws, cand_draws, minimum_draws, tolerance,
+                    int(latest_ref.value.get("update_identity") or 0),
+                    int(latest_cand.value.get("update_identity") or 0),
                 ):
                     state.begin_pairing()
                     state.released_ref.add(latest_ref.index)
@@ -1322,6 +1354,7 @@ def run_campaign(
                         "reference": reference_dump,
                         "candidate": candidate_dump,
                     }
+                    state.note_identity(pair["reference"], pair["candidate"])
                     for role, dump in (("reference", reference_dump),
                                        ("candidate", candidate_dump)):
                         for value in (dump.get("found") or {}).values():

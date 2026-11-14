@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from automation import gfx_dual_run, gfx_launch, gfx_scenario  # noqa: E402
+from automation import gfx_align, gfx_dual_run, gfx_launch, gfx_scenario  # noqa: E402
 
 try:
     import numpy as np
@@ -486,6 +486,31 @@ class QualificationTests(unittest.TestCase):
                                       "message": "current shader is not linked"},
                     "instrumentation_failures": []}))
         self.assertEqual(value["status"], "gpu_execution_failure")
+
+    def test_game_update_is_independent_alignment_evidence(self):
+        reference = {"frame_index": 1, "width": 100, "height": 100,
+                     "draws": 20, "caller_signature": "0x1",
+                     "update_identity": 99}
+        candidate = {"frame_index": 1, "width": 100, "height": 100,
+                     "draws": 20, "caller_signature": "0x2",
+                     "update_identity": 99}
+        score, evidence = gfx_align.match_score(reference, candidate)
+        self.assertIn("game_update", evidence)
+        self.assertGreaterEqual(score, 6)
+        result = gfx_align.align_sequences([reference], [candidate])
+        self.assertEqual(result["pairs"][0]["status"], gfx_align.ALIGNED)
+
+    def test_different_game_update_is_not_aligned(self):
+        reference = {"frame_index": 1, "width": 100, "height": 100,
+                     "draws": 20, "caller_signature": "0x1",
+                     "update_identity": 1}
+        candidate = {"frame_index": 1, "width": 100, "height": 100,
+                     "draws": 20, "caller_signature": "0x1",
+                     "update_identity": 2}
+        self.assertEqual(gfx_align.match_score(reference, candidate)[0], -100)
+        result = gfx_align.align_sequences([reference], [candidate])
+        self.assertFalse(any(pair["status"] == gfx_align.ALIGNED
+                             for pair in result["pairs"]))
 
     def test_ambiguous_pairs_are_alignment_failure(self):
         value = self.classify(self.result(aligned=90, not_aligned=10,

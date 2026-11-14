@@ -98,6 +98,14 @@ def match_score(reference: dict, candidate: dict) -> tuple[int, list[str]]:
             return -100, ["scene_mismatch"]
         score += 6
         evidence.append("scene")
+    ref_update = _int(reference.get("update_identity"), 0)
+    cand_update = _int(candidate.get("update_identity"), 0)
+    if ref_update and cand_update:
+        if ref_update == cand_update:
+            score += 8
+            evidence.append("game_update")
+        else:
+            return -100, ["game_update_mismatch"]
     ref_sig, cand_sig = _signature(reference), _signature(candidate)
     if ref_sig and cand_sig:
         if ref_sig == cand_sig:
@@ -188,12 +196,13 @@ def align_sequences(reference: list[dict], candidate: list[dict], *,
             candidate_row = cand[j - 1]
             value, evidence = match_score(reference_row, candidate_row)
             relation = extent_relation(reference_row, candidate_row)
-            if "scene_mismatch" in evidence:
+            if "scene_mismatch" in evidence or "game_update_mismatch" in evidence:
                 status = NOT_ALIGNED
             elif not relation["normalized"]:
                 status = NOT_ALIGNED
             elif value >= 6 and (
                 "caller_signature" in evidence or "scene" in evidence
+                or "game_update" in evidence
             ):
                 status = ALIGNED
             elif value >= 3:
