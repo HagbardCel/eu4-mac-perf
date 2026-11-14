@@ -1561,7 +1561,13 @@ def run_campaign(
         finished_tokens = set()
         for role, item in list(launched.items()):
             def finish_item(item=item):
-                ledger_status = "completed" if item.process.returncode == 0 else "failed"
+                # A campaign that stopped on a confirmed difference still ran
+                # to its configured termination; its launch is not a failure.
+                ledger_status = (
+                    "completed"
+                    if result.get("result") in ("completed", "stopped")
+                    else "failed"
+                )
                 launch_ledger.finish(ledger_path, item.token, pid=item.process.pid,
                                      status=ledger_status)
                 finished_tokens.add(item.token)

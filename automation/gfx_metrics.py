@@ -12,6 +12,8 @@ import argparse
 import json
 from pathlib import Path
 
+from automation import launch_ledger
+
 SCHEMA = "gfx-efficiency-metrics/v1"
 
 
@@ -47,17 +49,35 @@ def summarize(root: Path, *, ledger: Path | None = None) -> dict:
     total_valid_compared = 0
     classifications: dict[str, int] = {}
     launches = None
-    if ledger is not None and ledger.is_file():
-        value = _read_json(ledger) or {}
+    if ledger is not None:
+        paths = [Path(ledger)] if Path(ledger).is_file() else []
+    else:
+        paths = sorted(set(root.glob("authority/*.json"))
+                       | set(root.glob("ledger*.json")))
+    if paths:
         launches = {
-            "limit": value.get("limit"),
-            "used": value.get("used"),
-            "receipts": len(value.get("launches", [])),
+            "limit": 0,
+            "used": 0,
+            "claims": 0,
+            "real_launches": 0,
+            "receipts": 0,
+            "ledgers": len(paths),
             "statuses": {},
         }
-        for receipt in value.get("launches", []):
-            status = receipt.get("status", "unknown")
-            launches["statuses"][status] = launches["statuses"].get(status, 0) + 1
+        for path in paths:
+            try:
+                value = launch_ledger.load_ledger(path)
+            except Exception:  # noqa: BLE001 - a stray JSON file is not a ledger
+                continue
+            launches["limit"] += int(value.get("limit") or 0)
+            launches["used"] += int(value.get("used") or 0)
+            launches["claims"] += len(value.get("launches") or [])
+            for receipt in value.get("launches") or []:
+                launches["receipts"] += 1
+                if type(receipt.get("pid")) is int:
+                    launches["real_launches"] += 1
+                status = receipt.get("status", "unknown")
+                launches["statuses"][status] = launches["statuses"].get(status, 0) + 1
     for run, result in _session_results(root):
         frames = result.get("frames") or {}
         comparison = frames.get("comparison") or {}

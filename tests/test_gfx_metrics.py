@@ -80,6 +80,23 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(value["launches"]["used"], 1)
         self.assertEqual(value["launches"]["statuses"]["reserved"], 1)
 
+    def test_launches_are_discovered_without_an_explicit_ledger(self):
+        ledger = self.root / "authority" / "a.json"
+        ledger.parent.mkdir()
+        launch_ledger.create_ledger(
+            ledger, workflow_id="w", limit=4, deadline_seconds=60.0,
+            executable={"path": "/bin/true", "sha256": "a" * 64},
+            output_root=str(self.root),
+        )
+        launch_ledger.claim(ledger, campaign_id="c", run_root=self.root,
+                            output=ledger.parent / "a", targets=["frame"],
+                            requested_timeout=10.0, executable_sha256="a" * 64,
+                            executable_path="/bin/true", require_pinned=True)
+        value = gfx_metrics.summarize(self.root)
+        self.assertEqual(value["launches"]["used"], 1)
+        self.assertEqual(value["launches"]["real_launches"], 0)
+        self.assertEqual(value["sessions"], 0)
+
     def test_cli_writes_json(self):
         self.session("a", result="completed", compared=1, failed=0,
                      not_compared=0, duration=1.0, bytes_=1)
