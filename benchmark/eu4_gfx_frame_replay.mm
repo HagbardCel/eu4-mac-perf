@@ -12,6 +12,7 @@
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#import "eu4_gfx_draw_semantics.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -423,23 +424,19 @@ static MTLSamplerAddressMode address_mode(NSUInteger gl) {
 }
 
 static MTLPrimitiveType primitive_type(NSUInteger mode, NSError **error) {
-    switch (mode) {
-        case 0: return MTLPrimitiveTypePoint;
-        case 1: return MTLPrimitiveTypeLine;
-        case 2: return MTLPrimitiveTypeLineStrip;
-        case 3: return MTLPrimitiveTypeTriangleStrip;
-        case 4: return MTLPrimitiveTypeTriangle;
-        case 5: return MTLPrimitiveTypeTriangleStrip;
-        default: break;
+    int topology = eu4_gfx_metal_topology((uint32_t)mode);
+    if (topology >= 0) {
+        return (MTLPrimitiveType)topology;
     }
     if (error != NULL) {
+        NSString *reason = mode == 2
+            ? @"line-loop primitive is unsupported"
+            : [NSString stringWithFormat:@"unsupported primitive mode %lu",
+                                         (unsigned long)mode];
         *error = [NSError errorWithDomain:kErrorDomain code:13
-                                 userInfo:@{NSLocalizedDescriptionKey:
-                                                [NSString stringWithFormat:
-                                                     @"unsupported primitive mode %lu",
-                                                     (unsigned long)mode]}];
+                                 userInfo:@{NSLocalizedDescriptionKey: reason}];
     }
-    return MTLPrimitiveTypeTriangle;
+    return MTLPrimitiveTypePoint;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -922,12 +919,40 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
         if (vertex_function == nil || fragment_function == nil) {
             return NO;
         }
-        NSDictionary *draw_info = event[@"draw"] ?: @{};
-        BOOL instanced_draw = number(draw_info[@"instance_count"], 1) > 1;
         NSDictionary *state = event[@"state"] ?: @{};
         NSDictionary *blend = state[@"blend"] ?: @{};
         NSDictionary *depth_state = state[@"depth"] ?: @{};
         NSDictionary *cull = state[@"cull"] ?: @{};
+        NSDictionary *stencil_state = state[@"stencil"] ?: @{};
+        NSDictionary *polygon = state[@"polygon"] ?: @{};
+        if (number(stencil_state[@"test"], 0) != 0) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:69
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        @"captured stencil test is not reconstructed"}];
+            }
+            return NO;
+        }
+        for (id mode_value in polygon[@"mode"] ?: @[]) {
+            unsigned long mode = strtoul([string_value(mode_value) ?: @"0" UTF8String],
+                                         NULL, 0);
+            if (mode != 0x1b02) {
+                if (error != NULL) {
+                    *error = [NSError errorWithDomain:kErrorDomain code:70
+                                             userInfo:@{NSLocalizedDescriptionKey:
+                                                            @"captured non-fill polygon mode is not reconstructed"}];
+                }
+                return NO;
+            }
+        }
+        if (number(polygon[@"offset_fill"], 0) != 0) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:71
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        @"captured polygon offset is not reconstructed"}];
+            }
+            return NO;
+        }
         BOOL blend_enabled = number(blend[@"enabled"], 0) != 0;
         BOOL depth_test = number(depth_state[@"test"], 0) != 0;
         BOOL depth_write = number(depth_state[@"write"], 0) != 0;
@@ -943,6 +968,9 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
 
         NSArray *attribute_list = event[@"attributes"] ?: @[];
         NSMutableArray *attribute_plan = [NSMutableArray array];
+        /* Captured attribute blobs are rebased to their first effective
+           vertex; the replay index must stay inside this many vertices. */
+        NSUInteger replay_vertex_limit = NSUIntegerMax;
         NSMutableDictionary *buffers = [NSMutableDictionary dictionary];
         MTLVertexDescriptor *vertex_descriptor = [MTLVertexDescriptor vertexDescriptor];
         /* Declared attribute types, so constant (unbound) attributes get a
@@ -994,8 +1022,8 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             descriptor.bufferIndex = kVertexBufferBase + location;
             vertex_descriptor.layouts[kVertexBufferBase + location].stride = 16;
             vertex_descriptor.layouts[kVertexBufferBase + location].stepFunction =
-                MTLVertexStepFunctionPerInstance;
-            vertex_descriptor.layouts[kVertexBufferBase + location].stepRate = 1;
+                MTLVertexStepFunctionConstant;
+            vertex_descriptor.layouts[kVertexBufferBase + location].stepRate = 0;
             [attribute_plan addObject:@{
                 @"location": @(location),
                 @"components": @(components),
@@ -1039,8 +1067,8 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                 descriptor.bufferIndex = kVertexBufferBase + location;
                 vertex_descriptor.layouts[kVertexBufferBase + location].stride = 16;
                 vertex_descriptor.layouts[kVertexBufferBase + location].stepFunction =
-                    MTLVertexStepFunctionPerInstance;
-                vertex_descriptor.layouts[kVertexBufferBase + location].stepRate = instanced_draw ? 0 : 1;
+                    MTLVertexStepFunctionConstant;
+                vertex_descriptor.layouts[kVertexBufferBase + location].stepRate = 0;
                 [attribute_plan addObject:@{
                     @"location": @(location),
                     @"components": @(components),
@@ -1051,6 +1079,15 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                     @"divisor": @0,
                 }];
                 continue;
+            }
+            if (number(attribute[@"read_error"], 0) != 0 ||
+                number(attribute[@"range_truncated"], 0) != 0) {
+                if (error != NULL) {
+                    *error = [NSError errorWithDomain:kErrorDomain code:61
+                                             userInfo:@{NSLocalizedDescriptionKey:
+                                                            @"captured attribute range is invalid"}];
+                }
+                return NO;
             }
             NSString *data_file = string_value(attribute[@"data"]);
             NSData *data = read_blob(frameDir, data_file);
@@ -1088,6 +1125,20 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                 return NO;
             }
             buffers[@(location)] = buffer;
+            if (number(attribute[@"divisor"], 0) == 0 && stride > 0) {
+                NSUInteger element_bytes = 4;
+                switch (gl_type) {
+                    case 0x1400: case 0x1401: element_bytes = 1; break;
+                    case 0x1402: case 0x1403: case 0x140b: element_bytes = 2; break;
+                    default: element_bytes = 4; break;
+                }
+                NSUInteger attribute_bytes = components * element_bytes;
+                NSUInteger vertices = data.length >= attribute_bytes
+                    ? (data.length - attribute_bytes) / stride + 1 : 0;
+                if (vertices < replay_vertex_limit) {
+                    replay_vertex_limit = vertices;
+                }
+            }
             if (getenv("EU4_FRAME_REPLAY_DEBUG_DESCRIPTOR") != NULL) {
                 const float *raw = (const float *)data.bytes;
                 fprintf(stderr, "  attr %lu data %lu bytes first %.3f %.3f %.3f %.3f\n",
@@ -1100,7 +1151,7 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             descriptor.bufferIndex = kVertexBufferBase + location;
             vertex_descriptor.layouts[kVertexBufferBase + location].stride = stride;
             NSUInteger divisor = number(attribute[@"divisor"], 0);
-            if (instanced_draw && divisor > 0) {
+            if (divisor > 0) {
                 vertex_descriptor.layouts[kVertexBufferBase + location].stepFunction =
                     MTLVertexStepFunctionPerInstance;
                 vertex_descriptor.layouts[kVertexBufferBase + location].stepRate = divisor;
@@ -1109,13 +1160,26 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                     MTLVertexStepFunctionPerVertex;
                 vertex_descriptor.layouts[kVertexBufferBase + location].stepRate = 1;
             }
+            NSUInteger instance_available = 0;
+            if (divisor > 0 && stride > 0) {
+                NSUInteger element_bytes = 4;
+                switch (gl_type) {
+                    case 0x1400: case 0x1401: element_bytes = 1; break;
+                    case 0x1402: case 0x1403: case 0x140b: element_bytes = 2; break;
+                    default: element_bytes = 4; break;
+                }
+                NSUInteger attribute_bytes = components * element_bytes;
+                instance_available = data.length >= attribute_bytes
+                    ? (data.length - attribute_bytes) / stride + 1 : 0;
+            }
             [attribute_plan addObject:@{
                 @"location": @(location),
                 @"components": @(components),
                 @"gl_type": @(gl_type),
                 @"normalized": @(normalized),
                 @"stride": @(stride),
-                @"divisor": @(instanced_draw ? divisor : 0),
+                @"divisor": @(divisor),
+                @"instances": @(instance_available),
             }];
         }
         NSString *key = [state_key(event, target_info, attribute_plan)
@@ -1138,11 +1202,17 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                         (unsigned long)vertex_descriptor.layouts[descriptor.bufferIndex].stepRate);
             }
             NSData *u = pack_uniforms(vs, program, frameDir, nil);
-            const float *floats = (const float *)u.bytes;
-            fprintf(stderr, "  uniform bytes %lu first %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f\n",
-                    (unsigned long)u.length,
-                    floats[0], floats[1], floats[2], floats[3],
-                    floats[12], floats[13], floats[14], floats[15]);
+            if (u != nil && u.length >= 16 * sizeof(float)) {
+                const float *floats = (const float *)u.bytes;
+                fprintf(stderr,
+                        "  uniform bytes %lu first %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f\n",
+                        (unsigned long)u.length,
+                        floats[0], floats[1], floats[2], floats[3],
+                        floats[12], floats[13], floats[14], floats[15]);
+            } else {
+                fprintf(stderr, "  uniform bytes %lu (unavailable)\n",
+                        (unsigned long)(u != nil ? u.length : 0));
+            }
         }
         id<MTLRenderPipelineState> pipeline = g_pipelines[key];
         if (pipeline == nil) {
@@ -1448,8 +1518,27 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
         NSDictionary *draw = event[@"draw"] ?: @{};
         NSUInteger mode = number(draw[@"mode"], 4);
         NSUInteger count = number(draw[@"count"], 0);
-        NSUInteger base_vertex = number(draw[@"base_vertex"], 0);
+        NSInteger base_vertex = [draw[@"base_vertex"] isKindOfClass:[NSNumber class]]
+            ? [draw[@"base_vertex"] integerValue] : 0;
+        NSInteger vertex_origin = 0;
         NSUInteger instances = MAX((NSUInteger)1, number(draw[@"instance_count"], 1));
+        for (NSDictionary *plan in attribute_plan) {
+            NSUInteger divisor = number(plan[@"divisor"], 0);
+            if (divisor == 0) {
+                continue;
+            }
+            NSUInteger available = number(plan[@"instances"], 0);
+            NSUInteger last = instances > 0 ? (instances - 1) / divisor : 0;
+            if (last >= available) {
+                if (error != NULL) {
+                    *error = [NSError errorWithDomain:kErrorDomain code:69
+                                             userInfo:@{NSLocalizedDescriptionKey:
+                                                            @"instance attribute is outside its captured range"}];
+                }
+                [encoder endEncoding];
+                return NO;
+            }
+        }
         NSUInteger indexed = number(draw[@"indexed"], 0);
         NSError *primitive_error = nil;
         MTLPrimitiveType primitive = primitive_type(mode, &primitive_error);
@@ -1466,6 +1555,18 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
         }
         if (indexed) {
             NSDictionary *indices = event[@"indices"] ?: @{};
+            vertex_origin = [indices[@"vertex_origin"] isKindOfClass:[NSNumber class]]
+                ? [indices[@"vertex_origin"] integerValue] : 0;
+            if (number(indices[@"range_valid"], 1) == 0 ||
+                number(indices[@"read_error"], 0) != 0) {
+                if (error != NULL) {
+                    *error = [NSError errorWithDomain:kErrorDomain code:68
+                                             userInfo:@{NSLocalizedDescriptionKey:
+                                                            @"captured index range is invalid"}];
+                }
+                [encoder endEncoding];
+                return NO;
+            }
             NSData *index_data = read_blob(frameDir, string_value(indices[@"file"]));
             if (index_data == nil || index_data.length < count * 2) {
                 if (error != NULL) {
@@ -1476,19 +1577,32 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                 [encoder endEncoding];
                 return NO;
             }
-            NSMutableData *rewritten = [NSMutableData dataWithLength:count * 4];
-            uint32_t *destination = (uint32_t *)rewritten.mutableBytes;
+            NSMutableData *rebased = [NSMutableData dataWithLength:count * 2];
+            uint16_t *destination = (uint16_t *)rebased.mutableBytes;
             const uint16_t *source = (const uint16_t *)index_data.bytes;
             for (NSUInteger i = 0; i < count; i++) {
-                uint32_t value = source[i];
-                destination[i] = value >= base_vertex ? value - (uint32_t)base_vertex : 0;
+                int64_t effective = eu4_gfx_replay_index(source[i],
+                                                         (int32_t)base_vertex,
+                                                         (int32_t)vertex_origin);
+                if (effective < 0 || effective > 0xffff ||
+                    (replay_vertex_limit != NSUIntegerMax &&
+                     effective >= (int64_t)replay_vertex_limit)) {
+                    if (error != NULL) {
+                        *error = [NSError errorWithDomain:kErrorDomain code:68
+                                                 userInfo:@{NSLocalizedDescriptionKey:
+                                                                @"captured index is outside its vertex range"}];
+                    }
+                    [encoder endEncoding];
+                    return NO;
+                }
+                destination[i] = (uint16_t)effective;
             }
-            id<MTLBuffer> index_buffer = [g_device newBufferWithBytes:rewritten.bytes
-                                                               length:rewritten.length
+            id<MTLBuffer> index_buffer = [g_device newBufferWithBytes:rebased.bytes
+                                                               length:rebased.length
                                                               options:MTLResourceStorageModeManaged];
             [encoder drawIndexedPrimitives:primitive
                                indexCount:count
-                                indexType:MTLIndexTypeUInt32
+                                indexType:MTLIndexTypeUInt16
                               indexBuffer:index_buffer
                         indexBufferOffset:0
                             instanceCount:instances];

@@ -121,12 +121,57 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertEqual(ran.returncode, 0, ran.stderr)
         self.assertIn("resolve_orientation=1", ran.stdout)
 
+    def test_production_attribute_bounds(self) -> None:
+        ran = self._run("--production-bounds")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("production_bounds=1", ran.stdout)
+        self.assertIn("attributes_17=1", ran.stdout)
+        self.assertIn("capacity=1", ran.stdout)
+
+    def test_vertex_fetch_semantics(self) -> None:
+        ran = self._run("--vertex-fetch")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("vertex_fetch=1", ran.stdout)
+        self.assertIn("one_instance=1", ran.stdout)
+        self.assertIn("multi_instance=1", ran.stdout)
+        self.assertIn("constant=1", ran.stdout)
+
+    def test_production_pipeline_mask_cache_separation(self) -> None:
+        ran = self._run("--production-pipeline")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("production_pipeline=1", ran.stdout)
+        self.assertIn("distinct=1", ran.stdout)
+
+    def test_color_write_mask_preserves_disabled_channels(self) -> None:
+        ran = self._run("--color-write-mask")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("color_write_mask=1", ran.stdout)
+
+    def test_indexed_base_vertex_reads_effective_vertices(self) -> None:
+        ran = self._run("--indexed-base-vertex")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("indexed_base_vertex=1", ran.stdout)
+        self.assertIn("base4_green=1", ran.stdout)
+        self.assertIn("base0_red=1", ran.stdout)
+
+    def test_draw_semantics_contracts(self) -> None:
+        ran = self._run("--draw-semantics")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("draw_semantics=1", ran.stdout)
+
     def test_sampled_render_target_orientation(self) -> None:
         ran = self._run("--sampled-rt-orientation")
         self.assertEqual(ran.returncode, 0, ran.stderr)
         self.assertIn("sampled_rt_orientation=1", ran.stdout)
         self.assertIn("rt_flip=1", ran.stdout)
         self.assertIn("normal_preserved=1", ran.stdout)
+        self.assertIn("shadow_cache=1", ran.stdout)
+        self.assertIn("repeated=1", ran.stdout)
+        self.assertIn("modified=1", ran.stdout)
+        self.assertIn("abandoned=1", ran.stdout)
+        self.assertIn("stale=1", ran.stdout)
+        self.assertIn("refused=1", ran.stdout)
+        self.assertIn("missing_storage=1", ran.stdout)
 
     def test_sampler_effective_min_filter_uses_texture_mip_state(self) -> None:
         ran = self._run("--sampler-effective")
