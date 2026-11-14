@@ -148,7 +148,6 @@ class ReferenceTests(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAS_DEPS, "the live acceptance checker needs numpy")
-@unittest.skipUnless(_HAS_DEPS, "the live acceptance checker needs numpy")
 class ResolveTraceTests(unittest.TestCase):
     def test_failed_resolve_is_reported_even_without_refused_draws(self) -> None:
         import json
@@ -179,6 +178,7 @@ class ResolveTraceTests(unittest.TestCase):
             self.assertEqual(m6_live_accept.resolve_failures(Path(tmp)), [])
 
 
+@unittest.skipUnless(_HAS_DEPS, "the live acceptance checker needs numpy")
 class CandidateTests(unittest.TestCase):
     def test_dump_dimensions_are_derived_from_its_size(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
