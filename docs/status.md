@@ -59,6 +59,18 @@ verdict was issued. Phase readiness now also requires the two draw counts to be
 within `settle.draw_tolerance` (default 25%), and the frame limit is enforced
 while pairing rather than after a whole batch.
 
+**Qualification corrections (P0/P1).** Campaign execution and rendering
+qualification are now separate. A `match` requires the requested number of
+valid, passing pixel comparisons, clean GPU health and verified static-scene
+correspondence; frame-limit completion alone is `incomplete`. Image correlation
+is diagnostic only. Scenario controls that are not implemented fail closed.
+Incremental health polling stops a campaign on the first rejected draw.
+Lockstep timeouts invalidate synchronization. GL readback no longer consumes
+pending engine errors. Ring dumps retain the selected frame's immutable
+metadata, and capture requests use request IDs with explicit acknowledgements.
+Region-specific policies (including text) now affect acceptance. See
+[qualification contract](infra/qualification-contract.md).
+
 **Lease preflight.** The agent surface now exposes `eu4_session lease`; on the
 current host it reports `busy`, holder worktree
 `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf`, and the running

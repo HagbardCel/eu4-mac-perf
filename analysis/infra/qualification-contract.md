@@ -56,6 +56,17 @@ similarity. Loading screens therefore cannot qualify.
   a small text region can fail a run whose global fraction is low.
 - Horizontal mirroring remains an independent failure signal.
 
+## First-divergence integration (offline)
+
+`gfx_case.build_case(..., semantic=...)` now packages a semantic divergence:
+`operations/semantic.json` contains the first mismatched field, the analysis
+names it, and the missing-evidence claim is suppressed. When no operation prefix
+exists, `repro/targeted-capture-request.json` records the exact frame, caller
+signature and required operation fields for one targeted capture before another
+campaign. This is a capture request, not yet a packaged executable renderer
+reproduction; the existing selected-event replay remains the executable path
+when a trace exists.
+
 ## Cleanup
 
 Each cleanup responsibility is best-effort and independent: release paused

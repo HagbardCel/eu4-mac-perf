@@ -104,7 +104,8 @@ def _choose_pair(result: dict, pair_index: int | None = None) -> dict | None:
 
 
 def _analysis(result: dict, pair: dict | None, comparison: dict | None,
-              classification: str, artifacts: dict) -> str:
+              classification: str, artifacts: dict,
+              semantic: dict | None = None) -> str:
     scenario = result.get("scenario") or {}
     stop = result.get("stop") or {}
     health = result.get("health") or {}
@@ -157,6 +158,19 @@ def _analysis(result: dict, pair: dict | None, comparison: dict | None,
     lines += [
         f"- GPU health verdict: `{health.get('verdict')}`; first failure: "
         f"`{(health.get('first_failure') or {}).get('kind')}`.",
+    ]
+    if semantic:
+        first = (semantic.get("first") or {})
+        lines.append(
+            f"- First semantic divergence: `{first.get('field')}` "
+            f"(reference `{first.get('reference')}`, candidate "
+            f"`{first.get('candidate')}`)."
+        )
+        lines.append(
+            f"- Semantic localization: `{semantic.get('status')}` at operation "
+            f"{semantic.get('operation_index')}."
+        )
+    lines += [
         f"- Artifact budget: {artifacts.get('bytes')} / {artifacts.get('max_bytes')} bytes; "
         f"dropped {artifacts.get('dropped')}.",
         "",
@@ -211,7 +225,7 @@ def _analysis(result: dict, pair: dict | None, comparison: dict | None,
         missing.append("- Reference raw frame for the paired index.")
     if pair and not (pair.get("dumps") or {}).get("candidate", {}).get("found"):
         missing.append("- Candidate raw frame for the paired index.")
-    if not (Path(artifacts.get("root", "")) / "semantic.json").is_file():
+    if not semantic:
         missing.append(
             "- Per-draw semantic operation prefix (caller/shader/uniform/sampler/target) "
             "for the failing frame."
@@ -367,6 +381,33 @@ def build_case(run_dir: Path, *, out_dir: Path | None = None,
             "status": "missing",
             "reason": "resource events are captured by the selected-event replay path",
         })
+    if classification == CONFIRMED_RENDERING and semantic is None and pair:
+        _write_json(case_dir / "repro" / "targeted-capture-request.json", {
+            "schema": "gfx-targeted-capture-request/v1",
+            "session_id": result.get("session_id"),
+            "frame_index": pair.get("frame_index"),
+            "candidate_frame_index": pair.get("candidate_frame_index"),
+            "caller_signature": (pair.get("reference") or {}).get("caller_signature"),
+            "draws": (pair.get("reference") or {}).get("draws"),
+            "required": [
+                "ordered draw/clear/resolve operations",
+                "caller and shader identities",
+                "effective sampler-to-texture-unit mapping",
+                "vertex/index and uniform bindings",
+                "render-target and viewport state",
+                "raster/depth/blend state",
+                "GPU execution status",
+            ],
+            "suggested_command": (
+                "python3 -m automation.m6_frame capture --caller-rva <rva> "
+                "--occurrence <n> --output <dir>"
+            ),
+            "note": (
+                "The live campaign stores frame payloads and health, not a "
+                "per-draw operation prefix. Capture this prefix once before "
+                "another full campaign."
+            ),
+        })
     repro = {
         "schema": "gfx-diagnostic-repro/v1",
         "comparison": comparison,
@@ -377,7 +418,8 @@ def build_case(run_dir: Path, *, out_dir: Path | None = None,
     }
     _write_json(case_dir / "repro" / "repro.json", repro)
     (case_dir / "analysis.md").write_text(
-        _analysis(result, pair, comparison, classification, artifacts), encoding="utf-8"
+        _analysis(result, pair, comparison, classification, artifacts,
+                  semantic=semantic), encoding="utf-8"
     )
     packaged = {
         "schema": SCHEMA,
