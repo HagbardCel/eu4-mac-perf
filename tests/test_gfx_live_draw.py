@@ -121,6 +121,17 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertEqual(ran.returncode, 0, ran.stderr)
         self.assertIn("resolve_orientation=1", ran.stdout)
 
+    def test_production_attribute_bounds(self) -> None:
+        ran = self._run("--production-bounds")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("production_bounds=1", ran.stdout)
+
+    def test_production_pipeline_mask_cache_separation(self) -> None:
+        ran = self._run("--production-pipeline")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("production_pipeline=1", ran.stdout)
+        self.assertIn("distinct=1", ran.stdout)
+
     def test_color_write_mask_preserves_disabled_channels(self) -> None:
         ran = self._run("--color-write-mask")
         self.assertEqual(ran.returncode, 0, ran.stderr)
@@ -148,6 +159,7 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertIn("repeated=1", ran.stdout)
         self.assertIn("modified=1", ran.stdout)
         self.assertIn("abandoned=1", ran.stdout)
+        self.assertIn("stale=1", ran.stdout)
         self.assertIn("refused=1", ran.stdout)
 
     def test_sampler_effective_min_filter_uses_texture_mip_state(self) -> None:

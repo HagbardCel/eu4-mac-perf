@@ -12,9 +12,6 @@
 #include <pthread.h>
 
 static pthread_mutex_t g_sampling_lock = PTHREAD_MUTEX_INITIALIZER;
-/* Command buffer currently being prepared. Bind-time lookups may use a shadow
-   encoded into this command even before its completion promotes it. */
-static thread_local void *g_sampling_command;
 
 
 /* Bytes per pixel for formats 7..23, from the table at RVA 0x1a793a0. */
@@ -810,7 +807,7 @@ void eu4_gfx_clear_texture(void *header) {
         [backend.textures removeObjectForKey:key];
         [backend.sampledRenderTargets removeObjectForKey:key];
         [backend.sampledRenderTargetGenerations removeObjectForKey:key];
-        [backend.sampledRenderTargetPendingCommands removeObjectForKey:key];
+        [backend.sampledRenderTargetPendingTokens removeObjectForKey:key];
         [backend.sampledRenderTargetPendingGenerations removeObjectForKey:key];
         [backend.renderTargetGenerations removeObjectForKey:key];
         pthread_mutex_unlock(&g_sampling_lock);
@@ -899,7 +896,8 @@ static id<MTLTexture> ensure_sampling_shadow(void *header, id<MTLTexture> source
 /* Bind-time lookup. It never allocates, drains or commits. A shadow is usable
    when its generation has been promoted by a completed command or when it was
    encoded into the command currently being prepared. */
-static void *sampling_render_target(void *header, id<MTLTexture> source) {
+static void *sampling_render_target(void *header, id<MTLTexture> source,
+                                     uint64_t preparation_token) {
     if (header == NULL || source == nil) {
         return (__bridge void *)source;
     }
@@ -913,12 +911,12 @@ static void *sampling_render_target(void *header, id<MTLTexture> source) {
     id<MTLTexture> shadow = backend.sampledRenderTargets[key];
     NSNumber *generation = backend.renderTargetGenerations[key] ?: @(0);
     NSNumber *shadow_generation = backend.sampledRenderTargetGenerations[key];
-    NSValue *pending = backend.sampledRenderTargetPendingCommands[key];
+    NSNumber *pending_token = backend.sampledRenderTargetPendingTokens[key];
     NSNumber *pending_generation = backend.sampledRenderTargetPendingGenerations[key];
     BOOL committed = shadow != nil && shadow_generation != nil &&
                      [shadow_generation isEqual:generation];
-    BOOL current = shadow != nil && pending != nil &&
-                   [pending isEqual:[NSValue valueWithPointer:g_sampling_command]] &&
+    BOOL current = shadow != nil && pending_token != nil &&
+                   [pending_token unsignedLongLongValue] == preparation_token &&
                    pending_generation != nil &&
                    [pending_generation isEqual:generation];
     if (committed || current) {
@@ -928,7 +926,7 @@ static void *sampling_render_target(void *header, id<MTLTexture> source) {
     return result;
 }
 
-void *eu4_gfx_texture_for_sampling(void *header) {
+void *eu4_gfx_texture_for_sampling(void *header, uint64_t preparation_token) {
     id<MTLTexture> texture =
         (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(header);
     if (texture == nil || header == NULL) {
@@ -937,11 +935,15 @@ void *eu4_gfx_texture_for_sampling(void *header) {
     if (((const uint8_t *)header)[0x19] == 0) {
         return (__bridge void *)texture;
     }
-    return sampling_render_target(header, texture);
+    return sampling_render_target(header, texture, preparation_token);
 }
 
-int eu4_gfx_prepare_sampled_textures(void *command_buffer, char *reason,
+int eu4_gfx_prepare_sampled_textures(void *command_buffer,
+                                     uint64_t *preparation_token, char *reason,
                                      size_t capacity) {
+    if (preparation_token != NULL) {
+        *preparation_token = 0;
+    }
     if (reason != NULL && capacity > 0) {
         reason[0] = 0;
     }
@@ -951,20 +953,25 @@ int eu4_gfx_prepare_sampled_textures(void *command_buffer, char *reason,
         return 1;
     }
     pthread_mutex_lock(&g_sampling_lock);
-    g_sampling_command = command_buffer;
+    uint64_t token = ++backend.samplingPreparationToken;
+    if (token == 0) {
+        token = ++backend.samplingPreparationToken;
+    }
+    if (preparation_token != NULL) {
+        *preparation_token = token;
+    }
     if (backend.sampledRenderTargets == nil) {
         backend.sampledRenderTargets = [NSMutableDictionary dictionary];
     }
     if (backend.sampledRenderTargetGenerations == nil) {
         backend.sampledRenderTargetGenerations = [NSMutableDictionary dictionary];
     }
-    if (backend.sampledRenderTargetPendingCommands == nil) {
-        backend.sampledRenderTargetPendingCommands = [NSMutableDictionary dictionary];
+    if (backend.sampledRenderTargetPendingTokens == nil) {
+        backend.sampledRenderTargetPendingTokens = [NSMutableDictionary dictionary];
     }
     if (backend.sampledRenderTargetPendingGenerations == nil) {
         backend.sampledRenderTargetPendingGenerations = [NSMutableDictionary dictionary];
     }
-    NSValue *command_value = [NSValue valueWithPointer:command_buffer];
     for (NSUInteger index = 0; index < backend.boundTextures.count; index++) {
         void *header = NULL;
         [(NSValue *)backend.boundTextures[index] getValue:&header];
@@ -982,9 +989,10 @@ int eu4_gfx_prepare_sampled_textures(void *command_buffer, char *reason,
         if (shadow_generation != nil && [shadow_generation isEqual:generation]) {
             continue;
         }
-        NSValue *pending = backend.sampledRenderTargetPendingCommands[key];
+        NSNumber *pending_token = backend.sampledRenderTargetPendingTokens[key];
         NSNumber *pending_generation = backend.sampledRenderTargetPendingGenerations[key];
-        if (pending != nil && [pending isEqual:command_value] &&
+        if (pending_token != nil &&
+            [pending_token unsignedLongLongValue] == token &&
             pending_generation != nil &&
             [pending_generation isEqual:generation]) {
             continue;
@@ -1008,21 +1016,23 @@ int eu4_gfx_prepare_sampled_textures(void *command_buffer, char *reason,
             pthread_mutex_unlock(&g_sampling_lock);
             return 0;
         }
-        backend.sampledRenderTargetPendingCommands[key] = command_value;
+        backend.sampledRenderTargetPendingTokens[key] = @(token);
         backend.sampledRenderTargetPendingGenerations[key] = generation;
         __unsafe_unretained EU4GfxBackend *prepared_backend = backend;
         NSValue *prepared_key = key;
         NSNumber *prepared_generation = generation;
+        uint64_t prepared_token = token;
         id<MTLCommandBuffer> prepared_command =
             (__bridge id<MTLCommandBuffer>)command_buffer;
         [prepared_command addCompletedHandler:^(id<MTLCommandBuffer> completed) {
             pthread_mutex_lock(&g_sampling_lock);
-            NSValue *handler_pending =
-                prepared_backend.sampledRenderTargetPendingCommands[prepared_key];
+            NSNumber *handler_token =
+                prepared_backend.sampledRenderTargetPendingTokens[prepared_key];
             NSNumber *handler_generation =
                 prepared_backend.sampledRenderTargetPendingGenerations[prepared_key];
             if (completed.status == MTLCommandBufferStatusCompleted &&
-                [handler_pending isEqual:command_value] &&
+                handler_token != nil &&
+                [handler_token unsignedLongLongValue] == prepared_token &&
                 handler_generation != nil &&
                 [handler_generation isEqual:prepared_generation] &&
                 [prepared_backend.renderTargetGenerations[prepared_key]
@@ -1030,8 +1040,9 @@ int eu4_gfx_prepare_sampled_textures(void *command_buffer, char *reason,
                 prepared_backend.sampledRenderTargetGenerations[prepared_key] =
                     prepared_generation;
             }
-            if ([handler_pending isEqual:command_value]) {
-                [prepared_backend.sampledRenderTargetPendingCommands
+            if (handler_token != nil &&
+                [handler_token unsignedLongLongValue] == prepared_token) {
+                [prepared_backend.sampledRenderTargetPendingTokens
                     removeObjectForKey:prepared_key];
                 [prepared_backend.sampledRenderTargetPendingGenerations
                     removeObjectForKey:prepared_key];

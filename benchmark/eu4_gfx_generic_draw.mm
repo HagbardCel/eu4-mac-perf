@@ -63,24 +63,82 @@ typedef struct {
 static eu4_logged_element g_logged_elements[16];
 static int g_logged_element_count;
 
-/* Smallest complete-vertex count across per-vertex attributes. The engine's
-   index values are absolute within the bound buffers, so an effective index
-   outside this count would read past the attribute storage. */
-static size_t indexed_vertex_limit(void) {
-    size_t limit = (size_t)-1;
+/* Storage width of the Metal vertex format used by the descriptor. Converted
+   integer attributes use the FloatN format, so their effective width differs
+   from the original GL element. */
+static size_t metal_vertex_format_size(MTLVertexFormat format) {
+    switch (format) {
+        case MTLVertexFormatFloat: return 4;
+        case MTLVertexFormatFloat2: return 8;
+        case MTLVertexFormatFloat3: return 12;
+        case MTLVertexFormatFloat4: return 16;
+        case MTLVertexFormatHalf2: return 4;
+        case MTLVertexFormatHalf3: return 6;
+        case MTLVertexFormatHalf4: return 8;
+        case MTLVertexFormatShort2: return 4;
+        case MTLVertexFormatShort3: return 6;
+        case MTLVertexFormatShort4: return 8;
+        case MTLVertexFormatUShort2: return 4;
+        case MTLVertexFormatUShort3: return 6;
+        case MTLVertexFormatUShort4: return 8;
+        case MTLVertexFormatChar2: return 2;
+        case MTLVertexFormatChar3: return 3;
+        case MTLVertexFormatChar4: return 4;
+        case MTLVertexFormatUChar2: return 2;
+        case MTLVertexFormatUChar3: return 3;
+        case MTLVertexFormatUChar4: return 4;
+        case MTLVertexFormatInt: return 4;
+        case MTLVertexFormatInt2: return 8;
+        case MTLVertexFormatInt3: return 12;
+        case MTLVertexFormatInt4: return 16;
+        case MTLVertexFormatUInt: return 4;
+        case MTLVertexFormatUInt2: return 8;
+        case MTLVertexFormatUInt3: return 12;
+        case MTLVertexFormatUInt4: return 16;
+        case MTLVertexFormatShort2Normalized: return 4;
+        case MTLVertexFormatShort3Normalized: return 6;
+        case MTLVertexFormatShort4Normalized: return 8;
+        case MTLVertexFormatUShort2Normalized: return 4;
+        case MTLVertexFormatUShort3Normalized: return 6;
+        case MTLVertexFormatUShort4Normalized: return 8;
+        case MTLVertexFormatChar2Normalized: return 2;
+        case MTLVertexFormatChar3Normalized: return 3;
+        case MTLVertexFormatChar4Normalized: return 4;
+        case MTLVertexFormatUChar2Normalized: return 2;
+        case MTLVertexFormatUChar3Normalized: return 3;
+        case MTLVertexFormatUChar4Normalized: return 4;
+        default: return 0;
+    }
+}
+
+/* Validates the exact bytes read by every attribute for a draw. A tightly
+   sized last vertex is valid even when its trailing stride is absent. */
+static int validate_attribute_ranges(uint32_t last_vertex,
+                                     uint32_t instance_count,
+                                     char *reason, size_t capacity) {
     for (int i = 0; i < g_logged_element_count; i++) {
         const eu4_logged_element *e = &g_logged_elements[i];
-        if (e->divisor != 0 || e->bound_stride == 0 ||
-            e->slot_offset > e->bound_length) {
-            continue;
+        size_t width = metal_vertex_format_size((MTLVertexFormat)e->format);
+        if (width == 0 || e->bound_stride == 0) {
+            snprintf(reason, capacity,
+                     "vertex attribute format cannot be bounds-checked");
+            return 0;
         }
-        size_t vertices = (size_t)((e->bound_length - e->slot_offset) /
-                                   e->bound_stride);
-        if (vertices < limit) {
-            limit = vertices;
+        uint64_t end = 0;
+        uint64_t index = e->divisor == 0
+            ? (uint64_t)last_vertex
+            : (uint64_t)(instance_count > 0
+                             ? (instance_count - 1) / e->divisor : 0);
+        if (!eu4_gfx_attribute_end(e->bound_length, e->bound_offset,
+                                   e->bound_stride, index, width, &end)) {
+            snprintf(reason, capacity, "%s",
+                     e->divisor == 0
+                         ? "draw reads past the bound vertex attributes"
+                         : "instanced draw reads past the bound vertex attributes");
+            return 0;
         }
     }
-    return limit;
+    return 1;
 }
 
 /* Metal rejects binding a cube texture to a texture2d parameter (and vice
@@ -1020,6 +1078,48 @@ static int generic_effective_state_supported(const uint8_t *master,
     return 1;
 }
 
+int eu4_gfx_generic_bounds_test(const uint32_t *formats,
+                                const uint64_t *bound_offsets,
+                                const uint64_t *bound_strides,
+                                const uint64_t *bound_lengths,
+                                const uint32_t *divisors, int count,
+                                uint32_t last_vertex, uint32_t instance_count,
+                                char *reason, size_t capacity) {
+    if (count < 0 || count > 16 || formats == NULL || bound_offsets == NULL ||
+        bound_strides == NULL || bound_lengths == NULL || divisors == NULL) {
+        return 0;
+    }
+    memset(g_logged_elements, 0, sizeof g_logged_elements);
+    g_logged_element_count = count;
+    for (int i = 0; i < count; i++) {
+        g_logged_elements[i].format = formats[i];
+        g_logged_elements[i].bound_offset = bound_offsets[i];
+        g_logged_elements[i].bound_stride = bound_strides[i];
+        g_logged_elements[i].bound_length = bound_lengths[i];
+        g_logged_elements[i].divisor = divisors[i];
+    }
+    int ok = validate_attribute_ranges(last_vertex, instance_count, reason,
+                                       capacity);
+    g_logged_element_count = 0;
+    return ok;
+}
+
+void *eu4_gfx_generic_pipeline_test(void *device, void *vertex, void *fragment,
+                                    void *vertex_descriptor,
+                                    unsigned color_format,
+                                    const uint8_t *blend_snapshot) {
+    if (device == NULL || vertex == NULL || fragment == NULL ||
+        vertex_descriptor == NULL || blend_snapshot == NULL) {
+        return NULL;
+    }
+    return (__bridge void *)pipeline_for(
+        NULL, (__bridge id<MTLDevice>)device, (__bridge id<MTLFunction>)vertex,
+        (__bridge id<MTLFunction>)fragment,
+        (__bridge MTLVertexDescriptor *)vertex_descriptor,
+        (MTLPixelFormat)color_format, MTLPixelFormatInvalid, blend_snapshot,
+        NO, NO, 0x0203);
+}
+
 int eu4_gfx_generic_draw_supported(const void *immediate_context,
                                    const eu4_gfx_generic_call *call,
                                    char *reason, size_t capacity) {
@@ -1513,7 +1613,9 @@ static int generic_draw_encode_impl(const void *immediate_context,
     /* Render-target textures are converted to GL row order into this command
        buffer before the draw encoder opens, so the flip pass precedes the draw
        pass and no separate command buffer is committed. */
-    if (!eu4_gfx_prepare_sampled_textures((__bridge void *)command, reason,
+    uint64_t sampling_token = 0;
+    if (!eu4_gfx_prepare_sampled_textures((__bridge void *)command,
+                                          &sampling_token, reason,
                                           reason_capacity)) {
         return 0;
     }
@@ -1688,7 +1790,8 @@ static int generic_draw_encode_impl(const void *immediate_context,
                    engine's GL UVs address row 0 as the bottom; resolve them
                    to GL row order before binding. Ordinary textures are
                    returned unchanged. */
-                texture = (__bridge id<MTLTexture>)eu4_gfx_texture_for_sampling(header);
+                texture = (__bridge id<MTLTexture>)eu4_gfx_texture_for_sampling(
+                    header, sampling_token);
             }
             if (texture == nil) {
                 texture = backend.fallback;
@@ -1931,13 +2034,11 @@ static int generic_draw_encode_impl(const void *immediate_context,
             fail(reason, reason_capacity, "indexed draw has no readable indices");
             return 0;
         }
-        size_t vertex_limit = indexed_vertex_limit();
-        if (vertex_limit != (size_t)-1 &&
-            (uint64_t)last_effective >= (uint64_t)vertex_limit) {
+        if (!validate_attribute_ranges((uint32_t)last_effective,
+                                       (uint32_t)instance_count, reason,
+                                       reason_capacity)) {
             free(indices);
             [encoder endEncoding];
-            fail(reason, reason_capacity,
-                 "indexed draw reads past the bound vertex attributes");
             return 0;
         }
         /* Preserve the engine's 16-bit indices and let Metal apply the signed
@@ -1956,6 +2057,14 @@ static int generic_draw_encode_impl(const void *immediate_context,
                             baseVertex:(NSInteger)call->base_vertex
                           baseInstance:0];
     } else {
+        uint32_t last_vertex = (uint32_t)((call->first > 0 ? call->first : 0) +
+                                          (call->count > 0 ? call->count - 1 : 0));
+        if (!validate_attribute_ranges(last_vertex,
+                                       (uint32_t)instance_count, reason,
+                                       reason_capacity)) {
+            [encoder endEncoding];
+            return 0;
+        }
         [encoder drawPrimitives:primitive
                     vertexStart:(NSUInteger)(call->first > 0 ? call->first : 0)
                     vertexCount:(NSUInteger)call->count

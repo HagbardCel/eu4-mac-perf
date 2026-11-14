@@ -23,7 +23,7 @@ were introduced.
 
 | Area | Merged #189 behavior | Correction |
 | --- | --- | --- |
-| Indexed base vertex | Rewrote indices as `index - base`, clamped negatives to 0, installed a UInt32 buffer. Contradicts `glDrawElementsBaseVertex` and changes sparse-index meaning. | Live generic now preserves the 16-bit indices and passes the signed `baseVertex` to Metal's native indexed overload; validates `index + base` against the bound per-vertex attribute range and refuses negatives/out-of-range. |
+| Indexed base vertex | Rewrote indices as `index - base`, clamped negatives to 0, installed a UInt32 buffer. Contradicts `glDrawElementsBaseVertex` and changes sparse-index meaning. | Live generic now preserves the 16-bit indices and passes the signed `baseVertex` to Metal's native indexed overload; validates the exact `bound_offset + index*stride + format_width` bytes for every attribute (including converted integer formats and per-instance divisors), and refuses negatives/out-of-range. |
 | Replay index origin | Applied the live subtraction logic to captured buffers with no notion of the captured slice origin. | Capture records the true effective range and `vertex_origin`; replay rebases `index + base - origin` into the captured vertex blob, keeps UInt16, validates against the captured vertex count, and refuses invalid ranges. |
 | Indexed capture spans | Assumed `count` consecutive vertices (`base..base+count-1`), over/under-capturing sparse indices and truncating attributes. | Capture reads the actual 16-bit indices, computes min/max effective vertices with the signed base, uses that range for per-vertex attributes, computes instance-rate ranges from instance count/divisor, records `vertex_origin`/`range_valid`/`range_truncated`/`read_error`, and fails the event on truncated/error data. |
 | Colour write mask | Generic pipeline ignored `master+0x2c`. | `eu4_gfx_color_write_mask` maps GL R,G,B,A to Metal's BGRA-ordered write-mask bits; the mask is applied to the pipeline and included in the cache key. Disabled channels preserve the destination. |
@@ -46,8 +46,17 @@ were introduced.
   alpha-only, RGB-only and a partial mask; checks the destination pixels of
   disabled channels.
 - `tests/gfx_live_draw_host.mm --sampled-rt-orientation`: initial conversion,
-  repeated sampling, modification, abandoned-command recovery, conversion
-  failure and ordinary-texture preservation.
+  repeated sampling, modification, abandoned-command release/recovery, stale
+  completion after a newer write, conversion failure and ordinary-texture
+  preservation.
+- `tests/gfx_live_draw_host.mm --production-bounds`: the production attribute
+  bounds validator with tight 72/80-byte buffers, 71/79-byte rejects, nonzero
+  slot/element offsets, instance-rate divisors and unsupported formats.
+- `tests/gfx_live_draw_host.mm --production-pipeline`: the production pipeline
+  cache with all/alpha colour masks, cache separation and rendered channel
+  preservation.
+- `--draw-semantics` also covers the shared byte-range helper (tight final
+  vertex, overflow, GL type widths, interleaved offsets).
 - `tests/test_m6_frame.py`: the synthetic triangle-strip fixture now uses the
   correct GL token 5 (mode 3 is a line strip).
 - The full canonical replay is the capture-to-replay regression for the
@@ -66,20 +75,21 @@ All new regressions fail on the merged implementation:
 
 | Check | Result |
 | --- | --- |
-| `tests.test_gfx_live_draw` | 27 passed (new semantics, base-vertex GPU, colour-mask GPU, shadow-cache lifecycle) |
+| `tests.test_gfx_live_draw` | 29 passed (semantics, base-vertex GPU, colour-mask GPU, production bounds/pipeline, shadow-cache lifecycle) |
 | `tests.test_m6_frame` | 29 passed |
 | `tests.test_m6_live_accept` | 25 passed |
 | `tests.test_gfx_texture`, `test_gfx_contracts`, `test_gfx_compare`, `test_gfx_shader`, `test_gfx_default_target`, `test_m4_accept`, `test_m5_accept`, `test_m5_replay_cache` | pass |
 | Canonical 326-event replay | 326/326 encoded, zero failed, GPU completed, 0 differing pixels of 1,930,176 including alpha |
 | Existing three-start M6 acceptance | re-run against the committed artifacts; unchanged |
-| Fresh live start | `.local/m6/live-hardening2/run-1`, identity `1794686931-78631`, library `7c7e68…`: executed, encoded, GPU completed, presented, **0 refused draws**, 0 failed resolves; UI 0.832/0.946/0.836, map mean 72.23 / affinity 0.967, text upright 0.905/0.937 vs reflected 0.486/0.513; accepted. |
+| Fresh live start | `.local/m6/live-hardening3/run-1`, identity `1794689243-84463`, library `00eb43…`: executed, encoded, GPU completed, presented, **0 refused draws**, 0 failed resolves; UI 0.882/0.946/0.835, map mean 72.247 / affinity 0.967, text upright 0.905/0.937 vs reflected 0.486/0.513; accepted. |
 
 The first fresh run (`live-hardening/run-1`) exposed an over-strict indexed
-range check at caller `0x10d2993`: the limit used the attribute byte offset
-instead of the vertex-buffer slot origin, rejecting an index equal to the last
-valid vertex. The check now uses `(buffer_length - slot_offset) / stride`;
-the second run was clean. This is recorded because it is exactly the kind of
-live-only contract the native tests cannot fully exercise.
+range check at caller `0x10d2993`: the limit assumed whole strides instead of
+the exact final attribute bytes. The check now uses the actual
+`bound_offset + index*stride + format_width` against the bound buffer and
+distinguishes per-instance divisors; the final run was clean. This is recorded
+because it is exactly the kind of live-only contract the native tests cannot
+fully exercise.
 
 ## Remaining limitations
 

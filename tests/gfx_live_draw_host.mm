@@ -1273,6 +1273,155 @@ static int run_indexed_base_vertex(void) {
     return ok ? 0 : 1;
 }
 
+static int run_production_bounds(void) {
+    int ok = 1;
+    char reason[256] = "";
+    const uint32_t float3 = (uint32_t)MTLVertexFormatFloat3;
+    const uint32_t float2 = (uint32_t)MTLVertexFormatFloat2;
+    const uint32_t float4 = (uint32_t)MTLVertexFormatFloat4;
+
+    uint32_t formats[2] = {float3, 0};
+    uint64_t offsets[2] = {0, 0};
+    uint64_t strides[2] = {20, 0};
+    uint64_t lengths[2] = {72, 0};
+    uint32_t divisors[2] = {0, 0};
+    ok &= eu4_gfx_generic_bounds_test(formats, offsets, strides, lengths,
+                                      divisors, 1, 3, 1, reason,
+                                      sizeof reason) == 1;
+    lengths[0] = 71;
+    ok &= eu4_gfx_generic_bounds_test(formats, offsets, strides, lengths,
+                                      divisors, 1, 3, 1, reason,
+                                      sizeof reason) == 0;
+    /* Four 20-byte vertices, UV at offset 12, tightly sized at 80. */
+    formats[0] = float2;
+    offsets[0] = 12;
+    strides[0] = 20;
+    lengths[0] = 80;
+    ok &= eu4_gfx_generic_bounds_test(formats, offsets, strides, lengths,
+                                      divisors, 1, 3, 1, reason,
+                                      sizeof reason) == 1;
+    lengths[0] = 79;
+    ok &= eu4_gfx_generic_bounds_test(formats, offsets, strides, lengths,
+                                      divisors, 1, 3, 1, reason,
+                                      sizeof reason) == 0;
+    /* Nonzero slot/attribute offset. */
+    formats[0] = float3;
+    offsets[0] = 40;
+    strides[0] = 20;
+    lengths[0] = 112;
+    ok &= eu4_gfx_generic_bounds_test(formats, offsets, strides, lengths,
+                                      divisors, 1, 3, 1, reason,
+                                      sizeof reason) == 1;
+    /* Per-instance attribute with divisor 2 and five instances. */
+    formats[0] = float4;
+    offsets[0] = 0;
+    strides[0] = 16;
+    lengths[0] = 48;
+    divisors[0] = 2;
+    ok &= eu4_gfx_generic_bounds_test(formats, offsets, strides, lengths,
+                                      divisors, 1, 0, 5, reason,
+                                      sizeof reason) == 1;
+    lengths[0] = 47;
+    ok &= eu4_gfx_generic_bounds_test(formats, offsets, strides, lengths,
+                                      divisors, 1, 0, 5, reason,
+                                      sizeof reason) == 0;
+    /* Unknown format fails closed. */
+    formats[0] = 0;
+    lengths[0] = 1024;
+    divisors[0] = 0;
+    ok &= eu4_gfx_generic_bounds_test(formats, offsets, strides, lengths,
+                                      divisors, 1, 3, 1, reason,
+                                      sizeof reason) == 0;
+    printf("production_bounds=%d\n", ok);
+    return ok ? 0 : 1;
+}
+
+static int run_production_pipeline(void) {
+    boot();
+    id<MTLDevice> device = (__bridge id<MTLDevice>)eu4_gfx_metal_device();
+    if (device == nil) {
+        fail("production pipeline device");
+    }
+    NSString *source = @
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct VOut { float4 position [[position]]; };\n"
+        "vertex VOut v_main(uint vid [[vertex_id]]) {\n"
+        "  float2 p[3] = {float2(-1.0,-1.0), float2(3.0,-1.0), float2(-1.0,3.0)};\n"
+        "  VOut o; o.position = float4(p[vid], 0.0, 1.0); return o;\n"
+        "}\n"
+        "fragment float4 f_main() { return float4(0.0, 1.0, 0.0, 1.0); }\n";
+    NSError *error = nil;
+    id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
+    if (library == nil) {
+        fail("production pipeline library");
+    }
+    id<MTLFunction> vs = [library newFunctionWithName:@"v_main"];
+    id<MTLFunction> fs = [library newFunctionWithName:@"f_main"];
+    MTLVertexDescriptor *vd = [MTLVertexDescriptor vertexDescriptor];
+    uint8_t all_blend[0x24] = {0};
+    uint8_t alpha_blend[0x24] = {0};
+    all_blend[0x20] = all_blend[0x21] = all_blend[0x22] = all_blend[0x23] = 1;
+    alpha_blend[0x23] = 1;
+    void *all_pipeline = eu4_gfx_generic_pipeline_test(
+        (__bridge void *)device, (__bridge void *)vs, (__bridge void *)fs,
+        (__bridge void *)vd, (unsigned)MTLPixelFormatBGRA8Unorm, all_blend);
+    void *alpha_pipeline = eu4_gfx_generic_pipeline_test(
+        (__bridge void *)device, (__bridge void *)vs, (__bridge void *)fs,
+        (__bridge void *)vd, (unsigned)MTLPixelFormatBGRA8Unorm, alpha_blend);
+    int ok = all_pipeline != NULL && alpha_pipeline != NULL &&
+             all_pipeline != alpha_pipeline;
+    MTLTextureDescriptor *td =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                           width:2 height:2 mipmapped:NO];
+    td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    td.storageMode = MTLStorageModeShared;
+    id<MTLCommandQueue> queue = [device newCommandQueue];
+    for (int pass = 0; pass < 2 && ok; pass++) {
+        id<MTLTexture> target = [device newTextureWithDescriptor:td];
+        const uint8_t initial[4] = {10, 20, 30, 40};
+        uint8_t fill[16];
+        for (int i = 0; i < 4; i++) {
+            memcpy(fill + i * 4, initial, 4);
+        }
+        [target replaceRegion:MTLRegionMake2D(0, 0, 2, 2) mipmapLevel:0
+                    withBytes:fill bytesPerRow:2 * 4];
+        id<MTLCommandBuffer> command = [queue commandBuffer];
+        MTLRenderPassDescriptor *pass_desc = [MTLRenderPassDescriptor renderPassDescriptor];
+        pass_desc.colorAttachments[0].texture = target;
+        pass_desc.colorAttachments[0].loadAction = MTLLoadActionLoad;
+        pass_desc.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> encoder =
+            [command renderCommandEncoderWithDescriptor:pass_desc];
+        [encoder setRenderPipelineState:(__bridge id<MTLRenderPipelineState>)
+                                            (pass == 0 ? all_pipeline : alpha_pipeline)];
+        [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+        [encoder endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+        if (command.status != MTLCommandBufferStatusCompleted) {
+            ok = 0;
+            break;
+        }
+        uint32_t pixels[4];
+        read_target_texture(target, queue, 2 * 4, pixels);
+        const uint8_t *pixel = (const uint8_t *)&pixels[0];
+        const uint8_t want[4] = {
+            (uint8_t)(pass == 0 ? 0 : 10), (uint8_t)(pass == 0 ? 255 : 20),
+            (uint8_t)(pass == 0 ? 0 : 30), 255};
+        for (int c = 0; c < 4; c++) {
+            if (pixel[c] != want[c]) {
+                fprintf(stderr, "FAIL: production mask pass %d channel %d got %u want %u\n",
+                        pass, c, pixel[c], want[c]);
+                ok = 0;
+            }
+        }
+    }
+    printf("production_pipeline=%d distinct=%d\n", ok,
+           all_pipeline != alpha_pipeline);
+    return ok ? 0 : 1;
+}
+
 static int run_draw_semantics(void) {
     int ok = 1;
     ok &= eu4_gfx_metal_topology(0) == 0; /* point */
@@ -1311,6 +1460,27 @@ static int run_draw_semantics(void) {
     ok &= eu4_gfx_indexed_range(negative, 3, -1, &first, &last) == -1;
     ok &= eu4_gfx_replay_index(3, 4, 2) == 5;
     ok &= eu4_gfx_replay_index(2, -2, 0) == 0;
+    uint64_t end = 0;
+    /* Four 20-byte vertices, 8-byte UV at offset 12: ends exactly at 80. */
+    ok &= eu4_gfx_attribute_end(80, 12, 20, 3, 8, &end) == 1 && end == 80;
+    ok &= eu4_gfx_attribute_end(79, 12, 20, 3, 8, &end) == 0;
+    /* Four 20-byte vertices, float3 at offset 0: ends exactly at 72. */
+    ok &= eu4_gfx_attribute_end(72, 0, 20, 3, 12, &end) == 1 && end == 72;
+    ok &= eu4_gfx_attribute_end(71, 0, 20, 3, 12, &end) == 0;
+    /* Nonzero slot + attribute offset. */
+    ok &= eu4_gfx_attribute_end(120, 40, 20, 3, 12, &end) == 1 && end == 112;
+    /* Overflow is refused. */
+    ok &= eu4_gfx_attribute_end(UINT64_MAX, UINT64_MAX - 4, 20, 1, 12, &end) == 0;
+    /* Instance-rate final element: five instances, divisor 2 -> index 2. */
+    ok &= eu4_gfx_attribute_end(48, 0, 16, 2, 16, &end) == 1 && end == 48;
+    ok &= eu4_gfx_attribute_end(47, 0, 16, 2, 16, &end) == 0;
+    /* Interleaved attributes with different element offsets. */
+    ok &= eu4_gfx_attribute_end(80, 12, 20, 3, 8, &end) == 1 && end == 80;
+    ok &= eu4_gfx_attribute_end(80, 0, 20, 3, 12, &end) == 1 && end == 72;
+    ok &= eu4_gfx_gl_type_size(0x1406) == 4;
+    ok &= eu4_gfx_gl_type_size(0x1403) == 2;
+    ok &= eu4_gfx_gl_type_size(0x1401) == 1;
+    ok &= eu4_gfx_gl_type_size(0x9999) == 0;
     printf("draw_semantics=%d\n", ok);
     return ok ? 0 : 1;
 }
@@ -1378,8 +1548,9 @@ static int run_sampled_render_target_orientation(void) {
     [backend.boundTextures addObject:[NSValue valueWithPointer:header]];
     id<MTLCommandBuffer> flip_command = [backend.queue commandBuffer];
     char prepare_reason[256] = "";
+    uint64_t sampling_token = 0;
     if (!eu4_gfx_prepare_sampled_textures((__bridge void *)flip_command,
-                                          prepare_reason,
+                                          &sampling_token, prepare_reason,
                                           sizeof prepare_reason)) {
         fprintf(stderr, "FAIL: initial shadow conversion: %s\n", prepare_reason);
         return 1;
@@ -1389,7 +1560,7 @@ static int run_sampled_render_target_orientation(void) {
     if (flip_command.status != MTLCommandBufferStatusCompleted) {
         fail("sampled RT flip command");
     }
-    void *sampled = eu4_gfx_texture_for_sampling(header);
+    void *sampled = eu4_gfx_texture_for_sampling(header, sampling_token);
     if (sampled == NULL || sampled == (__bridge void *)target) {
         fprintf(stderr, "FAIL: render target was not converted for sampling\n");
         return 1;
@@ -1399,14 +1570,15 @@ static int run_sampled_render_target_orientation(void) {
 
     /* Repeated sampling without a write reuses the same committed shadow. */
     id<MTLCommandBuffer> repeat_command = [backend.queue commandBuffer];
+    uint64_t repeat_token = 0;
     if (!eu4_gfx_prepare_sampled_textures((__bridge void *)repeat_command,
-                                          prepare_reason,
+                                          &repeat_token, prepare_reason,
                                           sizeof prepare_reason)) {
         fail("repeated shadow prepare");
     }
     [repeat_command commit];
     [repeat_command waitUntilCompleted];
-    void *repeated = eu4_gfx_texture_for_sampling(header);
+    void *repeated = eu4_gfx_texture_for_sampling(header, repeat_token);
     int repeated_ok = repeated == sampled &&
         shadow_matches((__bridge id<MTLTexture>)repeated, backend.queue, pattern);
 
@@ -1419,14 +1591,15 @@ static int run_sampled_render_target_orientation(void) {
                 withBytes:modified bytesPerRow:4 * 4];
     eu4_gfx_note_render_target_write(header);
     id<MTLCommandBuffer> modify_command = [backend.queue commandBuffer];
+    uint64_t modify_token = 0;
     if (!eu4_gfx_prepare_sampled_textures((__bridge void *)modify_command,
-                                          prepare_reason,
+                                          &modify_token, prepare_reason,
                                           sizeof prepare_reason)) {
         fail("modified shadow prepare");
     }
     [modify_command commit];
     [modify_command waitUntilCompleted];
-    void *modified_sample = eu4_gfx_texture_for_sampling(header);
+    void *modified_sample = eu4_gfx_texture_for_sampling(header, modify_token);
     int modified_ok = shadow_matches((__bridge id<MTLTexture>)modified_sample,
                                      backend.queue, modified);
 
@@ -1438,24 +1611,60 @@ static int run_sampled_render_target_orientation(void) {
     [target replaceRegion:MTLRegionMake2D(0, 0, 4, 4) mipmapLevel:0
                 withBytes:second bytesPerRow:4 * 4];
     eu4_gfx_note_render_target_write(header);
-    id<MTLCommandBuffer> abandoned = [backend.queue commandBuffer];
-    if (!eu4_gfx_prepare_sampled_textures((__bridge void *)abandoned,
-                                          prepare_reason,
-                                          sizeof prepare_reason)) {
-        fail("abandoned shadow prepare");
+    @autoreleasepool {
+        id<MTLCommandBuffer> abandoned = [backend.queue commandBuffer];
+        uint64_t abandoned_token = 0;
+        if (!eu4_gfx_prepare_sampled_textures((__bridge void *)abandoned,
+                                              &abandoned_token, prepare_reason,
+                                              sizeof prepare_reason)) {
+            fail("abandoned shadow prepare");
+        }
+        /* Do not commit; release the command at the autorelease-pool boundary
+           so a later command may receive the same address. */
     }
-    /* Do not commit `abandoned`; the recovery command must re-encode. */
     id<MTLCommandBuffer> recovery = [backend.queue commandBuffer];
+    uint64_t recovery_token = 0;
     if (!eu4_gfx_prepare_sampled_textures((__bridge void *)recovery,
-                                          prepare_reason,
+                                          &recovery_token, prepare_reason,
                                           sizeof prepare_reason)) {
         fail("recovery shadow prepare");
     }
     [recovery commit];
     [recovery waitUntilCompleted];
-    void *recovered = eu4_gfx_texture_for_sampling(header);
+    void *recovered = eu4_gfx_texture_for_sampling(header, recovery_token);
     int abandoned_ok = shadow_matches((__bridge id<MTLTexture>)recovered,
                                       backend.queue, second);
+
+    /* An older completed command must not promote its stale generation after a
+       newer render-target write. */
+    id<MTLCommandBuffer> stale_command = [backend.queue commandBuffer];
+    uint64_t stale_token = 0;
+    if (!eu4_gfx_prepare_sampled_textures((__bridge void *)stale_command,
+                                          &stale_token, prepare_reason,
+                                          sizeof prepare_reason)) {
+        fail("stale shadow prepare");
+    }
+    [stale_command commit];
+    uint32_t third[16];
+    for (int i = 0; i < 16; i++) {
+        third[i] = pattern[(i + 12) % 16];
+    }
+    [target replaceRegion:MTLRegionMake2D(0, 0, 4, 4) mipmapLevel:0
+                withBytes:third bytesPerRow:4 * 4];
+    eu4_gfx_note_render_target_write(header);
+    id<MTLCommandBuffer> newer = [backend.queue commandBuffer];
+    uint64_t newer_token = 0;
+    if (!eu4_gfx_prepare_sampled_textures((__bridge void *)newer,
+                                          &newer_token, prepare_reason,
+                                          sizeof prepare_reason)) {
+        fail("newer shadow prepare");
+    }
+    [newer commit];
+    [newer waitUntilCompleted];
+    [stale_command waitUntilCompleted];
+    void *newer_sample = eu4_gfx_texture_for_sampling(header, newer_token);
+    int stale_ok = shadow_matches((__bridge id<MTLTexture>)newer_sample,
+                                  backend.queue, third);
 
     /* A depth render-target header has no colour conversion; fail closed. */
     uint8_t depth_header[0x44];
@@ -1472,10 +1681,13 @@ static int run_sampled_render_target_orientation(void) {
     [backend.boundTextures addObject:[NSValue valueWithPointer:depth_header]];
     char failure_reason[256] = "";
     id<MTLCommandBuffer> failure_command = [backend.queue commandBuffer];
+    uint64_t failure_token = 0;
     int refused = !eu4_gfx_prepare_sampled_textures((__bridge void *)failure_command,
+                                                    &failure_token,
                                                     failure_reason,
                                                     sizeof failure_reason);
-    int cache_ok = repeated_ok && modified_ok && abandoned_ok && refused;
+    int cache_ok = repeated_ok && modified_ok && abandoned_ok && stale_ok &&
+                   refused;
 
     /* A previously correct ordinary texture keeps its exact rows. */
     uint8_t normal_header[0x44];
@@ -1498,14 +1710,16 @@ static int run_sampled_render_target_orientation(void) {
     [backend.boundTextures removeAllObjects];
     [backend.boundTextures addObject:[NSValue valueWithPointer:normal_header]];
     id<MTLCommandBuffer> normal_command = [backend.queue commandBuffer];
+    uint64_t normal_token = 0;
     if (!eu4_gfx_prepare_sampled_textures((__bridge void *)normal_command,
-                                          prepare_reason,
+                                          &normal_token, prepare_reason,
                                           sizeof prepare_reason)) {
         fail("ordinary texture prepare");
     }
     [normal_command commit];
     [normal_command waitUntilCompleted];
-    void *normal_sampled = eu4_gfx_texture_for_sampling(normal_header);
+    void *normal_sampled = eu4_gfx_texture_for_sampling(normal_header,
+                                                        normal_token);
     int preserved = normal_sampled == (__bridge void *)normal;
     uint32_t normal_out[16];
     read_target_texture(normal, backend.queue, 4 * 4, normal_out);
@@ -1515,9 +1729,10 @@ static int run_sampled_render_target_orientation(void) {
         }
     }
     printf("sampled_rt_orientation=%d rt_flip=%d normal_preserved=%d "
-           "shadow_cache=%d repeated=%d modified=%d abandoned=%d refused=%d\n",
+           "shadow_cache=%d repeated=%d modified=%d abandoned=%d stale=%d "
+           "refused=%d\n",
            flipped && preserved && cache_ok, flipped, preserved, cache_ok,
-           repeated_ok, modified_ok, abandoned_ok, refused);
+           repeated_ok, modified_ok, abandoned_ok, stale_ok, refused);
     return flipped && preserved && cache_ok ? 0 : 1;
 }
 
@@ -1687,6 +1902,12 @@ int main(int argc, char **argv) {
     }
     if (argc >= 2 && strcmp(argv[1], "--draw-semantics") == 0) {
         return run_draw_semantics();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--production-bounds") == 0) {
+        return run_production_bounds();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--production-pipeline") == 0) {
+        return run_production_pipeline();
     }
     if (argc >= 2 && strcmp(argv[1], "--indexed-base-vertex") == 0) {
         return run_indexed_base_vertex();

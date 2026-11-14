@@ -1158,12 +1158,16 @@ static int capture_attributes(GLuint program, int indexed, int first, int count,
             normalized = engine_normalized;
             offset_source = "engine";
         }
-        int element_size = 4;
-        switch (gl_type) {
-            case GL_UNSIGNED_BYTE: case GL_BYTE: element_size = 1; break;
-            case GL_UNSIGNED_SHORT: case GL_SHORT:
-            case GL_HALF_FLOAT: element_size = 2; break;
-            default: element_size = 4; break;
+        int element_size = eu4_gfx_gl_type_size((uint32_t)gl_type);
+        int read_error = 0;
+        int unsupported_type = 0;
+        if (element_size == 0) {
+            /* Packed or unknown representations cannot be sized safely. */
+            unsupported_type = 1;
+            read_error = 1;
+            capture_error = 1;
+            range_valid = 0;
+            element_size = 1;
         }
         if (stride <= 0) {
             stride = components * element_size;
@@ -1188,31 +1192,59 @@ static int capture_attributes(GLuint program, int indexed, int first, int count,
             range_valid = 0;
             capture_error = 1;
         }
-        size_t begin = (size_t)offset + (size_t)vertex_first * (size_t)stride;
-        size_t end = (size_t)offset + (size_t)(vertex_last + 1) * (size_t)stride;
         GLint buffer_size = 0;
         if (buffer != 0) {
             glBindBuffer(GL_ARRAY_BUFFER, (GLuint)buffer);
             glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &buffer_size);
         }
+        uint64_t attribute_width =
+            (uint64_t)(components > 0 ? components : 0) *
+            (uint64_t)element_size;
+        uint64_t begin64 = 0;
+        uint64_t end64 = 0;
         int range_truncated = 0;
-        if (buffer_size <= 0 || end > (size_t)buffer_size) {
-            end = buffer_size > 0 ? (size_t)buffer_size : 0;
-            range_truncated = 1;
+        int range_ok = 0;
+        if (!unsupported_type && attribute_width > 0 && stride > 0 &&
+            (uint64_t)offset <= (uint64_t)INT64_MAX) {
+            uint64_t offset64 = (uint64_t)(int64_t)offset;
+            uint64_t stride64 = (uint64_t)stride;
+            if (vertex_first >= 0 &&
+                (uint64_t)vertex_first <=
+                    (UINT64_MAX - offset64) / stride64) {
+                begin64 = offset64 + (uint64_t)vertex_first * stride64;
+                range_ok = eu4_gfx_attribute_end(
+                    buffer_size > 0 ? (uint64_t)buffer_size : 0,
+                    offset64, stride64, (uint64_t)vertex_last,
+                    attribute_width, &end64);
+                if (range_ok && begin64 <= end64 &&
+                    end64 <= (uint64_t)buffer_size) {
+                    range_ok = 1;
+                } else {
+                    range_ok = 0;
+                }
+            }
+        }
+        if (!range_ok) {
+            range_truncated = buffer_size > 0 && !unsupported_type;
             range_valid = 0;
             capture_error = 1;
+            if (buffer_size > 0 && begin64 > (uint64_t)buffer_size) {
+                begin64 = (uint64_t)buffer_size;
+            }
+            end64 = begin64;
         }
-        size_t bytes = begin < end ? end - begin : 0;
+        size_t begin = (size_t)begin64;
+        size_t end = (size_t)end64;
+        size_t bytes = end > begin ? end - begin : 0;
         char blob_name[FTRACE_NAME] = "";
         char blob_sha[65] = "";
-        int read_error = 0;
         if (bytes > 0 && buffer != 0) {
             uint8_t *data = malloc(bytes);
             if (data == NULL) {
                 read_error = 1;
+                range_valid = 0;
+                capture_error = 1;
             } else {
-                while (glGetError() != GL_NO_ERROR) {
-                }
                 glGetBufferSubData(GL_ARRAY_BUFFER, (GLintptr)begin,
                                    (GLsizeiptr)bytes, data);
                 if (glGetError() != GL_NO_ERROR ||
@@ -1243,7 +1275,11 @@ static int capture_attributes(GLuint program, int indexed, int first, int count,
                 gl_type, bool_text(normalized != 0), stride, offset, divisor,
                 offset_source, buffer, buffer_size, begin, bytes, vertex_first,
                 vertex_last, bool_text(range_truncated), blob_name, blob_sha,
-                read_error || index_read_error ? ",\"read_error\":true" : "");
+                read_error || index_read_error
+                    ? (unsupported_type
+                           ? ",\"read_error\":true,\"unsupported_type\":true"
+                           : ",\"read_error\":true")
+                    : "");
         emitted++;
     }
     jprintf(out, "]");
@@ -1255,6 +1291,7 @@ static int capture_attributes(GLuint program, int indexed, int first, int count,
                 blob_name[0] = 0;
                 index_read_error = 1;
                 range_valid = 0;
+                capture_error = 1;
             }
         }
         jprintf(out,

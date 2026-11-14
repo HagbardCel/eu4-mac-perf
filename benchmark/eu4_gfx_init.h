@@ -41,11 +41,12 @@
    rebuilt only when the target generation changes. */
 @property (nonatomic, strong) NSMutableDictionary *sampledRenderTargets;
 @property (nonatomic, strong) NSMutableDictionary *sampledRenderTargetGenerations;
-/* Generation currently encoded into a not-yet-completed command buffer. The
-   shadow is usable by that command only; completion promotes it to the valid
-   dictionary, while abandonment leaves it invalid for the next command. */
-@property (nonatomic, strong) NSMutableDictionary *sampledRenderTargetPendingCommands;
+/* Generation currently encoded into a not-yet-completed preparation. The
+   shadow is usable by that preparation only; completion promotes it to the
+   valid dictionary, while abandonment leaves it invalid for the next one. */
+@property (nonatomic, strong) NSMutableDictionary *sampledRenderTargetPendingTokens;
 @property (nonatomic, strong) NSMutableDictionary *sampledRenderTargetPendingGenerations;
+@property (nonatomic) uint64_t samplingPreparationToken;
 @property (nonatomic, strong) NSMutableDictionary *renderTargetGenerations;
 @property (nonatomic) uint64_t renderTargetEpoch;
 @property (nonatomic, strong) id gameDepthTarget;
