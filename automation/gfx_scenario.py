@@ -109,9 +109,19 @@ def normalize(value: dict) -> dict:
             raise ScenarioError("missing", "start.save is required for a save start")
     elif save is not None:
         raise ScenarioError("invalid", "start.save is only valid for a save start")
-    pause = _optional(start.get("pause"), bool, "start.pause", True)
+    pause = _optional(start.get("pause"), bool, "start.pause", False)
     speed = _optional(start.get("game_speed"), int, "start.game_speed", 1,
                       minimum=0, maximum=5)
+    if pause:
+        raise ScenarioError(
+            "unsupported_scenario_feature",
+            "pausing the game is not implemented; set start.pause=false",
+        )
+    if speed != 1:
+        raise ScenarioError(
+            "unsupported_scenario_feature",
+            "game speed control is not implemented; use game_speed=1",
+        )
 
     game_config = value.get("game_config", {})
     if not isinstance(game_config, dict):
@@ -130,6 +140,21 @@ def normalize(value: dict) -> dict:
             raise ScenarioError("range", f"input_events[{index}].at_frame must be >= 0")
         if not isinstance(event.get("event"), str):
             raise ScenarioError("type", f"input_events[{index}] needs an event name")
+    if events:
+        raise ScenarioError(
+            "unsupported_scenario_feature",
+            "input events are not implemented; remove input_events",
+        )
+    if game_config:
+        raise ScenarioError(
+            "unsupported_scenario_feature",
+            "game_config overrides are not implemented; remove game_config",
+        )
+    if kind == "save" and save != "continuelastsave":
+        raise ScenarioError(
+            "unsupported_scenario_feature",
+            "only the last save is supported; set start.save=continuelastsave",
+        )
 
     settle = value.get("settle", {})
     if not isinstance(settle, dict):
@@ -202,10 +227,23 @@ def normalize(value: dict) -> dict:
         y0, y1, x0, x1 = region["rect"]
         if not (0 <= y0 < y1 <= height and 0 <= x0 < x1 <= width):
             raise ScenarioError("range", f"comparison.regions.{name} is outside the extent")
-        normalized_regions[name] = {
+        region_value = {
             "rect": [y0, y1, x0, x1],
             "policy": region.get("policy", "tolerant"),
         }
+        if "mirror_check" in region:
+            region_value["mirror_check"] = bool(region["mirror_check"])
+        for key, value_kind, minimum, maximum in (
+            ("min_structural_correlation", float, 0.0, 1.0),
+            ("max_channel_error", int, 0, 255),
+            ("max_mismatched_fraction", float, 0.0, 1.0),
+            ("max_mean_abs_error", float, 0.0, 255.0),
+        ):
+            if key in region:
+                region_value[key] = _require(
+                    region[key], value_kind, f"comparison.regions.{name}.{key}",
+                    minimum=minimum, maximum=maximum)
+        normalized_regions[name] = region_value
     require_aligned = _optional(comparison.get("require_aligned"), bool,
                                 "comparison.require_aligned", True)
 
@@ -306,7 +344,7 @@ def write_template(path: Path, *, executable_sha256: str, extent: tuple[int, int
         "name": "title-frontend",
         "executable_sha256": executable_sha256,
         "logical_extent": list(extent),
-        "start": {"kind": "frontend", "pause": True},
+        "start": {"kind": "frontend", "pause": False},
         "settle": {"min_frames": 5, "stable_frames": 3},
         "observation": {"max_frames": max_frames, "ring": 8, "dump_on_stop": 4},
         "comparison": {"policy": "exact"},

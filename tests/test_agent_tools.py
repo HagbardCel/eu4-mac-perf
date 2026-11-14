@@ -55,6 +55,14 @@ class ToolTests(unittest.TestCase):
         self.assertTrue(value["ok"])
         self.assertEqual(value["status"], "ok")
 
+    def test_re_query_decompile_is_dispatched(self):
+        code, value = self.call(["eu4_re_query", "decompile", "0x2000",
+                                 "--index", str(self.index), "--max-bytes", "32"])
+        self.assertEqual(code, 0)
+        self.assertEqual(value["status"], "ok")
+        self.assertIn("indirect_call", value["result"]["pseudocode"])
+        self.assertTrue(value["result"].get("truncated"))
+
     def test_re_query_function_and_abi(self):
         code, value = self.call(["eu4_re_query", "function", "0x2000",
                                  "--index", str(self.index)])

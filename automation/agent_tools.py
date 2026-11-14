@@ -97,9 +97,11 @@ def eu4_re_query(args: argparse.Namespace) -> dict:
         value = re_query.query_struct(args.target, limit=args.limit)
     elif args.re_op == "resolve":
         value = re_query.query_resolve(args.target, index=args.index, limit=args.limit)
-    elif args.re_op == "function":
+    elif args.re_op in ("function", "decompile"):
         value = re_query.query_function(args.target, index=args.index,
                                         max_bytes=args.max_bytes)
+        if args.re_op == "decompile":
+            value["operation"] = "decompile"
     elif args.re_op in ("callers", "callees"):
         value = re_query.query_edges(args.target, direction=args.re_op, index=args.index)
     elif args.re_op == "xrefs":
@@ -109,7 +111,9 @@ def eu4_re_query(args: argparse.Namespace) -> dict:
     else:
         raise ValueError(f"unknown re operation: {args.re_op}")
     status = value.get("status", "unavailable")
-    return _envelope("eu4_re_query", status, value.get("result"),
+    result = dict(value.get("result") or {})
+    result["truncated"] = bool(value.get("truncated"))
+    return _envelope("eu4_re_query", status, result,
                      reason=value.get("reason", ""))
 
 

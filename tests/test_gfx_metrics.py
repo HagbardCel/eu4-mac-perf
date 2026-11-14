@@ -42,6 +42,9 @@ class MetricsTests(unittest.TestCase):
                                "not_compared": not_compared},
             },
             "health": {"verdict": "unknown"},
+            "classification": "rendering_difference" if failed else "match",
+            "stop": {"reason": "frame_difference" if failed else "frame_limit",
+                     "elapsed_seconds": duration},
             "artifacts": {"bytes": bytes_, "dropped": 0},
         }))
         return run

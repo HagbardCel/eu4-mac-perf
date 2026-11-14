@@ -1,0 +1,69 @@
+# Campaign qualification contract (Phase 1-4 corrections)
+
+## Execution versus qualification
+
+`result.json` now carries three separate facts:
+
+- `result`: execution outcome (`completed`, `stopped`, `failed`, `incomplete`);
+- `stop`: the low-level reason/trigger, unchanged;
+- `classification` / `qualification`: whether the run *proves* rendering
+  equivalence.
+
+Classifications: `match`, `rendering_difference`, `gpu_execution_failure`,
+`alignment_failure`, `incomplete`, `infrastructure_failure`, `process_failure`.
+
+A `match` requires all of:
+
+1. at least `requested_frames` valid pixel comparisons (`passed + failed`);
+2. all required comparisons passed;
+3. no unverified/not-compared/not-aligned required pair;
+4. clean GPU health and no instrumentation/process failure;
+5. the configured policy is exact or tolerant (never diagnostic);
+6. **verified static-scene correspondence** (`settle.stable_frames`
+   consecutive identical full-frame digests on both sides).
+
+Frame-limit alone never qualifies: 100 paired observations with zero valid
+comparisons classify as `incomplete` and report the exact coverage gap.
+
+## Scenario controls
+
+Unimplemented controls now fail closed with `unsupported_scenario_feature`
+instead of being silently accepted: game pause, non-default speed, input
+events, arbitrary game-config overrides, and save names other than
+`continuelastsave`. The supported save scenario appends
+`--continuelastsave` to both processes.
+
+## Correspondence
+
+Coarse image correlation is diagnostic only; it is no longer an authoritative
+veto. A catastrophically wrong candidate frame is compared when scene/caller/
+draw/extent correspondence is otherwise established. Conversely, a `match`
+requires a verified static scene; animated or weakly identified scenes remain
+`incomplete` with an explicit weak-correspondence reason.
+
+No engine-level update/tick identity is implemented yet. Stability is measured
+from consecutive full-frame digests, not from draw count or background
+similarity. Loading screens therefore cannot qualify.
+
+## Comparison policy
+
+- `exact`: a scale-normalized comparison cannot be exactly qualified. If it
+  differs, the pixel verdict remains `fail`; if it is equal, the result is
+  `unverified`. `exact_qualified` is reported separately.
+- `tolerant`: global thresholds plus declared region thresholds.
+- `diagnostic`: reports differences, never qualifies.
+- Region policies (`structural`, `tolerant`, `ignore`) now affect acceptance;
+  a small text region can fail a run whose global fraction is low.
+- Horizontal mirroring remains an independent failure signal.
+
+## Cleanup
+
+Each cleanup responsibility is best-effort and independent: release paused
+frames, terminate owned process groups only, reap, release the lease, finalize
+every ledger token, write terminal status/result, preserve evidence. A failure
+in one action is recorded in `cleanup_errors` and does not skip the others.
+
+Tests cover failures before reference launch, after reference launch/before
+candidate launch, and during candidate launch, plus rejected draws, lockstep
+timeouts, request acknowledgement, immutable dump metadata, region policies,
+exact-vs-scaled differences, and qualification coverage.

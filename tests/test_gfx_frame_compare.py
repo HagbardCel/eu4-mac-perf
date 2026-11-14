@@ -136,6 +136,19 @@ class PixelComparisonTests(unittest.TestCase):
         self.assertEqual(result["statistics"]["mismatched_pixels"], 0)
         self.assertEqual(result["status"], "pass")
 
+    def test_exact_scaled_difference_is_still_a_difference(self):
+        reference = self.image(30, width=4, height=4)
+        candidate = np.repeat(np.repeat(reference, 2, axis=0), 2, axis=1)
+        candidate[0, 0, :3] = 200
+        result = gfx_frame_compare.compare_payloads(
+            bgra(reference), {"width": 4, "height": 4, "origin": "lower_left"},
+            candidate.tobytes(), {"width": 8, "height": 8, "origin": "top_left"},
+            policy=self.policy(), regions={},
+        )
+        self.assertEqual(result["status"], "fail")
+        self.assertEqual(result["pixel_verdict"], "different")
+        self.assertFalse(result["exact_qualified"])
+
     def test_exact_policy_does_not_pass_a_scaled_candidate_as_bit_identical(self):
         reference = self.image(30, width=4, height=4)
         candidate = np.repeat(np.repeat(reference, 2, axis=0), 2, axis=1)
@@ -172,6 +185,38 @@ class PixelComparisonTests(unittest.TestCase):
         )
         self.assertEqual(set(result["regions"]), {"ui", "map"})
         self.assertIn("structural_correlation", result["regions"]["ui"])
+
+    def test_region_policy_can_reject_a_small_text_difference(self):
+        reference = self.image(0, width=32, height=16)
+        candidate = reference.copy()
+        # A tiny glyph region differs while the global fraction stays low.
+        candidate[2:6, 2:10, :3] = 200
+        policy = self.policy(policy="tolerant", pixel_tolerance=0,
+                             max_mismatched_fraction=0.10,
+                             max_mean_abs_error=255.0)
+        regions = {
+            "text": {"rect": [0, 8, 0, 16], "policy": "tolerant",
+                     "max_mismatched_fraction": 0.0},
+            "map": {"rect": [8, 16, 0, 32], "policy": "ignore"},
+        }
+        result = gfx_frame_compare.compare_frames(
+            reference, candidate, policy=policy, regions=regions)
+        self.assertEqual(result["status"], "fail")
+        self.assertTrue(any("text" in failure for failure in result["region_failures"]))
+
+    def test_structural_region_failure_is_reported(self):
+        reference = self.image(0, width=16, height=16)
+        candidate = np.zeros_like(reference)
+        result = gfx_frame_compare.compare_frames(
+            reference, candidate,
+            policy=self.policy(policy="tolerant", pixel_tolerance=255,
+                               max_mismatched_fraction=1.0,
+                               max_mean_abs_error=255.0),
+            regions={"map": {"rect": [0, 16, 0, 16], "policy": "structural",
+                             "min_structural_correlation": 0.9}},
+        )
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("map", " ".join(result["region_failures"]))
 
     def test_non_integer_scale_is_unverified(self):
         reference = self.image(width=4, height=4)

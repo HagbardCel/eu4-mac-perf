@@ -255,6 +255,7 @@ def compare_frames(
 
     region_results = {}
     mirrored_regions = []
+    region_failures = []
     for name, definition in (regions or {}).items():
         rect = list(definition.get("rect", [0, reference.shape[0], 0, reference.shape[1]]))
         if not (0 <= rect[0] < rect[1] <= reference.shape[0]
@@ -262,16 +263,45 @@ def compare_frames(
             raise CompareError("region", f"region {name} is outside the frame")
         stats = _region_stats(reference, candidate, rect, tolerance,
                               mirror_check=definition.get("mirror_check", True))
-        stats["policy"] = definition.get("policy", "tolerant")
+        region_policy = str(definition.get("policy", "tolerant"))
+        stats["policy"] = region_policy
         region_results[name] = stats
         if stats["mirror"].get("mirrored"):
             mirrored_regions.append(name)
+        if region_policy == "ignore":
+            continue
+        region_failure = None
+        if region_policy == "structural":
+            minimum = float(definition.get("min_structural_correlation", 0.5))
+            correlation = stats.get("structural_correlation")
+            if correlation is None or correlation < minimum:
+                region_failure = (
+                    f"{name}: structural correlation {correlation} < {minimum}")
+        else:
+            region_tolerance = int(definition.get("max_channel_error", tolerance))
+            region_fraction = float(definition.get(
+                "max_mismatched_fraction", max_fraction))
+            region_mean = float(definition.get("max_mean_abs_error", max_mean))
+            if stats["max_channel_error"] > region_tolerance:
+                region_failure = (
+                    f"{name}: max_channel_error {stats['max_channel_error']} "
+                    f"> {region_tolerance}")
+            elif stats["mismatched_fraction"] > region_fraction:
+                region_failure = (
+                    f"{name}: mismatched_fraction {stats['mismatched_fraction']} "
+                    f"> {region_fraction}")
+            elif stats["mean_abs_error"] > region_mean:
+                region_failure = (
+                    f"{name}: mean_abs_error {stats['mean_abs_error']} > {region_mean}")
+        if region_failure:
+            region_failures.append(region_failure)
 
     would_fail = (
         max_error > tolerance
         or fraction > max_fraction
         or mean_error > max_mean
         or bool(mirrored_regions)
+        or bool(region_failures)
     )
     reasons = []
     if max_error > tolerance:
@@ -282,17 +312,31 @@ def compare_frames(
         reasons.append(f"mean_abs_error {mean_error:.6f} > {max_mean}")
     if mirrored_regions:
         reasons.append("horizontal mirroring suspected in: " + ", ".join(mirrored_regions))
+    reasons.extend(region_failures)
     if policy_name == "diagnostic":
         status = DIAGNOSTIC
     elif would_fail:
         status = FAIL
     else:
         status = PASS
+    exact_qualified = (
+        policy_name == "exact"
+        and normalization["scale"] == 1
+        and normalization["method"] == "none"
+    )
     if policy_name == "exact" and normalization["scale"] > 1:
-        status = UNVERIFIED
-        reasons.append(
-            "exact policy cannot treat a scale-normalized candidate as bit-identical"
-        )
+        if would_fail:
+            # A genuine difference remains a difference even though exact
+            # pixel equality cannot be qualified through a resample.
+            status = FAIL
+            reasons.append(
+                "exact pixel equality is unqualified after scale normalization"
+            )
+        else:
+            status = UNVERIFIED
+            reasons.append(
+                "exact policy cannot treat a scale-normalized candidate as bit-identical"
+            )
     worst = None
     if region_results:
         worst = max(
@@ -305,6 +349,9 @@ def compare_frames(
         "status": status,
         "policy": policy_name,
         "would_fail": would_fail,
+        "pixel_verdict": "different" if would_fail else "equal",
+        "exact_qualified": bool(exact_qualified),
+        "region_failures": region_failures,
         "reasons": reasons,
         "normalization": normalization,
         "statistics": {
@@ -387,12 +434,13 @@ def compare_payloads(
     )
     result = compare_frames(ref, cand, policy=policy, regions=regions,
                             candidate_meta=candidate_meta)
-    if (policy.get("policy") == "exact" and normalization["scale"] > 1
-            and result["status"] == PASS):
-        result["status"] = UNVERIFIED
-        result["reasons"].append(
-            "exact policy cannot treat a scale-normalized candidate as bit-identical"
-        )
+    if policy.get("policy") == "exact" and normalization["scale"] > 1:
+        result["exact_qualified"] = False
+        if result["status"] == PASS:
+            result["status"] = UNVERIFIED
+            result["reasons"].append(
+                "exact policy cannot treat a scale-normalized candidate as bit-identical"
+            )
     result["normalization"] = normalization
     result["reference"] = {
         "width": reference_meta.get("width"),

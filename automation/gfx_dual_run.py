@@ -123,6 +123,32 @@ class CampaignState:
     released_cand: set[int] = field(default_factory=set)
     phase_entry_ref: int | None = None
     phase_entry_cand: int | None = None
+    stability: dict = field(default_factory=lambda: {
+        "reference": {"last_digest": None, "streak": 0, "max_streak": 0},
+        "candidate": {"last_digest": None, "streak": 0, "max_streak": 0},
+    })
+
+    def note_digest(self, role: str, digest: str | None) -> None:
+        if not digest:
+            return
+        item = self.stability[role]
+        if digest == item["last_digest"]:
+            item["streak"] += 1
+        else:
+            item["last_digest"] = digest
+            item["streak"] = 1
+        item["max_streak"] = max(item["max_streak"], item["streak"])
+
+    def stability_summary(self, required: int) -> dict:
+        if required <= 1:
+            return {"status": "weak", "required_frames": required, "roles": self.stability}
+        verified = all(item["max_streak"] >= required
+                       for item in self.stability.values())
+        return {
+            "status": "verified" if verified else "weak",
+            "required_frames": required,
+            "roles": {key: dict(value) for key, value in self.stability.items()},
+        }
 
     def begin_pairing(self) -> None:
         """Anchor correspondence at the current observation point.
@@ -549,14 +575,9 @@ def _compare_pair(pair: dict, reference_meta: dict | None,
         )
     except Exception as exc:  # noqa: BLE001
         content = {"status": "unavailable", "reason": f"{type(exc).__name__}: {exc}"}
-    if content.get("veto"):
-        alignment["status"] = gfx_align.AMBIGUOUS
-        alignment["content"] = content
-        return {
-            "status": "not_compared",
-            "reason": "coarse content does not corroborate the semantic alignment",
-            "alignment": alignment,
-        }
+    # Coarse image correlation is diagnostic only.  A catastrophically wrong
+    # Metal image can correlate poorly while both games render the same frame;
+    # suppressing that comparison would hide the very defect under test.
     alignment["content"] = content
     compare_policy = {
         "policy": policy["policy"],
@@ -790,6 +811,9 @@ def classify_campaign(result: dict, scenario: dict, *, max_frames: int) -> dict:
     elif policy == "diagnostic":
         classification = "incomplete"
         reasons.append("diagnostic policy reports differences but does not qualify")
+    elif (result.get("stability") or {}).get("status") != "verified":
+        classification = "incomplete"
+        reasons.append("no verified static scene; correspondence is weak")
     else:
         classification = "match"
     return {
@@ -848,6 +872,9 @@ def run_campaign(
             "scenario executable_sha256 does not match the installed pinned build",
         )
     executable = Path(scenario.get("executable") or identity["executable"])
+    if (scenario.get("start") or {}).get("kind") == "save":
+        if "--continuelastsave" not in scenario["args"]:
+            scenario["args"].append("--continuelastsave")
     preflight = gfx_launch.preflight_user_data(executable)
 
     session = gfx_session.Session.create(
@@ -881,6 +908,7 @@ def run_campaign(
         "terminations": [],
         "result": "incomplete",
     }
+    campaign_start = time.monotonic()
     tokens: list[str] = []
     lease = None
     launched: dict = {}
@@ -1279,6 +1307,10 @@ def run_campaign(
                         "reference": reference_dump,
                         "candidate": candidate_dump,
                     }
+                    for role, dump in (("reference", reference_dump),
+                                       ("candidate", candidate_dump)):
+                        for value in (dump.get("found") or {}).values():
+                            state.note_digest(role, value.get("sha256"))
                     comparison = _compare_pair(
                         pair, reference_dump.get("found", {}).get(ref_index),
                         candidate_dump.get("found", {}).get(cand_index),
@@ -1485,6 +1517,14 @@ def run_campaign(
             "artifact_manifest": str(store.write_manifest()),
             "artifacts": store.summary(),
         }))
+        if result.get("stop"):
+            result["stop"]["elapsed_seconds"] = round(
+                time.monotonic() - campaign_start, 3)
+        if state is not None:
+            result["stability"] = state.stability_summary(
+                int((scenario.get("settle") or {}).get("stable_frames", 1)))
+        else:
+            result.setdefault("stability", {"status": "weak", "required_frames": 1})
         if "qualification" not in result:
             result["qualification"] = classify_campaign(result, scenario,
                                                         max_frames=max_frames)

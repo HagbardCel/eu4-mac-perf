@@ -13,6 +13,11 @@ sys.path.insert(0, str(ROOT))
 
 from automation import gfx_dual_run, gfx_launch, gfx_scenario  # noqa: E402
 
+try:
+    import numpy as np
+except Exception:  # noqa: BLE001
+    np = None
+
 SHA = "a" * 64
 
 
@@ -38,7 +43,7 @@ class ScenarioTests(unittest.TestCase):
         self.assertEqual(value["logical_extent"], [1728, 1117])
         self.assertEqual(value["reference_backend"], "opengl")
         self.assertEqual(value["candidate_backend"], "metal")
-        self.assertEqual(value["start"]["pause"], True)
+        self.assertEqual(value["start"]["pause"], False)
         self.assertIn("map", value["comparison"]["regions"])
         self.assertEqual(len(value["digest"]), 64)
         again = gfx_scenario.normalize(scenario())
@@ -61,6 +66,22 @@ class ScenarioTests(unittest.TestCase):
     def test_save_start_requires_a_save(self):
         with self.assertRaises(gfx_scenario.ScenarioError):
             gfx_scenario.normalize(scenario(start={"kind": "save"}))
+
+    def test_unimplemented_scenario_controls_fail_closed(self):
+        for overrides in (
+            {"start": {"kind": "frontend", "pause": True}},
+            {"input_events": [{"at_frame": 1, "event": "click"}]},
+            {"game_config": {"language": "l_english"}},
+            {"start": {"kind": "save", "save": "other.eu4"}},
+        ):
+            with self.assertRaises(gfx_scenario.ScenarioError) as caught:
+                gfx_scenario.normalize(scenario(**overrides))
+            self.assertEqual(caught.exception.kind, "unsupported_scenario_feature")
+
+    def test_save_scenario_uses_the_last_save(self):
+        value = gfx_scenario.normalize(scenario(
+            start={"kind": "save", "save": "continuelastsave"}))
+        self.assertEqual(value["start"]["kind"], "save")
 
     def test_region_outside_extent_is_refused(self):
         with self.assertRaises(gfx_scenario.ScenarioError):
@@ -359,7 +380,7 @@ class PairComparisonTests(unittest.TestCase):
 
     def test_mirrored_pair_fails_with_region(self):
         mirrored = self.image[:, ::-1, :]
-        candidate = self.np.repeat(self.np.repeat(mirrored, 2, axis=0), 2, axis=1)
+        candidate = np.repeat(np.repeat(mirrored, 2, axis=0), 2, axis=1)
         self.candidate_path.write_bytes(candidate.tobytes())
         result = gfx_dual_run._compare_pair(
             self.pair(), self.meta["reference"], self.meta["candidate"],
@@ -384,6 +405,17 @@ class PairComparisonTests(unittest.TestCase):
         )
         self.assertEqual(result["status"], "not_compared")
         self.assertIn("settle draw threshold", result["reason"])
+
+    def test_bad_image_is_still_compared_when_alignment_is_strong(self):
+        noise = np.random.default_rng(7).integers(
+            0, 255, size=(8, 8, 4), dtype=np.uint8)
+        self.candidate_path.write_bytes(noise.tobytes())
+        result = gfx_dual_run._compare_pair(
+            self.pair(), self.meta["reference"], self.meta["candidate"],
+            self.scenario,
+        )
+        self.assertEqual(result["status"], "fail", result)
+        self.assertIn("content", result["alignment"])
 
     def test_missing_raw_is_not_compared(self):
         result = gfx_dual_run._compare_pair(
@@ -419,6 +451,7 @@ class QualificationTests(unittest.TestCase):
                                         "candidate": {"exit_code": 0}},
             "terminations": [],
             "stop": stop or {"reason": "frame_limit"},
+            "stability": {"status": "verified"},
             "result": "completed",
         }
 
@@ -464,6 +497,13 @@ class QualificationTests(unittest.TestCase):
             processes={"reference": {"exit_code": 0},
                        "candidate": {"exit_code": 11}}))
         self.assertEqual(value["status"], "process_failure")
+
+    def test_weak_correspondence_cannot_match(self):
+        result = self.result()
+        result["stability"] = {"status": "weak"}
+        value = self.classify(result)
+        self.assertEqual(value["status"], "incomplete")
+        self.assertIn("correspondence is weak", " ".join(value["reasons"]))
 
     def test_lockstep_timeout_is_alignment_failure(self):
         value = self.classify(self.result(

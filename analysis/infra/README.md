@@ -14,6 +14,8 @@ PR snapshots are consolidated on the `infrastructure` integration branch.
 | 4 | `infra/pr4-first-divergence` | [first divergence and offline cases](first-divergence-and-offline-cases.md) |
 | 5 | `infra/pr5-agent-tools` | [agent integration and efficiency](agent-integration-and-efficiency.md) |
 
+Correction contract: [qualification lifecycle](qualification-contract.md).
+
 Machine-readable evidence:
 [feasibility](dual-process-feasibility.json),
 [campaign runs](dual-process-campaigns.json).

@@ -43,6 +43,9 @@ def summarize(root: Path, *, ledger: Path | None = None) -> dict:
     total_not_compared = 0
     total_failed = 0
     total_bytes = 0
+    total_required = 0
+    total_valid_compared = 0
+    classifications: dict[str, int] = {}
     launches = None
     if ledger is not None and ledger.is_file():
         value = _read_json(ledger) or {}
@@ -74,6 +77,20 @@ def summarize(root: Path, *, ledger: Path | None = None) -> dict:
         total_failed += failed
         total_bytes += int(artifacts.get("bytes") or 0)
         duration = result.get("duration_seconds")
+        qualification = result.get("qualification") or {}
+        classification = result.get("classification") or qualification.get("status")
+        coverage = qualification.get("frames") or {}
+        first_discrepancy = None
+        if classification in ("rendering_difference", "gpu_execution_failure",
+                              "alignment_failure", "process_failure",
+                              "infrastructure_failure"):
+            first_discrepancy = (result.get("stop") or {}).get("elapsed_seconds")
+        classifications[classification or "unknown"] = (
+            classifications.get(classification or "unknown", 0) + 1)
+        required = int(qualification.get("requested_frames") or 0)
+        valid_compared = int(coverage.get("validly_compared") or 0)
+        total_required += required
+        total_valid_compared += valid_compared
         sessions.append({
             "run": str(run),
             "session_id": result.get("session_id"),
@@ -86,7 +103,10 @@ def summarize(root: Path, *, ledger: Path | None = None) -> dict:
             "frames_aligned": int(frames.get("aligned") or 0),
             "frames_compared": compared,
             "frames_not_compared": not_compared,
-            "first_discrepancy_seconds": duration if failed else None,
+            "first_discrepancy_seconds": first_discrepancy,
+            "classification": classification,
+            "validly_compared": valid_compared,
+            "requested_frames": required,
             "health": health.get("verdict"),
             "artifact_bytes": int(artifacts.get("bytes") or 0),
             "dropped_artifacts": int(artifacts.get("dropped") or 0),
@@ -94,10 +114,15 @@ def summarize(root: Path, *, ledger: Path | None = None) -> dict:
     cases = []
     for path in sorted(root.glob("**/case/case.json")):
         value = _read_json(path) or {}
+        repro = path.parent / "repro" / "repro.json"
+        repro_value = _read_json(repro) or {}
         cases.append({
             "case": str(path.parent),
             "classification": value.get("classification"),
             "bytes": value.get("total_bytes"),
+            "executable_reproduction": bool(
+                repro_value.get("frames", {}).get("reference")
+                and repro_value.get("frames", {}).get("candidate")),
         })
     return {
         "schema": SCHEMA,
@@ -113,10 +138,25 @@ def summarize(root: Path, *, ledger: Path | None = None) -> dict:
             "failed": total_failed,
         },
         "inconclusive_comparisons": total_not_compared,
+        "qualification": {
+            "classifications": classifications,
+            "renderer_defects": classifications.get("rendering_difference", 0),
+            "gpu_failures": classifications.get("gpu_execution_failure", 0),
+            "incomplete": classifications.get("incomplete", 0),
+            "alignment_failures": classifications.get("alignment_failure", 0),
+            "process_failures": classifications.get("process_failure", 0),
+            "validly_compared_frames": total_valid_compared,
+            "requested_frames": total_required,
+            "coverage_fraction": round(
+                total_valid_compared / total_required, 6) if total_required else 0.0,
+        },
         "artifact_bytes": total_bytes,
         "cases": cases,
         "defects_with_offline_cases": sum(
             1 for case in cases if case.get("classification") != "match"
+        ),
+        "executable_offline_reproductions": sum(
+            1 for case in cases if case.get("executable_reproduction")
         ),
         "per_session": sessions,
         "notes": [
