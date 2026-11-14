@@ -120,9 +120,10 @@ def summarize(root: Path, *, ledger: Path | None = None) -> dict:
             "case": str(path.parent),
             "classification": value.get("classification"),
             "bytes": value.get("total_bytes"),
-            "executable_reproduction": bool(
-                repro_value.get("frames", {}).get("reference")
-                and repro_value.get("frames", {}).get("candidate")),
+            "executable_reproduction": (
+                repro_value.get("kind") == "renderer"
+                and bool(repro_value.get("replay"))
+            ),
         })
     return {
         "schema": SCHEMA,

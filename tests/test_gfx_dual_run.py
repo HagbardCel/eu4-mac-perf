@@ -246,6 +246,21 @@ class AlignmentTests(unittest.TestCase):
         second = gfx_dual_run.align_streams(state, limit=2)
         self.assertEqual([pair["frame_index"] for pair in second], [3, 4])
 
+    def test_phase_rejects_unequal_game_update(self):
+        self.assertFalse(gfx_dual_run._phase_ready(100, 100, 40, 0.25, 10, 11))
+        self.assertTrue(gfx_dual_run._phase_ready(100, 100, 40, 0.25, 10, 10))
+
+    def test_identity_streak_verifies_correspondence(self):
+        state = object.__new__(gfx_dual_run.CampaignState)
+        state.stability = {
+            "reference": {"last_digest": None, "streak": 0, "max_streak": 0},
+            "candidate": {"last_digest": None, "streak": 0, "max_streak": 0},
+        }
+        state.identity_max_streak = 3
+        self.assertEqual(state.stability_summary(3)["status"], "verified")
+        state.identity_max_streak = 0
+        self.assertEqual(state.stability_summary(3)["status"], "weak")
+
     def test_phase_requires_similar_draw_counts(self):
         self.assertFalse(gfx_dual_run._phase_ready(46, 273, 40, 0.25))
         self.assertTrue(gfx_dual_run._phase_ready(252, 273, 40, 0.25))

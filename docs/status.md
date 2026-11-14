@@ -74,11 +74,13 @@ consistency experiment (same Venice save, two processes) produced 20 pairs but
 zero aligned comparisons: draw counts were 373 vs 361 and the caller signatures
 differed. The save keeps running, so the processes are not at the same update;
 this fails Experiment A and blocks GL/Metal qualification until an
-engine-level update identity or a paused/static scenario is available. The
-observer now emits that identity from `CCurrentGameState::_pInstance` (date block
-at `+0x1d18`), and alignment rejects unequal identities; a live probe was
-blocked by the M6 agent holding the launch lease, so the identity has not yet
-been observed in a real process.
+engine-level update identity or a paused/static scenario is available. The observer now emits that identity from `CCurrentGameState::_pInstance` (date
+block at `+0x1d18`, read with `vm_read_overwrite`), and alignment rejects unequal
+identities; a live probe was blocked by the M6 agent holding the launch lease,
+so the identity has not yet been observed in a real process. Replay tool
+envelopes now distinguish successful replay execution from the reproduced
+comparison outcome, and metrics count executable renderer reproductions
+separately from image-comparison cases.
 
 **Lease preflight.** The agent surface now exposes `eu4_session lease`; on the
 current host it reports `busy`, holder worktree

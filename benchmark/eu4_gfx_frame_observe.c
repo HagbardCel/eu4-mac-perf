@@ -9,6 +9,8 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <mach-o/dyld.h>
+#include <mach/mach.h>
+#include <mach/vm_map.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -271,17 +273,33 @@ static void game_state_identity(int *day, uint64_t *fingerprint) {
     *fingerprint = 0;
     const uintptr_t header = (uintptr_t)_dyld_get_image_header(0);
     if (header == 0) return;
-    volatile uintptr_t *singleton =
-        (volatile uintptr_t *)(header + (uintptr_t)0x2244620);
-    uintptr_t instance = *singleton;
+    uintptr_t instance = 0;
+    vm_size_t copied = 0;
+    if (vm_read_overwrite(mach_task_self(),
+                          (vm_address_t)(header + 0x2244620),
+                          sizeof(instance), (vm_address_t)&instance,
+                          &copied) != KERN_SUCCESS ||
+        copied != sizeof(instance)) {
+        return;
+    }
     if (instance < (uintptr_t)0x100000000ULL ||
         instance > (uintptr_t)0x7fffffffffffULL) {
         return;
     }
-    const uint8_t *date = (const uint8_t *)(instance + 0x1d18);
-    *day = *(const int *)date;
+    uint8_t date[0x28];
+    copied = 0;
+    if (vm_read_overwrite(mach_task_self(),
+                          (vm_address_t)(instance + 0x1d18),
+                          sizeof(date), (vm_address_t)date,
+                          &copied) != KERN_SUCCESS ||
+        copied != sizeof(date)) {
+        return;
+    }
+    int day_value = 0;
+    memcpy(&day_value, date, sizeof(day_value));
+    *day = day_value;
     uint64_t hash = 1469598103934665603ULL;
-    for (int i = 0; i < 0x28; i++) {
+    for (size_t i = 0; i < sizeof(date); i++) {
         hash ^= date[i];
         hash *= 1099511628211ULL;
     }
@@ -499,7 +517,8 @@ static void dump_ring(obs_ring_slot *slot) {
         "\"raw_file\":\"%s\","
         "\"raw_bytes\":%zu,\"sha256\":\"%s\",\"draws\":%u,"
         "\"caller_signature\":\"0x%016llx\",\"gpu_completed\":%s,"
-        "\"capture_valid\":%s,\"source\":\"ring\"}\n",
+        "\"capture_valid\":%s,\"game_day\":%d,"
+        "\"update_identity\":\"0x%016llx\",\"source\":\"ring\"}\n",
         g_backend, g_session, (int)getpid(), (unsigned long long)slot->index,
         slot->width, slot->height, slot->origin, slot->width * 4, raw_path,
         (size_t)slot->width * slot->height * 4, slot->sha256, slot->draws,

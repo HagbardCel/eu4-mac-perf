@@ -41,9 +41,9 @@ draw/extent correspondence is otherwise established. Conversely, a `match`
 requires a verified static scene; animated or weakly identified scenes remain
 `incomplete` with an explicit weak-correspondence reason.
 
-An engine-level update identity is now emitted per observation. The observer
-reads the exported `CCurrentGameState::_pInstance` singleton at RVA `0x2244620`
-and hashes the date block at `+0x1d18` (the fields written by
+An engine-level update identity is now emitted per observation. The observer reads the exported `CCurrentGameState::_pInstance` singleton at
+RVA `0x2244620` with `vm_read_overwrite` (so a stale pointer cannot fault the
+game) and hashes the date block at `+0x1d18` (the fields written by
 `CGameState::SetCurrentDate`), emitting `game_day` and `update_identity`. When
 both sides have a non-zero identity, equality is weighted as independent
 alignment evidence and a mismatch makes the pair `not_aligned`; the target-phase

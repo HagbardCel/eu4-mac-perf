@@ -136,7 +136,9 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(value["result"]["classification"], "rendering_difference")
         code, value = self.call(["eu4_replay", "case", "--case", case_dir])
         self.assertEqual(code, 0)
-        self.assertIn(value["status"], ("pass", "fail", "unverified"),
+        self.assertEqual(value["status"], "ok")
+        self.assertIn(value["result"]["replay_status"],
+                      ("pass", "fail", "unverified"),
                       msg=json.dumps(value)[:2000])
 
     def test_diff_run_without_ledger_is_an_error_envelope(self):

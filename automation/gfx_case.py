@@ -410,6 +410,7 @@ def build_case(run_dir: Path, *, out_dir: Path | None = None,
         })
     repro = {
         "schema": "gfx-diagnostic-repro/v1",
+        "kind": "image-comparison",
         "comparison": comparison,
         "frames": frame_files,
         "policy": (result.get("scenario") or {}).get("comparison"),

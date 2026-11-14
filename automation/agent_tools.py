@@ -274,8 +274,12 @@ def eu4_diff_inspect(args: argparse.Namespace) -> dict:
 
 def eu4_replay(args: argparse.Namespace) -> dict:
     if args.replay_op == "case":
-        result = gfx_case.compare_case(Path(args.case))
-        return _envelope("eu4_replay", result.get("status", "unavailable"), result)
+        result = dict(gfx_case.compare_case(Path(args.case)))
+        replay_status = result.get("status", "unavailable")
+        result["replay_status"] = replay_status
+        result["reproduced"] = replay_status == "fail"
+        result["verified"] = replay_status == "pass"
+        return _envelope("eu4_replay", "ok", result)
     if args.replay_op == "frame":
         argv = ["automation.m6_frame", "replay", "--frame", args.frame,
                 "--shaders", args.shaders, "--out", args.out]
@@ -283,7 +287,9 @@ def eu4_replay(args: argparse.Namespace) -> dict:
             argv += ["--only-event", str(args.only_event)]
             argv += ["--capture-pre", "--capture-post"]
         value = _run_module(*argv, timeout=600)
-        return _envelope("eu4_replay", value.get("status", "ok"), value)
+        result = dict(value)
+        result["replay_status"] = value.get("status", "unknown")
+        return _envelope("eu4_replay", "ok", result)
     raise ValueError(f"unknown replay operation: {args.replay_op}")
 
 
