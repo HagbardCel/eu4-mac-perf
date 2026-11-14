@@ -234,6 +234,20 @@ def _identity_value(record) -> int:
     return int(value or 0)
 
 
+def _pause_failures(launched: dict) -> list[str]:
+    failures = []
+    for role, item in launched.items():
+        path = Path(item.observe_dir) / "pause-requested.json"
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            failures.append(f"{role}: pause request was not recorded")
+            continue
+        if value.get("status") != "requested":
+            failures.append(f"{role}: pause status {value.get('status')!r}")
+    return failures
+
+
 def _health_stop(summary: dict) -> tuple[str, str] | None:
     gate = gfx_diagnostics.health_gate(summary)
     if gate["allow"]:
@@ -1208,6 +1222,13 @@ def run_campaign(
                 break
             time.sleep(0.02)
         minimum_draws = int((scenario.get("settle") or {}).get("min_draws", 0))
+        if (scenario.get("start") or {}).get("pause"):
+            pause_failures = _pause_failures(launched)
+            if pause_failures:
+                result["stop"] = {"reason": "pause_failed",
+                                  "trigger": "; ".join(pause_failures)}
+                result["result"] = "incomplete"
+                raise _Finished()
         if mode == "streaming" and minimum_draws > 0:
             phase_deadline = time.monotonic() + float(scenario["settle"]["timeout_seconds"])
             while time.monotonic() < phase_deadline:
@@ -1232,6 +1253,13 @@ def run_campaign(
                 if any(item.process.poll() is not None for item in launched.values()):
                     break
                 time.sleep(0.02)
+        if (scenario.get("start") or {}).get("pause"):
+            pause_failures = _pause_failures(launched)
+            if pause_failures:
+                result["stop"] = {"reason": "pause_failed",
+                                  "trigger": "; ".join(pause_failures)}
+                result["result"] = "incomplete"
+                raise _Finished()
         if mode == "streaming" and minimum_draws > 0:
             # Pre-request a small full-resolution window at the start of the
             # target phase.  Metadata-only observation is cheap enough to reach

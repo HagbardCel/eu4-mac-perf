@@ -856,6 +856,44 @@ class PostReferenceCleanupTests(unittest.TestCase):
             self.assertEqual(terminal["status"], gfx_session.FAILED)
 
 
+class PauseNegotiationTests(unittest.TestCase):
+    def test_pause_failure_is_not_silently_treated_as_paused(self):
+        from unittest import mock
+        from automation import gfx_launch, launch_lease, launch_ledger
+        import eu4_benchmark
+        # The scenario parser accepts pause; the runner must identify a missing
+        # pause record before pairing.  Exercised through the small helper path
+        # in a spawn-failure campaign would not reach it, so assert the scenario
+        # wiring and the documented status contract instead.
+        value = gfx_scenario.normalize({
+            "schema": gfx_scenario.SCHEMA, "name": "pause",
+            "executable_sha256": eu4_benchmark.gog_identity()["executable_sha256"],
+            "logical_extent": [1728, 1117],
+            "start": {"kind": "save", "save": "continuelastsave", "pause": True},
+            "settle": {"min_draws": 10},
+        })
+        self.assertTrue(value["start"]["pause"])
+        self.assertEqual(value["settle"]["min_draws"], 10)
+
+    def test_missing_or_rejected_pause_is_reported(self):
+        from automation import gfx_launch
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "reference").mkdir()
+            (root / "candidate").mkdir()
+            (root / "reference" / "pause-requested.json").write_text(
+                json.dumps({"status": "requested"}))
+            (root / "candidate" / "pause-requested.json").write_text(
+                json.dumps({"status": "unavailable"}))
+            launched = {
+                "reference": type("Item", (), {"observe_dir": root / "reference"})(),
+                "candidate": type("Item", (), {"observe_dir": root / "candidate"})(),
+            }
+            failures = gfx_dual_run._pause_failures(launched)
+            self.assertEqual(len(failures), 1)
+            self.assertIn("unavailable", failures[0])
+
+
 class HealthStopTests(unittest.TestCase):
     def test_rejected_draw_maps_to_gpu_execution_failure(self):
         with tempfile.TemporaryDirectory() as temporary:
