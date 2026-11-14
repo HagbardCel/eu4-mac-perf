@@ -148,6 +148,20 @@ class ReferenceTests(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAS_DEPS, "the live acceptance checker needs numpy")
+class ResolveTraceRequirementTests(unittest.TestCase):
+    def test_missing_or_empty_trace_is_not_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            self.assertFalse(m6_live_accept.resolve_trace_present(run))
+            (run / "resolve-trace.jsonl").write_text("\n")
+            self.assertFalse(m6_live_accept.resolve_trace_present(run))
+            (run / "resolve-trace.jsonl").write_text(
+                '{"seq":1,"status":"scaled_ok"}\n'
+            )
+            self.assertTrue(m6_live_accept.resolve_trace_present(run))
+
+
+@unittest.skipUnless(_HAS_DEPS, "the live acceptance checker needs numpy")
 class ResolveTraceTests(unittest.TestCase):
     def test_failed_resolve_is_reported_even_without_refused_draws(self) -> None:
         import json

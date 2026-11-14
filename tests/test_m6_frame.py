@@ -589,6 +589,20 @@ void main()
         self.assertIn("layout(binding=0) uniform sampler2D tex0;", normalized["source"])
         self.assertIn("#define UNIFORM0 engine.UNIFORM0", normalized["source"])
 
+    def test_sampler_binding_preserves_tex_unit_number(self) -> None:
+        source = (
+            "#version 120\n"
+            "uniform sampler2D tex0;\n"
+            "uniform sampler2D tex4;\n"
+            "uniform sampler2D tex7;\n"
+            "void main() { gl_FragColor = vec4(1.0); }\n"
+        )
+        normalized = translate._normalize_source(source, "pixel")
+        self.assertEqual(
+            [(item["name"], item["binding"]) for item in normalized["samplers"]],
+            [("tex0", 0), ("tex4", 4), ("tex7", 7)],
+        )
+
     def test_size_one_array_stays_an_array(self) -> None:
         source = self.SOURCE.replace("UNIFORM0[3]", "UNIFORM0[1]")
         normalized = translate._normalize_source(source, "vertex")

@@ -278,17 +278,27 @@ def _normalize_source(source: str, stage: str) -> dict:
         text = text[:start] + text[end:]
     samplers: list[dict] = []
     sampler_binding = 0
+    used_bindings: set[int] = set()
 
     def sampler_replacement(match: re.Match) -> str:
         nonlocal sampler_binding
         kind = match.group("type")
         name = match.group("name")
-        if sampler_binding > MAX_SAMPLER_BINDINGS:
+        # The engine's virtual sampler names are tex0, tex1, ... and its
+        # uniform assignment maps texN to GL texture unit N. Declaration order
+        # is not the unit mapping: a shader that omits tex6 still binds tex7 to
+        # unit 7. Compressing the list to 0..n-1 silently shifts every sampler
+        # after the gap and feeds the wrong texture (including the white
+        # default) to the shader.
+        suffix = re.fullmatch(r"tex(\d+)", name)
+        binding = int(suffix.group(1)) if suffix else sampler_binding
+        while binding in used_bindings:
+            binding += 1
+        if binding > MAX_SAMPLER_BINDINGS:
             raise TranslationError("too many sampler bindings")
-        samplers.append(
-            {"name": name, "type": kind, "binding": sampler_binding}
-        )
-        sampler_binding += 1
+        used_bindings.add(binding)
+        sampler_binding = max(sampler_binding, binding + 1)
+        samplers.append({"name": name, "type": kind, "binding": binding})
         return f"layout(binding={samplers[-1]['binding']}) uniform {kind} {name};"
 
     text = re.sub(

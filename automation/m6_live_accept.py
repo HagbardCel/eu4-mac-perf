@@ -275,8 +275,18 @@ def resolve_failures(run: Path) -> list[dict]:
     return failures[:8]
 
 
+def resolve_trace_present(run: Path) -> bool:
+    path = run / "resolve-trace.jsonl"
+    if not path.is_file():
+        return False
+    try:
+        return any(line.strip() for line in path.read_text().splitlines())
+    except (OSError, UnicodeError):
+        return False
+
+
 def check_run(run: Path, reference: np.ndarray | None, reference_error: str,
-              policy: dict) -> dict:
+              policy: dict, require_resolve_trace: bool = False) -> dict:
     logical = tuple(policy["reference"]["logical"])
     result: dict = {"run": str(run), "status": {}, "checks": {}, "stats": {},
                     "canonical": str(run.resolve()), "identity": "", "ok": False}
@@ -299,11 +309,13 @@ def check_run(run: Path, reference: np.ndarray | None, reference_error: str,
     checks["no_refused_draws"] = not refused
     failed_resolves = resolve_failures(run)
     checks["no_failed_resolves"] = not failed_resolves
-    status["executed"] = all(
-        checks[key]
-        for key in ("probe_captured", "draw_reached", "draw_encoded",
-                    "pixels_captured", "no_refused_draws", "no_failed_resolves")
-    )
+    checks["resolve_trace_present"] = resolve_trace_present(run)
+    executed_checks = ["probe_captured", "draw_reached", "draw_encoded",
+                       "pixels_captured", "no_refused_draws",
+                       "no_failed_resolves"]
+    if require_resolve_trace:
+        executed_checks.append("resolve_trace_present")
+    status["executed"] = all(checks[key] for key in executed_checks)
     if failed_resolves:
         result["resolve_failures"] = failed_resolves
     checks["gpu_completed"] = bool(probe_status.get("gpu_completed"))
@@ -376,11 +388,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--policy", default=str(DEFAULT_POLICY))
     parser.add_argument("--run", action="append", required=True)
     parser.add_argument("--out", default=None)
+    parser.add_argument("--require-resolve-trace", action="store_true")
     args = parser.parse_args(argv)
     policy = json.loads(Path(args.policy).read_text())
     logical = tuple(policy["reference"]["logical"])
     reference, reference_error = load_reference(Path(args.reference), logical)
-    runs = [check_run(Path(item), reference, reference_error, policy)
+    runs = [check_run(Path(item), reference, reference_error, policy,
+                      require_resolve_trace=args.require_resolve_trace)
             for item in args.run]
     summary = summarize_runs(runs)
     report = {
