@@ -51,6 +51,26 @@ static int in_executable(uintptr_t address) {
     return 0;
 }
 
+int eu4_metal_events_append(const char *name, const char *body) {
+    if (event_dir[0] == 0 || name == NULL || body == NULL) {
+        return -1;
+    }
+    char path[1280];
+    int length = snprintf(path, sizeof path, "%s/%s", event_dir, name);
+    if (length < 0 || (size_t)length >= sizeof path) {
+        return -1;
+    }
+    FILE *out = fopen(path, "ab");
+    if (out == NULL) {
+        return -1;
+    }
+    int failed = fputs(body, out) == EOF;
+    if (fclose(out) != 0) {
+        failed = 1;
+    }
+    return failed ? -1 : 0;
+}
+
 int eu4_metal_events_write(const char *name, const char *body) {
     if (event_dir[0] == 0 || name == NULL || body == NULL) {
         return -1;

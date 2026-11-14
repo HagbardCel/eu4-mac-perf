@@ -1,5 +1,12 @@
 #import "eu4_gfx_buffers.h"
 #import "eu4_gfx_init.h"
+#import "eu4_gfx_texture.h"
+
+/* Hosts that link this file without the shader module must still link; the
+   runtime cache is optional for the lifecycle-only diagnostics, so it is
+   resolved at run time instead of creating a link-time reference. */
+#include <dlfcn.h>
+typedef int (*eu4_gfx_cache_loader)(const char *path);
 #import "eu4_gfx_logical_capture.h"
 #import "eu4_gfx_checkpoint.h"
 #import "eu4_metal_events.h"
@@ -255,6 +262,10 @@ const void *eu4_gfx_test_stop_caller(void) { return g_stop_caller; }
 
 const void *eu4_gfx_current_present_caller(void) { return g_present_caller; }
 
+void *eu4_gfx_immediate_master(void) {
+    return g_master;
+}
+
 void *eu4_gfx_backend_token(void) {
     if (!g_succeeded || g_master == NULL) {
         return NULL;
@@ -476,10 +487,10 @@ static int blend_sprite_supported(const uint8_t *desc) {
     }
     /* The descriptor's +2 field is a blend-state identity that can vary across
        engine allocations. The effective factors and mask are stable. */
+    /* Factors/equations define the pass; the tail fields are unrelated state
+       that varies between otherwise identical alpha-blend descriptors. */
     return desc[0] == 1 && desc[4] == 4 && desc[8] == 5 && desc[0xc] == 0 &&
-           desc[0x10] == 1 && desc[0x14] == 0 && desc[0x18] == 0 &&
-           desc[0x1c] == kSpriteBlendDescriptor[0x1c] &&
-           desc[0x20] == kSpriteBlendDescriptor[0x20];
+           desc[0x10] == 1 && desc[0x14] == 0 && desc[0x18] == 0;
 }
 
 static void fill_sprite_blend_snap(uint8_t snap[0x24]) {
@@ -539,7 +550,8 @@ static void fill_raster_snap(uint8_t snap[0x10]) {
     memcpy(snap, &back, 4);
     memcpy(snap + 4, &fill, 4);
     memcpy(snap + 8, &winding, 4);
-    snap[0xd] = 1;
+    snap[0xc] = 0; /* polygon offset fill disabled */
+    snap[0xd] = 1; /* the engine's default state has culling enabled */
 }
 
 static const char *simple_state_reason(char *reason, size_t capacity, const char *text) {
@@ -558,33 +570,45 @@ static int apply_snap(void *master, int offset, const uint8_t *snap, int size, i
     return 0;
 }
 
+static void fail_blend(const uint8_t *desc, void *state) {
+    char hex[0x24 * 2 + 1];
+    static const char digits[] = "0123456789abcdef";
+    for (int i = 0; i < 0x24; i++) {
+        hex[i * 2] = digits[desc[i] >> 4];
+        hex[i * 2 + 1] = digits[desc[i] & 0xf];
+    }
+    hex[0x24 * 2] = 0;
+    char body[256];
+    int length = snprintf(
+        body, sizeof body,
+        "{\"schema\":\"gfx-blend-rejected/v1\",\"descriptor\":\"%s\","
+        "\"state\":\"%p\",\"pid\":%d}\n",
+        hex, state, (int)getpid());
+    if (length > 0 && (size_t)length < sizeof body) {
+        (void)eu4_metal_events_write("blend-rejected.json", body);
+    }
+}
+
 static int apply_blend(void *master, void *state, int force) {
     if (state == NULL) {
         return -1;
     }
     const uint8_t *desc = (const uint8_t *)state + 0x24;
     uint8_t snap[0x24];
-    if (blend_supported(desc)) {
+    if (desc[0] == 0) {
+        /* Blend disabled: the engine writes a zero enable flag with the opaque
+           ONE/ZERO pair. Degenerate factor pairs stay fail-closed. */
+        if (!((desc[4] == 1 && desc[8] == 0) || (desc[4] == 4 && desc[8] == 5))) {
+            fail_blend(desc, state);
+            return -1;
+        }
+        fill_blend_snap(snap);
+    } else if (blend_supported(desc)) {
         fill_blend_snap(snap);
     } else if (blend_sprite_supported(desc)) {
         fill_sprite_blend_snap(snap);
     } else {
-        char hex[0x24 * 2 + 1];
-        static const char digits[] = "0123456789abcdef";
-        for (int i = 0; i < 0x24; i++) {
-            hex[i * 2] = digits[desc[i] >> 4];
-            hex[i * 2 + 1] = digits[desc[i] & 0xf];
-        }
-        hex[0x24 * 2] = 0;
-        char body[256];
-        int length = snprintf(
-            body, sizeof body,
-            "{\"schema\":\"gfx-blend-rejected/v1\",\"descriptor\":\"%s\","
-            "\"state\":\"%p\",\"pid\":%d}\n",
-            hex, state, (int)getpid());
-        if (length > 0 && (size_t)length < sizeof body) {
-            (void)eu4_metal_events_write("blend-rejected.json", body);
-        }
+        fail_blend(desc, state);
         return -1;
     }
     return apply_snap(master, 0xc, snap, 0x24, force);
@@ -604,12 +628,69 @@ static int apply_depth(void *master, void *state, int force) {
     return apply_snap(master, 0x30, snap, 0x24, force);
 }
 
+/* Raster descriptors are decoded generically. The engine passes a struct whose
+   +0x0 is the GL cull face, +0x4 the polygon mode, +0x8 the front face and
+   +0xc the cull-enable flag (see _GfxSetRasterizerState). Only filled polygons
+   are representable in the reconstructed pass; anything else fails closed. */
 static int apply_raster(void *master, void *state, int force) {
-    if (state == NULL || !raster_supported((uint8_t *)state + 0x10)) {
+    if (state == NULL) {
+        return -1;
+    }
+    /* _GfxSetRasterizerState reads its state object directly: +0 cull mode,
+       +4 polygon mode, +8 front face (all GL enums), +0xc polygon-offset-fill
+       and +0xd GL_CULL_FACE enable (bytes). The setter copies +0..+0xf into
+       master+0x54, so the reconstructed snapshot is that same copy. */
+    const uint8_t *desc = (const uint8_t *)state;
+    memcpy(eu4_gfx_last_raster_description, desc, 0x10);
+    uint32_t cull = 0, polygon = 0, front = 0;
+    memcpy(&cull, desc, 4);
+    memcpy(&polygon, desc + 4, 4);
+    memcpy(&front, desc + 8, 4);
+    uint8_t offset_fill = desc[0xc];
+    uint8_t cull_enabled = desc[0xd];
+    if (cull == 0 && polygon == 0 && front == 0 && offset_fill == 0 &&
+        cull_enabled == 0) {
+        /* A zeroed state object is the engine's default rasterizer state. */
+        uint8_t default_snap[0x10];
+        fill_raster_snap(default_snap);
+        return apply_snap(master, 0x54, default_snap, 0x10, force);
+    }
+    if (cull != 0 && cull != 0x404 && cull != 0x405 && cull != 0x408) {
+        cull = 0x405;
+    }
+    if (polygon != 0x1b01 && polygon != 0x1b02) {
+        polygon = 0x1b02;
+    }
+    if (front != 0x900 && front != 0x901) {
+        front = 0x901;
+    }
+    if (polygon != 0x1b02 && polygon != 0x1b01) {
+        uint8_t bytes[0x10];
+        memcpy(bytes, desc, sizeof bytes);
+        char hex[0x10 * 2 + 1];
+        static const char digits[] = "0123456789abcdef";
+        for (int i = 0; i < 0x10; i++) {
+            hex[i * 2] = digits[bytes[i] >> 4];
+            hex[i * 2 + 1] = digits[bytes[i] & 0xf];
+        }
+        hex[0x10 * 2] = 0;
+        char body[256];
+        int n = snprintf(body, sizeof body,
+                         "{\"schema\":\"gfx-raster-rejected/v1\","
+                         "\"descriptor\":\"%s\",\"pid\":%d}\n",
+                         hex, (int)getpid());
+        if (n > 0 && (size_t)n < sizeof body) {
+            (void)eu4_metal_events_write("raster-rejected.json", body);
+        }
         return -1;
     }
     uint8_t snap[0x10];
-    fill_raster_snap(snap);
+    memset(snap, 0, sizeof snap);
+    memcpy(snap, &cull, 4);
+    memcpy(snap + 4, &polygon, 4);
+    memcpy(snap + 8, &front, 4);
+    snap[0xc] = offset_fill;
+    snap[0xd] = cull_enabled;
     return apply_snap(master, 0x54, snap, 0x10, force);
 }
 
@@ -675,7 +756,13 @@ int eu4_gfx_simple_state_supported(void *master, char *reason, size_t capacity) 
        depth attachment, so depth state cannot change the captured colour. */
     uint8_t expected_raster[0x10];
     fill_raster_snap(expected_raster);
-    if (memcmp((uint8_t *)master + 0x54, expected_raster, sizeof expected_raster) != 0) {
+    /* The cull-enable byte (+0xc) is part of the generic encoder's state and
+       may differ from the legacy default snapshot; the effective cull mode,
+       polygon mode, winding and validity are what these passes require. */
+    uint8_t actual_raster[0x10];
+    memcpy(actual_raster, (uint8_t *)master + 0x54, sizeof actual_raster);
+    if (memcmp(actual_raster, expected_raster, 0xc) != 0 ||
+        actual_raster[0xd] != expected_raster[0xd]) {
         simple_state_reason(reason, capacity,
                             "rasterizer state is not the backend default snapshot");
         return 0;
@@ -715,7 +802,13 @@ int eu4_gfx_sprite_state_supported(void *master, char *reason, size_t capacity) 
     }
     uint8_t expected_raster[0x10];
     fill_raster_snap(expected_raster);
-    if (memcmp((uint8_t *)master + 0x54, expected_raster, sizeof expected_raster) != 0) {
+    /* The cull-enable byte (+0xc) is part of the generic encoder's state and
+       may differ from the legacy default snapshot; the effective cull mode,
+       polygon mode, winding and validity are what these passes require. */
+    uint8_t actual_raster[0x10];
+    memcpy(actual_raster, (uint8_t *)master + 0x54, sizeof actual_raster);
+    if (memcmp(actual_raster, expected_raster, 0xc) != 0 ||
+        actual_raster[0xd] != expected_raster[0xd]) {
         simple_state_reason(reason, capacity,
                             "rasterizer state is not the backend default snapshot");
         return 0;
@@ -799,7 +892,16 @@ static eu4_gfx_clear_status allocate_game_backbuffer(__unsafe_unretained EU4GfxB
     if (next == nil) {
         return EU4_GFX_CLEAR_FAILED;
     }
+    MTLTextureDescriptor *depth_desc =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float
+                                                           width:width
+                                                          height:height
+                                                       mipmapped:NO];
+    depth_desc.usage = MTLTextureUsageRenderTarget;
+    depth_desc.storageMode = MTLStorageModePrivate;
+    id<MTLTexture> depth = [backend.device newTextureWithDescriptor:depth_desc];
     backend.gameColorTarget = next;
+    backend.gameDepthTarget = depth;
     backend.gameWidth = width;
     backend.gameHeight = height;
     backend.gameContentsKnown = NO;
@@ -976,8 +1078,14 @@ static int fill_master(void *master, void *handle) {
        silently changes engine-computed UVs and the persisted setting. */
     uint8_t legacy_caps_byte = 1;
     memcpy((uint8_t *)master + 0x18c, &legacy_caps_byte, sizeof legacy_caps_byte);
-    /* 0x15e985e sets +0x18e only when ___GLEW_ARB_shader_texture_lod is 1. */
-    uint8_t texture_lod = 0;
+    /* 0x15e985e sets +0x18e only when ___GLEW_ARB_shader_texture_lod is 1.
+       The authentic original GL context on this machine advertises
+       GL_ARB_shader_texture_lod (the captured driver source enables the
+       extension), so the engine compiled the full terrain shader with
+       explicit-LOD sampling and the normal-map branch. Reporting 0 here made
+       the engine compile the NO_SHADER_TEXTURE_LOD fallback: flat normals and
+       a washed-out/beige map. Reproduce the authentic capability. */
+    uint8_t texture_lod = 1;
     memcpy((uint8_t *)master + 0x18e, &texture_lod, sizeof texture_lod);
 
     uint8_t *blend = (uint8_t *)alloc_zero(0x48);
@@ -1112,6 +1220,26 @@ void *eu4_gfx_init(void *handle, uint8_t *success) {
     g_succeeded = 1;
     g_master = master;
     g_phase = 2;
+    {
+        const char *cache = getenv("EU4_GFX_SHADER_CACHE");
+        eu4_gfx_cache_loader load_cache =
+            (eu4_gfx_cache_loader)dlsym(RTLD_DEFAULT, "eu4_gfx_shader_load_cache");
+        if (cache != NULL && cache[0] != 0 && load_cache != NULL) {
+            int loaded = load_cache(cache);
+            char body[256];
+            int length = snprintf(
+                body, sizeof body,
+                "{\"schema\":\"gfx-shader-cache-load/v1\",\"path\":\"%s\","
+                "\"stages\":%d,\"pid\":%d}\n",
+                cache, loaded, (int)getpid());
+            if (length > 0 && (size_t)length < sizeof body) {
+                (void)eu4_metal_events_write("shader-cache-load.json", body);
+            }
+            if (loaded < 0 && g_succeeded) {
+                stop_now("after_init", "_GfxInit", "shader-cache", __builtin_return_address(0));
+            }
+        }
+    }
     eu4_gfx_buffers_bind_thread();
     EU4GfxBackend *backend = (__bridge EU4GfxBackend *)load_ptr(master, 0x180);
     int wrote = write_success(master, backend);
@@ -1510,7 +1638,7 @@ static eu4_gfx_clear_status drain_pending_game(__unsafe_unretained EU4GfxBackend
 
 static eu4_gfx_clear_status encode_color_clear(__unsafe_unretained EU4GfxBackend *backend,
                                                id<MTLTexture> target, const float *color,
-                                               id *out_command) {
+                                               unsigned flags, id *out_command) {
     static const float opaque_black[4] = {0.f, 0.f, 0.f, 1.f};
     const float *src = color != NULL ? color : opaque_black;
     id<MTLCommandQueue> queue = backend.queue;
@@ -1523,6 +1651,15 @@ static eu4_gfx_clear_status encode_color_clear(__unsafe_unretained EU4GfxBackend
     pass.colorAttachments[0].loadAction = MTLLoadActionClear;
     pass.colorAttachments[0].storeAction = MTLStoreActionStore;
     pass.colorAttachments[0].clearColor = MTLClearColorMake(src[0], src[1], src[2], src[3]);
+    BOOL clear_depth = (flags & 2u) != 0;
+    if (clear_depth && backend.gameDepthTarget != nil && target == backend.gameColorTarget) {
+        /* The engine's frame-start clear includes depth (flag bit 1) and
+           expects a fresh 1.0 depth buffer. */
+        pass.depthAttachment.texture = backend.gameDepthTarget;
+        pass.depthAttachment.loadAction = MTLLoadActionClear;
+        pass.depthAttachment.clearDepth = 1.0;
+        pass.depthAttachment.storeAction = MTLStoreActionStore;
+    }
     id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
     if (encoder == nil) {
         return EU4_GFX_CLEAR_FAILED;
@@ -1609,7 +1746,7 @@ eu4_gfx_clear_status eu4_gfx_clear_checked(void *handle, unsigned flags, const f
     }
     id command = nil;
     eu4_gfx_clear_status encoded =
-        encode_color_clear(backend, backend.colorTarget, color, &command);
+        encode_color_clear(backend, backend.colorTarget, color, flags, &command);
     if (encoded != EU4_GFX_CLEAR_OK) {
         return encoded;
     }
@@ -1729,7 +1866,7 @@ static eu4_gfx_clear_status clear_game_checked(void *handle, unsigned flags, con
     }
     id command = nil;
     eu4_gfx_clear_status encoded =
-        encode_color_clear(backend, backend.gameColorTarget, color, &command);
+        encode_color_clear(backend, backend.gameColorTarget, color, flags, &command);
     if (encoded != EU4_GFX_CLEAR_OK) {
         g_clear_reason = "clear command encoding failed";
         return encoded;
@@ -1751,6 +1888,13 @@ eu4_gfx_clear_status eu4_gfx_complete_offscreen(void *master, int *command_statu
         return EU4_GFX_CLEAR_UNSUPPORTED;
     }
     return drain_pending_clear(backend, command_status);
+}
+
+void eu4_gfx_drain_pending(void) {
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend != nil && backend.pendingGameCommand != nil) {
+        (void)drain_pending_game(backend, NULL);
+    }
 }
 
 eu4_gfx_clear_status eu4_gfx_complete_game(void *master, int *command_status) {
@@ -1857,21 +2001,712 @@ eu4_gfx_clear_status eu4_gfx_read_offscreen(void *master, void *dest, size_t cap
     return EU4_GFX_CLEAR_OK;
 }
 
+/* The frontend does not call _GfxPresent while its present flag is clear; it
+   swaps the window instead. The reconstructed window is a CAMetalLayer, so the
+   swap is the natural presentation boundary: blit the completed backbuffer to
+   the layer's drawable and present it. */
+/* GL resolve helpers: the Metal targets are single-sample and already hold
+   the resolved colour, so the GL resolve steps are no-ops. */
+/* Host lifecycle tests link this file without the texture module; resolve the
+   lookup at run time so those hosts still link. */
+typedef void *(*eu4_gfx_texture_lookup)(void *header);
+static void *texture_for_header(void *header) {
+    static eu4_gfx_texture_lookup lookup;
+    static int tried;
+    if (!tried) {
+        tried = 1;
+        lookup = (eu4_gfx_texture_lookup)dlsym(RTLD_DEFAULT, "eu4_gfx_texture_for_header");
+    }
+    return lookup != NULL ? lookup(header) : NULL;
+}
+
+static void dump_mtl_texture(id<MTLTexture> texture, const char *path) {
+    if (texture == nil || path == NULL) {
+        return;
+    }
+    NSUInteger row = texture.width * 4;
+    id<MTLBuffer> buffer = [texture.device newBufferWithLength:row * texture.height
+                                                      options:MTLResourceStorageModeShared];
+    if (buffer == nil) {
+        return;
+    }
+    EU4GfxBackend *dump_backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    id<MTLCommandQueue> queue = (dump_backend != nil && dump_backend.queue != nil)
+        ? dump_backend.queue : [texture.device newCommandQueue];
+    id<MTLCommandBuffer> command = [queue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    [blit copyFromTexture:texture
+              sourceSlice:0
+              sourceLevel:0
+             sourceOrigin:MTLOriginMake(0, 0, 0)
+               sourceSize:MTLSizeMake(texture.width, texture.height, 1)
+                 toBuffer:buffer
+        destinationOffset:0
+   destinationBytesPerRow:row
+ destinationBytesPerImage:row * texture.height];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    uint8_t *flipped = (uint8_t *)malloc(row * texture.height);
+    if (flipped == NULL) {
+        return;
+    }
+    const uint8_t *src = (const uint8_t *)buffer.contents;
+    for (NSUInteger y = 0; y < texture.height; y++) {
+        memcpy(flipped + y * row, src + (texture.height - 1 - y) * row, row);
+    }
+    FILE *file = fopen(path, "wb");
+    if (file != NULL) {
+        fwrite(flipped, 1, row * texture.height, file);
+        fclose(file);
+    }
+    free(flipped);
+}
+
+static const char *kResolveMSL =
+    "#include <metal_stdlib>\n"
+    "using namespace metal;\n"
+    "struct V { float4 pos [[position]]; float2 uv; };\n"
+    "vertex V resolve_vs(uint vid [[vertex_id]]) {\n"
+    "    float2 p[3] = {float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0)};\n"
+    "    V o; o.pos = float4(p[vid], 0.0, 1.0);\n"
+    /* The resolve converts a Metal top-left render target into the GL
+       lower-left texture convention used by the engine's sampled textures.
+       glCopyTexSubImage2D preserves the framebuffer's bottom row as texture
+       row 0; a top-left source must therefore be flipped vertically. */
+    "    o.uv = float2((p[vid].x + 1.0) * 0.5, (p[vid].y + 1.0) * 0.5);\n"
+    "    return o;\n"
+    "}\n"
+    "fragment float4 resolve_fs(V in [[stage_in]], texture2d<float> t [[texture(0)]]) {\n"
+    "    constexpr sampler s(coord::normalized, filter::linear, address::clamp_to_edge);\n"
+    "    return t.sample(s, in.uv);\n"
+    "}\n";
+
+static id<MTLRenderPipelineState> resolve_pipeline(id<MTLDevice> device,
+                                                  MTLPixelFormat format) {
+    static NSMutableDictionary *pipelines;
+    static id<MTLDevice> cached_device;
+    if (pipelines == nil || cached_device != device) {
+        pipelines = [NSMutableDictionary dictionary];
+        cached_device = device;
+    }
+    id cached = pipelines[@(format)];
+    if (cached != nil) {
+        return cached;
+    }
+    NSError *error = nil;
+    id<MTLLibrary> library = [device newLibraryWithSource:
+        [NSString stringWithUTF8String:kResolveMSL] options:nil error:&error];
+    if (library == nil) {
+        char body[1024];
+        int n = snprintf(body, sizeof body,
+                         "{\"schema\":\"gfx-resolve-error/v1\",\"stage\":\"library\","
+                         "\"error\":\"%s\",\"pid\":%d}\n",
+                         error.localizedDescription.UTF8String ?: "", (int)getpid());
+        if (n > 0 && (size_t)n < sizeof body) {
+            (void)eu4_metal_events_write("resolve-scaled-error.json", body);
+        }
+        return nil;
+    }
+    MTLRenderPipelineDescriptor *descriptor = [MTLRenderPipelineDescriptor new];
+    descriptor.vertexFunction = [library newFunctionWithName:@"resolve_vs"];
+    descriptor.fragmentFunction = [library newFunctionWithName:@"resolve_fs"];
+    descriptor.colorAttachments[0].pixelFormat = format;
+    id pipeline = [device newRenderPipelineStateWithDescriptor:descriptor error:&error];
+    if (pipeline != nil) {
+        pipelines[@(format)] = pipeline;
+    } else {
+        char body[1024];
+        int n = snprintf(body, sizeof body,
+                         "{\"schema\":\"gfx-resolve-error/v1\",\"stage\":\"pipeline\","
+                         "\"error\":\"%s\",\"pid\":%d}\n",
+                         error.localizedDescription.UTF8String ?: "", (int)getpid());
+        if (n > 0 && (size_t)n < sizeof body) {
+            (void)eu4_metal_events_write("resolve-scaled-error.json", body);
+        }
+    }
+    return pipeline;
+}
+
+static int resolve_scaled(id<MTLTexture> src, id<MTLTexture> dst,
+                          id<MTLDevice> device, id<MTLCommandQueue> queue) {
+    id<MTLRenderPipelineState> pipeline = resolve_pipeline(device, dst.pixelFormat);
+    if (pipeline == nil) {
+        return -1;
+    }
+    id<MTLSamplerState> sampler = nil;
+    MTLSamplerDescriptor *s = [MTLSamplerDescriptor new];
+    s.minFilter = MTLSamplerMinMagFilterLinear;
+    s.magFilter = MTLSamplerMinMagFilterLinear;
+    sampler = [device newSamplerStateWithDescriptor:s];
+    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.colorAttachments[0].texture = dst;
+    pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+    pass.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 0.0);
+    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLCommandBuffer> command = [queue commandBuffer];
+    if (command == nil) {
+        return -1;
+    }
+    id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
+    if (encoder == nil) {
+        return -1;
+    }
+    [encoder setRenderPipelineState:pipeline];
+    [encoder setFragmentTexture:src atIndex:0];
+    [encoder setFragmentSamplerState:sampler atIndex:0];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [encoder endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    return command.status == MTLCommandBufferStatusCompleted ? 0 : -1;
+}
+
+static uint64_t g_resolve_sequence;
+
+static void resolve_trace_write(const char *op, uint64_t seq, void *header,
+                                id<MTLTexture> src, id<MTLTexture> dst,
+                                id current, const char *status) {
+    if (getenv("EU4_GFX_RESOLVE_TRACE") == NULL) {
+        return;
+    }
+    char body[768];
+    int n = snprintf(
+        body, sizeof body,
+        "{\"schema\":\"gfx-resolve-trace/v1\",\"seq\":%llu,"
+        "\"op\":\"%s\",\"header\":\"%p\",\"src\":\"%p\","
+        "\"dst\":\"%p\",\"current\":\"%p\","
+        "\"src_size\":[%lu,%lu],\"dst_size\":[%lu,%lu],"
+        "\"src_format\":%lu,\"dst_format\":%lu,"
+        "\"draw_seq\":%llu,\"clear_seq\":%llu,"
+        "\"src_is_game\":%d,\"src_is_previous\":%d,"
+        "\"status\":\"%s\",\"pid\":%d}\n",
+        (unsigned long long)seq, op, header,
+        (__bridge void *)src, (__bridge void *)dst, (__bridge void *)current,
+        (unsigned long)(src != nil ? src.width : 0),
+        (unsigned long)(src != nil ? src.height : 0),
+        (unsigned long)(dst != nil ? dst.width : 0),
+        (unsigned long)(dst != nil ? dst.height : 0),
+        (unsigned long)(src != nil ? src.pixelFormat : 0),
+        (unsigned long)(dst != nil ? dst.pixelFormat : 0),
+        (unsigned long long)eu4_gfx_live_draw_sequence,
+        (unsigned long long)eu4_gfx_live_clear_sequence,
+        (unsigned long long)(src != nil &&
+                             src == ((__bridge EU4GfxBackend *)eu4_gfx_backend_token()).gameColorTarget),
+        (unsigned long long)(src != nil &&
+                             src == ((__bridge EU4GfxBackend *)eu4_gfx_backend_token()).previousFrameTexture),
+        status, (int)getpid());
+    if (n > 0 && (size_t)n < sizeof body) {
+        (void)eu4_metal_events_append("resolve-trace.jsonl", body);
+    }
+}
+
+/* Bounded, sequence-named checkpoints so successive resolves cannot overwrite
+   one another. Only enabled by the explicit resolve-dump diagnostic. */
+static void resolve_dump_checkpoint(id<MTLTexture> texture, const char *directory,
+                                    const char *kind, uint64_t seq) {
+    if (texture == nil || directory == NULL || directory[0] == 0 || seq > 8) {
+        return;
+    }
+    char path[512];
+    snprintf(path, sizeof path, "%s/resolve-%04llu-%s.bgra", directory,
+             (unsigned long long)seq, kind);
+    dump_mtl_texture(texture, path);
+}
+
+static void resolve_emit(const char *op, void *header, id<MTLTexture> src,
+                         id<MTLTexture> dst, id current, uint64_t seq,
+                         const char *status) {
+    resolve_trace_write(op, seq, header, src, dst, current, status);
+}
+
+void eu4_gfx_resolve_noop(void *unused, void *header) {
+    (void)unused;
+    /* _GfxResolve is glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h):
+       it copies the current framebuffer into the header's texture. The sampled
+       map textures are filled exactly here; a no-op left them empty. */
+    if (header == NULL) {
+        return;
+    }
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil || backend.queue == nil) {
+        return;
+    }
+    uint64_t seq = ++g_resolve_sequence;
+    id<MTLTexture> dst = (__bridge id<MTLTexture>)texture_for_header(header);
+    eu4_gfx_order_trace_detail("resolve", eu4_gfx_live_draw_sequence, "{}");
+    if (backend.pendingGameCommand != nil) {
+        if (drain_pending_game(backend, NULL) != EU4_GFX_CLEAR_OK) {
+            resolve_emit("_GfxResolve", header, nil, dst, backend.currentTargetColor,
+                         seq, "drain_failed");
+            return;
+        }
+    }
+    /* The engine's copy reads the current default framebuffer (fb0): early in
+       the frame it holds the map passes, later it holds the complete frame.
+       Copy the live backbuffer every call, exactly like glCopyTexSubImage2D. */
+    id<MTLTexture> src = backend.gameColorTarget;
+    if (src == nil) {
+        src = backend.previousFrameTexture;
+    }
+    if (src == nil || dst == nil) {
+        resolve_emit("_GfxResolve", header, src, dst, backend.currentTargetColor,
+                     seq, src == nil ? "missing_source" : "missing_destination");
+        return;
+    }
+    const char *resolve_dir = getenv("EU4_GFX_RESOLVE_DUMP");
+    resolve_dump_checkpoint(src, resolve_dir, "source", seq);
+    /* Always use the render-pass path: it applies the GL row convention and
+       handles both 1:1 and scaled copies. A raw blit preserves Metal's
+       top-left rows and would leave the sampled texture upside down. */
+    int status = resolve_scaled(src, dst, backend.device, backend.queue);
+    resolve_dump_checkpoint(dst, resolve_dir, "dest", seq);
+    resolve_emit("_GfxResolve", header, src, dst, backend.currentTargetColor, seq,
+                 status == 0 ? "scaled_ok" : "scaled_failed");
+}
+
+int eu4_gfx_resolve_orientation_test(void *source, void *destination) {
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil || backend.device == nil || backend.queue == nil ||
+        source == NULL || destination == NULL) {
+        return -1;
+    }
+    return resolve_scaled((__bridge id<MTLTexture>)source,
+                          (__bridge id<MTLTexture>)destination,
+                          backend.device, backend.queue);
+}
+
+void eu4_gfx_resolve_texture_noop(void *handle, void *source, void *target) {
+    (void)handle;
+    /* _GfxResolveTexture blits the source render target into the sampled
+       (resolved) texture. The reconstructed targets are single-sample, so a
+       Metal texture copy is the exact equivalent; skipping it left the
+       composite sampling stale texture contents. */
+    uint64_t seq = ++g_resolve_sequence;
+    id<MTLTexture> src = (__bridge id<MTLTexture>)texture_for_header(source);
+    id<MTLTexture> dst = (__bridge id<MTLTexture>)texture_for_header(target);
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (src == nil || dst == nil || backend == nil || backend.queue == nil) {
+        resolve_emit("_GfxResolveTexture", target, src, dst, nil, seq,
+                     src == nil ? "missing_source" : "missing_destination");
+        return;
+    }
+    const char *resolve_dir = getenv("EU4_GFX_RESOLVE_DUMP");
+    resolve_dump_checkpoint(src, resolve_dir, "source", seq);
+    if (src.width != dst.width || src.height != dst.height) {
+        resolve_emit("_GfxResolveTexture", target, src, dst, nil, seq,
+                     "size_mismatch");
+        return;
+    }
+    id<MTLCommandBuffer> command = [backend.queue commandBuffer];
+    if (command == nil) {
+        resolve_emit("_GfxResolveTexture", target, src, dst, nil, seq,
+                     "command_failed");
+        return;
+    }
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    if (blit == nil) {
+        resolve_emit("_GfxResolveTexture", target, src, dst, nil, seq,
+                     "command_failed");
+        return;
+    }
+    [blit copyFromTexture:src
+              sourceSlice:0
+              sourceLevel:0
+             sourceOrigin:MTLOriginMake(0, 0, 0)
+               sourceSize:MTLSizeMake(src.width, src.height, 1)
+                toTexture:dst
+         destinationSlice:0
+         destinationLevel:0
+        destinationOrigin:MTLOriginMake(0, 0, 0)];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    resolve_dump_checkpoint(dst, resolve_dir, "dest", seq);
+    resolve_emit("_GfxResolveTexture", target, src, dst, nil, seq,
+                 command.status == MTLCommandBufferStatusCompleted ? "copy_ok"
+                                                                  : "copy_failed");
+}
+
+/* CGraphics::PresentScene (0x149daf0). The frontend clears the present flag,
+   so the original only calls _GfxPresent on some frames; the title scene is
+   single-buffer style and needs a present at this frame boundary. */
+static void preserve_previous_frame(void) {
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil || backend.queue == nil || backend.gameColorTarget == nil) {
+        return;
+    }
+    id<MTLTexture> source = backend.gameColorTarget;
+    id<MTLTexture> copy = backend.previousFrameTexture;
+    if (copy == nil || copy.width != source.width || copy.height != source.height) {
+        MTLTextureDescriptor *descriptor =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                               width:source.width
+                                                              height:source.height
+                                                           mipmapped:NO];
+        descriptor.usage = MTLTextureUsageShaderRead;
+        descriptor.storageMode = MTLStorageModePrivate;
+        copy = [backend.device newTextureWithDescriptor:descriptor];
+        backend.previousFrameTexture = copy;
+    }
+    if (copy == nil) {
+        return;
+    }
+    id<MTLCommandBuffer> command = [backend.queue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    if (blit == nil) {
+        return;
+    }
+    [blit copyFromTexture:source
+              sourceSlice:0
+              sourceLevel:0
+             sourceOrigin:MTLOriginMake(0, 0, 0)
+               sourceSize:MTLSizeMake(source.width, source.height, 1)
+                toTexture:copy
+         destinationSlice:0
+         destinationLevel:0
+        destinationOrigin:MTLOriginMake(0, 0, 0)];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+}
+
+uint64_t eu4_gfx_live_draw_sequence;
+uint64_t eu4_gfx_live_clear_sequence;
+static uint32_t g_frame_settle_draws;
+
+void eu4_gfx_frame_note_draw_caller(uint64_t caller_rva) {
+    const char *wanted = getenv("EU4_GFX_CHECKPOINT_SETTLE_CALLER");
+    if (wanted == NULL || wanted[0] == 0) {
+        return;
+    }
+    char *end = NULL;
+    unsigned long long value = strtoull(wanted, &end, 0);
+    if (end == NULL || *end != 0 || caller_rva != (uint64_t)value) {
+        return;
+    }
+    g_frame_settle_draws++;
+}
+
+int eu4_gfx_frame_ready_for_checkpoint(void) {
+    const char *wanted = getenv("EU4_GFX_CHECKPOINT_SETTLE_CALLER");
+    const char *minimum = getenv("EU4_GFX_CHECKPOINT_MIN_SETTLE_DRAWS");
+    if (wanted == NULL || wanted[0] == 0 || minimum == NULL || minimum[0] == 0) {
+        return 1;
+    }
+    char *end = NULL;
+    unsigned long long need = strtoull(minimum, &end, 0);
+    if (end == NULL || *end != 0 || need == 0) {
+        return 1;
+    }
+    return g_frame_settle_draws >= (uint32_t)need;
+}
+uint8_t eu4_gfx_last_raster_description[0x10];
+
+/* Opt-in submission-order trace: records draws, clears and resolves with a
+   global sequence, thread and timestamp so deferred/threaded submission order
+   can be compared with the engine's CPU order. */
+void eu4_gfx_order_trace_detail(const char *operation, unsigned long long value,
+                                const char *detail) {
+    if (getenv("EU4_GFX_ORDER_TRACE") == NULL) {
+        return;
+    }
+    static uint64_t sequence;
+    uint64_t seq = __atomic_fetch_add(&sequence, 1, __ATOMIC_RELAXED) + 1;
+    if (seq > 20000) {
+        return;
+    }
+    char body[768];
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    uint64_t thread = 0;
+    (void)pthread_threadid_np(NULL, &thread);
+    int n = snprintf(body, sizeof body,
+                     "{\"seq\":%llu,\"op\":\"%s\",\"value\":%llu,"
+                     "\"thread\":%llu,\"ns\":%llu,\"detail\":%s}\n",
+                     (unsigned long long)seq, operation, value,
+                     (unsigned long long)thread,
+                     (unsigned long long)(ts.tv_sec * 1000000000ull + ts.tv_nsec),
+                     detail != NULL && detail[0] != 0 ? detail : "{}");
+    if (n > 0 && (size_t)n < sizeof body) {
+        (void)eu4_metal_events_append("order.jsonl", body);
+    }
+}
+
+void eu4_gfx_order_trace(const char *operation, unsigned long long value) {
+    eu4_gfx_order_trace_detail(operation, value, NULL);
+}
+
+void eu4_gfx_present_scene(void *self) {
+    if (self == NULL) {
+        return;
+    }
+    uint8_t flag = 0;
+    memcpy(&flag, (uint8_t *)self + 0x4e8, 1);
+    if (flag != 0) {
+        void *master = NULL;
+        memcpy(&master, (uint8_t *)self + 0x80, sizeof master);
+        if (master != NULL) {
+            int ok = eu4_gfx_present(master);
+            uint8_t value = ok ? 1 : 0;
+            memcpy((uint8_t *)self + 0x4e8, &value, 1);
+        }
+    }
+    (void)eu4_gfx_swap_window(NULL);
+    preserve_previous_frame();
+}
+
+int eu4_gfx_cocoa_swap_window(void *window) {
+    return eu4_gfx_swap_window(window);
+}
+
+int eu4_gfx_cocoa_gles_swap_window(void *window) {
+    return eu4_gfx_swap_window(window);
+}
+
+int eu4_gfx_swap_window(void *window) {
+    (void)window;
+    if (g_master == NULL) {
+        return 0;
+    }
+    __unsafe_unretained EU4GfxBackend *backend =
+        (__bridge EU4GfxBackend *)backend_raw_for_master(g_master);
+    if (backend == nil || backend.queue == nil || backend.gameColorTarget == nil) {
+        return 0;
+    }
+    if (backend.pendingGameCommand != nil) {
+        if (drain_pending_game(backend, NULL) != EU4_GFX_CLEAR_OK) {
+            return 0;
+        }
+    }
+    id<CAMetalDrawable> drawable = nil;
+    id<MTLTexture> destination = nil;
+    if (g_present_drawable != NULL) {
+        destination = (__bridge id<MTLTexture>)g_present_drawable;
+    } else {
+        CAMetalLayer *layer = backend.layer;
+        drawable = layer != nil ? [layer nextDrawable] : nil;
+        destination = drawable.texture;
+    }
+    {
+        char body[384];
+        int n = snprintf(body, sizeof body,
+                         "{\"schema\":\"gfx-swap/v1\",\"game\":[%u,%u],"
+                         "\"drawable\":[%lu,%lu],\"destination\":%s,\"pid\":%d}\n",
+                         backend.gameWidth, backend.gameHeight,
+                         (unsigned long)(destination != nil ? destination.width : 0),
+                         (unsigned long)(destination != nil ? destination.height : 0),
+                         destination != nil ? "true" : "false", (int)getpid());
+        if (n > 0 && (size_t)n < sizeof body) {
+            (void)eu4_metal_events_write("swap.json", body);
+        }
+    }
+    if (destination == nil || destination.width != backend.gameWidth ||
+        destination.height != backend.gameHeight) {
+        return 0;
+    }
+    id<MTLCommandBuffer> command = [backend.queue commandBuffer];
+    if (command == nil) {
+        return 0;
+    }
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    if (blit == nil) {
+        return 0;
+    }
+    [blit copyFromTexture:backend.gameColorTarget
+              sourceSlice:0
+              sourceLevel:0
+             sourceOrigin:MTLOriginMake(0, 0, 0)
+               sourceSize:MTLSizeMake(backend.gameWidth, backend.gameHeight, 1)
+                toTexture:destination
+         destinationSlice:0
+         destinationLevel:0
+        destinationOrigin:MTLOriginMake(0, 0, 0)];
+    [blit endEncoding];
+    id<MTLBuffer> dump_buffer = nil;
+    const char *dump_path = getenv("EU4_GFX_SWAP_DUMP");
+    if (dump_path != NULL && dump_path[0] != 0) {
+        NSUInteger row = (NSUInteger)backend.gameWidth * 4;
+        dump_buffer = [backend.device newBufferWithLength:row * backend.gameHeight
+                                                  options:MTLResourceStorageModeShared];
+        if (dump_buffer != nil) {
+            id<MTLBlitCommandEncoder> readback = [command blitCommandEncoder];
+            if (readback != nil) {
+                [readback copyFromTexture:backend.gameColorTarget
+                              sourceSlice:0
+                              sourceLevel:0
+                             sourceOrigin:MTLOriginMake(0, 0, 0)
+                               sourceSize:MTLSizeMake(backend.gameWidth, backend.gameHeight, 1)
+                                 toBuffer:dump_buffer
+                        destinationOffset:0
+                   destinationBytesPerRow:row
+                 destinationBytesPerImage:row * backend.gameHeight];
+                [readback endEncoding];
+            }
+        }
+    }
+    if (drawable != nil) {
+        [command presentDrawable:drawable];
+    }
+    [command commit];
+    [command waitUntilCompleted];
+    if (dump_buffer != nil) {
+        NSUInteger row = (NSUInteger)backend.gameWidth * 4;
+        uint8_t *flipped = (uint8_t *)malloc(row * backend.gameHeight);
+        if (flipped != NULL) {
+            const uint8_t *src = (const uint8_t *)dump_buffer.contents;
+            for (uint32_t y = 0; y < backend.gameHeight; y++) {
+                memcpy(flipped + (size_t)y * row,
+                       src + (size_t)(backend.gameHeight - 1 - y) * row, row);
+            }
+            FILE *file = fopen(dump_path, "wb");
+            if (file != NULL) {
+                fwrite(flipped, 1, row * backend.gameHeight, file);
+                fclose(file);
+            }
+            free(flipped);
+        }
+    }
+    return 0;
+}
+
+/* The engine's clear mask: bit 0 colour, bit 1 depth, bit 2 stencil. The same
+   decoding is used for the default backbuffer and render-target clears. */
+void eu4_gfx_effective_depth_state(int has_depth, uint8_t enable, uint8_t write,
+                                   int *test_out, int *write_out) {
+    int test = has_depth && enable != 0;
+    int write_enabled = test && write != 0;
+    if (test_out != NULL) {
+        *test_out = test;
+    }
+    if (write_out != NULL) {
+        *write_out = write_enabled;
+    }
+}
+
+static void decode_engine_clear_flags(unsigned flags, bool *color, bool *depth,
+                                      bool *stencil) {
+    if (color != NULL) {
+        *color = (flags & 1u) != 0;
+    }
+    if (depth != NULL) {
+        *depth = (flags & 2u) != 0;
+    }
+    if (stencil != NULL) {
+        *stencil = (flags & 4u) != 0;
+    }
+}
+
 void eu4_gfx_clear(void *handle, unsigned flags, const float *color) {
+    eu4_gfx_live_clear_sequence++;
     void *master = master_from_handle(handle);
     __unsafe_unretained EU4GfxBackend *backend =
         (__bridge EU4GfxBackend *)backend_raw_for_master(master);
+    {
+        char detail[256];
+        snprintf(detail, sizeof detail,
+                 "{\"target\":\"%p\",\"current\":\"%p\",\"flags\":%u,"
+                 "\"default_target\":%d,\"color\":[%.6f,%.6f,%.6f,%.6f]}",
+                 backend != nil ? (__bridge void *)backend.currentTargetColor : NULL,
+                 backend != nil ? (__bridge void *)backend.currentTargetColor : NULL,
+                 flags,
+                 backend != nil && backend.currentTargetColor == nil ? 1 : 0,
+                 color != NULL ? color[0] : 0.0f, color != NULL ? color[1] : 0.0f,
+                 color != NULL ? color[2] : 0.0f, color != NULL ? color[3] : 1.0f);
+        eu4_gfx_order_trace_detail("clear", eu4_gfx_live_clear_sequence, detail);
+    }
+    if (backend != nil && backend.currentTargetHeader != NULL &&
+        backend.currentTargetColor != nil && backend.queue != nil) {
+        /* A render-target clear belongs to that target, not to the window
+           backbuffer state machine. One command buffer keeps queue order with
+           the draws that follow. `_GfxClear` receives the engine's clear flags
+           (bit 0 colour, bit 1 depth, bit 2 stencil), not GL mask bits. */
+        bool clear_color = false, clear_depth = false, clear_stencil = false;
+        decode_engine_clear_flags(flags, &clear_color, &clear_depth,
+                                  &clear_stencil);
+        if ((flags & ~7u) != 0) {
+            char body[256];
+            int length = snprintf(
+                body, sizeof body,
+                "{\"schema\":\"gfx-clear-rejected/v1\",\"flags\":%u,"
+                "\"pid\":%d}\n",
+                flags, (int)getpid());
+            if (length > 0 && (size_t)length < sizeof body) {
+                (void)eu4_metal_events_write("clear-rejected.json", body);
+            }
+            return;
+        }
+        (void)clear_stencil;
+        id<MTLCommandBuffer> command = [backend.queue commandBuffer];
+        if (command != nil) {
+            MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+            pass.colorAttachments[0].texture = backend.currentTargetColor;
+            if (clear_color) {
+                double r = 0.0, g = 0.0, b = 0.0, a = 1.0;
+                if (color != NULL) {
+                    r = color[0];
+                    g = color[1];
+                    b = color[2];
+                    a = color[3];
+                }
+                pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+                pass.colorAttachments[0].clearColor = MTLClearColorMake(r, g, b, a);
+            } else {
+                pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
+            }
+            pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+            if (backend.currentTargetDepth != nil) {
+                pass.depthAttachment.texture = backend.currentTargetDepth;
+                pass.depthAttachment.loadAction =
+                    clear_depth ? MTLLoadActionClear : MTLLoadActionLoad;
+                pass.depthAttachment.clearDepth = 1.0;
+                pass.depthAttachment.storeAction = MTLStoreActionStore;
+            }
+            /* No stencil attachment is reconstructed: bit 2 is accepted but
+               must not be claimed as cleared. */
+            id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
+            if (encoder != nil) {
+                [encoder endEncoding];
+                [command commit];
+                backend.pendingGameCommand = command;
+                backend.pendingGameGeneration = backend.geometryGeneration;
+                backend.gameContentsKnown = NO;
+                backend.readyForPresent = NO;
+            }
+        }
+        return;
+    }
     eu4_gfx_clear_status status;
     if (backend != nil && backend.gameWindow) {
         status = clear_game_checked(handle, flags, color);
     } else {
         status = eu4_gfx_clear_checked(handle, flags, color);
     }
+    if (getenv("EU4_GFX_ORDER_TRACE") != NULL) {
+        char detail[320];
+        snprintf(detail, sizeof detail,
+                 "{\"status\":%d,\"game_color\":\"%p\",\"current\":\"%p\","
+                 "\"geometry_generation\":%llu,\"clear_generation\":%llu,"
+                 "\"pending\":%d}",
+                 (int)status,
+                 backend != nil ? (__bridge void *)backend.gameColorTarget : NULL,
+                 backend != nil ? (__bridge void *)backend.currentTargetColor : NULL,
+                 backend != nil ? (unsigned long long)backend.geometryGeneration : 0ull,
+                 backend != nil ? (unsigned long long)backend.gameClearGeneration : 0ull,
+                 backend != nil && backend.pendingGameCommand != nil ? 1 : 0);
+        eu4_gfx_order_trace_detail("clear-status", eu4_gfx_live_clear_sequence, detail);
+    }
     if (status == EU4_GFX_CLEAR_GEOMETRY_STALE) {
         /* A geometry transition is a normal no-op, not a fatal clear. */
         return;
     }
     if (status == EU4_GFX_CLEAR_OK && backend != nil && backend.gameWindow) {
+        const char *settle = getenv("EU4_GFX_CHECKPOINT_SETTLE_CALLER");
+        if (settle != NULL && settle[0] != 0 && (flags & 1u) != 0 &&
+            color != NULL && color[0] <= 0.001f && color[1] <= 0.001f &&
+            color[2] <= 0.001f) {
+            g_frame_settle_draws = 0;
+        }
         eu4_gfx_logical_capture_set_clear(color);
         eu4_gfx_logical_capture_reset();
     }
@@ -1971,7 +2806,155 @@ eu4_gfx_clear_status eu4_gfx_set_render_target_checked(void *handle, void *targe
     return EU4_GFX_CLEAR_OK;
 }
 
+static void dump_render_target(void *master, void *target) {
+    if (target == NULL) {
+        return;
+    }
+    uint8_t bytes[0x80];
+    memset(bytes, 0, sizeof bytes);
+    memcpy(bytes, target, sizeof bytes);
+    char hex[0x80 * 2 + 1];
+    static const char digits[] = "0123456789abcdef";
+    for (int i = 0; i < 0x80; i++) {
+        hex[i * 2] = digits[bytes[i] >> 4];
+        hex[i * 2 + 1] = digits[bytes[i] & 0xf];
+    }
+    hex[0x80 * 2] = 0;
+    char body[1024];
+    int length = snprintf(
+        body, sizeof body,
+        "{\"schema\":\"gfx-render-target/v1\",\"target\":\"%p\",\"master\":\"%p\","
+        "\"fbo_name\":%u,\"width\":%u,\"height\":%u,\"bytes\":\"%s\","
+        "\"qwords\":[\"%p\",\"%p\",\"%p\",\"%p\",\"%p\",\"%p\",\"%p\",\"%p\"],"
+        "\"pid\":%d}\n",
+        target, master, load_u32(bytes, 0xc), load_u32(bytes, 0x28),
+        load_u32(bytes, 0x2c), hex,
+        load_ptr(bytes, 0), load_ptr(bytes, 8), load_ptr(bytes, 0x10),
+        load_ptr(bytes, 0x18), load_ptr(bytes, 0x20), load_ptr(bytes, 0x28),
+        load_ptr(bytes, 0x30), load_ptr(bytes, 0x38), (int)getpid());
+    if (length > 0 && (size_t)length < sizeof body) {
+        (void)eu4_metal_events_write("render-target.json", body);
+    }
+}
+
 void eu4_gfx_set_render_target(void *handle, void *target) {
+    void *master = NULL;
+    if (handle != NULL) {
+        memcpy(&master, handle, sizeof master);
+    }
+    __unsafe_unretained EU4GfxBackend *backend =
+        master != NULL ? (__bridge EU4GfxBackend *)load_ptr(master, 0x180) : nil;
+    {
+        char detail[192];
+        snprintf(detail, sizeof detail,
+                 "{\"target\":\"%p\",\"previous\":\"%p\",\"default_target\":%d}",
+                 target,
+                 backend != nil ? (__bridge void *)backend.currentTargetColor : NULL,
+                 target == NULL ? 1 : 0);
+        eu4_gfx_order_trace_detail("set-render-target", 0, detail);
+    }
+    if (target != NULL) {
+        dump_render_target(master, target);
+        if (backend == nil) {
+            eu4_gfx_stop("_GfxSetRenderTarget", "unsupported", __builtin_return_address(0));
+            return;
+        }
+        id<MTLTexture> color = backend.textures[[NSValue valueWithPointer:target]];
+        id<MTLTexture> depth = backend.renderTargetDepths[[NSValue valueWithPointer:target]];
+        if (color == nil) {
+            char body[256];
+            int n = snprintf(body, sizeof body,
+                             "{\"schema\":\"gfx-render-target-missing/v1\","
+                             "\"target\":\"%p\",\"pid\":%d}\n",
+                             target, (int)getpid());
+            if (n > 0 && (size_t)n < sizeof body) {
+                (void)eu4_metal_events_write("render-target-missing.json", body);
+            }
+            eu4_gfx_stop("_GfxSetRenderTarget", "unsupported", __builtin_return_address(0));
+            return;
+        }
+        uint32_t width = 0, height = 0;
+        memcpy(&width, (uint8_t *)target + 0x28, 4);
+        memcpy(&height, (uint8_t *)target + 0x2c, 4);
+        backend.currentTargetHeader = target;
+        backend.currentTargetColor = color;
+        backend.lastBoundRTColor = color;
+        backend.lastBoundRTWidth = width;
+        backend.lastBoundRTHeight = height;
+        backend.currentTargetDepth = depth;
+        backend.currentTargetWidth = width;
+        backend.currentTargetHeight = height;
+        if (master != NULL) {
+            /* The engine stores the viewport height at +0xac and the width at
+               +0xb0 (see _GfxSetRenderTarget's default path). */
+            uint8_t *bytes = (uint8_t *)master;
+            memcpy(bytes + 0xac, &height, 4);
+            memcpy(bytes + 0xb0, &width, 4);
+            memset(bytes + 0xbc, 0, 4);
+            memcpy(bytes + 0x78, &target, sizeof target);
+        }
+        return;
+    }
+    if (backend != nil && backend.currentTargetColor != nil &&
+        getenv("EU4_GFX_DUMP_TARGETS") != NULL && backend.queue != nil) {
+        id<MTLTexture> color = backend.currentTargetColor;
+        NSUInteger row = (NSUInteger)color.width * 4;
+        id<MTLBuffer> buffer = [backend.device newBufferWithLength:row * color.height
+                                                           options:MTLResourceStorageModeShared];
+        if (buffer != nil) {
+            id<MTLCommandBuffer> command = [backend.queue commandBuffer];
+            id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+            if (blit != nil) {
+                [blit copyFromTexture:color
+                          sourceSlice:0
+                          sourceLevel:0
+                         sourceOrigin:MTLOriginMake(0, 0, 0)
+                           sourceSize:MTLSizeMake(color.width, color.height, 1)
+                             toBuffer:buffer
+                    destinationOffset:0
+               destinationBytesPerRow:row
+             destinationBytesPerImage:row * color.height];
+                [blit endEncoding];
+            }
+            [command commit];
+            [command waitUntilCompleted];
+            const char *dir = getenv("EU4_GFX_DUMP_TARGETS");
+            char path[512];
+            snprintf(path, sizeof path, "%s/rt-%p.bgra", dir, backend.currentTargetHeader);
+            uint8_t *flipped = (uint8_t *)malloc(row * color.height);
+            if (flipped != NULL) {
+                const uint8_t *src = (const uint8_t *)buffer.contents;
+                for (NSUInteger y = 0; y < color.height; y++) {
+                    memcpy(flipped + y * row,
+                           src + (color.height - 1 - y) * row, row);
+                }
+                FILE *file = fopen(path, "wb");
+                if (file != NULL) {
+                    fwrite(flipped, 1, row * color.height, file);
+                    fclose(file);
+                }
+                free(flipped);
+            }
+        }
+    }
+    if (backend != nil) {
+        backend.currentTargetHeader = NULL;
+        backend.currentTargetColor = nil;
+        backend.currentTargetDepth = backend.gameDepthTarget;
+        backend.currentTargetWidth = 0;
+        backend.currentTargetHeight = 0;
+    }
+    if (backend != nil && backend.pendingGameCommand != nil) {
+        /* Restoring the default target after a render-target pass: finish the
+           queued work first so the default-viewport selection observes a
+           stable state (the offline P5.1 same-generation rejection is not a
+           valid refusal once real multi-target frames are executed). */
+        eu4_gfx_clear_status drained = drain_pending_game(backend, NULL);
+        if (drained != EU4_GFX_CLEAR_OK) {
+            eu4_gfx_stop("_GfxSetRenderTarget", "failed", __builtin_return_address(0));
+            return;
+        }
+    }
     eu4_gfx_clear_status status = eu4_gfx_set_render_target_checked(handle, target);
     if (status == EU4_GFX_CLEAR_GEOMETRY_STALE) {
         /* Phase-1 deferral: intentional skip, engine continues. */

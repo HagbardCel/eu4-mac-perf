@@ -1,0 +1,318 @@
+{
+  "schema": "m6-menu-frame-evidence/v9",
+  "canonical_reference": {
+    "frame_dir": ".local/m6/frames/menu-occ300/frame",
+    "selection": {
+      "callers": [
+        "0x103b3c8"
+      ],
+      "min_draws": 1,
+      "occurrence": 300,
+      "required": true
+    },
+    "frame": {
+      "width": 1728,
+      "height": 1117,
+      "origin": "lower_left",
+      "pixel_format": "BGRA8",
+      "row_stride": 6912,
+      "reference": "frame-reference.bgra",
+      "reference_bytes": 7720704,
+      "reference_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15"
+    },
+    "events": 326,
+    "event_log_sha256": "47bda04c18194365d9cce66f3ffbe0901f40d0e1e2c81839e387cee016618b30",
+    "raw_reference_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15",
+    "origin": "lower_left",
+    "note": "Canonical corrected reference: menu caller 0x103b3c8 occurrence 300, the live checkpoint selection; captured with the non-invasive observer."
+  },
+  "superseded_references": {
+    "menu-15": "observer unit-0 corruption (raw c3dab19c\u2026); invalid as an authentic pixel reference",
+    "menu-audit": "corrected but undirected (raw 888e0908\u2026); diagnostic only",
+    "menu-terrain-old-isolated": "the earlier all-black isolated result was produced by the harness ordering defect, not by the renderer; superseded"
+  },
+  "offline_replay": {
+    "frame_dir": ".local/m6/frames/menu-occ300/frame",
+    "replay_dir": ".local/m6/frames/menu-occ300/replay-final",
+    "independent_files": true,
+    "events": 326,
+    "encoded": 326,
+    "failed": 0,
+    "command_status": 4,
+    "status": "pass",
+    "pixels": 1930176,
+    "mismatched_pixels": 0,
+    "alpha_different_pixels": 0,
+    "max_channel_error": 0,
+    "reference_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15",
+    "candidate_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15",
+    "alias_rejection_active": true,
+    "note": "Captured-state replay only. It does not independently re-render the upstream terrain pass."
+  },
+  "isolation_harness": {
+    "source": "benchmark/eu4_gfx_frame_replay.mm",
+    "defect": "In --only-event --seed-marked, a synthetic black clear was encoded into the uncommitted frame command buffer, the authentic pre-image was uploaded in a separately committed blit, and the frame command buffer (carrying the clear) was committed afterwards. GPU order was upload -> clear -> draw, destroying the authentic pre-image.",
+    "fix": "Attachments are initialized and drained first, the authentic pre-image is uploaded and its transfer status checked, the pre-draw image is captured for verification, and only then is the selected draw encoded. Color is never cleared after a valid pre-image. Synthetic black remains only for the no-pre-image diagnostic. Depth is inspected: irrelevant for GL_NEVER/GL_ALWAYS or disabled tests; otherwise depth is cleared and marked unverified, or replayed from the recorded prefix when --depth-from-prefix is requested.",
+    "regression": "tests/test_m6_frame.py::IsolationOrderingTests.test_pre_image_survives_the_selected_draw (verified to fail under the old route ordering and pass after the fix)",
+    "python_interface": "automation/m6_frame.py replay --only-event N --depth-from-prefix; isolate --event N"
+  },
+  "terrain_pre_post": {
+    "capture": ".local/m6/frames/menu-terrain/frame",
+    "terrain_draws_with_pre_post": 252,
+    "selected_events": [
+      {
+        "event": 20,
+        "caller": "0x10ce96e",
+        "program": 331,
+        "target": {
+          "framebuffer": 0,
+          "width": 1728,
+          "height": 1117
+        },
+        "changed_pixels": {
+          "gl": 73,
+          "metal": 73
+        },
+        "pre_match": true,
+        "gl_pre_sha256": "ecd15f8594bca205596fb0b6b0a3e597bac98df4e632a62c52ac520a60065c0a",
+        "metal_pre_sha256": "ecd15f8594bca205596fb0b6b0a3e597bac98df4e632a62c52ac520a60065c0a",
+        "gl_post_sha256": "4185cbd2f2d49c7a4e0f707da20cad0b8489c921aac5b0bb264b2ce0992c7417",
+        "metal_post_sha256": "113b3c0968c303cc084feb2769e3c88682fe28dbed87d0e0c0fd6fa0fc2aa64d",
+        "post_difference": {
+          "pixels": 1930176,
+          "mismatched_pixels": 18,
+          "max_channel_error": 1,
+          "alpha_different_pixels": 0
+        },
+        "depth": {
+          "matters": true,
+          "contents": "replayed_prefix"
+        },
+        "interpretation": "The authentic pre-image is reproduced exactly and both sides change 73 pixels; the post-image differs on 18 pixels by at most one channel step."
+      },
+      {
+        "event": 92,
+        "caller": "0x10ce96e",
+        "program": 331,
+        "target": {
+          "framebuffer": 0,
+          "width": 1728,
+          "height": 1117
+        },
+        "changed_pixels": {
+          "gl": 2177,
+          "metal": 2177
+        },
+        "pre_match": true,
+        "gl_pre_sha256": "8e94fe58c72933b63597be6f0a1f8d1418d09175c8c9efe6a0ae450aa53de66f",
+        "metal_pre_sha256": "8e94fe58c72933b63597be6f0a1f8d1418d09175c8c9efe6a0ae450aa53de66f",
+        "gl_post_sha256": "22ba59174a5efce5a6da86a66b5ce996794ba45a85f0a54d95a61ae003f5a3c2",
+        "metal_post_sha256": "7e88c1bc2dd18d995979e505106714276c7b9e5a30f2e43e665d87738e9434d5",
+        "post_difference": {
+          "pixels": 1930176,
+          "mismatched_pixels": 685,
+          "max_channel_error": 8,
+          "alpha_different_pixels": 0,
+          "mean_max_channel_error": 0.000358517
+        },
+        "depth": {
+          "matters": true,
+          "contents": "replayed_prefix"
+        },
+        "interpretation": "A substantive terrain-producing draw (2177 changed pixels) with an exact pre-image and a near-identical post-image (685 pixels, max 8/255). The residual is consistent with compressed-texture/lighting rounding, not a contract failure. This qualifies this draw only, not the whole terrain pipeline."
+      }
+    ],
+    "note": "The earlier evidence that event 20 was an all-black candidate is superseded by the harness ordering correction."
+  },
+  "replay_scope": {
+    "finding": "Patching the terrain draw's UNIFORM0[0].x (view-projection) by +0.5 in a copied trace produced ZERO differing pixels, while patching the composite's first uniform changed 763,491 pixels. The offline replay therefore re-renders the captured seed composite against captured textures; it does not re-render the terrain pass from its recorded inputs.",
+    "consequence": "The pixel-exact offline result qualifies a captured-state replay, not an independent reconstruction of the terrain draw. Live terrain differences cannot be excluded or explained by the offline replay; they must be compared against the captured draw's inputs directly."
+  },
+  "live_verification": {
+    "runs": [
+      ".local/m6/live-final3/final-1",
+      ".local/m6/live-final3/final-2",
+      ".local/m6/live-final3/final-3"
+    ],
+    "accepted": 3,
+    "visual": {
+      "visual_match": true,
+      "ui_region_correlation": [
+        0.87,
+        0.978,
+        0.976
+      ],
+      "map_mean": 74.29,
+      "map_color_similarity": 0.943,
+      "map_structure": true
+    },
+    "operational": {
+      "zero_refused_draws": true,
+      "no_failed_resolves": true,
+      "gpu_completed": true,
+      "presented": true,
+      "distinct_identities": true
+    },
+    "residual": "Credits/Options button labels remain horizontally mirrored; the UI region policy passes but the text is not visually correct."
+  },
+  "live_start_policy": {
+    "required_clean_starts": 3,
+    "qualified_clean_starts": 0,
+    "reason": "One post-fix live verification was run; visual_match is false. Per the task rules the run was not repeated blindly and no qualification starts were claimed.",
+    "do_not_reuse": [
+      "final-1",
+      "final-2",
+      "final-3"
+    ]
+  },
+  "root_cause_history": [
+    {
+      "finding": "The original isolated terrain failure (all-black candidate) was caused by the harness pre-image/clear ordering defect.",
+      "status": "confirmed",
+      "evidence": "event 20 and 92 pre-images now match exactly"
+    },
+    {
+      "finding": "Offscreen render targets were viewport-scaled by the backbuffer HiDPI ratio (864x558 rendered into a 432x279 corner).",
+      "status": "confirmed",
+      "evidence": "live sample-u1 coverage was exactly 25% before the fix and 100% after; regression test added"
+    },
+    {
+      "finding": "Mipmapped textures used no mipmap live because the engine's base min and mip fields were conflated.",
+      "status": "confirmed",
+      "evidence": "live sampler trace min=0x2601/mip=0x2701 for every unit; captured min=0x2701 exactly for textures with >1 level; regression added"
+    },
+    {
+      "finding": "The MainScene resolve was claimed to read a previous composite.",
+      "status": "superseded",
+      "evidence": "the frame-start clear is valid and targets the same texture; the first resolve source is the current terrain batch"
+    },
+    {
+      "finding": "The live and reference frames do not share the same map update composition (231/9 vs 252/6 draw calls), stably across uptime.",
+      "status": "blocking",
+      "evidence": "caller-level order trace; single-draw inputs and output match; resolve status scaled_ok"
+    },
+    {
+      "finding": "The remaining live palette divergence is a frame/reference alignment issue, not a demonstrated renderer defect.",
+      "status": "blocking",
+      "evidence": "same 231/9 composition at 280 s and 320 s; first resolve source is the beige current batch; resolve and single-draw contracts match"
+    },
+    {
+      "finding": "The live engine compiled the NO_SHADER_TEXTURE_LOD fallback because GLEW_ARB_shader_texture_lod was reported absent.",
+      "status": "confirmed",
+      "evidence": "master+0x18e was 0; fixed to 1; 78 live sources now carry the extension; regression added"
+    },
+    {
+      "finding": "The 231/9 versus 252/6 draw difference was a partially loaded frame/capture boundary, not missing/repeated operations.",
+      "status": "confirmed",
+      "evidence": "settled frame has 252 terrain and 12 map-layer calls = 6 default + 6 offscreen; caller/count order matches the captured terrain order"
+    },
+    {
+      "finding": "_GfxResolve did not flip the Metal top-left framebuffer into the GL texture row convention.",
+      "status": "confirmed",
+      "evidence": "resolve source/destination dumps 99.9% same orientation; user-visible map 96.9% aligned only when flipped; native quadrant test red before / green after"
+    },
+    {
+      "finding": "Sampler names texN were compressed to declaration order when tex6 was absent, shifting every unit after the gap and feeding white/wrong textures to the land shader.",
+      "status": "confirmed",
+      "evidence": "map-base bindings after the fix map tex7->7..tex15->15; live map changed from beige mean 147.8 to green 74.29 and palette affinity 0.943; 3/3 accepted"
+    }
+  ],
+  "sampler_effective_state": {
+    "defect": "The engine sampler object stores base min=0x2601 and mip=0x2701 separately. The live encoder used the base min and disabled mipmapping for every texture, while GL uses GL_LINEAR_MIPMAP_NEAREST for textures with >1 mip level (captured min 0x2701) and GL_LINEAR for single-level textures.",
+    "fix": "eu4_gfx_effective_min_filter(state, has_mip_levels) selects the engine's mip filter when the bound texture has mip levels and the base min otherwise. sampler_for_unit uses it.",
+    "regression": "tests/test_gfx_live_draw.py::GfxLiveDrawTests.test_sampler_effective_min_filter_uses_texture_mip_state"
+  },
+  "resolve_sequence": {
+    "trace": ".local/m6/live-resolve/diag-2/resolve-trace.jsonl",
+    "first_seq": {
+      "seq": 1,
+      "op": "_GfxResolve",
+      "src": "gameColorTarget",
+      "src_size": [
+        3456,
+        2234
+      ],
+      "dst_size": [
+        1728,
+        1117
+      ],
+      "src_format": 80,
+      "dst_format": 80,
+      "draw_seq": 737,
+      "clear_seq": 113,
+      "status": "scaled_ok"
+    },
+    "first_source_mean": [
+      113.17,
+      112.21,
+      113.04,
+      247.13
+    ],
+    "first_dest_mean": [
+      113.23,
+      112.26,
+      113.06,
+      247.13
+    ],
+    "clear_before_terrain": {
+      "seq": 109,
+      "flags": 7,
+      "color": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "status": 0,
+      "default_target": true,
+      "same_target_as_terrain": true
+    },
+    "terrain_vertex_match": {
+      "event": 24,
+      "count": 594,
+      "position_offset": 1439536,
+      "texcoord_offset": 1439548,
+      "stride": 28,
+      "values_match_capture": true
+    },
+    "conclusion": "No invalid resolve or copy was observed. The beige MainScene is the faithful copy of a beige current backbuffer produced by the terrain batch. The batch composition differs from the reference frame, so the pixel comparison is not aligned."
+  },
+  "frame_composition": {
+    "reference": {
+      "terrain_0x10ce96e": 252,
+      "map_layer_0x10d4e50_default": 6,
+      "note": "batch after the fb0 clear, before composite"
+    },
+    "live_first_menu_frame": {
+      "terrain": 231,
+      "map_layer_total": 9,
+      "note": "partially loaded frame; 3 of the 9 map-layer calls are offscreen/fb6"
+    },
+    "live_settled_frame": {
+      "terrain": 252,
+      "map_layer_total": 12,
+      "map_layer_default": 6,
+      "map_layer_offscreen": 6,
+      "note": "equivalent to the reference when the offscreen fb6 draws are excluded"
+    },
+    "conclusion": "The 231/9 versus 252/6 difference was a capture-boundary/loading artifact, not missing or repeated live operations. A settle gate (252 terrain calls) now captures the fully loaded composition."
+  },
+  "shader_capability": {
+    "defect": "The live backend reported master+0x18e (GLEW_ARB_shader_texture_lod) as 0, so the engine compiled the NO_SHADER_TEXTURE_LOD fallback for the terrain/map shaders: flat normals, no explicit-LOD path. The authentic GL context advertises the extension (captured driver source has '#extension GL_ARB_shader_texture_lod : enable').",
+    "fix": "Report texture_lod=1 at master+0x18e, matching the authentic GL context. The live sources now carry the extension (78/78 in the settled run) and use the normal-map branch.",
+    "regression": "tests.test_gfx_live_draw::test_frame_start_reconstruction_and_texture_clear asserts texture_lod=1.",
+    "residual": "The live map is still beige after this correction, so the fallback shader was a real but not sufficient divergence."
+  },
+  "orientation": {
+    "defect": "_GfxResolve preserves the Metal top-left row order. GL glCopyTexSubImage2D preserves the framebuffer's bottom row as texture row 0, so the sampled MainScene was vertically inverted.",
+    "evidence": "resolve source and destination dumps agree 99.9% without a flip, while the user-visible map is 96.9% aligned only when flipped; the composite samples the resolve destination with GL UVs.",
+    "fix": "resolve_scaled flips V and is used for all _GfxResolve copies (1:1 and scaled); _GfxResolveTexture remains a 1:1 texture copy.",
+    "regression": "tests.test_gfx_live_draw::test_resolve_orientation (asymmetric quadrants; fails with the old V and passes with the flip).",
+    "live_result": "UI logo region improved 0.482 -> 0.506 and now passes; map orientation corrected, but land remains beige."
+  },
+  "sampler_unit_mapping": {
+    "defect": "The translator assigned sampler bindings sequentially (0..n-1) instead of the engine's texN unit N. The map-base shader omits tex6, so tex7..tex15 were shifted one unit: tex7 sampled the white default at unit6, tex8 sampled the FoW texture, etc. The live shader therefore fed the wrong textures (including white) to the land material.",
+    "fix": "_normalize_source now binds a sampler named texN to GL unit N (falling back to the next free unit for other names). Shader caches rebuilt; the live map-base bindings now map tex7->7, tex8->8, ... tex15->15.",
+    "regression": "tests.test_m6_frame.ShaderTranslationTests.test_sampler_binding_preserves_tex_unit_number (tex0/tex4/tex7 -> 0/4/7)."
+  }
+}

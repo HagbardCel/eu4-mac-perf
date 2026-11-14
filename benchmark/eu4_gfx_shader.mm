@@ -133,6 +133,8 @@ static const char kSimplePixelSource[] =
 @property (nonatomic, strong) id<MTLFunction> vertexFunction;
 @property (nonatomic, strong) id<MTLFunction> fragmentFunction;
 @property (nonatomic, strong) NSMutableDictionary *pipelines; /* key string -> PSO */
+@property (nonatomic, strong) NSDictionary *vertexStage;
+@property (nonatomic, strong) NSDictionary *pixelStage;
 @end
 
 @implementation EU4ShaderRecord
@@ -148,6 +150,8 @@ typedef struct {
     char effect[64];
 } EU4QualifiedSource;
 
+static NSMutableDictionary<NSString *, NSDictionary *> *g_stage_cache;
+static NSString *g_stage_cache_dir;
 static EU4QualifiedSource g_qualified[EU4_GFX_SHADER_MAX_QUALIFIED_HASHES];
 static size_t g_qualified_count;
 /* Off by default. Offline hosts may opt in; engine-path completion must not. */
@@ -156,6 +160,8 @@ static int g_allow_transitional_markers = 0;
 static void sha256_bytes(const void *data, size_t len, uint8_t out[32]) {
     CC_SHA256(data, (CC_LONG)len, out);
 }
+
+#define EU4_GFX_SHADER_GENERIC_IDENTITY "generic-cache/v1"
 
 static const char *effect_known(const char *effect) {
     if (effect == NULL) {
@@ -560,6 +566,162 @@ static void write_shader_event(const char *kind, const char *body) {
     (void)eu4_metal_events_write(name, body);
 }
 
+int eu4_gfx_shader_load_cache(const char *path) {
+    if (path == NULL || path[0] == 0) {
+        return -1;
+    }
+    NSError *error = nil;
+    NSData *data = [NSData dataWithContentsOfFile:[NSString stringWithUTF8String:path]
+                                          options:0
+                                            error:&error];
+    if (data == nil) {
+        return -1;
+    }
+    id value = [NSJSONSerialization JSONObjectWithData:data options:0 error:&error];
+    if (![value isKindOfClass:[NSDictionary class]]) {
+        return -1;
+    }
+    NSDictionary *stages = ((NSDictionary *)value)[@"stages"];
+    if (![stages isKindOfClass:[NSDictionary class]]) {
+        return -1;
+    }
+    pthread_mutex_lock(&g_lock);
+    if (g_stage_cache == nil) {
+        g_stage_cache = [NSMutableDictionary dictionary];
+    }
+    [g_stage_cache removeAllObjects];
+    for (NSString *key in stages) {
+        id entry = stages[key];
+        if ([entry isKindOfClass:[NSDictionary class]]) {
+            g_stage_cache[key.lowercaseString] = entry;
+        }
+    }
+    g_stage_cache_dir = [[NSString stringWithUTF8String:path] stringByDeletingLastPathComponent];
+    size_t count = g_stage_cache.count;
+    pthread_mutex_unlock(&g_lock);
+    return (int)count;
+}
+
+size_t eu4_gfx_shader_cache_count(void) {
+    pthread_mutex_lock(&g_lock);
+    size_t count = g_stage_cache == nil ? 0 : g_stage_cache.count;
+    pthread_mutex_unlock(&g_lock);
+    return count;
+}
+
+const char *eu4_gfx_shader_cache_dir(void) {
+    return g_stage_cache_dir != nil ? g_stage_cache_dir.UTF8String : NULL;
+}
+
+void *eu4_gfx_shader_vertex_stage(const void *shader) {
+    pthread_mutex_lock(&g_lock);
+    EU4ShaderRecord *record = find_record(shader);
+    void *stage = record != nil ? (__bridge void *)record.vertexStage : NULL;
+    pthread_mutex_unlock(&g_lock);
+    return stage;
+}
+
+void *eu4_gfx_shader_pixel_stage(const void *shader) {
+    pthread_mutex_lock(&g_lock);
+    EU4ShaderRecord *record = find_record(shader);
+    void *stage = record != nil ? (__bridge void *)record.pixelStage : NULL;
+    pthread_mutex_unlock(&g_lock);
+    return stage;
+}
+
+int eu4_gfx_shader_is_generic(const void *shader) {
+    pthread_mutex_lock(&g_lock);
+    EU4ShaderRecord *record = find_record(shader);
+    int generic = record != nil && record.vertexStage != nil && record.pixelStage != nil;
+    pthread_mutex_unlock(&g_lock);
+    return generic;
+}
+
+static NSDictionary *cached_stage_for(const char *source, int stage) {
+    if (source == NULL || g_stage_cache == nil) {
+        return nil;
+    }
+    char digest[65];
+    sha256_hex(source, digest);
+    NSString *key = [[NSString stringWithUTF8String:digest] lowercaseString];
+    NSDictionary *entry = g_stage_cache[key];
+    if (entry == nil) {
+        return nil;
+    }
+    NSString *entry_stage = entry[@"stage"];
+    const char *expected = stage == EU4_GFX_SHADER_STAGE_VERTEX ? "vertex" : "pixel";
+    if (![entry_stage isEqualToString:[NSString stringWithUTF8String:expected]]) {
+        return nil;
+    }
+    return entry;
+}
+
+int eu4_gfx_shader_generic_functions(const void *shader, void *device,
+                                     void **vertex_function,
+                                     void **fragment_function) {
+    if (shader == NULL || device == NULL || vertex_function == NULL ||
+        fragment_function == NULL || g_stage_cache_dir == nil) {
+        return 0;
+    }
+    pthread_mutex_lock(&g_lock);
+    EU4ShaderRecord *record = find_record(shader);
+    if (record == nil || record.vertexStage == nil || record.pixelStage == nil) {
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
+    if (record.vertexFunction != nil && record.fragmentFunction != nil) {
+        *vertex_function = (__bridge void *)record.vertexFunction;
+        *fragment_function = (__bridge void *)record.fragmentFunction;
+        pthread_mutex_unlock(&g_lock);
+        return 1;
+    }
+    id<MTLDevice> metal = (__bridge id<MTLDevice>)device;
+    NSError *error = nil;
+    NSString *vertex_source = record.vertexStage[@"msl_file"];
+    NSString *pixel_source = record.pixelStage[@"msl_file"];
+    if (vertex_source == nil || pixel_source == nil) {
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
+    NSMutableArray<NSString *> *sources = [NSMutableArray array];
+    for (NSString *file in @[vertex_source, pixel_source]) {
+        NSString *path = [g_stage_cache_dir stringByAppendingPathComponent:file];
+        NSString *text = [NSString stringWithContentsOfFile:path
+                                                   encoding:NSUTF8StringEncoding
+                                                      error:&error];
+        if (text == nil) {
+            pthread_mutex_unlock(&g_lock);
+            return 0;
+        }
+        [sources addObject:text];
+    }
+    id<MTLLibrary> vertex_library = [metal newLibraryWithSource:sources[0]
+                                                        options:nil
+                                                          error:&error];
+    id<MTLLibrary> pixel_library = [metal newLibraryWithSource:sources[1]
+                                                       options:nil
+                                                         error:&error];
+    if (vertex_library == nil || pixel_library == nil) {
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
+    NSString *vertex_entry = record.vertexStage[@"msl_entry"] ?: @"main0";
+    NSString *pixel_entry = record.pixelStage[@"msl_entry"] ?: @"main0";
+    id<MTLFunction> vertex = [vertex_library newFunctionWithName:vertex_entry];
+    id<MTLFunction> pixel = [pixel_library newFunctionWithName:pixel_entry];
+    if (vertex == nil || pixel == nil) {
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
+    record.library = vertex_library;
+    record.vertexFunction = vertex;
+    record.fragmentFunction = pixel;
+    *vertex_function = (__bridge void *)vertex;
+    *fragment_function = (__bridge void *)pixel;
+    pthread_mutex_unlock(&g_lock);
+    return 1;
+}
+
 void *eu4_gfx_create_shader(void) {
     auto *object = static_cast<uint8_t *>(::operator new(EU4_GFX_SHADER_OBJECT_SIZE));
     memset(object, 0, EU4_GFX_SHADER_OBJECT_SIZE);
@@ -588,8 +750,34 @@ int eu4_gfx_add_vertex_shader(void *unused, void *shader, const char *source) {
         pthread_mutex_unlock(&g_lock);
         return 0;
     }
-    const char *effect = admit_source(source, EU4_GFX_SHADER_STAGE_VERTEX,
-                                      source_is_simple_vertex);
+    const char *legacy_effect = admit_source(source, EU4_GFX_SHADER_STAGE_VERTEX,
+                                             source_is_simple_vertex);
+    if (legacy_effect == NULL) {
+    NSDictionary *cached = cached_stage_for(source, EU4_GFX_SHADER_STAGE_VERTEX);
+    if (cached != nil) {
+        record.vertexStage = cached;
+        record.hasVertex = YES;
+        record.identity = [NSString stringWithUTF8String:EU4_GFX_SHADER_GENERIC_IDENTITY];
+        [record.pipelines removeAllObjects];
+        pthread_mutex_unlock(&g_lock);
+        char digest[65];
+        sha256_hex(source, digest);
+        char event[512];
+        snprintf(event, sizeof event,
+                 "{\"schema\":\"gfx-shader-event/v1\",\"event\":\"add_vertex\","
+                 "\"shader\":\"0x%llx\",\"accepted\":true,\"source_sha256\":\"%s\","
+                 "\"source_length\":%zu,\"identity\":\"%s\",\"pid\":%d}\n",
+                 (unsigned long long)(uintptr_t)shader, digest, strlen(source),
+                 EU4_GFX_SHADER_GENERIC_IDENTITY, (int)getpid());
+        write_shader_event("vs", event);
+        return 1;
+    }
+    }
+    {
+        NSDictionary *attached = cached_stage_for(source, EU4_GFX_SHADER_STAGE_VERTEX);
+        if (attached != nil) { record.vertexStage = attached; }
+    }
+    const char *effect = legacy_effect;
     if (effect == NULL ||
         (record.identity != nil &&
          strcmp(record.identity.UTF8String, effect) != 0)) {
@@ -664,8 +852,34 @@ int eu4_gfx_add_pixel_shader(void *unused, void *shader, const char *source) {
         pthread_mutex_unlock(&g_lock);
         return 0;
     }
-    const char *effect = admit_source(source, EU4_GFX_SHADER_STAGE_PIXEL,
-                                      source_is_simple_pixel);
+    const char *legacy_effect = admit_source(source, EU4_GFX_SHADER_STAGE_PIXEL,
+                                             source_is_simple_pixel);
+    if (legacy_effect == NULL) {
+    NSDictionary *cached = cached_stage_for(source, EU4_GFX_SHADER_STAGE_PIXEL);
+    if (cached != nil) {
+        record.pixelStage = cached;
+        record.hasPixel = YES;
+        record.identity = [NSString stringWithUTF8String:EU4_GFX_SHADER_GENERIC_IDENTITY];
+        [record.pipelines removeAllObjects];
+        pthread_mutex_unlock(&g_lock);
+        char digest[65];
+        sha256_hex(source, digest);
+        char event[512];
+        snprintf(event, sizeof event,
+                 "{\"schema\":\"gfx-shader-event/v1\",\"event\":\"add_pixel\","
+                 "\"shader\":\"0x%llx\",\"accepted\":true,\"source_sha256\":\"%s\","
+                 "\"source_length\":%zu,\"identity\":\"%s\",\"pid\":%d}\n",
+                 (unsigned long long)(uintptr_t)shader, digest, strlen(source),
+                 EU4_GFX_SHADER_GENERIC_IDENTITY, (int)getpid());
+        write_shader_event("ps", event);
+        return 1;
+    }
+    }
+    {
+        NSDictionary *attached = cached_stage_for(source, EU4_GFX_SHADER_STAGE_PIXEL);
+        if (attached != nil) { record.pixelStage = attached; }
+    }
+    const char *effect = legacy_effect;
     if (effect == NULL ||
         (record.identity != nil &&
          strcmp(record.identity.UTF8String, effect) != 0)) {
@@ -732,11 +946,17 @@ int eu4_gfx_link_shader(void *unused, void *shader) {
     }
     pthread_mutex_lock(&g_lock);
     EU4ShaderRecord *record = find_record(shader);
-    if (record == nil || !record.hasVertex || !record.hasPixel ||
-        record.vertexFunction == nil || record.fragmentFunction == nil) {
+    if (record == nil || !record.hasVertex || !record.hasPixel) {
         if (record != nil) {
             record.linked = NO;
         }
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
+    int generic = record.vertexStage != nil && record.pixelStage != nil;
+    if (!generic &&
+        (record.vertexFunction == nil || record.fragmentFunction == nil)) {
+        record.linked = NO;
         pthread_mutex_unlock(&g_lock);
         return 0;
     }

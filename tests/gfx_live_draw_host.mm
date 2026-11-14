@@ -7,8 +7,10 @@
 #import "eu4_gfx_checkpoint.h"
 #import "eu4_gfx_draw_route.h"
 #import "eu4_gfx_init.h"
+#import "eu4_gfx_generic_draw.h"
 #import "eu4_gfx_shader.h"
 #import "eu4_gfx_simple_draw.h"
+#import "eu4_gfx_sprite_draw.h"
 #import "eu4_gfx_texture.h"
 #import "eu4_metal_events.h"
 
@@ -485,6 +487,7 @@ static int run_frame_start(void) {
     }
     void *fake_current = (void *)0x1234;
     memcpy(master + 0x70, &fake_current, sizeof fake_current);
+    int texture_lod = master[0x18e];
     int begin = eu4_gfx_begin_scene(master);
     void *current = NULL;
     memcpy(&current, master + 0x70, sizeof current);
@@ -515,13 +518,734 @@ static int run_frame_start(void) {
                    *(uint32_t *)(header + 0xc) == 0 &&
                    *(uint32_t *)(header + 4) == 0 &&
                    eu4_gfx_texture_for_header(header) == NULL;
-    int ok = begin == 1 && current == NULL && blend_ok && clear_ok;
-    printf("begin_scene=%d current_cleared=%d blend_default=%d clear_texture=%d\n",
-           begin == 1, current == NULL, blend_ok, clear_ok);
+    int ok = begin == 1 && current == NULL && blend_ok && clear_ok &&
+             texture_lod == 1;
+    printf("begin_scene=%d current_cleared=%d blend_default=%d clear_texture=%d "
+           "texture_lod=%d\n",
+           begin == 1, current == NULL, blend_ok, clear_ok, texture_lod);
     return ok ? 0 : 1;
 }
 
+static void read_target_texture(id<MTLTexture> texture, id<MTLCommandQueue> queue,
+                                NSUInteger row_bytes, void *out) {
+    NSUInteger length = row_bytes * texture.height;
+    id<MTLBuffer> buffer = [texture.device newBufferWithLength:length
+                                                       options:MTLResourceStorageModeShared];
+    id<MTLCommandBuffer> command = [queue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    [blit copyFromTexture:texture
+              sourceSlice:0
+              sourceLevel:0
+             sourceOrigin:MTLOriginMake(0, 0, 0)
+               sourceSize:MTLSizeMake(texture.width, texture.height, 1)
+                 toBuffer:buffer
+        destinationOffset:0
+   destinationBytesPerRow:row_bytes
+ destinationBytesPerImage:length];
+    [blit endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    memcpy(out, buffer.contents, length);
+}
+
+static int run_texture_type_decision(void) {
+    boot();
+    id<MTLDevice> device = (__bridge id<MTLDevice>)eu4_gfx_metal_device();
+    if (device == nil) {
+        return 1;
+    }
+    MTLTextureDescriptor *flat_descriptor =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                           width:2
+                                                          height:2
+                                                       mipmapped:NO];
+    MTLTextureDescriptor *cube_descriptor =
+        [MTLTextureDescriptor textureCubeDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                              size:2
+                                                         mipmapped:NO];
+    id<MTLTexture> flat = [device newTextureWithDescriptor:flat_descriptor];
+    id<MTLTexture> cube = [device newTextureWithDescriptor:cube_descriptor];
+    int substitute = -1;
+    int flat_ok = eu4_gfx_texture_binding_decision(0, (int)flat.textureType, 0,
+                                                   &substitute);
+    int cube_ok = eu4_gfx_texture_binding_decision(1, (int)cube.textureType, 0,
+                                                   &substitute);
+    int cube_in_2d_refused = eu4_gfx_texture_binding_decision(
+        0, (int)cube.textureType, 0, &substitute);
+    int cube_in_2d_allowed = eu4_gfx_texture_binding_decision(
+        0, (int)cube.textureType, 1, &substitute);
+    int substituted = substitute == 1;
+    int flat_in_cube_refused = eu4_gfx_texture_binding_decision(
+        1, (int)flat.textureType, 0, &substitute);
+    int ok = flat_ok == 1 && cube_ok == 1 && cube_in_2d_refused == 0 &&
+             cube_in_2d_allowed == 1 && substituted &&
+             flat_in_cube_refused == 0;
+    printf("texture_type_decision=%d\n", ok);
+    return ok ? 0 : 1;
+}
+
+static int run_scissor_helper(void) {
+    eu4_gfx_metal_scissor box = {0, 0, 0, 0};
+    /* Unset: the caller keeps its full-attachment default. */
+    int unset = eu4_gfx_scissor_for_attachment(0, 0, 0, 0, 0, 100, 50, &box);
+    /* Partial: GL lower-left box converted to the Metal top-left origin. */
+    eu4_gfx_metal_scissor partial = {0, 0, 0, 0};
+    int valid = eu4_gfx_scissor_for_attachment(1, 10, 5, 20, 10, 100, 50, &partial);
+    /* Empty: zero span. */
+    eu4_gfx_metal_scissor empty = {0, 0, 0, 0};
+    int empty_status = eu4_gfx_scissor_for_attachment(1, 10, 5, 0, 0, 100, 50, &empty);
+    /* Clipped: a box reaching past the attachment. */
+    eu4_gfx_metal_scissor clipped = {0, 0, 0, 0};
+    int clip_status = eu4_gfx_scissor_for_attachment(1, 90, 40, 20, 20, 100, 50, &clipped);
+    int ok = unset == EU4_GFX_SCISSOR_UNSET && valid == EU4_GFX_SCISSOR_VALID &&
+             partial.x == 10 && partial.y == 35 && partial.width == 20 &&
+             partial.height == 10 && empty_status == EU4_GFX_SCISSOR_EMPTY &&
+             clip_status == EU4_GFX_SCISSOR_VALID && clipped.x == 90 &&
+             clipped.y == 0 && clipped.width == 10 && clipped.height == 10;
+    printf("scissor_helper=%d\n", ok);
+    return ok ? 0 : 1;
+}
+
+static void *backend_array_value(NSArray *array, NSUInteger index) {
+    if (array == nil || index >= array.count) {
+        return NULL;
+    }
+    void *value = NULL;
+    [(NSValue *)array[index] getValue:&value];
+    return value;
+}
+
+static int run_texture_ranges(void) {
+    boot();
+    uint8_t *master = (uint8_t *)g_master;
+    uint8_t fallback_header[0x44];
+    memset(fallback_header, 0, sizeof fallback_header);
+    void *fallback = fallback_header;
+    memcpy(master + 0x98, &fallback, sizeof fallback);
+    static uint8_t headers[4][0x44];
+    for (int i = 0; i < 4; i++) {
+        memset(headers[i], 0, sizeof headers[i]);
+    }
+    void *a = headers[0], *b = headers[1], *c = headers[2];
+    void *textures[2] = {a, b};
+    void *handle = master;
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil) {
+        fail("texture range backend");
+    }
+    /* Bit 0 only. */
+    eu4_gfx_set_textures(&handle, 2, textures, 1, 0, NULL);
+    int ok = backend_array_value(backend.boundTextures, 0) == a &&
+             backend_array_value(backend.boundTextures, 1) == b &&
+             backend.boundTexture0 == a;
+    /* Bit 1 only leaves unit 0 alone and binds at base+0xf. */
+    void *single[1] = {c};
+    eu4_gfx_set_textures(&handle, 1, single, 2, 0, NULL);
+    ok = ok && backend_array_value(backend.boundTextures, 0) == a &&
+         backend_array_value(backend.boundTextures, 15) == c &&
+         backend.boundTexture0 == a;
+    /* Both ranges, nonzero base, preserving the earlier units. */
+    eu4_gfx_set_textures(&handle, 1, single, 3, 3, NULL);
+    ok = ok && backend_array_value(backend.boundTextures, 0) == a &&
+         backend_array_value(backend.boundTextures, 3) == c &&
+         backend_array_value(backend.boundTextures, 18) == c &&
+         backend.boundTexture0 == a;
+    /* Partial update keeps unrelated units. */
+    eu4_gfx_set_textures(&handle, 1, single, 1, 1, NULL);
+    ok = ok && backend_array_value(backend.boundTextures, 0) == a &&
+         backend_array_value(backend.boundTextures, 1) == c &&
+         backend_array_value(backend.boundTextures, 3) == c;
+    /* Null entries substitute the engine default header. */
+    void *nulls[1] = {NULL};
+    eu4_gfx_set_textures(&handle, 1, nulls, 1, 0, NULL);
+    ok = ok && backend_array_value(backend.boundTextures, 0) == fallback &&
+         backend.boundTexture0 == fallback;
+    /* Unsupported flags are refused without touching the bindings. */
+    eu4_gfx_set_textures(&handle, 1, single, 8, 0, NULL);
+    ok = ok && backend_array_value(backend.boundTextures, 0) == fallback;
+    printf("texture_ranges=%d\n", ok);
+    return ok ? 0 : 1;
+}
+
+static int run_dump_texture(void) {
+    boot();
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil || backend.device == nil) {
+        fail("dump texture device");
+    }
+    id<MTLDevice> device = backend.device;
+    MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                     width:4
+                                    height:2
+                                 mipmapped:NO];
+    descriptor.usage = MTLTextureUsageShaderRead;
+    id<MTLTexture> texture = [device newTextureWithDescriptor:descriptor];
+    uint8_t pixels[4 * 2 * 4];
+    for (int i = 0; i < 4 * 2; i++) {
+        pixels[i * 4 + 0] = (uint8_t)(i * 8);
+        pixels[i * 4 + 1] = 64;
+        pixels[i * 4 + 2] = 128;
+        pixels[i * 4 + 3] = 255;
+    }
+    [texture replaceRegion:MTLRegionMake2D(0, 0, 4, 2)
+                mipmapLevel:0
+                  withBytes:pixels
+                bytesPerRow:16];
+    char path[256];
+    snprintf(path, sizeof path, "%s/dump-texture-test.bgra",
+             getenv("TMPDIR") ?: "/tmp");
+    int ok = eu4_gfx_dump_texture((__bridge void *)texture, path) == 0;
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) {
+        ok = 0;
+    } else {
+        fseek(file, 0, SEEK_END);
+        long size = ftell(file);
+        fclose(file);
+        if (size != 4 * 2 * 4) {
+            ok = 0;
+        }
+    }
+    remove(path);
+    ok = ok && eu4_gfx_dump_texture((__bridge void *)texture,
+                                    "/nonexistent-dir/dump-test.bgra") != 0;
+    /* The BC path must also fail visibly for an unwritable destination. */
+    if (device.supportsBCTextureCompression) {
+        const uint8_t bc1_block[8] = {0x00, 0xF8, 0x00, 0x00, 0, 0, 0, 0};
+        MTLTextureDescriptor *bc1 = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatBC1_RGBA
+                                         width:4
+                                        height:4
+                                     mipmapped:NO];
+        bc1.usage = MTLTextureUsageShaderRead;
+        id<MTLTexture> bc1_texture = [device newTextureWithDescriptor:bc1];
+        [bc1_texture replaceRegion:MTLRegionMake2D(0, 0, 4, 4)
+                       mipmapLevel:0
+                         withBytes:bc1_block
+                       bytesPerRow:8];
+        char bc_path[256];
+        snprintf(bc_path, sizeof bc_path, "%s/dump-bc-test.bgra",
+                 getenv("TMPDIR") ?: "/tmp");
+        ok = ok && eu4_gfx_dump_texture((__bridge void *)bc1_texture, bc_path) == 0;
+        ok = ok && eu4_gfx_dump_texture((__bridge void *)bc1_texture,
+                                        "/nonexistent-dir/dump-bc.bgra") != 0;
+        char sidecar[300];
+        snprintf(sidecar, sizeof sidecar, "%s.json", bc_path);
+        FILE *meta = fopen(sidecar, "rb");
+        ok = ok && meta != NULL;
+        if (meta != NULL) {
+            fclose(meta);
+        }
+        remove(bc_path);
+        remove(sidecar);
+    }
+    printf("dump_texture=%d\n", ok);
+    return ok ? 0 : 1;
+}
+
+static int run_bc_decode(void) {
+    boot();
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil || backend.device == nil) {
+        fail("bc decode device");
+    }
+    id<MTLDevice> device = backend.device;
+    if (!device.supportsBCTextureCompression) {
+        printf("bc_decode=skip\n");
+        return 0;
+    }
+    int ok = 1;
+    /* Uncompressed RGBA8 with a unique value per texel, non-square extent. */
+    uint8_t texels[8 * 4 * 4];
+    for (int y = 0; y < 4; y++) {
+        for (int x = 0; x < 8; x++) {
+            uint8_t *p = texels + (y * 8 + x) * 4;
+            p[0] = (uint8_t)(x * 16 + y);
+            p[1] = (uint8_t)(x);
+            p[2] = (uint8_t)(y);
+            p[3] = 255;
+        }
+    }
+    MTLTextureDescriptor *rgba = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                     width:8
+                                    height:4
+                                 mipmapped:NO];
+    rgba.usage = MTLTextureUsageShaderRead;
+    id<MTLTexture> rgba_texture = [device newTextureWithDescriptor:rgba];
+    [rgba_texture replaceRegion:MTLRegionMake2D(0, 0, 8, 4)
+                    mipmapLevel:0
+                      withBytes:texels
+                    bytesPerRow:8 * 4];
+    unsigned char *decoded = NULL;
+    size_t row = 0, height = 0;
+    int rc = eu4_gfx_decode_texture_rgba8((__bridge void *)rgba_texture, &decoded,
+                                          &row, &height);
+    if (rc != 0 || row != 32 || height != 4) {
+        ok = 0;
+    } else {
+        /* Bottom-up rows: output row 0 is texture row 3. BGRA order. */
+        for (int y = 0; y < 4 && ok; y++) {
+            for (int x = 0; x < 8; x++) {
+                const uint8_t *p = decoded + (size_t)y * row + x * 4;
+                uint8_t expected = (uint8_t)(x * 16 + (3 - y));
+                if (p[0] != (uint8_t)(3 - y) || p[1] != (uint8_t)x ||
+                    p[2] != expected || p[3] != 255) {
+                    ok = 0;
+                    break;
+                }
+            }
+        }
+    }
+    free(decoded);
+    decoded = NULL;
+    /* BC1: a solid red block (565 red, zero indices). */
+    const uint8_t bc1_block[8] = {0x00, 0xF8, 0x00, 0x00, 0, 0, 0, 0};
+    MTLTextureDescriptor *bc1 = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatBC1_RGBA
+                                     width:4
+                                    height:4
+                                 mipmapped:NO];
+    bc1.usage = MTLTextureUsageShaderRead;
+    id<MTLTexture> bc1_texture = [device newTextureWithDescriptor:bc1];
+    [bc1_texture replaceRegion:MTLRegionMake2D(0, 0, 4, 4)
+                   mipmapLevel:0
+                     withBytes:bc1_block
+                   bytesPerRow:8];
+    int bc1_rc = eu4_gfx_decode_texture_rgba8((__bridge void *)bc1_texture, &decoded,
+                                             &row, &height);
+    if (bc1_rc != 0) {
+        ok = 0;
+    } else {
+        for (int i = 0; i < 16 && ok; i++) {
+            const uint8_t *p = decoded + i * 4;
+            if (p[2] < 250 || p[1] > 4 || p[0] > 4 || p[3] != 255) {
+                ok = 0;
+            }
+        }
+    }
+    free(decoded);
+    decoded = NULL;
+    /* BC3 lays out the 8-byte alpha block first, then the colour block. Use two
+       distinct alpha values: texel 0 selects endpoint 0xFF, the rest 0x00. */
+    uint8_t bc3_block[16];
+    memset(bc3_block, 0, sizeof bc3_block);
+    bc3_block[0] = 0xFF;
+    bc3_block[1] = 0x00;
+    {
+        uint8_t indices[6] = {0};
+        for (int texel = 0; texel < 16; texel++) {
+            int value = texel == 0 ? 0 : 1;
+            for (int bit = 0; bit < 3; bit++) {
+                int position = texel * 3 + bit;
+                indices[position / 8] |=
+                    (uint8_t)(((value >> bit) & 1) << (position % 8));
+            }
+        }
+        memcpy(bc3_block + 2, indices, sizeof indices);
+    }
+    bc3_block[8] = 0x00;
+    bc3_block[9] = 0xF8;
+    MTLTextureDescriptor *bc3 = [MTLTextureDescriptor
+        texture2DDescriptorWithPixelFormat:MTLPixelFormatBC3_RGBA
+                                     width:4
+                                    height:4
+                                 mipmapped:NO];
+    bc3.usage = MTLTextureUsageShaderRead;
+    id<MTLTexture> bc3_texture = [device newTextureWithDescriptor:bc3];
+    [bc3_texture replaceRegion:MTLRegionMake2D(0, 0, 4, 4)
+                   mipmapLevel:0
+                     withBytes:bc3_block
+                   bytesPerRow:16];
+    int bc3_rc = eu4_gfx_decode_texture_rgba8((__bridge void *)bc3_texture, &decoded,
+                                             &row, &height);
+    if (bc3_rc != 0) {
+        ok = 0;
+    } else {
+        /* Decoded rows are bottom-up: texture (0,0) lands at output row 3. */
+        if (decoded[(3 * 4 + 0) * 4 + 3] != 255 ||
+            decoded[(3 * 4 + 1) * 4 + 3] != 0) {
+            ok = 0;
+        }
+        for (int i = 0; i < 16 && ok; i++) {
+            const uint8_t *p = decoded + i * 4;
+            if (p[2] < 250) {
+                ok = 0;
+            }
+        }
+    }
+    free(decoded);
+    printf("bc_decode=%d\n", ok);
+    return ok ? 0 : 1;
+}
+
+static int run_sampler_decode(void) {
+    boot();
+    /* Linear filtering with repeat addressing, as the map/terrain draws use. */
+    uint8_t linear[0x40];
+    memset(linear, 0, sizeof linear);
+    uint32_t linear_min = 0x2601, linear_mag = 0x2601, repeat = 0x2901, mip = 0x2601;
+    memcpy(linear + 0x18, &repeat, 4);
+    memcpy(linear + 0x1c, &repeat, 4);
+    memcpy(linear + 0x20, &linear_mag, 4);
+    memcpy(linear + 0x24, &linear_min, 4);
+    memcpy(linear + 0x28, &mip, 4);
+    eu4_gfx_sampler_state a = {0};
+    int ok_a = eu4_gfx_decode_sampler(linear, &a) == 0 &&
+               a.min_filter == 0x2601 && a.mag_filter == 0x2601 &&
+               a.wrap_s == 0x2901;
+    /* Nearest filtering with clamp-to-edge. */
+    uint8_t nearest[0x40];
+    memset(nearest, 0, sizeof nearest);
+    uint32_t nearest_min = 0x2600, nearest_mag = 0x2600, clamp = 0x812f;
+    memcpy(nearest + 0x18, &clamp, 4);
+    memcpy(nearest + 0x1c, &clamp, 4);
+    memcpy(nearest + 0x20, &nearest_mag, 4);
+    memcpy(nearest + 0x24, &nearest_min, 4);
+    memcpy(nearest + 0x28, &mip, 4);
+    eu4_gfx_sampler_state b = {0};
+    int ok_b = eu4_gfx_decode_sampler(nearest, &b) == 0 &&
+               b.min_filter == 0x2600 && b.mag_filter == 0x2600 &&
+               b.wrap_s == 0x812f;
+    /* An unsupported state must be refused, not approximated. */
+    uint32_t bad = 0x1234;
+    memcpy(nearest + 0x20, &bad, 4);
+    eu4_gfx_sampler_state c = {0};
+    int refused = eu4_gfx_decode_sampler(nearest, &c) != 0;
+    int ok = ok_a && ok_b && refused;
+    printf("sampler_decode=%d\n", ok);
+    return ok ? 0 : 1;
+}
+
+static int run_sprite_uniform(void) {
+    boot();
+    uint8_t *master = (uint8_t *)g_master;
+    static uint8_t slot[16];
+    static uint8_t block[96];
+    for (int i = 0; i < 96; i++) {
+        block[i] = (uint8_t)(i * 3 + 1);
+    }
+    uint32_t words = 24;
+    memcpy(slot, &words, 4);
+    void *data = block;
+    memcpy(slot + 8, &data, sizeof data);
+    void *slot_ptr = slot;
+    memcpy(master + EU4_GFX_MASTER_CONSTANT_SLOT2, &slot_ptr, sizeof slot_ptr);
+    uint8_t out[96];
+    memset(out, 0, sizeof out);
+    int ok = eu4_gfx_sprite_uniform_data(master, out, sizeof out) == 0 &&
+             memcmp(out, block, sizeof block) == 0;
+    /* The block is read as 24 dwords; the header stores word counts. */
+    memcpy(slot, &words, 4);
+    void *no_slot = NULL;
+    memcpy(master + EU4_GFX_MASTER_CONSTANT_SLOT2, &no_slot, sizeof no_slot);
+    int refused = eu4_gfx_sprite_uniform_data(master, out, sizeof out) != 0;
+    memcpy(master + EU4_GFX_MASTER_CONSTANT_SLOT2, &slot_ptr, sizeof slot_ptr);
+    uint32_t too_few = 23;
+    memcpy(slot, &too_few, 4);
+    int short_refused = eu4_gfx_sprite_uniform_data(master, out, sizeof out) != 0;
+    int ok_all = ok && refused && short_refused;
+    printf("sprite_uniform=%d\n", ok_all);
+    return ok_all ? 0 : 1;
+}
+
+static int run_depth_state(void) {
+    boot();
+    static const struct {
+        int has_depth;
+        uint8_t enable;
+        uint8_t write;
+        int test;
+        int write_on;
+    } cases[] = {
+        {1, 0, 0, 0, 0}, /* test off / write off */
+        {1, 0, 1, 0, 0}, /* test off / write mask on */
+        {1, 1, 0, 1, 0}, /* test on / write off */
+        {1, 1, 1, 1, 1}, /* test on / write on */
+        {0, 1, 1, 0, 0}, /* no attachment */
+    };
+    int ok = 1;
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        int test = -1, write_on = -1;
+        eu4_gfx_effective_depth_state(cases[i].has_depth, cases[i].enable,
+                                      cases[i].write, &test, &write_on);
+        if (test != cases[i].test || write_on != cases[i].write_on) {
+            ok = 0;
+        }
+    }
+    printf("depth_state=%d\n", ok);
+    return ok ? 0 : 1;
+}
+
+static int run_sampler_effective(void) {
+    eu4_gfx_sampler_state state = {0};
+    state.min_filter = 0x2601;
+    state.mag_filter = 0x2601;
+    state.mip_filter = 0x2701;
+    uint32_t with_mips = eu4_gfx_effective_min_filter(&state, 1);
+    uint32_t without_mips = eu4_gfx_effective_min_filter(&state, 0);
+    eu4_gfx_sampler_state explicit_min = {0};
+    explicit_min.min_filter = 0x2703;
+    explicit_min.mag_filter = 0x2600;
+    explicit_min.mip_filter = 0;
+    uint32_t explicit_result = eu4_gfx_effective_min_filter(&explicit_min, 1);
+    int ok = with_mips == 0x2701 && without_mips == 0x2601 &&
+             explicit_result == 0x2703;
+    printf("sampler_effective=%d with_mips=%u without_mips=%u explicit=%u\n",
+           ok, with_mips, without_mips, explicit_result);
+    return ok ? 0 : 1;
+}
+
+static uint32_t quadrant_colour(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    // BGRA8: red / green / blue / yellow, top-left origin.
+    int right = x >= w / 2;
+    int bottom = y >= h / 2;
+    if (!bottom) return right ? 0xff00ff00u : 0xff0000ffu; // green / red
+    return right ? 0xff00ffffu : 0xffff0000u;             // yellow / blue
+}
+
+static int run_resolve_orientation(void) {
+    boot();
+    id<MTLDevice> device = (__bridge id<MTLDevice>)eu4_gfx_metal_device();
+    if (device == nil) {
+        fail("resolve device");
+    }
+    MTLTextureDescriptor *sd =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                           width:4 height:4 mipmapped:NO];
+    sd.usage = MTLTextureUsageShaderRead;
+    sd.storageMode = MTLStorageModeManaged;
+    id<MTLTexture> src = [device newTextureWithDescriptor:sd];
+    uint32_t source_pixels[16];
+    for (uint32_t y = 0; y < 4; y++) {
+        for (uint32_t x = 0; x < 4; x++) {
+            source_pixels[y * 4 + x] = quadrant_colour(x, y, 4, 4);
+        }
+    }
+    [src replaceRegion:MTLRegionMake2D(0, 0, 4, 4) mipmapLevel:0
+             withBytes:source_pixels bytesPerRow:4 * 4];
+    int ok = 1;
+    for (uint32_t size = 2; size <= 4; size += 2) {
+        MTLTextureDescriptor *dd =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                               width:size height:size mipmapped:NO];
+        dd.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        dd.storageMode = MTLStorageModeShared;
+        id<MTLTexture> dst = [device newTextureWithDescriptor:dd];
+        if (eu4_gfx_resolve_orientation_test((__bridge void *)src,
+                                             (__bridge void *)dst) != 0) {
+            fail("resolve orientation call");
+        }
+        uint32_t out[16];
+        id<MTLCommandQueue> queue = [device newCommandQueue];
+        read_target_texture(dst, queue, size * 4, out);
+        // The resolve converts a top-left source to GL row order: source
+        // bottom rows become destination top rows.
+        uint32_t tl = quadrant_colour(0, 4, 4, 4); // source bottom-left
+        uint32_t tr = quadrant_colour(4, 4, 4, 4); // source bottom-right
+        uint32_t bl = quadrant_colour(0, 0, 4, 4); // source top-left
+        uint32_t br = quadrant_colour(4, 0, 4, 4); // source top-right
+        uint32_t expect[4] = {tl, tr, bl, br};
+        for (uint32_t i = 0; i < 4; i++) {
+            uint32_t x = i % 2, y = i / 2;
+            uint32_t got = out[(y * size / 2) * size + x * size / 2];
+            if ((got & 0x00ffffffu) != (expect[i] & 0x00ffffffu)) {
+                fprintf(stderr, "FAIL: resolve %ux%u quadrant %u got %08x want %08x\n",
+                        size, size, i, got, expect[i]);
+                ok = 0;
+            }
+        }
+    }
+    printf("resolve_orientation=%d\n", ok);
+    return ok ? 0 : 1;
+}
+
+static int run_offscreen_viewport(void) {
+    /* An offscreen target is allocated at the engine's logical size. The
+       window is 64x64 (HiDPI would scale the backbuffer), but the target is
+       32x32 and its full-viewport draw must cover all of it. Before the route
+       fix the backbuffer scale (32/64) shrank the viewport to a 16x16 corner. */
+    boot();
+    void *shader = make_simple_shader();
+    uint8_t quad[96];
+    make_quad(quad);
+    void *vertex_header = eu4_gfx_create_vertex_buffer(NULL, quad, 4, 24, 0);
+    if (vertex_header == NULL) {
+        fail("offscreen vertex buffer");
+    }
+    uint8_t red_bgr[4 * 4 * 3];
+    for (int i = 0; i < 4 * 4; i++) {
+        red_bgr[i * 3 + 0] = 0;
+        red_bgr[i * 3 + 1] = 0;
+        red_bgr[i * 3 + 2] = 0xff;
+    }
+    uint8_t texture_header[0x44];
+    make_texture(4, 4, red_bgr, texture_header);
+    float matrix[16];
+    fill_matrix(matrix);
+    uint8_t constant[0x10];
+    memset(constant, 0, sizeof constant);
+    uint32_t words = 16;
+    memcpy(constant, &words, 4);
+    void *constant_data = matrix;
+    memcpy(constant + 8, &constant_data, sizeof constant_data);
+
+    void *rt = eu4_gfx_create_render_target_texture(g_master, 32, 32, 0, 1, 0);
+    if (rt == NULL) {
+        fail("offscreen render target");
+    }
+    struct {
+        void *master;
+    } ctx = {g_master};
+    uint32_t window_rect[6] = {64, 64, 0x3f800000u, 0, 0, 0};
+    eu4_gfx_set_viewport(g_master, window_rect);
+    const float black[4] = {0.f, 0.f, 0.f, 1.f};
+    eu4_gfx_clear(&ctx, 1, black);
+    if (eu4_gfx_complete_game(g_master, NULL) != EU4_GFX_CLEAR_OK) {
+        fail("offscreen frame clear");
+    }
+    eu4_gfx_set_render_target(g_master, rt);
+    install_geometry(shader, vertex_header, constant, texture_header);
+    uint32_t rect[6] = {32, 32, 0x3f800000u, 0, 0, 0};
+    eu4_gfx_set_viewport(g_master, rect);
+
+    eu4_gfx_draw_raw raw = draw_frame(&ctx);
+    char diagnostic[256];
+    if (eu4_gfx_draw_route_live(&raw, NULL, diagnostic, sizeof diagnostic) !=
+        EU4_GFX_DRAW_ROUTE_HANDLED) {
+        fail(diagnostic[0] != 0 ? diagnostic : "offscreen draw route");
+    }
+    if (eu4_gfx_complete_game(g_master, NULL) != EU4_GFX_CLEAR_OK) {
+        fail("offscreen draw completion");
+    }
+    id<MTLTexture> color =
+        (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(rt);
+    id<MTLDevice> device = (__bridge id<MTLDevice>)eu4_gfx_metal_device();
+    id<MTLCommandQueue> queue = [device newCommandQueue];
+    uint8_t pixels[32 * 32 * 4];
+    read_target_texture(color, queue, 32 * 4, pixels);
+    int covered = 0;
+    for (int i = 0; i < 32 * 32; i++) {
+        if (pixels[i * 4 + 2] > 200 && pixels[i * 4 + 1] < 60 &&
+            pixels[i * 4 + 0] < 60) {
+            covered++;
+        }
+    }
+    printf("offscreen_viewport=%d covered=%d of=%d\n", covered == 32 * 32,
+           covered, 32 * 32);
+    return covered == 32 * 32 ? 0 : 1;
+}
+
+static int run_target_clear(void) {
+    boot();
+    void *handle = g_master;
+    id<MTLDevice> device = (__bridge id<MTLDevice>)eu4_gfx_metal_device();
+    id<MTLCommandQueue> queue = [device newCommandQueue];
+    void *rt = eu4_gfx_create_render_target_texture(handle, 16, 16, 0, 1, 0);
+    if (rt == NULL) {
+        fail("target texture creation");
+    }
+    eu4_gfx_set_render_target(handle, rt);
+    id<MTLTexture> color = (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(rt);
+    id<MTLTexture> depth = (__bridge id<MTLTexture>)eu4_gfx_depth_texture_for_header(rt);
+    if (color == nil || depth == nil) {
+        fail("target textures");
+    }
+    /* Known depth value so preservation is observable. */
+    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.depthAttachment.texture = depth;
+    pass.depthAttachment.loadAction = MTLLoadActionClear;
+    pass.depthAttachment.clearDepth = 0.25;
+    pass.depthAttachment.storeAction = MTLStoreActionStore;
+    id<MTLCommandBuffer> command = [queue commandBuffer];
+    id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
+    [encoder endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+
+    uint8_t pixels[16 * 16 * 4];
+    float depths[16 * 16];
+
+    /* Colour-only clear: colour changes, depth is preserved. */
+    float red[4] = {1.f, 0.f, 0.f, 1.f};
+    eu4_gfx_clear(handle, 1, red);
+    if (eu4_gfx_complete_game(handle, NULL) != EU4_GFX_CLEAR_OK) {
+        fail("target clear did not complete");
+    }
+    read_target_texture(color, queue, 16 * 4, pixels);
+    read_target_texture(depth, queue, 16 * 4, depths);
+    int color_cleared = pixels[0] == 0 && pixels[1] == 0 && pixels[2] == 0xff &&
+                        pixels[3] == 0xff;
+    int depth_preserved = fabsf(depths[0] - 0.25f) < 1e-6f;
+
+    /* Colour+depth clear: both attachments change. */
+    float green[4] = {0.f, 1.f, 0.f, 1.f};
+    eu4_gfx_clear(handle, 3, green);
+    if (eu4_gfx_complete_game(handle, NULL) != EU4_GFX_CLEAR_OK) {
+        fail("target clear did not complete");
+    }
+    read_target_texture(color, queue, 16 * 4, pixels);
+    read_target_texture(depth, queue, 16 * 4, depths);
+    int color_cleared2 = pixels[0] == 0 && pixels[1] == 0xff && pixels[2] == 0;
+    int depth_cleared = fabsf(depths[0] - 1.0f) < 1e-6f;
+
+    /* Depth+stencil only: colour is preserved. */
+    float blue[4] = {0.f, 0.f, 1.f, 1.f};
+    eu4_gfx_clear(handle, 6, blue);
+    if (eu4_gfx_complete_game(handle, NULL) != EU4_GFX_CLEAR_OK) {
+        fail("target clear did not complete");
+    }
+    read_target_texture(color, queue, 16 * 4, pixels);
+    int color_preserved = pixels[0] == 0 && pixels[1] == 0xff && pixels[2] == 0;
+
+    printf("target_clear=%d depth_preserved=%d depth_cleared=%d "
+           "color_preserved=%d\n",
+           color_cleared && color_cleared2, depth_preserved, depth_cleared,
+           color_preserved);
+    return color_cleared && color_cleared2 && depth_preserved && depth_cleared &&
+                   color_preserved
+               ? 0
+               : 1;
+}
+
 int main(int argc, char **argv) {
+    if (argc >= 2 && strcmp(argv[1], "--target-clear") == 0) {
+        return run_target_clear();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--offscreen-viewport") == 0) {
+        return run_offscreen_viewport();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--sampler-effective") == 0) {
+        return run_sampler_effective();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--resolve-orientation") == 0) {
+        return run_resolve_orientation();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--depth-state") == 0) {
+        return run_depth_state();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--sprite-uniform") == 0) {
+        return run_sprite_uniform();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--sampler-decode") == 0) {
+        return run_sampler_decode();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--bc-decode") == 0) {
+        return run_bc_decode();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--dump-texture") == 0) {
+        return run_dump_texture();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--texture-ranges") == 0) {
+        return run_texture_ranges();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--scissor-helper") == 0) {
+        return run_scissor_helper();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--texture-type-decision") == 0) {
+        return run_texture_type_decision();
+    }
     if (argc >= 2 && strcmp(argv[1], "--frame-start") == 0) {
         return run_frame_start();
     }

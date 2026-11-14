@@ -24,6 +24,46 @@
 /* Engine texture header currently bound to unit 0 by _GfxSetTextures.
    Non-owning; resolved through the textures dictionary at draw time. */
 @property (nonatomic) void *boundTexture0;
+/* Up to 16 engine texture headers bound by the last _GfxSetTextures. */
+@property (nonatomic, strong) NSMutableArray *boundTextures;
+@property (nonatomic, strong) NSMutableArray *boundSamplers;
+/* Render targets: the engine header currently bound as the draw target, its
+   colour/depth Metal textures, and the default backbuffer to restore. */
+@property (nonatomic) void *currentTargetHeader;
+@property (nonatomic, strong) id currentTargetColor;
+@property (nonatomic, strong) id currentTargetDepth;
+@property (nonatomic) uint32_t currentTargetWidth;
+@property (nonatomic) uint32_t currentTargetHeight;
+@property (nonatomic, strong) NSMutableDictionary *renderTargetDepths;
+@property (nonatomic, strong) id gameDepthTarget;
+@property (nonatomic, strong) id previousFrameTexture;
+@property (nonatomic, strong) id lastDrawTargetColor;
+@property (nonatomic, strong) id lastFullTargetColor;
+void eu4_gfx_order_trace(const char *operation, unsigned long long value);
+/* Same trace with an operation-specific JSON detail object (already escaped). */
+void eu4_gfx_order_trace_detail(const char *operation, unsigned long long value,
+                                const char *detail);
+
+/* Optional capture-state settle gate: count calls to a diagnostic caller
+   within the current frame (reset by the frame-start black default clear) and
+   report whether the configured minimum has been reached. No effect unless
+   EU4_GFX_CHECKPOINT_SETTLE_CALLER and ..._MIN_DRAWS are set. */
+int eu4_gfx_frame_ready_for_checkpoint(void);
+void eu4_gfx_frame_note_draw_caller(uint64_t caller_rva);
+
+/* Host-diagnostic: resolve a Metal source into a destination using the same
+   orientation conversion as _GfxResolve. Returns 0 on success. */
+int eu4_gfx_resolve_orientation_test(void *source, void *destination);
+extern uint8_t eu4_gfx_last_raster_description[0x10];
+extern uint64_t eu4_gfx_live_draw_sequence;
+extern uint64_t eu4_gfx_live_clear_sequence;
+@property (nonatomic, strong) id lastBoundRTColor;
+@property (nonatomic) uint32_t lastBoundRTWidth;
+@property (nonatomic) uint32_t lastBoundRTHeight;
+@property (nonatomic) uint32_t lastFullTargetWidth;
+@property (nonatomic) uint32_t lastFullTargetHeight;
+@property (nonatomic) uint32_t lastDrawTargetWidth;
+@property (nonatomic) uint32_t lastDrawTargetHeight;
 /* Optional offscreen clear target. Shared BGRA8Unorm render target. */
 @property (nonatomic, strong) id colorTarget;
 @property (nonatomic) uint32_t colorWidth;
@@ -207,6 +247,7 @@ uint8_t *eu4_gfx_image(void);
 /* Borrowed device and the non-owning backend token at master+0x180. */
 void *eu4_gfx_metal_device(void);
 void *eu4_gfx_backend_token(void);
+void *eu4_gfx_immediate_master(void);
 
 int eu4_gfx_phase(void);
 int eu4_gfx_backend_releases(void);
@@ -287,7 +328,21 @@ int eu4_gfx_offscreen_contents_known(void *master);
    backbuffer when game mode is on and +0x78 is null; otherwise to the
    diagnostic offscreen when configured. A geometry-transition stale skip
    returns normally; unsupported or failed cases stop. */
+void eu4_gfx_present_scene(void *self);
+int eu4_gfx_swap_window(void *window);
+int eu4_gfx_cocoa_swap_window(void *window);
+int eu4_gfx_cocoa_gles_swap_window(void *window);
+void eu4_gfx_resolve_noop(void *unused, void *header);
+void eu4_gfx_resolve_texture_noop(void *handle, void *source, void *target);
+
 void eu4_gfx_clear(void *handle, unsigned flags, const float *color);
+
+/* GL-compatible effective depth state: testing is active only when a depth
+   attachment exists and the engine's enable byte is set; depth writes only
+   happen while testing is active. `enable` and `write` are the separate bytes
+   at master+0x30 and master+0x31. */
+void eu4_gfx_effective_depth_state(int has_depth, uint8_t enable, uint8_t write,
+                                   int *test_out, int *write_out);
 /* Diagnostic offscreen only. Validate and commit without waiting. ok means
    submitted. Rejects a second clear while one is pending. Invalidates
    contentsKnown on submit. */
@@ -311,6 +366,9 @@ eu4_gfx_clear_status eu4_gfx_read_game_target(void *master, void *dest, size_t c
 /* Wait for the pending game clear. On OK sets gameContentsKnown and
    readyForPresent only when the pending generation is still current. */
 eu4_gfx_clear_status eu4_gfx_complete_game(void *master, int *command_status);
+
+/* Drains the pending game submission (diagnostic readbacks only). */
+void eu4_gfx_drain_pending(void);
 int eu4_gfx_game_contents_known(void *master);
 int eu4_gfx_ready_for_present(void *master);
 /* _GfxSetRenderTarget at 0x15ed004. null selects the default game backbuffer.

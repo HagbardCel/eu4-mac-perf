@@ -27,6 +27,7 @@ SOURCES = [
     ROOT / "benchmark" / "eu4_gfx_draw_encode.mm",
     ROOT / "benchmark" / "eu4_gfx_draw_capture.c",
     ROOT / "benchmark" / "eu4_gfx_draw_route.mm",
+    ROOT / "benchmark" / "eu4_gfx_generic_draw.mm",
     ROOT / "benchmark" / "eu4_gfx_logical_capture.mm",
     ROOT / "benchmark" / "eu4_gfx_checkpoint.mm",
     ROOT / "benchmark" / "eu4_metal_events.c",
@@ -65,6 +66,74 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertIn("present=1", ran.stdout)
         self.assertIn("gpu_failure=1", ran.stdout)
 
+    def test_texture_binding_ranges(self) -> None:
+        ran = self._run("--texture-ranges")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("texture_ranges=1", ran.stdout)
+
+    def test_dump_texture_write_failure(self) -> None:
+        ran = self._run("--dump-texture")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("dump_texture=1", ran.stdout)
+
+    def test_bc_texture_decode(self) -> None:
+        ran = self._run("--bc-decode")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertTrue(
+            "bc_decode=1" in ran.stdout or "bc_decode=skip" in ran.stdout
+        )
+
+    def test_sampler_state_decode(self) -> None:
+        ran = self._run("--sampler-decode")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("sampler_decode=1", ran.stdout)
+
+    def test_sprite_uniform_contract(self) -> None:
+        ran = self._run("--sprite-uniform")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("sprite_uniform=1", ran.stdout)
+
+    def test_effective_depth_state(self) -> None:
+        ran = self._run("--depth-state")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("depth_state=1", ran.stdout)
+
+    def test_texture_type_binding_decision(self) -> None:
+        ran = self._run("--texture-type-decision")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("texture_type_decision=1", ran.stdout)
+
+    def test_scissor_conversion_helper(self) -> None:
+        ran = self._run("--scissor-helper")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("scissor_helper=1", ran.stdout)
+
+    def test_target_clear_engine_flags(self) -> None:
+        ran = self._run("--target-clear")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("target_clear=1", ran.stdout)
+        self.assertIn("depth_preserved=1", ran.stdout)
+        self.assertIn("depth_cleared=1", ran.stdout)
+        self.assertIn("color_preserved=1", ran.stdout)
+
+    def test_resolve_orientation(self) -> None:
+        ran = self._run("--resolve-orientation")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("resolve_orientation=1", ran.stdout)
+
+    def test_sampler_effective_min_filter_uses_texture_mip_state(self) -> None:
+        ran = self._run("--sampler-effective")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("sampler_effective=1", ran.stdout)
+        self.assertIn("with_mips=9985", ran.stdout)
+        self.assertIn("without_mips=9729", ran.stdout)
+
+    def test_offscreen_viewport_is_not_hidpi_scaled(self) -> None:
+        ran = self._run("--offscreen-viewport")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("offscreen_viewport=1", ran.stdout)
+        self.assertIn("covered=1024 of=1024", ran.stdout)
+
     def test_frame_start_reconstruction_and_texture_clear(self) -> None:
         ran = self._run("--frame-start")
         self.assertEqual(ran.returncode, 0, ran.stderr)
@@ -72,6 +141,7 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertIn("current_cleared=1", ran.stdout)
         self.assertIn("blend_default=1", ran.stdout)
         self.assertIn("clear_texture=1", ran.stdout)
+        self.assertIn("texture_lod=1", ran.stdout)
 
     def test_two_frame_prefix_resets_stale_target_contents(self) -> None:
         ran = self._run("--prefix-two-frames")

@@ -65,6 +65,7 @@ def build_library() -> Path:
         str(BENCH / "eu4_gfx_observe_framebuffer.c"),
         str(BENCH / "eu4_gfx_observe_framebuffer_drawable.mm"),
         str(BENCH / "eu4_gfx_observe_viewport.c"),
+        str(BENCH / "eu4_gfx_frame_trace.c"),
         str(BENCH / "eu4_gfx_observe_gateway.S"),
         str(BENCH / "eu4_gfx_startup_trace.c"),
         str(BENCH / "eu4_gfx_startup_trace_detour.c"),
@@ -97,6 +98,7 @@ def build_host() -> Path:
         str(BENCH / "eu4_gfx_observe_draw.c"),
         str(BENCH / "eu4_gfx_observe_framebuffer.c"),
         str(BENCH / "eu4_gfx_observe_viewport.c"),
+        str(BENCH / "eu4_gfx_frame_trace.c"),
         str(BENCH / "eu4_gfx_observe_gateway.S"),
         str(BENCH / "eu4_gfx_startup_trace.c"),
         str(BENCH / "eu4_gfx_startup_trace_detour.c"),
@@ -176,6 +178,9 @@ def run(*, authorize_live: bool, wait_seconds: float = 180.0) -> dict:
     env["EU4_GFX_EXPECTED_EXE"] = str(base.GOG_EXE)
     env["EU4_GFX_EXECUTABLE_SHA256"] = evidence["executable_sha256"]
     env["EU4_GFX_STARTUP_DEADLINE_S"] = str(int(wait_seconds))
+    if env_extra:
+        for key, value in env_extra.items():
+            env[str(key)] = str(value)
     env.pop("EU4_METAL_BOOT_MODE", None)
     env.pop("EU4_METAL_INIT_DIR", None)
     stdout = (run_dir / "game.stdout").open("wb")
@@ -387,6 +392,8 @@ def run_ops(
     until_target_draw: bool = False,
     target_caller_rva: int | None = None,
     gl_reference: bool = False,
+    env_extra: dict | None = None,
+    retention: str | None = None,
 ) -> dict:
     """Launch one bounded original-process observation session."""
     if not authorize_live:
@@ -424,10 +431,19 @@ def run_ops(
     env["EU4_GFX_OPS_STOP_POLICY"] = (
         "target_draw" if until_target_draw else "quota"
     )
-    env["EU4_GFX_OPS_RETENTION"] = "state" if until_target_draw else "legacy"
+    env["EU4_GFX_OPS_RETENTION"] = (
+        retention
+        if retention is not None
+        else ("state" if until_target_draw else "legacy")
+    )
+    if retention is not None and retention not in ("state", "legacy"):
+        raise StartupError("retention must be 'state' or 'legacy'")
     if target_caller_rva is not None:
         env["EU4_GFX_OPS_TARGET_CALLER"] = f"0x{target_caller_rva:x}"
     env["EU4_GFX_OPS_FRAMEBUFFER"] = "pre+post" if gl_reference else ""
+    if env_extra:
+        for key, value in env_extra.items():
+            env[str(key)] = str(value)
     env.pop("EU4_METAL_BOOT_MODE", None)
     env.pop("EU4_METAL_INIT_DIR", None)
     request = {

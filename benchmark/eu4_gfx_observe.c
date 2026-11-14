@@ -1,5 +1,6 @@
 #include "eu4_gfx_observe.h"
 
+#include "eu4_gfx_frame_trace.h"
 #include "eu4_gfx_observe_buffers.h"
 #include "eu4_gfx_observe_draw.h"
 #include "eu4_gfx_observe_framebuffer.h"

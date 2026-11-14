@@ -40,6 +40,7 @@ SIMPLE_DRAW = SOURCE.with_name("eu4_gfx_simple_draw.mm")
 SPRITE_DRAW = SOURCE.with_name("eu4_gfx_sprite_draw.mm")
 DRAW_ENCODE = SOURCE.with_name("eu4_gfx_draw_encode.mm")
 LOGICAL_CAPTURE = SOURCE.with_name("eu4_gfx_logical_capture.mm")
+GENERIC_DRAW = SOURCE.with_name("eu4_gfx_generic_draw.mm")
 LIBRARY = SOURCE.parent / ".build/libeu4_metal_boot.dylib"
 HOST_SOURCE = SOURCE.parents[1] / "tests/metal_boot_host.c"
 HOST = SOURCE.parent / ".build/metal_boot_host"
@@ -59,7 +60,7 @@ def build_library(arch: str = "x86_64") -> Path:
         "-o", str(output), str(SOURCE), str(PATCH), str(ENTRY), str(EVENTS), str(GL_DIAG), str(GFX),
         str(BUFFERS), str(DRAW_C), str(DRAW_S), str(TEXTURE), str(SHADER),
         str(SIMPLE_DRAW), str(SPRITE_DRAW), str(DRAW_ENCODE), str(DRAW_ROUTE),
-        str(CHECKPOINT), str(LOGICAL_CAPTURE),
+        str(CHECKPOINT), str(LOGICAL_CAPTURE), str(GENERIC_DRAW),
     ]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode:

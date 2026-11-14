@@ -1,0 +1,21 @@
+{
+  "schema": "gfx-frame-comparison-policy/v1",
+  "name": "m6-menu-frame",
+  "description": "Differential policy for the reconstructed Metal execution of a captured original-OpenGL frame. The only declared normalization is row origin; every other difference is a test result, not a tolerance.",
+  "allowed_normalizations": [
+    "row_origin"
+  ],
+  "alpha": {
+    "ignored": false,
+    "reason": "The GL drawable carries a meaningful alpha channel for this frame; alpha is compared, not masked."
+  },
+  "thresholds": {
+    "max_channel_error": 0,
+    "mismatched_fraction": 0.0,
+    "mean_abs_error": 0.0
+  },
+  "notes": [
+    "Thresholds start exact because the Metal replay consumes the exact captured inputs.",
+    "A non-zero threshold is admissible only with measured evidence of legitimate backend variation, recorded in the qualification report."
+  ]
+}

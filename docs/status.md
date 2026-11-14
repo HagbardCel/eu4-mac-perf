@@ -2,6 +2,92 @@
 
 Authoritative summary of what is established, qualified, and in flight. Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
 
+## M6 — authentic title scene through Metal (2026-11-14, interim)
+
+Offline captured-state replay **passes**; live visual acceptance **has not
+passed**, so M6 is not accepted and PR #189 remains Draft.
+[Qualification report](../analysis/m6/qualification-report.md),
+[frame evidence](../analysis/m6/menu-frame-evidence.json),
+[live acceptance](../analysis/m6/live-acceptance.json),
+[campaign record](../analysis/m6/campaign-record.md).
+
+- **Canonical frame.** The corrected menu-caller occurrence-300 capture
+  (`.local/m6/frames/menu-occ300/frame`) has 326 events, reference SHA-256
+  `ff2f4e2b…`. `menu-15` is invalidated: its observer corrupted texture unit 0
+  and it must not be used as a pixel reference. `menu-audit` is diagnostic
+  only.
+- **Offline captured-state replay.** The final implementation encoded 326/326
+  events with 0 failures, GPU completion, 0 differing pixels of 1,930,176
+  including alpha, and independent reference/candidate files with alias
+  rejection. This is a captured-state replay; it does not independently
+  reconstruct the upstream terrain pass and does not qualify the live terrain
+  pipeline.
+- **Isolation harness (fixed).** The `--only-event --seed-marked` path used to
+  encode a clear after the authentic pre-image upload, so the isolated draw
+  started from black. Attachments and depth are now initialized first, the
+  pre-image is uploaded with a checked transfer and a pre-draw readback, and
+  only then is the draw encoded. The regression
+  `test_pre_image_survives_the_selected_draw` fails under the old ordering and
+  passes now. Selected-event replay/comparison is exposed through
+  `python3 -m automation.m6_frame replay --only-event` and `isolate --event`.
+- **Isolated terrain evidence.** Event 20 (73 changed pixels) and event 92
+  (2,177 changed pixels) both reproduce the GL pre-image exactly; their
+  post-images differ by 18 pixels (max 1/255) and 685 pixels (max 8/255)
+  respectively, with depth replayed from the recorded prefix. This qualifies
+  those draws only.
+- **First live divergence (fixed).** The live route applied the backbuffer
+  HiDPI ratio to offscreen targets: the 864x558 bloom/season target rendered
+  into a 432x279 corner (25% coverage, near-black). `eu4_gfx_draw_route`
+  now gives the backbuffer its window extent and each offscreen target its own
+  extent; the native offscreen-viewport regression fails under the old
+  behaviour and passes after the fix.
+- **Live result after the fixes.** The post-sampler-fix launch
+  (`live-verify2/run-1`, identity `1794640399-68635`) executed, GPU-completed
+  and presented the complete title scene with zero refused draws. The
+  magenta/pink palette disappeared and the secondary composite input is
+  full-size and non-black.
+- **MainScene lifecycle (observed).** The resolve trace shows the first
+  `_GfxResolve` (draw 737) copies the current `gameColorTarget` (3456x2234)
+  into MainScene (1728x1117) with `scaled_ok`; the destination hash equals the
+  composite's MainScene sample. The preceding default clear is valid (flags 7,
+  black, status 0) and targets the same texture. The earlier
+  previous-composite-feedback interpretation is superseded.
+- **Sampler effective state (fixed).** The live filter decode conflated the
+  engine's base min filter and its separate mip filter, disabling mipmapping
+  for every texture. `eu4_gfx_effective_min_filter` now uses the engine mip
+  filter only when the bound texture has mip levels; a native regression
+  covers the mapping. Palette affinity improved only marginally
+  (0.435 -> 0.452), so this is a correctness fix, not the map root cause.
+- **Composition (resolved).** The 231/9 versus 252/6 difference was a
+  partially loaded first menu frame. A settle gate waits for 252 terrain calls;
+  the settled frame has 252 terrain + 12 map-layer calls (6 default + 6
+  offscreen), equivalent to the reference. The missing/repeated-operations
+  hypothesis is rejected.
+- **Shader capability (fixed).** The live backend reported
+  `GLEW_ARB_shader_texture_lod` as absent (`master+0x18e=0`), so the engine
+  compiled the `NO_SHADER_TEXTURE_LOD` fallback with flat normals. The
+  authentic GL context advertises the extension. Reporting it as present makes
+  the live sources match the captured variant (78/78); regression added.
+- **Orientation (fixed).** `_GfxResolve` did not convert the Metal top-left
+  render target into the GL texture row convention, so MainScene was sampled
+  upside down. `resolve_scaled` now flips V and serves every `_GfxResolve`
+  copy; a native four-quadrant regression covers it. The post-fix run has UI
+  correlations 0.752/0.965/0.506 — the logo region now passes.
+- **Land rendering (fixed).** The translator assigned sampler bindings
+  sequentially (0..n-1) instead of the engine's `texN` -> unit N. The map-base
+  shader omits `tex6`, so `tex7..tex15` were shifted one unit and sampled the
+  white default/wrong textures. Samplers named `texN` now bind to unit N;
+  caches were rebuilt and a unit-number regression added. The live map changed
+  from beige (mean 147.8, affinity 0.441) to green (mean 74.29, affinity 0.943).
+- **Live qualification.** Three fresh, distinct settled launches on the
+  corrected implementation were accepted with the final resolve-trace
+  requirement: UI 0.87/0.978/0.976, map affinity 0.943, zero refused draws, no
+  failed resolves, GPU completion and presentation.
+- **Residual UI defect.** The Credits/Options button labels remain vertically inverted
+  (word order preserved; the earlier “horizontally mirrored” description was
+  incorrect). The UI region policy passes, but the text is not visually correct;
+  this is the remaining M6 blocker.
+
 ## M4 — original-GL reference and Metal presentation (2026-11-12)
 
 Qualified by the M4 checker. The authentic Simple loading draw was captured

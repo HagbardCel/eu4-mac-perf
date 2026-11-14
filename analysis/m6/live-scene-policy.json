@@ -1,0 +1,43 @@
+{
+  "schema": "m6-live-scene-policy/v1",
+  "reference": {
+    "logical": [
+      1728,
+      1117
+    ],
+    "alpha": "opaque"
+  },
+  "ui_regions": [
+    [
+      900,
+      1117,
+      0,
+      1728
+    ],
+    [
+      40,
+      260,
+      0,
+      760
+    ],
+    [
+      40,
+      260,
+      1580,
+      1728
+    ]
+  ],
+  "ui_min_correlation": 0.5,
+  "ui_tolerance": 40.0,
+  "map_region": [
+    300,
+    880,
+    200,
+    1500
+  ],
+  "map_min_unique_colors": 500,
+  "map_min_mean": 10.0,
+  "map_min_std": 20.0,
+  "map_min_coherence": 0.5,
+  "map_min_color_similarity": 0.85
+}
