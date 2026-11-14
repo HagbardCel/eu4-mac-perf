@@ -246,6 +246,14 @@ class MultiClaimTests(unittest.TestCase):
         after = launch_ledger.load_ledger(self.ledger)
         self.assertEqual(before, after)
 
+    def test_ledger_pointer_collision_is_refused(self):
+        with self.assertRaises(launch_ledger.LedgerError) as caught:
+            launch_ledger.authorize_workflow(
+                self.root / "workflow-ledger.json", self.root,
+                workflow_id="w", limit=1, deadline_seconds=10.0,
+            )
+        self.assertEqual(caught.exception.kind, "collision")
+
     def test_every_output_must_be_inside_the_pinned_root(self):
         with self.assertRaises(launch_ledger.LedgerError) as caught:
             launch_ledger.claim_many(

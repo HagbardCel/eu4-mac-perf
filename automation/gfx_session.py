@@ -357,7 +357,13 @@ class Session:
             dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             + "-" + uuid.uuid4().hex[:8]
         )
-        run_dir = unique_run_dir(Path(run_root), "session" + (f"-{suffix}" if suffix else ""))
+        base = Path(run_root).expanduser().resolve()
+        base.mkdir(parents=True, exist_ok=True)
+        run_dir = base / ("session-" + session_id + (f"-{suffix}" if suffix else ""))
+        try:
+            run_dir.mkdir()
+        except FileExistsError as exc:
+            raise SessionError("collision", f"session directory already exists: {run_dir}") from exc
         marker = root / f"session-{session_id}.json"
         lock_path = root / f"session-{session_id}.lock"
         handle = lock_path.open("a+")

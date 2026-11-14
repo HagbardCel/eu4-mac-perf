@@ -539,6 +539,12 @@ def authorize_workflow(
     """
     ledger_path = Path(ledger_path).expanduser().resolve()
     run_root = Path(run_root).expanduser().resolve()
+    if ledger_path == pointer_path(run_root).resolve():
+        raise LedgerError(
+            "collision",
+            "the ledger path and the run-root pointer are the same file; "
+            "choose a separate ledger path so authorization cannot be overwritten",
+        )
     if deadline_seconds is not None:
         validate_timeout(deadline_seconds, field="deadline_seconds")
     created = not ledger_path.exists()
