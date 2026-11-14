@@ -60,9 +60,11 @@ complete. The controlled V-flip fault still localizes to event 291 / texture 443
 and a shifted-sampler fault is detected semantically at event 17.
 
 Background placement/focus remains qualified 5/5 for OpenGL and 5/5 for Metal,
-but a longer background title-rendering test did not progress beyond the loading
-scene (6 draws, 70 scenes); the authentic capture therefore used the preserved
-foreground fallback. `strategy-b-metrics.json` records these categories
+but the three background title-capture attempts were made before the interposer
+self-recursion fix and stalled at the loading scene (6 draws, 70 scenes). They
+are therefore inconclusive, not evidence that background rendering cannot reach
+title. Background title rendering remains unverified; the authentic capture
+used the preserved foreground fallback. `strategy-b-metrics.json` records these categories
 separately and is reconstructed from the session records.
 
 Relevant suites pass: 258 capture/replay/graph/display tests, 12 native

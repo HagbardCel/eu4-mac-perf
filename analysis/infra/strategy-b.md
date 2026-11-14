@@ -489,10 +489,12 @@ rerun reproduced the same four-pixel alpha difference.
 
 Placement/focus qualification remains 5/5 OpenGL and 5/5 Metal. Three background
 title-capture attempts stalled at the loading scene (6 draws, 70 scenes, no
-authentic copies) and did not reach title rendering. The preserved foreground
-fallback produced the authentic capture. Background mode therefore remains an
-opt-in isolation capability, **not** a qualified path for long OpenGL title
-capture.
+authentic copies), but all three predated the interposer self-recursion fix.
+They are therefore **inconclusive** about background rendering itself, not
+evidence that background title rendering is impossible. Background title
+rendering remains unverified; the preserved foreground fallback produced the
+authentic capture. Background mode remains opt-in and is not qualified for long
+OpenGL title capture.
 
 ### Remaining limitations
 
@@ -500,8 +502,9 @@ capture.
 2. The new frame has a deterministic 4-pixel, 1-LSB alpha difference at screen
    edges; the canonical frame has none. This is reported as a real result, not
    normalized away.
-3. Background OpenGL title rendering does not progress beyond loading; the
-   foreground fallback is required for authentic title/menu capture.
+3. Background OpenGL title rendering remains unverified. The pre-fix attempts
+   stalled at loading and are inconclusive; the foreground fallback produced
+   the authentic capture.
 4. The copy/clear semantics are fully validated synthetically and by native
    pixel tests, but no authentic copy-bearing menu frame has been captured.
 5. Checkpoint 433 remains diagnostic because RGB8/BGRA8 conventions differ.

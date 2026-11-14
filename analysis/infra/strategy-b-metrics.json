@@ -21,8 +21,8 @@
   "background_isolation_qualified": true,
   "background_title_rendering_qualified": false,
   "background_title_capture_attempts": 3,
-  "background_title_capture_result": "loading_only_6_draws_70_scenes",
-  "background_title_capture_note": "Three background attempts (frame-early, frame-title-short, frame-menu-loading) and one background save attempt stalled at the loading scene; the authenticated capture used the preserved foreground fallback.",
+  "background_title_capture_result": "inconclusive_pre_interposer_fix_loading_only",
+  "background_title_capture_note": "The three background title attempts (frame-early, frame-title-short, frame-menu-loading) predated the interposer self-recursion fix, so their loading-only progression is not evidence about background rendering itself. Background title rendering remains unverified; the authenticated capture used the foreground fallback.",
   "foreground_fallback_used_for_capture": true,
   "texture_442_copy_events_observed": 0,
   "texture_442_source": null,
@@ -118,7 +118,7 @@
   "notes": [
     "The integration branch was synchronized with origin/main 61e7795 before these corrections; the merge commit is cb35385.",
     "Texture 442 remains the single unresolved dependency in both the historical canonical menu frame and the new menu scene 79.",
-    "Background placement/focus is qualified 5/5 for both backends, but background OpenGL title rendering did not progress beyond the loading scene; the foreground fallback produced the authentic capture.",
+    "Background placement/focus is qualified 5/5 for both backends. The pre-fix background title attempts stalled at loading and are inconclusive; background title rendering remains unverified. The foreground fallback produced the authentic capture.",
     "The copy interposer now resolves the OpenGL framework implementation explicitly and refuses self-recursion; the old 5,618-event lifecycle record is not valid evidence.",
     "The copy kernel now bounds work to the requested rectangle, and native tests assert actual pixels for partial copies, orientation and clear preservation."
   ]
