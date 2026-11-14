@@ -213,7 +213,7 @@ class GraphTests(unittest.TestCase):
         self.assertTrue(graph["reasons"])
 
 
-def replay_provenance(*, seeded=False, generation=1):
+def replay_provenance(*, seeded=False, generation=2):
     sample = {
         "event": 4, "texture": "10", "sampler": "tex10", "unit": 10,
         "source": "external_capture" if seeded else "metal_render_target",
@@ -327,6 +327,21 @@ class FirstDivergenceTests(unittest.TestCase):
         self.assertEqual(value["kind"], "intermediate")
         self.assertEqual(value["event"], 291)
         self.assertEqual(value["producer_event"], 289)
+
+    def test_semantic_mismatch_is_the_earliest_divergence(self):
+        audit = {
+            "ok": False,
+            "mismatches": [{
+                "event": 14, "kind": "missing_texture_unit",
+                "sampler": "tex7", "engine_unit": 6,
+            }],
+        }
+        value = gfx_independent_replay.first_divergence(
+            {"resources": {}, "events": []}, [], {"status": "match"},
+            binding_audit=audit)
+        self.assertEqual(value["kind"], "semantic")
+        self.assertEqual(value["event"], 14)
+        self.assertEqual(value["semantic"]["sampler"], "tex7")
 
     def test_final_only_divergence_is_not_attributed_to_an_input(self):
         value = gfx_independent_replay.first_divergence(

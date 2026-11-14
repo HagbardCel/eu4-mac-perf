@@ -286,12 +286,38 @@ def final_comparison(frame_dir: Path, out_dir: Path,
 
 
 def first_divergence(graph: dict, checkpoints: list[dict],
-                     final: dict, *, fault: dict | None = None) -> dict:
-    """Earliest confirmed intermediate or final divergence with provenance."""
+                     final: dict, *, binding_audit: dict | None = None,
+                     fault: dict | None = None) -> dict:
+    """Earliest confirmed semantic, intermediate or final divergence."""
+    audit = binding_audit or {}
+    first_semantic = (audit.get("mismatches") or [None])[0]
     divergent = [
         item for item in checkpoints
         if item.get("status") == "divergent" and item.get("authoritative")
     ]
+    semantic_event = first_semantic.get("event") if first_semantic else None
+    intermediate_event = divergent[0]["event"] if divergent else None
+    final_event = None
+    candidates = [
+        ("semantic", semantic_event if not audit.get("ok") else None),
+        ("intermediate", intermediate_event),
+        ("final", final_event),
+    ]
+    candidates = [item for item in candidates if item[1] is not None]
+    earliest = min(candidates, key=lambda item: item[1]) if candidates else None
+    if earliest and earliest[1] == semantic_event:
+        return {
+            "schema": "gfx-first-divergence/v1",
+            "kind": "semantic",
+            "event": semantic_event,
+            "semantic": first_semantic,
+            "intermediate": (divergent[0] if divergent else None),
+            "final": final.get("status"),
+            "fault": fault,
+            "reason": (
+                "the earliest confirmed difference is a binding/state mismatch; "
+                "its pixel effect may be overdrawn later"),
+        }
     if divergent:
         first = divergent[0]
         resource = (graph.get("resources") or {}).get(first["resource"]) or {}
@@ -318,6 +344,8 @@ def first_divergence(graph: dict, checkpoints: list[dict],
             "producer": producers[-1] if producers else None,
             "statistics": first.get("statistics"),
             "upstream_checkpoints": upstream,
+            "semantic": first_semantic,
+            "final": final.get("status"),
             "reason": (
                 "the earliest authoritative intermediate checkpoint differs; "
                 "its inputs are not necessarily the cause"),
@@ -329,6 +357,8 @@ def first_divergence(graph: dict, checkpoints: list[dict],
             "kind": "final_only",
             "event": None,
             "statistics": final.get("statistics"),
+            "semantic": first_semantic,
+            "intermediate": None,
             "reason": (
                 "no authoritative intermediate checkpoint diverged before the "
                 "final output; increase checkpoint detail around the last pass"),
@@ -344,6 +374,8 @@ def first_divergence(graph: dict, checkpoints: list[dict],
             {"event": item["event"], "target": item["target"],
              "statistics": item.get("statistics")} for item in diagnostic
         ],
+        "semantic": first_semantic,
+        "intermediate": None,
         "reason": "all authoritative checkpoints and the final output match",
         "fault": fault,
     }
@@ -380,6 +412,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(json.dumps({
         "status": report.get("status"),
+        "outcome": report.get("outcome"),
+        "qualified": (report.get("outcome") or {}).get("qualified"),
         "graph": (report.get("graph") or {}).get("status"),
         "evaluation": (report.get("evaluation") or {}).get("status"),
         "final": (report.get("final") or {}).get("status"),
@@ -466,20 +500,54 @@ def replay(
     checkpoints = compare_checkpoints(graph, replay_result, frame_dir, out_dir)
     audit = binding_audit(replay_result)
     final = final_comparison(frame_dir, out_dir, policy)
-    divergence = first_divergence(graph, checkpoints, final, fault=faults or None)
-    status = evaluation["status"]
-    if final.get("status") != "match" and status == "complete":
+    divergence = first_divergence(
+        graph, checkpoints, final, binding_audit=audit,
+        fault=faults or None)
+    execution_ok = (
+        replay_result.get("status") == "ok"
+        and replay_result.get("encoded") == replay_result.get("events")
+        and replay_result.get("failed") == 0
+        and replay_result.get("command_status") == 4
+        and bool(replay_result.get("readback"))
+    )
+    coverage = evaluation["status"]
+    if execution_ok and coverage == "complete" and evaluation.get("seeded_intermediates"):
+        coverage = "partial"
+    semantic = "match" if audit.get("ok") else "divergent"
+    pixels = final.get("status", "invalid")
+    intermediate_divergent = any(
+        item.get("status") == "divergent" and item.get("authoritative")
+        for item in checkpoints)
+    qualified = bool(
+        execution_ok and coverage == "complete" and semantic == "match"
+        and pixels == "match" and not intermediate_divergent
+        and not faults
+    )
+    if not execution_ok or coverage == "invalid":
+        status = "invalid"
+    elif semantic == "divergent":
+        status = "semantic_divergence"
+    elif pixels == "divergent" or intermediate_divergent:
+        status = ("confirmed_rendering_difference" if coverage == "complete"
+                  else "partial_rendering_difference")
+    elif coverage == "partial":
         status = "partial"
-    if any(item.get("status") == "divergent" and item.get("authoritative")
-           for item in checkpoints) and status == "complete":
-        status = "partial"
-    if not audit.get("ok") and status == "complete":
-        status = "partial"
+    else:
+        status = "qualified"
     report = {
         "schema": SCHEMA,
         "frame_dir": str(frame_dir),
         "out_dir": str(out_dir),
         "status": status,
+        "outcome": {
+            "execution": "ok" if execution_ok else "failed",
+            "coverage": coverage,
+            "pixels": pixels,
+            "semantic": semantic,
+            "qualified": qualified,
+            "intermediate_divergence": intermediate_divergent,
+            "fault_injection": bool(faults),
+        },
         "faults": faults,
         "graph": graph,
         "evaluation": evaluation,

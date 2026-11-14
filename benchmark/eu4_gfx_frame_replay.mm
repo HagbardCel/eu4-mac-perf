@@ -2386,6 +2386,15 @@ int main(int argc, const char *argv[]) {
             BOOL ok = YES;
             if ([kind isEqualToString:@"clear"]) {
                 ok = encode_clear(event, frame_path, command, &event_error);
+            } else if ([kind isEqualToString:@"resolve"] ||
+                       [kind isEqualToString:@"copy"]) {
+                /* The graph recognizes resolve/copy events, but this host does
+                   not yet execute them.  Count them as failures: an unsupported
+                   operation must never be encoded as a silent no-op. */
+                ok = NO;
+                event_error = [NSError errorWithDomain:kErrorDomain code:95
+                                             userInfo:@{NSLocalizedDescriptionKey:
+                                                            @"captured resolve/copy event is not reconstructed"}];
             } else if ([kind isEqualToString:@"draw"]) {
                 NSNumber *program = event[@"program"][@"name"];
                 NSDictionary *entry = programs[program];

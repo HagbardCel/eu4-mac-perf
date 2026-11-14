@@ -258,6 +258,8 @@ def build(frame_dir: Path | str) -> dict:
                          if first_consumer is None or item["event"] < first_consumer]
         writes_after = [item for item in producers
                         if first_consumer is not None and item["event"] > first_consumer]
+        resource["classification_basis"] = []
+        resource["possible_missing_producer"] = False
         if writes_before:
             resource["origin"] = GENERATED
             resource["initialized_by"] = (
@@ -265,10 +267,15 @@ def build(frame_dir: Path | str) -> dict:
             )
             if first_consumer is not None:
                 resource["consumed_version_event"] = writes_before[-1]["event"]
+                resource["expected_generation"] = len(writes_before)
+            resource["classification_basis"] = [
+                "captured in-frame producer before first consumer"]
         elif key.startswith("fb:"):
             # The default framebuffer always exists before the frame; it is a
             # pre-frame output unless a clear initializes it in-frame.
             resource["origin"] = BOUNDARY if resource["boundary"] else UNPROVEN
+            resource["classification_basis"] = [
+                "default framebuffer without an in-frame initialization"]
         elif first_consumer is not None:
             width, height = resource["dimensions"]
             full_extent = (
@@ -278,15 +285,29 @@ def build(frame_dir: Path | str) -> dict:
                 resource["origin"] = UNPROVEN
                 resource["unproven_reason"] = (
                     "first consumer precedes every captured producer")
+                resource["classification_basis"] = [
+                    "consumer precedes the only captured producer"]
             elif full_extent or key[4:] in target_names:
                 resource["origin"] = UNPROVEN
+                resource["possible_missing_producer"] = True
                 resource["unproven_reason"] = (
                     "sampled full-extent texture has no captured producer; a "
-                    "resolve/copy or earlier pass is missing from the capture")
+                    "resolve/copy or earlier pass may be missing from the capture")
+                resource["classification_basis"] = [
+                    "no in-frame producer",
+                    "full-extent or in-frame target: missing producer is possible"]
             else:
                 resource["origin"] = EXTERNAL
+                resource["classification_basis"] = [
+                    "no in-frame producer",
+                    "captured content at every consumer",
+                    "not an in-frame target",
+                ]
         else:
             resource["origin"] = GENERATED if producers else UNPROVEN
+            resource["classification_basis"] = (
+                ["captured in-frame producer"] if producers
+                else ["no producer and no consumer"])
             if not producers:
                 resource["unproven_reason"] = "written resource has no producer"
 
@@ -491,11 +512,21 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
         zero = [item for item in bindings
                 if item.get("source") == "metal_render_target"
                 and int(item.get("generation") or 0) == 0]
-        if external or zero:
+        expected = int(
+            (graph.get("resources") or {}).get(key, {}).get(
+                "expected_generation", 0))
+        stale = [
+            item for item in bindings
+            if item.get("source") == "metal_render_target"
+            and int(item.get("generation") or 0) < expected
+        ]
+        if external or zero or stale:
             seeded.append({
                 "resource": key,
                 "external_bindings": len(external),
                 "generation_zero_bindings": len(zero),
+                "stale_generation_bindings": len(stale),
+                "expected_generation": expected,
             })
     for item in provenance.get("first_sample_before_any_write") or []:
         seeded.append({
