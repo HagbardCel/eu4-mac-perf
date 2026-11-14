@@ -37,6 +37,34 @@ Evidence: [Strategy B report](../analysis/infra/strategy-b.md). Tools:
 `eu4_capture graph`, `eu4_replay independent`, `eu4_case_inspect` for Strategy B
 cases, and `python3.14 -m automation.gfx_replay_case`.
 
+### Final correctness closure (2026-11-15)
+
+The infrastructure branch was synchronized with `origin/main` (`61e7795`) as
+merge `cb35385`. The closure fixes the startup launcher interface, makes the
+trace writer fail closed, applies one scene-occurrence semantic to both
+boundaries, bounds the Metal copy kernel to the requested rectangle, validates
+every clear flag combination against actual pixels, and rejects missing,
+duplicate or zero-index-shifted consumer provenance.
+
+A new authentic OpenGL menu capture (scene 79, 282 events / 273 draws,
+reference SHA-256 `3b832401…`) replays deterministically through Metal:
+273/273 draws execute, 2,573 bindings audit cleanly, checkpoints 431, 432, 443
+and 447 match exactly, and the final image differs in only four edge pixels by
+one alpha LSB. Coverage is still **partial**: texture 442 is sampled without an
+in-captured producer. The previously reported 5,618 copy events into texture 442
+are **retracted**: they were produced by an interposer that resolved
+`dlsym(RTLD_NEXT)` to itself and recursed in `GfxResolve`. After the fix, no
+authentic copy event is present in the captured menu frame, so texture 442
+remains an unresolved pre-frame dependency and the frame cannot be certified as
+complete. The controlled V-flip fault still localizes to event 291 / texture 443,
+and a shifted-sampler fault is detected semantically at event 17.
+
+Background placement/focus remains qualified 5/5 for OpenGL and 5/5 for Metal,
+but a longer background title-rendering test did not progress beyond the loading
+scene (6 draws, 70 scenes); the authentic capture therefore used the preserved
+foreground fallback. `strategy-b-metrics.json` records these categories
+separately and is reconstructed from the session records.
+
 ## Differential debugging infrastructure (2026-11-14, stacked PRs 1-5)
 
 Five stacked branches implement the autonomous OpenGL-vs-Metal differential

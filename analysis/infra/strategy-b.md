@@ -382,3 +382,133 @@ M6 frame and PR #190 draw suites; 6/6 DSH plugin tests pass.
   but the exact copy position relative to the canonical frame boundary is still
   unproven, so 442 is not declared a boundary input and the frame remains
   `coverage=partial`.
+
+## 12. Final correctness closure (2026-11-15)
+
+### Baseline and ancestry
+
+The reviewed integration head was `b8fdd0b95567567aa4cf63203fe5cd3da278fe57`.
+It was synchronized with the current integration baseline `origin/main`
+(`61e7795`, the PR #190 merge) as merge commit `cb35385`, preserving the five
+historical infrastructure branches and all follow-up corrections. The code
+corrections are commit `24012a4`; no original branch was rewritten.
+
+### Executable defects fixed
+
+1. **Startup launcher (`eu4_gfx_startup_trace.py`).** `run()` referenced
+   `env_extra` and `game_args` without declaring them. Both are now optional
+   parameters mirroring `run_ops`; the CLI exposes `--env` and `--game-arg`.
+   A new offline test mocks `preflight()`, the lease and `Popen`, and asserts the
+   exact argv and environment.
+2. **Fail-closed trace writer (`eu4_gfx_frame_trace.c`).** A copy at capacity now
+   sets `truncated`; `emit_event()` returns success and marks
+   `capture_failed` on write, flush or close failure; the event stream is closed,
+   re-read, structurally checked and counted before any manifest may publish
+   `complete=true`. Regressions cover copy capacity, forced flush failure,
+   malformed records, count mismatch, and a valid draw+copy frame.
+3. **Scene selector.** The scene path now applies the same caller, minimum-draw,
+   maximum-frame-draw and occurrence semantics as the present path, finishes the
+   selected scene at its corresponding next boundary, and explicitly rejects the
+   unsupported scene+absolute-frame combination. Synthetic scene tests assert
+   occurrence 2 selects scene 5, capture spans scenes 6→6 through both
+   boundaries, and only scene-6 draws appear.
+4. **Copy interposer self-recursion.** `dlsym(RTLD_NEXT)` returned the interposed
+   function itself, so `GfxResolve` recursed on the main thread. The original is
+   now resolved explicitly from the OpenGL framework handle, with a self-pointer
+   guard. This also invalidated the old 5,618-copy lifecycle record.
+5. **Partial copy kernel.** The compute kernel was bounded only by texture
+   extent, so a 2×2 request overwrote an 8×8-clipped region. The kernel now
+   receives the requested size and returns outside it.
+6. **Consumer validation.** Event index 0 is preserved, and two provenance rows
+   for the same `(event, sampler)` are rejected as `duplicate_consumer` instead
+   of counting as one valid binding.
+
+### Authentic capture and independent replay
+
+A new original-OpenGL menu scene was captured after the interposer fix:
+
+- scene 79, 282 events, 273 draws, 9 clears, no recorded resolve/copy event;
+- reference 1728×1117 BGRA8, SHA-256 `3b832401…`;
+- capture manifest `complete=true`, `stream_validated=true`.
+
+Independent Metal replay:
+
+| Property | Result |
+| --- | --- |
+| Draws executed | 273/273, 0 failed |
+| Command status | completed |
+| Bindings audited | 2,573 checked, 0 mismatched |
+| Checkpoints 431, 432, 443, 447 | exact |
+| Checkpoint 433 | diagnostic (GL RGB8 vs Metal BGRA8) |
+| Final pixels | 4 / 1,930,176 differ, all alpha LSB, max channel error 1 |
+| Determinism | two replays produced identical candidate SHA-256 |
+| Qualification | **not qualified** (coverage partial, 4-pixel difference) |
+
+The four differing pixels are at the top and bottom screen edges
+(`(2,1)`, `(1725,1)`, `(1727,1)`, `(0,1116)`); colour is identical and alpha is
+229 in the GL reference versus 228 in Metal. The first-divergence report is
+therefore `final_only`, not an intermediate mismatch. The historical canonical
+frame still replays with 0 differing pixels.
+
+### Texture 442 blocker
+
+Texture 442 is 1728×1117, sampled by two in-frame passes, and has no in-frame
+producer. The earlier metrics claimed 5,618 `glCopyTexSubImage2D` events into
+texture 442. That record is **not authentic**: before the interposer fix,
+`dlsym(RTLD_NEXT)` returned the replacement itself, so each `GfxResolve` call
+recursed until termination and every recursion appended a log line. With the
+original OpenGL function resolved correctly, the captured menu workload contains
+no authentic copy event. The precise temporal relationship between the default
+framebuffer, the copy and the frame boundary therefore remains **unproven**.
+
+The correct classification is still `unproven`, not "external input": treating
+442 as a boundary input without temporal evidence would violate the capture
+contract. The frame remains partial and replay qualification remains false even
+though final pixels almost match.
+
+### Controlled regressions
+
+- Render-target V-flip disabled on the canonical frame: earliest authoritative
+  divergence event **291**, target **443**, producer event 289
+  (`_GfxDraw`, caller `0xed7c76`, program 349), 481,860/482,112 pixels differ.
+- Shifted-sampler fault (`--sampler-shift 1 --sampler-shift-min 7`) on the new
+  frame: 806 binding mismatches, earliest semantic divergence **event 17**
+  (`tex10` shader unit 0 selected engine unit 11 instead of texture 389).
+  Later overdraw hides most of the pixel effect; the semantic audit still
+  detects it.
+- Both faults are offline and do not relaunch EU4.
+
+### Portable case
+
+`case-menu-clean-moved` contains capture, shaders, graph, checkpoint request,
+replay outputs and relative commands (1,084 files). It was moved to a new
+directory, verified (`problems: []`) and replayed from the packaged inputs; the
+rerun reproduced the same four-pixel alpha difference.
+
+### Background integration
+
+Placement/focus qualification remains 5/5 OpenGL and 5/5 Metal. Three background
+title-capture attempts stalled at the loading scene (6 draws, 70 scenes, no
+authentic copies) and did not reach title rendering. The preserved foreground
+fallback produced the authentic capture. Background mode therefore remains an
+opt-in isolation capability, **not** a qualified path for long OpenGL title
+capture.
+
+### Remaining limitations
+
+1. Texture 442 has no authentic captured producer; the frame is partial.
+2. The new frame has a deterministic 4-pixel, 1-LSB alpha difference at screen
+   edges; the canonical frame has none. This is reported as a real result, not
+   normalized away.
+3. Background OpenGL title rendering does not progress beyond loading; the
+   foreground fallback is required for authentic title/menu capture.
+4. The copy/clear semantics are fully validated synthetically and by native
+   pixel tests, but no authentic copy-bearing menu frame has been captured.
+5. Checkpoint 433 remains diagnostic because RGB8/BGRA8 conventions differ.
+
+### Merge recommendation
+
+Merge the integration branch as a coherent infrastructure PR. It contains the
+baseline synchronization, the executable fixes, fail-closed evidence, native
+pixel semantics, the authentic replay case and honest partial coverage. Do not
+claim texture 442 provenance or complete Strategy B qualification.
