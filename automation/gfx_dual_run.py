@@ -237,8 +237,15 @@ def _phase_ready(reference_draws: int, candidate_draws: int,
                  minimum: int, tolerance: float,
                  reference_update: int = 0,
                  candidate_update: int = 0) -> bool:
-    if reference_update and candidate_update and reference_update != candidate_update:
-        return False
+    if reference_update and candidate_update:
+        if reference_update != candidate_update:
+            return False
+        # A shared engine update is the strong criterion.  Draw counts are
+        # backend-dependent (GL batches differently from the reconstruction),
+        # so they must not veto an identity-matched scene.
+        if minimum > 0 and (reference_draws < minimum or candidate_draws < minimum):
+            return False
+        return reference_draws > 0 and candidate_draws > 0
     if minimum > 0 and (reference_draws < minimum or candidate_draws < minimum):
         return False
     if reference_draws <= 0 or candidate_draws <= 0:
@@ -393,6 +400,7 @@ def _await_dump_meta(launched: dict, indices: list[int], timeout: float = 4.0,
     captured = Path(launched["observe_dir"]) / "captured"
     wanted = set(indices)
     found: dict[int, dict] = {}
+    explicit_missing: set[int] = set()
     deadline = time.monotonic() + timeout
     ack_path = Path(launched["observe_dir"]) / "capture-ack.json"
     while time.monotonic() < deadline and wanted:
@@ -406,7 +414,9 @@ def _await_dump_meta(launched: dict, indices: list[int], timeout: float = 4.0,
                 for value in ack.get("missing", []):
                     if type(value) is int and value in wanted:
                         wanted.discard(value)
-                break
+                        explicit_missing.add(value)
+                # Still scan captured/: an expired ack may coexist with a
+                # successfully written payload for another requested index.
         for index in sorted(wanted):
             path = captured / f"frame-{index}.json"
             if not path.is_file():
@@ -419,7 +429,8 @@ def _await_dump_meta(launched: dict, indices: list[int], timeout: float = 4.0,
             wanted.discard(index)
         if wanted:
             time.sleep(0.02)
-    return {"found": found, "missing": sorted(wanted)}
+    return {"found": found,
+            "missing": sorted((wanted | explicit_missing) - set(found))}
 
 
 def _collect_dumps(launched: dict, indices: list[int], store: gfx_artifacts.ArtifactStore,

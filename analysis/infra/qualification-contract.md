@@ -43,25 +43,29 @@ requires a verified static scene; animated or weakly identified scenes remain
 
 An engine-level update identity is now emitted per observation. The observer reads the exported `CCurrentGameState::_pInstance` singleton at
 RVA `0x2244620` with `vm_read_overwrite` (so a stale pointer cannot fault the
-game) and hashes the date block at `+0x1d18` (the fields written by
-`CGameState::SetCurrentDate`), emitting `game_day` and `update_identity`. When
+game) and reads the day counter at `+0x1d18` (written by
+`CGameState::SetCurrentDate`), emitting `game_day` and an `update_identity`
+derived only from that deterministic counter.  The rest of the date block varies
+per process and is deliberately not hashed. When
 both sides have a non-zero identity, equality is weighted as independent
 alignment evidence and a mismatch makes the pair `not_aligned`; the target-phase
 gate also refuses unequal identities. If the singleton is not live, identity is zero and correspondence is explicitly
 weak. The identity was observed live in a `--continuelastsave` reference at frame
-5: `game_day=43808760`, `update_identity=0x0de0dd22eab200f0`.
+5 with `game_day=43808760`.  A later repeat showed that hashing the whole date
+block produced different values between two processes; only the day counter is
+deterministic.
 
 Stability is also measured from consecutive full-frame digests. Loading screens
 therefore cannot qualify.
 
 Two earlier loaded-save OpenGL/OpenGL experiments (before update identity)
 produced 373 vs 361 draws and different caller signatures, so all 20 pairs were
-`ambiguous`. With identity gating, a later run aligned all 20 pairs on equal
-identity and identical signature/draw counts (380/380), but raw payloads were
-missing: the streaming path issued a per-pair request after the phase-entry
-window, overwriting the pending window. Streaming now issues only the
-phase-entry window (lockstep still requests the paused pair); the fix is
-unit-tested but not yet re-run live. The save
+`ambiguous`. A later identity-gated run aligned 20 pairs with identical
+signature/draw counts, but raw payloads were missing because the streaming path
+issued a per-pair request after the phase-entry window and overwrote it. A
+repeat then showed the full-block identity differed between processes. Streaming
+now issues only one phase-entry window, and identity hashes only the
+deterministic day counter; neither change has been re-run live. The save
 continues running, so the two processes are not at the same update. Experiment A
 therefore failed before any GL/Metal comparison; this is recorded as an
 `alignment_failure`, not as a renderer difference.

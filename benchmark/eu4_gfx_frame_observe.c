@@ -298,9 +298,11 @@ static void game_state_identity(int *day, uint64_t *fingerprint) {
     int day_value = 0;
     memcpy(&day_value, date, sizeof(day_value));
     *day = day_value;
+    /* Only the day counter is deterministic across two processes; later
+       fields in the date block vary per process.  Hash that counter alone. */
     uint64_t hash = 1469598103934665603ULL;
-    for (size_t i = 0; i < sizeof(date); i++) {
-        hash ^= date[i];
+    for (size_t i = 0; i < sizeof(day_value); i++) {
+        hash ^= ((const uint8_t *)&day_value)[i];
         hash *= 1099511628211ULL;
     }
     *fingerprint = hash;

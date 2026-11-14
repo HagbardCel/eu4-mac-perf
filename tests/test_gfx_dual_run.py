@@ -249,6 +249,8 @@ class AlignmentTests(unittest.TestCase):
     def test_phase_rejects_unequal_game_update(self):
         self.assertFalse(gfx_dual_run._phase_ready(100, 100, 40, 0.25, 10, 11))
         self.assertTrue(gfx_dual_run._phase_ready(100, 100, 40, 0.25, 10, 10))
+        # Same identity but backend-dependent draw counts still qualifies.
+        self.assertTrue(gfx_dual_run._phase_ready(100, 500, 40, 0.25, 10, 10))
 
     def test_identity_streak_verifies_correspondence(self):
         state = object.__new__(gfx_dual_run.CampaignState)
@@ -541,6 +543,14 @@ class QualificationTests(unittest.TestCase):
                                           passed=90, not_compared=10))
         self.assertEqual(value["status"], "alignment_failure")
 
+    def test_cleanup_sigkill_is_not_process_failure(self):
+        value = self.classify(self.result(
+            passed=99, failed=1,
+            processes={"reference": {"exit_code": -9},
+                       "candidate": {"exit_code": -9}},
+            stop={"reason": "frame_difference", "elapsed_seconds": 5}))
+        self.assertEqual(value["status"], "rendering_difference")
+
     def test_abnormal_process_exit_is_process_failure(self):
         value = self.classify(self.result(
             processes={"reference": {"exit_code": 0},
@@ -704,3 +714,43 @@ class PostReferenceCleanupTests(unittest.TestCase):
             terminal = json.loads(
                 (Path(result["run_dir"]) / "terminal-status.json").read_text())
             self.assertEqual(terminal["status"], gfx_session.FAILED)
+
+
+class CaptureRequestTests(unittest.TestCase):
+    def test_request_ids_and_acks_are_correlated(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            observe = Path(temporary) / "observe"
+            (observe / "captured").mkdir(parents=True)
+            launched = {"observe_dir": observe}
+            request_id = gfx_dual_run._request_dumps(launched, [7, 9])
+            self.assertIsInstance(request_id, int)
+            request = json.loads((observe / "capture-request.json").read_text())
+            self.assertEqual(request["request_id"], request_id)
+            self.assertEqual(request["frames"], [7, 9])
+            (observe / "captured" / "frame-7.json").write_text(json.dumps({
+                "schema": "gfx-frame-dump/v1", "frame_index": 7,
+                "width": 4, "height": 4, "sha256": "a" * 64,
+                "raw_file": str(observe / "captured" / "frame-7.bgra"),
+            }))
+            (observe / "capture-ack.json").write_text(json.dumps({
+                "schema": "gfx-frame-ack/v1", "request_id": request_id,
+                "status": "expired", "captured": [7], "missing": [9],
+            }))
+            value = gfx_dual_run._await_dump_meta(
+                launched, [7, 9], timeout=0.5, request_id=request_id)
+            self.assertEqual(sorted(value["found"]), [7])
+            self.assertEqual(value["missing"], [9])
+
+    def test_stale_ack_is_not_used(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            observe = Path(temporary) / "observe"
+            (observe / "captured").mkdir(parents=True)
+            (observe / "capture-ack.json").write_text(json.dumps({
+                "request_id": 1, "status": "expired", "missing": [7],
+            }))
+            (observe / "captured" / "frame-7.json").write_text(json.dumps({
+                "schema": "gfx-frame-dump/v1", "frame_index": 7,
+            }))
+            value = gfx_dual_run._await_dump_meta(
+                {"observe_dir": observe}, [7], timeout=0.3, request_id=2)
+            self.assertIn(7, value["found"])
