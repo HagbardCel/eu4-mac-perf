@@ -448,6 +448,19 @@ class PairComparisonTests(unittest.TestCase):
         self.assertEqual(result["status"], "fail", result)
         self.assertIn("all", result["mirrored_regions"])
 
+    def test_identity_with_different_backend_draw_counts_is_compared(self):
+        scenario = dict(self.scenario)
+        scenario["settle"] = {"draw_tolerance": 0.5}
+        reference = dict(self.meta["reference"], draws=300,
+                         update_identity="0x10")
+        candidate = dict(self.meta["candidate"], draws=350,
+                         caller_signature="0xdef", update_identity="0x10")
+        result = gfx_dual_run._compare_pair(
+            self.pair(), reference, candidate, scenario)
+        self.assertEqual(result["status"], "pass", result)
+        self.assertTrue(result["alignment"]["identity_equal"])
+        self.assertLess(result["alignment"]["draw_relation"], 0.5)
+
     def test_ambiguous_composition_is_not_compared(self):
         candidate = dict(self.meta["candidate"], caller_signature="0xdef")
         result = gfx_dual_run._compare_pair(

@@ -579,6 +579,8 @@ def _compare_pair(pair: dict, reference_meta: dict | None,
         "origin": reference_meta.get("origin"),
         "caller_signature": reference_meta.get("caller_signature"),
         "draws": reference_meta.get("draws"),
+        "game_day": reference_meta.get("game_day"),
+        "update_identity": reference_meta.get("update_identity"),
     }
     candidate_record = {
         "frame_index": pair.get("candidate_frame_index"),
@@ -587,6 +589,8 @@ def _compare_pair(pair: dict, reference_meta: dict | None,
         "origin": candidate_meta.get("origin"),
         "caller_signature": candidate_meta.get("caller_signature"),
         "draws": candidate_meta.get("draws"),
+        "game_day": candidate_meta.get("game_day"),
+        "update_identity": candidate_meta.get("update_identity"),
     }
     score, evidence = gfx_align.match_score(reference_record, candidate_record)
     relation = gfx_align.extent_relation(reference_record, candidate_record)
@@ -597,13 +601,35 @@ def _compare_pair(pair: dict, reference_meta: dict | None,
         and reference_record.get("draws") == candidate_record.get("draws")
         and reference_record.get("draws") > 0
     )
+    reference_identity = _identity_value(reference_record)
+    candidate_identity = _identity_value(candidate_record)
+    identity_equal = bool(
+        reference_identity and reference_identity == candidate_identity
+    )
+    draw_tolerance = float((scenario.get("settle") or {}).get(
+        "draw_tolerance", 0.25))
+    ref_draws = reference_record.get("draws") or 0
+    cand_draws = candidate_record.get("draws") or 0
+    draw_relation = (
+        abs(ref_draws - cand_draws) / max(ref_draws, cand_draws)
+        if ref_draws and cand_draws else 1.0
+    )
     strong = (
         relation["normalized"]
         and "scene_mismatch" not in evidence
-        and same_draws
+        and "game_update_mismatch" not in evidence
         and (
-            (reference_signature and reference_signature == candidate_signature)
-            or "scene" in evidence
+            # A shared engine day plus a comparable render workload is strong
+            # across backends even when GL/Metal batch draws differently.
+            (identity_equal and draw_relation <= draw_tolerance)
+            or (
+                same_draws
+                and (
+                    (reference_signature
+                     and reference_signature == candidate_signature)
+                    or "scene" in evidence
+                )
+            )
         )
     )
     alignment = {
@@ -613,6 +639,8 @@ def _compare_pair(pair: dict, reference_meta: dict | None,
         "draw_counts": [reference_record.get("draws"),
                         candidate_record.get("draws")],
         "signatures": [reference_signature, candidate_signature],
+        "identity_equal": identity_equal,
+        "draw_relation": round(draw_relation, 6),
         "status": gfx_align.ALIGNED if strong else gfx_align.AMBIGUOUS,
     }
     if alignment["status"] != gfx_align.ALIGNED:

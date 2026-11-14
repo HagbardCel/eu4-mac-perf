@@ -72,7 +72,14 @@ streams had equal `game_day`/`update_identity`; the pair dict simply omitted
 both fields, so alignment could not use them. Pair records now carry identity, and a unit test asserts it. Replaying the
 recorded Experiment A observation window offline through the fixed alignment
 gives **20 aligned, 0 ambiguous** pairs; the real window is committed as a
-regression fixture. Pixel comparison still needs a live re-run. The save
+regression fixture.
+
+A later Experiment A run paired 20 frames with equal day identity but the two
+processes carried **241 vs 370 draws** (34.9% apart) within the same day; the
+comparison gate correctly refused all 20 as ambiguous. The day counter is too
+coarse to establish intra-day update correspondence for a running save. A paused
+save or a finer simulation/tick identity is required before Experiment A can
+qualify. The save
 continues running, so the two processes are not at the same update. Experiment A
 therefore failed before any GL/Metal comparison; this is recorded as an
 `alignment_failure`, not as a renderer difference.

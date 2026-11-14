@@ -86,7 +86,10 @@ run had equal day/update identities but only 13/20 pairs aligned because the
 pair records omitted both identity fields; they are now carried and unit-tested.
 Neither fix has been re-run live. Replaying the recorded 20-frame
 observation window offline through the fixed alignment yields 20/20 aligned
-pairs; the real window is a committed regression fixture. Replay tool
+pairs; the real window is a committed regression fixture. A new Experiment A run
+then paired 20 frames but the same-day processes carried 241 vs 370 draws (34.9%
+apart), so comparison was correctly refused. The day identity is too coarse for
+a running save; a paused save or a finer tick identity is required. Replay tool
 envelopes now distinguish successful replay execution from the reproduced
 comparison outcome, and metrics count executable renderer reproductions
 separately from image-comparison cases.
