@@ -919,8 +919,6 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
         if (vertex_function == nil || fragment_function == nil) {
             return NO;
         }
-        NSDictionary *draw_info = event[@"draw"] ?: @{};
-        BOOL instanced_draw = number(draw_info[@"instance_count"], 1) > 1;
         NSDictionary *state = event[@"state"] ?: @{};
         NSDictionary *blend = state[@"blend"] ?: @{};
         NSDictionary *depth_state = state[@"depth"] ?: @{};
@@ -1024,8 +1022,8 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             descriptor.bufferIndex = kVertexBufferBase + location;
             vertex_descriptor.layouts[kVertexBufferBase + location].stride = 16;
             vertex_descriptor.layouts[kVertexBufferBase + location].stepFunction =
-                MTLVertexStepFunctionPerInstance;
-            vertex_descriptor.layouts[kVertexBufferBase + location].stepRate = 1;
+                MTLVertexStepFunctionConstant;
+            vertex_descriptor.layouts[kVertexBufferBase + location].stepRate = 0;
             [attribute_plan addObject:@{
                 @"location": @(location),
                 @"components": @(components),
@@ -1069,8 +1067,8 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                 descriptor.bufferIndex = kVertexBufferBase + location;
                 vertex_descriptor.layouts[kVertexBufferBase + location].stride = 16;
                 vertex_descriptor.layouts[kVertexBufferBase + location].stepFunction =
-                    MTLVertexStepFunctionPerInstance;
-                vertex_descriptor.layouts[kVertexBufferBase + location].stepRate = instanced_draw ? 0 : 1;
+                    MTLVertexStepFunctionConstant;
+                vertex_descriptor.layouts[kVertexBufferBase + location].stepRate = 0;
                 [attribute_plan addObject:@{
                     @"location": @(location),
                     @"components": @(components),
@@ -1153,7 +1151,7 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             descriptor.bufferIndex = kVertexBufferBase + location;
             vertex_descriptor.layouts[kVertexBufferBase + location].stride = stride;
             NSUInteger divisor = number(attribute[@"divisor"], 0);
-            if (instanced_draw && divisor > 0) {
+            if (divisor > 0) {
                 vertex_descriptor.layouts[kVertexBufferBase + location].stepFunction =
                     MTLVertexStepFunctionPerInstance;
                 vertex_descriptor.layouts[kVertexBufferBase + location].stepRate = divisor;
@@ -1162,13 +1160,26 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                     MTLVertexStepFunctionPerVertex;
                 vertex_descriptor.layouts[kVertexBufferBase + location].stepRate = 1;
             }
+            NSUInteger instance_available = 0;
+            if (divisor > 0 && stride > 0) {
+                NSUInteger element_bytes = 4;
+                switch (gl_type) {
+                    case 0x1400: case 0x1401: element_bytes = 1; break;
+                    case 0x1402: case 0x1403: case 0x140b: element_bytes = 2; break;
+                    default: element_bytes = 4; break;
+                }
+                NSUInteger attribute_bytes = components * element_bytes;
+                instance_available = data.length >= attribute_bytes
+                    ? (data.length - attribute_bytes) / stride + 1 : 0;
+            }
             [attribute_plan addObject:@{
                 @"location": @(location),
                 @"components": @(components),
                 @"gl_type": @(gl_type),
                 @"normalized": @(normalized),
                 @"stride": @(stride),
-                @"divisor": @(instanced_draw ? divisor : 0),
+                @"divisor": @(divisor),
+                @"instances": @(instance_available),
             }];
         }
         NSString *key = [state_key(event, target_info, attribute_plan)
@@ -1191,11 +1202,17 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                         (unsigned long)vertex_descriptor.layouts[descriptor.bufferIndex].stepRate);
             }
             NSData *u = pack_uniforms(vs, program, frameDir, nil);
-            const float *floats = (const float *)u.bytes;
-            fprintf(stderr, "  uniform bytes %lu first %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f\n",
-                    (unsigned long)u.length,
-                    floats[0], floats[1], floats[2], floats[3],
-                    floats[12], floats[13], floats[14], floats[15]);
+            if (u != nil && u.length >= 16 * sizeof(float)) {
+                const float *floats = (const float *)u.bytes;
+                fprintf(stderr,
+                        "  uniform bytes %lu first %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f\n",
+                        (unsigned long)u.length,
+                        floats[0], floats[1], floats[2], floats[3],
+                        floats[12], floats[13], floats[14], floats[15]);
+            } else {
+                fprintf(stderr, "  uniform bytes %lu (unavailable)\n",
+                        (unsigned long)(u != nil ? u.length : 0));
+            }
         }
         id<MTLRenderPipelineState> pipeline = g_pipelines[key];
         if (pipeline == nil) {
@@ -1505,6 +1522,23 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             ? [draw[@"base_vertex"] integerValue] : 0;
         NSInteger vertex_origin = 0;
         NSUInteger instances = MAX((NSUInteger)1, number(draw[@"instance_count"], 1));
+        for (NSDictionary *plan in attribute_plan) {
+            NSUInteger divisor = number(plan[@"divisor"], 0);
+            if (divisor == 0) {
+                continue;
+            }
+            NSUInteger available = number(plan[@"instances"], 0);
+            NSUInteger last = instances > 0 ? (instances - 1) / divisor : 0;
+            if (last >= available) {
+                if (error != NULL) {
+                    *error = [NSError errorWithDomain:kErrorDomain code:69
+                                             userInfo:@{NSLocalizedDescriptionKey:
+                                                            @"instance attribute is outside its captured range"}];
+                }
+                [encoder endEncoding];
+                return NO;
+            }
+        }
         NSUInteger indexed = number(draw[@"indexed"], 0);
         NSError *primitive_error = nil;
         MTLPrimitiveType primitive = primitive_type(mode, &primitive_error);

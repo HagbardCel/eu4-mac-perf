@@ -733,7 +733,6 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
                                     MTLVertexDescriptor *descriptor,
                                     NSMutableDictionary *buffers,
                                     NSDictionary *stage,
-                                    int instanced_draw,
                                     char *reason, size_t capacity) {
     void *elements = load_ptr((const uint8_t *)shader, 0x10);
     int32_t count = (int32_t)load_u32((const uint8_t *)shader, 0x18);
@@ -908,11 +907,15 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
             }
         }
         descriptor.layouts[buffer_index].stride = bound_stride;
-        if (instanced_draw && divisor > 0) {
-            descriptor.layouts[buffer_index].stepFunction = MTLVertexStepFunctionPerInstance;
+        /* GL divisor semantics are independent of the draw entry point:
+           divisor 0 fetches per vertex, positive divisors fetch per instance. */
+        if (divisor > 0) {
+            descriptor.layouts[buffer_index].stepFunction =
+                MTLVertexStepFunctionPerInstance;
             descriptor.layouts[buffer_index].stepRate = divisor;
         } else {
-            descriptor.layouts[buffer_index].stepFunction = MTLVertexStepFunctionPerVertex;
+            descriptor.layouts[buffer_index].stepFunction =
+                MTLVertexStepFunctionPerVertex;
             descriptor.layouts[buffer_index].stepRate = 1;
         }
         buffers[@(buffer_index)] = @{@"buffer": bound_buffer,
@@ -937,8 +940,10 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
         attribute.offset = 0;
         attribute.bufferIndex = buffer_index;
         descriptor.layouts[buffer_index].stride = 16;
-        descriptor.layouts[buffer_index].stepFunction = MTLVertexStepFunctionPerVertex;
-        descriptor.layouts[buffer_index].stepRate = 1;
+        /* One constant value for every vertex and instance. */
+        descriptor.layouts[buffer_index].stepFunction =
+            MTLVertexStepFunctionConstant;
+        descriptor.layouts[buffer_index].stepRate = 0;
         buffers[@(buffer_index)] = @{@"constant": @[@0.0f, @0.0f, @0.0f, @1.0f]};
     }
     return YES;
@@ -1534,11 +1539,11 @@ static int generic_draw_encode_impl(const void *immediate_context,
         fail(reason, reason_capacity, "cached MSL did not compile");
         return 0;
     }
-    int instanced_draw = call->instance_count > 1;
+
     MTLVertexDescriptor *descriptor = [MTLVertexDescriptor vertexDescriptor];
     NSMutableDictionary *buffers = [NSMutableDictionary dictionary];
     if (!build_vertex_descriptor(shader, master, device, descriptor, buffers,
-                                 vertex_stage, instanced_draw, reason,
+                                 vertex_stage, reason,
                                  reason_capacity)) {
         return 0;
     }
