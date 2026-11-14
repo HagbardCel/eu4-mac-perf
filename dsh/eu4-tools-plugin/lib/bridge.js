@@ -58,6 +58,8 @@ export function buildArgs(tool, args = {}) {
     add('--mode', 'mode')
     add('--max-frames', 'max_frames')
     add('--profile', 'profile')
+    if (args.staggered) output.push('--staggered')
+    add('--stagger-wait', 'stagger_wait')
   } else if (tool === 'eu4_diff_inspect') {
     add('--run', 'run')
     if (args.build_case) output.push('--build-case')

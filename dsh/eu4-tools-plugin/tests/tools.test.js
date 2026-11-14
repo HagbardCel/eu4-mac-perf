@@ -65,6 +65,9 @@ test('argument mapping covers each tool', () => {
     ['eu4_capture', 'request', '--run', '/r', '--role', 'candidate', '--frame', '4', '--frame', '5'])
   const diff = buildArgs('eu4_diff_run', { scenario: 's.json', run_root: '/r', ledger: '/l', mode: 'lockstep' })
   assert.deepEqual(diff, ['eu4_diff_run', '--scenario', 's.json', '--run-root', '/r', '--ledger', '/l', '--mode', 'lockstep'])
+  const staggered = buildArgs('eu4_diff_run', { scenario: 's.json', run_root: '/r', ledger: '/l', staggered: true, stagger_wait: 120 })
+  assert.ok(staggered.includes('--staggered'))
+  assert.deepEqual(staggered.slice(-2), ['--stagger-wait', '120'])
   assert.deepEqual(buildArgs('eu4_diff_inspect', { run: '/r', build_case: true }),
     ['eu4_diff_inspect', '--run', '/r', '--build-case'])
   assert.deepEqual(buildArgs('eu4_replay', { op: 'case', case: '/c' }),

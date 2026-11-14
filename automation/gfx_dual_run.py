@@ -699,6 +699,8 @@ def run_campaign(
     keep_evidence: bool = True,
     runner: Callable | None = None,
     session_root: Path | None = None,
+    staggered: bool = False,
+    stagger_wait_seconds: float = 600.0,
 ) -> dict:
     run_root = Path(run_root).expanduser().resolve()
     ledger_path = Path(ledger_path).expanduser().resolve()
@@ -795,21 +797,58 @@ def run_campaign(
         )
         lease = launch_lease.acquire(executable, output=session.run_dir)
         # Start both backends before waiting on either one's readiness.
+        health = gfx_diagnostics.GpuHealth()
+        prelaunched_ref_stream = None
         launched["reference"] = gfx_launch.spawn(
             "reference", config, session.run_dir / "reference",
             lease=lease, session=session, token=tokens[0], libraries=libraries,
             backend=scenario.get("reference_backend", "opengl"),
         )
+        launch_ledger.start(ledger_path, launched["reference"].token,
+                            launched["reference"].process.pid)
+        result["processes"]["reference"] = launched["reference"].as_dict()
+        if staggered:
+            # Let the (slower) reference reach the target scene before starting
+            # the candidate.  Both processes still overlap for the whole
+            # differential interval; this only removes dead time where the
+            # candidate rendered an empty screen while the reference loaded.
+            minimum_draws = int((scenario.get("settle") or {}).get("min_draws", 0))
+            prelaunched_ref_stream = FrameStream(
+                launched["reference"].observe_dir / "frame-observe.jsonl")
+            wait_deadline = time.monotonic() + max(30.0, stagger_wait_seconds)
+            while time.monotonic() < wait_deadline:
+                for record in prelaunched_ref_stream.poll():
+                    _record_health(record, health)
+                latest = _latest(prelaunched_ref_stream)
+                draws = (latest.value.get("draws") if latest else 0) or 0
+                if minimum_draws == 0 or draws >= minimum_draws:
+                    result["stagger"] = {
+                        "reference_ready_seconds": round(
+                            max(0.0, stagger_wait_seconds - (wait_deadline - time.monotonic())), 3),
+                        "reference_frame": latest.index if latest else None,
+                        "reference_draws": draws,
+                    }
+                    break
+                if launched["reference"].process.poll() is not None:
+                    result["stagger"] = {"status": "reference_exited_before_phase",
+                                         "reference_draws": draws}
+                    raise _Finished()
+                time.sleep(0.1)
+            else:
+                result["stagger"] = {"status": "phase_timeout",
+                                     "reference_draws": draws}
+                result["stop"] = {"reason": "reference_phase_timeout",
+                                  "trigger": f"{stagger_wait_seconds}s"}
+                result["result"] = "incomplete"
+                raise _Finished()
         launched["candidate"] = gfx_launch.spawn(
             "candidate", config, session.run_dir / "candidate",
             lease=lease, session=session, token=tokens[1], libraries=libraries,
             backend=scenario.get("candidate_backend", "metal"),
         )
-        for role, item in launched.items():
-            launch_ledger.start(ledger_path, item.token, item.process.pid)
-            result["processes"][role] = item.as_dict()
-
-        health = gfx_diagnostics.GpuHealth()
+        launch_ledger.start(ledger_path, launched["candidate"].token,
+                            launched["candidate"].process.pid)
+        result["processes"]["candidate"] = launched["candidate"].as_dict()
 
         def abort_for_exit() -> bool:
             return any(item.process.poll() is not None for item in launched.values())
@@ -859,7 +898,8 @@ def run_campaign(
             raise _Finished()
 
         state = CampaignState(
-            ref_stream=FrameStream(launched["reference"].observe_dir / "frame-observe.jsonl"),
+            ref_stream=prelaunched_ref_stream or FrameStream(
+                launched["reference"].observe_dir / "frame-observe.jsonl"),
             cand_stream=FrameStream(launched["candidate"].observe_dir / "frame-observe.jsonl"),
         )
         deadline = time.monotonic() + float(scenario["observation"]["max_runtime_seconds"])
@@ -1252,6 +1292,9 @@ def _parser():
     run.add_argument("--profile", choices=("early", "targeted", "qualification"),
                      default=None)
     run.add_argument("--session-root", type=Path, default=None)
+    run.add_argument("--staggered", action="store_true",
+                     help="start the reference and let it reach the target scene before the candidate")
+    run.add_argument("--stagger-wait", type=float, default=600.0)
     run.add_argument("--out", type=Path, default=None)
 
     template = sub.add_parser("template", help="write a validated scenario template")
@@ -1284,6 +1327,8 @@ def main(argv: list[str] | None = None) -> int:
             max_frames=args.max_frames,
             profile=args.profile,
             session_root=args.session_root,
+            staggered=args.staggered,
+            stagger_wait_seconds=args.stagger_wait,
         )
     except (gfx_scenario.ScenarioError, gfx_launch.LaunchError,
             launch_ledger.LedgerError, launch_lease.LeaseError) as exc:

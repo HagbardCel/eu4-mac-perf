@@ -36,10 +36,21 @@ reproduces it without an EU4 launch (`tests/test_offline_campaign.py`).
 The real 100-frame **title-scene** demonstration is still open: under two
 concurrent GUI processes the background OpenGL reference was throttled to about
 0.3 fps and never reached the title draw count in the tested window, while the
-Metal candidate reached it. Metadata-only observation and phase-gated pairing
-are implemented, but the reference-side loading/focus behaviour needs a
-separate experiment (windowed/foreground configuration) before the live
-100-frame and real title differential are claimed.
+Metal candidate reached it. Metadata-only observation, phase-gated pairing and
+a **staggered reference-first** launch mode are implemented; the staggered live
+attempt was refused because the M6 agent held the host lease with a real EU4
+process (`pid 5618`), which is the intended coexistence behaviour. The
+reference-side loading/focus behaviour still needs a windowed/foreground
+configuration experiment before the live 100-frame and real title differential
+are claimed.
+
+**DSH tools mount.** A temporary dedicated DSH home
+(`EU4_DSH_HOME=/tmp/eu4-dsh-tools-test`) provisioned both `@eu4/dsh-goal` and
+`@eu4/dsh-tools`; `dsh plugin add link:` succeeded for both and the profile row
+is present. `preflight.sh` reaches the plugin/runtime checks; its only failure
+is the pre-existing Node pin (`v26.13.0` vs installed `v26.13.1`), an
+environment drift, not a tools-plugin failure. The live profile was deliberately
+not mutated while the Web session and the M6 agent were active.
 
 **Safety properties.** A rejected draw is detected on its first diagnostic
 execution in about 4 s; command-buffer completion is never reported as pixel

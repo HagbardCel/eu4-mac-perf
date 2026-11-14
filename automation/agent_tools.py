@@ -202,6 +202,8 @@ def eu4_diff_run(args: argparse.Namespace) -> dict:
         mode=args.mode,
         max_frames=args.max_frames,
         profile=args.profile,
+        staggered=bool(getattr(args, "staggered", False)),
+        stagger_wait_seconds=float(getattr(args, "stagger_wait", 600.0)),
     )
     status = result.get("result", "incomplete")
     return _envelope("eu4_diff_run",
@@ -308,6 +310,8 @@ def _parser() -> argparse.ArgumentParser:
     diff_run.add_argument("--max-frames", type=int, default=None)
     diff_run.add_argument("--profile", choices=("early", "targeted", "qualification"),
                           default=None)
+    diff_run.add_argument("--staggered", action="store_true")
+    diff_run.add_argument("--stagger-wait", type=float, default=600.0)
 
     inspect = sub.add_parser("eu4_diff_inspect")
     inspect.add_argument("--run", required=True, type=Path)

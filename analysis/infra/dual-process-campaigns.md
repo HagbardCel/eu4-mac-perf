@@ -167,6 +167,14 @@ pre-requests a small full-resolution window at the target phase, so selected
 frames carry raw payloads for comparison while loading is not slowed by
 8 MB-per-frame GPU syncs.
 
+A **staggered** mode starts the reference first and launches the candidate only
+after the reference reaches the target scene, so the candidate does not idle
+while the GL reference loads.  Both processes overlap for the differential
+interval.  The first staggered attempt was refused by the host lease because
+the M6 worktree held a real EU4 process; no interference occurred.  This is the
+coexistence contract working as designed, and the staggered live run can be
+retried when the lease is free.
+
 Real limitation observed: with two concurrent GUI apps, the background OpenGL
 reference ran at roughly 0.3 fps and did not reach the title draw count in the
 tested window, while the Metal candidate did.  Phase pairing never started and

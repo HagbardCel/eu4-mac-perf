@@ -106,6 +106,8 @@ export function definitions(run) {
         mode: { type: 'string', enum: ['streaming', 'lockstep'], description: 'synchronization mode' },
         max_frames: integer('maximum paired logical frames'),
         profile: { type: 'string', enum: ['early', 'targeted', 'qualification'], description: 'wait profile' },
+        staggered: boolean('let the reference reach the target scene before starting the candidate'),
+        stagger_wait: { type: 'number', description: 'reference phase wait seconds' },
       },
       ['scenario', 'run_root', 'ledger'],
       safe('eu4_diff_run'),
