@@ -244,6 +244,37 @@ def summarize_runs(runs: list[dict]) -> dict:
     }
 
 
+def resolve_failures(run: Path) -> list[dict]:
+    """Returns failed/malformed resolve records from an opt-in sequence trace.
+
+    A resolve that failed must not be treated as an entirely successful scene
+    just because no draw was refused. Absence of the trace is not a failure;
+    the trace is opt-in.
+    """
+    path = run / "resolve-trace.jsonl"
+    if not path.is_file():
+        return []
+    failures: list[dict] = []
+    try:
+        lines = path.read_text().splitlines()
+    except (OSError, UnicodeError):
+        return [{"status": "unreadable_trace"}]
+    for index, line in enumerate(lines):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            failures.append({"line": index, "status": "malformed_trace"})
+            continue
+        if not isinstance(record, dict):
+            failures.append({"line": index, "status": "malformed_trace"})
+            continue
+        if record.get("status") not in ("copy_ok", "scaled_ok"):
+            failures.append(record)
+    return failures[:8]
+
+
 def check_run(run: Path, reference: np.ndarray | None, reference_error: str,
               policy: dict) -> dict:
     logical = tuple(policy["reference"]["logical"])
@@ -266,11 +297,15 @@ def check_run(run: Path, reference: np.ndarray | None, reference_error: str,
     checks["draw_encoded"] = bool(probe_status.get("draw_encoded"))
     checks["pixels_captured"] = bool(probe_status.get("pixels_captured"))
     checks["no_refused_draws"] = not refused
+    failed_resolves = resolve_failures(run)
+    checks["no_failed_resolves"] = not failed_resolves
     status["executed"] = all(
         checks[key]
         for key in ("probe_captured", "draw_reached", "draw_encoded",
-                    "pixels_captured", "no_refused_draws")
+                    "pixels_captured", "no_refused_draws", "no_failed_resolves")
     )
+    if failed_resolves:
+        result["resolve_failures"] = failed_resolves
     checks["gpu_completed"] = bool(probe_status.get("gpu_completed"))
     status["gpu_completed"] = checks["gpu_completed"]
 

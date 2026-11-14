@@ -148,6 +148,37 @@ class ReferenceTests(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAS_DEPS, "the live acceptance checker needs numpy")
+@unittest.skipUnless(_HAS_DEPS, "the live acceptance checker needs numpy")
+class ResolveTraceTests(unittest.TestCase):
+    def test_failed_resolve_is_reported_even_without_refused_draws(self) -> None:
+        import json
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            records = [
+                {"seq": 1, "op": "_GfxResolve", "status": "scaled_ok"},
+                {"seq": 2, "op": "_GfxResolve", "status": "scaled_failed"},
+            ]
+            (run / "resolve-trace.jsonl").write_text(
+                "\n".join(json.dumps(record) for record in records) + "\n"
+            )
+            failures = m6_live_accept.resolve_failures(run)
+            self.assertEqual(len(failures), 1)
+            self.assertEqual(failures[0]["status"], "scaled_failed")
+
+    def test_malformed_resolve_trace_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            (run / "resolve-trace.jsonl").write_text("{not json}\n")
+            failures = m6_live_accept.resolve_failures(run)
+            self.assertEqual(len(failures), 1)
+            self.assertEqual(failures[0]["status"], "malformed_trace")
+
+    def test_absent_trace_is_not_a_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(m6_live_accept.resolve_failures(Path(tmp)), [])
+
+
 class CandidateTests(unittest.TestCase):
     def test_dump_dimensions_are_derived_from_its_size(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

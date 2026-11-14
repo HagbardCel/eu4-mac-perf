@@ -774,6 +774,16 @@ def selected_event_report(
         except (OSError, json.JSONDecodeError):
             replay = {}
     isolated = replay.get("isolated") or {}
+    replay_valid = bool(
+        replay.get("status") == "ok"
+        and replay.get("failed") == 0
+        and replay.get("command_status") == 4
+        and isolated.get("event") == event_index
+        and isolated.get("pre_image_supplied") is True
+        and isolated.get("pre_capture_ok") is True
+        and isolated.get("color_initialization") == "supplied_pre_image"
+        and isolated.get("depth_contents") in ("not_required", "replayed_prefix")
+    )
     gl_change = m6_compare.compare_images(gl_pre, gl_post, width, height)
     metal_change = m6_compare.compare_images(metal_pre, metal_post, width, height)
     pre_match = gl_pre == metal_pre
@@ -822,13 +832,14 @@ def selected_event_report(
             "pre_match": pre_match,
             "post_match": post_match,
             "exact_isolated_replay": bool(isolated.get("exact")),
+            "replay_valid": replay_valid,
             "depth": {
                 "matters": isolated.get("depth_matters"),
                 "contents": isolated.get("depth_contents"),
             },
             "color_initialization": isolated.get("color_initialization"),
         },
-        "ok": pre_match and post_match,
+        "ok": replay_valid and pre_match and post_match,
     }
     (candidate / f"isolated-event-{event_index}.json").write_text(
         json.dumps(report, indent=2) + "\n"
