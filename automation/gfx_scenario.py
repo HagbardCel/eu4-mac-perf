@@ -101,7 +101,7 @@ def normalize(value: dict) -> dict:
         raise ScenarioError("type", "start must be an object")
     _check_keys(start, {"kind", "save", "pause", "game_speed",
                         "pause_at_first_game_day", "pause_at_draws",
-                        "pause_mode"}, "start")
+                        "pause_mode", "pause_signature"}, "start")
     kind = start.get("kind", "frontend")
     if kind not in STARTS:
         raise ScenarioError("enum", f"start.kind must be one of {STARTS}")
@@ -304,6 +304,8 @@ def normalize(value: dict) -> dict:
                                     minimum=0, maximum=100000),
         "pause_mode": _optional(start.get("pause_mode"), str,
                                 "start.pause_mode", "input"),
+        "pause_signature": _optional(start.get("pause_signature"), str,
+                                     "start.pause_signature", ""),
             "game_speed": speed,
         },
         "game_config": game_config,

@@ -85,3 +85,15 @@ recorded `method=game_speed_zero` at 506 draws, and both streams stayed on
 
 This is the first configuration that froze the simulation deterministically
 without an input event, but the raw-payload window is now the blocking bug.
+
+
+## Follow-up: speed-zero freezes the day, not the render stage
+
+Several attempts with `game_speed_zero` at 500-506 draws froze both streams on
+the same game day, but at different render stages (for example 374 vs 218 draws,
+or loading 219 vs map 380). Alignment then refused the pairs. A signature gate
+was tested as an extra condition, but the first map signature varied between
+loads, so a fixed signature is not a stable scene selector.
+
+The blocking requirement is therefore not just freezing simulation time; it is
+freezing both processes at the **same render stage**. That remains open.

@@ -1116,6 +1116,8 @@ def run_campaign(
                 (scenario.get("start") or {}).get("pause")
                 and (scenario.get("start") or {}).get("pause_mode") == "game_speed_zero"
             ),
+            pause_signature=int((scenario.get("start") or {}).get(
+                "pause_signature") or "0", 0),
         )
         lease = launch_lease.acquire(executable, output=session.run_dir)
         # Start both backends before waiting on either one's readiness.
@@ -1304,6 +1306,7 @@ def run_campaign(
                                   "trigger": "; ".join(pause_failures)}
                 result["result"] = "incomplete"
                 raise _Finished()
+        streaming_requests: dict[str, int | None] = {}
         if mode == "streaming" and minimum_draws > 0:
             # Pre-request a small full-resolution window at the start of the
             # target phase.  Metadata-only observation is cheap enough to reach
@@ -1312,11 +1315,11 @@ def run_campaign(
             latest_cand = _latest(state.cand_stream)
             if latest_ref is not None and latest_cand is not None:
                 window = max(32, max_frames + 8)
-                _request_dumps(
+                streaming_requests["reference"] = _request_dumps(
                     {"observe_dir": launched["reference"].observe_dir},
                     list(range(latest_ref.index + 1, latest_ref.index + 1 + window)),
                 )
-                _request_dumps(
+                streaming_requests["candidate"] = _request_dumps(
                     {"observe_dir": launched["candidate"].observe_dir},
                     list(range(latest_cand.index + 1, latest_cand.index + 1 + window)),
                 )
@@ -1495,13 +1498,17 @@ def run_campaign(
                     # In streaming mode the phase-entry window was requested
                     # once.  Issuing another request here would overwrite that
                     # pending window and lose already-declared frames.
-                    dump_timeout = 4.0 if mode == "lockstep" else 0.5
+                    dump_timeout = 4.0 if mode == "lockstep" else 2.0
                     reference_dump = _await_dump_meta(
                         {"observe_dir": launched["reference"].observe_dir}, [ref_index],
-                        timeout=dump_timeout)
+                        timeout=dump_timeout,
+                        request_id=streaming_requests.get("reference")
+                        if mode == "streaming" else None)
                     candidate_dump = _await_dump_meta(
                         {"observe_dir": launched["candidate"].observe_dir}, [cand_index],
-                        timeout=dump_timeout)
+                        timeout=dump_timeout,
+                        request_id=streaming_requests.get("candidate")
+                        if mode == "streaming" else None)
                     pair["dumps"] = {
                         "reference": reference_dump,
                         "candidate": candidate_dump,
