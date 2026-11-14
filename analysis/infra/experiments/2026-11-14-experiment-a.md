@@ -107,3 +107,15 @@ pause record. The loading path does not expose a stable draw-count selector.
 
 The committed scenario therefore remains at the 100-draw threshold with
 `game_speed_zero`; it freezes the day but not always the render stage.
+
+
+## Latest: same day, different render stages
+
+Session `20261114T184826Z-643bc5b0`: speed-zero at the 100-draw threshold froze
+both streams on `game_day=56456976`, but the reference was on the map
+(`0xfaced05509c2a707`, 374 draws) while the candidate was still loading
+(`0x038458cf31968881`, 218 draws). All 20 pairs were `ambiguous`; no raw payload
+was comparable.
+
+This confirms that game-day identity and simulation freeze are not sufficient.
+A deterministic **render-stage** selector or a genuinely paused save is required.
