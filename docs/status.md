@@ -65,6 +65,13 @@ scene (6 draws, 70 scenes); the authentic capture therefore used the preserved
 foreground fallback. `strategy-b-metrics.json` records these categories
 separately and is reconstructed from the session records.
 
+Relevant suites pass: 259 capture/replay/graph/display tests, 12 native
+copy/clear pixel tests, 7 trace-writer regressions and 40 DSH plugin tests.
+Full Python discovery runs 2,865 tests with 9 failures and 2 errors, all in
+pre-existing native-host build/environment tests (missing
+`_eu4_gfx_note_render_target_write` host link support and the documented
+shadow-worker texture-LOD expectation), not in the touched capture paths.
+
 ## Differential debugging infrastructure (2026-11-14, stacked PRs 1-5)
 
 Five stacked branches implement the autonomous OpenGL-vs-Metal differential
