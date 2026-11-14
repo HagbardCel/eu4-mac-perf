@@ -92,7 +92,7 @@
   "case_files": 1084,
   "case_bytes": 441000000,
   "tests_touched": 259,
-  "tests_touched_result": "259 relevant tests pass (118 primary + 141 additional graphics suites); full discovery 2865 tests with 11 pre-existing failures",
+  "tests_touched_result": "258 relevant tests pass (118 primary + 140 additional graphics suites); full discovery 2865 tests with 11 pre-existing failures",
   "dsh_tests": 40,
   "dsh_tests_result": "pass",
   "full_python_discovery": {
