@@ -30,6 +30,13 @@ uint32_t eu4_gfx_frame_observe_dropped(void);
 int eu4_gfx_frame_observe_lockstep_enabled(void);
 int eu4_gfx_frame_observe_lockstep_wait(uint32_t frame_index,
                                         uint32_t timeout_ms);
+int eu4_gfx_frame_observe_wants(uint32_t frame_index);
+int eu4_gfx_frame_observe_emit_metadata(uint32_t width, uint32_t height,
+                                        const char *origin,
+                                        uint32_t frame_index, uint32_t draws,
+                                        uint64_t signature,
+                                        uint32_t distinct_callers,
+                                        int gpu_completed, const char *error);
 int eu4_gfx_frame_observe_emit(const uint8_t *bgra, uint32_t width,
                                uint32_t height, const char *origin,
                                uint32_t frame_index, uint32_t draws,

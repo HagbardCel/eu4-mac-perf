@@ -627,6 +627,90 @@ int eu4_gfx_frame_observe_emit(const uint8_t *bgra, uint32_t width,
 }
 
 
+
+int eu4_gfx_frame_observe_wants(uint32_t frame_index) {
+    if (!g_enabled || g_request[0] == 0) {
+        return 0;
+    }
+    struct stat status;
+    static struct stat last_status;
+    static int have_status;
+    static uint64_t frames[OBS_MAX_DUMPS];
+    static int count;
+    if (stat(g_request, &status) == 0) {
+        if (!have_status || status.st_mtime != last_status.st_mtime ||
+            status.st_size != last_status.st_size) {
+            last_status = status;
+            have_status = 1;
+            FILE *file = fopen(g_request, "r");
+            if (file != NULL) {
+                char text[4096];
+                size_t used = fread(text, 1, sizeof text - 1, file);
+                fclose(file);
+                text[used] = 0;
+                count = parse_frames(text, frames, OBS_MAX_DUMPS);
+            }
+        }
+    }
+    for (int i = 0; i < count; i++) {
+        if (frames[i] == (uint64_t)frame_index) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int eu4_gfx_frame_observe_emit_metadata(uint32_t width, uint32_t height,
+                                        const char *origin,
+                                        uint32_t frame_index, uint32_t draws,
+                                        uint64_t signature,
+                                        uint32_t distinct_callers,
+                                        int gpu_completed, const char *error) {
+    if (!g_enabled || width == 0 || height == 0) {
+        return -1;
+    }
+    if (frame_index == 0 || frame_index > OBS_MAX_FRAMES) {
+        return -1;
+    }
+    pthread_mutex_lock(&g_lock);
+    if (g_emitted >= OBS_MAX_FRAMES) {
+        g_dropped += 1;
+        pthread_mutex_unlock(&g_lock);
+        return -1;
+    }
+    uint64_t gap = 0;
+    if (g_last_index != 0 && frame_index > g_last_index + 1) {
+        gap = frame_index - g_last_index - 1;
+        g_skipped += gap;
+    }
+    char line[900];
+    int length = snprintf(
+        line, sizeof line,
+        "{\"schema\":\"%s\",\"backend\":\"%s\",\"session\":\"%s\","
+        "\"pid\":%d,\"frame_index\":%u,\"width\":%u,\"height\":%u,"
+        "\"origin\":\"%s\",\"pixel_format\":\"BGRA8\",\"row_stride\":%u,"
+        "\"sha256\":\"\",\"preview_file\":\"\",\"preview_width\":0,"
+        "\"preview_height\":0,\"content\":\"metadata\",\"draws\":%u,"
+        "\"caller_signature\":\"0x%016llx\",\"distinct_callers\":%u,"
+        "\"skipped_before\":%llu,\"gpu_completed\":%s,"
+        "\"capture_valid\":true,\"error\":\"%s\",\"ts_ms\":%llu}\n",
+        EU4_GFX_FRAME_OBSERVE_SCHEMA, g_backend, g_session, (int)getpid(),
+        frame_index, width, height, origin != NULL ? origin : "top_left",
+        width * 4, draws, (unsigned long long)signature, distinct_callers,
+        (unsigned long long)gap, gpu_completed ? "true" : "false",
+        error != NULL ? error : "", (unsigned long long)now_ms());
+    if (length <= 0 || (size_t)length >= sizeof line ||
+        append_line(g_jsonl, line) != 0) {
+        g_dropped += 1;
+        pthread_mutex_unlock(&g_lock);
+        return -1;
+    }
+    g_emitted += 1;
+    g_last_index = frame_index;
+    pthread_mutex_unlock(&g_lock);
+    return 0;
+}
+
 int eu4_gfx_frame_observe_lockstep_enabled(void) {
     return g_lockstep;
 }

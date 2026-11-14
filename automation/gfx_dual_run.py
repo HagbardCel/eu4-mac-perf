@@ -119,6 +119,10 @@ class CampaignState:
     cand_base: int | None = None
     pairing: bool = False
     lockstep_stops: int = 0
+    released_ref: set[int] = field(default_factory=set)
+    released_cand: set[int] = field(default_factory=set)
+    phase_entry_ref: int | None = None
+    phase_entry_cand: int | None = None
 
     def begin_pairing(self) -> None:
         """Anchor correspondence at the current observation point.
@@ -135,6 +139,8 @@ class CampaignState:
             return
         self.ref_base = max(ref_indices) + 1
         self.cand_base = max(cand_indices) + 1
+        self.phase_entry_ref = self.ref_base - 1
+        self.phase_entry_cand = self.cand_base - 1
         self.pairing = True
 
 
@@ -666,6 +672,20 @@ def _stop_processes(session: gfx_session.Session, *, resume_first: bool = False)
     return [item.as_dict() for item in session.terminate_all(grace_seconds=6.0)]
 
 
+
+def _latest(stream: FrameStream) -> FrameRecord | None:
+    return stream.records[-1] if stream.records else None
+
+
+def _release_once(launched: dict, state: CampaignState, role: str,
+                  index: int) -> None:
+    released = state.released_ref if role == "reference" else state.released_cand
+    if index in released:
+        return
+    _release({"observe_dir": launched[role].observe_dir}, [index])
+    released.add(index)
+
+
 def run_campaign(
     scenario: dict,
     *,
@@ -770,6 +790,7 @@ def run_campaign(
             ring=int(scenario["observation"]["ring"]),
             deadline_seconds=float(scenario["observation"]["max_runtime_seconds"]),
             lockstep=mode == "lockstep",
+            metadata_only=mode == "streaming",
             session_id=session.session_id,
         )
         lease = launch_lease.acquire(executable, output=session.run_dir)
@@ -793,12 +814,16 @@ def run_campaign(
         def abort_for_exit() -> bool:
             return any(item.process.poll() is not None for item in launched.values())
 
+        def role_ready(role: str) -> bool:
+            item = launched[role]
+            if item.backend == "metal":
+                return gfx_launch.candidate_initialized(
+                    item.run_dir, item.process.pid)
+            return gfx_launch.reference_installed(item.run_dir, item.process.pid)
+
         def both_ready() -> bool:
             return (
-                gfx_launch.reference_installed(
-                    launched["reference"].run_dir, launched["reference"].process.pid)
-                and gfx_launch.candidate_initialized(
-                    launched["candidate"].run_dir, launched["candidate"].process.pid)
+                role_ready("reference") and role_ready("candidate")
                 and gfx_launch.observation_lines(launched["reference"].run_dir) > 0
                 and gfx_launch.observation_lines(launched["candidate"].run_dir) > 0
             )
@@ -852,17 +877,61 @@ def run_campaign(
             if any(item.process.poll() is not None for item in launched.values()):
                 break
             time.sleep(0.02)
+        minimum_draws = int((scenario.get("settle") or {}).get("min_draws", 0))
+        if mode == "streaming" and minimum_draws > 0:
+            phase_deadline = time.monotonic() + float(scenario["settle"]["timeout_seconds"])
+            while time.monotonic() < phase_deadline:
+                for record in state.ref_stream.poll():
+                    state.ref_by_index[record.index] = record
+                    _record_health(record, health)
+                for record in state.cand_stream.poll():
+                    state.cand_by_index[record.index] = record
+                    _record_health(record, health)
+                latest_ref = _latest(state.ref_stream)
+                latest_cand = _latest(state.cand_stream)
+                ref_draws = (latest_ref.value.get("draws") if latest_ref else 0) or 0
+                cand_draws = (latest_cand.value.get("draws") if latest_cand else 0) or 0
+                if (ref_draws >= minimum_draws and cand_draws >= minimum_draws):
+                    break
+                if any(item.process.poll() is not None for item in launched.values()):
+                    break
+                time.sleep(0.02)
+        if mode == "streaming" and minimum_draws > 0:
+            # Pre-request a small full-resolution window at the start of the
+            # target phase.  Metadata-only observation is cheap enough to reach
+            # the scene; these frames carry the raw payloads for comparison.
+            latest_ref = _latest(state.ref_stream)
+            latest_cand = _latest(state.cand_stream)
+            if latest_ref is not None and latest_cand is not None:
+                window = 8
+                _request_dumps(
+                    {"observe_dir": launched["reference"].observe_dir},
+                    list(range(latest_ref.index + 1, latest_ref.index + 1 + window)),
+                )
+                _request_dumps(
+                    {"observe_dir": launched["candidate"].observe_dir},
+                    list(range(latest_cand.index + 1, latest_cand.index + 1 + window)),
+                )
         if mode == "lockstep":
-            state.pairing = True
-            state.ref_base = 0
-            state.cand_base = 0
+            # Do not pair until both sides have reached the target scene.  The
+            # side that arrives first stays paused while the other finishes
+            # loading; loading progress is never compared.
+            state.pairing = False
+            state.ref_base = None
+            state.cand_base = None
         else:
             state.begin_pairing()
         result["alignment"] = {
-            "anchor": "post-readiness relative frame ordinal",
+            "anchor": "post-readiness relative frame ordinal in the target phase",
             "reference_base": state.ref_base,
             "candidate_base": state.cand_base,
             "semantic": False,
+            "phase": {
+                "name": "target" if minimum_draws else "all",
+                "min_draws": minimum_draws,
+                "reference_entry_index": state.phase_entry_ref,
+                "candidate_entry_index": state.phase_entry_cand,
+            },
         }
         stop_reason = ""
         stop_trigger = ""
@@ -875,6 +944,43 @@ def run_campaign(
             for record in new_cand:
                 state.cand_by_index[record.index] = record
                 _record_health(record, health)
+            if not state.pairing and mode == "lockstep":
+                latest_ref = _latest(state.ref_stream)
+                latest_cand = _latest(state.cand_stream)
+                ref_draws = (latest_ref.value.get("draws") if latest_ref else 0) or 0
+                cand_draws = (latest_cand.value.get("draws") if latest_cand else 0) or 0
+                if latest_ref is not None and latest_cand is not None and (
+                    minimum_draws == 0
+                    or (ref_draws >= minimum_draws and cand_draws >= minimum_draws)
+                ):
+                    state.begin_pairing()
+                    state.released_ref.add(latest_ref.index)
+                    state.released_cand.add(latest_cand.index)
+                    _release({"observe_dir": launched["reference"].observe_dir},
+                             [latest_ref.index])
+                    _release({"observe_dir": launched["candidate"].observe_dir},
+                             [latest_cand.index])
+                    result["alignment"] = {
+                        "anchor": "relative frame ordinal after both reached the target phase",
+                        "reference_base": state.ref_base,
+                        "candidate_base": state.cand_base,
+                        "semantic": True,
+                        "phase": {
+                            "name": "target",
+                            "min_draws": minimum_draws,
+                            "reference_entry_index": state.phase_entry_ref,
+                            "candidate_entry_index": state.phase_entry_cand,
+                            "reference_draws": ref_draws,
+                            "candidate_draws": cand_draws,
+                        },
+                    }
+                else:
+                    # Advance only the side(s) still below the phase threshold.
+                    if latest_ref is not None and ref_draws < minimum_draws:
+                        _release_once(launched, state, "reference", latest_ref.index)
+                    if latest_cand is not None and cand_draws < minimum_draws:
+                        _release_once(launched, state, "candidate", latest_cand.index)
+                    pairs = []
             pairs = align_streams(state)
             for pair in pairs:
                 flight.frame({
@@ -889,7 +995,7 @@ def run_campaign(
                         if isinstance(pair.get("comparison"), dict) else None
                     ),
                 })
-            if mode == "lockstep" and pairs:
+            if pairs:
                 for pair in pairs:
                     ref_index = pair["frame_index"]
                     cand_index = pair.get("candidate_frame_index", ref_index)
@@ -899,26 +1005,30 @@ def run_campaign(
                         (pair.get("candidate") or {}).get("draws") or 0,
                     )
                     if settle_draws and min(pair_draws) < settle_draws:
-                        # Loading progress is not comparable; release the pair
-                        # without paying for a full-resolution dump.
-                        _release({"observe_dir": launched["reference"].observe_dir},
-                                 [ref_index])
-                        _release({"observe_dir": launched["candidate"].observe_dir},
-                                 [cand_index])
+                        # Loading progress is not comparable; do not pay for a
+                        # full-resolution dump.
                         pair["comparison"] = {
                             "status": "not_compared",
                             "reason": f"below settle draw threshold {pair_draws} < {settle_draws}",
                         }
-                        state.lockstep_stops += 1
+                        if mode == "lockstep":
+                            _release({"observe_dir": launched["reference"].observe_dir},
+                                     [ref_index])
+                            _release({"observe_dir": launched["candidate"].observe_dir},
+                                     [cand_index])
+                            state.lockstep_stops += 1
                         continue
                     _request_dumps({"observe_dir": launched["reference"].observe_dir},
                                    [ref_index])
                     _request_dumps({"observe_dir": launched["candidate"].observe_dir},
                                    [cand_index])
+                    dump_timeout = 4.0 if mode == "lockstep" else 1.5
                     reference_dump = _await_dump_meta(
-                        {"observe_dir": launched["reference"].observe_dir}, [ref_index])
+                        {"observe_dir": launched["reference"].observe_dir}, [ref_index],
+                        timeout=dump_timeout)
                     candidate_dump = _await_dump_meta(
-                        {"observe_dir": launched["candidate"].observe_dir}, [cand_index])
+                        {"observe_dir": launched["candidate"].observe_dir}, [cand_index],
+                        timeout=dump_timeout)
                     pair["dumps"] = {
                         "reference": reference_dump,
                         "candidate": candidate_dump,
@@ -938,15 +1048,19 @@ def run_campaign(
                         )
                         if comparison.get("status") == gfx_frame_compare.FAIL:
                             _preserve_pair(store, launched, pair)
+                        if mode == "lockstep":
+                            _release({"observe_dir": launched["reference"].observe_dir},
+                                     [ref_index])
+                            _release({"observe_dir": launched["candidate"].observe_dir},
+                                     [cand_index])
+                        break
+                    if mode == "lockstep":
                         _release({"observe_dir": launched["reference"].observe_dir},
                                  [ref_index])
                         _release({"observe_dir": launched["candidate"].observe_dir},
                                  [cand_index])
-                        break
-                    _release({"observe_dir": launched["reference"].observe_dir},
-                             [ref_index])
-                    _release({"observe_dir": launched["candidate"].observe_dir},
-                             [cand_index])
+                    state.released_ref.add(ref_index)
+                    state.released_cand.add(cand_index)
                     recent = state.pairs[-2:]
                     _prune_dumps(
                         {"observe_dir": launched["reference"].observe_dir},
@@ -957,7 +1071,8 @@ def run_campaign(
                         [pair.get("candidate_frame_index", pair["frame_index"])
                          for pair in recent],
                     )
-                    state.lockstep_stops += 1
+                    if mode == "lockstep":
+                        state.lockstep_stops += 1
                     if stop_reason:
                         break
             if stop_reason:

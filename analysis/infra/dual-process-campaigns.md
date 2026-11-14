@@ -151,6 +151,29 @@ implementation with its shader cache. The observed preview differences are
 expected because no pixel normalization or comparison has run yet; full-frame
 hashes cannot match across lower-left 1728×1117 and top-left 3456×2234.
 
+## Target-phase pairing and metadata-first observation
+
+Pairing does not start at process start.  The coordinator waits until both
+sides have reached the configured target draw threshold (`settle.min_draws`),
+then anchors on the next frame from each side.  While one side is still
+loading, only that side is advanced in lockstep; the side already in the target
+scene stays paused.  This removes the loading-progress mismatch that produced a
+false 13.9% difference.
+
+For streaming campaigns the reference observer can run in metadata-only mode
+(`EU4_GFX_FRAME_METADATA=1`): it emits draw count, caller composition,
+dimensions and health every frame without a full readback.  The coordinator
+pre-requests a small full-resolution window at the target phase, so selected
+frames carry raw payloads for comparison while loading is not slowed by
+8 MB-per-frame GPU syncs.
+
+Real limitation observed: with two concurrent GUI apps, the background OpenGL
+reference ran at roughly 0.3 fps and did not reach the title draw count in the
+tested window, while the Metal candidate did.  Phase pairing never started and
+the run correctly reported zero compared frames rather than comparing loading
+progress.  A windowed/foreground configuration experiment is required before
+the live title-scene campaign.
+
 ## Limits carried into PR 3
 
 1. The correspondence anchor is relative frame ordinal, not semantic scene /

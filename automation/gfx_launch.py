@@ -47,6 +47,7 @@ class LaunchConfig:
     deadline_seconds: float = 180.0
     skip_unsupported: bool = False
     lockstep: bool = False
+    metadata_only: bool = False
     session_id: str = ""
 
 
@@ -168,6 +169,8 @@ def prepare(role: str, config: LaunchConfig, run_dir: Path,
         env["EU4_GFX_OPS_DURATION_MS"] = str(int(config.deadline_seconds * 1000))
         env["EU4_GFX_OPS_STOP_POLICY"] = "none"
         env["EU4_GFX_OPS_RETENTION"] = "legacy"
+        if config.metadata_only:
+            env["EU4_GFX_FRAME_METADATA"] = "1"
     else:
         env["DYLD_INSERT_LIBRARIES"] = str(library)
         env["EU4_METAL_BOOT_MODE"] = "metal_init"

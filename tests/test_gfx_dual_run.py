@@ -79,6 +79,16 @@ class ScenarioTests(unittest.TestCase):
         with self.assertRaises(gfx_scenario.ScenarioError):
             gfx_scenario.normalize(scenario(reference_backend="metal"))
 
+    def test_consistency_experiment_requires_the_same_backend(self):
+        value = gfx_scenario.normalize(scenario(
+            experiment="consistency", reference_backend="opengl",
+            candidate_backend="opengl"))
+        self.assertEqual(value["experiment"], "consistency")
+        with self.assertRaises(gfx_scenario.ScenarioError):
+            gfx_scenario.normalize(scenario(
+                experiment="consistency", reference_backend="opengl",
+                candidate_backend="metal"))
+
     def test_load_round_trip(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "scenario.json"
@@ -182,6 +192,26 @@ class AlignmentTests(unittest.TestCase):
         self.assertEqual(preview["pixels"], 16)
         self.assertEqual(preview["different_pixels"], 16)
         self.assertEqual(preview["max_channel_error"], 2)
+
+    def test_begin_pairing_anchors_at_the_next_frame_on_both_sides(self):
+        state = self.state()
+        state.pairing = False
+        state.ref_base = None
+        state.cand_base = None
+        state.ref_stream.records = [
+            gfx_dual_run.FrameRecord("opengl", self.ref_path,
+                                     {"frame_index": 10, "draws": 20}),
+            gfx_dual_run.FrameRecord("opengl", self.ref_path,
+                                     {"frame_index": 11, "draws": 20}),
+        ]
+        state.cand_stream.records = [
+            gfx_dual_run.FrameRecord("metal", self.cand_path,
+                                     {"frame_index": 40, "draws": 20}),
+        ]
+        state.begin_pairing()
+        self.assertEqual((state.ref_base, state.cand_base), (12, 41))
+        self.assertEqual((state.phase_entry_ref, state.phase_entry_cand), (11, 40))
+        self.assertTrue(state.pairing)
 
     def test_malformed_lines_are_counted_not_silently_dropped(self):
         self.ref_path.write_text("{not json}\n", encoding="utf-8")

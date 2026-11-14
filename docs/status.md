@@ -28,11 +28,18 @@ clean termination. A later campaign ran 60 and 80 paired lockstep frames with
 bounded evidence and no false rendering verdicts after the loading-stage gate
 was added. A recorded loading-stage comparison exposed a real correspondence
 bug (identical caller composition at different loading progress); it is now a
-regression and comparison is gated on `settle.min_draws`. The full 100-frame
-aligned demonstration and a real title-scene differential verdict are **not yet
-established**: lockstep through loading did not reach the title draw count in
-the tested 240 s window, and the last real comparison was correctly withheld as
-unaligned.
+regression and comparison is gated on `settle.min_draws` and target-phase
+pairing. An **offline 100-frame campaign with a controlled mirrored-text defect
+at frame 57** detects exactly that frame, builds a replayable case, and
+reproduces it without an EU4 launch (`tests/test_offline_campaign.py`).
+
+The real 100-frame **title-scene** demonstration is still open: under two
+concurrent GUI processes the background OpenGL reference was throttled to about
+0.3 fps and never reached the title draw count in the tested window, while the
+Metal candidate reached it. Metadata-only observation and phase-gated pairing
+are implemented, but the reference-side loading/focus behaviour needs a
+separate experiment (windowed/foreground configuration) before the live
+100-frame and real title differential are claimed.
 
 **Safety properties.** A rejected draw is detected on its first diagnostic
 execution in about 4 s; command-buffer completion is never reported as pixel

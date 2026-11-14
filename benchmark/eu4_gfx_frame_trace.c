@@ -24,6 +24,11 @@ extern int eu4_gfx_frame_observe_enabled(void) EU4_OBSERVE_WEAK;
 extern int eu4_gfx_frame_observe_lockstep_enabled(void) EU4_OBSERVE_WEAK;
 extern int eu4_gfx_frame_observe_lockstep_wait(uint32_t, uint32_t)
     EU4_OBSERVE_WEAK;
+extern int eu4_gfx_frame_observe_wants(uint32_t) EU4_OBSERVE_WEAK;
+extern int eu4_gfx_frame_observe_emit_metadata(uint32_t, uint32_t, const char *,
+                                               uint32_t, uint32_t, uint64_t,
+                                               uint32_t, int, const char *)
+    EU4_OBSERVE_WEAK;
 extern int eu4_gfx_frame_observe_emit(const uint8_t *, uint32_t, uint32_t,
                                       const char *, uint32_t, uint32_t, uint64_t,
                                       uint32_t, int, int, const char *)
@@ -2115,16 +2120,45 @@ void eu4_gfx_frame_trace_boundary_exit(eu4_gfx_capture_frame *frame,
     uint32_t stream_draws = 0, stream_distinct = 0;
     uint64_t stream_signature = 0;
     int stream_ok = 0;
+    int metadata_only = 0;
     if (g.stream_only) {
         stream_draws = g.frame_draws;
         stream_distinct = (uint32_t)g.frame_caller_count;
         stream_signature = stream_caller_signature();
-        stream_ok = read_drawable_bgra(&stream_width, &stream_height,
-                                       &stream_pixels) == 0;
+        const char *metadata = getenv("EU4_GFX_FRAME_METADATA");
+        metadata_only = metadata != NULL && strcmp(metadata, "1") == 0;
+        if (metadata_only) {
+            uint32_t width = 0, height = 0;
+            if (eu4_gfx_gl_drawable_extent(&width, &height) != 0 ||
+                width == 0 || height == 0) {
+                GLint viewport[4] = {0, 0, 0, 0};
+                glGetIntegerv(GL_VIEWPORT, viewport);
+                width = (uint32_t)(viewport[2] > 0 ? viewport[2] : 0);
+                height = (uint32_t)(viewport[3] > 0 ? viewport[3] : 0);
+            }
+            stream_width = width;
+            stream_height = height;
+            int wanted = eu4_gfx_frame_observe_wants != NULL &&
+                         eu4_gfx_frame_observe_wants((uint32_t)g.scene_index);
+            stream_ok = 1;
+            if (wanted) {
+                stream_ok = read_drawable_bgra(&stream_width, &stream_height,
+                                               &stream_pixels) == 0;
+                metadata_only = 0;
+            }
+        } else {
+            stream_ok = read_drawable_bgra(&stream_width, &stream_height,
+                                           &stream_pixels) == 0;
+        }
     }
     frame_reset();
     pthread_mutex_unlock(&g_lock);
-    if (g.stream_only && eu4_gfx_frame_observe_emit != NULL) {
+    if (g.stream_only && metadata_only &&
+        eu4_gfx_frame_observe_emit_metadata != NULL) {
+        (void)eu4_gfx_frame_observe_emit_metadata(
+            stream_width, stream_height, "lower_left", (uint32_t)g.scene_index,
+            stream_draws, stream_signature, stream_distinct, 1, "");
+    } else if (g.stream_only && eu4_gfx_frame_observe_emit != NULL) {
         (void)eu4_gfx_frame_observe_emit(
             stream_pixels, stream_width, stream_height, "lower_left",
             (uint32_t)g.scene_index, stream_draws, stream_signature,

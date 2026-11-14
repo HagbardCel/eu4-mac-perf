@@ -37,9 +37,9 @@ reported a 13.9% difference, which was a false rendering verdict.
 
 Mitigations implemented:
 
-- `settle.min_draws` gates comparison until both sides reach the scene's draw
-  threshold (loading frames are explicitly excluded from the comparison, not
-  silently trusted).
+- `settle.min_draws` and target-phase pairing gate comparison until both sides
+  reach the scene; loading frames are explicitly excluded, and the side that
+  reaches the scene first stays paused while the other finishes loading.
 - The case is retained as a regression: an ambiguous/load-progress pair must
   produce `not_compared`, not `fail`.
 - The remaining gap is explicit: a per-frame **update-state fingerprint** is
@@ -102,8 +102,10 @@ renderer.  A run that fails consistency is reported as reference instability,
 not as a rendering defect.
 
 The real GL/GL and Metal/Metal campaigns remain to be executed; the synthetic
-consistency cases in `test_same_composition_is_a_consistency_case` pin the
-alignment/comparison contract until then.
+consistency cases in `test_same_composition_is_a_consistency_case` and the
+100-frame offline campaign pin the alignment/comparison contract until then.
+The offline campaign deliberately mirrors a text region at frame 57; 56 frames
+pass and frame 57 fails with `mirrored_regions=["text"]`.
 
 ## First-difference preservation
 
