@@ -18,7 +18,7 @@
 #define OBS_MAX_PATH 1400
 #define OBS_MAX_FRAMES 120000
 #define OBS_PREVIEW_MAX 64
-#define OBS_MAX_DUMPS 64
+#define OBS_MAX_DUMPS 256
 
 typedef struct {
     uint8_t *pixels;
@@ -545,7 +545,7 @@ static uint64_t parse_request_id(const char *text) {
 static void write_ack(const char *status, uint64_t request_id,
                       const uint64_t *captured, int captured_count,
                       const uint64_t *missing, int missing_count) {
-    char body[1024];
+    char body[4096];
     int used = snprintf(
         body, sizeof body,
         "{\"schema\":\"gfx-frame-ack/v1\",\"request_id\":%llu,"
