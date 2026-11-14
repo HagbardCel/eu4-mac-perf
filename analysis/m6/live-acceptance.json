@@ -19,6 +19,7 @@
         "draw_encoded": true,
         "pixels_captured": true,
         "no_refused_draws": true,
+        "no_failed_resolves": true,
         "gpu_completed": true,
         "frame_dump": true,
         "presented_flag": true,
@@ -88,7 +89,7 @@
       "note": "pink palette"
     }
   ],
-  "note": "One post-sampler-fix live verification reached the settled title scene, executed, GPU-completed and presented with zero refused draws, but visual_match=false. The resolve copy is faithful (the first resolve source is the current beige terrain batch); the remaining defect is inside the multi-draw terrain batch. Three clean starts are not claimed.",
+  "note": "One post-sampler-fix live verification reached the settled title scene, executed, GPU-completed and presented with zero refused draws and no failed resolves, but visual_match=false. The resolve copy is faithful (the first resolve source is the current beige terrain batch); the remaining defect is inside the multi-draw terrain batch. Three clean starts are not claimed.",
   "qualified_clean_starts": 0,
   "required_clean_starts": 3
 }
