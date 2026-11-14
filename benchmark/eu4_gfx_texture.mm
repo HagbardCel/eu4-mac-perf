@@ -1018,7 +1018,7 @@ int eu4_gfx_prepare_sampled_textures(void *command_buffer,
         }
         backend.sampledRenderTargetPendingTokens[key] = @(token);
         backend.sampledRenderTargetPendingGenerations[key] = generation;
-        __unsafe_unretained EU4GfxBackend *prepared_backend = backend;
+        __weak EU4GfxBackend *prepared_backend = backend;
         NSValue *prepared_key = key;
         NSNumber *prepared_generation = generation;
         uint64_t prepared_token = token;
@@ -1026,25 +1026,30 @@ int eu4_gfx_prepare_sampled_textures(void *command_buffer,
             (__bridge id<MTLCommandBuffer>)command_buffer;
         [prepared_command addCompletedHandler:^(id<MTLCommandBuffer> completed) {
             pthread_mutex_lock(&g_sampling_lock);
+            EU4GfxBackend *backend_ref = prepared_backend;
+            if (backend_ref == nil) {
+                pthread_mutex_unlock(&g_sampling_lock);
+                return;
+            }
             NSNumber *handler_token =
-                prepared_backend.sampledRenderTargetPendingTokens[prepared_key];
+                backend_ref.sampledRenderTargetPendingTokens[prepared_key];
             NSNumber *handler_generation =
-                prepared_backend.sampledRenderTargetPendingGenerations[prepared_key];
+                backend_ref.sampledRenderTargetPendingGenerations[prepared_key];
             if (completed.status == MTLCommandBufferStatusCompleted &&
                 handler_token != nil &&
                 [handler_token unsignedLongLongValue] == prepared_token &&
                 handler_generation != nil &&
                 [handler_generation isEqual:prepared_generation] &&
-                [prepared_backend.renderTargetGenerations[prepared_key]
+                [backend_ref.renderTargetGenerations[prepared_key]
                     isEqual:prepared_generation]) {
-                prepared_backend.sampledRenderTargetGenerations[prepared_key] =
+                backend_ref.sampledRenderTargetGenerations[prepared_key] =
                     prepared_generation;
             }
             if (handler_token != nil &&
                 [handler_token unsignedLongLongValue] == prepared_token) {
-                [prepared_backend.sampledRenderTargetPendingTokens
+                [backend_ref.sampledRenderTargetPendingTokens
                     removeObjectForKey:prepared_key];
-                [prepared_backend.sampledRenderTargetPendingGenerations
+                [backend_ref.sampledRenderTargetPendingGenerations
                     removeObjectForKey:prepared_key];
             }
             pthread_mutex_unlock(&g_sampling_lock);
