@@ -113,6 +113,7 @@ def build(frame_dir: Path | str) -> dict:
     target_names: set[str] = set()
     event_rows: list[dict] = []
     unknown_events: list[dict] = []
+    contract_problems: list[str] = []
 
     # First pass: every logical texture name that is ever written.
     for event in events:
@@ -205,6 +206,23 @@ def build(frame_dir: Path | str) -> dict:
             source = _name(event.get("source") or event.get("source_texture"))
             destination = _name(event.get("destination"))
             source_fbo = event.get("source_framebuffer")
+            operation = event.get("operation")
+            if operation != "glCopyTexSubImage2D":
+                contract_problems.append(
+                    f"unsupported copy operation at event {index}: {operation!r}")
+            if event.get("source_level") not in (0, None) or event.get(
+                    "destination_level") not in (0, None):
+                contract_problems.append(
+                    f"unsupported mip level at event {index}")
+            if event.get("source_resolved") is False or event.get(
+                    "destination_resolved") is False:
+                contract_problems.append(
+                    f"unresolved copy source or destination at event {index}")
+            if source_fbo == 0 and event.get("read_buffer") not in (
+                    0x0405, None):
+                contract_problems.append(
+                    f"default-framebuffer copy does not read GL_BACK at "
+                    f"event {index}")
             if source in ("", "0") or source_fbo == 0:
                 source_key = "fb:0"
             else:
@@ -217,14 +235,24 @@ def build(frame_dir: Path | str) -> dict:
                                    "unit": None, "sampler": kind})
             if destination:
                 dest_key = f"tex:{destination}"
-                resource = _resource(resources, dest_key, kind="texture",
-                                     width=event.get("width"),
-                                     height=event.get("height"),
-                                     internal_format=event.get("internal_format"))
+                resource = _resource(
+                    resources, dest_key, kind="texture",
+                    width=event.get("destination_width")
+                    or event.get("width"),
+                    height=event.get("destination_height")
+                    or event.get("height"),
+                    internal_format=event.get("internal_format"))
                 resource["producers"].append(
                     {"event": index, "kind": kind,
-                     "rect": event.get("rect"),
-                     "source": source})
+                     "operation": operation,
+                     "rect": event.get("source_rect") or event.get("rect"),
+                     "destination_offset": event.get(
+                         "destination_offset"),
+                     "source": source,
+                     "source_framebuffer": source_fbo,
+                     "read_buffer": event.get("read_buffer"),
+                     "source_level": event.get("source_level"),
+                     "destination_level": event.get("destination_level")})
                 row["writes"].append("color")
         else:
             unknown_events.append({"event": index, "kind": kind})
@@ -334,6 +362,7 @@ def build(frame_dir: Path | str) -> dict:
             "unsupported event kinds: "
             + ", ".join(sorted({str(item["kind"]) for item in unknown_events}))
         )
+    reasons.extend(contract_problems)
     unproven = sorted(key for key, value in resources.items()
                       if value["origin"] == UNPROVEN and value["consumers"])
     for key in unproven:
@@ -371,8 +400,9 @@ def build(frame_dir: Path | str) -> dict:
         key for key in generated
         if resources[key]["consumers"] and not key.startswith("fb:")
     )
-    status = "invalid" if (not manifest.get("complete") or unknown_events) else (
-        "partial" if reasons else "complete")
+    status = "invalid" if (
+        not manifest.get("complete") or unknown_events or contract_problems
+    ) else ("partial" if reasons else "complete")
     return {
         "schema": SCHEMA,
         "frame_dir": str(frame_dir),
@@ -508,12 +538,18 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
     samples = replay.get("_provenance_samples")
     if samples is None:
         samples = []
+
+    def event_index(value) -> int:
+        """Preserve event 0; only a missing value becomes -1."""
+        return -1 if value is None else int(value)
+
     by_texture: dict[str, list[dict]] = {}
     by_consumer: dict[tuple, list[dict]] = {}
     for sample in samples:
         by_texture.setdefault(str(sample.get("texture") or ""), []).append(sample)
         by_consumer.setdefault(
-            (int(sample.get("event") or -1), str(sample.get("sampler") or "")),
+            (event_index(sample.get("event")),
+             str(sample.get("sampler") or "")),
             []).append(sample)
 
     # Every captured consumer must be represented exactly once per
@@ -527,7 +563,7 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
             for row in resource.get("consumer_generations") or []
         }
         for consumer in resource.get("consumers") or []:
-            event = int(consumer.get("event") or -1)
+            event = event_index(consumer.get("event"))
             sampler = str(consumer.get("sampler") or "")
             if sampler in ("resolve", "copy"):
                 # Resolve/copy execution is validated by the ordered event
@@ -538,6 +574,14 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
                 consumer_problems.append({
                     "event": event, "sampler": sampler, "resource": key,
                     "kind": "missing_consumer"})
+                continue
+            if len(rows) != 1:
+                # Two records for the same expected (event, sampler) are two
+                # contested bindings, not one confirmation.
+                consumer_problems.append({
+                    "event": event, "sampler": sampler, "resource": key,
+                    "kind": "duplicate_consumer",
+                    "records": len(rows)})
                 continue
             textures = {str(row.get("texture") or "") for row in rows}
             if len(textures) != 1:
@@ -602,7 +646,7 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
         for item in bindings:
             if item.get("source") != "metal_render_target":
                 continue
-            expected = required_by_event.get(int(item.get("event") or -1))
+            expected = required_by_event.get(event_index(item.get("event")))
             if expected is None:
                 continue
             generation = int(item.get("generation") or 0)

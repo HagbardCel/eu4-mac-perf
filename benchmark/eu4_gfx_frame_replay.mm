@@ -157,7 +157,9 @@ static NSString *const kCopyKernelMSL =
      "kernel void copy_rect(texture2d<float, access::read> source [[texture(0)]],\n"
      "                      texture2d<float, access::write> destination [[texture(1)]],\n"
      "                      constant int4 &rect [[buffer(0)]],\n"
+     "                      constant int2 &size [[buffer(1)]],\n"
      "                      uint2 gid [[thread_position_in_grid]]) {\n"
+     "    if ((int)gid.x >= size.x || (int)gid.y >= size.y) return;\n"
      "    int x = rect.x + (int)gid.x;\n"
      "    int y = rect.y + (int)gid.y;\n"
      "    int dx = rect.z + (int)gid.x;\n"
@@ -1907,12 +1909,42 @@ static BOOL encode_copy_event(NSDictionary *event, NSString *frameDir,
                              NSError **error) {
     (void)frameDir;
     NSString *operation = string_value(event[@"operation"]);
-    if (operation != nil &&
+    /* A missing operation is not "the default copy": the captured variant must
+       be explicitly present and recognized. */
+    if (operation == nil ||
         ![operation isEqualToString:@"glCopyTexSubImage2D"]) {
         if (error != NULL) {
             *error = [NSError errorWithDomain:kErrorDomain code:96
                                      userInfo:@{NSLocalizedDescriptionKey:
                                                     @"unsupported resolve/copy variant"}];
+        }
+        return NO;
+    }
+    if (event[@"source_framebuffer"] == nil || event[@"read_buffer"] == nil ||
+        event[@"source_level"] == nil || event[@"destination_level"] == nil) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:96
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"resolve/copy is missing its effective source state"}];
+        }
+        return NO;
+    }
+    if (number(event[@"is_blit"], 0) != 0 ||
+        number(event[@"source_level"], -1) != 0 ||
+        number(event[@"destination_level"], -1) != 0) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:96
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"blit or nonzero mip level is unsupported"}];
+        }
+        return NO;
+    }
+    if (number(event[@"source_resolved"], 0) == 0 ||
+        number(event[@"destination_resolved"], 0) == 0) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:96
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"resolve/copy source or destination was unresolved"}];
         }
         return NO;
     }
@@ -1928,19 +1960,47 @@ static BOOL encode_copy_event(NSDictionary *event, NSString *frameDir,
     }
     NSString *source_name = texture_key(event[@"source"]);
     NSMutableDictionary *source_info = nil;
-    if (source_name.length > 0 && ![source_name isEqualToString:@"0"]) {
-        source_info = g_render_targets[source_name];
-    } else {
+    if (number(event[@"source_framebuffer"], 0) == 0) {
+        /* Only the back buffer is represented by the Metal default target.
+           A front-buffer read is a different, uncaptured input. */
+        if (number(event[@"read_buffer"], 0) != 0x0405 ||
+            (source_name.length > 0 &&
+             ![source_name isEqualToString:@"0"])) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:98
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        @"default-framebuffer copy does not read GL_BACK"}];
+            }
+            return NO;
+        }
         source_info = target_for(@{@"framebuffer": @0,
                                    @"width": @(g_default_target.width),
                                    @"height": @(g_default_target.height)},
                                  error);
+    } else {
+        if (source_name.length == 0 || [source_name isEqualToString:@"0"]) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:98
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        @"non-default copy has no source attachment"}];
+            }
+            return NO;
+        }
+        source_info = g_render_targets[source_name];
     }
     if (source_info == nil) {
         if (error != NULL) {
             *error = [NSError errorWithDomain:kErrorDomain code:98
                                      userInfo:@{NSLocalizedDescriptionKey:
                                                     @"resolve source target missing"}];
+        }
+        return NO;
+    }
+    if (source_info == destination_info) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:98
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"resolve source and destination are the same target"}];
         }
         return NO;
     }
@@ -1991,6 +2051,8 @@ static BOOL encode_copy_event(NSDictionary *event, NSString *frameDir,
     [encoder setTexture:source_texture atIndex:0];
     [encoder setTexture:destination_texture atIndex:1];
     [encoder setBytes:copy_rect length:sizeof(copy_rect) atIndex:0];
+    int32_t copy_size[2] = {(int32_t)width, (int32_t)height};
+    [encoder setBytes:copy_size length:sizeof(copy_size) atIndex:1];
     MTLSize threads_per_group = MTLSizeMake(8, 8, 1);
     MTLSize groups = MTLSizeMake(((NSUInteger)width + 7) / 8,
                                  ((NSUInteger)height + 7) / 8, 1);
@@ -1998,7 +2060,10 @@ static BOOL encode_copy_event(NSDictionary *event, NSString *frameDir,
     [encoder endEncoding];
     [command commit];
     [command waitUntilCompleted];
-    if (command.status != MTLCommandBufferStatusCompleted) {
+    const char *copy_fault = getenv("EU4_FRAME_REPLAY_COPY_FAULT");
+    BOOL forced_failure = copy_fault != NULL &&
+                          strcmp(copy_fault, "command") == 0;
+    if (forced_failure || command.status != MTLCommandBufferStatusCompleted) {
         if (error != NULL) {
             *error = [NSError errorWithDomain:kErrorDomain code:101
                                      userInfo:@{NSLocalizedDescriptionKey:

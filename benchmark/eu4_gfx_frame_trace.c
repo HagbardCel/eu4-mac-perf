@@ -122,7 +122,14 @@ static struct {
     int armed;
     int capturing_frame;
     int matching_frames;
+    int matching_scenes;
     int event_count;
+    int stream_validated;
+    uint64_t timeline_seq;
+    uint32_t scene_copy_count;
+    uint64_t copy_count;
+    int test_only;
+    int test_fail_flush;
     int have_seed;
 
     /* Caller set of the frame currently being observed (cheap, always on). */
@@ -133,6 +140,7 @@ static struct {
     FILE *events;
     char partial_path[FTRACE_PATH];
     char final_path[FTRACE_PATH];
+    char timeline_path[FTRACE_PATH];
     char reference_file[FTRACE_NAME];
     char reference_sha[65];
     size_t reference_bytes;
@@ -263,46 +271,138 @@ static void texture_cache_put(const char *key, const char *levels) {
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static const char *g_capture_failure_reason;
-static void emit_event(const char *json);
+static int emit_event(const char *json);
+static uint64_t now_ms(void);
+static uint64_t now_ns(void);
+static void timeline_write(const char *format, ...);
+static const char *bool_text(int value);
 
-/* Ordered copy/resolve event from the GL interposer.  Only captured frames are
-   recorded; a copy before the selected frame belongs to the frame boundary. */
-void eu4_gfx_frame_trace_copy_event(int is_blit, int src_fbo, int src_texture,
-                                    int src_level, int dst_texture,
-                                    int dst_level, int x, int y, int width,
-                                    int height, int dx, int dy) {
-    pthread_mutex_lock(&g_lock);
-    if (!g.armed || g.events == NULL ||
-        g.event_count >= (int)g.max_draws) {
-        pthread_mutex_unlock(&g_lock);
-        return;
+static void fail_capture_locked(const char *reason) {
+    g.capture_failed = 1;
+    if (g_capture_failure_reason == NULL) {
+        g_capture_failure_reason = reason;
     }
-    GLint destination_width = 0, destination_height = 0, internal_format = 0;
-    glGetTexLevelParameteriv(GL_TEXTURE_2D, dst_level, GL_TEXTURE_WIDTH,
-                             &destination_width);
-    glGetTexLevelParameteriv(GL_TEXTURE_2D, dst_level, GL_TEXTURE_HEIGHT,
-                             &destination_height);
-    glGetTexLevelParameteriv(GL_TEXTURE_2D, dst_level, GL_TEXTURE_INTERNAL_FORMAT,
-                             &internal_format);
-    char body[1024];
+}
+
+/* Ordered copy/resolve event from the GL interposer.  Every copy is logged to
+   the single monotonic timeline when enabled; only an armed capture records
+   the event that replay consumes.  Unsupported variants fail the capture
+   rather than accepting a source we cannot reconstruct. */
+int eu4_gfx_frame_trace_copy_mode(void) {
+    pthread_mutex_lock(&g_lock);
+    g.copy_count++;
+    g.scene_copy_count++;
+    int record = g.armed ||
+                 (g.timeline_path[0] != 0 && g.scene_copy_count == 1);
+    pthread_mutex_unlock(&g_lock);
+    return record;
+}
+
+int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event) {
+    if (event == NULL) {
+        return 0;
+    }
+    pthread_mutex_lock(&g_lock);
+    int accepted = 0;
+    if (g.timeline_path[0] != 0 && !g.capture_failed) {
+        uint64_t sequence = ++g.timeline_seq;
+        timeline_write(
+            "{\"kind\":\"copy\",\"seq\":%llu,\"pid\":%d,\"monotonic_ns\":%llu,"
+            "\"scene\":%d,\"present\":%d,\"armed\":%d,\"captured\":%d,"
+            "\"source_framebuffer\":%d,\"read_buffer\":%d,\"draw_buffer\":%d,"
+            "\"source_attachment_type\":%d,\"source_attachment_name\":%d,"
+            "\"source_level\":%d,\"source_resolved\":%d,"
+            "\"destination\":\"%d\",\"destination_level\":%d,"
+            "\"source_rect\":[%d,%d,%d,%d],\"destination_offset\":[%d,%d]}",
+            (unsigned long long)sequence, (int)getpid(),
+            (unsigned long long)now_ns(), g.scene_index,
+            g.present_index, g.armed, g.captured, event->source_framebuffer,
+            event->read_buffer, event->draw_buffer, event->source_color_type,
+            event->source_color_name, event->source_level,
+            event->source_resolved, event->destination_texture,
+            event->destination_level, event->x, event->y, event->width,
+            event->height, event->dx, event->dy);
+    }
+    if (!g.armed || g.events == NULL) {
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
+    if (g.event_count >= (int)g.max_draws) {
+        g.truncated = 1;
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
+    if (event->is_blit || event->source_level != 0 ||
+        event->destination_level != 0 || !event->source_resolved ||
+        !event->destination_resolved) {
+        fail_capture_locked("unsupported_copy_variant");
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
+    if (event->source_framebuffer == 0 &&
+        event->read_buffer != 0x0405 /* GL_BACK */) {
+        /* The Metal default target represents the back buffer.  A front-buffer
+           read is a pre-frame input we have not captured; refuse to substitute
+           the back buffer for it. */
+        fail_capture_locked("unsupported_default_read_buffer");
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
+    int destination_width = event->destination_width;
+    int destination_height = event->destination_height;
+    int internal_format = event->destination_internal_format;
+    if ((destination_width <= 0 || destination_height <= 0 ||
+         internal_format == 0) &&
+        !g.test_only) {
+        GLint queried_width = 0, queried_height = 0, queried_format = 0;
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, event->destination_level,
+                                 GL_TEXTURE_WIDTH, &queried_width);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, event->destination_level,
+                                 GL_TEXTURE_HEIGHT, &queried_height);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, event->destination_level,
+                                 GL_TEXTURE_INTERNAL_FORMAT, &queried_format);
+        destination_width = queried_width;
+        destination_height = queried_height;
+        internal_format = queried_format;
+    }
+    char body[2048];
     int length = snprintf(
         body, sizeof body,
-        "{\"kind\":\"resolve\",\"operation\":\"%s\","
-        "\"source_framebuffer\":%d,\"source\":\"%d\","
-        "\"source_level\":%d,\"destination\":\"%d\","
-        "\"destination_level\":%d,\"source_rect\":[%d,%d,%d,%d],"
+        "{\"kind\":\"resolve\",\"operation\":\"%s\",\"is_blit\":%s,"
+        "\"source_framebuffer\":%d,\"read_buffer\":%d,\"draw_buffer\":%d,"
+        "\"double_buffered\":%d,\"source\":\"%d\","
+        "\"source_attachment_type\":%d,\"source_attachment_name\":%d,"
+        "\"source_level\":%d,\"source_resolved\":%s,"
+        "\"source_width\":%d,\"source_height\":%d,"
+        "\"source_internal_format\":%d,"
+        "\"destination\":\"%d\",\"destination_level\":%d,"
+        "\"destination_resolved\":%s,"
+        "\"source_rect\":[%d,%d,%d,%d],"
         "\"destination_offset\":[%d,%d],\"width\":%d,\"height\":%d,"
         "\"destination_width\":%d,\"destination_height\":%d,"
-        "\"internal_format\":%d}",
-        is_blit ? "glBlitFramebuffer" : "glCopyTexSubImage2D",
-        src_fbo, src_texture, src_level, dst_texture, dst_level,
-        x, y, width, height, dx, dy, width, height,
-        destination_width, destination_height, internal_format);
-    if (length > 0 && (size_t)length < sizeof body) {
-        emit_event(body);
+        "\"internal_format\":%d,\"sequence\":%llu,\"pid\":%d,"
+        "\"scene\":%d,\"present\":%d,\"captured_frame\":%d}",
+        event->is_blit ? "glBlitFramebuffer" : "glCopyTexSubImage2D",
+        bool_text(event->is_blit), event->source_framebuffer,
+        event->read_buffer, event->draw_buffer, event->double_buffered,
+        event->source_texture, event->source_color_type,
+        event->source_color_name, event->source_level,
+        bool_text(event->source_resolved), event->source_width,
+        event->source_height, event->source_internal_format,
+        event->destination_texture, event->destination_level,
+        bool_text(event->destination_resolved), event->x, event->y,
+        event->width, event->height, event->dx, event->dy,
+        event->width, event->height, destination_width, destination_height,
+        internal_format, (unsigned long long)++g.timeline_seq, (int)getpid(),
+        g.scene_index, g.present_index, g.capturing_frame);
+    if (length <= 0 || (size_t)length >= sizeof body) {
+        fail_capture_locked("copy_event_oversized");
+    } else if (emit_event(body)) {
         g.event_count++;
+        accepted = 1;
     }
     pthread_mutex_unlock(&g_lock);
+    return accepted;
 }
 
 /* Entry-side draw arguments. The gateway's exit frame holds post-call
@@ -449,6 +549,31 @@ static uint64_t now_ms(void) {
     return (uint64_t)spec.tv_sec * 1000ull + (uint64_t)spec.tv_nsec / 1000000ull;
 }
 
+static uint64_t now_ns(void) {
+    struct timespec spec;
+    clock_gettime(CLOCK_MONOTONIC, &spec);
+    return (uint64_t)spec.tv_sec * 1000000000ull + (uint64_t)spec.tv_nsec;
+}
+
+/* One ordered, process-identifiable timeline.  Callers hold g_lock, so the
+   timeline sequence is the same total order the capture observes. */
+static void timeline_write(const char *format, ...) {
+    if (g.timeline_path[0] == 0) {
+        return;
+    }
+    FILE *file = fopen(g.timeline_path, "a");
+    if (file == NULL) {
+        return;
+    }
+    va_list args;
+    va_start(args, format);
+    if (vfprintf(file, format, args) >= 0) {
+        fputc('\n', file);
+    }
+    va_end(args);
+    fclose(file);
+}
+
 static int parse_u64(const char *text, uint64_t *out) {
     if (text == NULL || *text == 0) {
         return -1;
@@ -479,9 +604,16 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
     const char *after_ms = getenv("EU4_GFX_FRAME_TRACE_AFTER_MS");
     const char *max_draws = getenv("EU4_GFX_FRAME_TRACE_MAX_DRAWS");
     const char *max_frame_draws = getenv("EU4_GFX_FRAME_TRACE_MAX_FRAME_DRAWS");
+    const char *timeline = getenv("EU4_GFX_FRAME_TRACE_TIMELINE");
     const char *observe_dir = getenv("EU4_GFX_FRAME_OBSERVE_DIR");
     g.configured = 1;
     g.enabled = 0;
+    g.test_only = test_only != NULL && strcmp(test_only, "1") == 0;
+    if (g.test_only) {
+        const char *fail_flush =
+            getenv("EU4_GFX_FRAME_TRACE_TEST_FAIL_FLUSH");
+        g.test_fail_flush = fail_flush != NULL && strcmp(fail_flush, "1") == 0;
+    }
     if (observe_dir != NULL && observe_dir[0] == '/') {
         g.stream_only = (dir == NULL || dir[0] == 0);
         if (g.stream_only) {
@@ -528,6 +660,12 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
     }
     if (boundary != NULL && strcmp(boundary, "scene") == 0) {
         g.boundary_scene = 1;
+    }
+    /* Absolute frame selection is defined for the present boundary.  A scene
+       request that also names an absolute frame would otherwise silently
+       select a different occurrence, so reject the combination. */
+    if (g.boundary_scene && g.at_frame != UINT64_MAX) {
+        return -1;
     }
     if (pre_post != NULL && pre_post[0] != 0) {
         char copy[512];
@@ -602,6 +740,10 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
     snprintf(g.partial_path, sizeof(g.partial_path), "%s/frame-events.jsonl",
              g.dir);
     snprintf(g.final_path, sizeof(g.final_path), "%s/frame-events.jsonl", g.dir);
+    if (timeline != NULL && strcmp(timeline, "1") == 0) {
+        snprintf(g.timeline_path, sizeof(g.timeline_path), "%s/timeline.jsonl",
+                 g.dir);
+    }
     load_sampler_queries();
     g.enabled = 1;
     return 1;
@@ -648,15 +790,101 @@ static void frame_reset(void) {
     g.frame_draws = 0;
 }
 
-static void emit_event(const char *json) {
+static int emit_event(const char *json) {
     if (g.events == NULL) {
-        return;
+        fail_capture_locked("event_stream_unavailable");
+        return 0;
     }
-    fputs(json, g.events);
-    fputc('\n', g.events);
-    if (fflush(g.events) != 0) {
+    if (fputs(json, g.events) == EOF || fputc('\n', g.events) == EOF) {
+        fail_capture_locked("event_write_failed");
+        fclose(g.events);
+        g.events = NULL;
+        return 0;
+    }
+    if (fflush(g.events) != 0 ||
+        (g.test_only && g.test_fail_flush)) {
+        fail_capture_locked("event_flush_failed");
+        fclose(g.events);
+        g.events = NULL;
+        return 0;
+    }
+    return 1;
+}
+
+/* Finalizes and validates the event stream before a manifest may claim
+   completion.  Every record must be one complete JSON object and the number of
+   records on disk must equal the number the capture reported. */
+static int finalize_event_stream(void) {
+    int ok = 1;
+    if (g.events != NULL) {
+        if (ferror(g.events) != 0 || fflush(g.events) != 0) {
+            fail_capture_locked("event_flush_failed");
+            ok = 0;
+        }
+        if (fclose(g.events) != 0) {
+            fail_capture_locked("event_close_failed");
+            ok = 0;
+        }
         g.events = NULL;
     }
+    if (g.capture_failed) {
+        ok = 0;
+    }
+    FILE *file = fopen(g.partial_path, "rb");
+    if (file == NULL) {
+        fail_capture_locked("event_stream_missing");
+        return 0;
+    }
+    char *line = NULL;
+    size_t capacity = 0;
+    ssize_t length = 0;
+    int records = 0;
+    int malformed = 0;
+    int newline_terminated = 1;
+    while ((length = getline(&line, &capacity, file)) >= 0) {
+        int start = 0;
+        while (start < length && (line[start] == ' ' || line[start] == '\t')) {
+            start++;
+        }
+        int end = (int)length;
+        if (end > start && line[end - 1] == '\n') {
+            end--;
+        } else {
+            newline_terminated = 0;
+        }
+        int has_kind = 0;
+        for (int i = start; i + 6 <= end; i++) {
+            if (memcmp(line + i, "\"kind\"", 6) == 0) {
+                has_kind = 1;
+                break;
+            }
+        }
+        if (end <= start || line[start] != '{' || line[end - 1] != '}' ||
+            !has_kind) {
+            malformed = 1;
+        }
+        records++;
+    }
+    free(line);
+    fclose(file);
+    if (malformed) {
+        fail_capture_locked("malformed_event");
+        ok = 0;
+    }
+    if (!newline_terminated) {
+        fail_capture_locked("unterminated_event");
+        ok = 0;
+    }
+    if (records != g.event_count) {
+        fail_capture_locked("event_count_mismatch");
+        ok = 0;
+    }
+    if (records == 0) {
+        fail_capture_locked("empty_event_stream");
+        ok = 0;
+    }
+    g.stream_validated = ok && !g.capture_failed;
+    return g.stream_validated;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1173,15 +1401,12 @@ static int capture_attributes(GLuint program, int indexed, int first, int count,
                     /* Do not drain the application's pending GL error here:
                        that is observable state. A pre-existing error makes the
                        capture fail closed rather than being silently cleared. */
+                    /* Do not consume the engine's pending GL error state.
+                       The actual index values are validated by
+                       eu4_gfx_indexed_range below; a short read is caught by
+                       the range check. */
                     glGetBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0,
                                        (GLsizeiptr)index_bytes, index_data);
-                    if (glGetError() != GL_NO_ERROR) {
-                        index_read_error = 1;
-                        capture_error = 1;
-                        free(index_data);
-                        index_data = NULL;
-                        index_bytes = 0;
-                    }
                 }
             }
             if (index_bytes < (size_t)count * 2u || index_data == NULL) {
@@ -1352,8 +1577,7 @@ static int capture_attributes(GLuint program, int indexed, int first, int count,
             } else {
                 glGetBufferSubData(GL_ARRAY_BUFFER, (GLintptr)begin,
                                    (GLsizeiptr)bytes, data);
-                if (glGetError() != GL_NO_ERROR ||
-                    put_blob(data, bytes, "vb", blob_name, blob_sha) != 0) {
+                if (put_blob(data, bytes, "vb", blob_name, blob_sha) != 0) {
                     read_error = 1;
                     blob_name[0] = 0;
                     range_valid = 0;
@@ -1412,6 +1636,9 @@ static int capture_attributes(GLuint program, int indexed, int first, int count,
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, (GLuint)previous_element);
     free(index_data);
     (void)element_bytes;
+    if ((capture_error || !range_valid) && g_capture_failure_reason == NULL) {
+        g_capture_failure_reason = "attribute_range";
+    }
     return capture_error || !range_valid ? 1 : 0;
 }
 
@@ -1984,8 +2211,11 @@ static void write_frame_manifest(int complete, const char *reason) {
     fprintf(file, "\"complete\":%s,", bool_text(complete));
     fprintf(file, "\"reason\":\"%s\",", reason != NULL ? reason : "");
     fprintf(file, "\"truncated\":%s,", bool_text(g.truncated));
+    fprintf(file, "\"stream_validated\":%s,", bool_text(g.stream_validated));
     fprintf(file, "\"pid\":%d,", (int)getpid());
     fprintf(file, "\"present_index\":%d,", g.capturing_frame);
+    fprintf(file, "\"scene_index\":%d,",
+            g.boundary_scene ? g.capturing_frame : g.scene_index);
     fprintf(file, "\"events\":%d,", g.event_count);
     fputs("\"gl\":{", file);
     fprintf(file, "\"vendor\":\"%s\",", vendor != NULL ? vendor : "");
@@ -2006,6 +2236,15 @@ static void write_frame_manifest(int complete, const char *reason) {
     }
     fprintf(file, "],\"min_draws\":%u,", g.min_draws);
     fprintf(file, "\"occurrence\":%u,", g.occurrence);
+    fprintf(file, "\"max_frame_draws\":%u,", g.max_frame_draws);
+    if (g.at_frame == UINT64_MAX) {
+        fputs("\"at_frame\":null,", file);
+    } else {
+        fprintf(file, "\"at_frame\":%llu,",
+                (unsigned long long)g.at_frame);
+    }
+    fprintf(file, "\"boundary\":\"%s\",",
+            g.boundary_scene ? "scene" : "present");
     fprintf(file, "\"required\":%s},", bool_text(g.caller_count > 0));
     fputs("\"seed\":{", file);
     fprintf(file, "\"width\":%d,", g.seed_width);
@@ -2030,15 +2269,36 @@ static void finish_capture(const char *reason) {
     if (!g.armed) {
         return;
     }
+    uint32_t width = 0, height = 0;
+    int have_reference = 0;
+    if (g.test_only) {
+        /* Offline writer host: exercise the real finalize/validation path
+           without an OpenGL context. */
+        width = 4;
+        height = 4;
+        uint8_t pixels[4 * 4 * 4];
+        for (size_t i = 0; i < sizeof(pixels); i++) {
+            pixels[i] = (uint8_t)(i * 37u);
+        }
+        char path[FTRACE_PATH];
+        snprintf(path, sizeof(path), "%s/frame-reference.bgra", g.dir);
+        if (write_atomic(path, pixels, sizeof(pixels)) == 0) {
+            snprintf(g.reference_file, sizeof(g.reference_file),
+                     "frame-reference.bgra");
+            sha256_hex(pixels, sizeof(pixels), g.reference_sha);
+            g.reference_bytes = sizeof(pixels);
+            g.reference_width = width;
+            g.reference_height = height;
+            have_reference = 1;
+        }
+    } else {
     GLint viewport[4] = {0, 0, 0, 0};
     glGetIntegerv(GL_VIEWPORT, viewport);
-    uint32_t width = 0, height = 0;
     if (eu4_gfx_gl_drawable_extent(&width, &height) == 0 || width == 0 ||
         height == 0) {
         width = (uint32_t)(viewport[2] > 0 ? viewport[2] : 0);
         height = (uint32_t)(viewport[3] > 0 ? viewport[3] : 0);
     }
-    int have_reference = 0;
     if (width > 0 && height > 0 && width <= 8192 && height <= 8192) {
         size_t bytes = (size_t)width * height * 4;
         uint8_t *pixels = malloc(bytes);
@@ -2085,17 +2345,28 @@ static void finish_capture(const char *reason) {
             free(pixels);
         }
     }
-    write_frame_manifest(have_reference && !g.truncated && !g.capture_failed,
-                         g.truncated ? "draw_cap"
-                                     : (g.capture_failed
-                                            ? (g_capture_failure_reason
-                                                   ? g_capture_failure_reason
-                                                   : "capture_failed")
-                                            : (have_reference ? reason : "reference_read")));
-    if (g.events != NULL) {
-        fclose(g.events);
-        g.events = NULL;
     }
+    /* The manifest is published only after the event stream has been closed
+       and validated.  A write/flush failure, malformed record, missing record
+       or count mismatch therefore cannot produce complete=true. */
+    int stream_validated = finalize_event_stream();
+    const char *manifest_reason;
+    if (g.capture_failed) {
+        manifest_reason = g_capture_failure_reason != NULL
+                              ? g_capture_failure_reason
+                              : "capture_failed";
+    } else if (g.truncated) {
+        manifest_reason = "draw_cap";
+    } else if (!have_reference) {
+        manifest_reason = "reference_read";
+    } else if (!stream_validated) {
+        manifest_reason = "event_stream_invalid";
+    } else {
+        manifest_reason = reason;
+    }
+    write_frame_manifest(
+        have_reference && !g.truncated && !g.capture_failed && stream_validated,
+        manifest_reason);
     g.armed = 0;
     g.captured = 1;
 }
@@ -2114,6 +2385,7 @@ static void start_capture_at_frame(int next_frame) {
     g.event_count = 0;
     g.truncated = 0;
     g.capture_failed = 0;
+    g.stream_validated = 0;
     g_capture_failure_reason = NULL;
     g.have_seed = 0;
     g.seed_emitted = 0;
@@ -2225,6 +2497,16 @@ void eu4_gfx_frame_trace_boundary_entry(eu4_gfx_capture_frame *frame,
     pthread_mutex_lock(&g_lock);
     call->retain = 0;
     g.scene_index++;
+    g.scene_copy_count = 0;
+    timeline_write(
+        "{\"kind\":\"scene_entry\",\"seq\":%llu,\"pid\":%d,"
+        "\"monotonic_ns\":%llu,\"scene\":%d,\"draws\":%u,"
+        "\"copies_before\":%u,\"copies_total\":%llu,"
+        "\"armed\":%d,\"captured\":%d}",
+        (unsigned long long)++g.timeline_seq, (int)getpid(),
+        (unsigned long long)now_ns(), g.scene_index, g.frame_draws,
+        g.scene_copy_count, (unsigned long long)g.copy_count, g.armed,
+        g.captured);
     const char *log_path = getenv("EU4_GFX_FRAME_TRACE_LOG");
     if (log_path != NULL && log_path[0] == '/' && g.scene_index % 60 == 0) {
         FILE *log = fopen(log_path, "a");
@@ -2237,8 +2519,9 @@ void eu4_gfx_frame_trace_boundary_entry(eu4_gfx_capture_frame *frame,
             fclose(log);
         }
     }
-    if (g.boundary_scene && g.armed) {
-        /* Every draw of the scene has been issued when the frontend presents. */
+    if (g.boundary_scene && g.armed &&
+        g.capturing_frame < g.scene_index) {
+        /* A capture whose scene exit was missed still ends at this boundary. */
         finish_capture("scene_present");
     }
     pthread_mutex_unlock(&g_lock);
@@ -2254,26 +2537,58 @@ void eu4_gfx_frame_trace_boundary_exit(eu4_gfx_capture_frame *frame,
     }
     pthread_mutex_lock(&g_lock);
     call->retain = 0;
-    if (g.boundary_scene && !g.captured && !g.armed && !g.stream_only) {
-        int time_ready = g.after_ms == 0 || now_ms() - g.start_ms >= g.after_ms;
-        int enough = time_ready && g.frame_draws >= g.min_draws &&
-                     caller_set_matches();
-        const char *log_path = getenv("EU4_GFX_FRAME_TRACE_LOG");
-        if (log_path != NULL && log_path[0] == '/' && g.scene_index % 60 == 0) {
-            FILE *log = fopen(log_path, "a");
-            if (log != NULL) {
-                fprintf(log,
-                        "{\"event\":\"exit\",\"scene\":%d,\"ms\":%llu,"
-                        "\"draws\":%u,\"ready\":%d,\"enough\":%d,"
-                        "\"armed\":%d,\"captured\":%d}\n",
-                        g.scene_index,
-                        (unsigned long long)(now_ms() - g.start_ms),
-                        g.frame_draws, time_ready, enough, g.armed, g.captured);
-                fclose(log);
-            }
+    if (g.boundary_scene && !g.stream_only) {
+        /* The scene selected at the previous exit is captured from that
+           boundary to this corresponding exit, so every draw between the two
+           scene boundaries is in the event stream. */
+        if (g.armed && g.capturing_frame == g.scene_index) {
+            finish_capture("scene_present");
         }
-        if (enough) {
-            start_capture_at_frame(g.scene_index + 1);
+        if (!g.captured && !g.armed) {
+            int time_ready =
+                g.after_ms == 0 || now_ms() - g.start_ms >= g.after_ms;
+            int enough = time_ready && g.frame_draws > 0 &&
+                         g.frame_draws >= g.min_draws &&
+                         caller_set_matches() &&
+                         (g.max_frame_draws == 0 ||
+                          g.frame_draws <= g.max_frame_draws);
+            int candidate = 0;
+            if (enough) {
+                g.matching_scenes++;
+                candidate = (uint32_t)g.matching_scenes == g.occurrence;
+            }
+            timeline_write(
+                "{\"kind\":\"scene_exit\",\"seq\":%llu,\"pid\":%d,"
+                "\"monotonic_ns\":%llu,\"scene\":%d,\"draws\":%u,"
+                "\"ready\":%d,\"enough\":%d,\"matching\":%d,"
+                "\"selected\":%d,\"copies\":%u,\"copies_total\":%llu,"
+                "\"armed\":%d,\"captured\":%d}",
+                (unsigned long long)++g.timeline_seq, (int)getpid(),
+                (unsigned long long)now_ns(), g.scene_index, g.frame_draws,
+                time_ready, enough, g.matching_scenes, candidate,
+                g.scene_copy_count, (unsigned long long)g.copy_count, g.armed,
+                g.captured);
+            const char *log_path = getenv("EU4_GFX_FRAME_TRACE_LOG");
+            if (log_path != NULL && log_path[0] == '/' &&
+                g.scene_index % 60 == 0) {
+                FILE *log = fopen(log_path, "a");
+                if (log != NULL) {
+                    fprintf(log,
+                            "{\"event\":\"exit\",\"scene\":%d,\"ms\":%llu,"
+                            "\"draws\":%u,\"ready\":%d,\"enough\":%d,"
+                            "\"matching\":%d,\"selected\":%d,"
+                            "\"armed\":%d,\"captured\":%d}\n",
+                            g.scene_index,
+                            (unsigned long long)(now_ms() - g.start_ms),
+                            g.frame_draws, time_ready, enough,
+                            g.matching_scenes, candidate, g.armed,
+                            g.captured);
+                    fclose(log);
+                }
+            }
+            if (candidate) {
+                start_capture_at_frame(g.scene_index + 1);
+            }
         }
     }
     uint32_t stream_width = 0, stream_height = 0;
@@ -2535,6 +2850,12 @@ static void draw_entry_common(eu4_gfx_capture_frame *frame,
         return;
     }
     pthread_mutex_lock(&g_lock);
+    if (g.test_only) {
+        caller_add(call->caller_rva);
+        g.frame_draws++;
+        pthread_mutex_unlock(&g_lock);
+        return;
+    }
     if (g.gl_vendor[0] == 0) {
         const char *vendor = (const char *)glGetString(GL_VENDOR);
         const char *renderer = (const char *)glGetString(GL_RENDERER);
@@ -2646,6 +2967,26 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
     }
     pthread_mutex_lock(&g_lock);
     call->retain = 0;
+    if (g.test_only) {
+        if (g.armed && g.events != NULL) {
+            if (g.event_count >= (int)g.max_draws) {
+                g.truncated = 1;
+            } else {
+                char body[256];
+                int length = snprintf(
+                    body, sizeof body,
+                    "{\"kind\":\"draw\",\"index\":%d,\"test\":true,"
+                    "\"draw\":{\"entry\":\"_GfxDraw\",\"caller_rva\":\"0x%llx\"}}",
+                    g.event_count, (unsigned long long)call->caller_rva);
+                if (length > 0 && (size_t)length < sizeof body &&
+                    emit_event(body)) {
+                    g.event_count++;
+                }
+            }
+        }
+        pthread_mutex_unlock(&g_lock);
+        return;
+    }
     if (g.armed && g.events != NULL && g.event_count >= (int)g.max_draws) {
         g.truncated = 1;
     }
@@ -2691,7 +3032,9 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
                 emit_event(buffer);
                 g.event_count++;
             } else {
-                g.capture_failed = 1;
+                fail_capture_locked(g_capture_failure_reason != NULL
+                                        ? g_capture_failure_reason
+                                        : "draw_event_capture");
             }
             free(buffer);
         }

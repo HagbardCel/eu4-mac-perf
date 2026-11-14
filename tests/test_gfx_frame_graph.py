@@ -206,6 +206,61 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(graph["unproven"], ["tex:99"])
         self.assertTrue(any("resolve/copy" in reason for reason in graph["reasons"]))
 
+    def test_copy_destination_explains_a_previously_unproven_texture(self):
+        fixture = self.fixture
+        copy = {
+            "kind": "resolve", "operation": "glCopyTexSubImage2D",
+            "is_blit": False, "source_framebuffer": 0, "read_buffer": 0x0405,
+            "source": "0", "source_level": 0, "source_resolved": True,
+            "destination": "10", "destination_level": 0,
+            "destination_resolved": True,
+            "source_rect": [0, 0, WIDTH, HEIGHT],
+            "destination_offset": [0, 0], "width": WIDTH, "height": HEIGHT,
+            "destination_width": WIDTH, "destination_height": HEIGHT,
+            "internal_format": 0x8058,
+        }
+        # Keep only the first draw, then copy the default framebuffer into 10
+        # and sample it.  Its only producer is the in-frame copy.
+        fixture.events = [
+            clear(None, 7),
+            draw(1, None, [fixture.asset], program=1),
+            copy,
+            draw(2, None, [fixture.rt], program=3),
+        ]
+        fixture.events[1]["seed"] = None
+        fixture.write()
+        manifest = json.loads((fixture.frame / "frame-trace.json").read_text())
+        manifest["events"] = len(fixture.events)
+        (fixture.frame / "frame-trace.json").write_text(json.dumps(manifest))
+        graph = gfx_frame_graph.build(fixture.frame)
+        self.assertEqual(graph["status"], "complete", graph["reasons"])
+        self.assertEqual(graph["counts"]["resolves"], 1)
+        resource = graph["resources"]["tex:10"]
+        self.assertEqual(resource["origin"], "renderer_generated")
+        self.assertEqual(resource["producers"][0]["kind"], "resolve")
+        self.assertEqual(resource["producers"][0]["rect"],
+                         [0, 0, WIDTH, HEIGHT])
+        self.assertEqual(graph["unproven"], [])
+
+    def test_unsupported_copy_variant_invalidates_the_capture(self):
+        fixture = self.fixture
+        fixture.events.append({
+            "kind": "resolve", "operation": "glBlitFramebuffer",
+            "source_framebuffer": 0, "read_buffer": 0x0405,
+            "destination": "10", "source_level": 0, "destination_level": 0,
+            "source_resolved": True, "destination_resolved": True,
+            "source_rect": [0, 0, 4, 4], "destination_offset": [0, 0],
+            "width": 4, "height": 4,
+        })
+        fixture.write()
+        manifest = json.loads((fixture.frame / "frame-trace.json").read_text())
+        manifest["events"] = len(fixture.events)
+        (fixture.frame / "frame-trace.json").write_text(json.dumps(manifest))
+        graph = gfx_frame_graph.build(fixture.frame)
+        self.assertEqual(graph["status"], "invalid")
+        self.assertTrue(any("unsupported copy operation" in reason
+                            for reason in graph["reasons"]), graph["reasons"])
+
     def test_missing_blob_is_invalid_not_silently_accepted(self):
         (self.fixture.blobs / self.fixture.rt["levels"][0]["file"]).unlink()
         graph = gfx_frame_graph.build(self.fixture.frame)
@@ -330,6 +385,43 @@ class ReplayContractTests(unittest.TestCase):
         problems = value["consumer_validation"]["problems"]
         self.assertTrue(any(item["kind"] == "missing_consumer"
                             and item["event"] == 6 for item in problems), problems)
+
+    def test_event_zero_consumer_index_is_preserved(self):
+        graph = {
+            "status": "complete",
+            "resources": {
+                "tex:10": {
+                    "origin": "external",
+                    "consumers": [{"event": 0, "sampler": "tex10"}],
+                    "consumer_generations": [
+                        {"event": 0, "required_generation": 0}
+                    ],
+                }
+            },
+            "renderer_generated_sampled": [],
+            "boundary": {},
+        }
+        replay = fake_replay()
+        replay["_provenance_samples"] = [{
+            "event": 0, "texture": "10", "sampler": "tex10", "unit": 10,
+            "source": "external_capture", "generation": -1,
+            "expected_texture": "10", "selected_texture": "10",
+        }]
+        value = gfx_frame_graph.evaluate_replay(graph, replay)
+        self.assertEqual(value["status"], "complete", value["reasons"])
+        self.assertEqual(
+            value["consumer_validation"]["problems"], [])
+
+    def test_duplicate_provenance_records_are_rejected(self):
+        replay = fake_replay()
+        rows = replay_provenance()
+        rows.append(dict(rows[1]))  # same (event=4, sampler=tex10)
+        replay["_provenance_samples"] = rows
+        value = gfx_frame_graph.evaluate_replay(self.graph, replay)
+        self.assertEqual(value["status"], "invalid")
+        kinds = [item["kind"]
+                 for item in value["consumer_validation"]["problems"]]
+        self.assertIn("duplicate_consumer", kinds)
 
     def test_missing_metal_binding_is_invalid(self):
         replay = fake_replay()

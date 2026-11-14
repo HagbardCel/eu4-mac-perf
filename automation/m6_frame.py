@@ -333,6 +333,19 @@ def capture(args: argparse.Namespace) -> int:
         max_events=max_events,
         duration_s=args.duration,
     )
+    background_plan = None
+    if getattr(args, "background", False):
+        from automation import gfx_display, gfx_launch
+
+        try:
+            user_data = gfx_launch.preflight_user_data(startup.base.GOG_EXE)
+            background_plan = gfx_display.plan_background(
+                user_data["user_data"]
+            )
+        except (gfx_display.DisplayError, gfx_launch.LaunchError, OSError) as exc:
+            print(f"capture refused: background display unavailable: {exc}",
+                  file=sys.stderr)
+            return 2
     token = None
     if args.campaign_run_root:
         try:
@@ -371,6 +384,8 @@ def capture(args: argparse.Namespace) -> int:
         env_extra["EU4_GFX_FRAME_TRACE_LOG"] = str(
             (output / "frame-boundary.log").resolve()
         )
+    if getattr(args, "timeline", False):
+        env_extra["EU4_GFX_FRAME_TRACE_TIMELINE"] = "1"
     try:
         report = startup.run_ops(
             targets=TARGETS,
@@ -382,6 +397,8 @@ def capture(args: argparse.Namespace) -> int:
             evidence=evidence,
             env_extra=env_extra,
             retention="state",
+            background_plan=background_plan,
+            game_args=list(getattr(args, "game_arg", []) or []) or None,
         )
     except (startup.StartupError, OSError, RuntimeError) as exc:
         if token is not None:
@@ -395,6 +412,7 @@ def capture(args: argparse.Namespace) -> int:
         "schema": "m6-frame-capture/v1",
         "session": report.get("session"),
         "pid": report.get("pid"),
+        "display": report.get("display"),
         "frame_dir": str(frame_dir),
         "targets": TARGETS,
         "selection": {
@@ -1000,6 +1018,9 @@ def _parser() -> argparse.ArgumentParser:
     cap.add_argument("--boundary", default="")
     cap.add_argument("--pre-post-callers", default="")
     cap.add_argument("--log", action="store_true")
+    cap.add_argument("--timeline", action="store_true")
+    cap.add_argument("--background", action="store_true")
+    cap.add_argument("--game-arg", action="append", default=[])
     cap.add_argument("--max-draws", type=int, default=256)
     cap.add_argument("--duration", type=float, default=90.0)
     cap.add_argument("--timeout", type=float, default=180.0)
