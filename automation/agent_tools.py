@@ -346,18 +346,30 @@ def eu4_replay(args: argparse.Namespace) -> dict:
         if strategy_b_case:
             verification = gfx_replay_case.verify(case_path)
             if args.replay_out:
-                report = gfx_replay_case.replay_case(case_path, Path(args.replay_out))
-                return _envelope("eu4_replay", "ok", {
+                report = gfx_replay_case.replay_case(
+                    case_path, Path(args.replay_out))
+                outcome = report.get("outcome") or {}
+                envelope = _envelope("eu4_replay", report.get("status", "invalid"), {
                     "case": verification,
                     "status": report.get("status"),
+                    "outcome": outcome,
+                    "qualified": outcome.get("qualified"),
                     "evaluation": report.get("evaluation"),
                     "checkpoints": report.get("checkpoints"),
                     "final": report.get("final"),
                     "first_divergence": report.get("first_divergence"),
                 })
+                envelope["ok"] = bool(outcome.get("qualified"))
+                envelope["diagnostic_ok"] = outcome.get("execution") == "ok"
+                return envelope
+            graph = _read_json(case_path / "graph.json") if (
+                case_path / "graph.json").is_file() else {}
             return _envelope("eu4_replay", "ok", {
                 "case": verification,
-                "next": "pass --out to re-execute this Strategy B case",
+                "execution": "not_run",
+                "coverage": graph.get("status"),
+                "qualified": False,
+                "next": "pass --replay-out to re-execute this Strategy B case",
             })
         result = dict(gfx_case.compare_case(Path(args.case)))
         replay_status = result.get("status", "unavailable")

@@ -381,6 +381,25 @@ def first_divergence(graph: dict, checkpoints: list[dict],
     }
 
 
+def qualification_exit_code(report: dict) -> int:
+    """Stable CLI policy for replay qualification.
+
+    0  qualified (execution, coverage, semantics and pixels all pass)
+    2  executed but not qualified (partial coverage/divergence)
+    3  deliberate fault injection executed; qualification is expected to fail
+    1  invalid execution or unusable report
+    """
+    outcome = report.get("outcome") or {}
+    execution = outcome.get("execution")
+    if execution != "ok":
+        return 1
+    if outcome.get("qualified"):
+        return 0
+    if outcome.get("fault_injection"):
+        return 3
+    return 2
+
+
 def _parser():
     import argparse
 
@@ -433,7 +452,7 @@ def main(argv: list[str] | None = None) -> int:
         "first_divergence": report.get("first_divergence"),
         "report": str(Path(args.out) / "replay-report.json"),
     }, indent=2))
-    return 0
+    return qualification_exit_code(report)
 
 
 def replay(

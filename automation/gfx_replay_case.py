@@ -282,12 +282,15 @@ def main(argv: list[str] | None = None) -> int:
                 faults["sampler_shift"] = args.sampler_shift
                 faults["sampler_shift_min"] = args.sampler_shift_min
             value = replay_case(args.case, args.out, faults=faults)
+            outcome = value.get("outcome") or {}
             print(json.dumps({
                 "status": value.get("status"),
+                "outcome": outcome,
+                "qualified": outcome.get("qualified"),
                 "final": (value.get("final") or {}).get("status"),
                 "first_divergence": value.get("first_divergence"),
             }, indent=2))
-            return 0 if value.get("final", {}).get("status") == "match" else 2
+            return gfx_independent_replay.qualification_exit_code(value)
     except (CaseError, gfx_independent_replay.ReplayError,
             m6_frame.FrameError) as exc:
         print(json.dumps({"status": "error", "reason": str(exc)}, indent=2))

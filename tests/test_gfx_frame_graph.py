@@ -273,6 +273,38 @@ class ReplayContractTests(unittest.TestCase):
         self.assertIn(value["status"], ("invalid", "partial"))
         self.assertTrue(value["seeded_intermediates"])
 
+    def test_second_sample_requires_the_newer_generation(self):
+        fixture = self.fixture
+        fixture.events.append(draw(4, 10, [fixture.asset], program=2))
+        fixture.events.append(draw(5, None, [fixture.rt], program=3))
+        fixture.write()
+        manifest = json.loads((fixture.frame / "frame-trace.json").read_text())
+        manifest["events"] = len(fixture.events)
+        (fixture.frame / "frame-trace.json").write_text(json.dumps(manifest))
+        graph = gfx_frame_graph.build(fixture.frame)
+        generated = graph["resources"]["tex:10"]
+        self.assertEqual(
+            [(row["event"], row["required_generation"])
+             for row in generated["consumer_generations"]],
+            [(4, 2), (6, 3)])
+        replay = fake_replay()
+        replay["_provenance_samples"] = [
+            {"event": 1, "texture": "1", "sampler": "tex1", "unit": 1,
+             "source": "external_capture", "generation": -1,
+             "expected_texture": "1", "selected_texture": "1"},
+            {"event": 4, "texture": "10", "sampler": "tex10", "unit": 10,
+             "source": "metal_render_target", "generation": 2,
+             "expected_texture": "10", "selected_texture": "10"},
+            {"event": 6, "texture": "10", "sampler": "tex10", "unit": 10,
+             "source": "metal_render_target", "generation": 2,
+             "expected_texture": "10", "selected_texture": "10"},
+        ]
+        value = gfx_frame_graph.evaluate_replay(graph, replay)
+        self.assertIn(value["status"], ("invalid", "partial"))
+        stale = value["seeded_intermediates"][0]["stale"]
+        self.assertEqual(stale[0]["event"], 6)
+        self.assertEqual(stale[0]["expected_generation"], 3)
+
     def test_missing_metal_binding_is_invalid(self):
         replay = fake_replay()
         replay["_provenance_samples"] = replay_provenance()[:1]
@@ -308,6 +340,34 @@ class ReplayContractTests(unittest.TestCase):
             fake_replay(_provenance_samples=rows))
         self.assertEqual(audit["mismatches"][0]["kind"], "missing_texture_unit")
         self.assertEqual(audit["mismatches"][0]["engine_unit"], 6)
+
+
+class ExitCodePolicyTests(unittest.TestCase):
+    def outcome(self, **overrides):
+        value = {"execution": "ok", "coverage": "complete",
+                 "pixels": "match", "semantic": "match",
+                 "qualified": True, "fault_injection": False}
+        value.update(overrides)
+        return value
+
+    def test_policy(self):
+        policy = gfx_independent_replay.qualification_exit_code
+        self.assertEqual(policy({"outcome": self.outcome()}), 0)
+        for overrides in (
+            {"coverage": "partial"},
+            {"pixels": "divergent"},
+            {"semantic": "divergent"},
+        ):
+            self.assertEqual(
+                policy({"outcome": self.outcome(qualified=False, **overrides)}),
+                2, overrides)
+        self.assertEqual(
+            policy({"outcome": self.outcome(qualified=False,
+                                            fault_injection=True)}), 3)
+        self.assertEqual(
+            policy({"outcome": self.outcome(execution="failed",
+                                            qualified=False)}), 1)
+        self.assertEqual(policy({}), 1)
 
 
 class FirstDivergenceTests(unittest.TestCase):

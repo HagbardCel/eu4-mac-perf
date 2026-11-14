@@ -253,6 +253,16 @@ def build(frame_dir: Path | str) -> dict:
     for key, resource in resources.items():
         consumers = sorted(resource["consumers"], key=lambda item: item["event"])
         producers = sorted(resource["producers"], key=lambda item: item["event"])
+        for consumer in consumers:
+            consumer["required_generation"] = sum(
+                1 for producer in producers
+                if producer["event"] < consumer["event"]
+            )
+        resource["consumer_generations"] = [
+            {"event": consumer["event"],
+             "required_generation": consumer["required_generation"]}
+            for consumer in consumers
+        ]
         first_consumer = consumers[0]["event"] if consumers else None
         writes_before = [item for item in producers
                          if first_consumer is None or item["event"] < first_consumer]
@@ -512,21 +522,32 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
         zero = [item for item in bindings
                 if item.get("source") == "metal_render_target"
                 and int(item.get("generation") or 0) == 0]
-        expected = int(
-            (graph.get("resources") or {}).get(key, {}).get(
-                "expected_generation", 0))
-        stale = [
-            item for item in bindings
-            if item.get("source") == "metal_render_target"
-            and int(item.get("generation") or 0) < expected
-        ]
+        resource = (graph.get("resources") or {}).get(key, {})
+        required_by_event = {
+            row["event"]: row["required_generation"]
+            for row in resource.get("consumer_generations") or []
+        }
+        stale = []
+        for item in bindings:
+            if item.get("source") != "metal_render_target":
+                continue
+            expected = required_by_event.get(int(item.get("event") or -1))
+            if expected is None:
+                continue
+            generation = int(item.get("generation") or 0)
+            if generation != expected:
+                stale.append({
+                    "event": item.get("event"),
+                    "expected_generation": expected,
+                    "actual_generation": generation,
+                })
         if external or zero or stale:
             seeded.append({
                 "resource": key,
                 "external_bindings": len(external),
                 "generation_zero_bindings": len(zero),
                 "stale_generation_bindings": len(stale),
-                "expected_generation": expected,
+                "stale": stale[:8],
             })
     for item in provenance.get("first_sample_before_any_write") or []:
         seeded.append({
