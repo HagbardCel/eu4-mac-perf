@@ -1,5 +1,5 @@
 {
-  "schema": "m6-menu-frame-evidence/v7",
+  "schema": "m6-menu-frame-evidence/v8",
   "canonical_reference": {
     "frame_dir": ".local/m6/frames/menu-occ300/frame",
     "selection": {
@@ -129,7 +129,7 @@
     "consequence": "The pixel-exact offline result qualifies a captured-state replay, not an independent reconstruction of the terrain draw. Live terrain differences cannot be excluded or explained by the offline replay; they must be compared against the captured draw's inputs directly."
   },
   "live_verification": {
-    "run": ".local/m6/live-lod/run-1",
+    "run": ".local/m6/live-orient/run-1",
     "operational": {
       "executed": true,
       "gpu_completed": true,
@@ -140,21 +140,15 @@
     "visual": {
       "visual_match": false,
       "ui_region_correlation": [
-        0.757,
-        0.825,
-        0.482
+        0.752,
+        0.965,
+        0.506
       ],
-      "map_mean": 143.044,
-      "map_color_similarity": 0.454,
+      "map_mean": 147.804,
+      "map_color_similarity": 0.441,
       "map_structure": true
     },
-    "composition": {
-      "terrain_draws": 252,
-      "map_layer_total": 12,
-      "map_layer_default": 6,
-      "shader_sources_with_extension": 78
-    },
-    "remaining": "The map remains beige despite an equivalent settled composition, matching per-draw vertex/texture/uniform/state inputs, the authentic shader variant and a faithful resolve. The remaining divergence is not yet identified."
+    "remaining": "Land appearance is still wrong (white/tan instead of dark green). Water is relatively close. The orientation and UI-logo defects are corrected. The land-lighting/material branch remains the blocker."
   },
   "live_start_policy": {
     "required_clean_starts": 3,
@@ -206,6 +200,11 @@
       "finding": "The 231/9 versus 252/6 draw difference was a partially loaded frame/capture boundary, not missing/repeated operations.",
       "status": "confirmed",
       "evidence": "settled frame has 252 terrain and 12 map-layer calls = 6 default + 6 offscreen; caller/count order matches the captured terrain order"
+    },
+    {
+      "finding": "_GfxResolve did not flip the Metal top-left framebuffer into the GL texture row convention.",
+      "status": "confirmed",
+      "evidence": "resolve source/destination dumps 99.9% same orientation; user-visible map 96.9% aligned only when flipped; native quadrant test red before / green after"
     }
   ],
   "sampler_effective_state": {
@@ -293,5 +292,12 @@
     "fix": "Report texture_lod=1 at master+0x18e, matching the authentic GL context. The live sources now carry the extension (78/78 in the settled run) and use the normal-map branch.",
     "regression": "tests.test_gfx_live_draw::test_frame_start_reconstruction_and_texture_clear asserts texture_lod=1.",
     "residual": "The live map is still beige after this correction, so the fallback shader was a real but not sufficient divergence."
+  },
+  "orientation": {
+    "defect": "_GfxResolve preserves the Metal top-left row order. GL glCopyTexSubImage2D preserves the framebuffer's bottom row as texture row 0, so the sampled MainScene was vertically inverted.",
+    "evidence": "resolve source and destination dumps agree 99.9% without a flip, while the user-visible map is 96.9% aligned only when flipped; the composite samples the resolve destination with GL UVs.",
+    "fix": "resolve_scaled flips V and is used for all _GfxResolve copies (1:1 and scaled); _GfxResolveTexture remains a 1:1 texture copy.",
+    "regression": "tests.test_gfx_live_draw::test_resolve_orientation (asymmetric quadrants; fails with the old V and passes with the flip).",
+    "live_result": "UI logo region improved 0.482 -> 0.506 and now passes; map orientation corrected, but land remains beige."
   }
 }

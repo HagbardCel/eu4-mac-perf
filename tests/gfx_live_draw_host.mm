@@ -997,6 +997,70 @@ static int run_sampler_effective(void) {
     return ok ? 0 : 1;
 }
 
+static uint32_t quadrant_colour(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    // BGRA8: red / green / blue / yellow, top-left origin.
+    int right = x >= w / 2;
+    int bottom = y >= h / 2;
+    if (!bottom) return right ? 0xff00ff00u : 0xff0000ffu; // green / red
+    return right ? 0xff00ffffu : 0xffff0000u;             // yellow / blue
+}
+
+static int run_resolve_orientation(void) {
+    boot();
+    id<MTLDevice> device = (__bridge id<MTLDevice>)eu4_gfx_metal_device();
+    if (device == nil) {
+        fail("resolve device");
+    }
+    MTLTextureDescriptor *sd =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                           width:4 height:4 mipmapped:NO];
+    sd.usage = MTLTextureUsageShaderRead;
+    sd.storageMode = MTLStorageModeManaged;
+    id<MTLTexture> src = [device newTextureWithDescriptor:sd];
+    uint32_t source_pixels[16];
+    for (uint32_t y = 0; y < 4; y++) {
+        for (uint32_t x = 0; x < 4; x++) {
+            source_pixels[y * 4 + x] = quadrant_colour(x, y, 4, 4);
+        }
+    }
+    [src replaceRegion:MTLRegionMake2D(0, 0, 4, 4) mipmapLevel:0
+             withBytes:source_pixels bytesPerRow:4 * 4];
+    int ok = 1;
+    for (uint32_t size = 2; size <= 4; size += 2) {
+        MTLTextureDescriptor *dd =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                               width:size height:size mipmapped:NO];
+        dd.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        dd.storageMode = MTLStorageModeShared;
+        id<MTLTexture> dst = [device newTextureWithDescriptor:dd];
+        if (eu4_gfx_resolve_orientation_test((__bridge void *)src,
+                                             (__bridge void *)dst) != 0) {
+            fail("resolve orientation call");
+        }
+        uint32_t out[16];
+        id<MTLCommandQueue> queue = [device newCommandQueue];
+        read_target_texture(dst, queue, size * 4, out);
+        // The resolve converts a top-left source to GL row order: source
+        // bottom rows become destination top rows.
+        uint32_t tl = quadrant_colour(0, 4, 4, 4); // source bottom-left
+        uint32_t tr = quadrant_colour(4, 4, 4, 4); // source bottom-right
+        uint32_t bl = quadrant_colour(0, 0, 4, 4); // source top-left
+        uint32_t br = quadrant_colour(4, 0, 4, 4); // source top-right
+        uint32_t expect[4] = {tl, tr, bl, br};
+        for (uint32_t i = 0; i < 4; i++) {
+            uint32_t x = i % 2, y = i / 2;
+            uint32_t got = out[(y * size / 2) * size + x * size / 2];
+            if ((got & 0x00ffffffu) != (expect[i] & 0x00ffffffu)) {
+                fprintf(stderr, "FAIL: resolve %ux%u quadrant %u got %08x want %08x\n",
+                        size, size, i, got, expect[i]);
+                ok = 0;
+            }
+        }
+    }
+    printf("resolve_orientation=%d\n", ok);
+    return ok ? 0 : 1;
+}
+
 static int run_offscreen_viewport(void) {
     /* An offscreen target is allocated at the engine's logical size. The
        window is 64x64 (HiDPI would scale the backbuffer), but the target is
@@ -1154,6 +1218,9 @@ int main(int argc, char **argv) {
     }
     if (argc >= 2 && strcmp(argv[1], "--sampler-effective") == 0) {
         return run_sampler_effective();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--resolve-orientation") == 0) {
+        return run_resolve_orientation();
     }
     if (argc >= 2 && strcmp(argv[1], "--depth-state") == 0) {
         return run_depth_state();

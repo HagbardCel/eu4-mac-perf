@@ -2,8 +2,8 @@
   "schema": "m6-live-title-starts/v2",
   "runs": [
     {
-      "run": ".local/m6/live-lod/run-1",
-      "phase": "post-LOD-capability and settle verification",
+      "run": ".local/m6/live-orient/run-1",
+      "phase": "post-orientation-fix verification",
       "overall": "captured",
       "status": {
         "draw_reached": true,
@@ -13,10 +13,10 @@
         "presented": true,
         "reference_matched": null
       },
-      "launch_identity": "1794646964-77420",
-      "pid": 77485,
+      "launch_identity": "1794651888-80470",
+      "pid": 80537,
       "refused_draws": 0,
-      "swap_dump_sha256": "547e6e4de6748fa548824557d4d069971f76f7576cfad0cc481c53fedcffcaaf",
+      "swap_dump_sha256": "20046fbd81b4d11b965edd23b8ae7caf7907cdff105db53dce3ed04fc1b0e38f",
       "swap_dump_bytes": 30882816,
       "acceptance": {
         "executed": true,
@@ -25,33 +25,38 @@
         "visual_match": false,
         "accepted": false
       },
-      "note": "visual_match=false; not a qualified start"
+      "note": "visual_match=false (land palette); not a qualified start"
     }
   ],
   "historical_runs": [
     {
+      "run": ".local/m6/live-lod/run-1",
+      "phase": "pre-orientation-fix",
+      "status": "historical"
+    },
+    {
       "run": ".local/m6/live-verify2/run-1",
-      "phase": "post-sampler-fix",
+      "phase": "pre-LOD",
       "status": "historical"
     },
     {
       "run": ".local/m6/live-final/verify-1",
-      "phase": "pre-sampler-fix",
+      "phase": "pre-sampler",
       "status": "historical"
     },
     {
       "run": ".local/m6/live/final-1",
-      "phase": "pre-viewport-fix",
+      "phase": "pre-viewport",
       "status": "historical"
     },
     {
       "run": ".local/m6/live/final-2",
-      "phase": "pre-viewport-fix",
+      "phase": "pre-viewport",
       "status": "historical"
     },
     {
       "run": ".local/m6/live/final-3",
-      "phase": "pre-viewport-fix",
+      "phase": "pre-viewport",
       "status": "historical"
     }
   ],
@@ -63,5 +68,5 @@
   "distinct_runs": true,
   "distinct_identities": true,
   "ok": false,
-  "note": "One post-LOD/settle launch reached the settled title scene and presented with zero refused draws and no failed resolves. The visual gate still fails; three clean starts are not claimed."
+  "note": "One post-orientation-fix launch presented with zero refused draws and no failed resolves. UI regions now pass (0.752/0.965/0.506); land palette still fails. Three clean starts are not claimed."
 }

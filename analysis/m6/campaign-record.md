@@ -1291,3 +1291,21 @@ the resolve all match; the offline terrain batch is green (73/76/65) while the
 live batch is beige (113/112/113). The remaining divergence is not yet
 identified. No brightness or global color change was made. Three clean starts
 are not claimed; PR #189 remains Draft.
+
+## Map orientation correction (2026-11-14, fifth pass)
+
+The sampled MainScene was vertically inverted. `_GfxResolve` is
+`glCopyTexSubImage2D`, which preserves the GL framebuffer's bottom row as
+texture row 0; the Metal source is a top-left render target, but
+`resolve_scaled` preserved row order. The resolve source and destination dumps
+agree 99.9% without a flip, and the user-visible map is 96.9% land/water
+aligned only when flipped. `resolve_scaled` now flips V and is used for every
+`_GfxResolve` copy (1:1 and scaled); `_GfxResolveTexture` remains a 1:1
+texture copy. Native regression `test_resolve_orientation` renders an
+asymmetric four-quadrant target, resolves it, and checks every quadrant; it
+fails with the old V and passes with the correction.
+
+The post-fix settled run (`live-orient/run-1`) has UI correlations
+0.752/0.965/0.506: the Paradox-logo region now passes. The map is correctly
+oriented but still beige (mean 147.8 vs 71.9, palette affinity 0.441). The
+remaining land-appearance defect is the blocker.

@@ -50,6 +50,10 @@ void eu4_gfx_order_trace_detail(const char *operation, unsigned long long value,
    EU4_GFX_CHECKPOINT_SETTLE_CALLER and ..._MIN_DRAWS are set. */
 int eu4_gfx_frame_ready_for_checkpoint(void);
 void eu4_gfx_frame_note_draw_caller(uint64_t caller_rva);
+
+/* Host-diagnostic: resolve a Metal source into a destination using the same
+   orientation conversion as _GfxResolve. Returns 0 on success. */
+int eu4_gfx_resolve_orientation_test(void *source, void *destination);
 extern uint8_t eu4_gfx_last_raster_description[0x10];
 extern uint64_t eu4_gfx_live_draw_sequence;
 extern uint64_t eu4_gfx_live_clear_sequence;

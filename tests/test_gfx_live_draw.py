@@ -116,6 +116,11 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertIn("depth_cleared=1", ran.stdout)
         self.assertIn("color_preserved=1", ran.stdout)
 
+    def test_resolve_orientation(self) -> None:
+        ran = self._run("--resolve-orientation")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("resolve_orientation=1", ran.stdout)
+
     def test_sampler_effective_min_filter_uses_texture_mip_state(self) -> None:
         ran = self._run("--sampler-effective")
         self.assertEqual(ran.returncode, 0, ran.stderr)

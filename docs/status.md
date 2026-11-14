@@ -68,13 +68,16 @@ passed**, so M6 is not accepted and PR #189 remains Draft.
   compiled the `NO_SHADER_TEXTURE_LOD` fallback with flat normals. The
   authentic GL context advertises the extension. Reporting it as present makes
   the live sources match the captured variant (78/78); regression added.
-- **Remaining blocker.** The settle-gated live frame is operationally clean
-  (252 terrain calls, authentic shader sources, zero refused draws, no failed
-  resolves), but the map is still beige (mean 143.0 vs 71.9, palette affinity
-  0.454) and the Paradox-logo UI region is 0.482 (floor 0.5). All compared
-  per-draw inputs and the resolve match; the remaining color divergence is not
-  yet identified. Live acceptance reports `visual_match=false`; the
-  three-clean-start gate is not met.
+- **Orientation (fixed).** `_GfxResolve` did not convert the Metal top-left
+  render target into the GL texture row convention, so MainScene was sampled
+  upside down. `resolve_scaled` now flips V and serves every `_GfxResolve`
+  copy; a native four-quadrant regression covers it. The post-fix run has UI
+  correlations 0.752/0.965/0.506 — the logo region now passes.
+- **Remaining blocker.** The map is correctly oriented but land is still
+  white/tan (map mean 147.8 vs 71.9, palette affinity 0.441). Water is
+  relatively close and the UI regions pass. The land material/lighting branch
+  is the remaining defect; live acceptance reports `visual_match=false` and
+  the three-clean-start gate is not met.
 
 ## M4 — original-GL reference and Metal presentation (2026-11-12)
 

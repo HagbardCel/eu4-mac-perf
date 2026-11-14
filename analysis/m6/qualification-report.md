@@ -178,6 +178,24 @@ This improved palette affinity only marginally (0.435 -> 0.452), so it is a
 correctness fix, not the root cause of the beige map.
 
 
+### Resolve orientation (fixed)
+
+`_GfxResolve` had preserved the Metal top-left row order. The original
+operation is `glCopyTexSubImage2D`, which preserves the GL framebuffer's bottom
+row as texture row 0, so a top-left source must be flipped into the sampled
+texture. The resolve source and destination dumps agree 99.9% without a flip,
+while the user-visible map is 96.9% land/water aligned only when flipped.
+`resolve_scaled` now flips V and serves every `_GfxResolve` copy (1:1 and
+scaled); `_GfxResolveTexture` remains a 1:1 texture copy. Native regression
+`test_resolve_orientation` renders a four-quadrant asymmetric target, resolves
+it and checks every quadrant; it fails with the old V and passes after the
+correction.
+
+The post-fix run (`live-orient/run-1`) has UI correlations 0.752/0.965/0.506
+(the logo region now passes) and a correctly oriented map, but the land is
+still beige (map mean 147.8 vs 71.9, palette affinity 0.441). The remaining
+blocker is the land material/lighting branch, not orientation or composition.
+
 ### Settled composition and shader capability
 
 The 231/9 versus 252/6 difference was a capture-boundary/loading artifact. A

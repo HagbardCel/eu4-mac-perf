@@ -2070,7 +2070,11 @@ static const char *kResolveMSL =
     "vertex V resolve_vs(uint vid [[vertex_id]]) {\n"
     "    float2 p[3] = {float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0)};\n"
     "    V o; o.pos = float4(p[vid], 0.0, 1.0);\n"
-    "    o.uv = float2((p[vid].x + 1.0) * 0.5, (1.0 - p[vid].y) * 0.5);\n"
+    /* The resolve converts a Metal top-left render target into the GL
+       lower-left texture convention used by the engine's sampled textures.
+       glCopyTexSubImage2D preserves the framebuffer's bottom row as texture
+       row 0; a top-left source must therefore be flipped vertically. */
+    "    o.uv = float2((p[vid].x + 1.0) * 0.5, (p[vid].y + 1.0) * 0.5);\n"
     "    return o;\n"
     "}\n"
     "fragment float4 resolve_fs(V in [[stage_in]], texture2d<float> t [[texture(0)]]) {\n"
@@ -2078,11 +2082,17 @@ static const char *kResolveMSL =
     "    return t.sample(s, in.uv);\n"
     "}\n";
 
-static id<MTLRenderPipelineState> resolve_pipeline(id<MTLDevice> device) {
-    static id<MTLRenderPipelineState> pipeline;
+static id<MTLRenderPipelineState> resolve_pipeline(id<MTLDevice> device,
+                                                  MTLPixelFormat format) {
+    static NSMutableDictionary *pipelines;
     static id<MTLDevice> cached_device;
-    if (pipeline != nil && cached_device == device) {
-        return pipeline;
+    if (pipelines == nil || cached_device != device) {
+        pipelines = [NSMutableDictionary dictionary];
+        cached_device = device;
+    }
+    id cached = pipelines[@(format)];
+    if (cached != nil) {
+        return cached;
     }
     NSError *error = nil;
     id<MTLLibrary> library = [device newLibraryWithSource:
@@ -2101,10 +2111,10 @@ static id<MTLRenderPipelineState> resolve_pipeline(id<MTLDevice> device) {
     MTLRenderPipelineDescriptor *descriptor = [MTLRenderPipelineDescriptor new];
     descriptor.vertexFunction = [library newFunctionWithName:@"resolve_vs"];
     descriptor.fragmentFunction = [library newFunctionWithName:@"resolve_fs"];
-    descriptor.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
-    pipeline = [device newRenderPipelineStateWithDescriptor:descriptor error:&error];
+    descriptor.colorAttachments[0].pixelFormat = format;
+    id pipeline = [device newRenderPipelineStateWithDescriptor:descriptor error:&error];
     if (pipeline != nil) {
-        cached_device = device;
+        pipelines[@(format)] = pipeline;
     } else {
         char body[1024];
         int n = snprintf(body, sizeof body,
@@ -2120,7 +2130,7 @@ static id<MTLRenderPipelineState> resolve_pipeline(id<MTLDevice> device) {
 
 static int resolve_scaled(id<MTLTexture> src, id<MTLTexture> dst,
                           id<MTLDevice> device, id<MTLCommandQueue> queue) {
-    id<MTLRenderPipelineState> pipeline = resolve_pipeline(device);
+    id<MTLRenderPipelineState> pipeline = resolve_pipeline(device, dst.pixelFormat);
     if (pipeline == nil) {
         return -1;
     }
@@ -2246,36 +2256,24 @@ void eu4_gfx_resolve_noop(void *unused, void *header) {
     }
     const char *resolve_dir = getenv("EU4_GFX_RESOLVE_DUMP");
     resolve_dump_checkpoint(src, resolve_dir, "source", seq);
-    if (src.width != dst.width || src.height != dst.height) {
-        int status = resolve_scaled(src, dst, backend.device, backend.queue);
-        resolve_dump_checkpoint(dst, resolve_dir, "dest", seq);
-        resolve_emit("_GfxResolve", header, src, dst, backend.currentTargetColor,
-                     seq, status == 0 ? "scaled_ok" : "scaled_failed");
-        return;
-    }
-    id<MTLCommandBuffer> command = [backend.queue commandBuffer];
-    id<MTLBlitCommandEncoder> blit = command != nil ? [command blitCommandEncoder] : nil;
-    if (blit == nil) {
-        resolve_emit("_GfxResolve", header, src, dst, backend.currentTargetColor,
-                     seq, "command_failed");
-        return;
-    }
-    [blit copyFromTexture:src
-              sourceSlice:0
-              sourceLevel:0
-             sourceOrigin:MTLOriginMake(0, 0, 0)
-               sourceSize:MTLSizeMake(src.width, src.height, 1)
-                toTexture:dst
-         destinationSlice:0
-         destinationLevel:0
-        destinationOrigin:MTLOriginMake(0, 0, 0)];
-    [blit endEncoding];
-    [command commit];
-    [command waitUntilCompleted];
+    /* Always use the render-pass path: it applies the GL row convention and
+       handles both 1:1 and scaled copies. A raw blit preserves Metal's
+       top-left rows and would leave the sampled texture upside down. */
+    int status = resolve_scaled(src, dst, backend.device, backend.queue);
     resolve_dump_checkpoint(dst, resolve_dir, "dest", seq);
     resolve_emit("_GfxResolve", header, src, dst, backend.currentTargetColor, seq,
-                 command.status == MTLCommandBufferStatusCompleted ? "copy_ok"
-                                                                  : "copy_failed");
+                 status == 0 ? "scaled_ok" : "scaled_failed");
+}
+
+int eu4_gfx_resolve_orientation_test(void *source, void *destination) {
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil || backend.device == nil || backend.queue == nil ||
+        source == NULL || destination == NULL) {
+        return -1;
+    }
+    return resolve_scaled((__bridge id<MTLTexture>)source,
+                          (__bridge id<MTLTexture>)destination,
+                          backend.device, backend.queue);
 }
 
 void eu4_gfx_resolve_texture_noop(void *handle, void *source, void *target) {
