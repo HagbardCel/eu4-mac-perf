@@ -286,6 +286,18 @@ class AlignmentTests(unittest.TestCase):
         self.assertEqual(pairs[0]["reference"]["update_identity"], "0x10")
         self.assertEqual(pairs[0]["candidate"]["game_day"], 42)
 
+    def test_identity_aligns_small_backend_draw_differences(self):
+        state = self.state()
+        write_record(self.ref_path, 1, sha="a" * 64,
+                     extra={"draws": 374, "update_identity": "0x10"})
+        write_record(self.cand_path, 1, sha="b" * 64,
+                     extra={"draws": 380, "update_identity": "0x10"})
+        state.ref_by_index.update({r.index: r for r in state.ref_stream.poll()})
+        state.cand_by_index.update({r.index: r for r in state.cand_stream.poll()})
+        pairs = gfx_dual_run.align_streams(
+            state, limit=1, draw_tolerance=0.30)
+        self.assertEqual(pairs[0]["status"], gfx_dual_run.ALIGNED)
+
     def test_pairing_respects_the_frame_limit(self):
         state = self.state()
         for index in (1, 2, 3, 4, 5):

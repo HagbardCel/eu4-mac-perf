@@ -53,6 +53,7 @@ class LaunchConfig:
     pause_at_first_game_day: bool = False
     pause_by_game_speed_zero: bool = False
     pause_signature: int = 0
+    pause_max_draws: int = 0
 
 
 @dataclass
@@ -184,6 +185,8 @@ def prepare(role: str, config: LaunchConfig, run_dir: Path,
             env["EU4_GFX_PAUSE_BY_GAME_SPEED_ZERO"] = "1"
         if config.pause_signature:
             env["EU4_GFX_PAUSE_SIGNATURE"] = hex(config.pause_signature)
+        if config.pause_max_draws > 0:
+            env["EU4_GFX_PAUSE_MAX_DRAWS"] = str(config.pause_max_draws)
     else:
         env["DYLD_INSERT_LIBRARIES"] = str(library)
         env["EU4_METAL_BOOT_MODE"] = "metal_init"

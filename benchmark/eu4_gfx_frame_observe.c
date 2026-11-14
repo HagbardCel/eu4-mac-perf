@@ -52,6 +52,7 @@ static char g_captured[OBS_MAX_PATH];
 static char g_request[OBS_MAX_PATH];
 static char g_ack_path[OBS_MAX_PATH];
 static int g_pause_at_draws;
+static int g_pause_max_draws;
 static int g_pause_at_first_game_day;
 static int g_pause_by_speed_zero;
 static uint64_t g_pause_signature;
@@ -343,6 +344,8 @@ int eu4_gfx_frame_observe_init(const char *backend, const char *dir,
     snprintf(g_ack_path, sizeof g_ack_path, "%s/capture-ack.json", dir);
     const char *pause_at = getenv("EU4_GFX_PAUSE_AT_DRAWS");
     g_pause_at_draws = pause_at != NULL ? atoi(pause_at) : 0;
+    const char *pause_max = getenv("EU4_GFX_PAUSE_MAX_DRAWS");
+    g_pause_max_draws = pause_max != NULL ? atoi(pause_max) : 0;
     const char *pause_first = getenv("EU4_GFX_PAUSE_AT_FIRST_GAME_DAY");
     g_pause_at_first_game_day = pause_first != NULL && strcmp(pause_first, "1") == 0;
     const char *pause_speed = getenv("EU4_GFX_PAUSE_BY_GAME_SPEED_ZERO");
@@ -580,10 +583,12 @@ static int write_game_speed_zero(void) {
 
 static void maybe_request_pause(uint32_t draws, int game_day,
                                 uint64_t signature) {
-    int due = (g_pause_at_draws > 0 && (int)draws >= g_pause_at_draws)
+    int in_draw_window =
+        g_pause_at_draws > 0 && (int)draws >= g_pause_at_draws
+        && (g_pause_max_draws == 0 || (int)draws <= g_pause_max_draws);
+    int due = in_draw_window
               || (g_pause_at_first_game_day && game_day != 0)
-              || (g_pause_by_speed_zero && g_pause_at_draws > 0
-                  && (int)draws >= g_pause_at_draws);
+              || (g_pause_by_speed_zero && in_draw_window);
     if (due && g_pause_signature != 0 && signature != g_pause_signature) {
         due = 0;
     }

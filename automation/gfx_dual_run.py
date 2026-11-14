@@ -279,7 +279,8 @@ def _phase_ready(reference_draws: int, candidate_draws: int,
     return abs(reference_draws - candidate_draws) / larger <= tolerance
 
 
-def align_streams(state: CampaignState, *, limit: int | None = None) -> list[dict]:
+def align_streams(state: CampaignState, *, limit: int | None = None,
+                  draw_tolerance: float = 0.30) -> list[dict]:
     """Pair observations by logical frame index.
 
     PR 2 uses the frame index as the correspondence key.  A pair is only
@@ -315,11 +316,19 @@ def align_streams(state: CampaignState, *, limit: int | None = None) -> list[dic
             and ref.value.get("draws") == cand.value.get("draws")
             and ref.value.get("draws") > 0
         )
-        strong = (
-            extent["normalized"]
-            and same_draws
-            and reference_signature
-            and reference_signature == candidate_signature
+        ref_draws = ref.value.get("draws") or 0
+        cand_draws = cand.value.get("draws") or 0
+        draw_relation = (
+            abs(ref_draws - cand_draws) / max(ref_draws, cand_draws)
+            if ref_draws and cand_draws else 1.0
+        )
+        ref_identity = _identity_value(ref)
+        cand_identity = _identity_value(cand)
+        identity_equal = bool(ref_identity and ref_identity == cand_identity)
+        strong = extent["normalized"] and (
+            (identity_equal and draw_relation <= draw_tolerance)
+            or (same_draws and reference_signature
+                and reference_signature == candidate_signature)
         )
         if not ref_valid or not cand_valid:
             status = NOT_ALIGNED
@@ -1118,6 +1127,8 @@ def run_campaign(
             ),
             pause_signature=int((scenario.get("start") or {}).get(
                 "pause_signature") or "0", 0),
+            pause_max_draws=int((scenario.get("start") or {}).get(
+                "pause_max_draws") or 0),
         )
         lease = launch_lease.acquire(executable, output=session.run_dir)
         # Start both backends before waiting on either one's readiness.
@@ -1449,7 +1460,10 @@ def run_campaign(
                         _release_once(launched, state, "candidate", latest_cand.index)
                     pairs = []
             remaining = max_frames - len(state.pairs)
-            pairs = align_streams(state, limit=max(0, remaining))
+            pairs = align_streams(
+                state, limit=max(0, remaining),
+                draw_tolerance=float((scenario.get("settle") or {}).get(
+                    "draw_tolerance", 0.30)))
             for pair in pairs:
                 flight.frame({
                     "frame_index": pair.get("frame_index"),

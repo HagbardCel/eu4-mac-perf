@@ -97,3 +97,13 @@ loads, so a fixed signature is not a stable scene selector.
 
 The blocking requirement is therefore not just freezing simulation time; it is
 freezing both processes at the **same render stage**. That remains open.
+
+
+## Follow-up: workload-window pause is not stable either
+
+A 350-450 draw pause window was intended to select the map frame and exclude
+loading (219/506 draws), but one run never entered the window and produced no
+pause record. The loading path does not expose a stable draw-count selector.
+
+The committed scenario therefore remains at the 100-draw threshold with
+`game_speed_zero`; it freezes the day but not always the render stage.

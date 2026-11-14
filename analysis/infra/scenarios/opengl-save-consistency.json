@@ -19,9 +19,10 @@
     "save": "continuelastsave",
     "pause": true,
     "pause_at_first_game_day": false,
-    "pause_at_draws": 500,
+    "pause_at_draws": 100,
     "pause_mode": "game_speed_zero",
     "pause_signature": "",
+    "pause_max_draws": 0,
     "game_speed": 1
   },
   "game_config": {},
@@ -76,5 +77,5 @@
   "mode": "streaming",
   "profile": "targeted",
   "authorization": null,
-  "digest": "021ca6821f2c5e72280de9733e056511abe7e4b3ca6e089196b8d2cad5588034"
+  "digest": "102c8736bf2fc614719d792484b870ed71ca5a22327df0c3a2313a233cb93969"
 }
