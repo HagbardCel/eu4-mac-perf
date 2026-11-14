@@ -221,6 +221,111 @@ def _locked(path: Path):
     return handle
 
 
+def _claim_checks(
+    value: dict,
+    *,
+    output: Path,
+    requested_timeout: float,
+    executable_sha256: str | None,
+    executable_path: str | None,
+    require_pinned: bool,
+    additional: int = 1,
+) -> None:
+    """Shared claim validation.  Runs under the ledger lock."""
+    pinned = value.get("executable")
+    root_value = value.get("output_root")
+    if require_pinned:
+        if not isinstance(pinned, dict) or not pinned.get("path") or not pinned.get("sha256"):
+            raise LedgerError(
+                "unpinned",
+                "this authorization does not pin an executable identity",
+            )
+        if not isinstance(root_value, str) or not root_value:
+            raise LedgerError(
+                "unpinned",
+                "this authorization does not pin an experiment output root",
+            )
+        if value.get("deadline_seconds") is None:
+            raise LedgerError(
+                "unpinned",
+                "this authorization does not pin a per-launch deadline",
+            )
+        if executable_path is None:
+            raise LedgerError(
+                "executable",
+                "the launch must attest its canonical executable path",
+            )
+    if isinstance(pinned, dict):
+        if executable_sha256 is None:
+            raise LedgerError(
+                "executable",
+                "the workflow pins an executable; the launch must attest its sha256",
+            )
+        if executable_sha256 != pinned.get("sha256"):
+            raise LedgerError(
+                "executable",
+                "launch executable does not match the operator-pinned identity",
+            )
+        if executable_path is not None and pinned.get("path"):
+            pinned_path = Path(str(pinned["path"])).expanduser().resolve(strict=False)
+            actual_path = Path(executable_path).expanduser().resolve(strict=False)
+            if str(actual_path) != str(pinned_path):
+                raise LedgerError(
+                    "executable_path",
+                    "launch executable path does not match the operator-pinned path",
+                )
+    if isinstance(root_value, str):
+        root = Path(root_value).expanduser().resolve(strict=False)
+        destination = Path(output).expanduser().resolve(strict=False)
+        if not _within(destination, root):
+            raise LedgerError(
+                "output_root",
+                f"experiment output escapes the authorized root: {destination}",
+            )
+    if value["used"] + additional > value["limit"]:
+        raise LedgerError(
+            "exhausted",
+            f"{value['used']}/{value['limit']} workflow launches already used; "
+            f"{additional} requested",
+        )
+    deadline = value.get("deadline_seconds")
+    if deadline is not None:
+        deadline = validate_timeout(deadline, field="deadline_seconds")
+        if requested_timeout > deadline:
+            raise LedgerError(
+                "deadline",
+                f"requested {requested_timeout:g}s exceeds workflow "
+                f"limit {deadline:g}s",
+            )
+
+
+def _receipt(
+    *,
+    token: str,
+    campaign_id: str,
+    run_root: Path,
+    output: Path,
+    targets: list[str],
+    requested_timeout: float,
+    role: str | None = None,
+) -> dict:
+    receipt = {
+        "token": token,
+        "campaign_id": campaign_id,
+        "run_root": str(Path(run_root).resolve()),
+        "output": str(Path(output).resolve()),
+        "targets": list(targets),
+        "requested_timeout": float(requested_timeout),
+        "status": "reserved",
+        "pid": None,
+        "at": _now(),
+        "updated_at": _now(),
+    }
+    if role is not None:
+        receipt["role"] = role
+    return receipt
+
+
 def claim(
     path: Path,
     *,
@@ -233,97 +338,89 @@ def claim(
     executable_path: str | None = None,
     require_pinned: bool = False,
 ) -> str:
+    return claim_many(
+        path,
+        campaign_id=campaign_id,
+        run_root=run_root,
+        outputs=[output],
+        targets=targets,
+        requested_timeout=requested_timeout,
+        executable_sha256=executable_sha256,
+        executable_path=executable_path,
+        require_pinned=require_pinned,
+    )[0]
+
+
+def claim_many(
+    path: Path,
+    *,
+    campaign_id: str,
+    run_root: Path,
+    outputs: list[Path],
+    targets: list[str],
+    requested_timeout: float,
+    executable_sha256: str | None = None,
+    executable_path: str | None = None,
+    require_pinned: bool = False,
+    roles: list[str] | None = None,
+) -> list[str]:
+    """Reserve several launches atomically.
+
+    A dual-process campaign needs two independent accounting receipts.  Reserving
+    them under one lock is all-or-nothing: a workflow with one launch left cannot
+    accidentally start a reference process that has no candidate budget.
+    """
+    if not isinstance(outputs, list) or not outputs:
+        raise LedgerError("claim", "outputs must be a non-empty list")
+    if len(outputs) > 16:
+        raise LedgerError("claim", "at most 16 launches may be claimed at once")
+    if roles is not None and len(roles) != len(outputs):
+        raise LedgerError("claim", "roles must match outputs")
     path = Path(path)
     requested_timeout = validate_timeout(requested_timeout, field="requested_timeout")
     handle = _locked(path)
     try:
         value = load_ledger(path)
-        pinned = value.get("executable")
-        root_value = value.get("output_root")
-        if require_pinned:
-            if not isinstance(pinned, dict) or not pinned.get("path") or not pinned.get("sha256"):
-                raise LedgerError(
-                    "unpinned",
-                    "this authorization does not pin an executable identity",
-                )
-            if not isinstance(root_value, str) or not root_value:
-                raise LedgerError(
-                    "unpinned",
-                    "this authorization does not pin an experiment output root",
-                )
-            if value.get("deadline_seconds") is None:
-                raise LedgerError(
-                    "unpinned",
-                    "this authorization does not pin a per-launch deadline",
-                )
-            if executable_path is None:
-                raise LedgerError(
-                    "executable",
-                    "the launch must attest its canonical executable path",
-                )
-        if isinstance(pinned, dict):
-            if executable_sha256 is None:
-                raise LedgerError(
-                    "executable",
-                    "the workflow pins an executable; the launch must attest its sha256",
-                )
-            if executable_sha256 != pinned.get("sha256"):
-                raise LedgerError(
-                    "executable",
-                    "launch executable does not match the operator-pinned identity",
-                )
-            if executable_path is not None and pinned.get("path"):
-                pinned_path = Path(str(pinned["path"])).expanduser().resolve(strict=False)
-                actual_path = Path(executable_path).expanduser().resolve(strict=False)
-                if str(actual_path) != str(pinned_path):
-                    raise LedgerError(
-                        "executable_path",
-                        "launch executable path does not match the operator-pinned path",
-                    )
-        if isinstance(root_value, str):
-            root = Path(root_value).expanduser().resolve(strict=False)
-            destination = Path(output).expanduser().resolve(strict=False)
-            if not _within(destination, root):
-                raise LedgerError(
-                    "output_root",
-                    f"experiment output escapes the authorized root: {destination}",
-                )
-        if value["used"] >= value["limit"]:
-            raise LedgerError(
-                "exhausted",
-                f"{value['used']}/{value['limit']} workflow launches already used",
-            )
-        deadline = value.get("deadline_seconds")
-        if deadline is not None:
-            deadline = validate_timeout(deadline, field="deadline_seconds")
-            if requested_timeout > deadline:
-                raise LedgerError(
-                    "deadline",
-                    f"requested {requested_timeout:g}s exceeds workflow "
-                    f"limit {deadline:g}s",
-                )
-        token = f"{dt.datetime.now(dt.timezone.utc).timestamp()}-{os.getpid()}-{len(value['launches'])}"
-        value["launches"].append(
-            {
-                "token": token,
-                "campaign_id": campaign_id,
-                "run_root": str(Path(run_root).resolve()),
-                "output": str(Path(output).resolve()),
-                "targets": list(targets),
-                "requested_timeout": float(requested_timeout),
-                "status": "reserved",
-                "pid": None,
-                "at": _now(),
-                "updated_at": _now(),
-            }
+        _claim_checks(
+            value,
+            output=Path(outputs[0]),
+            requested_timeout=requested_timeout,
+            executable_sha256=executable_sha256,
+            executable_path=executable_path,
+            require_pinned=require_pinned,
+            additional=len(outputs),
         )
+        tokens: list[str] = []
+        stamp = dt.datetime.now(dt.timezone.utc).timestamp()
+        for index, output in enumerate(outputs):
+            if index and isinstance(value.get("output_root"), str):
+                # Every output must be inside the pinned root, not just the first.
+                root = Path(value["output_root"]).expanduser().resolve(strict=False)
+                destination = Path(output).expanduser().resolve(strict=False)
+                if not _within(destination, root):
+                    raise LedgerError(
+                        "output_root",
+                        f"experiment output escapes the authorized root: {destination}",
+                    )
+            token = f"{stamp}-{os.getpid()}-{len(value['launches'])}"
+            tokens.append(token)
+            value["launches"].append(
+                _receipt(
+                    token=token,
+                    campaign_id=campaign_id,
+                    run_root=run_root,
+                    output=Path(output),
+                    targets=targets,
+                    requested_timeout=requested_timeout,
+                    role=None if roles is None else roles[index],
+                )
+            )
         value["used"] = len(value["launches"])
         _atomic(path, value)
-        return token
+        return tokens
     finally:
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         handle.close()
-
 
 def _update(path: Path, token: str, **fields) -> bool:
     path = Path(path)

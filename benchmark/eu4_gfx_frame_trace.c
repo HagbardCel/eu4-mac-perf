@@ -646,20 +646,36 @@ static int format_is_depth(GLenum internal) {
    currently active unit (saving that unit's binding for the inspected target)
    and restores it afterwards; the active unit itself is never changed. */
 static void capture_texture_begin(GLenum target, GLuint name, GLint *binding,
-                                  GLint *alignment, GLint *row_length) {
+                                  GLint *alignment, GLint *row_length,
+                                  GLint *skip_rows, GLint *skip_pixels,
+                                  GLint *pack_buffer) {
     glGetIntegerv(texture_binding_query(target), binding);
     glGetIntegerv(GL_PACK_ALIGNMENT, alignment);
     glGetIntegerv(GL_PACK_ROW_LENGTH, row_length);
+    glGetIntegerv(GL_PACK_SKIP_ROWS, skip_rows);
+    glGetIntegerv(GL_PACK_SKIP_PIXELS, skip_pixels);
+    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, pack_buffer);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+    glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+    if (*pack_buffer != 0) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    }
     glBindTexture(target, name);
 }
 
 static void capture_texture_end(GLenum target, GLint binding, GLint alignment,
-                                GLint row_length) {
+                                GLint row_length, GLint skip_rows,
+                                GLint skip_pixels, GLint pack_buffer) {
     glBindTexture(target, (GLuint)binding);
     glPixelStorei(GL_PACK_ALIGNMENT, alignment);
     glPixelStorei(GL_PACK_ROW_LENGTH, row_length);
+    glPixelStorei(GL_PACK_SKIP_ROWS, skip_rows);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, skip_pixels);
+    if (pack_buffer != 0) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)pack_buffer);
+    }
     while (glGetError() != GL_NO_ERROR) {
     }
 }
@@ -668,10 +684,13 @@ static void capture_texture_end(GLenum target, GLint binding, GLint alignment,
    bind/restore round trip without reading pixels. */
 int eu4_gfx_frame_trace_texture_probe(GLenum target, GLuint name) {
     GLint binding = 0, alignment = 0, row_length = 0;
-    capture_texture_begin(target, name, &binding, &alignment, &row_length);
+    GLint skip_rows = 0, skip_pixels = 0, pack_buffer = 0;
+    capture_texture_begin(target, name, &binding, &alignment, &row_length,
+                          &skip_rows, &skip_pixels, &pack_buffer);
     GLint bound = 0;
     glGetIntegerv(texture_binding_query(target), &bound);
-    capture_texture_end(target, binding, alignment, row_length);
+    capture_texture_end(target, binding, alignment, row_length, skip_rows,
+                        skip_pixels, pack_buffer);
     return bound == (GLint)name ? 0 : -1;
 }
 
@@ -679,8 +698,10 @@ static int read_texture(GLenum target, GLuint name, json_out *out) {
     GLint previous_alignment = 0;
     GLint previous_row = 0;
     GLint previous_binding = 0;
+    GLint previous_skip_rows = 0, previous_skip_pixels = 0, previous_pack_buffer = 0;
     capture_texture_begin(target, name, &previous_binding, &previous_alignment,
-                          &previous_row);
+                          &previous_row, &previous_skip_rows,
+                          &previous_skip_pixels, &previous_pack_buffer);
     while (glGetError() != GL_NO_ERROR) {
     }
 
@@ -790,7 +811,8 @@ static int read_texture(GLenum target, GLuint name, json_out *out) {
         jprintf(out, ",\"capture_error\":\"texture_read\"");
     }
     capture_texture_end(target, previous_binding, previous_alignment,
-                        previous_row);
+                        previous_row, previous_skip_rows, previous_skip_pixels,
+                        previous_pack_buffer);
     return failure ? -1 : 0;
 }
 
@@ -1261,6 +1283,8 @@ static int capture_target(json_out *out, GLint *out_width, GLint *out_height) {
                     object_name, texture_level, format_name((GLenum)internal),
                     width, height);
         } else if (object_type == GL_RENDERBUFFER) {
+            GLint previous_renderbuffer = 0;
+            glGetIntegerv(GL_RENDERBUFFER_BINDING, &previous_renderbuffer);
             glBindRenderbuffer(GL_RENDERBUFFER, (GLuint)object_name);
             GLint render_width = 0, render_height = 0, internal = 0;
             glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_WIDTH,
@@ -1277,6 +1301,7 @@ static int capture_target(json_out *out, GLint *out_width, GLint *out_height) {
                     "\"name\":%d,\"internal_format\":\"%s\",\"width\":%d,"
                     "\"height\":%d}",
                     object_name, format_name((GLenum)internal), width, height);
+            glBindRenderbuffer(GL_RENDERBUFFER, (GLuint)previous_renderbuffer);
         }
         GLint depth_type = 0, depth_name = 0;
         glGetFramebufferAttachmentParameteriv(
@@ -1347,11 +1372,14 @@ static int capture_target_pixels(const char *prefix, const char *member,
                                      &height);
             glBindTexture(GL_TEXTURE_2D, (GLuint)previous);
         } else {
+            GLint previous_renderbuffer = 0;
+            glGetIntegerv(GL_RENDERBUFFER_BINDING, &previous_renderbuffer);
             glBindRenderbuffer(GL_RENDERBUFFER, (GLuint)object_name);
             glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_WIDTH,
                                          &width);
             glGetRenderbufferParameteriv(GL_RENDERBUFFER,
                                          GL_RENDERBUFFER_HEIGHT, &height);
+            glBindRenderbuffer(GL_RENDERBUFFER, (GLuint)previous_renderbuffer);
         }
     }
     if (width <= 0 || height <= 0 || width > 8192 || height > 8192) {

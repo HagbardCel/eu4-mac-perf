@@ -51,7 +51,21 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     time.sleep(args.settle)
     drawable = output / "swap-frame.bgra"
-    result = live_gfx._window_capture(output, int(pid), drawable if drawable.is_file() else None)
+    drawable_size = None
+    try:
+        checkpoint_record = json.loads(checkpoint.read_text())
+        target = checkpoint_record.get("target") or {}
+        width, height = target.get("width"), target.get("height")
+        if type(width) is int and type(height) is int and width > 0 and height > 0:
+            drawable_size = (width, height)
+    except (OSError, json.JSONDecodeError):
+        drawable_size = None
+    result = live_gfx._window_capture(
+        output,
+        int(pid),
+        drawable if drawable.is_file() else None,
+        drawable_size=drawable_size,
+    )
     record = {
         "schema": "m6-live-window-capture/v1",
         "probe_output": str(output),
@@ -69,7 +83,8 @@ def main(argv: list[str] | None = None) -> int:
         "method": result.get("method"),
     }
     print(json.dumps(summary, indent=2))
-    return 0 if result.get("status") == "captured" else 1
+    accepted = result.get("status") == "captured" and result.get("qualified") is True
+    return 0 if accepted else 1
 
 
 if __name__ == "__main__":

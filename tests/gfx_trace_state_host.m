@@ -87,6 +87,16 @@ int main(void) {
     glBindTexture(GL_TEXTURE_2D, b);
     glBindTexture(GL_TEXTURE_CUBE_MAP, cube_e);
 
+    /* A pack state that the engine may legitimately leave set at draw time.
+       The readback must restore all of it, including a bound pack buffer. */
+    glPixelStorei(GL_PACK_ALIGNMENT, 8);
+    glPixelStorei(GL_PACK_ROW_LENGTH, 33);
+    glPixelStorei(GL_PACK_SKIP_ROWS, 2);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, 3);
+    GLuint pack_buffer = 0;
+    glGenBuffers(1, &pack_buffer);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, pack_buffer);
+
     int ok = 1;
     if (eu4_gfx_frame_trace_texture_probe(GL_TEXTURE_2D, c) != 0) {
         ok = 0;
@@ -107,6 +117,18 @@ int main(void) {
         ok = 0;
     }
     glActiveTexture(GL_TEXTURE3);
+
+    GLint pack_alignment = 0, pack_row = 0, pack_skip_rows = 0;
+    GLint pack_skip_pixels = 0, pack_bound = 0;
+    glGetIntegerv(GL_PACK_ALIGNMENT, &pack_alignment);
+    glGetIntegerv(GL_PACK_ROW_LENGTH, &pack_row);
+    glGetIntegerv(GL_PACK_SKIP_ROWS, &pack_skip_rows);
+    glGetIntegerv(GL_PACK_SKIP_PIXELS, &pack_skip_pixels);
+    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_bound);
+    if (pack_alignment != 8 || pack_row != 33 || pack_skip_rows != 2 ||
+        pack_skip_pixels != 3 || pack_bound != (GLint)pack_buffer) {
+        ok = 0;
+    }
 
     /* A cube probe on the active unit restores both target bindings there. */
     if (eu4_gfx_frame_trace_texture_probe(GL_TEXTURE_CUBE_MAP, cube_f) != 0) {
