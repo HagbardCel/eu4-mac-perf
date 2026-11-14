@@ -49,7 +49,20 @@ def local_binary_root(digest: str | None = None) -> Path:
     override = os.environ.get("EU4_RE_EXPORT")
     if override:
         return Path(override).expanduser()
-    return ROOT / ".local" / "eu4" / digest
+    local = ROOT / ".local" / "eu4" / digest
+    if local.is_dir():
+        return local
+    # A separate worktree may not carry its own downloaded RE export.  Look in
+    # the sibling checkouts of this project before declaring the corpus absent.
+    parent = ROOT.parent
+    if parent.is_dir():
+        for sibling in sorted(parent.iterdir()):
+            if not sibling.is_dir() or sibling == ROOT:
+                continue
+            candidate = sibling / ".local" / "eu4" / digest
+            if (candidate / "exports").is_dir():
+                return candidate
+    return local
 
 
 def export_root(binary_root: Path, baseline_revision: str) -> Path:

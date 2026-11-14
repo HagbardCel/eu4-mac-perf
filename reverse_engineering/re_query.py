@@ -8,7 +8,9 @@ Resolution order for the index:
 
 1. ``EU4_RE_INDEX`` (explicit index file; used by tests and temporary corpora);
 2. ``EU4_RE_EXPORT/exports/<revision>/index.sqlite``;
-3. the repository-local ``.local/eu4/<sha>/exports/<revision>`` layout.
+3. the repository-local ``.local/eu4/<sha>/exports/<revision>`` layout;
+4. a sibling checkout's identical ``.local/eu4/<sha>/exports`` layout, so a
+   separate infrastructure worktree can query the same pinned corpus.
 
 A missing corpus is ``unavailable`` with an actionable reason, never an empty
 success.

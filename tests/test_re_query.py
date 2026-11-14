@@ -78,6 +78,21 @@ class QueryTests(unittest.TestCase):
                          "mesh-draw-subrecord-0xe8-layout")
         self.assertEqual(result["result"]["layouts"][0]["layout"]["schema_version"], 1)
 
+    def test_sibling_worktree_export_is_discovered(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary)
+            work = parent / "work"
+            work.mkdir()
+            digest = "b" * 64
+            sibling = parent / "repo"
+            export = sibling / ".local" / "eu4" / digest / "exports" / "rev"
+            export.mkdir(parents=True)
+            with mock.patch.object(re_query.paths, "ROOT", work), \
+                 mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("EU4_RE_EXPORT", None)
+                found = re_query.paths.local_binary_root(digest)
+            self.assertEqual(found, sibling / ".local" / "eu4" / digest)
+
     def test_missing_index_is_unavailable(self):
         with mock.patch.dict(os.environ, {"EU4_RE_INDEX": str(self.index) + ".missing"}):
             result = re_query.query_resolve("anything")
