@@ -123,6 +123,29 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(value["result"]["health"]["verdict"], "unknown")
         self.assertFalse(value["result"]["gate"]["allow"])
 
+    def test_capture_request_uses_the_native_request_protocol(self):
+        run = self.root / "request-run"
+        (run / "candidate" / "observe").mkdir(parents=True)
+        code, value = self.call([
+            "eu4_capture", "request", "--run", str(run),
+            "--role", "candidate", "--frame", "7", "--frame", "9",
+        ])
+        self.assertEqual(code, 0, value)
+        request = json.loads(
+            (run / "candidate" / "observe" / "capture-request.json").read_text())
+        self.assertEqual(request["schema"], "gfx-frame-request/v1")
+        self.assertIsInstance(request["request_id"], int)
+        self.assertEqual(request["request_id"], value["result"]["request_id"])
+        self.assertEqual(request["frames"], [7, 9])
+        self.assertEqual(request["capacity"], 256)
+        code, value = self.call([
+            "eu4_capture", "request", "--run", str(run),
+            "--role", "candidate",
+            *[token for index in range(257) for token in ("--frame", str(index))],
+        ])
+        self.assertEqual(code, 2)
+        self.assertEqual(value["status"], "refused")
+
     def test_diff_inspect_and_case_inspect(self):
         run = self.run_fixture()
         code, value = self.call(["eu4_diff_inspect", "--run", str(run),

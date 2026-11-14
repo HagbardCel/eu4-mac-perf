@@ -195,17 +195,27 @@ def eu4_capture(args: argparse.Namespace) -> dict:
                         rows.append(value)
         return _envelope("eu4_capture", "ok", {"frames": rows, "count": len(rows)})
     if args.capture_op == "request":
+        if not args.role:
+            return _envelope("eu4_capture", "error",
+                             reason="request requires --role")
         role_dir = run / args.role
         observe = role_dir / "observe"
         if not observe.is_dir():
             return _envelope("eu4_capture", "unavailable",
                              reason=f"no observation directory: {observe}")
+        frames = [int(value) for value in args.frame]
+        try:
+            request_id = gfx_dual_run._request_dumps(
+                {"observe_dir": observe}, frames)
+        except gfx_dual_run.RequestError as exc:
+            return _envelope("eu4_capture", "refused", reason=str(exc))
         request = observe / "capture-request.json"
-        payload = {"schema": "gfx-frame-request/v1",
-                   "frames": [int(value) for value in args.frame]}
-        request.write_text(json.dumps(payload) + "\n", encoding="utf-8")
-        return _envelope("eu4_capture", "ok",
-                         {"request": str(request), "frames": payload["frames"]})
+        return _envelope("eu4_capture", "ok", {
+            "request": str(request),
+            "frames": sorted(set(frames)),
+            "request_id": request_id,
+            "capacity": gfx_dual_run.NATIVE_REQUEST_CAPACITY,
+        })
     if args.capture_op == "probe":
         argv = ["automation.live_gfx", "probe", "--backend", "metal",
                 "--checkpoint", args.checkpoint, "--occurrence", str(args.occurrence),
@@ -301,10 +311,12 @@ def eu4_replay(args: argparse.Namespace) -> dict:
             faults["sampler_shift_min"] = args.sampler_shift_min
         report = gfx_independent_replay.replay(
             Path(args.frame), Path(args.replay_out), shaders=args.shaders, faults=faults)
-        status = {"complete": "ok", "partial": "partial"}.get(
-            report.get("status"), "invalid")
-        return _envelope("eu4_replay", status, {
+        outcome = report.get("outcome") or {}
+        status = report.get("status") or "invalid"
+        envelope = _envelope("eu4_replay", status, {
             "status": report.get("status"),
+            "outcome": outcome,
+            "qualified": outcome.get("qualified"),
             "evaluation": report.get("evaluation"),
             "checkpoints": report.get("checkpoints"),
             "binding_audit": report.get("binding_audit"),
@@ -318,6 +330,8 @@ def eu4_replay(args: argparse.Namespace) -> dict:
             },
             "report": str(Path(args.replay_out) / "replay-report.json"),
         }, reason="; ".join((report.get("evaluation") or {}).get("reasons") or []))
+        envelope["ok"] = bool(outcome.get("qualified"))
+        return envelope
     if args.replay_op == "case":
         case_path = Path(args.case)
         strategy_b_case = False
@@ -396,6 +410,8 @@ def eu4_case_inspect(args: argparse.Namespace) -> dict:
                 },
                 "replay": {
                     "status": (report.get("status")),
+                    "outcome": report.get("outcome"),
+                    "qualified": (report.get("outcome") or {}).get("qualified"),
                     "final": report.get("final"),
                     "checkpoints": report.get("checkpoints"),
                     "binding_audit": report.get("binding_audit"),

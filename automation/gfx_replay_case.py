@@ -87,7 +87,11 @@ def package(
         if source.is_file():
             shutil.copy2(source, case_dir / "replay" / name)
     for item in report.get("checkpoints") or []:
-        source = replay_dir / str(item.get("file") or "")
+        # Comparison entries expose the replay output as ``metal_file``;
+        # legacy entries may still use ``file``.
+        source = Path(str(item.get("metal_file") or item.get("file") or ""))
+        if not source.is_absolute():
+            source = replay_dir / source
         if source.is_file():
             shutil.copy2(source, case_dir / "replay" / source.name)
     graph = report.get("graph") or gfx_frame_graph.build(case_dir / "capture")
