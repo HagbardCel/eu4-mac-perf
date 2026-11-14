@@ -20,6 +20,7 @@ SOURCES = [
     ROOT / "benchmark" / "eu4_gfx_buffers.mm",
     ROOT / "benchmark" / "eu4_gfx_texture.mm",
     ROOT / "benchmark" / "eu4_gfx_init.mm",
+    ROOT / "benchmark" / "eu4_gfx_frame_observe.c",
     ROOT / "benchmark" / "eu4_gfx_simple_draw.mm",
     ROOT / "benchmark" / "eu4_metal_events.c",
 ]

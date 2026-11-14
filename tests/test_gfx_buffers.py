@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 HOST_SOURCE = ROOT / "tests" / "gfx_buffers_host.mm"
 INIT = ROOT / "benchmark" / "eu4_gfx_init.mm"
+FRAME_OBSERVE = ROOT / "benchmark" / "eu4_gfx_frame_observe.c"
 BUFFERS = ROOT / "benchmark" / "eu4_gfx_buffers.mm"
 EVENTS = ROOT / "benchmark" / "eu4_metal_events.c"
 HOST = ROOT / "benchmark" / ".build" / "gfx_buffers_host"
@@ -19,7 +20,7 @@ class GfxBufferTests(unittest.TestCase):
             "clang", "-arch", "x86_64", "-O2", "-Wall", "-Wextra", "-fobjc-arc", "-lc++",
             "-I", str(ROOT / "benchmark"),
             "-framework", "Foundation", "-framework", "Metal", "-framework", "QuartzCore",
-            "-o", str(HOST), str(HOST_SOURCE), str(INIT), str(BUFFERS), str(EVENTS),
+            "-o", str(HOST), str(HOST_SOURCE), str(INIT), str(FRAME_OBSERVE), str(BUFFERS), str(EVENTS),
         ]
         built = subprocess.run(command, capture_output=True, text=True, check=False)
         if built.returncode:

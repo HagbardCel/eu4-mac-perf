@@ -8,7 +8,28 @@
 #include <dlfcn.h>
 typedef int (*eu4_gfx_cache_loader)(const char *path);
 #import "eu4_gfx_logical_capture.h"
-#import "eu4_gfx_frame_observe.h"
+
+/* The frame observation module is linked into the live dylib.  Host tests link
+   init.mm without it, so the references must be optional. */
+#if defined(__APPLE__)
+#define EU4_OBSERVE_WEAK __attribute__((weak_import))
+#else
+#define EU4_OBSERVE_WEAK __attribute__((weak))
+#endif
+extern "C" {
+int eu4_gfx_frame_observe_init(const char *, const char *, const char *)
+    EU4_OBSERVE_WEAK;
+int eu4_gfx_frame_observe_enabled(void) EU4_OBSERVE_WEAK;
+int eu4_gfx_frame_observe_lockstep_enabled(void) EU4_OBSERVE_WEAK;
+int eu4_gfx_frame_observe_lockstep_wait(uint32_t, uint32_t) EU4_OBSERVE_WEAK;
+void eu4_gfx_frame_observe_note_draw(uint64_t) EU4_OBSERVE_WEAK;
+void eu4_gfx_frame_observe_take_stats(uint32_t *, uint64_t *, uint32_t *)
+    EU4_OBSERVE_WEAK;
+int eu4_gfx_frame_observe_emit(const uint8_t *, uint32_t, uint32_t,
+                               const char *, uint32_t, uint32_t, uint64_t,
+                               uint32_t, int, int, const char *)
+    EU4_OBSERVE_WEAK;
+}
 #import "eu4_gfx_checkpoint.h"
 #import "eu4_metal_events.h"
 
@@ -2377,7 +2398,9 @@ uint64_t eu4_gfx_live_clear_sequence;
 static uint32_t g_frame_settle_draws;
 
 void eu4_gfx_frame_note_draw_caller(uint64_t caller_rva) {
-    eu4_gfx_frame_observe_note_draw(caller_rva);
+    if (eu4_gfx_frame_observe_note_draw != NULL) {
+        eu4_gfx_frame_observe_note_draw(caller_rva);
+    }
     const char *wanted = getenv("EU4_GFX_CHECKPOINT_SETTLE_CALLER");
     if (wanted == NULL || wanted[0] == 0) {
         return;
@@ -2473,6 +2496,10 @@ static uint64_t g_observe_frame_index;
 static int g_observe_init_attempted;
 
 static int observe_stream_ready(void) {
+    if (eu4_gfx_frame_observe_init == NULL ||
+        eu4_gfx_frame_observe_enabled == NULL) {
+        return 0;
+    }
     if (g_observe_init_attempted) {
         return eu4_gfx_frame_observe_enabled();
     }
@@ -2605,7 +2632,9 @@ int eu4_gfx_swap_window(void *window) {
     }
     [command commit];
     [command waitUntilCompleted];
-    if (observe && g_observe_buffer != nil) {
+    if (observe && g_observe_buffer != nil &&
+        eu4_gfx_frame_observe_take_stats != NULL &&
+        eu4_gfx_frame_observe_emit != NULL) {
         uint32_t draws = 0, distinct = 0;
         uint64_t signature = 0;
         eu4_gfx_frame_observe_take_stats(&draws, &signature, &distinct);
@@ -2615,7 +2644,9 @@ int eu4_gfx_swap_window(void *window) {
             backend.gameHeight, "top_left", (uint32_t)(++g_observe_frame_index),
             draws, signature, distinct, completed, completed ? 1 : 0,
             completed ? "" : "command_buffer_failed");
-        if (eu4_gfx_frame_observe_lockstep_enabled()) {
+        if (eu4_gfx_frame_observe_lockstep_enabled != NULL &&
+            eu4_gfx_frame_observe_lockstep_wait != NULL &&
+            eu4_gfx_frame_observe_lockstep_enabled()) {
             (void)eu4_gfx_frame_observe_lockstep_wait(
                 (uint32_t)g_observe_frame_index, 0);
         }
