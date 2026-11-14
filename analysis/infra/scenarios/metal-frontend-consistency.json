@@ -17,7 +17,7 @@
   "start": {
     "kind": "frontend",
     "save": null,
-    "pause": false,
+    "pause": true,
     "game_speed": 1
   },
   "game_config": {},
@@ -68,5 +68,5 @@
   "mode": "streaming",
   "profile": "targeted",
   "authorization": null,
-  "digest": "e224e4ab472276b5556a39bedaa9729f5c5cb2c5578e1f51ac8b0c00b85726c8"
+  "digest": "b20ef1ac33f5e2f910f5c2be259ffdce393b9bf2cb0a612538e07b7899e1ae80"
 }

@@ -11,6 +11,7 @@
 #include <mach-o/dyld.h>
 #include <mach/mach.h>
 #include <mach/vm_map.h>
+#include <dlfcn.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -48,6 +49,8 @@ static char g_previews[OBS_MAX_PATH];
 static char g_captured[OBS_MAX_PATH];
 static char g_request[OBS_MAX_PATH];
 static char g_ack_path[OBS_MAX_PATH];
+static int g_pause_at_draws;
+static int g_pause_sent;
 static uint64_t g_request_id;
 static uint64_t g_pending_frames[OBS_MAX_DUMPS];
 static int g_pending_count;
@@ -333,6 +336,8 @@ int eu4_gfx_frame_observe_init(const char *backend, const char *dir,
     snprintf(g_captured, sizeof g_captured, "%s/captured", dir);
     snprintf(g_request, sizeof g_request, "%s/capture-request.json", dir);
     snprintf(g_ack_path, sizeof g_ack_path, "%s/capture-ack.json", dir);
+    const char *pause_at = getenv("EU4_GFX_PAUSE_AT_DRAWS");
+    g_pause_at_draws = pause_at != NULL ? atoi(pause_at) : 0;
     snprintf(g_ready, sizeof g_ready, "%s/ready", dir);
     snprintf(g_release, sizeof g_release, "%s/release", dir);
     snprintf(g_lockstep_timeout_path, sizeof g_lockstep_timeout_path,
@@ -532,6 +537,64 @@ static void dump_ring(obs_ring_slot *slot) {
         write_atomic(json_path, body, (size_t)length) != 0) {
         g_dropped += 1;
     }
+}
+
+
+/* Optional, single pause request used by a paused scenario.  It posts one
+   SDL keyboard space event to the game's own event loop; no general input
+   automation is added.  If SDL is not reachable, the request is recorded as
+   unavailable and normal observation continues. */
+static void maybe_request_pause(uint32_t draws) {
+    if (g_pause_at_draws <= 0 || g_pause_sent || (int)draws < g_pause_at_draws) {
+        return;
+    }
+    g_pause_sent = 1;
+    typedef struct {
+        uint32_t type;
+        uint32_t timestamp;
+        uint32_t window_id;
+        uint8_t state;
+        uint8_t repeat;
+        uint8_t pad2;
+        uint8_t pad3;
+        int32_t scancode;
+        int32_t sym;
+        uint16_t mod;
+        uint32_t unused;
+    } sdl_keyboard_event;
+    typedef union {
+        uint8_t padding[56];
+        sdl_keyboard_event key;
+    } sdl_event;
+    typedef int (*push_event_fn)(sdl_event *);
+    push_event_fn push = (push_event_fn)dlsym(RTLD_DEFAULT, "SDL_PushEvent");
+    char path[OBS_MAX_PATH];
+    snprintf(path, sizeof path, "%s/pause-requested.json", g_dir);
+    if (push == NULL) {
+        char body[256];
+        int n = snprintf(body, sizeof body,
+                         "{\"schema\":\"gfx-pause-request/v1\",\"status\":\"unavailable\","
+                         "\"draws\":%u}\n", draws);
+        if (n > 0 && (size_t)n < sizeof body) (void)write_atomic(path, body, (size_t)n);
+        return;
+    }
+    sdl_event event;
+    memset(&event, 0, sizeof event);
+    event.key.type = 0x300; /* SDL_KEYDOWN */
+    event.key.state = 1;    /* SDL_PRESSED */
+    event.key.scancode = 44; /* SDL_SCANCODE_SPACE */
+    event.key.sym = 32;      /* SDLK_SPACE */
+    int first = push(&event);
+    event.key.type = 0x301; /* SDL_KEYUP */
+    event.key.state = 0;
+    int second = push(&event);
+    char body[256];
+    int n = snprintf(body, sizeof body,
+                     "{\"schema\":\"gfx-pause-request/v1\",\"status\":\"%s\","
+                     "\"draws\":%u,\"down\":%d,\"up\":%d}\n",
+                     first == 0 && second == 0 ? "requested" : "rejected",
+                     draws, first, second);
+    if (n > 0 && (size_t)n < sizeof body) (void)write_atomic(path, body, (size_t)n);
 }
 
 static uint64_t parse_request_id(const char *text) {
@@ -745,6 +808,7 @@ int eu4_gfx_frame_observe_emit(const uint8_t *bgra, uint32_t width,
     int game_day = 0;
     uint64_t update_identity = 0;
     game_state_identity(&game_day, &update_identity);
+    maybe_request_pause(draws);
     ring_store(bgra, width, height, frame_index, draws, signature,
                distinct_callers, gpu_completed, capture_valid,
                origin != NULL ? origin : "top_left", full_digest,
@@ -812,6 +876,7 @@ int eu4_gfx_frame_observe_emit_metadata(uint32_t width, uint32_t height,
     int game_day = 0;
     uint64_t update_identity = 0;
     game_state_identity(&game_day, &update_identity);
+    maybe_request_pause(draws);
     pthread_mutex_lock(&g_lock);
     if (g_emitted >= OBS_MAX_FRAMES) {
         g_dropped += 1;

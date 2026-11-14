@@ -16,7 +16,8 @@ identity means the singleton was not live; do not proceed.
 
 Scenario: `analysis/infra/scenarios/opengl-save-consistency.json`
 
-- Both processes load the same last save.
+- Both processes load the same last save and request one pause at the target draw
+  count.
 - Require paired, aligned, **validly compared** frames, not merely observed.
 - If alignment fails, stop; do not run GL/Metal.
 - If the images differ, that is a scenario/nondeterminism result; record it

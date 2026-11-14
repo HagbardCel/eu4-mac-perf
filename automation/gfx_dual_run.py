@@ -1071,6 +1071,12 @@ def run_campaign(
             lockstep=mode == "lockstep",
             metadata_only=True,
             session_id=session.session_id,
+            pause_at_draws=(
+                int(scenario["settle"]["min_draws"])
+                if (scenario.get("start") or {}).get("pause")
+                and int(scenario["settle"]["min_draws"]) > 0
+                else 0
+            ),
         )
         lease = launch_lease.acquire(executable, output=session.run_dir)
         # Start both backends before waiting on either one's readiness.

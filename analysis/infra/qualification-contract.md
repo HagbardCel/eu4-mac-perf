@@ -86,6 +86,15 @@ continues running, so the two processes are not at the same update. Experiment A
 therefore failed before any GL/Metal comparison; this is recorded as an
 `alignment_failure`, not as a renderer difference.
 
+## Optional pause request
+
+`start.pause=true` is executed as a **single** native SDL space key event posted
+by the observer when the frame draw count first reaches `settle.min_draws`. It is
+opt-in, recorded in `pause-requested.json`, and is not a general input framework;
+no input is sent during the comparison interval. If SDL cannot be reached the
+file records `unavailable` and observation continues. This path is implemented
+and unit-tested but not yet validated live.
+
 ## Comparison policy
 
 - `exact`: a scale-normalized comparison cannot be exactly qualified. If it

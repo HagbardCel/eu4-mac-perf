@@ -17,7 +17,7 @@
   "start": {
     "kind": "save",
     "save": "continuelastsave",
-    "pause": false,
+    "pause": true,
     "game_speed": 1
   },
   "game_config": {},
@@ -68,5 +68,5 @@
   "mode": "streaming",
   "profile": "targeted",
   "authorization": null,
-  "digest": "e99d15759ac3e634374b4937d27fcb4b5a59719cc4be32e3643f64395ce01433"
+  "digest": "772a4077aff76fb01e44b7cb854f53c80b2470b12c62bc80dfc6324f392cb1ec"
 }

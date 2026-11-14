@@ -95,7 +95,6 @@ class ScenarioTests(unittest.TestCase):
 
     def test_unimplemented_scenario_controls_fail_closed(self):
         for overrides in (
-            {"start": {"kind": "frontend", "pause": True}},
             {"input_events": [{"at_frame": 1, "event": "click"}]},
             {"game_config": {"language": "l_english"}},
             {"start": {"kind": "save", "save": "other.eu4"}},
@@ -103,6 +102,11 @@ class ScenarioTests(unittest.TestCase):
             with self.assertRaises(gfx_scenario.ScenarioError) as caught:
                 gfx_scenario.normalize(scenario(**overrides))
             self.assertEqual(caught.exception.kind, "unsupported_scenario_feature")
+
+    def test_pause_is_supported_as_a_single_native_request(self):
+        value = gfx_scenario.normalize(scenario(
+            start={"kind": "save", "save": "continuelastsave", "pause": True}))
+        self.assertTrue(value["start"]["pause"])
 
     def test_save_scenario_uses_the_last_save(self):
         value = gfx_scenario.normalize(scenario(
@@ -375,6 +379,14 @@ class LaunchPreparationTests(unittest.TestCase):
         with self.assertRaises(gfx_launch.LaunchError) as caught:
             self.prepare("candidate")
         self.assertEqual(caught.exception.kind, "config")
+
+    def test_pause_request_is_passed_to_the_observer(self):
+        self.config.pause_at_draws = 100
+        env, _run_dir, _observe = gfx_launch.prepare(
+            "reference", self.config, self.root / "paused",
+            libraries={"reference": self.library, "candidate": self.library},
+        )
+        self.assertEqual(env["EU4_GFX_PAUSE_AT_DRAWS"], "100")
 
     def test_inherited_instrumentation_is_cleared(self):
         import os

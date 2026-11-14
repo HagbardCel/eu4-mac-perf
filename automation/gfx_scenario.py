@@ -112,11 +112,6 @@ def normalize(value: dict) -> dict:
     pause = _optional(start.get("pause"), bool, "start.pause", False)
     speed = _optional(start.get("game_speed"), int, "start.game_speed", 1,
                       minimum=0, maximum=5)
-    if pause:
-        raise ScenarioError(
-            "unsupported_scenario_feature",
-            "pausing the game is not implemented; set start.pause=false",
-        )
     if speed != 1:
         raise ScenarioError(
             "unsupported_scenario_feature",

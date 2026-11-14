@@ -49,6 +49,7 @@ class LaunchConfig:
     lockstep: bool = False
     metadata_only: bool = False
     session_id: str = ""
+    pause_at_draws: int = 0
 
 
 @dataclass
@@ -172,6 +173,8 @@ def prepare(role: str, config: LaunchConfig, run_dir: Path,
         if config.metadata_only:
             env["EU4_GFX_FRAME_METADATA"] = "1"
         env["EU4_GFX_FRAME_ONLY"] = "1"
+        if config.pause_at_draws > 0:
+            env["EU4_GFX_PAUSE_AT_DRAWS"] = str(config.pause_at_draws)
     else:
         env["DYLD_INSERT_LIBRARIES"] = str(library)
         env["EU4_METAL_BOOT_MODE"] = "metal_init"
