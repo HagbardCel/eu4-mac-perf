@@ -1273,6 +1273,138 @@ static int run_indexed_base_vertex(void) {
     return ok ? 0 : 1;
 }
 
+static int run_vertex_fetch(void) {
+    boot();
+    id<MTLDevice> device = (__bridge id<MTLDevice>)eu4_gfx_metal_device();
+    if (device == nil) {
+        fail("vertex fetch device");
+    }
+    NSString *source = @
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "constant uint kColumns [[function_constant(0)]];\n"
+        "struct VIn { float4 color [[attribute(0)]]; };\n"
+        "struct VOut { float4 position [[position]]; float4 color; };\n"
+        "vertex VOut v_main(VIn in [[stage_in]], uint vid [[vertex_id]],\n"
+        "                   uint iid [[instance_id]]) {\n"
+        "  float x0 = -1.0 + 2.0 * float(iid) / float(kColumns);\n"
+        "  float x1 = -1.0 + 2.0 * float(iid + 1) / float(kColumns);\n"
+        "  float2 p[4] = {float2(x0, -1.0), float2(x1, -1.0),\n"
+        "                 float2(x0, 1.0), float2(x1, 1.0)};\n"
+        "  VOut o; o.position = float4(p[vid], 0.0, 1.0);\n"
+        "  o.color = in.color; return o;\n"
+        "}\n"
+        "fragment float4 f_main(VOut in [[stage_in]]) { return in.color; }\n";
+    NSError *error = nil;
+    id<MTLLibrary> library = [device newLibraryWithSource:source options:nil error:&error];
+    if (library == nil) {
+        fail("vertex fetch library");
+    }
+    id<MTLCommandQueue> queue = [device newCommandQueue];
+    MTLTextureDescriptor *td =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                           width:3 height:3 mipmapped:NO];
+    td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    td.storageMode = MTLStorageModeShared;
+
+    const float colors[3][4] = {
+        {0.0f, 1.0f, 0.0f, 1.0f}, /* green */
+        {1.0f, 0.0f, 0.0f, 1.0f}, /* red */
+        {0.0f, 0.0f, 1.0f, 1.0f}, /* blue */
+    };
+    int ok = 1;
+    int one_instance_ok = 1;
+    int multi_instance_ok = 1;
+    int constant_ok = 1;
+
+    /* Runs one pipeline and returns the pixels of the middle row. */
+    for (int mode = 0; mode < 3; mode++) {
+        uint32_t columns = mode == 1 ? 3 : (mode == 2 ? 3 : 1);
+        MTLFunctionConstantValues *constants = [MTLFunctionConstantValues new];
+        [constants setConstantValue:&columns type:MTLDataTypeUInt atIndex:0];
+        NSError *function_error = nil;
+        id<MTLFunction> vs =
+            [library newFunctionWithName:@"v_main" constantValues:constants
+                                   error:&function_error];
+        id<MTLFunction> fs = [library newFunctionWithName:@"f_main"];
+        if (vs == nil || fs == nil) {
+            ok = 0;
+            break;
+        }
+        MTLVertexDescriptor *vd = [MTLVertexDescriptor vertexDescriptor];
+        vd.attributes[0].format = MTLVertexFormatFloat4;
+        vd.attributes[0].offset = 0;
+        vd.attributes[0].bufferIndex = 0;
+        vd.layouts[0].stride = 16;
+        if (mode == 2) {
+            vd.layouts[0].stepFunction = MTLVertexStepFunctionConstant;
+            vd.layouts[0].stepRate = 0;
+        } else {
+            vd.layouts[0].stepFunction = MTLVertexStepFunctionPerInstance;
+            vd.layouts[0].stepRate = mode == 0 ? 1 : 2;
+        }
+        MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
+        pd.vertexFunction = vs;
+        pd.fragmentFunction = fs;
+        pd.vertexDescriptor = vd;
+        pd.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+        id<MTLRenderPipelineState> pipeline =
+            [device newRenderPipelineStateWithDescriptor:pd error:&error];
+        if (pipeline == nil) {
+            ok = 0;
+            break;
+        }
+        const void *bytes = colors;
+        NSUInteger length = 3 * 16;
+        if (mode == 2) {
+            bytes = colors[0];
+            length = 16;
+        }
+        id<MTLBuffer> buffer =
+            [device newBufferWithBytes:bytes length:length
+                               options:MTLResourceStorageModeShared];
+        id<MTLTexture> target = [device newTextureWithDescriptor:td];
+        id<MTLCommandBuffer> command = [queue commandBuffer];
+        MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+        pass.colorAttachments[0].texture = target;
+        pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+        pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
+        pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> encoder =
+            [command renderCommandEncoderWithDescriptor:pass];
+        [encoder setRenderPipelineState:pipeline];
+        [encoder setVertexBuffer:buffer offset:0 atIndex:0];
+        [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
+                    vertexStart:0 vertexCount:4
+                  instanceCount:(mode == 0 ? 1 : 3)];
+        [encoder endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+        if (command.status != MTLCommandBufferStatusCompleted) {
+            ok = 0;
+            break;
+        }
+        uint32_t pixels[9];
+        read_target_texture(target, queue, 3 * 4, pixels);
+        for (int x = 0; x < 3; x++) {
+            const uint8_t *pixel = (const uint8_t *)&pixels[1 * 3 + x];
+            int green = pixel[1] > 200 && pixel[0] < 40 && pixel[2] < 40;
+            int red = pixel[2] > 200 && pixel[0] < 40 && pixel[1] < 40;
+            int blue = pixel[0] > 200 && pixel[1] < 40 && pixel[2] < 40;
+            if (mode == 0 && !green) one_instance_ok = 0;
+            if (mode == 1) {
+                if ((x < 2 && !green) || (x == 2 && !red)) multi_instance_ok = 0;
+            }
+            if (mode == 2 && !green) constant_ok = 0;
+            (void)blue;
+        }
+    }
+    ok = ok && one_instance_ok && multi_instance_ok && constant_ok;
+    printf("vertex_fetch=%d one_instance=%d multi_instance=%d constant=%d\n",
+           ok, one_instance_ok, multi_instance_ok, constant_ok);
+    return ok ? 0 : 1;
+}
+
 static int run_production_bounds(void) {
     int ok = 1;
     char reason[256] = "";
@@ -1325,6 +1457,20 @@ static int run_production_bounds(void) {
     ok &= eu4_gfx_generic_bounds_test(formats, offsets, strides, lengths,
                                       divisors, 1, 0, 5, reason,
                                       sizeof reason) == 0;
+    /* One per-instance element, tightly sized: 16 bytes valid, 15 invalid. */
+    formats[0] = float4;
+    offsets[0] = 0;
+    strides[0] = 16;
+    lengths[0] = 16;
+    divisors[0] = 1;
+    ok &= eu4_gfx_generic_bounds_test(formats, offsets, strides, lengths,
+                                      divisors, 1, 0, 1, reason,
+                                      sizeof reason) == 1;
+    lengths[0] = 15;
+    ok &= eu4_gfx_generic_bounds_test(formats, offsets, strides, lengths,
+                                      divisors, 1, 0, 1, reason,
+                                      sizeof reason) == 0;
+
     /* Unknown format fails closed. */
     formats[0] = 0;
     lengths[0] = 1024;
@@ -1332,7 +1478,47 @@ static int run_production_bounds(void) {
     ok &= eu4_gfx_generic_bounds_test(formats, offsets, strides, lengths,
                                       divisors, 1, 3, 1, reason,
                                       sizeof reason) == 0;
-    printf("production_bounds=%d\n", ok);
+
+    /* All 17 admitted attributes participate in validation. */
+    uint32_t formats17[17];
+    uint64_t offsets17[17];
+    uint64_t strides17[17];
+    uint64_t lengths17[17];
+    uint32_t divisors17[17];
+    for (int i = 0; i < 17; i++) {
+        formats17[i] = float3;
+        offsets17[i] = 0;
+        strides17[i] = 20;
+        lengths17[i] = 72;
+        divisors17[i] = 0;
+    }
+    int attributes17_ok = eu4_gfx_generic_bounds_test(
+        formats17, offsets17, strides17, lengths17, divisors17, 17, 3, 1,
+        reason, sizeof reason) == 1;
+    lengths17[16] = 71;
+    attributes17_ok &= eu4_gfx_generic_bounds_test(
+        formats17, offsets17, strides17, lengths17, divisors17, 17, 3, 1,
+        reason, sizeof reason) == 0;
+    lengths17[16] = 72;
+    lengths17[15] = 71;
+    attributes17_ok &= eu4_gfx_generic_bounds_test(
+        formats17, offsets17, strides17, lengths17, divisors17, 17, 3, 1,
+        reason, sizeof reason) == 0;
+    lengths17[15] = 72;
+
+    /* Metal capacity guard: 17 attributes from base slot 8 fit (next_buffer
+       25); 31/32 and location 31 are refused with diagnostics. */
+    char capacity_reason[256] = "";
+    int capacity_ok =
+        eu4_gfx_generic_descriptor_capacity_test(25, 30, capacity_reason,
+                                                 sizeof capacity_reason) == 1 &&
+        eu4_gfx_generic_descriptor_capacity_test(31, 30, capacity_reason,
+                                                 sizeof capacity_reason) == 0 &&
+        eu4_gfx_generic_descriptor_capacity_test(25, 31, capacity_reason,
+                                                 sizeof capacity_reason) == 0;
+    ok &= attributes17_ok && capacity_ok;
+    printf("production_bounds=%d attributes_17=%d capacity=%d\n",
+           ok, attributes17_ok, capacity_ok);
     return ok ? 0 : 1;
 }
 
@@ -1481,6 +1667,33 @@ static int run_draw_semantics(void) {
     ok &= eu4_gfx_gl_type_size(0x1403) == 2;
     ok &= eu4_gfx_gl_type_size(0x1401) == 1;
     ok &= eu4_gfx_gl_type_size(0x9999) == 0;
+    int32_t range_first = 0, range_last = 0;
+    /* Nonindexed, first 8 count 3, per-vertex. */
+    ok &= eu4_gfx_capture_vertex_range(0, 0, 1, 8, 3, 0, 0,
+                                       &range_first, &range_last) == 0 &&
+          range_first == 8 && range_last == 10;
+    /* Same draw, positive divisors fetch element 0 regardless of first. */
+    ok &= eu4_gfx_capture_vertex_range(1, 0, 1, 8, 3, 0, 0,
+                                       &range_first, &range_last) == 0 &&
+          range_first == 0 && range_last == 0;
+    ok &= eu4_gfx_capture_vertex_range(2, 0, 1, 8, 3, 0, 0,
+                                       &range_first, &range_last) == 0 &&
+          range_first == 0 && range_last == 0;
+    /* Indexed [0,4,7] base 3 -> effective 3..10. */
+    ok &= eu4_gfx_capture_vertex_range(0, 1, 1, 0, 3, 3, 10,
+                                       &range_first, &range_last) == 0 &&
+          range_first == 3 && range_last == 10;
+    /* Five indexed instances, divisor 2 -> elements 0..2. */
+    ok &= eu4_gfx_capture_vertex_range(2, 1, 5, 0, 3, 0, 0,
+                                       &range_first, &range_last) == 0 &&
+          range_first == 0 && range_last == 2;
+    /* Overflow and invalid ranges fail without clamping. */
+    ok &= eu4_gfx_capture_vertex_range(0, 0, 1, INT32_MAX, 2, 0, 0,
+                                       &range_first, &range_last) == -1;
+    ok &= eu4_gfx_capture_vertex_range(0, 0, 1, -1, 3, 0, 0,
+                                       &range_first, &range_last) == -1;
+    ok &= eu4_gfx_capture_attribute_count_ok(16, 16) == 1;
+    ok &= eu4_gfx_capture_attribute_count_ok(17, 16) == 0;
     printf("draw_semantics=%d\n", ok);
     return ok ? 0 : 1;
 }
@@ -1967,6 +2180,9 @@ int main(int argc, char **argv) {
     }
     if (argc >= 2 && strcmp(argv[1], "--production-pipeline") == 0) {
         return run_production_pipeline();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--vertex-fetch") == 0) {
+        return run_vertex_fetch();
     }
     if (argc >= 2 && strcmp(argv[1], "--indexed-base-vertex") == 0) {
         return run_indexed_base_vertex();

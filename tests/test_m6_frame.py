@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import struct
 import subprocess
 import sys
 import tempfile
@@ -985,6 +986,82 @@ fragment FOut test_fragment(float4 position [[position]]) {
         }))
         return frame, shaders, pre
 
+    def test_replay_divisor_and_constant_descriptor(self) -> None:
+        host = m6_frame.build_replay_host(force=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            frame, shaders, pre = self._frame(root)
+            events = [json.loads(line) for line in
+                      (frame / "frame-events.jsonl").read_text().splitlines()]
+            event = events[0]
+            colors = b"".join(struct.pack("<3f", *c) for c in
+                              [(0.0, 1.0, 0.0), (1.0, 0.0, 0.0),
+                               (0.0, 0.0, 1.0)])
+            blob = self._write(frame / "blobs" / "color.bin", colors)
+            event["attributes"] = [
+                {
+                    "name": "in_COLOR", "location": 1, "components": 3,
+                    "gl_type": "0x1406", "normalized": False, "stride": 12,
+                    "divisor": 1, "enabled": True, "first_vertex": 0,
+                    "last_vertex": 2, "data": blob["file"],
+                    "bytes": blob["bytes"], "sha256": blob["sha256"],
+                },
+                {
+                    "name": "in_CONSTANT", "location": 2, "components": 4,
+                    "gl_type": "0x1406", "normalized": False, "stride": 0,
+                    "divisor": 0, "enabled": False,
+                    "constant_value": [0.0, 0.0, 1.0, 1.0],
+                },
+            ]
+            (frame / "frame-events.jsonl").write_text(json.dumps(event) + "\n")
+            manifest = json.loads((frame / "frame-trace.json").read_text())
+            manifest["blobs"] = manifest.get("blobs", 0) + 1
+            (frame / "frame-trace.json").write_text(json.dumps(manifest))
+            env = dict(os.environ)
+            env["EU4_FRAME_REPLAY_DEBUG_DESCRIPTOR"] = "1"
+            out = root / "replay"
+            ran = subprocess.run(
+                [str(host), "--frame", str(frame), "--shaders", str(shaders),
+                 "--out", str(out), "--only-event", "0", "--capture-post"],
+                capture_output=True, text=True, check=False, timeout=120,
+                env=env)
+            self.assertEqual(ran.returncode, 0, ran.stderr + ran.stdout)
+            # MTLVertexStepFunction: Constant=0, PerVertex=1, PerInstance=2.
+            self.assertIn("step 2 rate 1", ran.stderr)
+            self.assertIn("step 0 rate 0", ran.stderr)
+            post = (out / "isolated-post-0.bgra").read_bytes()
+            self.assertNotEqual(post, pre)
+
+            # A one-event divisor-2 / three-instance frame checks the actual
+            # replay descriptor without relying on multi-event isolation.
+            root2 = Path(tmp) / "second"
+            root2.mkdir()
+            frame2, shaders2, _ = self._frame(root2)
+            events2 = [json.loads(line) for line in
+                       (frame2 / "frame-events.jsonl").read_text().splitlines()]
+            event2 = events2[0]
+            blob2 = self._write(frame2 / "blobs" / "color.bin", colors)
+            event2["attributes"] = [{
+                "name": "in_COLOR", "location": 1, "components": 3,
+                "gl_type": "0x1406", "normalized": False, "stride": 12,
+                "divisor": 2, "enabled": True, "first_vertex": 0,
+                "last_vertex": 2, "data": blob2["file"],
+                "bytes": blob2["bytes"], "sha256": blob2["sha256"],
+            }]
+            event2["draw"]["instance_count"] = 3
+            (frame2 / "frame-events.jsonl").write_text(json.dumps(event2) + "\n")
+            manifest2 = json.loads((frame2 / "frame-trace.json").read_text())
+            manifest2["blobs"] = manifest2.get("blobs", 0) + 1
+            (frame2 / "frame-trace.json").write_text(json.dumps(manifest2))
+            out2 = root2 / "replay"
+            ran2 = subprocess.run(
+                [str(host), "--frame", str(frame2), "--shaders", str(shaders2),
+                 "--out", str(out2), "--only-event", "0"],
+                capture_output=True, text=True, check=False, timeout=120,
+                env=env)
+            self.assertEqual(ran2.returncode, 0, ran2.stderr + ran2.stdout)
+            self.assertIn("step 2 rate 2", ran2.stderr)
+
     def test_pre_image_survives_the_selected_draw(self) -> None:
         host = m6_frame.build_replay_host(force=True)
         with tempfile.TemporaryDirectory() as tmp:
@@ -1021,6 +1098,8 @@ fragment FOut test_fragment(float4 position [[position]]) {
             self.assertEqual(changed, 4)
             self.assertEqual(isolated["pre_image"]["sha256"],
                              hashlib.sha256(pre).hexdigest())
+
+
 
 
 if __name__ == "__main__":

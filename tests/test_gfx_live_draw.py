@@ -126,6 +126,16 @@ class GfxLiveDrawTests(unittest.TestCase):
         ran = self._run("--production-bounds")
         self.assertEqual(ran.returncode, 0, ran.stderr)
         self.assertIn("production_bounds=1", ran.stdout)
+        self.assertIn("attributes_17=1", ran.stdout)
+        self.assertIn("capacity=1", ran.stdout)
+
+    def test_vertex_fetch_semantics(self) -> None:
+        ran = self._run("--vertex-fetch")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("vertex_fetch=1", ran.stdout)
+        self.assertIn("one_instance=1", ran.stdout)
+        self.assertIn("multi_instance=1", ran.stdout)
+        self.assertIn("constant=1", ran.stdout)
 
     def test_production_pipeline_mask_cache_separation(self) -> None:
         ran = self._run("--production-pipeline")

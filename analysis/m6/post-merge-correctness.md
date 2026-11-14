@@ -35,6 +35,77 @@ were introduced.
 | Shadow cache lifetime | Marked a shadow valid when the flip was encoded, even if the command was later abandoned; a failed conversion could fall back to the raw top-left texture; resolve/clear writes were not all invalidating. | Shadows have a pending-command state promoted only by command completion; abandoned commands leave them invalid and the next draw re-encodes. Conversion failure refuses the draw instead of binding the raw resource. Draw, clear, initialize and both resolve paths invalidate the relevant generation. |
 | Shadow tests | Initial conversion and ordinary-texture preservation only. | Native lifecycle test covers initial conversion, repeated sampling, modification, abandoned-command recovery, conversion failure and ordinary-texture preservation. |
 
+## Vertex attribute capacity
+
+The `0x15ea970`/`0x15ebf41` bodies do not impose a 16-attribute limit:
+`SShaderOpenGL::EnableVertexAttribArrays` iterates the shader's full element
+count (`SShaderOpenGL+0x18`, guarded at 64 by the generic encoder) across the
+four vertex-buffer slots, using element location `+0xc`, offset `+0x18`,
+divisor `+0x20` and the slot offset. The 16-entry array was a diagnostic cap,
+not an engine contract. Correctness tracking now covers all 31 Metal attribute
+locations (`0..30`); the shared capacity guard checks the attribute location
+and the next vertex-buffer index (`8..30`), refusing with
+`vertex attribute location exceeds Metal capacity` or
+`vertex descriptor buffer capacity exceeded`. Conversion to FloatN updates the
+tracked format on the attribute's own record, and no code mutates the previous
+entry when tracking is full.
+
+Regression coverage: 17 valid attributes accepted; the 17th out of bounds
+refused; the 16th out of bounds with a valid 17th refused (proving no overwrite
+of the 16th record); capacity guard accepts `next_buffer=25, location=30` and
+refuses `31`/`location=31` with diagnostics.
+
+## Capture range completeness
+
+`capture_attributes` now selects ranges in the original GL order:
+instance-rate attributes first (`0..(instance_count-1)/divisor`), then indexed
+per-vertex attributes from the actual sparse index range, then nonindexed
+per-vertex attributes as `first..first+count-1`. Nonindexed draws with a
+positive divisor therefore capture element 0 regardless of `first`; indexed
+instanced draws use the actual instance count. The speculative signed-32-bit
+`base_vertex + count - 1` initialization was removed; indexed ranges come only
+from the read index data. Nonindexed arithmetic is checked in 64 bits and
+refused on overflow rather than clamped.
+
+`GL_ACTIVE_ATTRIBUTES` is checked against `FTRACE_MAX_ATTRS`; overflow marks
+the capture failed and publishes the frame with `complete=false` and reason
+`attribute_capacity`. A local CGL query of the legacy Apple OpenGL environment
+reports `GL_MAX_VERTEX_ATTRIBS=16`, so the condition is impossible there with
+the current 16-entry representation; the guard remains for environments with a
+larger limit.
+
+Regressions cover nonindexed divisor 0/1/2 ranges, indexed `[0,4,7]` base 3
+(3..10), five instances divisor 2 (0..2), `INT32_MAX` overflow, invalid first,
+and attribute counts 16/17 against the recorder limit.
+
+## Vertex-fetch semantics
+
+`SShaderOpenGL::EnableVertexAttribArrays` (`0x15ea970`) configures
+`glVertexAttribDivisorARB` from the shader element descriptor (`+0x20`), not
+from the draw entry point. `_GfxDraw` (`0x15ea789`), `_GfxDrawIndexed` (`0x15eaa77`) and
+`_GfxDrawIndexedInstanced` (`0x15eac9c`, third argument is instance count) do
+not change that divisor. Corrections:
+
+- Divisor `0` is `MTLVertexStepFunctionPerVertex`/rate 1; divisor `>0` is
+  `MTLVertexStepFunctionPerInstance`/rate divisor, independent of
+  `instance_count`. A non-instanced draw is one instance and therefore fetches
+  element 0 of every per-instance attribute for all of its vertices.
+- The live builder no longer takes an `instanced_draw` flag. Replay keeps the
+  captured divisor in the attribute plan and pipeline descriptor; it validates
+  per-instance captured buffers against `(instances-1)/divisor`.
+- Declared-but-unbound and disabled generic attributes use
+  `MTLVertexStepFunctionConstant` with rate 0 and a 16-byte single-value buffer.
+  The GPU fetches element 0 for every vertex and instance. Disabled attributes
+  preserve the captured `constant_value`; the zero/one fallback for
+  declared-but-unbound attributes remains a documented limitation because the
+  original GL generic attribute value is not in the trace.
+
+Regression coverage: direct GPU one-instance divisor-1 (all vertices green,
+not interpolated), three-instance divisor-2 (instances 0/1 green, instance 2
+red), constant attribute across vertices/instances, tight one-element bounds;
+synthetic replay one-instance divisor-1 plus disabled constant and
+three-instance divisor-2 descriptor checks.
+
 ## Regression tests added/updated
 
 - `tests/gfx_live_draw_host.mm --draw-semantics`: topology mapping, Metal
@@ -55,7 +126,9 @@ were introduced.
   A test-only conversion counter proves the pending path was entered.
 - `tests/gfx_live_draw_host.mm --production-bounds`: the production attribute
   bounds validator with tight 72/80-byte buffers, 71/79-byte rejects, nonzero
-  slot/element offsets, instance-rate divisors and unsupported formats.
+  slot/element offsets, instance-rate divisors, unsupported formats, 17 active
+  attributes (including the 16th/17th ordering cases) and the descriptor
+  capacity guard.
 - `tests/gfx_live_draw_host.mm --production-pipeline`: the production pipeline
   cache with all/alpha colour masks, cache separation and rendered channel
   preservation.
@@ -79,8 +152,8 @@ All new regressions fail on the merged implementation:
 
 | Check | Result |
 | --- | --- |
-| `tests.test_gfx_live_draw` | 29 passed (semantics, base-vertex GPU, colour-mask GPU, production bounds/pipeline, shadow-cache lifecycle) |
-| `tests.test_m6_frame` | 29 passed |
+| `tests.test_gfx_live_draw` | 30 passed (semantics, base-vertex GPU, colour-mask GPU, vertex-fetch GPU, production bounds/pipeline, shadow-cache lifecycle) |
+| `tests.test_m6_frame` | 30 passed |
 | `tests.test_m6_live_accept` | 25 passed |
 | `tests.test_gfx_texture`, `test_gfx_contracts`, `test_gfx_compare`, `test_gfx_shader`, `test_gfx_default_target`, `test_m4_accept`, `test_m5_accept`, `test_m5_replay_cache` | pass |
 | Canonical 326-event replay | 326/326 encoded, zero failed, GPU completed, 0 differing pixels of 1,930,176 including alpha |
