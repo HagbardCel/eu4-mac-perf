@@ -136,7 +136,8 @@ class ScenarioTests(unittest.TestCase):
 
 
 def write_record(path: Path, index: int, *, sha: str, valid: bool = True,
-                 preview: bytes | None = None) -> None:
+                 preview: bytes | None = None,
+                 extra: dict | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if preview is not None:
         (path.parent / f"preview-{index}.bgra").write_bytes(preview)
@@ -153,6 +154,8 @@ def write_record(path: Path, index: int, *, sha: str, valid: bool = True,
         "draws": 2,
         "preview_file": f"preview-{index}.bgra" if preview is not None else "",
     }
+    if extra:
+        record.update(extra)
     with path.open("a", encoding="utf-8") as target:
         target.write(json.dumps(record) + "\n")
 
@@ -250,6 +253,19 @@ class AlignmentTests(unittest.TestCase):
         self.assertEqual((state.ref_base, state.cand_base), (12, 41))
         self.assertEqual((state.phase_entry_ref, state.phase_entry_cand), (11, 40))
         self.assertTrue(state.pairing)
+
+    def test_pairs_carry_engine_identity(self):
+        state = self.state()
+        for index in (1, 2):
+            write_record(self.ref_path, index, sha=f"{index:064x}",
+                         extra={"update_identity": "0x10", "game_day": 42})
+            write_record(self.cand_path, index, sha=f"{index:064x}",
+                         extra={"update_identity": "0x10", "game_day": 42})
+        state.ref_by_index.update({r.index: r for r in state.ref_stream.poll()})
+        state.cand_by_index.update({r.index: r for r in state.cand_stream.poll()})
+        pairs = gfx_dual_run.align_streams(state, limit=2)
+        self.assertEqual(pairs[0]["reference"]["update_identity"], "0x10")
+        self.assertEqual(pairs[0]["candidate"]["game_day"], 42)
 
     def test_pairing_respects_the_frame_limit(self):
         state = self.state()

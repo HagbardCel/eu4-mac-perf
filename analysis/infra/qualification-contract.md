@@ -65,7 +65,12 @@ signature/draw counts, but raw payloads were missing because the streaming path
 issued a per-pair request after the phase-entry window and overwrote it. A
 repeat then showed the full-block identity differed between processes. Streaming
 now issues only one phase-entry window, and identity hashes only the
-deterministic day counter; neither change has been re-run live. The save
+deterministic day counter.
+
+Experiment A after those fixes produced 20 pairs but only 13 aligned. The
+streams had equal `game_day`/`update_identity`; the pair dict simply omitted
+both fields, so alignment could not use them. Pair records now carry identity,
+and a unit test asserts it. This has not been re-run live. The save
 continues running, so the two processes are not at the same update. Experiment A
 therefore failed before any GL/Metal comparison; this is recorded as an
 `alignment_failure`, not as a renderer difference.

@@ -314,6 +314,8 @@ def align_streams(state: CampaignState, *, limit: int | None = None) -> list[dic
                 "height": ref.value.get("height"),
                 "draws": ref.value.get("draws"),
                 "caller_signature": ref.value.get("caller_signature"),
+                "game_day": ref.value.get("game_day"),
+                "update_identity": ref.value.get("update_identity"),
             },
             "candidate": {
                 "sha256": cand.digest,
@@ -321,6 +323,8 @@ def align_streams(state: CampaignState, *, limit: int | None = None) -> list[dic
                 "height": cand.value.get("height"),
                 "draws": cand.value.get("draws"),
                 "caller_signature": cand.value.get("caller_signature"),
+                "game_day": cand.value.get("game_day"),
+                "update_identity": cand.value.get("update_identity"),
             },
             "exact_equal": bool(ref.digest and ref.digest == cand.digest),
             "extent": _extent_relation(ref, cand),

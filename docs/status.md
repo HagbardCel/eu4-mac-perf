@@ -81,8 +81,10 @@ reference (`game_day=43808760` at frame 5). A repeat showed that hashing the ful
 date block is not deterministic across processes, so identity now derives only
 from the day counter. An identity-gated GL/GL run aligned 20 pairs but produced
 zero comparisons because per-pair requests overwrote the phase-entry capture
-window; streaming now issues a single pre-requested window. Both fixes still
-need a live re-run. Replay tool
+window; streaming now issues a single pre-requested window. A later Experiment A
+run had equal day/update identities but only 13/20 pairs aligned because the
+pair records omitted both identity fields; they are now carried and unit-tested.
+Neither fix has been re-run live. Replay tool
 envelopes now distinguish successful replay execution from the reproduced
 comparison outcome, and metrics count executable renderer reproductions
 separately from image-comparison cases.
