@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from automation import gfx_align, gfx_dual_run, gfx_launch, gfx_scenario  # noqa: E402
+from automation import gfx_align, gfx_diagnostics, gfx_dual_run, gfx_launch, gfx_scenario  # noqa: E402
 
 try:
     import numpy as np
@@ -817,6 +817,25 @@ class PostReferenceCleanupTests(unittest.TestCase):
             terminal = json.loads(
                 (Path(result["run_dir"]) / "terminal-status.json").read_text())
             self.assertEqual(terminal["status"], gfx_session.FAILED)
+
+
+class HealthStopTests(unittest.TestCase):
+    def test_rejected_draw_maps_to_gpu_execution_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            (run / "draw-refused-edfcd1.json").write_text(json.dumps({
+                "variant": "_GfxDraw", "caller_rva": "0xedfcd1",
+                "reason": "invalid sampler"}))
+            summary = gfx_diagnostics.scan_run(run)
+            value = gfx_dual_run._health_stop(summary)
+            self.assertIsNotNone(value)
+            self.assertEqual(value[0], "gpu_execution_failure")
+            self.assertIn("invalid sampler", value[1])
+
+    def test_clean_health_does_not_stop(self):
+        health = gfx_diagnostics.GpuHealth()
+        health.add("health_check", "ok", severity="info")
+        self.assertIsNone(gfx_dual_run._health_stop(health.summary()))
 
 
 class RealIdentityAlignmentTests(unittest.TestCase):

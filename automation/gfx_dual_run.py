@@ -234,6 +234,15 @@ def _identity_value(record) -> int:
     return int(value or 0)
 
 
+def _health_stop(summary: dict) -> tuple[str, str] | None:
+    gate = gfx_diagnostics.health_gate(summary)
+    if gate["allow"]:
+        return None
+    if summary.get("verdict") == gfx_diagnostics.FAILED:
+        return "gpu_execution_failure", str(gate.get("reason") or "GPU failure")
+    return "infrastructure_failure", str(gate.get("reason") or "health gate denied")
+
+
 def _phase_ready(reference_draws: int, candidate_draws: int,
                  minimum: int, tolerance: float,
                  reference_update: int = 0,
@@ -1235,16 +1244,10 @@ def run_campaign(
                 _record_health(record, health)
             for role, scanner in incremental.items():
                 summary = scanner.poll()
-                gate = gfx_diagnostics.health_gate(summary)
-                if not gate["allow"]:
-                    stop_reason = (
-                        "gpu_execution_failure"
-                        if summary.get("verdict") == gfx_diagnostics.FAILED
-                        else "infrastructure_failure"
-                    )
-                    stop_trigger = (
-                        f"{role}: {gate.get('reason') or summary.get('verdict')}"
-                    )
+                health_stop = _health_stop(summary)
+                if health_stop is not None:
+                    stop_reason, detail = health_stop
+                    stop_trigger = f"{role}: {detail}"
                     break
             if stop_reason:
                 break
