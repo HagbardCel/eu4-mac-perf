@@ -2029,12 +2029,15 @@ static int read_drawable_bgra(uint32_t *out_width, uint32_t *out_height,
     if (pack_buffer != 0) {
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     }
-    while (glGetError() != GL_NO_ERROR) {
-    }
+    /* Deliberately do not drain the GL error queue here.  The engine owns that
+       state and reading it in the observer would consume a pending renderer
+       error.  OpenGL provides no non-destructive error peek; the consequence is
+       that a failure of this readback cannot be distinguished from a pending
+       engine error without consuming one.  The observer records the read as
+       attempted and leaves the queue untouched. */
     glFinish();
     glReadPixels(0, 0, (GLsizei)width, (GLsizei)height, GL_BGRA,
                  GL_UNSIGNED_INT_8_8_8_8_REV, pixels);
-    GLenum error = glGetError();
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)draw_framebuffer);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)read_framebuffer);
     glReadBuffer((GLenum)read_buffer);
@@ -2045,14 +2048,20 @@ static int read_drawable_bgra(uint32_t *out_width, uint32_t *out_height,
     if (pack_buffer != 0) {
         glBindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)pack_buffer);
     }
-    if (error != GL_NO_ERROR) {
-        free(pixels);
-        return -1;
-    }
     *out_width = width;
     *out_height = height;
     *out_pixels = pixels;
     return 0;
+}
+
+/* Exported for the native state-restoration host: performs one readback using
+   the same state-saving path without claiming an engine error. */
+int eu4_gfx_frame_trace_readback_probe(void) {
+    uint32_t width = 0, height = 0;
+    uint8_t *pixels = NULL;
+    int result = read_drawable_bgra(&width, &height, &pixels);
+    free(pixels);
+    return result;
 }
 
 void eu4_gfx_frame_trace_boundary_entry(eu4_gfx_capture_frame *frame,

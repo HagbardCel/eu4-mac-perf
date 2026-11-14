@@ -790,3 +790,144 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+class IncrementalHealth:
+    """Incrementally watch a live run directory.
+
+    One-shot artifacts are parsed once; append-only streams keep a byte offset.
+    The first event is retained by ``GpuHealth`` and repeats aggregate by
+    signature, so polling never produces a duplicate flood.
+    """
+
+    def __init__(self, run_dir: Path, health: GpuHealth | None = None):
+        self.run_dir = Path(run_dir)
+        self.health = health or GpuHealth()
+        self._seen: set[str] = set()
+        self._offsets: dict[str, int] = {}
+        self._stop_mtime: float | None = None
+
+    def _first(self, path: Path) -> bool:
+        key = str(path)
+        if key in self._seen:
+            return False
+        self._seen.add(key)
+        return True
+
+    def _tail(self, path: Path, handler) -> None:
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return
+        offset = self._offsets.get(str(path), 0)
+        if size <= offset:
+            return
+        try:
+            with path.open("rb") as source:
+                source.seek(offset)
+                data = source.read(size - offset)
+        except OSError:
+            return
+        self._offsets[str(path)] = size
+        for raw in data.split(b"\n"):
+            if not raw.strip():
+                continue
+            try:
+                handler(raw.decode("utf-8", "replace"))
+            except (UnicodeError, ValueError):
+                continue
+
+    def poll(self) -> dict:
+        run = self.run_dir
+        for path in sorted(run.glob("draw-refused-*.json")):
+            if not self._first(path):
+                continue
+            record = _read_json(path) or {}
+            reason = str(record.get("reason") or "draw refused")
+            caller = record.get("caller_rva")
+            self.health.add(
+                "draw_refused", reason,
+                symbol=str(record.get("variant") or "_GfxDraw"),
+                draw=str(caller) if caller is not None else None,
+                source=str(path),
+                signature=f"draw_refused:{record.get('variant')}:{normalize_message(reason)}",
+                detail={"caller_rva": caller, "route": record.get("route")},
+            )
+        for name, kind in (
+            ("draw-unsupported.json", "draw_refused"),
+            ("generic-pipeline-error.json", "shader_pipeline"),
+            ("diagnostic-failure.json", "capture"),
+            ("render-target-failure.json", "render_target"),
+        ):
+            path = run / name
+            if path.is_file() and self._first(path):
+                record = _read_json(path) or {}
+                self.health.add(kind,
+                                str(record.get("error") or record.get("reason") or name),
+                                source=str(path))
+        stop = run / "stop.json"
+        if stop.is_file() and self._first(stop):
+            _scan_stop(stop, self.health)
+
+        def resolve_line(line: str) -> None:
+            import json as _json
+            try:
+                row = _json.loads(line)
+            except _json.JSONDecodeError:
+                return
+            status = str(row.get("status") or "")
+            if "fail" in status.lower() or "missing" in status.lower():
+                self.health.add(
+                    "resolve", status, source=str(run / "resolve-trace.jsonl"),
+                    draw=str(row.get("draw_seq")) if row.get("draw_seq") is not None else None,
+                    detail={"seq": row.get("seq"), "status": status},
+                    signature=f"resolve:{status}",
+                )
+
+        def timeout_line(line: str) -> None:
+            import json as _json
+            try:
+                row = _json.loads(line)
+            except _json.JSONDecodeError:
+                return
+            backend = str(row.get("backend") or "unknown")
+            frame = row.get("frame_index")
+            self.health.add(
+                "instrumentation",
+                f"{backend} lockstep wait timed out at frame {frame}",
+                source=str(run / "lockstep-timeout.jsonl"),
+                symbol="lockstep",
+                draw=str(frame) if frame is not None else None,
+                signature=f"lockstep_timeout:{backend}",
+            )
+
+        resolve = run / "resolve-trace.jsonl"
+        if resolve.is_file():
+            self._tail(resolve, resolve_line)
+        timeouts = run / "lockstep-timeout.jsonl"
+        if timeouts.is_file():
+            self._tail(timeouts, timeout_line)
+        for name in ("game.stderr", "stderr.log", "metal.stderr"):
+            stderr = run / name
+            if stderr.is_file():
+                self._tail(stderr, lambda line: self._validation(line, stderr))
+                break
+        for path in sorted(run.glob("checkpoint-*.json")):
+            if not self._first(path):
+                continue
+            record = _read_json(path) or {}
+            validity_record = assess_checkpoint(record, base=run)
+            if validity_record["status"] == INVALID:
+                self.health.add("capture",
+                                "checkpoint capture is invalid",
+                                source=str(path),
+                                detail={"reasons": validity_record["reasons"][:4]})
+        return self.health.summary()
+
+    def _validation(self, text: str, path: Path) -> None:
+        text = text.strip()
+        if not text:
+            return
+        if any(pattern.search(text) for pattern in _VALIDATION_PATTERNS):
+            self.health.add("validation", text, source=str(path),
+                            signature="validation:" + normalize_message(text))

@@ -291,3 +291,43 @@ class HealthGateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IncrementalHealthTests(unittest.TestCase):
+    def test_rejected_draw_is_seen_once_and_stops_immediately(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            scanner = diag.IncrementalHealth(run)
+            self.assertTrue(diag.health_gate(scanner.poll())["allow"])
+            write_json(run / "draw-refused-edfcd1.json", {
+                "variant": "_GfxDraw", "caller_rva": "0xedfcd1",
+                "reason": "invalid sampler binding",
+            })
+            summary = scanner.poll()
+            self.assertEqual(summary["verdict"], diag.FAILED)
+            self.assertFalse(diag.health_gate(summary)["allow"])
+            self.assertEqual(summary["first_failure"]["kind"], "draw_refused")
+            again = scanner.poll()
+            self.assertEqual(again["total_diagnostics"], 1)
+
+    def test_append_only_resolve_and_validation_are_incremental(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            scanner = diag.IncrementalHealth(run)
+            (run / "resolve-trace.jsonl").write_text(
+                '{"seq":1,"draw_seq":7,"status":"scaled_ok"}\n')
+            scanner.poll()
+            with (run / "resolve-trace.jsonl").open("a", encoding="utf-8") as target:
+                target.write('{"seq":2,"draw_seq":8,"status":"scaled_failed"}\n')
+            summary = scanner.poll()
+            self.assertEqual(summary["first_failure"]["kind"], "resolve")
+            self.assertEqual(summary["total_diagnostics"], 1)
+            with (run / "game.stderr").open("w", encoding="utf-8") as target:
+                target.write("Metal Validation Error: binding failed at 1\n")
+            summary = scanner.poll()
+            validation = [row for row in summary["aggregated"]
+                          if row["kind"] == "validation"]
+            self.assertEqual(len(validation), 1)
+            # Re-polling does not duplicate the consumed line.
+            self.assertEqual(scanner.poll()["total_diagnostics"],
+                             summary["total_diagnostics"])

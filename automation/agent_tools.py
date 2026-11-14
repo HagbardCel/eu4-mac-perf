@@ -218,15 +218,27 @@ def eu4_diff_run(args: argparse.Namespace) -> dict:
         staggered=bool(getattr(args, "staggered", False)),
         stagger_wait_seconds=float(getattr(args, "stagger_wait", 600.0)),
     )
-    status = result.get("result", "incomplete")
-    return _envelope("eu4_diff_run",
-                     "completed" if status == "completed" else status,
-                     {"run_dir": result.get("run_dir"),
-                      "error": result.get("error"),
-                      "stop": result.get("stop"),
-                      "frames": (result.get("frames") or {}).get("paired"),
-                      "comparison": (result.get("frames") or {}).get("comparison"),
-                      "health": (result.get("health") or {}).get("verdict")})
+    qualification = result.get("qualification")
+    if qualification is None:
+        qualification = gfx_dual_run.classify_campaign(
+            result, scenario,
+            max_frames=int(args.max_frames or scenario["observation"]["max_frames"]),
+        )
+    tool_error = result.get("error") is not None
+    status = "error" if tool_error else "ok"
+    return _envelope("eu4_diff_run", status, {
+        "run_dir": result.get("run_dir"),
+        "error": result.get("error"),
+        "execution": result.get("result", "incomplete"),
+        "classification": qualification["status"],
+        "qualified": qualification["qualified"],
+        "qualification": qualification,
+        "stop": result.get("stop"),
+        "frames": (result.get("frames") or {}).get("paired"),
+        "comparison": (result.get("frames") or {}).get("comparison"),
+        "health": (result.get("health") or {}).get("verdict"),
+        "cleanup_errors": result.get("cleanup_errors") or [],
+    }, reason=str(result.get("error") or ""))
 
 
 def eu4_diff_inspect(args: argparse.Namespace) -> dict:
@@ -242,6 +254,8 @@ def eu4_diff_inspect(args: argparse.Namespace) -> dict:
         "run_dir": str(run),
         "stop": result.get("stop"),
         "health": result.get("health"),
+        "classification": result.get("classification"),
+        "qualification": result.get("qualification"),
         "alignment": result.get("alignment"),
         "comparison": comparison,
         "first_pair": pair,

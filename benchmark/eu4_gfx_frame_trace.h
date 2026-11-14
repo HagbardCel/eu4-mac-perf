@@ -57,6 +57,7 @@ void eu4_gfx_frame_trace_draw_exit(eu4_gfx_capture_frame *frame,
    the active unit for `target` and restores the previous binding and pack
    state. Returns 0 when the bind took effect. */
 int eu4_gfx_frame_trace_texture_probe(unsigned target, unsigned name);
+int eu4_gfx_frame_trace_readback_probe(void);
 
 void eu4_gfx_frame_trace_resolve_entry(eu4_gfx_capture_frame *frame,
                                        eu4_gfx_observe_call *call);

@@ -284,14 +284,19 @@ def _tail(run_dir: Path) -> dict:
     }
 
 
-def _request_dumps(launched: dict, indices: list[int]) -> Path | None:
+def _request_dumps(launched: dict, indices: list[int]) -> int | None:
     if not indices:
         return None
-    path = launched["observe_dir"] / "capture-request.json"
-    path.write_text(json.dumps({"schema": "gfx-frame-request/v1",
-                                "frames": sorted(set(indices))}) + "\n",
-                    encoding="utf-8")
-    return path
+    request_id = time.time_ns()
+    path = Path(launched["observe_dir"]) / "capture-request.json"
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps({
+        "schema": "gfx-frame-request/v1",
+        "request_id": request_id,
+        "frames": sorted(set(indices)),
+    }) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+    return request_id
 
 
 
@@ -321,12 +326,25 @@ def _release(launched: dict, indices: list[int]) -> None:
         (release / f"frame-{index}").write_text("1\n", encoding="utf-8")
 
 
-def _await_dump_meta(launched: dict, indices: list[int], timeout: float = 4.0) -> dict:
+def _await_dump_meta(launched: dict, indices: list[int], timeout: float = 4.0,
+                     request_id: int | None = None) -> dict:
     captured = Path(launched["observe_dir"]) / "captured"
     wanted = set(indices)
     found: dict[int, dict] = {}
     deadline = time.monotonic() + timeout
+    ack_path = Path(launched["observe_dir"]) / "capture-ack.json"
     while time.monotonic() < deadline and wanted:
+        if request_id is not None and ack_path.is_file():
+            try:
+                ack = json.loads(ack_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                ack = {}
+            if (isinstance(ack, dict) and ack.get("request_id") == request_id
+                    and ack.get("status") in ("captured", "expired", "missing")):
+                for value in ack.get("missing", []):
+                    if type(value) is int and value in wanted:
+                        wanted.discard(value)
+                break
         for index in sorted(wanted):
             path = captured / f"frame-{index}.json"
             if not path.is_file():
@@ -698,6 +716,105 @@ def _release_once(launched: dict, state: CampaignState, role: str,
     released.add(index)
 
 
+
+def classify_campaign(result: dict, scenario: dict, *, max_frames: int) -> dict:
+    """Separate execution outcome from rendering qualification.
+
+    A campaign is ``match`` only when the requested frame count was actually
+    compared, every required pair was valid and passed, health is clean, and no
+    dropped/skipped/invalid required frame remains.
+    """
+    frames = result.get("frames") or {}
+    comparison = frames.get("comparison") or {}
+    health = result.get("health") or {}
+    stop = result.get("stop") or {}
+    policy = (scenario.get("comparison") or {}).get("policy", "exact")
+    paired = int(frames.get("paired") or 0)
+    aligned = int(frames.get("aligned") or 0)
+    not_aligned = int(frames.get("not_aligned") or 0)
+    passed = int(comparison.get("passed") or 0)
+    failed = int(comparison.get("failed") or 0)
+    unverified = int(comparison.get("unverified") or 0)
+    not_compared = int(comparison.get("not_compared") or 0)
+    valid_compared = passed + failed
+    required = int(max_frames)
+    coverage_complete = (
+        paired >= required
+        and valid_compared >= required
+        and unverified == 0
+        and not_compared == 0
+        and not_aligned == 0
+    )
+    reasons = []
+    if result.get("error") and "exception" in str(stop.get("reason") or ""):
+        classification = "infrastructure_failure"
+        reasons.append("campaign raised an internal error")
+    elif any(
+        type(process.get("exit_code")) is int and process["exit_code"] not in (0, -15)
+        for process in (result.get("processes") or {}).values()
+        if isinstance(process, dict)
+    ) or any(
+        type(item.get("returncode")) is int and item["returncode"] not in (0, -15)
+        for item in (result.get("terminations") or [])
+        if isinstance(item, dict)
+    ):
+        classification = "process_failure"
+        reasons.append("an owned game process exited abnormally")
+    elif health.get("verdict") == "failed":
+        classification = "gpu_execution_failure"
+        reasons.append((health.get("first_failure") or {}).get("message")
+                       or "GPU/API execution failure")
+    elif health.get("instrumentation_failures"):
+        classification = "infrastructure_failure"
+        reasons.append("instrumentation failure")
+    elif stop.get("reason") in ("lockstep_timeout", "observation_stall",
+                                "alignment_failure"):
+        classification = "alignment_failure"
+        reasons.append(stop.get("reason"))
+    elif not_aligned:
+        classification = "alignment_failure"
+        reasons.append(f"{not_aligned} pair(s) not aligned")
+    elif failed:
+        classification = "rendering_difference"
+        reasons.extend((comparison.get("first_failure") or {}).get("comparison", {}).get("reasons", [])[:3])
+    elif valid_compared < required:
+        classification = "incomplete"
+        reasons.append(
+            f"requested {required} compared frames, got {valid_compared}; "
+            f"paired={paired}, aligned={aligned}, unverified={unverified}, "
+            f"not_compared={not_compared}"
+        )
+    elif not coverage_complete:
+        classification = "incomplete"
+        reasons.append("required coverage is not complete")
+    elif policy == "diagnostic":
+        classification = "incomplete"
+        reasons.append("diagnostic policy reports differences but does not qualify")
+    else:
+        classification = "match"
+    return {
+        "schema": "gfx-campaign-qualification/v1",
+        "status": classification,
+        "qualified": classification == "match",
+        "policy": policy,
+        "requested_frames": required,
+        "frames": {
+            "observed": int(frames.get("observed_reference") or 0)
+                        + int(frames.get("observed_candidate") or 0),
+            "paired": paired,
+            "aligned": aligned,
+            "validly_compared": valid_compared,
+            "passed": passed,
+            "failed": failed,
+            "unverified": unverified,
+            "not_compared": not_compared,
+            "not_aligned": not_aligned,
+        },
+        "coverage_complete": coverage_complete,
+        "reasons": [reason for reason in reasons if reason],
+    }
+
+
 def run_campaign(
     scenario: dict,
     *,
@@ -767,6 +884,7 @@ def run_campaign(
     tokens: list[str] = []
     lease = None
     launched: dict = {}
+    state: CampaignState | None = None
     store = gfx_artifacts.ArtifactStore(
         session.run_dir / "artifacts", max_bytes=128 * 1024 * 1024
     )
@@ -861,6 +979,10 @@ def run_campaign(
         launch_ledger.start(ledger_path, launched["candidate"].token,
                             launched["candidate"].process.pid)
         result["processes"]["candidate"] = launched["candidate"].as_dict()
+        incremental = {
+            role: gfx_diagnostics.IncrementalHealth(item.run_dir, health)
+            for role, item in launched.items()
+        }
 
         def abort_for_exit() -> bool:
             return any(item.process.poll() is not None for item in launched.values())
@@ -1002,6 +1124,21 @@ def run_campaign(
             for record in new_cand:
                 state.cand_by_index[record.index] = record
                 _record_health(record, health)
+            for role, scanner in incremental.items():
+                summary = scanner.poll()
+                gate = gfx_diagnostics.health_gate(summary)
+                if not gate["allow"]:
+                    stop_reason = (
+                        "gpu_execution_failure"
+                        if summary.get("verdict") == gfx_diagnostics.FAILED
+                        else "infrastructure_failure"
+                    )
+                    stop_trigger = (
+                        f"{role}: {gate.get('reason') or summary.get('verdict')}"
+                    )
+                    break
+            if stop_reason:
+                break
             counts = (len(state.ref_stream.records), len(state.cand_stream.records))
             if counts != last_counts:
                 last_counts = counts
@@ -1014,6 +1151,25 @@ def run_campaign(
                     f"reference={counts[0]} candidate={counts[1]} observations"
                 )
                 break
+            if mode == "lockstep" and state is not None:
+                timeout_files = [
+                    Path(item.observe_dir) / "lockstep-timeout.jsonl"
+                    for item in launched.values()
+                ]
+                timed_out = [path for path in timeout_files
+                             if path.is_file() and path.stat().st_size > 0]
+                if timed_out:
+                    stop_reason = "lockstep_timeout"
+                    stop_trigger = (
+                        "lockstep wait expired; synchronization is lost at "
+                        + ", ".join(str(path.parent) for path in timed_out)
+                    )
+                    result["synchronization"] = {
+                        "lost": True,
+                        "reason": "lockstep_timeout",
+                        "evidence": [str(path) for path in timed_out],
+                    }
+                    break
             if not state.pairing and mode == "lockstep":
                 latest_ref = _latest(state.ref_stream)
                 latest_cand = _latest(state.cand_stream)
@@ -1279,53 +1435,79 @@ def run_campaign(
             json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
     finally:
-        for role, item in launched.items():
-            result.setdefault("processes", {}).setdefault(role, {})["exit_code"] = item.process.poll()
-        if mode == "lockstep":
-            for role, item in launched.items():
-                pending = [record.index for record in
-                           (state.ref_stream.records if role == "reference"
-                            else state.cand_stream.records)]
-                if pending:
-                    _release({"observe_dir": item.observe_dir}, pending[-4:])
-        result["terminations"] = _stop_processes(session, resume_first=mode == "lockstep")
-        for role, item in launched.items():
-            result.setdefault("processes", {}).setdefault(role, {})[
-                "exit_code"] = item.process.poll()
+        cleanup_errors: list[str] = []
+
+        def attempt(label: str, action):
+            try:
+                return action()
+            except BaseException as exc:  # noqa: BLE001 - one cleanup failure must not skip others
+                cleanup_errors.append(f"{label}: {type(exc).__name__}: {exc}")
+                return None
+
+        for role, item in list(launched.items()):
+            attempt(f"record-exit-{role}",
+                    lambda item=item, role=role: result.setdefault(
+                        "processes", {}).setdefault(role, {}).update(
+                            {"exit_code": item.process.poll()}))
+        if mode == "lockstep" and state is not None:
+            for role, item in list(launched.items()):
+                def release_pending(item=item, role=role):
+                    pending = [record.index for record in
+                               (state.ref_stream.records if role == "reference"
+                                else state.cand_stream.records)]
+                    if pending:
+                        _release({"observe_dir": item.observe_dir}, pending[-4:])
+                attempt(f"release-paused-{role}", release_pending)
+        attempt("terminate-owned", lambda: result.__setitem__(
+            "terminations", _stop_processes(session, resume_first=mode == "lockstep")))
+        for role, item in list(launched.items()):
+            attempt(f"record-final-exit-{role}",
+                    lambda item=item, role=role: result.setdefault(
+                        "processes", {}).setdefault(role, {}).update(
+                            {"exit_code": item.process.poll()}))
         if lease is not None:
-            lease.release()
+            attempt("release-lease", lambda: lease.release())
             lease = None
         finished_tokens = set()
-        for role, item in launched.items():
-            ledger_status = "completed" if item.process.returncode == 0 else "failed"
-            launch_ledger.finish(ledger_path, item.token, pid=item.process.pid,
-                                 status=ledger_status)
-            finished_tokens.add(item.token)
+        for role, item in list(launched.items()):
+            def finish_item(item=item):
+                ledger_status = "completed" if item.process.returncode == 0 else "failed"
+                launch_ledger.finish(ledger_path, item.token, pid=item.process.pid,
+                                     status=ledger_status)
+                finished_tokens.add(item.token)
+            attempt(f"finish-ledger-{role}", finish_item)
         for token in tokens:
             if token not in finished_tokens:
-                # A reserved claim whose process was never registered is still
-                # charged and must not remain open.
-                launch_ledger.finish(ledger_path, token, pid=None, status="failed")
-        try:
-            manifest = store.write_manifest()
-            result["artifacts"] = store.summary()
-            result["artifact_manifest"] = str(manifest)
-        except Exception as exc:  # noqa: BLE001
-            result["artifact_error"] = str(exc)
-        session.close(
+                attempt(f"finish-unstarted-{token}",
+                        lambda token=token: launch_ledger.finish(
+                            ledger_path, token, pid=None, status="failed"))
+        attempt("write-artifact-manifest", lambda: result.update({
+            "artifact_manifest": str(store.write_manifest()),
+            "artifacts": store.summary(),
+        }))
+        if "qualification" not in result:
+            result["qualification"] = classify_campaign(result, scenario,
+                                                        max_frames=max_frames)
+            result["classification"] = result["qualification"]["status"]
+        attempt("close-session", lambda: session.close(
             status=gfx_session.CLOSED if result.get("result") in ("completed", "stopped")
             else gfx_session.FAILED,
             reason=result.get("stop", {}).get("reason", ""),
-            extra={"result": result.get("result"), "frames": result.get("frames", {})},
-        )
-        result["terminal"] = gfx_session.Session.load(session.run_dir).get("terminal")
+            extra={"result": result.get("result"),
+                   "classification": result.get("classification"),
+                   "frames": result.get("frames", {})},
+        ))
+        attempt("load-terminal", lambda: result.__setitem__(
+            "terminal", gfx_session.Session.load(session.run_dir).get("terminal")))
         if not keep_evidence:
-            session.cleanup_temp()
+            attempt("cleanup-temp", session.cleanup_temp)
+        result["cleanup_errors"] = cleanup_errors
         result["finished_unix"] = time.time()
         result["duration_seconds"] = round(result["finished_unix"] - started, 3)
-        (session.run_dir / "result.json").write_text(
-            json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
+        attempt("write-final-result", lambda: (
+            session.run_dir / "result.json"
+        ).write_text(json.dumps(result, indent=2, sort_keys=True) + "\n",
+                     encoding="utf-8"))
     return result
 
 

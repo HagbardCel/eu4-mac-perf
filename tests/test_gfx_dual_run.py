@@ -390,3 +390,228 @@ class PairComparisonTests(unittest.TestCase):
             self.pair(), self.meta["reference"], None, self.scenario,
         )
         self.assertEqual(result["status"], "not_compared")
+
+
+class QualificationTests(unittest.TestCase):
+    def result(self, *, paired=100, aligned=100, not_aligned=0, passed=100,
+               failed=0, unverified=0, not_compared=0, health=None,
+               processes=None, stop=None):
+        return {
+            "frames": {
+                "paired": paired,
+                "aligned": aligned,
+                "not_aligned": not_aligned,
+                "observed_reference": paired,
+                "observed_candidate": paired,
+                "comparison": {
+                    "compared": passed + failed + unverified,
+                    "passed": passed,
+                    "failed": failed,
+                    "unverified": unverified,
+                    "not_compared": not_compared,
+                    "first_failure": {"comparison": {"reasons": ["pixel"]}}
+                    if failed else None,
+                },
+            },
+            "health": health or {"verdict": "unknown", "first_failure": None,
+                                  "instrumentation_failures": []},
+            "processes": processes or {"reference": {"exit_code": 0},
+                                        "candidate": {"exit_code": 0}},
+            "terminations": [],
+            "stop": stop or {"reason": "frame_limit"},
+            "result": "completed",
+        }
+
+    def scenario(self, policy="tolerant"):
+        return {"comparison": {"policy": policy}}
+
+    def classify(self, result, **kwargs):
+        return gfx_dual_run.classify_campaign(
+            result, self.scenario(kwargs.pop("policy", "tolerant")),
+            max_frames=kwargs.pop("max_frames", 100))
+
+    def test_full_passing_coverage_is_match(self):
+        value = self.classify(self.result())
+        self.assertEqual(value["status"], "match")
+        self.assertTrue(value["qualified"])
+        self.assertTrue(value["coverage_complete"])
+
+    def test_one_hundred_pairs_without_comparisons_is_incomplete(self):
+        value = self.classify(self.result(passed=0, not_compared=100))
+        self.assertEqual(value["status"], "incomplete")
+        self.assertFalse(value["qualified"])
+        self.assertIn("requested 100 compared frames, got 0", " ".join(value["reasons"]))
+
+    def test_pixel_difference_is_rendering_difference(self):
+        value = self.classify(self.result(passed=99, failed=1))
+        self.assertEqual(value["status"], "rendering_difference")
+
+    def test_gpu_failure_takes_priority(self):
+        value = self.classify(self.result(
+            health={"verdict": "failed",
+                    "first_failure": {"kind": "draw_refused",
+                                      "message": "current shader is not linked"},
+                    "instrumentation_failures": []}))
+        self.assertEqual(value["status"], "gpu_execution_failure")
+
+    def test_ambiguous_pairs_are_alignment_failure(self):
+        value = self.classify(self.result(aligned=90, not_aligned=10,
+                                          passed=90, not_compared=10))
+        self.assertEqual(value["status"], "alignment_failure")
+
+    def test_abnormal_process_exit_is_process_failure(self):
+        value = self.classify(self.result(
+            processes={"reference": {"exit_code": 0},
+                       "candidate": {"exit_code": 11}}))
+        self.assertEqual(value["status"], "process_failure")
+
+    def test_lockstep_timeout_is_alignment_failure(self):
+        value = self.classify(self.result(
+            stop={"reason": "lockstep_timeout"}))
+        self.assertEqual(value["status"], "alignment_failure")
+
+    def test_diagnostic_policy_never_qualifies(self):
+        value = self.classify(self.result(), policy="diagnostic")
+        self.assertEqual(value["status"], "incomplete")
+        self.assertFalse(value["qualified"])
+
+
+class CleanupFailureTests(unittest.TestCase):
+    def test_spawn_failure_finishes_both_ledger_claims_and_closes_session(self):
+        from unittest import mock
+        from automation import gfx_launch, gfx_session, launch_ledger
+        import eu4_benchmark
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scenario = gfx_scenario.normalize({
+                "schema": gfx_scenario.SCHEMA,
+                "name": "spawn-failure",
+                "executable_sha256": eu4_benchmark.gog_identity()["executable_sha256"],
+                "logical_extent": [1728, 1117],
+                "observation": {"max_frames": 2, "max_runtime_seconds": 30},
+                "comparison": {"policy": "exact"},
+                "mode": "streaming",
+                "profile": "early",
+            })
+            ledger = root / "authority.json"
+            launch_ledger.create_ledger(
+                ledger, workflow_id="spawn-failure", limit=2, deadline_seconds=60.0,
+                executable={"path": eu4_benchmark.gog_identity()["executable"],
+                            "sha256": eu4_benchmark.gog_identity()["executable_sha256"]},
+                output_root=str(root),
+            )
+            libraries = {}
+            for role in ("reference", "candidate"):
+                path = root / f"{role}.dylib"
+                path.write_bytes(role.encode())
+                libraries[role] = path
+
+            from automation import launch_lease
+            with mock.patch.dict("os.environ",
+                                 {"EU4_LAUNCH_LEASE_DIR": str(root / "lease")}), \
+                 mock.patch.object(gfx_launch, "preflight_user_data",
+                                   return_value={"writable": True}), \
+                 mock.patch.object(gfx_launch, "build_libraries",
+                                   return_value=libraries), \
+                 mock.patch.object(launch_lease, "manual_game_pids",
+                                   return_value=[]), \
+                 mock.patch.object(gfx_launch, "spawn",
+                                   side_effect=RuntimeError("injected spawn failure")):
+                result = gfx_dual_run.run_campaign(
+                    scenario,
+                    run_root=root,
+                    ledger_path=ledger,
+                    shader_cache=None,
+                    qualified_sources=None,
+                    max_frames=2,
+                    session_root=root / "sessions",
+                )
+            self.assertEqual(result["result"], "failed")
+            self.assertIn("injected spawn failure", result.get("error", ""))
+            self.assertIn("qualification", result)
+            value = launch_ledger.load_ledger(ledger)
+            self.assertEqual(value["used"], 2)
+            self.assertEqual({row["status"] for row in value["launches"]},
+                             {"failed"})
+            sessions = list((root / "sessions").glob("session-*.json"))
+            self.assertEqual(len(sessions), 1)
+            terminal = json.loads(
+                (Path(result["run_dir"]) / "terminal-status.json").read_text())
+            self.assertEqual(terminal["status"], gfx_session.FAILED)
+
+
+class PostReferenceCleanupTests(unittest.TestCase):
+    def test_candidate_spawn_failure_terminates_reference_and_finishes_tokens(self):
+        from unittest import mock
+        from automation import gfx_launch, gfx_session, launch_lease, launch_ledger
+        import eu4_benchmark
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scenario = gfx_scenario.normalize({
+                "schema": gfx_scenario.SCHEMA,
+                "name": "candidate-failure",
+                "executable_sha256": eu4_benchmark.gog_identity()["executable_sha256"],
+                "logical_extent": [1728, 1117],
+                "observation": {"max_frames": 2, "max_runtime_seconds": 30},
+                "comparison": {"policy": "exact"},
+                "mode": "streaming",
+                "profile": "early",
+            })
+            ledger = root / "authority.json"
+            launch_ledger.create_ledger(
+                ledger, workflow_id="candidate-failure", limit=2,
+                deadline_seconds=60.0,
+                executable={"path": eu4_benchmark.gog_identity()["executable"],
+                            "sha256": eu4_benchmark.gog_identity()["executable_sha256"]},
+                output_root=str(root),
+            )
+            libraries = {}
+            for role in ("reference", "candidate"):
+                path = root / f"{role}.dylib"
+                path.write_bytes(role.encode())
+                libraries[role] = path
+            spawned = []
+
+            def fake_spawn(role, config, run_dir, *, lease, session, token="", libraries=None,
+                           backend=None):
+                if role == "candidate":
+                    raise RuntimeError("injected candidate failure")
+                run_dir.mkdir(parents=True)
+                observe = run_dir / "observe"
+                observe.mkdir()
+                process = subprocess.Popen(
+                    [sys.executable, "-c", "import time; time.sleep(60)"],
+                    start_new_session=True,
+                )
+                spawned.append(process)
+                identity = session.register("reference", process, token=token)
+                return gfx_launch.Launched(
+                    role="reference", backend="opengl", run_dir=run_dir,
+                    observe_dir=observe, process=process, identity=identity,
+                    token=token)
+            from automation import launch_lease as real_lease
+            with mock.patch.dict("os.environ",
+                                 {"EU4_LAUNCH_LEASE_DIR": str(root / "lease")}), \
+                 mock.patch.object(gfx_launch, "preflight_user_data",
+                                   return_value={"writable": True}), \
+                 mock.patch.object(gfx_launch, "build_libraries",
+                                   return_value=libraries), \
+                 mock.patch.object(gfx_launch, "spawn", side_effect=fake_spawn), \
+                 mock.patch.object(real_lease, "manual_game_pids", return_value=[]):
+                result = gfx_dual_run.run_campaign(
+                    scenario, run_root=root, ledger_path=ledger,
+                    shader_cache=None, qualified_sources=None, max_frames=2,
+                    session_root=root / "sessions",
+                )
+            self.assertEqual(result["result"], "failed")
+            self.assertEqual(len(spawned), 1)
+            self.assertIsNotNone(spawned[0].poll())
+            value = launch_ledger.load_ledger(ledger)
+            self.assertEqual({row["status"] for row in value["launches"]},
+                             {"failed"})
+            terminal = json.loads(
+                (Path(result["run_dir"]) / "terminal-status.json").read_text())
+            self.assertEqual(terminal["status"], gfx_session.FAILED)

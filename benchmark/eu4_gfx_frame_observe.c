@@ -22,6 +22,14 @@ typedef struct {
     uint32_t width;
     uint32_t height;
     uint64_t index;
+    uint32_t draws;
+    uint32_t distinct_callers;
+    uint64_t signature;
+    int gpu_completed;
+    int capture_valid;
+    uint64_t ts_ms;
+    char origin[16];
+    char sha256[65];
 } obs_ring_slot;
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -34,6 +42,11 @@ static char g_jsonl[OBS_MAX_PATH];
 static char g_previews[OBS_MAX_PATH];
 static char g_captured[OBS_MAX_PATH];
 static char g_request[OBS_MAX_PATH];
+static char g_ack_path[OBS_MAX_PATH];
+static uint64_t g_request_id;
+static uint64_t g_pending_frames[OBS_MAX_DUMPS];
+static int g_pending_count;
+static uint64_t g_pending_start_ms;
 static char g_ready[OBS_MAX_PATH];
 static char g_release[OBS_MAX_PATH];
 static int g_lockstep;
@@ -270,6 +283,7 @@ int eu4_gfx_frame_observe_init(const char *backend, const char *dir,
     snprintf(g_previews, sizeof g_previews, "%s/previews", dir);
     snprintf(g_captured, sizeof g_captured, "%s/captured", dir);
     snprintf(g_request, sizeof g_request, "%s/capture-request.json", dir);
+    snprintf(g_ack_path, sizeof g_ack_path, "%s/capture-ack.json", dir);
     snprintf(g_ready, sizeof g_ready, "%s/ready", dir);
     snprintf(g_release, sizeof g_release, "%s/release", dir);
     snprintf(g_lockstep_timeout_path, sizeof g_lockstep_timeout_path,
@@ -354,7 +368,10 @@ void eu4_gfx_frame_observe_take_stats(uint32_t *draws, uint64_t *signature,
 /* --- ring and dumps ----------------------------------------------------- */
 
 static void ring_store(const uint8_t *bgra, uint32_t width, uint32_t height,
-                       uint64_t index) {
+                       uint64_t index, uint32_t draws, uint64_t signature,
+                       uint32_t distinct_callers, int gpu_completed,
+                       int capture_valid, const char *origin,
+                       const char *digest) {
     if (g_ring_size == 0) {
         return;
     }
@@ -377,6 +394,15 @@ static void ring_store(const uint8_t *bgra, uint32_t width, uint32_t height,
     slot->width = width;
     slot->height = height;
     slot->index = index;
+    slot->draws = draws;
+    slot->signature = signature;
+    slot->distinct_callers = distinct_callers;
+    slot->gpu_completed = gpu_completed;
+    slot->capture_valid = capture_valid;
+    slot->ts_ms = now_ms();
+    snprintf(slot->origin, sizeof slot->origin, "%s",
+             origin != NULL ? origin : "top_left");
+    snprintf(slot->sha256, sizeof slot->sha256, "%s", digest != NULL ? digest : "");
     g_ring_next = (g_ring_next + 1) % (int)g_ring_size;
 }
 
@@ -420,8 +446,7 @@ static int parse_frames(const char *text, uint64_t *frames, int capacity) {
     return count;
 }
 
-static void dump_ring(obs_ring_slot *slot, uint32_t frame_draws,
-                      uint64_t signature, int gpu_completed, int capture_valid) {
+static void dump_ring(obs_ring_slot *slot) {
     char raw_path[OBS_MAX_PATH];
     char json_path[OBS_MAX_PATH];
     snprintf(raw_path, sizeof raw_path, "%s/frame-%llu.bgra", g_captured,
@@ -431,8 +456,6 @@ static void dump_ring(obs_ring_slot *slot, uint32_t frame_draws,
         g_dropped += 1;
         return;
     }
-    char digest[65];
-    sha256_hex(slot->pixels, (size_t)slot->width * slot->height * 4, digest);
     snprintf(json_path, sizeof json_path, "%s/frame-%llu.json", g_captured,
              (unsigned long long)slot->index);
     char body[1024];
@@ -446,52 +469,116 @@ static void dump_ring(obs_ring_slot *slot, uint32_t frame_draws,
         "\"caller_signature\":\"0x%016llx\",\"gpu_completed\":%s,"
         "\"capture_valid\":%s,\"source\":\"ring\"}\n",
         g_backend, g_session, (int)getpid(), (unsigned long long)slot->index,
-        slot->width, slot->height, g_origin, slot->width * 4, raw_path,
-        (size_t)slot->width * slot->height * 4, digest, frame_draws,
-        (unsigned long long)signature, gpu_completed ? "true" : "false",
-        capture_valid ? "true" : "false");
+        slot->width, slot->height, slot->origin, slot->width * 4, raw_path,
+        (size_t)slot->width * slot->height * 4, slot->sha256, slot->draws,
+        (unsigned long long)slot->signature,
+        slot->gpu_completed ? "true" : "false",
+        slot->capture_valid ? "true" : "false");
     if (length <= 0 || (size_t)length >= sizeof body ||
         write_atomic(json_path, body, (size_t)length) != 0) {
         g_dropped += 1;
     }
 }
 
-static void handle_request(uint32_t frame_draws, uint64_t signature,
-                           int gpu_completed, int capture_valid) {
-    struct stat status;
-    static struct stat last_status;
-    static int have_status;
-    static uint64_t pending[OBS_MAX_DUMPS];
-    static int pending_count;
-    if (stat(g_request, &status) == 0) {
-        int changed = !have_status || status.st_mtime != last_status.st_mtime ||
-                      status.st_size != last_status.st_size;
-        if (changed) {
-            last_status = status;
-            have_status = 1;
-            FILE *file = fopen(g_request, "r");
-            if (file != NULL) {
-                char text[4096];
-                size_t used = fread(text, 1, sizeof text - 1, file);
-                fclose(file);
-                text[used] = 0;
-                pending_count = parse_frames(text, pending, OBS_MAX_DUMPS);
-            }
-        }
+static uint64_t parse_request_id(const char *text) {
+    const char *key = strstr(text, "\"request_id\"");
+    if (key == NULL) return 0;
+    const char *cursor = strchr(key, ':');
+    if (cursor == NULL) return 0;
+    cursor++;
+    while (*cursor == ' ' || *cursor == '\t') cursor++;
+    return strtoull(cursor, NULL, 10);
+}
+
+static void write_ack(const char *status, uint64_t request_id,
+                      const uint64_t *captured, int captured_count,
+                      const uint64_t *missing, int missing_count) {
+    char body[1024];
+    int used = snprintf(
+        body, sizeof body,
+        "{\"schema\":\"gfx-frame-ack/v1\",\"request_id\":%llu,"
+        "\"backend\":\"%s\",\"pid\":%d,\"status\":\"%s\",\"captured\":[",
+        (unsigned long long)request_id, g_backend, (int)getpid(), status);
+    if (used <= 0 || (size_t)used >= sizeof body) return;
+    for (int i = 0; i < captured_count; i++) {
+        used += snprintf(body + used, sizeof body - (size_t)used, "%s%llu",
+                         i ? "," : "", (unsigned long long)captured[i]);
     }
-    /* A requested frame may not be in the ring yet.  Keep the request pending
-       until it is captured, then drop it. */
-    for (int i = 0; i < pending_count; i++) {
-        obs_ring_slot *slot = ring_find(pending[i]);
-        if (slot != NULL) {
-            dump_ring(slot, frame_draws, signature, gpu_completed, capture_valid);
-            pending[i] = pending[pending_count - 1];
-            pending_count -= 1;
-            i -= 1;
-        }
+    used += snprintf(body + used, sizeof body - (size_t)used, "],\"missing\":[");
+    for (int i = 0; i < missing_count; i++) {
+        used += snprintf(body + used, sizeof body - (size_t)used, "%s%llu",
+                         i ? "," : "", (unsigned long long)missing[i]);
+    }
+    used += snprintf(body + used, sizeof body - (size_t)used, "]}\n");
+    if (used > 0 && (size_t)used < sizeof body) {
+        (void)write_atomic(g_ack_path, body, (size_t)used);
     }
 }
 
+static int read_request(uint64_t *request_id, uint64_t *frames, int *count) {
+    *request_id = 0;
+    *count = 0;
+    FILE *file = fopen(g_request, "r");
+    if (file == NULL) return 0;
+    char text[4096];
+    size_t used = fread(text, 1, sizeof text - 1, file);
+    fclose(file);
+    text[used] = 0;
+    *request_id = parse_request_id(text);
+    *count = parse_frames(text, frames, OBS_MAX_DUMPS);
+    return 1;
+}
+
+static void handle_request(void) {
+    uint64_t request_id = 0;
+    uint64_t requested[OBS_MAX_DUMPS];
+    int requested_count = 0;
+    if (!read_request(&request_id, requested, &requested_count)) return;
+    if (request_id == 0) {
+        write_ack("invalid", 0, NULL, 0, NULL, 0);
+        return;
+    }
+    if (request_id != g_request_id) {
+        g_request_id = request_id;
+        g_pending_count = requested_count;
+        memcpy(g_pending_frames, requested, sizeof(uint64_t) * (size_t)requested_count);
+        g_pending_start_ms = now_ms();
+        write_ack("accepted", request_id, NULL, 0, NULL, 0);
+    }
+    if (g_pending_count == 0) return;
+    uint64_t captured[OBS_MAX_DUMPS];
+    uint64_t missing[OBS_MAX_DUMPS];
+    int captured_count = 0, missing_count = 0;
+    uint64_t now = now_ms();
+    int expired = now - g_pending_start_ms > 5000;
+    for (int i = 0; i < g_pending_count; i++) {
+        obs_ring_slot *slot = ring_find(g_pending_frames[i]);
+        if (slot != NULL) {
+            dump_ring(slot);
+            captured[captured_count++] = g_pending_frames[i];
+        } else if (expired) {
+            missing[missing_count++] = g_pending_frames[i];
+        }
+    }
+    if (captured_count == 0 && missing_count == 0) return;
+    uint64_t remaining[OBS_MAX_DUMPS];
+    int remaining_count = 0;
+    for (int i = 0; i < g_pending_count; i++) {
+        int done = 0;
+        for (int j = 0; j < captured_count; j++)
+            if (captured[j] == g_pending_frames[i]) done = 1;
+        for (int j = 0; j < missing_count; j++)
+            if (missing[j] == g_pending_frames[i]) done = 1;
+        if (!done) remaining[remaining_count++] = g_pending_frames[i];
+    }
+    memcpy(g_pending_frames, remaining, sizeof(uint64_t) * (size_t)remaining_count);
+    g_pending_count = remaining_count;
+    if (missing_count > 0) {
+        write_ack("expired", g_request_id, captured, captured_count, missing, missing_count);
+    } else if (remaining_count == 0) {
+        write_ack("captured", g_request_id, captured, captured_count, NULL, 0);
+    }
+}
 /* --- preview ------------------------------------------------------------ */
 
 static void write_preview(const uint8_t *bgra, uint32_t width, uint32_t height,
@@ -601,8 +688,10 @@ int eu4_gfx_frame_observe_emit(const uint8_t *bgra, uint32_t width,
         gap = frame_index - g_last_index - 1;
         g_skipped += gap;
     }
-    ring_store(bgra, width, height, frame_index);
-    handle_request(draws, signature, gpu_completed, capture_valid);
+    ring_store(bgra, width, height, frame_index, draws, signature,
+               distinct_callers, gpu_completed, capture_valid,
+               origin != NULL ? origin : "top_left", full_digest);
+    handle_request();
 
     char line[1400];
     int length = snprintf(
@@ -636,37 +725,16 @@ int eu4_gfx_frame_observe_emit(const uint8_t *bgra, uint32_t width,
 
 
 int eu4_gfx_frame_observe_wants(uint32_t frame_index) {
-    if (!g_enabled || g_request[0] == 0) {
-        return 0;
-    }
-    struct stat status;
-    static struct stat last_status;
-    static int have_status;
-    static uint64_t frames[OBS_MAX_DUMPS];
-    static int count;
-    if (stat(g_request, &status) == 0) {
-        if (!have_status || status.st_mtime != last_status.st_mtime ||
-            status.st_size != last_status.st_size) {
-            last_status = status;
-            have_status = 1;
-            FILE *file = fopen(g_request, "r");
-            if (file != NULL) {
-                char text[4096];
-                size_t used = fread(text, 1, sizeof text - 1, file);
-                fclose(file);
-                text[used] = 0;
-                count = parse_frames(text, frames, OBS_MAX_DUMPS);
-            }
-        }
-    }
+    if (!g_enabled || g_request[0] == 0) return 0;
+    uint64_t request_id = 0;
+    uint64_t frames[OBS_MAX_DUMPS];
+    int count = 0;
+    if (!read_request(&request_id, frames, &count) || request_id == 0) return 0;
     for (int i = 0; i < count; i++) {
-        if (frames[i] == (uint64_t)frame_index) {
-            return 1;
-        }
+        if (frames[i] == (uint64_t)frame_index) return 1;
     }
     return 0;
 }
-
 int eu4_gfx_frame_observe_emit_metadata(uint32_t width, uint32_t height,
                                         const char *origin,
                                         uint32_t frame_index, uint32_t draws,
@@ -755,7 +823,7 @@ int eu4_gfx_frame_observe_lockstep_wait(uint32_t frame_index,
         }
         /* The coordinator needs a dump while the process is paused here. */
         pthread_mutex_lock(&g_lock);
-        handle_request(g_last_draws, g_last_signature, 1, 1);
+        handle_request();
         pthread_mutex_unlock(&g_lock);
         usleep(1000);
     }

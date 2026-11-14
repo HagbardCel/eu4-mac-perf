@@ -46,7 +46,7 @@ int main(int argc, char **argv) {
              "%s/capture-request.json", argv[1]);
     FILE *file = fopen(request, "wb");
     if (file != NULL) {
-        fputs("{\"schema\":\"gfx-frame-request/v1\",\"frames\":[3,9]}\n", file);
+        fputs("{\"schema\":\"gfx-frame-request/v1\",\"request_id\":42,\"frames\":[3,9]}\n", file);
         fclose(file);
     }
     int frames = strcmp(mode, "gap") == 0 ? 4 : 10;

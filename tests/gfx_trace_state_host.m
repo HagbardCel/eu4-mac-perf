@@ -30,7 +30,8 @@ void eu4_gfx_observe_set_kind(eu4_gfx_observe_call *call, uint32_t kind) {
 }
 
 int eu4_gfx_gl_drawable_extent(uint32_t *width, uint32_t *height) {
-    (void)width; (void)height;
+    if (width != NULL) *width = 4;
+    if (height != NULL) *height = 4;
     return 0;
 }
 
@@ -138,6 +139,21 @@ int main(void) {
         binding_of(GL_TEXTURE_BINDING_2D) != (GLint)b) {
         ok = 0;
     }
-    printf("trace_state=%d\n", ok);
+    /* A pending engine error must survive a readback.  glGetError is the only
+       OpenGL error query and is destructive by design; the observer must not
+       call it to "clean up" the queue. */
+    glEnable(0xFFFF);
+    int pending = glGetError();
+    if (pending == GL_NO_ERROR) {
+        ok = 0;
+    }
+    if (eu4_gfx_frame_trace_readback_probe() != 0) {
+        ok = 0;
+    }
+    int after = glGetError();
+    if (after == GL_NO_ERROR) {
+        ok = 0;
+    }
+    printf("trace_state=%d pending=0x%x after=0x%x\n", ok, pending, after);
     return ok ? 0 : 1;
 }
