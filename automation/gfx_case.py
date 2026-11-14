@@ -398,14 +398,25 @@ def compare_case(case_dir: Path) -> dict:
             "sha256": candidate.get("sha256"),
         }
         try:
+            reference_bytes = Path(reference["path"]).read_bytes()
+            candidate_bytes = Path(candidate["path"]).read_bytes()
+            if reference.get("sha256") and gfx_frame_compare._sha256(
+                Path(reference["path"])
+            ) != reference["sha256"]:
+                raise ValueError("packaged reference frame digest does not match")
+            if candidate.get("sha256") and gfx_frame_compare._sha256(
+                Path(candidate["path"])
+            ) != candidate["sha256"]:
+                raise ValueError("packaged candidate frame digest does not match")
             result = gfx_frame_compare.compare_payloads(
-                Path(reference["path"]).read_bytes(), reference_meta,
-                Path(candidate["path"]).read_bytes(), candidate_meta,
+                reference_bytes, reference_meta,
+                candidate_bytes, candidate_meta,
                 policy=compare_policy,
                 regions=policy.get("regions") or {},
             )
             result["schema"] = "gfx-case-repro/v1"
-        except (OSError, KeyError, TypeError, gfx_frame_compare.CompareError) as exc:
+        except (OSError, KeyError, TypeError, ValueError,
+                gfx_frame_compare.CompareError) as exc:
             result = {"schema": "gfx-case-repro/v1", "status": INCOMPLETE,
                       "reason": f"{type(exc).__name__}: {exc}"}
     _write_json(case_dir / "repro" / "comparison.json", result)

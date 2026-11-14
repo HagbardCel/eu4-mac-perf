@@ -142,6 +142,17 @@ class CaseBuilderTests(unittest.TestCase):
         self.assertEqual(inspected["classification"], gfx_case.CONFIRMED_RENDERING)
         self.assertGreater(packaged["total_bytes"], 0)
 
+    def test_tampered_packaged_frame_is_not_replayed_as_valid(self):
+        packaged = gfx_case.build_case(self.run)
+        case_dir = Path(packaged["case_dir"])
+        frame = case_dir / "frames" / "reference-frame-4.bgra"
+        payload = bytearray(frame.read_bytes())
+        payload[0] ^= 0xFF
+        frame.write_bytes(bytes(payload))
+        replay = gfx_case.compare_case(case_dir)
+        self.assertEqual(replay["status"], gfx_case.INCOMPLETE)
+        self.assertIn("digest", replay["reason"])
+
     def test_missing_raw_frames_are_incomplete_evidence(self):
         pair = dict(self.pair, dumps={"reference": {"found": {}}, "candidate": {"found": {}}})
         self.result["frames"] = {"comparison": {"first_failure": pair}, "last_pair": pair}
