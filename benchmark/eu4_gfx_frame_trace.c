@@ -11,6 +11,23 @@
 #include "eu4_gfx_frame_trace.h"
 
 #include "eu4_gfx_observe_framebuffer.h"
+/* The state host and manifest host link this file without the observation
+   stream.  Weak declarations keep those diagnostics builds valid. */
+#if defined(__APPLE__)
+#define EU4_OBSERVE_WEAK __attribute__((weak_import))
+#else
+#define EU4_OBSERVE_WEAK __attribute__((weak))
+#endif
+extern int eu4_gfx_frame_observe_init(const char *, const char *, const char *)
+    EU4_OBSERVE_WEAK;
+extern int eu4_gfx_frame_observe_enabled(void) EU4_OBSERVE_WEAK;
+extern int eu4_gfx_frame_observe_lockstep_enabled(void) EU4_OBSERVE_WEAK;
+extern int eu4_gfx_frame_observe_lockstep_wait(uint32_t, uint32_t)
+    EU4_OBSERVE_WEAK;
+extern int eu4_gfx_frame_observe_emit(const uint8_t *, uint32_t, uint32_t,
+                                      const char *, uint32_t, uint32_t, uint64_t,
+                                      uint32_t, int, int, const char *)
+    EU4_OBSERVE_WEAK;
 
 #include <CommonCrypto/CommonDigest.h>
 #include <OpenGL/gl.h>
@@ -88,6 +105,7 @@ static struct {
     uint64_t start_ms;
     int boundary_fb; /* -1: present boundary; >=0: clear of this framebuffer */
     int boundary_scene; /* PresentScene entry/exit boundary */
+    int stream_only; /* per-frame observation without a frame-trace capture */
     int scene_index;
     uint64_t pre_post_callers[16];
     int pre_post_count;
@@ -412,8 +430,24 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
     const char *after_ms = getenv("EU4_GFX_FRAME_TRACE_AFTER_MS");
     const char *max_draws = getenv("EU4_GFX_FRAME_TRACE_MAX_DRAWS");
     const char *max_frame_draws = getenv("EU4_GFX_FRAME_TRACE_MAX_FRAME_DRAWS");
+    const char *observe_dir = getenv("EU4_GFX_FRAME_OBSERVE_DIR");
     g.configured = 1;
     g.enabled = 0;
+    if (observe_dir != NULL && observe_dir[0] == '/') {
+        g.stream_only = (dir == NULL || dir[0] == 0);
+        if (g.stream_only) {
+            g.enabled = 1;
+            g.boundary_scene = 1;
+            snprintf(g.dir, sizeof(g.dir), "%s", observe_dir);
+        }
+        if (eu4_gfx_frame_observe_init != NULL) {
+            const char *session = getenv("EU4_GFX_FRAME_SESSION");
+            if (session == NULL || session[0] == 0) {
+                session = getenv("EU4_GFX_STARTUP_ID");
+            }
+            (void)eu4_gfx_frame_observe_init("opengl", observe_dir, session);
+        }
+    }
     if (dir == NULL || dir[0] == 0) {
         if (test_only != NULL && strcmp(test_only, "1") == 0) {
             return 0;
@@ -1932,6 +1966,90 @@ static void start_capture_at_frame(int next_frame) {
     open_events();
 }
 
+static uint64_t stream_caller_signature(void) {
+    uint64_t signature = 1469598103934665603ULL;
+    for (int i = 0; i < g.frame_caller_count; i++) {
+        signature ^= g.frame_callers[i];
+        signature *= 1099511628211ULL;
+    }
+    return signature;
+}
+
+/* Read the actual drawable (default framebuffer) into tightly packed BGRA8.
+   Every binding the readback changes is restored, including pack skip state and
+   a bound pixel-pack buffer.  Returns 0 on success. */
+static int read_drawable_bgra(uint32_t *out_width, uint32_t *out_height,
+                              uint8_t **out_pixels) {
+    *out_width = 0;
+    *out_height = 0;
+    *out_pixels = NULL;
+    uint32_t width = 0, height = 0;
+    GLint viewport[4] = {0, 0, 0, 0};
+    glGetIntegerv(GL_VIEWPORT, viewport);
+    if (eu4_gfx_gl_drawable_extent(&width, &height) != 0 || width == 0 ||
+        height == 0) {
+        width = (uint32_t)(viewport[2] > 0 ? viewport[2] : 0);
+        height = (uint32_t)(viewport[3] > 0 ? viewport[3] : 0);
+    }
+    if (width == 0 || height == 0 || width > 8192 || height > 8192) {
+        return -1;
+    }
+    size_t bytes = (size_t)width * height * 4;
+    uint8_t *pixels = malloc(bytes);
+    if (pixels == NULL) {
+        return -1;
+    }
+    GLint draw_framebuffer = 0, read_framebuffer = 0, read_buffer = 0;
+    GLint pack_alignment = 0, pack_row = 0, pack_skip_rows = 0;
+    GLint pack_skip_pixels = 0, pack_buffer = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_framebuffer);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_framebuffer);
+    glGetIntegerv(GL_READ_BUFFER, &read_buffer);
+    glGetIntegerv(GL_PACK_ALIGNMENT, &pack_alignment);
+    glGetIntegerv(GL_PACK_ROW_LENGTH, &pack_row);
+    glGetIntegerv(GL_PACK_SKIP_ROWS, &pack_skip_rows);
+    glGetIntegerv(GL_PACK_SKIP_PIXELS, &pack_skip_pixels);
+    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_buffer);
+    if (draw_framebuffer != 0) {
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    }
+    if (read_framebuffer != 0) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    }
+    glReadBuffer(GL_BACK);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+    glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+    if (pack_buffer != 0) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    }
+    while (glGetError() != GL_NO_ERROR) {
+    }
+    glFinish();
+    glReadPixels(0, 0, (GLsizei)width, (GLsizei)height, GL_BGRA,
+                 GL_UNSIGNED_INT_8_8_8_8_REV, pixels);
+    GLenum error = glGetError();
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)draw_framebuffer);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)read_framebuffer);
+    glReadBuffer((GLenum)read_buffer);
+    glPixelStorei(GL_PACK_ALIGNMENT, pack_alignment);
+    glPixelStorei(GL_PACK_ROW_LENGTH, pack_row);
+    glPixelStorei(GL_PACK_SKIP_ROWS, pack_skip_rows);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, pack_skip_pixels);
+    if (pack_buffer != 0) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)pack_buffer);
+    }
+    if (error != GL_NO_ERROR) {
+        free(pixels);
+        return -1;
+    }
+    *out_width = width;
+    *out_height = height;
+    *out_pixels = pixels;
+    return 0;
+}
+
 void eu4_gfx_frame_trace_boundary_entry(eu4_gfx_capture_frame *frame,
                                         eu4_gfx_observe_call *call) {
     (void)frame;
@@ -1970,7 +2088,7 @@ void eu4_gfx_frame_trace_boundary_exit(eu4_gfx_capture_frame *frame,
     }
     pthread_mutex_lock(&g_lock);
     call->retain = 0;
-    if (g.boundary_scene && !g.captured && !g.armed) {
+    if (g.boundary_scene && !g.captured && !g.armed && !g.stream_only) {
         int time_ready = g.after_ms == 0 || now_ms() - g.start_ms >= g.after_ms;
         int enough = time_ready && g.frame_draws >= g.min_draws &&
                      caller_set_matches();
@@ -1992,8 +2110,33 @@ void eu4_gfx_frame_trace_boundary_exit(eu4_gfx_capture_frame *frame,
             start_capture_at_frame(g.scene_index + 1);
         }
     }
+    uint32_t stream_width = 0, stream_height = 0;
+    uint8_t *stream_pixels = NULL;
+    uint32_t stream_draws = 0, stream_distinct = 0;
+    uint64_t stream_signature = 0;
+    int stream_ok = 0;
+    if (g.stream_only) {
+        stream_draws = g.frame_draws;
+        stream_distinct = (uint32_t)g.frame_caller_count;
+        stream_signature = stream_caller_signature();
+        stream_ok = read_drawable_bgra(&stream_width, &stream_height,
+                                       &stream_pixels) == 0;
+    }
     frame_reset();
     pthread_mutex_unlock(&g_lock);
+    if (g.stream_only && eu4_gfx_frame_observe_emit != NULL) {
+        (void)eu4_gfx_frame_observe_emit(
+            stream_pixels, stream_width, stream_height, "lower_left",
+            (uint32_t)g.scene_index, stream_draws, stream_signature,
+            stream_distinct, stream_ok, stream_ok,
+            stream_ok ? "" : "drawable_readback_failed");
+        if (eu4_gfx_frame_observe_lockstep_enabled != NULL &&
+            eu4_gfx_frame_observe_lockstep_enabled() &&
+            eu4_gfx_frame_observe_lockstep_wait != NULL) {
+            (void)eu4_gfx_frame_observe_lockstep_wait((uint32_t)g.scene_index, 0);
+        }
+    }
+    free(stream_pixels);
 }
 
 void eu4_gfx_frame_trace_present_entry(eu4_gfx_capture_frame *frame,

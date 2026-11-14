@@ -664,6 +664,8 @@ bool eu4_gfx_observe_configure_from_env(void) {
     if (stop_text != NULL) {
         if (strcmp(stop_text, "target_draw") == 0) {
             stop_policy = EU4_GFX_OBSERVE_STOP_TARGET_DRAW;
+        } else if (strcmp(stop_text, "none") == 0) {
+            stop_policy = EU4_GFX_OBSERVE_STOP_NEVER;
         } else if (strcmp(stop_text, "quota") != 0) {
             return false;
         }
@@ -699,7 +701,8 @@ bool eu4_gfx_observe_configure_from_env(void) {
 bool eu4_gfx_observe_configure_policy(uint32_t stop_policy, uint64_t target_caller,
                                       uint32_t retention) {
     if (stop_policy != EU4_GFX_OBSERVE_STOP_QUOTA &&
-        stop_policy != EU4_GFX_OBSERVE_STOP_TARGET_DRAW) {
+        stop_policy != EU4_GFX_OBSERVE_STOP_TARGET_DRAW &&
+        stop_policy != EU4_GFX_OBSERVE_STOP_NEVER) {
         return false;
     }
     if (retention != EU4_GFX_OBSERVE_RETENTION_LEGACY &&
@@ -859,6 +862,10 @@ void eu4_gfx_observe_poll(void) {}
 
 bool eu4_gfx_observe_should_stop(void) {
     if (!atomic_load_explicit(&g_enabled, memory_order_relaxed)) {
+        return false;
+    }
+    if (atomic_load_explicit(&g_stop_policy, memory_order_relaxed) ==
+        EU4_GFX_OBSERVE_STOP_NEVER) {
         return false;
     }
     if (atomic_load_explicit(&g_stop_policy, memory_order_relaxed) ==
@@ -1192,7 +1199,7 @@ static int write_summary_body(FILE *file, void *opaque) {
                                                                : "legacy",
             snap->stop_policy == EU4_GFX_OBSERVE_STOP_TARGET_DRAW
                 ? "target_draw"
-                : "quota",
+                : (snap->stop_policy == EU4_GFX_OBSERVE_STOP_NEVER ? "none" : "quota"),
             snap->observed, state_name(snap->state), snap->events,
             snap->integrity_ok ? "true" : "false",
             snap->records_copied ? "true" : "false", snap->overlaps,

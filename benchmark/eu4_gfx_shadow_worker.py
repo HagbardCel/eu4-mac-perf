@@ -33,6 +33,7 @@ def build():
         str(BINARY),
         str(ROOT / "benchmark" / "eu4_gfx_shadow_worker.mm"),
         str(ROOT / "benchmark" / "eu4_gfx_init.mm"),
+        str(ROOT / "benchmark" / "eu4_gfx_frame_observe.c"),
         str(ROOT / "benchmark" / "eu4_gfx_buffers.mm"),
         str(ROOT / "benchmark" / "eu4_metal_events.c"),
     ]

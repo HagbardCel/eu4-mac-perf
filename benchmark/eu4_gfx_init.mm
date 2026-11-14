@@ -8,6 +8,7 @@
 #include <dlfcn.h>
 typedef int (*eu4_gfx_cache_loader)(const char *path);
 #import "eu4_gfx_logical_capture.h"
+#import "eu4_gfx_frame_observe.h"
 #import "eu4_gfx_checkpoint.h"
 #import "eu4_metal_events.h"
 
@@ -2376,6 +2377,7 @@ uint64_t eu4_gfx_live_clear_sequence;
 static uint32_t g_frame_settle_draws;
 
 void eu4_gfx_frame_note_draw_caller(uint64_t caller_rva) {
+    eu4_gfx_frame_observe_note_draw(caller_rva);
     const char *wanted = getenv("EU4_GFX_CHECKPOINT_SETTLE_CALLER");
     if (wanted == NULL || wanted[0] == 0) {
         return;
@@ -2464,6 +2466,30 @@ int eu4_gfx_cocoa_gles_swap_window(void *window) {
     return eu4_gfx_swap_window(window);
 }
 
+static id<MTLBuffer> g_observe_buffer;
+static uint32_t g_observe_width;
+static uint32_t g_observe_height;
+static uint64_t g_observe_frame_index;
+static int g_observe_init_attempted;
+
+static int observe_stream_ready(void) {
+    if (g_observe_init_attempted) {
+        return eu4_gfx_frame_observe_enabled();
+    }
+    const char *dir = getenv("EU4_GFX_FRAME_OBSERVE_DIR");
+    if (dir == NULL || dir[0] != '/') {
+        g_observe_init_attempted = 1;
+        return 0;
+    }
+    const char *session = getenv("EU4_GFX_FRAME_SESSION");
+    if (session == NULL || session[0] == 0) {
+        session = getenv("EU4_GFX_STARTUP_ID");
+    }
+    (void)eu4_gfx_frame_observe_init("metal", dir, session);
+    g_observe_init_attempted = 1;
+    return eu4_gfx_frame_observe_enabled();
+}
+
 int eu4_gfx_swap_window(void *window) {
     (void)window;
     if (g_master == NULL) {
@@ -2545,11 +2571,55 @@ int eu4_gfx_swap_window(void *window) {
             }
         }
     }
+    int observe = observe_stream_ready();
+    if (observe) {
+        NSUInteger row = (NSUInteger)backend.gameWidth * 4;
+        if (g_observe_buffer == nil || g_observe_width != backend.gameWidth ||
+            g_observe_height != backend.gameHeight) {
+            g_observe_buffer = [backend.device
+                newBufferWithLength:row * backend.gameHeight
+                            options:MTLResourceStorageModeShared];
+            g_observe_width = backend.gameWidth;
+            g_observe_height = backend.gameHeight;
+        }
+        if (g_observe_buffer != nil) {
+            id<MTLBlitCommandEncoder> observe_blit = [command blitCommandEncoder];
+            if (observe_blit != nil) {
+                [observe_blit copyFromTexture:backend.gameColorTarget
+                                  sourceSlice:0
+                                  sourceLevel:0
+                                 sourceOrigin:MTLOriginMake(0, 0, 0)
+                                   sourceSize:MTLSizeMake(backend.gameWidth, backend.gameHeight, 1)
+                                     toBuffer:g_observe_buffer
+                            destinationOffset:0
+                       destinationBytesPerRow:row
+                      destinationBytesPerImage:row * backend.gameHeight];
+                [observe_blit endEncoding];
+            } else {
+                g_observe_buffer = nil;
+            }
+        }
+    }
     if (drawable != nil) {
         [command presentDrawable:drawable];
     }
     [command commit];
     [command waitUntilCompleted];
+    if (observe && g_observe_buffer != nil) {
+        uint32_t draws = 0, distinct = 0;
+        uint64_t signature = 0;
+        eu4_gfx_frame_observe_take_stats(&draws, &signature, &distinct);
+        int completed = command.status == MTLCommandBufferStatusCompleted;
+        (void)eu4_gfx_frame_observe_emit(
+            (const uint8_t *)g_observe_buffer.contents, backend.gameWidth,
+            backend.gameHeight, "top_left", (uint32_t)(++g_observe_frame_index),
+            draws, signature, distinct, completed, completed ? 1 : 0,
+            completed ? "" : "command_buffer_failed");
+        if (eu4_gfx_frame_observe_lockstep_enabled()) {
+            (void)eu4_gfx_frame_observe_lockstep_wait(
+                (uint32_t)g_observe_frame_index, 0);
+        }
+    }
     if (dump_buffer != nil) {
         NSUInteger row = (NSUInteger)backend.gameWidth * 4;
         uint8_t *flipped = (uint8_t *)malloc(row * backend.gameHeight);
