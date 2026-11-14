@@ -644,7 +644,15 @@ def _compare_pair(pair: dict, reference_meta: dict | None,
         "status": gfx_align.ALIGNED if strong else gfx_align.AMBIGUOUS,
     }
     if alignment["status"] != gfx_align.ALIGNED:
-        return {"status": "not_compared", "reason": "alignment is ambiguous",
+        if identity_equal and draw_relation > draw_tolerance:
+            reason = (
+                "same engine day but render workload differs "
+                f"({draw_relation:.1%} > {draw_tolerance:.0%}); "
+                "intra-day state is not established"
+            )
+        else:
+            reason = "alignment is ambiguous"
+        return {"status": "not_compared", "reason": reason,
                 "alignment": alignment}
     policy = scenario["comparison"]
     minimum_draws = int((scenario.get("settle") or {}).get("min_draws", 0))

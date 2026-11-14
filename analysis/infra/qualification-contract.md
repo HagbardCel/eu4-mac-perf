@@ -77,7 +77,9 @@ regression fixture.
 A later Experiment A run paired 20 frames with equal day identity but the two
 processes carried **241 vs 370 draws** (34.9% apart) within the same day; the
 comparison gate correctly refused all 20 as ambiguous. The day counter is too
-coarse to establish intra-day update correspondence for a running save. A paused
+coarse to establish intra-day update correspondence for a running save, and the
+comparison now says so explicitly ("same engine day but render workload differs
+… intra-day state is not established"). A paused
 save or a finer simulation/tick identity is required before Experiment A can
 qualify. The save
 continues running, so the two processes are not at the same update. Experiment A
