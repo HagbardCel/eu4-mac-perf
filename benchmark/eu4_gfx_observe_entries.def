@@ -9,3 +9,13 @@ OBS_ENTRY("_GfxSetVertexBuffers", 0x15ebf41, "\x55\x48\x89\xe5\x41\x57", EU4_GFX
 OBS_ENTRY("_GfxSetPrimitiveType", 0x15ea76f, "\x55\x48\x89\xe5\x53", EU4_GFX_OBSERVE_RELOC_SAFE, eu4_gfx_observe_primitive_entry, eu4_gfx_observe_primitive_exit)
 OBS_ENTRY("_GfxDraw", 0x15ea789, "\x55\x48\x89\xe5\x41\x57", EU4_GFX_OBSERVE_RELOC_SAFE, eu4_gfx_observe_draw_entry, eu4_gfx_observe_draw_exit)
 OBS_ENTRY("_GfxSetConstantBuffer", 0x15ec36a, "\x55\x48\x89\xe5\x48\x8b\x07\x89\xc9", EU4_GFX_OBSERVE_RELOC_SAFE, eu4_gfx_observe_cb_entry, NULL)
+// Complete-frame trace boundaries. Observation only; the frame tracer records
+// every draw between two presents and the authentic backbuffer at present.
+OBS_ENTRY("_GfxClear", 0x15ea552, "\x55\x48\x89\xe5\x41\x57", EU4_GFX_OBSERVE_RELOC_SAFE, eu4_gfx_frame_trace_clear_entry, eu4_gfx_frame_trace_clear_exit)
+OBS_ENTRY("_GfxPresent", 0x15ea6cb, "\x55\x48\x89\xe5\x48\x8b\xbf\x78\x01\x00\x00", EU4_GFX_OBSERVE_RELOC_SAFE, eu4_gfx_frame_trace_present_entry, eu4_gfx_frame_trace_present_exit)
+OBS_ENTRY("_GfxDrawIndexed", 0x15eaa77, "\x55\x48\x89\xe5\x41\x57", EU4_GFX_OBSERVE_RELOC_SAFE, eu4_gfx_frame_trace_draw_indexed_entry, eu4_gfx_frame_trace_draw_indexed_exit)
+OBS_ENTRY("_GfxDrawIndexedInstanced", 0x15eac9c, "\x55\x48\x89\xe5\x41\x57", EU4_GFX_OBSERVE_RELOC_SAFE, eu4_gfx_frame_trace_draw_instanced_entry, eu4_gfx_frame_trace_draw_instanced_exit)
+// CGraphics::PresentScene. The menu skips _GfxPresent when its present flag is
+// clear, but the frontend calls PresentScene every rendered frame. This entry is
+// the frame boundary for the title scene.
+OBS_ENTRY("PresentScene", 0x149daf0, "\x55\x48\x89\xe5\x53\x50", EU4_GFX_OBSERVE_RELOC_SAFE, eu4_gfx_frame_trace_boundary_entry, eu4_gfx_frame_trace_boundary_exit)

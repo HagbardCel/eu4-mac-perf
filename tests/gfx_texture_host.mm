@@ -29,28 +29,44 @@ static uint32_t name_at(const uint8_t *header) {
 
 static void test_closed_branches(void) {
     uint8_t header[0x44];
-    uint32_t desc[5] = {4, 4, 1, 1, 0};
+    uint32_t desc[5] = {4, 4, 1, 24, 0};
     memset(header, 0, sizeof header);
     memset(header + 4, 0xff, 4);
-    if (eu4_gfx_texture_prepare(header, desc, NULL, 0) != EU4_GFX_TEX_COMPRESSED) {
-        fail("compressed");
+    if (eu4_gfx_texture_prepare(header, desc, NULL, 0) != EU4_GFX_TEX_FORMAT) {
+        fail("unsupported format");
     }
     if (header[0x28] != 0 || name_at(header) != 0xffffffffu) {
         fail("failed prepare wrote the header");
     }
     desc[3] = 0xb;
     desc[4] = 1;
+    desc[1] = 8;
     if (eu4_gfx_texture_prepare(header, desc, NULL, 0) != EU4_GFX_TEX_CUBEMAP) {
         fail("cubemap");
     }
+    desc[1] = 4;
+    if (eu4_gfx_texture_prepare(header, desc, NULL, 0) != EU4_GFX_TEX_OK) {
+        fail("square cubemap");
+    }
     desc[4] = 2;
+    memset(header, 0, sizeof header);
+    memset(header + 4, 0xff, 4);
     if (eu4_gfx_texture_prepare(header, desc, NULL, 0) != EU4_GFX_TEX_FORMAT || name_at(header) != 0xffffffffu) {
         fail("kind");
     }
     desc[4] = 0;
     desc[3] = 2;
-    if (eu4_gfx_texture_prepare(header, desc, NULL, 0) != EU4_GFX_TEX_COMPRESSED) {
+    if (eu4_gfx_texture_prepare(header, desc, NULL, 0) != EU4_GFX_TEX_OK) {
         fail("format 2");
+    }
+    uint32_t stored = 0;
+    memcpy(&stored, header + 0x30, 4);
+    if (stored != 2) {
+        fail("format 2 field");
+    }
+    desc[3] = 6;
+    if (eu4_gfx_texture_prepare(header, desc, NULL, 0) != EU4_GFX_TEX_OK) {
+        fail("format 6");
     }
     desc[3] = 99;
     if (eu4_gfx_texture_prepare(header, desc, NULL, 0) != EU4_GFX_TEX_FORMAT) {
@@ -61,6 +77,8 @@ static void test_closed_branches(void) {
         fail("missing images");
     }
     uint8_t pixel = 0;
+    memset(header, 0, sizeof header);
+    memset(header + 4, 0xff, 4);
     image_record face = {0, 1, 4, 4, 0, 0, &pixel};
     if (eu4_gfx_texture_prepare(header, desc, &face, 1) != EU4_GFX_TEX_FORMAT || name_at(header) != 0xffffffffu) {
         fail("face");
@@ -321,17 +339,20 @@ static void test_bc3(void) {
 }
 
 static void test_set_textures(void) {
+    /* A master with no backend (+0x180 == NULL) must stay untouched, including
+       for the offset-range bindings the engine also uses. */
     uint8_t object[0x198];
     uint8_t saved[0x198];
-    memset(object, 0x5a, sizeof object);
+    memset(object, 0, sizeof object);
     memcpy(saved, object, sizeof saved);
     void *handle = object;
+    void *list[2] = {NULL, NULL};
     void *invalid = reinterpret_cast<void *>(1);
     eu4_gfx_set_textures(&handle, 0, invalid, 0, 0, invalid);
     if (memcmp(object, saved, sizeof saved) != 0) {
         fail("set textures wrote the object");
     }
-    eu4_gfx_set_textures(&handle, 2, invalid, 3, 3, invalid);
+    eu4_gfx_set_textures(&handle, 2, list, 3, 3, NULL);
     if (memcmp(object, saved, sizeof saved) != 0) {
         fail("set textures wrote the object with flags");
     }

@@ -75,6 +75,25 @@ static uint32_t load_u32(const uint8_t *base, size_t offset) {
     return value;
 }
 
+int eu4_gfx_sprite_uniform_data(void *master, void *out, size_t capacity) {
+    if (master == NULL || out == NULL || capacity < EU4_GFX_SPRITE_CONSTANT_BYTES) {
+        return -1;
+    }
+    const uint8_t *constant =
+        (const uint8_t *)load_ptr((const uint8_t *)master, EU4_GFX_MASTER_CONSTANT_SLOT2);
+    if (constant == NULL) {
+        return -1;
+    }
+    uint32_t constant_words = load_u32(constant, 0);
+    const void *constant_data = load_ptr(constant, 8);
+    /* The header stores 32-bit words, not vec4 values: the block is 96 bytes. */
+    if (constant_data == NULL || constant_words < 24) {
+        return -1;
+    }
+    memcpy(out, constant_data, EU4_GFX_SPRITE_CONSTANT_BYTES);
+    return 0;
+}
+
 static eu4_gfx_sprite_draw_status refuse(eu4_gfx_sprite_draw_status status,
                                           const char **reason, const char *why) {
     if (reason != NULL) {
@@ -184,15 +203,8 @@ eu4_gfx_sprite_draw_status eu4_gfx_sprite_draw_encode_into(
                       "vertex range exceeds the buffer length");
     }
 
-    const uint8_t *constant = (const uint8_t *)load_ptr(master, EU4_GFX_MASTER_CONSTANT_SLOT2);
-    if (constant == NULL) {
-        return refuse(EU4_GFX_SPRITE_DRAW_CONSTANT, reason, "constant slot 2 is unset");
-    }
-    uint32_t constant_words = load_u32(constant, 0);
-    const void *constant_data = load_ptr(constant, 8);
-    /* The header stores the number of 32-bit words, not the number of vec4
-       values. The six-vec4 uniform block is 96 bytes = 24 dwords. */
-    if (constant_data == NULL || constant_words < 24) {
+    uint8_t uniform[EU4_GFX_SPRITE_CONSTANT_BYTES];
+    if (eu4_gfx_sprite_uniform_data((void *)master, uniform, sizeof uniform) != 0) {
         return refuse(EU4_GFX_SPRITE_DRAW_CONSTANT, reason,
                       "constant slot 2 declares fewer than 24 dwords (96 bytes)");
     }
@@ -268,8 +280,6 @@ eu4_gfx_sprite_draw_status eu4_gfx_sprite_draw_encode_into(
                       "sampler state could not be created");
     }
 
-    uint8_t uniform[EU4_GFX_SPRITE_CONSTANT_BYTES];
-    memcpy(uniform, constant_data, sizeof uniform);
 
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
     pass.colorAttachments[0].texture = target;

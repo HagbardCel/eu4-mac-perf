@@ -98,6 +98,17 @@ void eu4_gfx_checkpoint_configure(const char *operation, uint64_t caller_rva,
     }
 }
 
+static uint64_t g_configure_ms;
+static uint64_t g_min_uptime_ms;
+
+static uint64_t monotonic_ms(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 0;
+    }
+    return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
+}
+
 int eu4_gfx_checkpoint_configure_from_env(void) {
     g_checkpoint = EU4_GFX_CHECKPOINT_NONE;
     const char *operation = getenv("EU4_GFX_CHECKPOINT");
@@ -124,6 +135,16 @@ int eu4_gfx_checkpoint_configure_from_env(void) {
     if (stop != NULL && stop[0] != 0 && strcmp(stop, "0") == 0) {
         stop_after = 0;
     }
+    g_min_uptime_ms = 0;
+    const char *uptime = getenv("EU4_GFX_CHECKPOINT_MIN_UPTIME_MS");
+    if (uptime != NULL && uptime[0] != 0) {
+        uint64_t value = 0;
+        if (!parse_uint(uptime, &value) || value > 3600000) {
+            return 0;
+        }
+        g_min_uptime_ms = value;
+    }
+    g_configure_ms = monotonic_ms();
     g_hold_ms = 0;
     const char *hold = getenv("EU4_GFX_CHECKPOINT_HOLD_MS");
     if (hold != NULL && hold[0] != 0) {
@@ -412,6 +433,12 @@ static void capture(const char *operation, const char *symbol, const char *stop_
 void eu4_gfx_checkpoint_after_draw(void *master, const eu4_gfx_draw_raw *raw,
                                    const eu4_gfx_simple_draw_state *state) {
     if (g_checkpoint != EU4_GFX_CHECKPOINT_AFTER_DRAW || raw == NULL) {
+        return;
+    }
+    if (g_min_uptime_ms != 0 && monotonic_ms() - g_configure_ms < g_min_uptime_ms) {
+        return;
+    }
+    if (!eu4_gfx_frame_ready_for_checkpoint()) {
         return;
     }
     const void *caller = (const void *)(uintptr_t)raw->retaddr;

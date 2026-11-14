@@ -1,0 +1,71 @@
+{
+  "schema": "m6-live-title-starts/v3",
+  "runs": [
+    {
+      "run": ".local/m6/live-start3/run-1",
+      "phase": "final qualification",
+      "overall": "captured",
+      "status": {
+        "draw_reached": true,
+        "draw_encoded": true,
+        "gpu_completed": true,
+        "pixels_captured": true,
+        "presented": true,
+        "reference_matched": null
+      },
+      "launch_identity": "1794678332-33516",
+      "pid": 33582,
+      "swap_dump_sha256": "d0063c0914da5b55e5361fb76525a3c4ca9acf5b126c372e2c4897db929cedbe",
+      "swap_dump_bytes": 30882816,
+      "accepted": true,
+      "note": "accepted by automation.m6_live_accept with --require-resolve-trace; text-orientation check pass"
+    },
+    {
+      "run": ".local/m6/live-start4/run-1",
+      "phase": "final qualification",
+      "overall": "captured",
+      "status": {
+        "draw_reached": true,
+        "draw_encoded": true,
+        "gpu_completed": true,
+        "pixels_captured": true,
+        "presented": true,
+        "reference_matched": null
+      },
+      "launch_identity": "1794678828-35589",
+      "pid": 35665,
+      "swap_dump_sha256": "ff08cf7f87d6cd947274497aea12a54da0d2fc1075549a8f6e7461ed0abcf206",
+      "swap_dump_bytes": 30882816,
+      "accepted": true,
+      "note": "accepted by automation.m6_live_accept with --require-resolve-trace; text-orientation check pass"
+    },
+    {
+      "run": ".local/m6/live-start5/run-1",
+      "phase": "final qualification",
+      "overall": "captured",
+      "status": {
+        "draw_reached": true,
+        "draw_encoded": true,
+        "gpu_completed": true,
+        "pixels_captured": true,
+        "presented": true,
+        "reference_matched": null
+      },
+      "launch_identity": "1794679203-37056",
+      "pid": 37165,
+      "swap_dump_sha256": "3bb4f73b933a3ad9dec1cea2cc64f947a4def6d2dbfe6695b327696b97a18e09",
+      "swap_dump_bytes": 30882816,
+      "accepted": true,
+      "note": "accepted by automation.m6_live_accept with --require-resolve-trace; text-orientation check pass"
+    }
+  ],
+  "menu_caller": "0x103b3c8",
+  "min_uptime_ms": 280000,
+  "checkpoint_occurrence": 300,
+  "clean_starts": 3,
+  "required_clean_starts": 3,
+  "distinct_runs": true,
+  "distinct_identities": true,
+  "ok": true,
+  "note": "Three fresh, distinct, independently authorized settled launches on the finalized render-target sampling correction. All accepted with the final resolve-trace and text-orientation requirements."
+}

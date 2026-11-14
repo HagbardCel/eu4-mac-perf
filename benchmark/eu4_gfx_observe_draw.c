@@ -1,6 +1,7 @@
 #include "eu4_gfx_observe_draw.h"
 
 #include "eu4_gfx_observe_buffers.h"
+#include "eu4_gfx_frame_trace.h"
 #include "eu4_gfx_observe_framebuffer.h"
 
 #include <stdatomic.h>
@@ -93,6 +94,7 @@ void eu4_gfx_observe_draw_entry(eu4_gfx_capture_frame *frame,
     const int32_t first = (int32_t)frame->rdx;
 
     eu4_gfx_observe_set_kind(call, EU4_GFX_OBSERVE_KIND_DRAW);
+    eu4_gfx_frame_trace_draw_entry(frame, call);
 
     uint64_t master = 0;
     int master_ok = eu4_gfx_observe_read((const void *)handle, &master,
@@ -240,8 +242,8 @@ void eu4_gfx_observe_draw_entry(eu4_gfx_capture_frame *frame,
 void eu4_gfx_observe_draw_exit(eu4_gfx_capture_frame *frame,
                                eu4_gfx_observe_call *call,
                                eu4_gfx_observe_record *record) {
-    (void)frame;
     (void)record;
+    eu4_gfx_frame_trace_draw_exit(frame, call);
     if (call == NULL || !call->target_selected ||
         g_tls.target_call_id != call->call_id) {
         return;

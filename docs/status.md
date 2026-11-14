@@ -2,6 +2,54 @@
 
 Authoritative summary of what is established, qualified, and in flight. Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
 
+## M6 — authentic title scene through Metal (accepted 2026-11-14)
+
+The authentic title scene renders through Metal and passes the three-start
+qualification, including the new Credits/Options text-orientation check.
+Evidence: [qualification report](../analysis/m6/qualification-report.md),
+[frame evidence](../analysis/m6/menu-frame-evidence.json),
+[text orientation](../analysis/m6/texture-orientation.json),
+[live acceptance](../analysis/m6/live-acceptance.json),
+[live starts](../analysis/m6/live-title-starts.json),
+[campaign record](../analysis/m6/campaign-record.md).
+
+- **Canonical frame.** The corrected menu-caller occurrence-300 capture
+  (`.local/m6/frames/menu-occ300/frame`) has 326 events, reference SHA-256
+  `ff2f4e2b…`. `menu-15` (observer unit-0 corruption) and `menu-audit`
+  (undirected) are superseded and are not pixel references.
+- **Offline captured-state replay.** 326/326 events encoded, 0 failed, GPU
+  completion, 0 differing pixels of 1,930,176 including alpha. This is a
+  captured-state replay; it does not independently reconstruct the upstream
+  terrain pass.
+- **Text root cause (fixed).** The Credits/Options labels are directly sampled
+  render targets. GL stores render-target row 0 at the bottom; Metal stores it
+  at the top, so the engine's GL bottom-up UVs reflected the label. Live vertex
+  data matches GL exactly, the 168x63 Metal textures match the GL contents in
+  the same orientation, and the normal-upload controls (1537x192, 111x111)
+  sample correctly. `eu4_gfx_prepare_sampled_textures` now converts each bound
+  render target into a cached GL-row shadow, encoded into the draw's own
+  command buffer; ordinary textures, resolves and sprite UVs are untouched.
+  The native regression
+  `tests.test_gfx_live_draw::test_sampled_render_target_orientation` fails with
+  the raw-render-target path and passes after the correction.
+- **Live acceptance policy.** The checker now requires a tight-glyph
+  orientation check for both labels (upright correlation high, reflected
+  correlation low). The map structure check is calibrated against the authentic
+  reference spread instead of a fixed floor that rejected the reference itself
+  (reference spread 18.1; the old 20.0 floor was miscalibrated). The UI,
+  palette-affinity (0.85) and map coherence requirements are unchanged.
+- **Earlier live contracts (retained).** Offscreen targets use their own
+  extent; `_GfxResolve` flips into the GL lower-left row convention; the engine
+  base/mip filters are decoded separately; the shader-texture-LOD extension is
+  advertised so the authentic 78-source variant is used; samplers named `texN`
+  bind to unit N; the settle gate requires 252 terrain calls.
+- **Live result.** Three fresh independent settled starts on the finalized
+  implementation: zero refused draws, no failed resolves, GPU completion,
+  presentation, UI correlations 0.882/0.946/0.836, map mean 72.2, palette
+  affinity 0.968, and Credits/Options upright with the reflected correlation
+  below the upright correlation. The earlier beige-map, magenta-palette,
+  partial-composition and inverted-text blockers are closed.
+
 ## M4 — original-GL reference and Metal presentation (2026-11-12)
 
 Qualified by the M4 checker. The authentic Simple loading draw was captured

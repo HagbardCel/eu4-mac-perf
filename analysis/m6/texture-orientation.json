@@ -1,0 +1,189 @@
+{
+  "schema": "m6-text-orientation/v1",
+  "reference_frame": ".local/m6/frames/menu-occ300/frame",
+  "live_run": ".local/m6/live-uivertex9/run-1",
+  "dimensions": [
+    168,
+    63
+  ],
+  "gl": {
+    "452": {
+      "width": 168,
+      "height": 63,
+      "format": "RGBA8",
+      "row_convention": "GL glGetTexImage row 0 = texture v=0",
+      "sha256": "a80eb741b2cb479c628b68ee3f4d71653aec72537fa596a853119fd8377a20f9",
+      "live_pair": "tex-u0-168x63-0x7f7c30105660.bgra"
+    },
+    "453": {
+      "width": 168,
+      "height": 63,
+      "format": "RGBA8",
+      "row_convention": "GL glGetTexImage row 0 = texture v=0",
+      "sha256": "688d45e2ae7f12009c68ce18bb4a46cd6c6643c0a82035753e7a761643482332",
+      "live_pair": "tex-u0-168x63-0x7f7c3004e740.bgra"
+    }
+  },
+  "live": {
+    "tex-u0-168x63-0x7f7c3004e740.bgra": {
+      "format": "BGRA8",
+      "rows": "bottom_up (dump flips Metal top-left rows)",
+      "sha256": "a174f0b206e07ceb2e957cb1d9c3090776435cd8d0cadd42f727896193676249",
+      "header": "0x6000171654a0",
+      "render_target": true,
+      "gl_pair": "453",
+      "comparison": {
+        "same": {
+          "differing_fraction": 0.039895,
+          "mean_abs_error": 8.706,
+          "max_channel_error": 255
+        },
+        "vflip": {
+          "differing_fraction": 0.74948,
+          "mean_abs_error": 34.411,
+          "max_channel_error": 255
+        },
+        "hflip": {
+          "differing_fraction": 0.679965,
+          "mean_abs_error": 22.9076,
+          "max_channel_error": 255
+        },
+        "rot180": {
+          "differing_fraction": 0.766416,
+          "mean_abs_error": 36.3027,
+          "max_channel_error": 255
+        }
+      }
+    },
+    "tex-u0-168x63-0x7f7c30105660.bgra": {
+      "format": "BGRA8",
+      "rows": "bottom_up (dump flips Metal top-left rows)",
+      "sha256": "8d3d5f0c7a341064b04b27a94603a68b9337b8fa6684353e846bd80fddbe742d",
+      "header": "0x600017156c10",
+      "render_target": true,
+      "gl_pair": "452",
+      "comparison": {
+        "same": {
+          "differing_fraction": 0.035289,
+          "mean_abs_error": 7.744,
+          "max_channel_error": 255
+        },
+        "vflip": {
+          "differing_fraction": 0.742796,
+          "mean_abs_error": 32.3767,
+          "max_channel_error": 255
+        },
+        "hflip": {
+          "differing_fraction": 0.669785,
+          "mean_abs_error": 19.4599,
+          "max_channel_error": 255
+        },
+        "rot180": {
+          "differing_fraction": 0.759732,
+          "mean_abs_error": 34.2268,
+          "max_channel_error": 255
+        }
+      }
+    }
+  },
+  "pairing": {
+    "452": "tex-u0-168x63-0x7f7c30105660.bgra",
+    "453": "tex-u0-168x63-0x7f7c3004e740.bgra"
+  },
+  "controls": {
+    "134": {
+      "width": 1537,
+      "height": 192,
+      "gl_sha256": "067e1d5ca4fd07bc4ed33842b58c70c77af967d294b1ea1d86514e644ca14a13",
+      "live_sha256": "b9f90773973f28c3d467425e23cc26cddcf0cc85b2bcddd02dc5224c95be3990",
+      "live_render_target": false,
+      "same": {
+        "differing_fraction": 0.507065,
+        "mean_abs_error": 60.7586,
+        "max_channel_error": 255
+      },
+      "vflip": {
+        "differing_fraction": 0.0,
+        "mean_abs_error": 0.0,
+        "max_channel_error": 0
+      }
+    },
+    "133": {
+      "width": 111,
+      "height": 111,
+      "gl_sha256": "f1b410906c3edc8cadb3479d68380413528067e8140142a1ef57a0553a294992",
+      "live_sha256": "5a88829ece82100a998470ddbea16f4d0ce0eccfba3055272b750f8efbc605a7",
+      "live_render_target": false,
+      "same": {
+        "differing_fraction": 0.541271,
+        "mean_abs_error": 50.1807,
+        "max_channel_error": 255
+      },
+      "vflip": {
+        "differing_fraction": 0.0,
+        "mean_abs_error": 0.0,
+        "max_channel_error": 0
+      }
+    }
+  },
+  "uv": {
+    "gl_events_310_311": {
+      "positions": [
+        [
+          0,
+          0,
+          1
+        ],
+        [
+          0,
+          63,
+          1
+        ],
+        [
+          168,
+          0,
+          1
+        ],
+        [
+          168,
+          63,
+          1
+        ]
+      ],
+      "texcoords": [
+        [
+          0,
+          1
+        ],
+        [
+          0,
+          0
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          1,
+          0
+        ]
+      ]
+    },
+    "live_c58d_168x63": {
+      "first_position": [
+        0,
+        0,
+        1
+      ],
+      "first_texcoord": [
+        0,
+        1
+      ],
+      "trace": "live-uivertex9/run-1/vertex-trace.jsonl"
+    },
+    "match": true
+  },
+  "conclusion": "GL and Metal contents agree. The 168x63 text resources are render targets (render_target=1); their Metal storage is top-left, so the engine's GL bottom-up UVs sample them reflected. The normal-upload controls (1537x192, 111x111; render_target=0) are the exact vertical flip of the GL raw rows under the dump convention and render upright. Live UVs equal GL UVs; the first divergence is the render-target row origin.",
+  "dump_convention": "dump_texture_file copies Metal's top-left rows and flips them into a bottom-up file. Therefore a normal row-for-row upload appears as the vertical flip of the GL glGetTexImage capture, while a top-left render target appears in the same orientation as the GL capture.",
+  "differing_fraction_definition": "fraction of pixels with any of the four BGRA channels differing, after BGRA->RGBA channel normalization; mean_abs_error is the mean over all channel bytes; max_channel_error is the maximum channel byte difference"
+}

@@ -1799,6 +1799,63 @@ def probe(args: argparse.Namespace) -> int:
             Path(args.qualified_sources).expanduser().resolve()
         ),
     }
+    if args.skip_unsupported:
+        env["EU4_GFX_DRAW_SKIP_UNSUPPORTED"] = "1"
+    if args.texture_diagnostics:
+        env["EU4_GFX_TEXTURE_TRACE"] = "1"
+        env["EU4_GFX_TEXTURE_PLACEHOLDER"] = "1"
+    if args.uniform_trace:
+        env["EU4_GFX_UNIFORM_TRACE"] = "1"
+    if args.swap_dump:
+        env["EU4_GFX_SWAP_DUMP"] = str(Path(output) / "swap-frame.bgra")
+    if args.texture_bind_trace:
+        env["EU4_GFX_TEXTURE_BIND_TRACE"] = "1"
+    if args.uniform_dump:
+        env["EU4_GFX_UNIFORM_DUMP"] = str(Path(output))
+    if args.pipeline_stats:
+        env["EU4_GFX_PIPELINE_STATS"] = "1"
+    if args.order_trace:
+        env["EU4_GFX_ORDER_TRACE"] = "1"
+    if args.no_cull:
+        env["EU4_GFX_NO_CULL"] = "1"
+    if args.no_blend:
+        env["EU4_GFX_NO_BLEND"] = "1"
+    if args.element_trace:
+        env["EU4_GFX_ELEMENT_TRACE"] = "1"
+    if args.depth_trace:
+        env["EU4_GFX_DEPTH_TRACE"] = "1"
+    if args.sampler_trace:
+        env["EU4_GFX_SAMPLER_TRACE"] = "1"
+    if args.vertex_trace:
+        env["EU4_GFX_VERTEX_TRACE"] = "1"
+        if args.vertex_trace_stage:
+            env["EU4_GFX_VERTEX_TRACE_STAGE"] = args.vertex_trace_stage
+    if args.sample_texture_dump:
+        env["EU4_GFX_SAMPLE_TEXTURE_DUMP"] = str(Path(output))
+        if args.sample_texture_stage:
+            env["EU4_GFX_SAMPLE_TEXTURE_STAGE"] = args.sample_texture_stage
+    if args.texture_type_trace:
+        env["EU4_GFX_TEXTURE_TYPE_TRACE"] = "1"
+    if args.metal_validation:
+        env["MTL_DEBUG_LAYER"] = "1"
+        env["MTL_DEBUG_LAYER_ERROR_MODE"] = "nslog"
+    if args.resolve_trace:
+        env["EU4_GFX_RESOLVE_TRACE"] = "1"
+        env["EU4_GFX_RESOLVE_DUMP"] = str(Path(output))
+    if args.composite_dump:
+        env["EU4_GFX_COMPOSITE_DUMP"] = str(Path(output))
+        env["EU4_GFX_COMPOSITE_STAGE"] = "11a05cd9fd8f7533"
+    if args.min_uptime_ms:
+        env["EU4_GFX_CHECKPOINT_MIN_UPTIME_MS"] = str(int(args.min_uptime_ms))
+    if args.settle_caller:
+        env["EU4_GFX_CHECKPOINT_SETTLE_CALLER"] = args.settle_caller
+        env["EU4_GFX_CHECKPOINT_MIN_SETTLE_DRAWS"] = str(max(0, args.min_settle_draws))
+    if args.dump_targets:
+        env["EU4_GFX_DUMP_TARGETS"] = str(Path(output))
+    if args.shader_cache:
+        env["EU4_GFX_SHADER_CACHE"] = str(
+            Path(args.shader_cache).expanduser().resolve()
+        )
     if args.draw_sequence:
         env["EU4_GFX_DRAW_SEQUENCE"] = "1"
     if args.logical_prefix:
@@ -2187,6 +2244,32 @@ def _parser() -> argparse.ArgumentParser:
     prb.add_argument("--output", required=True)
     prb.add_argument("--campaign-run-root")
     prb.add_argument("--reference")
+    prb.add_argument("--shader-cache")
+    prb.add_argument("--skip-unsupported", action="store_true")
+    prb.add_argument("--texture-diagnostics", action="store_true")
+    prb.add_argument("--uniform-trace", action="store_true")
+    prb.add_argument("--swap-dump", action="store_true")
+    prb.add_argument("--dump-targets", action="store_true")
+    prb.add_argument("--min-uptime-ms", type=int, default=0)
+    prb.add_argument("--texture-bind-trace", action="store_true")
+    prb.add_argument("--uniform-dump", action="store_true")
+    prb.add_argument("--composite-dump", action="store_true")
+    prb.add_argument("--resolve-trace", action="store_true")
+    prb.add_argument("--order-trace", action="store_true")
+    prb.add_argument("--pipeline-stats", action="store_true")
+    prb.add_argument("--metal-validation", action="store_true")
+    prb.add_argument("--texture-type-trace", action="store_true")
+    prb.add_argument("--sample-texture-dump", action="store_true")
+    prb.add_argument("--element-trace", action="store_true")
+    prb.add_argument("--depth-trace", action="store_true")
+    prb.add_argument("--sampler-trace", action="store_true")
+    prb.add_argument("--vertex-trace", action="store_true")
+    prb.add_argument("--vertex-trace-stage", default="")
+    prb.add_argument("--settle-caller", default="")
+    prb.add_argument("--min-settle-draws", type=int, default=0)
+    prb.add_argument("--no-cull", action="store_true")
+    prb.add_argument("--no-blend", action="store_true")
+    prb.add_argument("--sample-texture-stage", default="")
     prb.add_argument(
         "--qualified-sources",
         default=str(ROOT / "analysis" / "gfx-shader" / "v0" / "qualified-sources.json"),

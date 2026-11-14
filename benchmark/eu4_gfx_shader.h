@@ -56,6 +56,29 @@ size_t eu4_gfx_shader_qualified_count(void);
 /* Clear qualified-hash table (tests). */
 void eu4_gfx_shader_clear_qualified_hashes(void);
 
+/* Runtime shader cache (gfx-shader-cache/v1) produced by
+   automation/gfx_shader_translate.py. Stages are admitted by the exact
+   SHA-256 of the engine's compiler input; the cache carries the MSL file,
+   entry point, attribute/varying locations, std140 uniform layout and sampler
+   bindings. Returns the number of cached stages, or -1 on an unreadable file. */
+int eu4_gfx_shader_load_cache(const char *path);
+size_t eu4_gfx_shader_cache_count(void);
+
+/* 1 when this engine shader object was admitted from the runtime cache. */
+int eu4_gfx_shader_is_generic(const void *shader);
+
+/* Borrowed metadata dictionaries for the admitted stages (nil when absent).
+   Foundation objects; ObjC++ callers only. */
+void *eu4_gfx_shader_vertex_stage(const void *shader);
+void *eu4_gfx_shader_pixel_stage(const void *shader);
+const char *eu4_gfx_shader_cache_dir(void);
+
+/* Lazy MSL compilation for the generic path. Returns 1 and sets both
+   functions. */
+int eu4_gfx_shader_generic_functions(const void *shader, void *device,
+                                     void **vertex_function,
+                                     void **fragment_function);
+
 /* Load exact compiler-input SHA-256 values from the tracked qualification
    manifest (analysis/gfx-shader/v0/qualified-sources.json). Returns the number
    registered, or -1 on an unreadable/malformed manifest. This never enables
