@@ -279,6 +279,16 @@ def _normalize_source(source: str, stage: str) -> dict:
     samplers: list[dict] = []
     sampler_binding = 0
     used_bindings: set[int] = set()
+    reserved_bindings: set[int] = set()
+    for match in re.finditer(
+        r"^[ \t]*uniform[ \t]+(?P<type>sampler[0-9A-Za-z_]*)[ \t]+"
+        r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)[ \t]*;",
+        text,
+        flags=re.M,
+    ):
+        suffix = re.fullmatch(r"tex(\d+)", match.group("name"))
+        if suffix:
+            reserved_bindings.add(int(suffix.group(1)))
 
     def sampler_replacement(match: re.Match) -> str:
         nonlocal sampler_binding
@@ -292,7 +302,7 @@ def _normalize_source(source: str, stage: str) -> dict:
         # default) to the shader.
         suffix = re.fullmatch(r"tex(\d+)", name)
         binding = int(suffix.group(1)) if suffix else sampler_binding
-        while binding in used_bindings:
+        while binding in used_bindings or (not suffix and binding in reserved_bindings):
             binding += 1
         if binding > MAX_SAMPLER_BINDINGS:
             raise TranslationError("too many sampler bindings")
