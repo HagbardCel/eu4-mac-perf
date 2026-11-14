@@ -1667,6 +1667,33 @@ static int run_draw_semantics(void) {
     ok &= eu4_gfx_gl_type_size(0x1403) == 2;
     ok &= eu4_gfx_gl_type_size(0x1401) == 1;
     ok &= eu4_gfx_gl_type_size(0x9999) == 0;
+    int32_t range_first = 0, range_last = 0;
+    /* Nonindexed, first 8 count 3, per-vertex. */
+    ok &= eu4_gfx_capture_vertex_range(0, 0, 1, 8, 3, 0, 0,
+                                       &range_first, &range_last) == 0 &&
+          range_first == 8 && range_last == 10;
+    /* Same draw, positive divisors fetch element 0 regardless of first. */
+    ok &= eu4_gfx_capture_vertex_range(1, 0, 1, 8, 3, 0, 0,
+                                       &range_first, &range_last) == 0 &&
+          range_first == 0 && range_last == 0;
+    ok &= eu4_gfx_capture_vertex_range(2, 0, 1, 8, 3, 0, 0,
+                                       &range_first, &range_last) == 0 &&
+          range_first == 0 && range_last == 0;
+    /* Indexed [0,4,7] base 3 -> effective 3..10. */
+    ok &= eu4_gfx_capture_vertex_range(0, 1, 1, 0, 3, 3, 10,
+                                       &range_first, &range_last) == 0 &&
+          range_first == 3 && range_last == 10;
+    /* Five indexed instances, divisor 2 -> elements 0..2. */
+    ok &= eu4_gfx_capture_vertex_range(2, 1, 5, 0, 3, 0, 0,
+                                       &range_first, &range_last) == 0 &&
+          range_first == 0 && range_last == 2;
+    /* Overflow and invalid ranges fail without clamping. */
+    ok &= eu4_gfx_capture_vertex_range(0, 0, 1, INT32_MAX, 2, 0, 0,
+                                       &range_first, &range_last) == -1;
+    ok &= eu4_gfx_capture_vertex_range(0, 0, 1, -1, 3, 0, 0,
+                                       &range_first, &range_last) == -1;
+    ok &= eu4_gfx_capture_attribute_count_ok(16, 16) == 1;
+    ok &= eu4_gfx_capture_attribute_count_ok(17, 16) == 0;
     printf("draw_semantics=%d\n", ok);
     return ok ? 0 : 1;
 }

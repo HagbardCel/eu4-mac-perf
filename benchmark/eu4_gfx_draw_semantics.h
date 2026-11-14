@@ -51,6 +51,53 @@ static inline int eu4_gfx_indexed_range(const uint16_t *indices, int count,
     return 0;
 }
 
+/* Selects the vertex/instance element range captured for one attribute.
+   Instance-rate attributes always start at element 0; per-vertex indexed
+   attributes use the actual sparse effective range; per-vertex nonindexed
+   attributes use first..first+count-1 with checked arithmetic. Returns 0 on
+   success and -1 for invalid/overflowing ranges. */
+static inline int eu4_gfx_capture_vertex_range(
+    int divisor, int indexed, int32_t instance_count, int32_t first,
+    int32_t count, int32_t index_first, int32_t index_last,
+    int32_t *out_first, int32_t *out_last) {
+    if (out_first == NULL || out_last == NULL) {
+        return -1;
+    }
+    if (divisor > 0) {
+        *out_first = 0;
+        *out_last = instance_count > 0 ? (instance_count - 1) / divisor : 0;
+        return 0;
+    }
+    if (indexed) {
+        if (index_first < 0 || index_last < index_first) {
+            return -1;
+        }
+        *out_first = index_first;
+        *out_last = index_last;
+        return 0;
+    }
+    if (first < 0 || count < 0) {
+        return -1;
+    }
+    if (count == 0) {
+        *out_first = first;
+        *out_last = first;
+        return 0;
+    }
+    int64_t last = (int64_t)first + (int64_t)count - 1;
+    if (last > INT32_MAX) {
+        return -1;
+    }
+    *out_first = first;
+    *out_last = (int32_t)last;
+    return 0;
+}
+
+/* True when every active attribute fits the fixed capture representation. */
+static inline int eu4_gfx_capture_attribute_count_ok(int active, int capacity) {
+    return active >= 0 && capacity >= 0 && active <= capacity;
+}
+
 /* Checks that one complete attribute element fits in its bound buffer. The
    complete accessed range is offset + index*stride + width; a tightly sized
    final vertex does not need a full trailing stride. Returns 0 on overflow or

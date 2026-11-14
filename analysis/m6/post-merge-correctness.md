@@ -55,6 +55,29 @@ refused; the 16th out of bounds with a valid 17th refused (proving no overwrite
 of the 16th record); capacity guard accepts `next_buffer=25, location=30` and
 refuses `31`/`location=31` with diagnostics.
 
+## Capture range completeness
+
+`capture_attributes` now selects ranges in the original GL order:
+instance-rate attributes first (`0..(instance_count-1)/divisor`), then indexed
+per-vertex attributes from the actual sparse index range, then nonindexed
+per-vertex attributes as `first..first+count-1`. Nonindexed draws with a
+positive divisor therefore capture element 0 regardless of `first`; indexed
+instanced draws use the actual instance count. The speculative signed-32-bit
+`base_vertex + count - 1` initialization was removed; indexed ranges come only
+from the read index data. Nonindexed arithmetic is checked in 64 bits and
+refused on overflow rather than clamped.
+
+`GL_ACTIVE_ATTRIBUTES` is checked against `FTRACE_MAX_ATTRS`; overflow marks
+the capture failed and publishes the frame with `complete=false` and reason
+`attribute_capacity`. A local CGL query of the legacy Apple OpenGL environment
+reports `GL_MAX_VERTEX_ATTRIBS=16`, so the condition is impossible there with
+the current 16-entry representation; the guard remains for environments with a
+larger limit.
+
+Regressions cover nonindexed divisor 0/1/2 ranges, indexed `[0,4,7]` base 3
+(3..10), five instances divisor 2 (0..2), `INT32_MAX` overflow, invalid first,
+and attribute counts 16/17 against the recorder limit.
+
 ## Vertex-fetch semantics
 
 `SShaderOpenGL::EnableVertexAttribArrays` (`0x15ea970`) configures

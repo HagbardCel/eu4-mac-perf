@@ -239,6 +239,7 @@ static void texture_cache_put(const char *key, const char *levels) {
 }
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
+static const char *g_capture_failure_reason;
 
 /* Entry-side draw arguments. The gateway's exit frame holds post-call
  * registers, so every engine argument the packet needs is captured here. */
@@ -1037,10 +1038,10 @@ static int capture_attributes(GLuint program, int indexed, int first, int count,
     glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &previous_array);
     glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &previous_element);
 
-    int32_t index_first = indexed ? base_vertex : first;
-    int32_t index_last = indexed
-        ? base_vertex + (count > 0 ? count - 1 : 0)
-        : first + (count > 0 ? count - 1 : 0);
+    /* Indexed ranges are populated from the actual index data. Nonindexed
+       ranges are selected per attribute with checked 64-bit arithmetic. */
+    int32_t index_first = 0;
+    int32_t index_last = 0;
     int range_valid = 1;
     int capture_error = 0;
     int index_read_error = 0;
@@ -1101,6 +1102,15 @@ static int capture_attributes(GLuint program, int indexed, int first, int count,
     glGetProgramiv(program, GL_ACTIVE_ATTRIBUTES, &attribute_count);
     if (attribute_count < 0) {
         attribute_count = 0;
+    }
+    GLint max_vertex_attribs = 0;
+    glGetIntegerv(GL_MAX_VERTEX_ATTRIBS, &max_vertex_attribs);
+    if (!eu4_gfx_capture_attribute_count_ok((int)attribute_count,
+                                            FTRACE_MAX_ATTRS)) {
+        capture_error = 1;
+        range_valid = 0;
+        g_capture_failure_reason = "attribute_capacity";
+        (void)max_vertex_attribs;
     }
     const int element_bytes = 2;
     for (int i = 0; i < attribute_count && i < FTRACE_MAX_ATTRS; i++) {
@@ -1176,23 +1186,14 @@ static int capture_attributes(GLuint program, int indexed, int first, int count,
         }
         int32_t vertex_first = 0;
         int32_t vertex_last = 0;
-        if (indexed) {
-            if (divisor > 0) {
-                vertex_first = 0;
-                vertex_last = instance_count > 0
-                    ? (instance_count - 1) / divisor : 0;
-            } else {
-                vertex_first = index_first;
-                vertex_last = index_last;
-            }
-        } else {
-            vertex_first = first;
-            vertex_last = first + (count > 0 ? count - 1 : 0);
-        }
-        if (vertex_first < 0) {
-            vertex_first = 0;
+        if (eu4_gfx_capture_vertex_range(divisor, indexed, instance_count,
+                                         first, count, index_first, index_last,
+                                         &vertex_first, &vertex_last) != 0) {
             range_valid = 0;
             capture_error = 1;
+            g_capture_failure_reason = "vertex_range";
+            vertex_first = 0;
+            vertex_last = 0;
         }
         GLint buffer_size = 0;
         if (buffer != 0) {
@@ -1979,7 +1980,9 @@ static void finish_capture(const char *reason) {
     write_frame_manifest(have_reference && !g.truncated && !g.capture_failed,
                          g.truncated ? "draw_cap"
                                      : (g.capture_failed
-                                            ? "capture_failed"
+                                            ? (g_capture_failure_reason
+                                                   ? g_capture_failure_reason
+                                                   : "capture_failed")
                                             : (have_reference ? reason : "reference_read")));
     if (g.events != NULL) {
         fclose(g.events);
@@ -2003,6 +2006,7 @@ static void start_capture_at_frame(int next_frame) {
     g.event_count = 0;
     g.truncated = 0;
     g.capture_failed = 0;
+    g_capture_failure_reason = NULL;
     g.have_seed = 0;
     g.seed_emitted = 0;
     g.seed_json[0] = 0;
