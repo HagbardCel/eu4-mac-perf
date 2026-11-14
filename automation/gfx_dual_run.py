@@ -738,6 +738,29 @@ def _release_once(launched: dict, state: CampaignState, role: str,
 
 
 
+
+def _process_failure(result: dict) -> bool:
+    """True only for an abnormal exit that was observed before cleanup.
+
+    SIGKILL/SIGTERM produced by our own bounded termination is not a renderer
+    process failure.  Older results that lack ``exit_code_before_stop`` are
+    interpreted using the stop reason.
+    """
+    stop_reason = (result.get("stop") or {}).get("reason")
+    for process in (result.get("processes") or {}).values():
+        if not isinstance(process, dict):
+            continue
+        if "exit_code_before_stop" in process:
+            code = process.get("exit_code_before_stop")
+        else:
+            code = process.get("exit_code")
+            if code in (-9, -15) and stop_reason != "process_exit":
+                continue
+        if type(code) is int and code != 0:
+            return True
+    return False
+
+
 def classify_campaign(result: dict, scenario: dict, *, max_frames: int) -> dict:
     """Separate execution outcome from rendering qualification.
 
@@ -770,15 +793,7 @@ def classify_campaign(result: dict, scenario: dict, *, max_frames: int) -> dict:
     if result.get("error") and "exception" in str(stop.get("reason") or ""):
         classification = "infrastructure_failure"
         reasons.append("campaign raised an internal error")
-    elif any(
-        type(process.get("exit_code")) is int and process["exit_code"] not in (0, -15)
-        for process in (result.get("processes") or {}).values()
-        if isinstance(process, dict)
-    ) or any(
-        type(item.get("returncode")) is int and item["returncode"] not in (0, -15)
-        for item in (result.get("terminations") or [])
-        if isinstance(item, dict)
-    ):
+    elif _process_failure(result):
         classification = "process_failure"
         reasons.append("an owned game process exited abnormally")
     elif health.get("verdict") == "failed":
@@ -1480,7 +1495,8 @@ def run_campaign(
             attempt(f"record-exit-{role}",
                     lambda item=item, role=role: result.setdefault(
                         "processes", {}).setdefault(role, {}).update(
-                            {"exit_code": item.process.poll()}))
+                            {"exit_code_before_stop": item.process.poll(),
+                             "exit_code": item.process.poll()}))
         if mode == "lockstep" and state is not None:
             for role, item in list(launched.items()):
                 def release_pending(item=item, role=role):
