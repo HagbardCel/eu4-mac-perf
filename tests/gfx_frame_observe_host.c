@@ -27,6 +27,10 @@ int main(int argc, char **argv) {
         return 2;
     }
     const char *mode = argv[2];
+    if (strcmp(mode, "lockstep-timeout") == 0) {
+        setenv("EU4_GFX_FRAME_LOCKSTEP", "1", 1);
+        setenv("EU4_GFX_FRAME_LOCKSTEP_TIMEOUT_MS", "100", 1);
+    }
     const int width = 8, height = 6;
     uint8_t pixels[8 * 6 * 4];
     if (strcmp(mode, "disabled") == 0) {
@@ -46,6 +50,18 @@ int main(int argc, char **argv) {
         fclose(file);
     }
     int frames = strcmp(mode, "gap") == 0 ? 4 : 10;
+    if (strcmp(mode, "lockstep-timeout") == 0) {
+        eu4_gfx_frame_observe_note_draw(0xedfcd1);
+        uint32_t draws = 0, distinct = 0;
+        uint64_t signature = 0;
+        eu4_gfx_frame_observe_take_stats(&draws, &signature, &distinct);
+        if (eu4_gfx_frame_observe_emit_metadata(
+                1728, 1117, "lower_left", 1, draws, signature, distinct, 1, "") != 0) {
+            return 6;
+        }
+        printf("waited=%d\n", eu4_gfx_frame_observe_lockstep_wait(1, 50));
+        return 0;
+    }
     if (strcmp(mode, "metadata") == 0) {
         for (int index = 1; index <= 5; index++) {
             eu4_gfx_frame_observe_note_draw(0xedfcd1);

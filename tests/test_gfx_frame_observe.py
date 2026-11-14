@@ -82,6 +82,8 @@ class FrameObserveHostTests(unittest.TestCase):
         self.assertEqual(dump["backend"], "opengl")
         self.assertEqual(dump["session"], "session-test")
         self.assertEqual(dump["raw_bytes"], dump["width"] * dump["height"] * 4)
+        self.assertEqual(dump["draws"], 3)
+        self.assertNotEqual(dump["caller_signature"], "0x0000000000000000")
         raw = Path(dump["raw_file"]).read_bytes()
         self.assertEqual(len(raw), dump["raw_bytes"])
         self.assertEqual(hashlib.sha256(raw).hexdigest(), dump["sha256"])
@@ -109,6 +111,16 @@ class FrameObserveHostTests(unittest.TestCase):
         self.assertIn("wants4=0", ran.stdout)
         self.assertEqual(list((directory / "captured").glob("frame-*")), [])
         self.assertEqual(list((directory / "previews").iterdir()), [])
+
+    def test_lockstep_timeout_is_recorded(self):
+        directory, ran = self.run_host("lockstep-timeout")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("waited=1", ran.stdout)
+        rows = [json.loads(line) for line in
+                (directory / "lockstep-timeout.jsonl").read_text().splitlines()]
+        self.assertEqual(rows[0]["schema"], "gfx-lockstep-timeout/v1")
+        self.assertEqual(rows[0]["frame_index"], 1)
+        self.assertEqual(rows[0]["backend"], "opengl")
 
     def test_disabled_stream_writes_nothing(self):
         directory, ran = self.run_host("disabled")

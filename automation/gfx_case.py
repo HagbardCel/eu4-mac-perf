@@ -81,7 +81,10 @@ def _choose_pair(result: dict, pair_index: int | None = None) -> dict | None:
     frames = result.get("frames") or {}
     summary = frames.get("comparison") or {}
     if pair_index is not None:
-        return None
+        raise ValueError(
+            "pair_index selection is not available in this result schema; "
+            "inspect the recorded first/last pair instead"
+        )
     if summary.get("first_failure"):
         return summary["first_failure"]
     return frames.get("last_pair")

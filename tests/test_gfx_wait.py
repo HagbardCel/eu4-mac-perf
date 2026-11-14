@@ -119,6 +119,14 @@ class WaitTests(unittest.TestCase):
         self.assertEqual(result.status, gfx_wait.DEADLINE)
         self.assertLessEqual(result.elapsed_seconds, 13.0)
 
+    def test_a_broken_probe_cannot_be_hidden_by_a_later_success(self):
+        result = self.wait({
+            "broken": lambda: (_ for _ in ()).throw(RuntimeError("probe broke")),
+            "checkpoint": lambda: True,
+        })
+        self.assertEqual(result.status, gfx_wait.ERROR)
+        self.assertIn("probe broke", result.reason)
+
     def test_condition_error_is_reported(self):
         def broken():
             raise RuntimeError("probe broke")

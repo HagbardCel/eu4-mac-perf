@@ -1260,10 +1260,17 @@ def run_campaign(
         if lease is not None:
             lease.release()
             lease = None
+        finished_tokens = set()
         for role, item in launched.items():
             ledger_status = "completed" if item.process.returncode == 0 else "failed"
             launch_ledger.finish(ledger_path, item.token, pid=item.process.pid,
                                  status=ledger_status)
+            finished_tokens.add(item.token)
+        for token in tokens:
+            if token not in finished_tokens:
+                # A reserved claim whose process was never registered is still
+                # charged and must not remain open.
+                launch_ledger.finish(ledger_path, token, pid=None, status="failed")
         try:
             manifest = store.write_manifest()
             result["artifacts"] = store.summary()

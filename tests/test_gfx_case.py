@@ -153,6 +153,10 @@ class CaseBuilderTests(unittest.TestCase):
         self.assertEqual(replay["status"], gfx_case.INCOMPLETE)
         self.assertIn("digest", replay["reason"])
 
+    def test_pair_index_is_not_silently_ignored(self):
+        with self.assertRaises(ValueError):
+            gfx_case.build_case(self.run, pair_index=3)
+
     def test_missing_raw_frames_are_incomplete_evidence(self):
         pair = dict(self.pair, dumps={"reference": {"found": {}}, "candidate": {"found": {}}})
         self.result["frames"] = {"comparison": {"first_failure": pair}, "last_pair": pair}

@@ -83,6 +83,25 @@ class ToolTests(unittest.TestCase):
                 finally:
                     session.close()
 
+    def test_session_terminate_refuses_a_foreign_worktree(self):
+        with tempfile.TemporaryDirectory() as registry:
+            with mock.patch.dict(os.environ, {"EU4_GFX_SESSION_ROOT": registry}):
+                session = gfx_session.Session.create(
+                    Path(registry) / "runs", workflow_id="foreign",
+                    profile="early", session_root_path=Path(registry),
+                )
+                try:
+                    state = json.loads((session.run_dir / "session.json").read_text())
+                    state["worktree"] = "/some/other/worktree"
+                    (session.run_dir / "session.json").write_text(json.dumps(state))
+                    code, value = self.call(["eu4_session", "terminate",
+                                             "--run", str(session.run_dir)])
+                    self.assertEqual(code, 2)
+                    self.assertEqual(value["status"], "refused")
+                    self.assertIn("another worktree", value["reason"])
+                finally:
+                    session.close()
+
     def test_capture_health_on_a_run(self):
         run = self.root / "run"
         (run / "reference" / "observe").mkdir(parents=True)

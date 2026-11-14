@@ -193,6 +193,10 @@ def wait_for(
 
         match = _check(conditions, kind="condition", result=result, exceptions=checks)
         if match is not None:
+            if checks:
+                result.status = ERROR
+                result.reason = "; ".join(checks[:4])
+                return result
             result.status = MET
             result.matched = match
             result.reason = ""

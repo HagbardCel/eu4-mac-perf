@@ -187,7 +187,6 @@ def assess_probe(result: dict, *, base: Path | None = None) -> dict:
         ("draw_reached", _flag(status.get("draw_reached"))),
         ("draw_encoded", _flag(status.get("draw_encoded"))),
         ("gpu_completed", _flag(status.get("gpu_completed"))),
-        ("pixels_captured", _flag(status.get("pixels_captured"))),
     ]
     artifact = result.get("artifacts")
     checkpoint = artifact.get("checkpoint") if isinstance(artifact, dict) else None
@@ -205,6 +204,10 @@ def assess_probe(result: dict, *, base: Path | None = None) -> dict:
         # Presentation is observable, but without a capture artifact the pixels
         # remain unverified.
         checks.append(("capture_artifact", None))
+    if _flag(status.get("pixels_captured")) is True and not isinstance(checkpoint, dict):
+        # A pixel claim without a capture artifact is contradicted evidence,
+        # whatever the overall label says.
+        checks.append(("pixels_claim_without_capture", False))
     record = _validity_from_checks(checks)
     extra = [payload_reason] if payload_reason else []
     if overall not in (None, "captured", "presented") and record["status"] == VALID:
@@ -677,6 +680,21 @@ def scan_run(run_dir: Path, *, health: GpuHealth | None = None) -> dict:
         if path.is_file():
             _scan_stderr(path, health)
             break
+
+    lockstep_timeout = run_dir / "lockstep-timeout.jsonl"
+    if lockstep_timeout.is_file():
+        for row in _read_jsonl(lockstep_timeout):
+            backend = str(row.get("backend") or "unknown")
+            frame = row.get("frame_index")
+            health.add(
+                "instrumentation",
+                f"{backend} lockstep wait timed out at frame {frame}",
+                source=str(lockstep_timeout),
+                symbol="lockstep",
+                draw=str(frame) if frame is not None else None,
+                signature=f"lockstep_timeout:{backend}",
+                detail={"frame_index": frame, "pid": row.get("pid")},
+            )
 
     health_file = run_dir / "gpu-health.jsonl"
     if health_file.is_file():

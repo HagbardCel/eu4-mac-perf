@@ -112,11 +112,21 @@ class CaptureValidityTests(unittest.TestCase):
         })
         self.assertEqual(result["status"], diag.INVALID)
 
+    def test_pixels_claim_without_checkpoint_is_invalid(self):
+        result = diag.assess_probe({
+            "overall": "draw_reached",
+            "status": {"draw_reached": True, "draw_encoded": True,
+                       "gpu_completed": True, "pixels_captured": True},
+            "artifacts": {},
+        })
+        self.assertEqual(result["status"], diag.INVALID)
+        self.assertTrue(any("pixels" in reason for reason in result["reasons"]))
+
     def test_presented_probe_without_checkpoint_is_unverified(self):
         result = diag.assess_probe({
             "overall": "presented",
             "status": {"draw_reached": True, "draw_encoded": True,
-                       "gpu_completed": True, "pixels_captured": True},
+                       "gpu_completed": True, "pixels_captured": False},
             "artifacts": {"presentation": {"presented": True}},
         })
         self.assertEqual(result["status"], diag.UNVERIFIED)
@@ -255,6 +265,17 @@ class HealthGateTests(unittest.TestCase):
             diag.normalize_message("buffer(0x1234) failed at 17 for \"x\""),
             diag.normalize_message("buffer(0xdead) failed at 99 for \"y\""),
         )
+
+    def test_lockstep_timeout_is_an_instrumentation_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary)
+            (run / "lockstep-timeout.jsonl").write_text(
+                '{"schema":"gfx-lockstep-timeout/v1","backend":"opengl",'
+                '"frame_index":12,"pid":7}\n', encoding="utf-8")
+            summary = diag.scan_run(run)
+            self.assertEqual(summary["verdict"], diag.DEGRADED)
+            self.assertTrue(summary["instrumentation_failures"])
+            self.assertFalse(diag.health_gate(summary)["allow"])
 
     def test_scan_real_spike_rejection_if_present(self):
         # The feasibility spike produced this exact artifact; when it is present

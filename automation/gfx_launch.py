@@ -222,7 +222,17 @@ def spawn(role: str, config: LaunchConfig, run_dir: Path, *, lease: launch_lease
     finally:
         stdout.close()
         stderr.close()
-    identity = session.register(role, process, token=token or None)
+    try:
+        identity = session.register(role, process, token=token or None)
+    except BaseException:
+        # The child was created by this session even if registration failed;
+        # it must not become an untracked EU4 process.
+        try:
+            captured = gfx_session.ProcessIdentity.capture(process.pid, role=role)
+            gfx_session.terminate_owned(captured, process=process, grace_seconds=5.0)
+        except Exception:  # noqa: BLE001
+            pass
+        raise
     return Launched(
         role=role,
         backend=backend,

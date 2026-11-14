@@ -129,6 +129,12 @@ def eu4_session(args: argparse.Namespace) -> dict:
         return _envelope("eu4_session", "ok", gfx_session.Session.load(run))
     if args.session_op == "terminate":
         state = _read_json(run / "session.json")
+        worktree = Path(str(state.get("worktree", ""))).expanduser().resolve()
+        if not getattr(args, "force", False) and worktree != ROOT.resolve():
+            return _envelope(
+                "eu4_session", "refused", reason=(
+                    "session belongs to another worktree; pass --force only if "
+                    "you own it"))
         processes = state.get("processes") or []
         results = []
         for row in processes:
@@ -292,6 +298,7 @@ def _parser() -> argparse.ArgumentParser:
     session.add_argument("--executable", default=None)
     session.add_argument("--run", type=Path, default=None)
     session.add_argument("--grace", type=float, default=6.0)
+    session.add_argument("--force", action="store_true")
 
     capture = sub.add_parser("eu4_capture")
     capture.add_argument("capture_op", choices=("health", "frames", "request", "probe"))

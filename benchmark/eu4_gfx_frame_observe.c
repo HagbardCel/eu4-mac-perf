@@ -40,6 +40,9 @@ static int g_lockstep;
 static uint32_t g_lockstep_timeout_ms = 8000;
 static uint64_t g_lockstep_timeouts;
 static char g_origin[16] = "top_left";
+static char g_lockstep_timeout_path[OBS_MAX_PATH];
+static uint32_t g_last_draws;
+static uint64_t g_last_signature;
 static uint32_t g_ring_size = 8;
 static uint64_t g_last_index;
 static uint64_t g_skipped;
@@ -269,6 +272,8 @@ int eu4_gfx_frame_observe_init(const char *backend, const char *dir,
     snprintf(g_request, sizeof g_request, "%s/capture-request.json", dir);
     snprintf(g_ready, sizeof g_ready, "%s/ready", dir);
     snprintf(g_release, sizeof g_release, "%s/release", dir);
+    snprintf(g_lockstep_timeout_path, sizeof g_lockstep_timeout_path,
+             "%s/lockstep-timeout.jsonl", dir);
     const char *lockstep = getenv("EU4_GFX_FRAME_LOCKSTEP");
     if (lockstep != NULL && strcmp(lockstep, "1") == 0) {
         g_lockstep = 1;
@@ -572,6 +577,8 @@ int eu4_gfx_frame_observe_emit(const uint8_t *bgra, uint32_t width,
     if (origin != NULL && origin[0] != 0) {
         snprintf(g_origin, sizeof g_origin, "%s", origin);
     }
+    g_last_draws = draws;
+    g_last_signature = signature;
     char full_digest[65];
     char preview_digest[65];
     uint32_t preview_w = 0, preview_h = 0;
@@ -672,6 +679,8 @@ int eu4_gfx_frame_observe_emit_metadata(uint32_t width, uint32_t height,
     if (frame_index == 0 || frame_index > OBS_MAX_FRAMES) {
         return -1;
     }
+    g_last_draws = draws;
+    g_last_signature = signature;
     pthread_mutex_lock(&g_lock);
     if (g_emitted >= OBS_MAX_FRAMES) {
         g_dropped += 1;
@@ -746,10 +755,21 @@ int eu4_gfx_frame_observe_lockstep_wait(uint32_t frame_index,
         }
         /* The coordinator needs a dump while the process is paused here. */
         pthread_mutex_lock(&g_lock);
-        handle_request(0, 0, 1, 1);
+        handle_request(g_last_draws, g_last_signature, 1, 1);
         pthread_mutex_unlock(&g_lock);
         usleep(1000);
     }
     g_lockstep_timeouts += 1;
+    {
+        char line[256];
+        int length = snprintf(
+            line, sizeof line,
+            "{\"schema\":\"gfx-lockstep-timeout/v1\",\"backend\":\"%s\","
+            "\"pid\":%d,\"frame_index\":%u}\n",
+            g_backend, (int)getpid(), frame_index);
+        if (length > 0 && (size_t)length < sizeof line) {
+            (void)append_line(g_lockstep_timeout_path, line);
+        }
+    }
     return 1;
 }
