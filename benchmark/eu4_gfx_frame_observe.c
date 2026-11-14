@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -50,7 +51,7 @@ static char g_captured[OBS_MAX_PATH];
 static char g_request[OBS_MAX_PATH];
 static char g_ack_path[OBS_MAX_PATH];
 static int g_pause_at_draws;
-static int g_pause_sent;
+static _Atomic int g_pause_sent;
 static uint64_t g_request_id;
 static uint64_t g_pending_frames[OBS_MAX_DUMPS];
 static int g_pending_count;
@@ -545,10 +546,12 @@ static void dump_ring(obs_ring_slot *slot) {
    automation is added.  If SDL is not reachable, the request is recorded as
    unavailable and normal observation continues. */
 static void maybe_request_pause(uint32_t draws) {
-    if (g_pause_at_draws <= 0 || g_pause_sent || (int)draws < g_pause_at_draws) {
+    if (g_pause_at_draws <= 0 || (int)draws < g_pause_at_draws) {
         return;
     }
-    g_pause_sent = 1;
+    if (atomic_exchange_explicit(&g_pause_sent, 1, memory_order_acq_rel)) {
+        return;
+    }
     typedef struct {
         uint32_t type;
         uint32_t timestamp;
