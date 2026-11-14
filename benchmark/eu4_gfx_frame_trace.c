@@ -126,6 +126,7 @@ static struct {
     int seed_height;
     int seed_emitted;
     int truncated;
+    int capture_failed;
 
     struct blob_entry *blobs;
     int blob_count;
@@ -1974,9 +1975,11 @@ static void finish_capture(const char *reason) {
             free(pixels);
         }
     }
-    write_frame_manifest(have_reference && !g.truncated,
+    write_frame_manifest(have_reference && !g.truncated && !g.capture_failed,
                          g.truncated ? "draw_cap"
-                                     : (have_reference ? reason : "reference_read"));
+                                     : (g.capture_failed
+                                            ? "capture_failed"
+                                            : (have_reference ? reason : "reference_read")));
     if (g.events != NULL) {
         fclose(g.events);
         g.events = NULL;
@@ -1998,6 +2001,7 @@ static void start_capture_at_frame(int next_frame) {
     g.capturing_frame = next_frame;
     g.event_count = 0;
     g.truncated = 0;
+    g.capture_failed = 0;
     g.have_seed = 0;
     g.seed_emitted = 0;
     g.seed_json[0] = 0;
@@ -2245,6 +2249,8 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
             if (!out.failed && buffer != NULL) {
                 emit_event(buffer);
                 g.event_count++;
+            } else {
+                g.capture_failed = 1;
             }
             free(buffer);
         }
@@ -2424,6 +2430,8 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
             if (!out.failed && buffer != NULL) {
                 emit_event(buffer);
                 g.event_count++;
+            } else {
+                g.capture_failed = 1;
             }
             free(buffer);
         }

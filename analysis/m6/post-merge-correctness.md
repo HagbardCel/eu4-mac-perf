@@ -18,6 +18,8 @@ were introduced.
 | `_GfxSetRasterizerState` | `0x15ea35a` | Cull mode `master+0x54`, polygon mode `+0x58` (`0x1b02`=GL_FILL, `0x1b01`=GL_LINE), front face `+0x5c`, polygon-offset-fill enable `+0x60`, cull enable `+0x61`. |
 | `_GfxResolveTexture` | `0x15ece63` | Returns when source==destination and destination `+0x1b==0`; binds read FBO `source+8`, draw FBO `destination+0xc`, `glBlitFramebuffer(0,0,dstW,dstH, 0,0,srcW,srcH, GL_COLOR_BUFFER_BIT, GL_NEAREST)`, then restores the draw FBO and viewport from `master+0x78`. |
 | `_GfxSetIndexBuffer` | `0x15ec28e` | Binds `GL_ELEMENT_ARRAY_BUFFER` (`0x8893`) to the GL name at `header+4` and stores the count at `master+0x68`. The engine indices are 16-bit. |
+| `_GfxSetVertexBuffers` | `0x15ebf41` | Stores each slot header at `master+0x130+slot*8`, its binding offset at `master+0x150+slot*4`, and its stride at `master+0x160+slot*4`. Slot 0 also writes `master+0x64`/`master+0x6c`. The slot offset is a buffer origin, not a vertex-attribute offset. |
+| `SShaderOpenGL::EnableVertexAttribArrays` | `0x15ea970` | Binds `GL_ARRAY_BUFFER` per slot and calls `glVertexAttribPointer(location, size, type, normalized, slot_stride, element_offset + slot_offset)`; divisor comes from element byte `+0x20` and normalized from `+0x21`. Element stride is `0x28`. |
 
 ## Original defects and resolutions
 
