@@ -258,11 +258,14 @@ def final_comparison(frame_dir: Path, out_dir: Path,
         reference.read_bytes(), candidate.read_bytes(), width, height)
     policy = json.loads(Path(policy_path or DEFAULT_POLICY).read_text())
     thresholds = policy.get("thresholds") or {}
+    max_channel = int(thresholds.get("max_channel_error", 0))
+    max_fraction = float(thresholds.get("mismatched_fraction", 0.0))
+    max_mean = float(thresholds.get("mean_abs_error", 0.0))
+    mean_total = sum(float(value) for value in statistics["mean_abs_error"])
     passed = (
-        statistics["mismatched_pixels"] == 0
-        if int(thresholds.get("mismatched_fraction", 0)) == 0
-        else statistics["mismatched_fraction"]
-        <= float(thresholds["mismatched_fraction"])
+        statistics["max_channel_error"] <= max_channel
+        and statistics["mismatched_fraction"] <= max_fraction
+        and mean_total <= max_mean
     )
     return {
         "status": "match" if passed else "divergent",

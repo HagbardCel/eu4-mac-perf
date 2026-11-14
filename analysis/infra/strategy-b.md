@@ -213,7 +213,16 @@ python3.14 -m automation.gfx_replay_case replay --case . --out replay-rerun
    frame masks its pixels; a map/terrain frame is needed for pixel-level
    detection of that historical defect.
 
-## 10. Merge recommendation
+## 10. Efficiency measurements
+
+See [`strategy-b-metrics.json`](strategy-b-metrics.json). Four authentic EU4
+launches were attempted for display qualification (none qualified for focus
+isolation); no new GPU capture was taken. One authentic frame was replayed
+offline eight times; the qualified replay takes 4.12 s versus roughly 340 s to
+reach the title scene live, and the five renderer/provenance changes were
+validated without relaunching EU4.
+
+## 11. Merge recommendation
 
 The correctness fixes, dependency contract, independent replay, provenance
 enforcement, first-divergence experiment and portable case are mergeable as

@@ -205,7 +205,11 @@ def verify(case_dir: Path | str) -> dict:
     for name in required:
         if not (case_dir / name).is_file():
             problems.append(f"missing required {name}")
-    graph = json.loads((case_dir / "graph.json").read_text())
+    graph: dict = {}
+    try:
+        graph = json.loads((case_dir / "graph.json").read_text())
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        problems.append("graph.json is unreadable")
     return {
         "schema": "gfx-strategy-b-case-verification/v1",
         "case_id": manifest.get("case_id"),

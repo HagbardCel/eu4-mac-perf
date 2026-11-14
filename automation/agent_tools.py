@@ -320,7 +320,16 @@ def eu4_replay(args: argparse.Namespace) -> dict:
         }, reason="; ".join((report.get("evaluation") or {}).get("reasons") or []))
     if args.replay_op == "case":
         case_path = Path(args.case)
+        strategy_b_case = False
         if (case_path / "case.json").is_file():
+            try:
+                strategy_b_case = (
+                    json.loads((case_path / "case.json").read_text()).get("schema")
+                    == gfx_replay_case.SCHEMA
+                )
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                strategy_b_case = False
+        if strategy_b_case:
             verification = gfx_replay_case.verify(case_path)
             if args.replay_out:
                 report = gfx_replay_case.replay_case(case_path, Path(args.replay_out))
@@ -357,7 +366,16 @@ def eu4_replay(args: argparse.Namespace) -> dict:
 
 def eu4_case_inspect(args: argparse.Namespace) -> dict:
     path = Path(args.case)
+    strategy_b_case = False
     if (path / "case.json").is_file():
+        try:
+            strategy_b_case = (
+                json.loads((path / "case.json").read_text()).get("schema")
+                == gfx_replay_case.SCHEMA
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            strategy_b_case = False
+    if strategy_b_case:
         verification = gfx_replay_case.verify(path)
         manifest = _read_json(path / "case.json")
         graph = _read_json(path / "graph.json") if (path / "graph.json").is_file() else {}

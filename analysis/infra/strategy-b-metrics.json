@@ -1,0 +1,38 @@
+{
+  "schema": "gfx-strategy-b-metrics/v1",
+  "canonical_frame": "menu-occ300",
+  "authentic_eu4_launches": 4,
+  "background_launches": 4,
+  "background_launches_qualified": 0,
+  "live_launch_time_seconds": [
+    35,
+    38,
+    33,
+    36
+  ],
+  "live_captures": 0,
+  "captured_frames": 1,
+  "captured_frames_complete": 0,
+  "captured_frames_partial": 1,
+  "offline_replay_attempts": 8,
+  "offline_replay_seconds": 4.12,
+  "deterministic_replays": 2,
+  "final_mismatched_pixels": 0,
+  "final_pixels": 1930176,
+  "first_divergence_localized": true,
+  "first_divergence_kind": "intermediate",
+  "first_divergence_event": 291,
+  "sampler_defect_detected": true,
+  "sampler_defect_state_mismatches": 842,
+  "fixes_validated_without_relaunch": 5,
+  "case_files": 1237,
+  "case_bytes": 432013312,
+  "eu4_launch_to_window_seconds_min": 20,
+  "eu4_launch_to_title_seconds_observed": 340,
+  "replay_time_ratio": "~1/80 of a title-launch",
+  "notes": [
+    "Launches 2-4 were guard experiments; they rendered (820-1484 observations) but their windows were not visible to the window server.",
+    "The single unguarded launch placed the window on the physical display and took focus.",
+    "Offline replay timing excludes the ~1 s replay-host build."
+  ]
+}
