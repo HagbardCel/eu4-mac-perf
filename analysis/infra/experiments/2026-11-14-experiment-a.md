@@ -41,3 +41,15 @@ same-backend measurements.
 
 The diagnostic case (raw frames, difference image, statistics, analysis) was
 built at the session's `case/` directory; raw artifacts stay local.
+
+
+## Follow-up: pause timing is not synchronized
+
+A diagnostic run (`20261114T181705Z-c19ac0c9`) requested the same pause but the
+two processes froze at different game days (`56457144` vs `56457216`). Nine of
+ten pairs were not aligned; no comparable frame beyond the first was produced.
+The pause event itself is accepted, but pausing at a draw threshold does not
+guarantee the same simulation moment.
+
+Next requirement: pause before the simulation advances (or coordinate the pause
+on the engine update identity), not merely at a render-workload threshold.

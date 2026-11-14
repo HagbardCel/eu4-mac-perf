@@ -131,6 +131,7 @@ class CampaignState:
     identity_streak: int = 0
     identity_max_streak: int = 0
     last_identity: int = 0
+    samples: list[dict] = field(default_factory=list)
 
     def note_digest(self, role: str, digest: str | None) -> None:
         if not digest:
@@ -1466,6 +1467,17 @@ def run_campaign(
                         scenario,
                     )
                     pair["comparison"] = comparison
+                    if len(state.samples) < 256:
+                        stats = comparison.get("statistics") or {}
+                        state.samples.append({
+                            "reference_index": ref_index,
+                            "candidate_index": cand_index,
+                            "status": comparison.get("status"),
+                            "alignment": (comparison.get("alignment") or {}).get("status"),
+                            "mismatched_fraction": stats.get("mismatched_fraction"),
+                            "max_channel_error": stats.get("max_channel_error"),
+                            "mean_abs_error": stats.get("mean_abs_error"),
+                        })
                     if comparison.get("status") in (gfx_frame_compare.FAIL,
                                                     gfx_frame_compare.UNVERIFIED):
                         if comparison.get("status") == gfx_frame_compare.FAIL:
@@ -1548,6 +1560,7 @@ def run_campaign(
             "last_pair": state.last_pair,
             "policy": scenario["comparison"]["policy"],
             "comparison": _comparison_summary(state.pairs, scenario),
+            "samples": state.samples,
         }
         stop = {
             "reason": stop_reason,
