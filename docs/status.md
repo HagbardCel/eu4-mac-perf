@@ -83,8 +83,9 @@ passed**, so M6 is not accepted and PR #189 remains Draft.
   corrected implementation were accepted with the final resolve-trace
   requirement: UI 0.87/0.978/0.976, map affinity 0.943, zero refused draws, no
   failed resolves, GPU completion and presentation.
-- **Residual UI defect.** The Credits/Options button labels remain horizontally
-  mirrored. The UI region policy passes, but the text is not visually correct;
+- **Residual UI defect.** The Credits/Options button labels remain vertically inverted
+  (word order preserved; the earlier “horizontally mirrored” description was
+  incorrect). The UI region policy passes, but the text is not visually correct;
   this is the remaining M6 blocker.
 
 ## M4 — original-GL reference and Metal presentation (2026-11-12)

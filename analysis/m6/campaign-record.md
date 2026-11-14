@@ -1330,3 +1330,18 @@ resolves, GPU completion and presentation.
 Residual: the Credits/Options button labels are still horizontally mirrored.
 The UI region policy passes, but the text is visibly reflected; this remains
 the M6 blocker for a visually complete title scene.
+
+## UI label transform correction (2026-11-14)
+
+A closer tight-crop inspection shows the Credits/Options defect is a **vertical
+inversion with word order preserved**, not a horizontal mirror: the leading
+"C" stays on the left and the trailing "s" on the right, while the glyphs are
+flipped top-to-bottom. The earlier "horizontally mirrored" description was
+wrong and is corrected here.
+
+The producing draws remain events 310/311 (caller `0x15048ba`, program 43,
+textures 452/453). The live Options uniform block matches the captured
+`UNIFORM0[6]` values. `_GfxUpdateTextureRectangle` was prototyped and enabled
+with texture tracing; no `texture-update.jsonl` calls were observed and the
+labels did not change, so the prototype was reverted. The texture/UV contract
+that supplies the missing V inversion is still unidentified.
