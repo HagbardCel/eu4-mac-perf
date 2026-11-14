@@ -27,7 +27,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import gfx_case, gfx_diagnostics, gfx_dual_run, gfx_scenario  # noqa: E402
+from automation import (gfx_case, gfx_diagnostics, gfx_dual_run, gfx_frame_graph,
+                        gfx_independent_replay, gfx_replay_case, gfx_scenario)  # noqa: E402
 from automation import gfx_session, launch_lease, launch_ledger  # noqa: E402
 
 SCHEMA = "eu4-agent-tool/v1"
@@ -154,6 +155,19 @@ def eu4_session(args: argparse.Namespace) -> dict:
 
 
 def eu4_capture(args: argparse.Namespace) -> dict:
+    if args.capture_op == "graph":
+        if not args.frame_dir:
+            return _envelope("eu4_capture", "error",
+                             reason="graph requires --frame-dir")
+        graph = gfx_frame_graph.build(Path(args.frame_dir))
+        if args.out:
+            Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.out).write_text(
+                json.dumps(graph, indent=2) + "\n", encoding="utf-8")
+        status = {"complete": "ok", "partial": "partial"}.get(
+            graph["status"], "invalid")
+        return _envelope("eu4_capture", status, graph,
+                         reason="; ".join(graph.get("reasons") or []))
     run = Path(args.run).expanduser().resolve()
     if args.capture_op == "health":
         summary = gfx_diagnostics.scan_run(run)
@@ -221,6 +235,8 @@ def eu4_diff_run(args: argparse.Namespace) -> dict:
         profile=args.profile,
         staggered=bool(getattr(args, "staggered", False)),
         stagger_wait_seconds=float(getattr(args, "stagger_wait", 600.0)),
+        background=bool(getattr(args, "background", False)),
+        display_name=getattr(args, "display_name", "EU4 Test"),
     )
     qualification = result.get("qualification")
     if qualification is None:
@@ -273,7 +289,53 @@ def eu4_diff_inspect(args: argparse.Namespace) -> dict:
 
 
 def eu4_replay(args: argparse.Namespace) -> dict:
+    if args.replay_op == "independent":
+        if not args.frame or not args.replay_out:
+            return _envelope("eu4_replay", "error",
+                             reason="independent replay requires --frame and --replay-out")
+        faults: dict = {}
+        if getattr(args, "disable_render_target_vflip", False):
+            faults["disable_render_target_vflip"] = True
+        if getattr(args, "sampler_shift", None) is not None:
+            faults["sampler_shift"] = args.sampler_shift
+            faults["sampler_shift_min"] = args.sampler_shift_min
+        report = gfx_independent_replay.replay(
+            Path(args.frame), Path(args.replay_out), shaders=args.shaders, faults=faults)
+        status = {"complete": "ok", "partial": "partial"}.get(
+            report.get("status"), "invalid")
+        return _envelope("eu4_replay", status, {
+            "status": report.get("status"),
+            "evaluation": report.get("evaluation"),
+            "checkpoints": report.get("checkpoints"),
+            "binding_audit": report.get("binding_audit"),
+            "final": report.get("final"),
+            "first_divergence": report.get("first_divergence"),
+            "graph": {
+                "status": (report.get("graph") or {}).get("status"),
+                "counts": (report.get("graph") or {}).get("counts"),
+                "reasons": (report.get("graph") or {}).get("reasons"),
+                "boundary": (report.get("graph") or {}).get("boundary"),
+            },
+            "report": str(Path(args.replay_out) / "replay-report.json"),
+        }, reason="; ".join((report.get("evaluation") or {}).get("reasons") or []))
     if args.replay_op == "case":
+        case_path = Path(args.case)
+        if (case_path / "case.json").is_file():
+            verification = gfx_replay_case.verify(case_path)
+            if args.replay_out:
+                report = gfx_replay_case.replay_case(case_path, Path(args.replay_out))
+                return _envelope("eu4_replay", "ok", {
+                    "case": verification,
+                    "status": report.get("status"),
+                    "evaluation": report.get("evaluation"),
+                    "checkpoints": report.get("checkpoints"),
+                    "final": report.get("final"),
+                    "first_divergence": report.get("first_divergence"),
+                })
+            return _envelope("eu4_replay", "ok", {
+                "case": verification,
+                "next": "pass --out to re-execute this Strategy B case",
+            })
         result = dict(gfx_case.compare_case(Path(args.case)))
         replay_status = result.get("status", "unavailable")
         result["replay_status"] = replay_status
@@ -294,7 +356,37 @@ def eu4_replay(args: argparse.Namespace) -> dict:
 
 
 def eu4_case_inspect(args: argparse.Namespace) -> dict:
-    value = gfx_case.inspect_case(Path(args.case))
+    path = Path(args.case)
+    if (path / "case.json").is_file():
+        verification = gfx_replay_case.verify(path)
+        manifest = _read_json(path / "case.json")
+        graph = _read_json(path / "graph.json") if (path / "graph.json").is_file() else {}
+        report = _read_json(path / "report.json") if (path / "report.json").is_file() else {}
+        return _envelope(
+            "eu4_case_inspect", "ok" if verification["ok"] else "partial", {
+                "schema": manifest.get("schema"),
+                "case_id": manifest.get("case_id"),
+                "title": manifest.get("title"),
+                "verification": verification,
+                "graph": {
+                    "status": graph.get("status"),
+                    "counts": graph.get("counts"),
+                    "reasons": graph.get("reasons"),
+                    "unproven": graph.get("unproven"),
+                    "external_inputs": graph.get("external_inputs"),
+                    "renderer_generated": graph.get("renderer_generated"),
+                },
+                "replay": {
+                    "status": (report.get("status")),
+                    "final": report.get("final"),
+                    "checkpoints": report.get("checkpoints"),
+                    "binding_audit": report.get("binding_audit"),
+                    "first_divergence": report.get("first_divergence"),
+                },
+                "replay_command": manifest.get("replay_command"),
+                "files": len(manifest.get("files") or []),
+            })
+    value = gfx_case.inspect_case(path)
     return _envelope("eu4_case_inspect", "ok", value)
 
 
@@ -325,7 +417,8 @@ def _parser() -> argparse.ArgumentParser:
     session.add_argument("--force", action="store_true")
 
     capture = sub.add_parser("eu4_capture")
-    capture.add_argument("capture_op", choices=("health", "frames", "request", "probe"))
+    capture.add_argument("capture_op", choices=("health", "frames", "request", "probe", "graph"))
+    capture.add_argument("--frame-dir", type=Path, default=None)
     capture.add_argument("--run", type=Path, default=None)
     capture.add_argument("--role", choices=("reference", "candidate"), default=None)
     capture.add_argument("--frame", action="append", type=int, default=[])
@@ -351,18 +444,23 @@ def _parser() -> argparse.ArgumentParser:
                           default=None)
     diff_run.add_argument("--staggered", action="store_true")
     diff_run.add_argument("--stagger-wait", type=float, default=600.0)
+    diff_run.add_argument("--background", action="store_true")
+    diff_run.add_argument("--display-name", default="EU4 Test")
 
     inspect = sub.add_parser("eu4_diff_inspect")
     inspect.add_argument("--run", required=True, type=Path)
     inspect.add_argument("--build-case", action="store_true")
 
     replay = sub.add_parser("eu4_replay")
-    replay.add_argument("replay_op", choices=("case", "frame"))
+    replay.add_argument("replay_op", choices=("case", "frame", "independent"))
     replay.add_argument("--case", type=Path, default=None)
     replay.add_argument("--frame", default=None)
     replay.add_argument("--shaders", default=None)
-    replay.add_argument("--out", default=None)
+    replay.add_argument("--replay-out", type=Path, default=None)
     replay.add_argument("--only-event", type=int, default=None)
+    replay.add_argument("--disable-render-target-vflip", action="store_true")
+    replay.add_argument("--sampler-shift", type=int, default=None)
+    replay.add_argument("--sampler-shift-min", type=int, default=7)
 
     case = sub.add_parser("eu4_case_inspect")
     case.add_argument("--case", required=True, type=Path)
@@ -395,6 +493,7 @@ def main(argv: list[str] | None = None) -> int:
         code = 3
     text = json.dumps(value, indent=2, sort_keys=False) + "\n"
     if args.out is not None:
+        args.out = Path(args.out)
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(text, encoding="utf-8")
     print(text, end="")

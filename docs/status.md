@@ -2,6 +2,37 @@
 
 Authoritative summary of what is established, qualified, and in flight. Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
 
+## Strategy B — independent replay (2026-11-14)
+
+Capture once, replay independently. A canonical authentic OpenGL title frame
+(326 events, 317 draws) is replayed through the existing M6 Metal host. The
+replay now distinguishes external captured inputs from renderer-generated
+resources: 274 bindings use Metal render targets and 2,485 use captured
+assets/inputs; no captured OpenGL intermediate is seeded. The final output is
+pixel-identical (0 / 1,930,176, SHA-256 `ff2f4e2b…`) and two consecutive replays
+are deterministic (4.12 s each). Checkpoints for textures 431, 432, 443 and 447
+match exactly; the GL-RGB8/Metal-BGRA8 checkpoint 433 is diagnostic.
+
+The capture is **partial**, not complete: sampled full-extent texture 442 has no
+captured producer because resolve/copy operations are not recorded by the frame
+trace. A controlled V-flip fault localizes the earliest divergence to event 291
+(producer 289, program 349). The historical `tex7` defect is injected offline
+and the binding audit identifies the exact wrong engine unit at event 14 (842
+state mismatches) even though the title frame's terrain is overdrawn and its
+pixels do not change.
+
+BetterDisplay `EU4 Test` (1920x1200, 1x, non-main) is created once and reused.
+One real original-OpenGL background launch produced 820 observations, restored
+`settings.txt` byte-for-byte and terminated cleanly, but the window was placed
+on the physical display and EU4 took focus. Background focus/placement is
+therefore **not qualified**; the opt-in AppKit guard is disabled by default and
+foreground remains the fallback. Five-launch acceptance was not performed
+because the launch lease was held by the parallel M6 worktree.
+
+Evidence: [Strategy B report](../analysis/infra/strategy-b.md). Tools:
+`eu4_capture graph`, `eu4_replay independent`, `eu4_case_inspect` for Strategy B
+cases, and `python3.14 -m automation.gfx_replay_case`.
+
 ## Differential debugging infrastructure (2026-11-14, stacked PRs 1-5)
 
 Five stacked branches implement the autonomous OpenGL-vs-Metal differential

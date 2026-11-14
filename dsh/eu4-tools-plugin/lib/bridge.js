@@ -41,6 +41,7 @@ export function buildArgs(tool, args = {}) {
     output.push(String(args.op))
     add('--run', 'run')
     add('--role', 'role')
+    add('--frame-dir', 'frame_dir')
     for (const frame of args.frames || []) output.push('--frame', String(frame))
     if (args.require_pixels) output.push('--require-pixels')
     add('--checkpoint', 'checkpoint')
@@ -61,6 +62,8 @@ export function buildArgs(tool, args = {}) {
     add('--profile', 'profile')
     if (args.staggered) output.push('--staggered')
     add('--stagger-wait', 'stagger_wait')
+    if (args.background) output.push('--background')
+    add('--display-name', 'display_name')
   } else if (tool === 'eu4_diff_inspect') {
     add('--run', 'run')
     if (args.build_case) output.push('--build-case')
@@ -69,8 +72,11 @@ export function buildArgs(tool, args = {}) {
     add('--case', 'case')
     add('--frame', 'frame')
     add('--shaders', 'shaders')
-    add('--out', 'out')
+    add('--replay-out', args.replay_out === undefined ? 'out' : 'replay_out')
     add('--only-event', 'only_event')
+    if (args.disable_render_target_vflip) output.push('--disable-render-target-vflip')
+    add('--sampler-shift', 'sampler_shift')
+    add('--sampler-shift-min', 'sampler_shift_min')
   } else if (tool === 'eu4_case_inspect') {
     add('--case', 'case')
   } else {

@@ -74,6 +74,14 @@ test('argument mapping covers each tool', () => {
     ['eu4_diff_inspect', '--run', '/r', '--build-case'])
   assert.deepEqual(buildArgs('eu4_replay', { op: 'case', case: '/c' }),
     ['eu4_replay', 'case', '--case', '/c'])
+  assert.deepEqual(buildArgs('eu4_capture', { op: 'graph', frame_dir: '/f' }),
+    ['eu4_capture', 'graph', '--frame-dir', '/f'])
+  assert.deepEqual(buildArgs('eu4_replay', {
+    op: 'independent', frame: '/f', shaders: '/s', replay_out: '/o',
+    disable_render_target_vflip: true, sampler_shift: -1, sampler_shift_min: 7,
+  }), ['eu4_replay', 'independent', '--frame', '/f', '--shaders', '/s',
+    '--replay-out', '/o', '--disable-render-target-vflip',
+    '--sampler-shift', '-1', '--sampler-shift-min', '7'])
   assert.deepEqual(buildArgs('eu4_case_inspect', { case: '/c' }),
     ['eu4_case_inspect', '--case', '/c'])
 })
