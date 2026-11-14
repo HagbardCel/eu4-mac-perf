@@ -44,6 +44,12 @@ reference-side loading/focus behaviour still needs a windowed/foreground
 configuration experiment before the live 100-frame and real title differential
 are claimed.
 
+**Lease preflight.** The agent surface now exposes `eu4_session lease`; on the
+current host it reports `busy`, holder worktree
+`/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf`, and the running
+game PID, so a general agent does not attempt a futile launch while the M6
+worktree is active.
+
 **DSH tools mount.** A temporary dedicated DSH home
 (`EU4_DSH_HOME=/tmp/eu4-dsh-tools-test`) provisioned both `@eu4/dsh-goal` and
 `@eu4/dsh-tools`; `dsh plugin add link:` succeeded for both and the profile row

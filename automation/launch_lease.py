@@ -278,6 +278,39 @@ class ProcessLease:
             pass
 
 
+def inspect(executable: Path | str) -> dict:
+    """Report the current lease state without acquiring it.
+
+    Returns ``{"state": "free"|"busy"|"manual", "holder": {...},
+    "manual_game_pids": [...]}``.  This is a read-only diagnostic for agents that
+    should not attempt a pointless launch; the lease itself remains the
+    authority and is still acquired immediately before spawn.
+    """
+    path = lease_path(executable)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+    state = "free"
+    holder = None
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno not in (errno.EWOULDBLOCK, errno.EAGAIN):
+                raise LeaseError("unavailable", str(exc)) from exc
+            state = "busy"
+            holder = _read_holder(path)
+        pids = manual_game_pids(executable)
+        if pids:
+            state = "manual" if state == "free" else state
+            holder = holder or {"manual_game_pids": pids}
+        return {"state": state, "holder": holder, "manual_game_pids": pids}
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        os.close(fd)
+
+
 def acquire(
     executable: Path | str,
     *,

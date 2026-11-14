@@ -28,7 +28,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from automation import gfx_case, gfx_diagnostics, gfx_dual_run, gfx_scenario  # noqa: E402
-from automation import gfx_session, launch_ledger  # noqa: E402
+from automation import gfx_session, launch_lease, launch_ledger  # noqa: E402
 
 SCHEMA = "eu4-agent-tool/v1"
 TOOLS = (
@@ -117,6 +117,13 @@ def eu4_session(args: argparse.Namespace) -> dict:
     if args.session_op == "list":
         rows = gfx_session.Session.active_sessions()
         return _envelope("eu4_session", "ok", {"sessions": rows})
+    if args.session_op == "lease":
+        executable = Path(args.executable).expanduser() if args.executable else None
+        if executable is None:
+            from reverse_engineering import paths
+            executable = paths.executable_path()
+        return _envelope("eu4_session", "ok",
+                         launch_lease.inspect(executable))
     run = Path(args.run).expanduser().resolve()
     if args.session_op == "inspect":
         return _envelope("eu4_session", "ok", gfx_session.Session.load(run))
@@ -281,7 +288,8 @@ def _parser() -> argparse.ArgumentParser:
     re_query.add_argument("--max-bytes", type=int, default=24000)
 
     session = sub.add_parser("eu4_session")
-    session.add_argument("session_op", choices=("list", "inspect", "terminate"))
+    session.add_argument("session_op", choices=("list", "inspect", "terminate", "lease"))
+    session.add_argument("--executable", default=None)
     session.add_argument("--run", type=Path, default=None)
     session.add_argument("--grace", type=float, default=6.0)
 

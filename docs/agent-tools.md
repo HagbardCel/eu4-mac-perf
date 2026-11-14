@@ -45,8 +45,12 @@ renderer snapshot; it never guesses a prototype.
 python3 -m automation.agent_tools eu4_session list
 python3 -m automation.agent_tools eu4_session inspect --run <session-dir>
 python3 -m automation.agent_tools eu4_session terminate --run <session-dir>
+python3 -m automation.agent_tools eu4_session lease
 ```
 
+`lease` reports `free`/`busy`/`manual`, the holder's worktree/pid and any
+manually started EU4 PID without acquiring the lease. It is the cheap preflight
+that prevents a pointless launch while another agent owns the installation.
 `terminate` signals only the process identities recorded in that session, after
 re-verifying pid/start-time/executable. It never enumerates `eu4` processes.
 

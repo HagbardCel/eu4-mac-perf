@@ -35,6 +35,7 @@ export function buildArgs(tool, args = {}) {
   } else if (tool === 'eu4_session') {
     output.push(String(args.op || 'list'))
     add('--run', 'run')
+    add('--executable', 'executable')
   } else if (tool === 'eu4_capture') {
     if (!args.op) throw new Error('eu4_capture requires op')
     output.push(String(args.op))

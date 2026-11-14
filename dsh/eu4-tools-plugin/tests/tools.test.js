@@ -61,6 +61,8 @@ test('argument mapping covers each tool', () => {
     ['eu4_re_query', 'function', '0x2000'])
   assert.deepEqual(buildArgs('eu4_session', { op: 'inspect', run: '/r' }),
     ['eu4_session', 'inspect', '--run', '/r'])
+  assert.deepEqual(buildArgs('eu4_session', { op: 'lease', executable: '/bin/true' }),
+    ['eu4_session', 'lease', '--executable', '/bin/true'])
   assert.deepEqual(buildArgs('eu4_capture', { op: 'request', run: '/r', role: 'candidate', frames: [4, 5] }),
     ['eu4_capture', 'request', '--run', '/r', '--role', 'candidate', '--frame', '4', '--frame', '5'])
   const diff = buildArgs('eu4_diff_run', { scenario: 's.json', run_root: '/r', ledger: '/l', mode: 'lockstep' })

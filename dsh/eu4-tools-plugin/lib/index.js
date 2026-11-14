@@ -68,8 +68,9 @@ export function definitions(run) {
       'eu4_session',
       'Inspect or safely terminate a session owned by this harness. Never lists or kills unrelated EU4 processes.',
       {
-        op: { type: 'string', enum: ['list', 'inspect', 'terminate'], description: 'session operation' },
+        op: { type: 'string', enum: ['list', 'inspect', 'terminate', 'lease'], description: 'session operation' },
         run: string('session run directory'),
+        executable: string('executable path for a lease query'),
       },
       ['op'],
       safe('eu4_session'),
