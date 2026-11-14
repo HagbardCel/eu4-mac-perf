@@ -3,6 +3,7 @@
 #import "eu4_gfx_draw_encode.h"
 #import "eu4_gfx_generic_draw.h"
 #import "eu4_gfx_shader.h"
+#import "eu4_gfx_texture.h"
 
 #import "eu4_gfx_checkpoint.h"
 #import "eu4_gfx_init.h"
@@ -197,6 +198,11 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
     inputs.viewport_height = viewport_height;
     inputs.clear_color = NULL; /* _GfxClear already established the contents */
 
+    if (backend.currentTargetHeader != NULL) {
+        /* The draw writes the currently bound render target; any cached
+           sampling shadow for it is stale after this submission. */
+        eu4_gfx_note_render_target_write(backend.currentTargetHeader);
+    }
     id<MTLCommandBuffer> command = [backend.queue commandBuffer];
     if (command == nil) {
         return refuse(EU4_GFX_DRAW_ROUTE_FAILED, diagnostic, capacity,

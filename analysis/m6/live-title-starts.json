@@ -2,7 +2,7 @@
   "schema": "m6-live-title-starts/v3",
   "runs": [
     {
-      "run": ".local/m6/live-final3/final-1",
+      "run": ".local/m6/live-start3/run-1",
       "phase": "final qualification",
       "overall": "captured",
       "status": {
@@ -13,16 +13,15 @@
         "presented": true,
         "reference_matched": null
       },
-      "launch_identity": "1794654646-82541",
-      "pid": 82608,
-      "refused_draws": 0,
-      "swap_dump_sha256": "bbf3ad61855c1cfa156ec4e96b9a22f7e128a9e21d3f5e535fc596946bea1ac8",
+      "launch_identity": "1794678332-33516",
+      "pid": 33582,
+      "swap_dump_sha256": "d0063c0914da5b55e5361fb76525a3c4ca9acf5b126c372e2c4897db929cedbe",
       "swap_dump_bytes": 30882816,
       "accepted": true,
-      "note": "accepted by automation.m6_live_accept with --require-resolve-trace"
+      "note": "accepted by automation.m6_live_accept with --require-resolve-trace; text-orientation check pass"
     },
     {
-      "run": ".local/m6/live-final3/final-2",
+      "run": ".local/m6/live-start4/run-1",
       "phase": "final qualification",
       "overall": "captured",
       "status": {
@@ -33,16 +32,15 @@
         "presented": true,
         "reference_matched": null
       },
-      "launch_identity": "1794655028-82721",
-      "pid": 82787,
-      "refused_draws": 0,
-      "swap_dump_sha256": "8a776c650c1b65bc646e11b4cdc2571d0d629514734fa807a9c952e3265d6200",
+      "launch_identity": "1794678828-35589",
+      "pid": 35665,
+      "swap_dump_sha256": "ff08cf7f87d6cd947274497aea12a54da0d2fc1075549a8f6e7461ed0abcf206",
       "swap_dump_bytes": 30882816,
       "accepted": true,
-      "note": "accepted by automation.m6_live_accept with --require-resolve-trace"
+      "note": "accepted by automation.m6_live_accept with --require-resolve-trace; text-orientation check pass"
     },
     {
-      "run": ".local/m6/live-final3/final-3",
+      "run": ".local/m6/live-start5/run-1",
       "phase": "final qualification",
       "overall": "captured",
       "status": {
@@ -53,13 +51,12 @@
         "presented": true,
         "reference_matched": null
       },
-      "launch_identity": "1794655398-82866",
-      "pid": 82932,
-      "refused_draws": 0,
-      "swap_dump_sha256": "de112eff6ad5c067801cb1f3e8939ebb8fa3138eab9bd3d5cf3abe7d0b15641c",
+      "launch_identity": "1794679203-37056",
+      "pid": 37165,
+      "swap_dump_sha256": "3bb4f73b933a3ad9dec1cea2cc64f947a4def6d2dbfe6695b327696b97a18e09",
       "swap_dump_bytes": 30882816,
       "accepted": true,
-      "note": "accepted by automation.m6_live_accept with --require-resolve-trace"
+      "note": "accepted by automation.m6_live_accept with --require-resolve-trace; text-orientation check pass"
     }
   ],
   "menu_caller": "0x103b3c8",
@@ -70,5 +67,5 @@
   "distinct_runs": true,
   "distinct_identities": true,
   "ok": true,
-  "note": "Three fresh, distinct, independently authorized settled launches on the sampler-unit-corrected implementation. All three accepted with the final resolve-trace requirement. Credits/Options labels remain horizontally mirrored (visual residual outside the region policy)."
+  "note": "Three fresh, distinct, independently authorized settled launches on the finalized render-target sampling correction. All accepted with the final resolve-trace and text-orientation requirements."
 }

@@ -270,5 +270,70 @@ class MapStructureTests(unittest.TestCase):
         self.assertLess(flipped, 0.9)
 
 
+@unittest.skipUnless(_HAS_DEPS, "the live acceptance checker needs numpy")
+class TextOrientationTests(unittest.TestCase):
+    POLICY = {
+        "text_min_upright_correlation": 0.55,
+        "text_max_flipped_correlation": 0.65,
+        "text_min_flip_margin": 0.15,
+    }
+
+    @staticmethod
+    def _glyph() -> "np.ndarray":
+        image = np.zeros((40, 60, 3), dtype=np.uint8)
+        image[8:32, 12:18] = 255          # stem
+        image[8:12, 12:40] = 255          # top arm
+        image[20:24, 12:32] = 255         # middle arm
+        return image
+
+    def test_vertical_reflection_is_rejected(self) -> None:
+        reference = self._glyph()
+        reflected = reference[::-1, :].copy()
+        region = (0, 40, 0, 60)
+        stats = m6_live_accept.text_orientation(reflected, reference, region)
+        self.assertGreater(stats["flipped"], stats["upright"])
+        self.assertFalse(m6_live_accept.text_orientation_ok([stats], self.POLICY))
+        same = m6_live_accept.text_orientation(reference, reference, region)
+        self.assertTrue(m6_live_accept.text_orientation_ok([same], self.POLICY))
+
+    def test_known_defective_capture_fails_and_reference_passes(self) -> None:
+        # The registered visual fixtures are analysis/m6/ref-buttons-crop.png
+        # and analysis/m6/live-title-buttons-crop.png. The crops are trimmed
+        # at the label baseline, so the acceptance metric runs on the same
+        # registered glyph regions in the full logical frames from which the
+        # crops were taken.
+        root = Path(__file__).resolve().parents[1]
+        reference_path = root / ".local/m6/frames/menu-occ300/frame/frame-reference.png"
+        live_path = root / "analysis/m6/live-title-final-1728x1117.png"
+        crop_paths = [
+            root / "analysis/m6/ref-buttons-crop.png",
+            root / "analysis/m6/live-title-buttons-crop.png",
+        ]
+        if not all(path.is_file() for path in [reference_path, live_path, *crop_paths]):
+            self.skipTest("the recorded M6 text fixtures are not present")
+        from PIL import Image
+
+        reference = np.asarray(Image.open(reference_path).convert("RGB"))
+        live = np.asarray(Image.open(live_path).convert("RGB"))
+        regions = [(1064, 1092, 744, 816), (1064, 1096, 908, 990)]
+        live_stats = [
+            m6_live_accept.text_orientation(live, reference, region)
+            for region in regions
+        ]
+        for stats in live_stats:
+            self.assertGreater(stats["flipped"], stats["upright"])
+        self.assertFalse(
+            m6_live_accept.text_orientation_ok(live_stats, self.POLICY)
+        )
+        reference_stats = [
+            m6_live_accept.text_orientation(reference, reference, region)
+            for region in regions
+        ]
+        self.assertTrue(
+            m6_live_accept.text_orientation_ok(reference_stats, self.POLICY)
+        )
+
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -9,6 +9,7 @@
 #define GL_GLEXT_PROTOTYPES 1
 
 #include "eu4_gfx_frame_trace.h"
+#include "eu4_gfx_draw_semantics.h"
 
 #include "eu4_gfx_observe_framebuffer.h"
 /* The state host and manifest host link this file without the observation
@@ -148,6 +149,7 @@ static struct {
     int seed_height;
     int seed_emitted;
     int truncated;
+    int capture_failed;
 
     struct blob_entry *blobs;
     int blob_count;
@@ -1092,6 +1094,67 @@ static int capture_attributes(GLuint program, int indexed, int first, int count,
                               int instance_count, int base_vertex,
                               uintptr_t master, GLuint index_buffer,
                               json_out *out) {
+    GLint previous_array = 0, previous_element = 0;
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &previous_array);
+    glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &previous_element);
+
+    int32_t index_first = indexed ? base_vertex : first;
+    int32_t index_last = indexed
+        ? base_vertex + (count > 0 ? count - 1 : 0)
+        : first + (count > 0 ? count - 1 : 0);
+    int range_valid = 1;
+    int capture_error = 0;
+    int index_read_error = 0;
+    uint8_t *index_data = NULL;
+    size_t index_bytes = 0;
+
+    if (indexed) {
+        if (index_buffer == 0) {
+            index_buffer = (GLuint)previous_element;
+        }
+        if (index_buffer != 0 && count > 0) {
+            GLint buffer_size = 0;
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, index_buffer);
+            glGetBufferParameteriv(GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE,
+                                   &buffer_size);
+            index_bytes = (size_t)count * 2u;
+            if (buffer_size <= 0 || index_bytes > (size_t)buffer_size) {
+                index_bytes = buffer_size > 0 ? (size_t)buffer_size : 0;
+                range_valid = 0;
+            }
+            if (index_bytes > 0) {
+                index_data = malloc(index_bytes);
+                if (index_data == NULL) {
+                    index_read_error = 1;
+                    capture_error = 1;
+                } else {
+                    while (glGetError() != GL_NO_ERROR) {
+                    }
+                    glGetBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0,
+                                       (GLsizeiptr)index_bytes, index_data);
+                    if (glGetError() != GL_NO_ERROR) {
+                        index_read_error = 1;
+                        capture_error = 1;
+                        free(index_data);
+                        index_data = NULL;
+                        index_bytes = 0;
+                    }
+                }
+            }
+            if (index_bytes < (size_t)count * 2u || index_data == NULL) {
+                range_valid = 0;
+            } else if (eu4_gfx_indexed_range((const uint16_t *)index_data,
+                                             count, base_vertex, &index_first,
+                                             &index_last) != 0) {
+                range_valid = 0;
+                capture_error = 1;
+            }
+        } else {
+            range_valid = 0;
+            capture_error = 1;
+        }
+    }
+
     jprintf(out, "\"attributes\":[");
     int emitted = 0;
     GLint attribute_count = 0;
@@ -1099,15 +1162,7 @@ static int capture_attributes(GLuint program, int indexed, int first, int count,
     if (attribute_count < 0) {
         attribute_count = 0;
     }
-    int element_bytes = 2;
-    if (indexed) {
-        GLint bound = 0;
-        glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &bound);
-        if (bound != 0) {
-            index_buffer = (GLuint)bound;
-        }
-        element_bytes = 2; /* the engine's indexed tails pass GL_UNSIGNED_SHORT */
-    }
+    const int element_bytes = 2;
     for (int i = 0; i < attribute_count && i < FTRACE_MAX_ATTRS; i++) {
         char name[256];
         GLsizei length = 0;
@@ -1148,8 +1203,10 @@ static int capture_attributes(GLuint program, int indexed, int first, int count,
                             &normalized);
         glGetVertexAttribiv((GLuint)location, GL_VERTEX_ATTRIB_ARRAY_STRIDE,
                             &stride);
-        glGetVertexAttribiv((GLuint)location, GL_VERTEX_ATTRIB_ARRAY_POINTER,
-                            &offset);
+        GLvoid *pointer = NULL;
+        glGetVertexAttribPointerv((GLuint)location,
+                                  GL_VERTEX_ATTRIB_ARRAY_POINTER, &pointer);
+        offset = (GLint)(intptr_t)pointer;
         glGetVertexAttribiv((GLuint)location, GL_VERTEX_ATTRIB_ARRAY_DIVISOR,
                             &divisor);
         uint32_t engine_offset = 0;
@@ -1163,52 +1220,108 @@ static int capture_attributes(GLuint program, int indexed, int first, int count,
             normalized = engine_normalized;
             offset_source = "engine";
         }
-        int element_size = 4;
-        switch (gl_type) {
-            case GL_UNSIGNED_BYTE: case GL_BYTE: element_size = 1; break;
-            case GL_UNSIGNED_SHORT: case GL_SHORT:
-            case GL_HALF_FLOAT: element_size = 2; break;
-            default: element_size = 4; break;
+        int element_size = eu4_gfx_gl_type_size((uint32_t)gl_type);
+        int read_error = 0;
+        int unsupported_type = 0;
+        if (element_size == 0) {
+            /* Packed or unknown representations cannot be sized safely. */
+            unsupported_type = 1;
+            read_error = 1;
+            capture_error = 1;
+            range_valid = 0;
+            element_size = 1;
         }
         if (stride <= 0) {
             stride = components * element_size;
         }
-        int vertex_first = indexed ? base_vertex : first;
-        int vertex_last = indexed ? base_vertex + (count > 0 ? count - 1 : 0)
-                                  : first + (count > 0 ? count - 1 : 0);
+        int32_t vertex_first = 0;
+        int32_t vertex_last = 0;
+        if (indexed) {
+            if (divisor > 0) {
+                vertex_first = 0;
+                vertex_last = instance_count > 0
+                    ? (instance_count - 1) / divisor : 0;
+            } else {
+                vertex_first = index_first;
+                vertex_last = index_last;
+            }
+        } else {
+            vertex_first = first;
+            vertex_last = first + (count > 0 ? count - 1 : 0);
+        }
         if (vertex_first < 0) {
             vertex_first = 0;
+            range_valid = 0;
+            capture_error = 1;
         }
-        size_t begin = (size_t)offset + (size_t)vertex_first * (size_t)stride;
-        size_t end = (size_t)offset + (size_t)(vertex_last + 1) * (size_t)stride;
         GLint buffer_size = 0;
         if (buffer != 0) {
             glBindBuffer(GL_ARRAY_BUFFER, (GLuint)buffer);
             glGetBufferParameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &buffer_size);
         }
-        if (end > (size_t)(buffer_size > 0 ? buffer_size : 0)) {
-            end = (size_t)(buffer_size > 0 ? buffer_size : 0);
+        uint64_t attribute_width =
+            (uint64_t)(components > 0 ? components : 0) *
+            (uint64_t)element_size;
+        uint64_t begin64 = 0;
+        uint64_t end64 = 0;
+        int range_truncated = 0;
+        int range_ok = 0;
+        if (!unsupported_type && attribute_width > 0 && stride > 0 &&
+            (uint64_t)offset <= (uint64_t)INT64_MAX) {
+            uint64_t offset64 = (uint64_t)(int64_t)offset;
+            uint64_t stride64 = (uint64_t)stride;
+            if (vertex_first >= 0 &&
+                (uint64_t)vertex_first <=
+                    (UINT64_MAX - offset64) / stride64) {
+                begin64 = offset64 + (uint64_t)vertex_first * stride64;
+                range_ok = eu4_gfx_attribute_end(
+                    buffer_size > 0 ? (uint64_t)buffer_size : 0,
+                    offset64, stride64, (uint64_t)vertex_last,
+                    attribute_width, &end64);
+                if (range_ok && begin64 <= end64 &&
+                    end64 <= (uint64_t)buffer_size) {
+                    range_ok = 1;
+                } else {
+                    range_ok = 0;
+                }
+            }
         }
-        size_t bytes = begin < end ? end - begin : 0;
+        if (!range_ok) {
+            range_truncated = buffer_size > 0 && !unsupported_type;
+            range_valid = 0;
+            capture_error = 1;
+            if (buffer_size > 0 && begin64 > (uint64_t)buffer_size) {
+                begin64 = (uint64_t)buffer_size;
+            }
+            end64 = begin64;
+        }
+        size_t begin = (size_t)begin64;
+        size_t end = (size_t)end64;
+        size_t bytes = end > begin ? end - begin : 0;
         char blob_name[FTRACE_NAME] = "";
         char blob_sha[65] = "";
-        int read_error = 0;
         if (bytes > 0 && buffer != 0) {
             uint8_t *data = malloc(bytes);
             if (data == NULL) {
                 read_error = 1;
+                range_valid = 0;
+                capture_error = 1;
             } else {
-                while (glGetError() != GL_NO_ERROR) {
-                }
                 glGetBufferSubData(GL_ARRAY_BUFFER, (GLintptr)begin,
                                    (GLsizeiptr)bytes, data);
                 if (glGetError() != GL_NO_ERROR ||
                     put_blob(data, bytes, "vb", blob_name, blob_sha) != 0) {
                     read_error = 1;
                     blob_name[0] = 0;
+                    range_valid = 0;
+                    capture_error = 1;
                 }
                 free(data);
             }
+        } else if (bytes > 0) {
+            read_error = 1;
+            range_valid = 0;
+            capture_error = 1;
         }
         jprintf(out,
                 "%s{\"index\":%d,\"name\":\"%s\",\"location\":%d,"
@@ -1218,57 +1331,45 @@ static int capture_attributes(GLuint program, int indexed, int first, int count,
                 "\"offset_source\":\"%s\","
                 "\"buffer\":%d,\"buffer_bytes\":%d,\"range_begin\":%zu,"
                 "\"range_bytes\":%zu,\"first_vertex\":%d,\"last_vertex\":%d,"
+                "\"range_truncated\":%s,"
                 "\"data\":\"%s\",\"sha256\":\"%s\"%s}",
                 emitted > 0 ? "," : "", location, name, location, components,
                 gl_type, bool_text(normalized != 0), stride, offset, divisor,
                 offset_source, buffer, buffer_size, begin, bytes, vertex_first,
-                vertex_last, blob_name, blob_sha,
-                read_error ? ",\"read_error\":true" : "");
+                vertex_last, bool_text(range_truncated), blob_name, blob_sha,
+                read_error || index_read_error
+                    ? (unsupported_type
+                           ? ",\"read_error\":true,\"unsupported_type\":true"
+                           : ",\"read_error\":true")
+                    : "");
         emitted++;
     }
     jprintf(out, "]");
     if (indexed) {
-        GLint buffer_size = 0;
-        if (index_buffer != 0) {
-            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, index_buffer);
-            glGetBufferParameteriv(GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE,
-                                   &buffer_size);
-        }
-        size_t bytes = (size_t)(count > 0 ? count : 0) * (size_t)element_bytes;
-        if (bytes > (size_t)(buffer_size > 0 ? buffer_size : 0)) {
-            bytes = (size_t)(buffer_size > 0 ? buffer_size : 0);
-        }
         char blob_name[FTRACE_NAME] = "";
         char blob_sha[65] = "";
-        if (bytes > 0) {
-            uint8_t *data = malloc(bytes);
-            if (data == NULL) {
-                bytes = 0;
-            } else {
-                while (glGetError() != GL_NO_ERROR) {
-                }
-                glGetBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, (GLsizeiptr)bytes,
-                                   data);
-                if (glGetError() != GL_NO_ERROR) {
-                    free(data);
-                    bytes = 0;
-                } else if (put_blob(data, bytes, "ib", blob_name, blob_sha) != 0) {
-                    blob_name[0] = 0;
-                    free(data);
-                    data = NULL;
-                }
-                if (data != NULL) {
-                    free(data);
-                }
+        if (index_data != NULL && index_bytes > 0) {
+            if (put_blob(index_data, index_bytes, "ib", blob_name, blob_sha) != 0) {
+                blob_name[0] = 0;
+                index_read_error = 1;
+                range_valid = 0;
+                capture_error = 1;
             }
         }
         jprintf(out,
                 ",\"indices\":{\"buffer\":%u,\"bytes\":%zu,\"first_index\":0,"
-                "\"count\":%d,\"instance_count\":%d,\"file\":\"%s\","
-                "\"sha256\":\"%s\"}",
-                index_buffer, bytes, count, instance_count, blob_name, blob_sha);
+                "\"count\":%d,\"instance_count\":%d,\"base_vertex\":%d,"
+                "\"vertex_origin\":%d,\"range_valid\":%s,\"read_error\":%s,"
+                "\"file\":\"%s\",\"sha256\":\"%s\"}",
+                index_buffer, index_bytes, count, instance_count, base_vertex,
+                range_valid ? index_first : 0, bool_text(range_valid),
+                bool_text(index_read_error), blob_name, blob_sha);
     }
-    return 0;
+    glBindBuffer(GL_ARRAY_BUFFER, (GLuint)previous_array);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, (GLuint)previous_element);
+    free(index_data);
+    (void)element_bytes;
+    return capture_error || !range_valid ? 1 : 0;
 }
 
 static int capture_target(json_out *out, GLint *out_width, GLint *out_height) {
@@ -1813,8 +1914,10 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
 
     json_out attr = *out;
     jprintf(&attr, ",");
-    capture_attributes((GLuint)program, indexed, first, count, instance_count,
-                       base_vertex, master, 0, &attr);
+    if (capture_attributes((GLuint)program, indexed, first, count,
+                           instance_count, base_vertex, master, 0, &attr) != 0) {
+        attr.failed = 1;
+    }
     if (attr.failed) {
         out->failed = 1;
     }
@@ -1939,9 +2042,11 @@ static void finish_capture(const char *reason) {
             free(pixels);
         }
     }
-    write_frame_manifest(have_reference && !g.truncated,
+    write_frame_manifest(have_reference && !g.truncated && !g.capture_failed,
                          g.truncated ? "draw_cap"
-                                     : (have_reference ? reason : "reference_read"));
+                                     : (g.capture_failed
+                                            ? "capture_failed"
+                                            : (have_reference ? reason : "reference_read")));
     if (g.events != NULL) {
         fclose(g.events);
         g.events = NULL;
@@ -1963,6 +2068,7 @@ static void start_capture_at_frame(int next_frame) {
     g.capturing_frame = next_frame;
     g.event_count = 0;
     g.truncated = 0;
+    g.capture_failed = 0;
     g.have_seed = 0;
     g.seed_emitted = 0;
     g.seed_json[0] = 0;
@@ -2357,6 +2463,8 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
             if (!out.failed && buffer != NULL) {
                 emit_event(buffer);
                 g.event_count++;
+            } else {
+                g.capture_failed = 1;
             }
             free(buffer);
         }
@@ -2536,6 +2644,8 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
             if (!out.failed && buffer != NULL) {
                 emit_event(buffer);
                 g.event_count++;
+            } else {
+                g.capture_failed = 1;
             }
             free(buffer);
         }
