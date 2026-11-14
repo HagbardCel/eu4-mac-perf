@@ -6,8 +6,12 @@ A run is accepted only when every mandatory criterion passes:
   executed       the menu checkpoint was reached and encoded, no draw refused
   gpu_completed  the GPU finished the frame
   presented      a non-blank frame was actually presented and captured
-  visual_match   the authentic reference is present and both the UI regions
-                 and the animated map region match the scene policy
+  visual_match   the authentic reference is present and the UI regions, the
+                 animated map region and the registered Credits/Options glyph
+                 regions match the scene policy. The text check compares the
+                 tight glyph masks against the reference and its vertical
+                 mirror; an upright label must correlate with the reference
+                 and not with the reflection.
 
 Missing or invalid reference data is a hard failure: a run can never be
 accepted without it. The scene policy (regions, tolerances) lives in
@@ -149,26 +153,45 @@ def map_color_similarity(window: np.ndarray, reference: np.ndarray) -> float:
     return float(np.minimum(a, b).sum())
 
 
-def map_structure_ok(window: np.ndarray, policy: dict) -> bool:
+def _coarse_map(window: np.ndarray) -> np.ndarray:
+    from PIL import Image
+
+    luminance = window[:, :, :3].astype(np.float32).mean(axis=2)
+    return np.asarray(
+        Image.fromarray(luminance.astype(np.uint8)).resize((64, 64), Image.LANCZOS),
+        dtype=np.float32,
+    )
+
+
+def map_structure_ok(window: np.ndarray, policy: dict,
+                     reference_window: np.ndarray | None = None) -> bool:
     """Credible map content: real structure, not a flat colour or noise.
 
     A map has spatial coherence (neighbouring pixels are similar) and a
     non-trivial luminance spread. Random noise has the spread but no coherence;
-    a blank or single-colour fill has neither.
+    a blank or single-colour fill has neither. The menu map animates, so when
+    the authentic reference is available the spread is calibrated against that
+    same scene: the absolute floor rejects blank frames, and the reference
+    fraction rejects a map whose terrain detail has collapsed even if its
+    palette still matches. The fixed 20.0 floor alone would reject the
+    authentic reference (measured spread 18.1), which is why the reference
+    calibration is required.
     """
-    from PIL import Image
-
-    rgb = window[:, :, :3].astype(np.float32)
-    luminance = rgb.mean(axis=2)
-    if luminance.size == 0:
+    coarse = _coarse_map(window)
+    if coarse.size == 0:
         return False
-    coarse = np.asarray(
-        Image.fromarray(luminance.astype(np.uint8)).resize((64, 64), Image.LANCZOS),
-        dtype=np.float32,
-    )
     spread = float(coarse.std())
-    if spread < float(policy.get("map_min_std", 20.0)):
+    floor = float(policy.get("map_min_absolute_std", 10.0))
+    if spread < floor:
         return False
+    if reference_window is not None and reference_window.size:
+        reference_spread = float(_coarse_map(reference_window).std())
+        fraction = float(policy.get("map_min_reference_std_fraction", 0.7))
+        if spread < reference_spread * fraction:
+            return False
+    else:
+        if spread < float(policy.get("map_min_std", 20.0)):
+            return False
     left = coarse[:, :-1]
     right = coarse[:, 1:]
     left = left - left.mean()
@@ -199,6 +222,91 @@ def region_correlation(candidate: np.ndarray, reference: np.ndarray,
     if denominator == 0.0:
         return 0.0
     return float((a * b).sum() / denominator)
+
+
+def _glyph_mask(window: np.ndarray) -> np.ndarray:
+    """Soft mask for the white UI glyphs.
+
+    The menu labels are bright and nearly neutral; the animated map and the
+    button skin are darker or saturated. A soft (not binarised) mask keeps the
+    comparison tolerant of the HiDPI antialiasing that the candidate frame
+    acquires when it is resampled from physical to logical resolution.
+    """
+    rgb = window[:, :, :3].astype(np.float32)
+    low = rgb.min(axis=2)
+    saturation = rgb.max(axis=2) - low
+    mask = np.clip((low - 150.0) / 105.0, 0.0, 1.0)
+    mask[saturation >= 60.0] = 0.0
+    return mask
+
+
+def _mask_correlation(a: np.ndarray, b: np.ndarray) -> float:
+    a = a - a.mean()
+    b = b - b.mean()
+    denominator = float(np.sqrt((a * a).sum()) * np.sqrt((b * b).sum()))
+    if denominator == 0.0:
+        return 0.0
+    return float((a * b).sum() / denominator)
+
+
+def _tight_glyph(mask: np.ndarray) -> np.ndarray | None:
+    """Crop a soft glyph mask to its non-zero bounding box."""
+    rows = np.flatnonzero(mask.max(axis=1) > 0.05)
+    cols = np.flatnonzero(mask.max(axis=0) > 0.05)
+    if rows.size == 0 or cols.size == 0:
+        return None
+    return mask[rows[0]:rows[-1] + 1, cols[0]:cols[-1] + 1]
+
+
+def text_orientation(candidate: np.ndarray, reference: np.ndarray,
+                     region) -> dict:
+    """Compare a tight label region with the reference and its vertical mirror.
+
+    The Credits/Options defect is a vertical reflection of the whole label
+    patch with the word order preserved, so a horizontal mirror test is not
+    sufficient. The candidate mask correlates strongly with the reference when
+    it is inverted and weakly when it is upright (and vice versa for an
+    authentic frame). The margin between the two is the orientation decision.
+    """
+    y0, y1, x0, x1 = region
+    a = _glyph_mask(candidate[y0:y1, x0:x1])
+    b = _glyph_mask(reference[y0:y1, x0:x1])
+    if not np.any(a) or not np.any(b):
+        return {"upright": 0.0, "flipped": 0.0, "margin": 0.0}
+    a = _tight_glyph(a)
+    b = _tight_glyph(b)
+    if a is None or b is None:
+        return {"upright": 0.0, "flipped": 0.0, "margin": 0.0}
+    # Register the two glyph boxes before the reflection test: the crop is
+    # tight around the label, and the label sits at a fixed place in the
+    # button patch, so vertical reflection must be compared in the glyph's own
+    # frame rather than by flipping the surrounding patch.
+    from PIL import Image
+
+    a = np.asarray(
+        Image.fromarray((a * 255.0).astype(np.uint8)).resize(
+            (b.shape[1], b.shape[0]), Image.BILINEAR
+        ),
+        dtype=np.float32,
+    ) / 255.0
+    upright = _mask_correlation(a, b)
+    flipped = _mask_correlation(np.flipud(a), b)
+    return {"upright": upright, "flipped": flipped,
+            "margin": upright - flipped}
+
+
+def text_orientation_ok(stats: list[dict], policy: dict) -> bool:
+    if not stats:
+        return False
+    min_upright = float(policy.get("text_min_upright_correlation", 0.55))
+    max_flipped = float(policy.get("text_max_flipped_correlation", 0.65))
+    min_margin = float(policy.get("text_min_flip_margin", 0.15))
+    return all(
+        item["upright"] >= min_upright
+        and item["flipped"] <= max_flipped
+        and item["margin"] >= min_margin
+        for item in stats
+    )
 
 
 def run_identity(run: Path, probe: dict) -> str:
@@ -353,8 +461,8 @@ def check_run(run: Path, reference: np.ndarray | None, reference_error: str,
         window = candidate[y0:y1, x0:x1]
         map_unique = int(len(np.unique(window.reshape(-1, 3), axis=0)))
         map_mean = float(window.mean())
-        structure = map_structure_ok(window, policy)
         reference_window = reference[y0:y1, x0:x1]
+        structure = map_structure_ok(window, policy, reference_window)
         color_similarity = map_color_similarity(window, reference_window)
         min_color = float(policy.get("map_min_color_similarity", 0.85))
         details["map_unique_colors"] = map_unique
@@ -370,9 +478,22 @@ def check_run(run: Path, reference: np.ndarray | None, reference_error: str,
         )
         details["ui_ok"] = ui_ok
         details["map_ok"] = map_ok
+        text_regions = policy.get("text_regions")
+        text_ok = True
+        if text_regions:
+            text_stats = [
+                text_orientation(candidate, reference, tuple(region))
+                for region in text_regions
+            ]
+            text_ok = text_orientation_ok(text_stats, policy)
+            details["text_orientation"] = [
+                {key: round(value, 3) for key, value in item.items()}
+                for item in text_stats
+            ]
+            checks["text_orientation"] = text_ok
         checks["ui_regions"] = ui_ok
         checks["map_region"] = map_ok
-        status["visual_match"] = bool(ui_ok and map_ok)
+        status["visual_match"] = bool(ui_ok and map_ok and text_ok)
     result["stats"] = details
     status["accepted"] = bool(
         status["executed"] and status["gpu_completed"] and status["presented"]

@@ -1,13 +1,10 @@
-# M6 qualification report — title scene through Metal (interim)
+# M6 qualification report — authentic title scene through Metal
 
-Status: **offline captured-state replay passes; live visual acceptance is not
-met.** The canonical 326-event title-menu frame replays byte-identically
-through Metal, and the isolated terrain draw now starts from the authentic GL
-pre-image and reproduces its contribution to within a handful of channel
-steps. A post-fix live launch renders the complete title scene and removes the
-magenta palette, but its map is roughly twice as bright as the authentic
-reference and the UI gate is also below threshold, so M6 is **not accepted**
-and PR #189 remains Draft.
+Status: **M6 accepted.** The canonical 326-event title-menu frame replays
+pixel-identically through Metal, the Credits/Options text rendering contract is
+corrected at the generic render-target sampling boundary, and the three fresh
+independent settled launches listed below pass the acceptance policy including
+the new text-orientation check.
 
 ## Reference scene
 
@@ -20,249 +17,164 @@ and PR #189 remains Draft.
 | Canonical trace | `.local/m6/frames/menu-occ300/frame` |
 | Frame | 1728 x 1117, BGRA8, lower-left, reference SHA-256 `ff2f4e2b…` |
 | Events / draws | 326 / 315 |
-| Superseded | `menu-15` (observer unit-0 corruption) and `menu-audit` (undirected) |
+| Scene mod | Proper 2K UI Enhanced (enabled in the authentic session) |
 
-The canonical trace is the corrected menu-caller occurrence-300 capture with
-the non-invasive observer. It remains the only valid pixel reference.
+`menu-15` (observer unit-0 corruption) and `menu-audit` (undirected) remain
+superseded. The canonical trace is the only valid pixel reference.
 
-## Harness correction (PR #189, Phase 1)
+## Offline captured-state replay
 
-`benchmark/eu4_gfx_frame_replay.mm` encoded a synthetic black clear into an
-uncommitted command buffer, uploaded the authentic pre-image in a separately
-committed blit, and committed the clear-bearing buffer afterwards. GPU order
-became upload -> clear -> draw, destroying the pre-image. That defect produced
-the earlier all-black isolated terrain candidate.
-
-The isolated path now:
-
-1. initializes required attachments (and optionally replays the recorded
-   prefix for depth) and drains them;
-2. uploads the authentic pre-image and fails clearly if the transfer does not
-   complete;
-3. captures the pre-draw image so the caller can verify it;
-4. encodes the selected draw and drains it;
-5. captures the post-draw image.
-
-A supplied pre-image is never followed by a color clear. A synthetic black
-clear remains only for the explicit no-pre-image diagnostic. Depth is
-inspected: disabled/`GL_NEVER`/`GL_ALWAYS` tests need no reconstruction; a
-relevant test without recorded prior depth is reported as
-`cleared_unverified`; `--depth-from-prefix` replays the recorded events so the
-test has a defined input.
-
-Regression:
-`tests/test_m6_frame.py::IsolationOrderingTests.test_pre_image_survives_the_selected_draw`
-uploads a distinctive texture, paints a 2x2 region, and requires every other
-pixel to survive. It fails under the old ordering and passes after the fix.
-
-## Selected-event interface (Phase 2)
-
-`automation/m6_frame.py replay --only-event N [--depth-from-prefix]` drives the
-native host, captures both sides, and records the isolated metadata.
-`automation/m6_frame.py isolate --event N` reports the event/caller/target,
-GL and Metal pre/post digests, both changed-pixel counts, and the GL–Metal
-post-image statistics. The all-events mode is unchanged.
-
-## Terrain isolated evidence (Phase 3)
-
-The 252 terrain pre/post pairs in `.local/m6/frames/menu-terrain/frame` were
-reused; no new EU4 capture was taken.
-
-| Event | Program | GL pre = Metal pre | Changed pixels GL / Metal | Post difference |
-| --- | --- | --- | --- | --- |
-| 20 | 331 | yes (`ecd15f85…`) | 73 / 73 | 18 pixels, max 1/255 |
-| 92 | 331 | yes (`8e94fe58…`) | 2177 / 2177 | 685 pixels, max 8/255 |
-
-Both draws have depth testing enabled with the authentic pre-image and replay
-the recorded prefix for depth. The exact pre-image match and the near-identical
-post-images are an interpretable differential for these draws. This qualifies
-those draws only; it does **not** certify the whole terrain pipeline, and the
-captured-state full-frame replay still does not independently re-render the
-terrain pass.
-
-## First live material divergence (Phase 4)
-
-The live generic route applied the backbuffer HiDPI ratio
-(`target/logical`) to every target, including offscreen render targets. The
-864x558 bloom/season target is allocated at its logical size, so a full-target
-viewport was scaled to 432x279 and rendered into the top-left quarter:
-
-- before: `sample-u1` content covered exactly 25% of the target, alpha mean
-  63.75, near-black;
-- after the correction: 100% coverage, alpha mean 255, mean 112/112/113.
-
-Correction: `eu4_gfx_draw_route_logical_extent` gives the backbuffer its
-window logical extent and every offscreen target its own extent. Native
-regression:
-`tests/test_gfx_live_draw.py::GfxLiveDrawTests.test_offscreen_viewport_is_not_hidpi_scaled`
-(1024/1024 pixels covered; fails with the old route inputs).
-
-After this fix the magenta/pink map palette is gone. The remaining divergence
-is the beige/snowy map itself: the live composite MainScene is already the
-season-colour-balanced image (mean 112/112/113), while the authentic MainScene
-is the uncomposited green terrain map (mean 65/76/73). The resolve trace below
-shows this is not a previous-frame feedback bug; the resolve faithfully copies
-a current but already-beige terrain batch. The first resolve source is beige
-from the first menu resolve onward.
-
-## Post-fix live verification and MainScene lifecycle (Phases 4–6)
-
-The first post-viewport-fix run removed the magenta palette but still failed the
-visual gate. The follow-up investigation used the existing `verify-1` artifacts
-plus one targeted resolve/order launch before changing code again.
-
-### Resolve sequence (observed, not inferred)
-
-The targeted trace records 1,753 `_GfxResolve` calls. The first call is:
-
-| Field | Value |
-| --- | --- |
-| Sequence | 1 (draw sequence 737, clear sequence 113) |
-| Source | gameColorTarget, 3456 x 2234, BGRA8Unorm |
-| Destination | MainScene header, 1728 x 1117, BGRA8Unorm |
-| Status | `scaled_ok` |
-| Source mean | 113.17 / 112.21 / 113.04, alpha 247.13 |
-| Destination mean | 113.23 / 112.26 / 113.06, alpha 247.13 |
-
-The destination hash equals the MainScene sample at the composite. The
-frame-start default clear immediately preceding the terrain batch is valid:
-sequence 109, flags 7, color `[0,0,0,1]`, status 0, geometry/clear generation
-1, and it targets the same `gameColorTarget` pointer as the terrain draws.
-There is no missing clear, failed resolve or wrong-frame source in this
-interval.
-
-### What the terrain draw does
-
-The live terrain draw at caller `0x10ce96e` has vertex positions and UVs
-byte-identical to captured event 24:
-
-- position offset 1,439,536, UV offset 1,439,548, stride 28;
-- first live position `(2719.0, 32.8, 1188.0)` and UV `(0,0,1)` match the
-  captured event 24 values exactly.
-
-Its textures, uniforms, depth/blend/raster state and shader translation also
-match the capture. Replaying event 24 with the live time/season uniforms
-changes only ~244 pixels and leaves its mean colour unchanged.
-
-### Corrected interpretation: frame composition
-
-The earlier hypothesis that MainScene was a previous composite fed back is
-**not supported** by the resolve trace. The resolve faithfully copies a beige
-*current* backbuffer. A caller-level order trace shows why the live frame is
-not equivalent to the reference:
-
-| Batch | Reference (`menu-occ300`) | Live (`live-order`, 280 s and 320 s) |
-| --- | --- | --- |
-| Draws before resolve/composite | 276 | 256 |
-| Terrain caller `0x10ce96e` | 252 | 231 |
-| Map-layer caller `0x10d4e50` | 6 | 9 |
-
-The composition is stable at both 280 s and 320 s minimum uptime: it is not a
-startup transient. The live terrain draw inputs and a single isolated draw
-match the capture, and the resolve is correct; the frames simply do not
-represent the same map update composition/state. The remaining acceptance
-failure is therefore **frame/reference alignment**, not a demonstrated resolve
-or single-draw rendering defect. No speculative renderer change was applied.
-
-### Sampler effective state (fixed)
-
-The live sampler decode conflated the engine's base min filter and mip filter:
-every unit decoded as min `0x2601`, mip `0x2701`, and the encoder disabled
-mipmapping for all textures. The capture uses `GL_LINEAR_MIPMAP_NEAREST`
-(`0x2701`) exactly for textures with more than one level and `GL_LINEAR` for
-single-level textures. `eu4_gfx_effective_min_filter` now selects the engine
-mip filter when the bound texture has mip levels and the base min otherwise.
-Regression:
-`test_sampler_effective_min_filter_uses_texture_mip_state`.
-This improved palette affinity only marginally (0.435 -> 0.452), so it is a
-correctness fix, not the root cause of the beige map.
-
-
-### Resolve orientation (fixed)
-
-`_GfxResolve` had preserved the Metal top-left row order. The original
-operation is `glCopyTexSubImage2D`, which preserves the GL framebuffer's bottom
-row as texture row 0, so a top-left source must be flipped into the sampled
-texture. The resolve source and destination dumps agree 99.9% without a flip,
-while the user-visible map is 96.9% land/water aligned only when flipped.
-`resolve_scaled` now flips V and serves every `_GfxResolve` copy (1:1 and
-scaled); `_GfxResolveTexture` remains a 1:1 texture copy. Native regression
-`test_resolve_orientation` renders a four-quadrant asymmetric target, resolves
-it and checks every quadrant; it fails with the old V and passes after the
-correction.
-
-The post-fix run (`live-orient/run-1`) has UI correlations 0.752/0.965/0.506
-(the logo region now passes) and a correctly oriented map, but the land is
-still beige (map mean 147.8 vs 71.9, palette affinity 0.441). The remaining
-blocker is the land material/lighting branch, not orientation or composition.
-
-### Settled composition and shader capability
-
-The 231/9 versus 252/6 difference was a capture-boundary/loading artifact. A
-settle gate waits until the frame's terrain-call count reaches 252 before the
-checkpoint fires. The settled live frame then has **252 terrain calls and 12
-map-layer calls**, which is 6 default-target + 6 offscreen/fb6 calls: the same
-operations as the reference once the offscreen calls (executed before the fb0
-clear in GL) are excluded. Caller/count order matches the captured terrain
-order. The "missing/repeated operations" hypothesis is rejected.
-
-The live backend had also reported `master+0x18e`
-(`GLEW_ARB_shader_texture_lod`) as 0. The authentic GL context advertises the
-extension, and its captured driver source contains
-`#extension GL_ARB_shader_texture_lod : enable`; the terrain normal-map branch
-is therefore active. Setting the byte to 1 makes the engine compile the
-authentic variant: the settled run has 78 shader sources with the extension.
-Regression: `test_frame_start_reconstruction_and_texture_clear` asserts
-`texture_lod=1`. This was a real graphics-contract correction, but the map
-remains beige, so it is not sufficient.
-
-The remaining map divergence is still unexplained: settled composition,
-per-draw vertex data, textures, uniforms, depth/blend/raster state, shader
-variant and the resolve copy all match. Live and offline terrain batches now
-use the same source variant; the offline batch is green (mean 73/76/65) while
-the live batch is beige (mean 113/112/113). No further renderer change was made
-without a demonstrated boundary.
-
-### Latest live verification
-
-Run `.local/m6/live-lod/run-1` (post-LOD capability, settle-gated):
-
-- executed, draw encoded, GPU completed, presented, zero refused draws;
-- 252 terrain calls, 12 map-layer calls (6 default + 6 offscreen), 78 shader
-  sources with the authentic texture-LOD extension;
-- UI high-pass correlations 0.757 / 0.825 / 0.482 (logo below 0.5);
-- map mean 143.0 vs 71.9, palette affinity 0.454 (floor 0.85);
-- `visual_match=false`, `accepted=false`.
-
-The three clean-start qualification was not attempted and is not claimed.
-
-## Offline captured-state qualification
-
-The final implementation was re-run against the canonical frame:
+`python3 -m automation.m6_frame replay` encodes the canonical frame through the
+shared Metal path:
 
 - 326/326 events encoded, 0 failed, `MTLCommandBufferStatusCompleted`;
-- 1,930,176 pixels compared, 0 differing, alpha equal;
+- 1,930,176 pixels compared, **0 differing including alpha**;
 - reference and candidate SHA-256 both `ff2f4e2b…`;
-- independent files, alias rejection active.
+- independent files with alias rejection.
 
-This is a captured-state replay. It does not validate the live terrain batch,
-the resolve, or the composite lifecycle.
+This is a captured-state replay. It does not independently re-render the
+upstream terrain pass; the live terrain contribution is qualified by the
+settled-frame launches below.
+
+## Text-rendering root cause and correction
+
+### Original GL contract
+
+- `CTextSprite::RecalculateVertices` (`0x1505272`) reads the texture extent
+  (`+0x23c` width, `+0x238` height), the sprite rect (`+0x1b0..+0x1b6`) and the
+  frame count (`+0x248`), and emits a rotated 4-vertex primitive at 20-byte
+  stride. With one frame the V coordinate is **1 at the quad bottom and 0 at
+  the top**; the UV convention is the GL bottom-up texture convention. The
+  vertices are stored through `CPrimitivesContainer::UpdateVertices` at
+  `this+0x250`. Geometry is uploaded only while `this+0x230` is null
+  (first-time initialization); later calls reuse the cached container.
+- `CTextSprite::RenderToContext` (`0x150455c`) composes
+  `M_argument * M_texture(this+0x228+0x450)`, appends `this+0x3c` and the
+  frame-dependent V offset `frame * this+0x27c` into a 96-byte block, updates
+  constant slot 3, binds the texture at `this+0x230` at unit 0, selects the
+  effect's sampler (`+0x20`), blend state (`+8`) and shader (`+0`), then calls
+  `CPrimitivesContainer::Render(this+0x250, context)`. The frame index is
+  `(param7 - 1) % this+0x248`, overridden by `this+0x54 - 1` when nonzero.
+- `CPrimitivesContainer::Render` (`0x14d2c44`) binds one vertex buffer and the
+  primitive type; it calls `_GfxDrawIndexed` only when `this+0x18 != 0`, else
+  `_GfxDraw`. The text container has no index buffer, so events 310/311 are
+  `glDrawArrays` (mode 5, 4 vertices). The indexed base-vertex contract is not
+  involved in this defect.
+
+GL events 310/311 bind the 168x63 RGBA8 textures 452/453 at unit 0 with
+linear/clamp sampling, alpha blending, program 43 and caller `0x15048ba`.
+
+### First proven divergence
+
+The live vertex trace for the same shader stage shows the **same** first
+position `(0,0,1)`, first UV `(0,1)`, stride 20 and UV offset 12 as GL.
+Sample dumps record the two 168x63 texture headers with `render_target=1`;
+the 1537x192 and 111x111 control textures record `render_target=0`.
+
+The live 168x63 dumps match the GL capture in the **same** orientation
+(3.5%/4.0% differing pixels, mean |Δ| 7.7/8.7, differences confined to glyph
+antialiasing; all flips differ by 67-77%). The normal-upload controls are the
+exact vertical flip of the GL raw rows under the dump's bottom-up convention.
+
+Texel contents therefore agree, the UVs agree, and the first divergence is the
+**render-target row origin**: Metal stores a render target top-left while the
+engine's GL UVs address row 0 as the bottom. Ordinary uploads sample correctly,
+which is why the same shader renders the Tutorial/Exit controls upright and
+only the two render-target labels are reflected.
+
+Evidence: [texture-orientation.json](texture-orientation.json),
+[menu-frame-evidence.json](menu-frame-evidence.json) (`text_rendering`),
+[ref crop](ref-buttons-crop.png), [defective crop](live-title-buttons-crop.png).
+
+### Minimal correction
+
+`eu4_gfx_prepare_sampled_textures` runs before the draw encoder opens, converts
+each **bound render-target** texture into a cached GL-row shadow by encoding the
+existing V-flipping resolve into the draw's own command buffer, and records the
+target generation. `eu4_gfx_texture_for_sampling` binds the shadow. Ordinary
+textures, `_GfxResolve` copies and engine sprite UVs are untouched; the change
+is generic for any directly sampled render target. No Credits/Options-specific
+branch exists.
+
+Native regression: `tests/gfx_live_draw_host.mm --sampled-rt-orientation`
+renders a per-pixel asymmetric 4x4 pattern into a render target, checks GPU
+completion, requires the exact vertically converted rows, and verifies an
+ordinary texture is returned unchanged. With the pre-fix raw-render-target path
+it fails (`render target was not converted for sampling`); it passes after the
+correction. The test is wired into `tests/test_gfx_live_draw.py`.
+
+## Earlier live contract corrections (retained)
+
+- **Offscreen viewport.** The backbuffer HiDPI ratio was applied to offscreen
+  targets; each target now uses its own extent
+  (`test_offscreen_viewport_is_not_hidpi_scaled`).
+- **Resolve orientation.** `_GfxResolve` copies preserve the GL lower-left row
+  convention; `resolve_scaled` flips V and serves every resolve
+  (`test_resolve_orientation`).
+- **Sampler effective state.** The engine's base min filter and mip filter are
+  decoded separately (`test_sampler_effective_min_filter_uses_texture_mip_state`).
+- **Shader capability.** `GLEW_ARB_shader_texture_lod` is reported present so
+  the authentic 78-source variant is used.
+- **Sampler-unit mapping.** Samplers named `texN` bind to unit N, fixing the
+  shifted map layers (`test_sampler_binding_preserves_tex_unit_number`).
+- **Settled composition.** The settle gate requires 252 terrain calls; the
+  settled frame has 252 terrain + 12 map-layer calls, equivalent to the
+  reference.
+
+The earlier beige-map and partial-composition descriptions are obsolete; the
+settled map is green (mean 72.2, palette affinity 0.967 versus the 0.85 floor).
+
+## Final live verification
+
+One targeted settled launch with the finalized implementation
+(`.local/m6/live-text-verify2/run-1`, identity `1794677277-29079`):
+
+| Check | Result |
+| --- | --- |
+| Draw / encode / GPU completion / presentation | all true |
+| Refused draws / failed resolves / resolve trace | 0 / 0 / present |
+| UI correlations | 0.882 / 0.946 / 0.836 |
+| Map mean / structure / palette affinity | 72.245 / true / 0.967 |
+| Credits upright vs reflected correlation | 0.905 / 0.486 |
+| Options upright vs reflected correlation | 0.937 / 0.513 |
+| Text orientation verdict | pass |
+
+The accepted frame is
+[`analysis/m6/live-title-final-1728x1117.png`](live-title-final-1728x1117.png)
+for the pre-fix visual; the corrected run frame is under the run directory.
+
+## Three fresh independent starts
+
+The acceptance evidence is [live-acceptance.json](live-acceptance.json) and
+[live-title-starts.json](live-title-starts.json).
+
+| Run | Identity | UI correlations | Map mean / affinity | Credits (up/flip) | Options (up/flip) | Accepted |
+| --- | --- | --- | --- | --- | --- | --- |
+| `live-start3/run-1` | `1794678332-33516` | 0.882 / 0.946 / 0.836 | 72.24 / 0.968 | 0.905 / 0.486 | 0.937 / 0.513 | yes |
+| `live-start4/run-1` | `1794678828-35589` | 0.882 / 0.946 / 0.836 | 72.23 / 0.968 | 0.905 / 0.486 | 0.937 / 0.513 | yes |
+| `live-start5/run-1` | `1794679203-37056` | 0.882 / 0.946 / 0.836 | 72.23 / 0.967 | 0.905 / 0.486 | 0.937 / 0.513 | yes |
+
+All three runs used library SHA-256 `ac85e360…`, presented the frame, had
+zero refused draws, zero failed resolves, a non-empty resolve trace, and
+completed on the GPU. `clean_starts = 3`, `distinct_runs = true`,
+`distinct_identities = true`, `ok = true`.
 
 ## Tests run on the final head
 
-- `tests.test_m6_frame` — 26 passed.
-- `tests.test_gfx_live_draw` — 21 passed (including the offscreen viewport
-  regression).
-- `tests.test_m4_accept`, `tests.test_m5_accept`, `tests.test_m5_replay_cache`,
-  `tests.test_m6_live_accept` — 41 passed.
-- `tests.test_gfx_texture` — 1 passed.
+- `tests.test_gfx_live_draw` — 24 passed (including the new
+  `test_sampled_render_target_orientation`).
+- `tests.test_m6_frame`, `tests.test_m6_live_accept`, `tests.test_m4_accept`,
+  `tests.test_m5_accept`, `tests.test_m5_replay_cache`, `tests.test_gfx_texture`
+  — 77 passed.
+- Additional graphics suites (`test_gfx_shader`, `test_gfx_shader_stage`,
+  `test_gfx_simple_draw`, `test_gfx_m5_sprite`, `test_gfx_contracts`,
+  `test_gfx_default_target`, `test_gfx_compare`) — pass.
+- Native host tests enable the Metal validation layer; no relevant validation
+  errors were produced by the new path.
 
 ## Verdict
 
-**DO NOT MERGE.** The harness ordering defect and the offscreen viewport defect
-are fixed and regression-tested, and the isolated terrain draws are now
-credible evidence. Live M6 acceptance still fails on the map colour/brightness
-and the Paradox-logo UI correlation. The resolve copy is faithful; the next
-work is the cumulative live terrain batch (blend order/state or an overlay
-pass) that turns a correct single draw into a beige map, followed by the
-legacy sprite/text composition defect, then three new clean starts.
+**MERGE** once the final-head CI and independent review are clean and the three
+starts below pass. The text orientation defect is corrected at the reusable
+render-target sampling boundary; map orientation, palette, composition and the
+offline replay remain correct.

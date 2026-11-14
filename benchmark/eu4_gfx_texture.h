@@ -74,6 +74,21 @@ void eu4_gfx_clear_texture(void *header);
    successful _GfxInitializeTexture. NULL when the header is unknown. */
 void *eu4_gfx_texture_for_header(void *header);
 
+/* Texture to bind for GL-convention sampling. Render-target headers resolve to
+   a cached GL-row shadow (the engine's UVs are bottom-up); ordinary textures
+   are returned unchanged. NULL when the header is unknown. */
+void *eu4_gfx_texture_for_sampling(void *header);
+
+/* Marks a render-target header as written, invalidating its cached GL-row
+   sampling shadow. Called when the engine binds or resolves into the target. */
+void eu4_gfx_note_render_target_write(void *header);
+
+/* Encodes the GL-row conversion of every render-target texture bound for the
+   current draw into command_buffer. Must run before the draw's render encoder
+   is opened so the flip pass precedes the draw pass in the same command buffer.
+   Idempotent; ordinary textures are ignored. */
+void eu4_gfx_prepare_sampled_textures(void *command_buffer);
+
 /* Borrowed MTLTexture for the engine header bound to unit 0 by the replacement
    _GfxSetTextures. A header substituted for a null entry (master+0x98) resolves
    to backend.fallback; unknown headers return NULL. */

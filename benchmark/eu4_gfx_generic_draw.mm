@@ -1448,6 +1448,10 @@ static int generic_draw_encode_impl(const void *immediate_context,
         pass.depthAttachment.loadAction = MTLLoadActionLoad;
         pass.depthAttachment.storeAction = MTLStoreActionStore;
     }
+    /* Render-target textures are converted to GL row order into this command
+       buffer before the draw encoder opens, so the flip pass precedes the draw
+       pass and no separate command buffer is committed. */
+    eu4_gfx_prepare_sampled_textures((__bridge void *)command);
     id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
     if (encoder == nil) {
         fail(reason, reason_capacity, "generic render encoder failed");
@@ -1615,7 +1619,11 @@ static int generic_draw_encode_impl(const void *immediate_context,
             }
             id<MTLTexture> texture = nil;
             if (header != NULL) {
-                texture = (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(header);
+                /* Render targets are stored top-left in Metal while the
+                   engine's GL UVs address row 0 as the bottom; resolve them
+                   to GL row order before binding. Ordinary textures are
+                   returned unchanged. */
+                texture = (__bridge id<MTLTexture>)eu4_gfx_texture_for_sampling(header);
             }
             if (texture == nil) {
                 texture = backend.fallback;
@@ -1735,6 +1743,37 @@ static int generic_draw_encode_impl(const void *immediate_context,
                                             (unsigned long)texture.width,
                                             (unsigned long)texture.height);
                                     fclose(file);
+                                }
+                            } else {
+                                /* Resource-origin sidecar: a render-target
+                                   texture is stored in Metal's top-left row
+                                   order while the engine's GL UVs assume the
+                                   GL bottom-up convention, so origin is part
+                                   of the texture's identity. */
+                                char sidecar[640];
+                                snprintf(sidecar, sizeof sidecar, "%s.json", path);
+                                FILE *meta = fopen(sidecar, "w");
+                                if (meta != NULL) {
+                                    uint32_t hformat = 0;
+                                    if (header != NULL) {
+                                        memcpy(&hformat, (uint8_t *)header + 0x30, 4);
+                                    }
+                                    fprintf(meta,
+                                            "{\"texture\":\"%p\",\"header\":\"%p\","
+                                            "\"unit\":%lu,\"width\":%lu,\"height\":%lu,"
+                                            "\"format\":%u,\"render_target\":%d,"
+                                            "\"has_depth\":%d,\"rows\":\"bottom_up\"}\n",
+                                            (__bridge void *)texture, header,
+                                            (unsigned long)unit,
+                                            (unsigned long)texture.width,
+                                            (unsigned long)texture.height, hformat,
+                                            header != NULL
+                                                ? (int)((const uint8_t *)header)[0x19]
+                                                : -1,
+                                            header != NULL
+                                                ? (int)((const uint8_t *)header)[0x1a]
+                                                : -1);
+                                    fclose(meta);
                                 }
                             }
                         }

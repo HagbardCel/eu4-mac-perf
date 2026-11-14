@@ -39,5 +39,24 @@
   "map_min_mean": 10.0,
   "map_min_std": 20.0,
   "map_min_coherence": 0.5,
-  "map_min_color_similarity": 0.85
+  "map_min_color_similarity": 0.85,
+  "text_regions": [
+    [
+      1064,
+      1092,
+      744,
+      816
+    ],
+    [
+      1064,
+      1096,
+      908,
+      990
+    ]
+  ],
+  "text_min_upright_correlation": 0.55,
+  "text_max_flipped_correlation": 0.65,
+  "text_min_flip_margin": 0.15,
+  "map_min_absolute_std": 10.0,
+  "map_min_reference_std_fraction": 0.7
 }

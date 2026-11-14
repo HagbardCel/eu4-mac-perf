@@ -121,6 +121,13 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertEqual(ran.returncode, 0, ran.stderr)
         self.assertIn("resolve_orientation=1", ran.stdout)
 
+    def test_sampled_render_target_orientation(self) -> None:
+        ran = self._run("--sampled-rt-orientation")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("sampled_rt_orientation=1", ran.stdout)
+        self.assertIn("rt_flip=1", ran.stdout)
+        self.assertIn("normal_preserved=1", ran.stdout)
+
     def test_sampler_effective_min_filter_uses_texture_mip_state(self) -> None:
         ran = self._run("--sampler-effective")
         self.assertEqual(ran.returncode, 0, ran.stderr)

@@ -2162,6 +2162,45 @@ static int resolve_scaled(id<MTLTexture> src, id<MTLTexture> dst,
     return command.status == MTLCommandBufferStatusCompleted ? 0 : -1;
 }
 
+int eu4_gfx_encode_resolve_flip(void *source, void *destination,
+                                void *command_buffer) {
+    if (source == NULL || destination == NULL || command_buffer == NULL) {
+        return -1;
+    }
+    id<MTLTexture> src = (__bridge id<MTLTexture>)source;
+    id<MTLTexture> dst = (__bridge id<MTLTexture>)destination;
+    id<MTLCommandBuffer> command = (__bridge id<MTLCommandBuffer>)command_buffer;
+    id<MTLRenderPipelineState> pipeline =
+        resolve_pipeline(src.device, dst.pixelFormat);
+    if (pipeline == nil) {
+        return -1;
+    }
+    MTLSamplerDescriptor *sampler_descriptor = [MTLSamplerDescriptor new];
+    sampler_descriptor.minFilter = MTLSamplerMinMagFilterLinear;
+    sampler_descriptor.magFilter = MTLSamplerMinMagFilterLinear;
+    id<MTLSamplerState> sampler =
+        [src.device newSamplerStateWithDescriptor:sampler_descriptor];
+    if (sampler == nil) {
+        return -1;
+    }
+    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.colorAttachments[0].texture = dst;
+    pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+    pass.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 0.0);
+    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> encoder =
+        [command renderCommandEncoderWithDescriptor:pass];
+    if (encoder == nil) {
+        return -1;
+    }
+    [encoder setRenderPipelineState:pipeline];
+    [encoder setFragmentTexture:src atIndex:0];
+    [encoder setFragmentSamplerState:sampler atIndex:0];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [encoder endEncoding];
+    return 0;
+}
+
 static uint64_t g_resolve_sequence;
 
 static void resolve_trace_write(const char *op, uint64_t seq, void *header,
@@ -2260,6 +2299,7 @@ void eu4_gfx_resolve_noop(void *unused, void *header) {
        handles both 1:1 and scaled copies. A raw blit preserves Metal's
        top-left rows and would leave the sampled texture upside down. */
     int status = resolve_scaled(src, dst, backend.device, backend.queue);
+    eu4_gfx_note_render_target_write(header);
     resolve_dump_checkpoint(dst, resolve_dir, "dest", seq);
     resolve_emit("_GfxResolve", header, src, dst, backend.currentTargetColor, seq,
                  status == 0 ? "scaled_ok" : "scaled_failed");
@@ -2877,6 +2917,7 @@ void eu4_gfx_set_render_target(void *handle, void *target) {
         memcpy(&width, (uint8_t *)target + 0x28, 4);
         memcpy(&height, (uint8_t *)target + 0x2c, 4);
         backend.currentTargetHeader = target;
+        eu4_gfx_note_render_target_write(target);
         backend.currentTargetColor = color;
         backend.lastBoundRTColor = color;
         backend.lastBoundRTWidth = width;

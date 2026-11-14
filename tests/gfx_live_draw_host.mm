@@ -1061,6 +1061,112 @@ static int run_resolve_orientation(void) {
     return ok ? 0 : 1;
 }
 
+static int run_sampled_render_target_orientation(void) {
+    /* The menu labels are directly sampled render-target textures. Metal
+       stores render targets top-left, while the engine's GL UVs address row 0
+       as the bottom. Sampling the raw render target reflects the label.
+       This test pins the reusable conversion: a render-target header resolves
+       to a GL-row shadow, an ordinary texture is returned unchanged, and the
+       GPU output is checked row by row. */
+    boot();
+    id<MTLDevice> device = (__bridge id<MTLDevice>)eu4_gfx_metal_device();
+    if (device == nil) {
+        fail("sampled RT device");
+    }
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil || backend.queue == nil) {
+        fail("sampled RT backend");
+    }
+    /* Distinct per-pixel colours: a coarse row swap or a linearly blurred
+       copy both change at least one output pixel. */
+    uint32_t pattern[16] = {
+        0x000000ffu, 0x0000ff00u, 0x00ff0000u, 0x00ffffffu,
+        0x0000ffffu, 0x00ff00ffu, 0x00ffff00u, 0x00000000u,
+        0x00000080u, 0x00008000u, 0x00800000u, 0x00808080u,
+        0x000080ffu, 0x008000ffu, 0x00ff0080u, 0x00c0c0c0u,
+    };
+    void *header = eu4_gfx_create_render_target_texture(NULL, 4, 4, 11, 0, 0);
+    if (header == NULL) {
+        fail("sampled RT header");
+    }
+    id<MTLTexture> target =
+        (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(header);
+    if (target == nil) {
+        fail("sampled RT texture");
+    }
+    [target replaceRegion:MTLRegionMake2D(0, 0, 4, 4) mipmapLevel:0
+                withBytes:pattern bytesPerRow:4 * 4];
+    if (backend.boundTextures == nil) {
+        backend.boundTextures = [NSMutableArray array];
+    }
+    [backend.boundTextures removeAllObjects];
+    [backend.boundTextures addObject:[NSValue valueWithPointer:header]];
+    id<MTLCommandBuffer> flip_command = [backend.queue commandBuffer];
+    eu4_gfx_prepare_sampled_textures((__bridge void *)flip_command);
+    [flip_command commit];
+    [flip_command waitUntilCompleted];
+    if (flip_command.status != MTLCommandBufferStatusCompleted) {
+        fail("sampled RT flip command");
+    }
+    void *sampled = eu4_gfx_texture_for_sampling(header);
+    if (sampled == NULL || sampled == (__bridge void *)target) {
+        fprintf(stderr, "FAIL: render target was not converted for sampling\n");
+        return 1;
+    }
+    uint32_t converted[16];
+    read_target_texture((__bridge id<MTLTexture>)sampled, backend.queue,
+                        4 * 4, converted);
+    int flipped = 1;
+    for (uint32_t y = 0; y < 4; y++) {
+        for (uint32_t x = 0; x < 4; x++) {
+            uint32_t want = pattern[(3 - y) * 4 + x] & 0x00ffffffu;
+            uint32_t got = converted[y * 4 + x] & 0x00ffffffu;
+            if (got != want) {
+                fprintf(stderr, "FAIL: RT row %u col %u got %08x want %08x\n",
+                        y, x, got, want);
+                flipped = 0;
+            }
+        }
+    }
+
+    /* A previously correct ordinary texture keeps its exact rows. */
+    uint8_t normal_header[0x44];
+    memset(normal_header, 0, sizeof normal_header);
+    MTLTextureDescriptor *nd =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                           width:4 height:4 mipmapped:NO];
+    nd.usage = MTLTextureUsageShaderRead;
+    nd.storageMode = MTLStorageModeShared;
+    id<MTLTexture> normal = [device newTextureWithDescriptor:nd];
+    if (normal == nil) {
+        fail("normal texture");
+    }
+    [normal replaceRegion:MTLRegionMake2D(0, 0, 4, 4) mipmapLevel:0
+                withBytes:pattern bytesPerRow:4 * 4];
+    if (backend.textures == nil) {
+        backend.textures = [NSMutableDictionary dictionary];
+    }
+    backend.textures[[NSValue valueWithPointer:normal_header]] = normal;
+    [backend.boundTextures removeAllObjects];
+    [backend.boundTextures addObject:[NSValue valueWithPointer:normal_header]];
+    id<MTLCommandBuffer> normal_command = [backend.queue commandBuffer];
+    eu4_gfx_prepare_sampled_textures((__bridge void *)normal_command);
+    [normal_command commit];
+    [normal_command waitUntilCompleted];
+    void *normal_sampled = eu4_gfx_texture_for_sampling(normal_header);
+    int preserved = normal_sampled == (__bridge void *)normal;
+    uint32_t normal_out[16];
+    read_target_texture(normal, backend.queue, 4 * 4, normal_out);
+    for (uint32_t i = 0; i < 16; i++) {
+        if ((normal_out[i] & 0x00ffffffu) != (pattern[i] & 0x00ffffffu)) {
+            preserved = 0;
+        }
+    }
+    printf("sampled_rt_orientation=%d rt_flip=%d normal_preserved=%d\n",
+           flipped && preserved, flipped, preserved);
+    return flipped && preserved ? 0 : 1;
+}
+
 static int run_offscreen_viewport(void) {
     /* An offscreen target is allocated at the engine's logical size. The
        window is 64x64 (HiDPI would scale the backbuffer), but the target is
@@ -1221,6 +1327,9 @@ int main(int argc, char **argv) {
     }
     if (argc >= 2 && strcmp(argv[1], "--resolve-orientation") == 0) {
         return run_resolve_orientation();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--sampled-rt-orientation") == 0) {
+        return run_sampled_render_target_orientation();
     }
     if (argc >= 2 && strcmp(argv[1], "--depth-state") == 0) {
         return run_depth_state();

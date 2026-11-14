@@ -654,6 +654,13 @@ void eu4_gfx_initialize_render_target_texture(void *handle, void *header,
     if (depth != nil) {
         backend.renderTargetDepths[[NSValue valueWithPointer:header]] = depth;
     }
+    /* A render target is written top-left by Metal; bump its generation so the
+       sample-time GL-row shadow is rebuilt from the next content. */
+    if (backend.renderTargetGenerations == nil) {
+        backend.renderTargetGenerations = [NSMutableDictionary dictionary];
+    }
+    backend.renderTargetGenerations[[NSValue valueWithPointer:header]] =
+        @(++backend.renderTargetEpoch);
     uint8_t *bytes = (uint8_t *)header;
     memset(bytes, 0, 0x44);
     bytes[0x19] = 1;
@@ -791,7 +798,11 @@ void eu4_gfx_clear_texture(void *header) {
     }
     EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
     if (backend != nil && backend.textures != nil) {
-        [backend.textures removeObjectForKey:[NSValue valueWithPointer:header]];
+        NSValue *key = [NSValue valueWithPointer:header];
+        [backend.textures removeObjectForKey:key];
+        [backend.sampledRenderTargets removeObjectForKey:key];
+        [backend.sampledRenderTargetGenerations removeObjectForKey:key];
+        [backend.renderTargetGenerations removeObjectForKey:key];
     }
     uint8_t *bytes = (uint8_t *)header;
     if (bytes[0x1a] != 0) {
@@ -820,6 +831,127 @@ void *eu4_gfx_texture_for_header(void *header) {
     }
     id texture = backend.textures[[NSValue valueWithPointer:header]];
     return texture != nil ? (__bridge void *)texture : NULL;
+}
+
+void eu4_gfx_note_render_target_write(void *header) {
+    if (header == NULL) {
+        return;
+    }
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil) {
+        return;
+    }
+    if (backend.renderTargetGenerations == nil) {
+        backend.renderTargetGenerations = [NSMutableDictionary dictionary];
+    }
+    backend.renderTargetGenerations[[NSValue valueWithPointer:header]] =
+        @(++backend.renderTargetEpoch);
+}
+
+/* A Metal render target stores its first row at the top-left, while the
+   engine's GL UVs address row 0 as the bottom. Sampling an engine render
+   target directly therefore reflects the image unless it is converted to GL
+   row order first. The conversion is the same V-flipping GPU resolve used by
+   _GfxResolve; it is cached per header and rebuilt only when the render target
+   has been written again. Ordinary textures never take this path. */
+static id<MTLTexture> ensure_sampling_shadow(void *header, id<MTLTexture> source,
+                                             EU4GfxBackend *backend) {
+    NSValue *key = [NSValue valueWithPointer:header];
+    id<MTLTexture> shadow = backend.sampledRenderTargets[key];
+    if (shadow != nil && shadow.width == source.width &&
+        shadow.height == source.height &&
+        shadow.pixelFormat == source.pixelFormat) {
+        return shadow;
+    }
+    MTLTextureDescriptor *descriptor =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:source.pixelFormat
+                                                           width:source.width
+                                                          height:source.height
+                                                       mipmapped:NO];
+    descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    descriptor.storageMode = MTLStorageModeShared;
+    shadow = [source.device newTextureWithDescriptor:descriptor];
+    if (shadow == nil) {
+        return nil;
+    }
+    backend.sampledRenderTargets[key] = shadow;
+    [backend.sampledRenderTargetGenerations removeObjectForKey:key];
+    return shadow;
+}
+
+/* The bind-time lookup. It never allocates, drains or commits: the draw's
+   command buffer already carries the flip pass encoded before the encoder
+   opened, so the shadow is either current or the raw resource is used. */
+static void *sampling_render_target(void *header, id<MTLTexture> source) {
+    if (header == NULL || source == nil) {
+        return (__bridge void *)source;
+    }
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil || backend.sampledRenderTargets == nil) {
+        return (__bridge void *)source;
+    }
+    NSValue *key = [NSValue valueWithPointer:header];
+    id<MTLTexture> shadow = backend.sampledRenderTargets[key];
+    NSNumber *generation = backend.renderTargetGenerations[key] ?: @(0);
+    NSNumber *shadow_generation = backend.sampledRenderTargetGenerations[key];
+    if (shadow == nil || shadow_generation == nil ||
+        ![shadow_generation isEqual:generation]) {
+        return (__bridge void *)source;
+    }
+    return (__bridge void *)shadow;
+}
+
+void *eu4_gfx_texture_for_sampling(void *header) {
+    id<MTLTexture> texture =
+        (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(header);
+    if (texture == nil || header == NULL) {
+        return NULL;
+    }
+    if (((const uint8_t *)header)[0x19] == 0) {
+        return (__bridge void *)texture;
+    }
+    return sampling_render_target(header, texture);
+}
+
+void eu4_gfx_prepare_sampled_textures(void *command_buffer) {
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil || backend.boundTextures == nil ||
+        command_buffer == NULL) {
+        return;
+    }
+    if (backend.sampledRenderTargets == nil) {
+        backend.sampledRenderTargets = [NSMutableDictionary dictionary];
+    }
+    if (backend.sampledRenderTargetGenerations == nil) {
+        backend.sampledRenderTargetGenerations = [NSMutableDictionary dictionary];
+    }
+    for (NSUInteger index = 0; index < backend.boundTextures.count; index++) {
+        void *header = NULL;
+        [(NSValue *)backend.boundTextures[index] getValue:&header];
+        if (header == NULL || ((const uint8_t *)header)[0x19] == 0) {
+            continue;
+        }
+        id<MTLTexture> source =
+            (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(header);
+        if (source == nil) {
+            continue;
+        }
+        NSValue *key = [NSValue valueWithPointer:header];
+        id<MTLTexture> shadow = ensure_sampling_shadow(header, source, backend);
+        if (shadow == nil) {
+            continue;
+        }
+        NSNumber *generation = backend.renderTargetGenerations[key] ?: @(0);
+        NSNumber *shadow_generation = backend.sampledRenderTargetGenerations[key];
+        if (shadow_generation != nil && [shadow_generation isEqual:generation]) {
+            continue;
+        }
+        if (eu4_gfx_encode_resolve_flip((__bridge void *)source,
+                                        (__bridge void *)shadow,
+                                        command_buffer) == 0) {
+            backend.sampledRenderTargetGenerations[key] = generation;
+        }
+    }
 }
 
 static int sampler_min_is_mipmapped(uint32_t filter) {

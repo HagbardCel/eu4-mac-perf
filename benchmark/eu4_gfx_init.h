@@ -35,6 +35,14 @@
 @property (nonatomic) uint32_t currentTargetWidth;
 @property (nonatomic) uint32_t currentTargetHeight;
 @property (nonatomic, strong) NSMutableDictionary *renderTargetDepths;
+/* Sample-time GL-row conversion for render-target textures. The engine's GL
+   UVs assume the GL bottom-up row convention; a Metal render target is stored
+   top-left. Each directly sampled render target gets a cached GL-row shadow,
+   rebuilt only when the target generation changes. */
+@property (nonatomic, strong) NSMutableDictionary *sampledRenderTargets;
+@property (nonatomic, strong) NSMutableDictionary *sampledRenderTargetGenerations;
+@property (nonatomic, strong) NSMutableDictionary *renderTargetGenerations;
+@property (nonatomic) uint64_t renderTargetEpoch;
 @property (nonatomic, strong) id gameDepthTarget;
 @property (nonatomic, strong) id previousFrameTexture;
 @property (nonatomic, strong) id lastDrawTargetColor;
@@ -54,6 +62,12 @@ void eu4_gfx_frame_note_draw_caller(uint64_t caller_rva);
 /* Host-diagnostic: resolve a Metal source into a destination using the same
    orientation conversion as _GfxResolve. Returns 0 on success. */
 int eu4_gfx_resolve_orientation_test(void *source, void *destination);
+
+/* Encodes the same V-flipping resolve into an existing command buffer, without
+   committing it. Used to convert a render target into its GL-row sampling
+   shadow in the draw's own command buffer, before the draw pass. */
+int eu4_gfx_encode_resolve_flip(void *source, void *destination,
+                                void *command_buffer);
 extern uint8_t eu4_gfx_last_raster_description[0x10];
 extern uint64_t eu4_gfx_live_draw_sequence;
 extern uint64_t eu4_gfx_live_clear_sequence;
