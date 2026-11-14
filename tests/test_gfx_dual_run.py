@@ -11,7 +11,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from automation import gfx_align, gfx_diagnostics, gfx_dual_run, gfx_launch, gfx_scenario  # noqa: E402
+from automation import (gfx_align, gfx_artifacts, gfx_diagnostics, gfx_dual_run,
+                        gfx_launch, gfx_scenario)  # noqa: E402
 
 try:
     import numpy as np
@@ -457,15 +458,27 @@ class PairComparisonTests(unittest.TestCase):
                 "regions": {"all": {"rect": [0, 4, 0, 4]}},
             }
         }
+        import hashlib
+
+        def dump_meta(path, width, height, origin):
+            payload = path.read_bytes()
+            return {
+                "schema": "gfx-frame-dump/v1",
+                "width": width,
+                "height": height,
+                "origin": origin,
+                "pixel_format": "BGRA8",
+                "row_stride": width * 4,
+                "raw_bytes": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "raw_file": str(path),
+                "caller_signature": "0xabc",
+                "draws": 6,
+            }
+
         self.meta = {
-            "reference": {"width": 4, "height": 4, "origin": "lower_left",
-                          "pixel_format": "BGRA8", "sha256": "a" * 64,
-                          "raw_file": str(self.reference_path),
-                          "caller_signature": "0xabc", "draws": 6},
-            "candidate": {"width": 8, "height": 8, "origin": "top_left",
-                          "pixel_format": "BGRA8", "sha256": "b" * 64,
-                          "raw_file": str(self.candidate_path),
-                          "caller_signature": "0xabc", "draws": 6},
+            "reference": dump_meta(self.reference_path, 4, 4, "lower_left"),
+            "candidate": dump_meta(self.candidate_path, 8, 8, "top_left"),
         }
 
     def tearDown(self):
@@ -473,6 +486,14 @@ class PairComparisonTests(unittest.TestCase):
 
     def pair(self):
         return {"frame_index": 3, "candidate_frame_index": 3}
+
+    def set_candidate_bytes(self, payload: bytes):
+        self.candidate_path.write_bytes(payload)
+        import hashlib
+        self.meta["candidate"].update({
+            "raw_bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+        })
 
     def test_scaled_matching_pair_passes(self):
         result = gfx_dual_run._compare_pair(
@@ -486,7 +507,7 @@ class PairComparisonTests(unittest.TestCase):
     def test_mirrored_pair_fails_with_region(self):
         mirrored = self.image[:, ::-1, :]
         candidate = np.repeat(np.repeat(mirrored, 2, axis=0), 2, axis=1)
-        self.candidate_path.write_bytes(candidate.tobytes())
+        self.set_candidate_bytes(candidate.tobytes())
         result = gfx_dual_run._compare_pair(
             self.pair(), self.meta["reference"], self.meta["candidate"],
             self.scenario,
@@ -519,23 +540,27 @@ class PairComparisonTests(unittest.TestCase):
         self.assertEqual(result["status"], "not_compared")
         self.assertIn("intra-day state", result["reason"])
 
-    def test_weak_day_identity_rejects_uncorroborated_scene(self):
+    def test_image_correlation_is_diagnostic_not_a_corroboration_veto(self):
         scenario = dict(self.scenario)
         scenario["settle"] = {"draw_tolerance": 0.5}
         scenario["comparison"] = dict(scenario["comparison"],
                                       weak_identity_guard=True,
-                                      weak_identity_min_correlation=0.9)
+                                      weak_identity_min_correlation=0.99)
         noise = np.random.default_rng(11).integers(
             0, 255, size=(8, 8, 4), dtype=np.uint8)
-        self.candidate_path.write_bytes(noise.tobytes())
+        self.set_candidate_bytes(noise.tobytes())
         reference = dict(self.meta["reference"], draws=300,
                          update_identity="0x10")
         candidate = dict(self.meta["candidate"], draws=350,
                          caller_signature="0xdef", update_identity="0x10")
         result = gfx_dual_run._compare_pair(
             self.pair(), reference, candidate, scenario)
-        self.assertEqual(result["status"], "not_compared")
-        self.assertIn("day-level identity", result["reason"])
+        # Correspondence comes from identity and workload, not from image
+        # similarity.  A catastrophic but aligned Metal output is a rendering
+        # difference, not an alignment refusal.
+        self.assertEqual(result["status"], "fail", result)
+        self.assertTrue(result["alignment"]["correspondence"]
+                        ["image_correlation_is_diagnostic"])
 
     def test_ambiguous_composition_is_not_compared(self):
         candidate = dict(self.meta["candidate"], caller_signature="0xdef")
@@ -557,7 +582,7 @@ class PairComparisonTests(unittest.TestCase):
     def test_bad_image_is_still_compared_when_alignment_is_strong(self):
         noise = np.random.default_rng(7).integers(
             0, 255, size=(8, 8, 4), dtype=np.uint8)
-        self.candidate_path.write_bytes(noise.tobytes())
+        self.set_candidate_bytes(noise.tobytes())
         result = gfx_dual_run._compare_pair(
             self.pair(), self.meta["reference"], self.meta["candidate"],
             self.scenario,
@@ -963,6 +988,185 @@ class HealthStopTests(unittest.TestCase):
         health = gfx_diagnostics.GpuHealth()
         health.add("health_check", "ok", severity="info")
         self.assertIsNone(gfx_dual_run._health_stop(health.summary()))
+
+
+class CaptureIntegrityTests(unittest.TestCase):
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self._temporary.name)
+        self.payload = bytes(range(4 * 2 * 4))
+        self.raw = self.root / "frame.bgra"
+        self.raw.write_bytes(self.payload)
+        import hashlib
+        self.meta = {
+            "schema": "gfx-frame-dump/v1",
+            "frame_index": 3,
+            "width": 4,
+            "height": 2,
+            "origin": "lower_left",
+            "pixel_format": "BGRA8",
+            "row_stride": 16,
+            "raw_bytes": len(self.payload),
+            "sha256": hashlib.sha256(self.payload).hexdigest(),
+            "raw_file": str(self.raw),
+        }
+        self.scenario = {"comparison": {"policy": "exact"}}
+
+    def tearDown(self):
+        self._temporary.cleanup()
+
+    def test_wrong_declared_hash_is_rejected_before_comparison(self):
+        meta = dict(self.meta, sha256="0" * 64)
+        problems = gfx_dual_run._verify_dump_payload(meta, 3)
+        self.assertTrue(any("digest" in problem for problem in problems))
+
+    def test_wrong_payload_length_is_rejected(self):
+        self.raw.write_bytes(self.payload[:-1])
+        problems = gfx_dual_run._verify_dump_payload(self.meta, 3)
+        self.assertTrue(any("payload is" in problem for problem in problems))
+
+    def test_wrong_frame_identity_is_rejected(self):
+        problems = gfx_dual_run._verify_dump_payload(self.meta, 4)
+        self.assertTrue(any("frame_index" in problem for problem in problems))
+
+    def test_wrong_stride_and_origin_are_rejected(self):
+        problems = gfx_dual_run._verify_dump_payload(
+            dict(self.meta, row_stride=8, origin="sideways"), 3)
+        self.assertTrue(any("row stride" in problem for problem in problems))
+        self.assertTrue(any("origin" in problem for problem in problems))
+
+    def test_compare_pair_refuses_invalid_evidence(self):
+        meta = dict(self.meta, sha256="0" * 64)
+        result = gfx_dual_run._compare_pair(
+            {"frame_index": 3, "candidate_frame_index": 3}, meta, meta,
+            self.scenario)
+        self.assertEqual(result["status"], "not_compared")
+        self.assertIn("capture integrity failed", result["reason"])
+        self.assertIn("integrity", result)
+
+    def test_malformed_dump_is_preserved_but_marked_invalid(self):
+        observe = self.root / "observe"
+        captured = observe / "captured"
+        captured.mkdir(parents=True)
+        bad = dict(self.meta, sha256="1" * 64,
+                   raw_file=str(captured / "frame-3.bgra"))
+        (captured / "frame-3.bgra").write_bytes(self.payload)
+        (captured / "frame-3.json").write_text(json.dumps(bad))
+        store = gfx_artifacts.ArtifactStore(self.root / "artifacts",
+                                           max_bytes=1024 * 1024)
+        value = gfx_dual_run._collect_dumps(
+            {"role": "reference", "run_dir": self.root,
+             "observe_dir": observe, "backend": "opengl",
+             "session_id": "session-test"},
+            [3], store, timeout=0.2)
+        self.assertEqual(len(value["captured"]), 1)
+        self.assertFalse(value["captured"][0]["valid"])
+        self.assertTrue(value["captured"][0]["reasons"])
+
+
+class RequestCapacityTests(unittest.TestCase):
+    def test_request_over_native_capacity_is_refused(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            observe = Path(temporary)
+            with self.assertRaises(gfx_dual_run.RequestError) as caught:
+                gfx_dual_run._request_dumps(
+                    {"observe_dir": observe},
+                    list(range(gfx_dual_run.NATIVE_REQUEST_CAPACITY + 1)))
+            self.assertEqual(caught.exception.kind, "request_too_large")
+            self.assertFalse((observe / "capture-request.json").exists())
+
+    def test_request_at_capacity_is_accepted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            observe = Path(temporary)
+            request_id = gfx_dual_run._request_dumps(
+                {"observe_dir": observe},
+                list(range(gfx_dual_run.NATIVE_REQUEST_CAPACITY)))
+            self.assertIsInstance(request_id, int)
+            request = json.loads((observe / "capture-request.json").read_text())
+            self.assertEqual(request["requested"],
+                             gfx_dual_run.NATIVE_REQUEST_CAPACITY)
+            self.assertEqual(request["capacity"],
+                             gfx_dual_run.NATIVE_REQUEST_CAPACITY)
+
+
+class EffectiveScenarioTests(unittest.TestCase):
+    def scenario(self, **overrides):
+        value = scenario(start={"kind": "save", "save": "continuelastsave"})
+        value.update(overrides)
+        return value
+
+    def test_continuelastsave_is_part_of_the_recorded_digest(self):
+        declared = self.scenario()
+        original = gfx_scenario.normalize(declared)
+        before = list(original["args"])
+        effective, provenance = gfx_dual_run._effective_scenario(original)
+        self.assertEqual(original["args"], before)  # not mutated
+        self.assertIn("--continuelastsave", effective["args"])
+        self.assertTrue(provenance["args_changed"])
+        self.assertNotEqual(provenance["declared_digest"],
+                            provenance["effective_digest"])
+        self.assertEqual(
+            effective["digest"],
+            gfx_scenario.scenario_digest(effective),
+        )
+
+    def test_existing_argument_is_not_duplicated(self):
+        original = gfx_scenario.normalize(
+            self.scenario(args=["-enabletelemetry", "--continuelastsave"]))
+        effective, provenance = gfx_dual_run._effective_scenario(original)
+        self.assertEqual(effective["args"].count("--continuelastsave"), 1)
+        self.assertFalse(provenance["args_changed"])
+        self.assertEqual(provenance["declared_digest"],
+                         provenance["effective_digest"])
+
+    def test_frontend_scenario_is_unchanged(self):
+        original = gfx_scenario.normalize(scenario())
+        effective, provenance = gfx_dual_run._effective_scenario(original)
+        self.assertEqual(effective["args"], original["args"])
+        self.assertFalse(provenance["args_changed"])
+
+
+class ClassificationTests(unittest.TestCase):
+    def base(self, **overrides):
+        value = {
+            "frames": {
+                "paired": 4, "aligned": 4,
+                "comparison": {"passed": 4, "failed": 0, "unverified": 0,
+                               "not_compared": 0},
+            },
+            "health": {"verdict": "healthy"},
+            "stability": {"status": "verified"},
+            "stop": {"reason": "frame_limit"},
+        }
+        value.update(overrides)
+        return value
+
+    def scenario(self):
+        return {"comparison": {"policy": "exact"},
+                "start": {"pause": False}, "settle": {"stable_frames": 1}}
+
+    def test_frame_limit_alone_does_not_pass(self):
+        value = gfx_dual_run.classify_campaign(
+            self.base(frames={"paired": 0, "aligned": 0, "comparison": {}}),
+            self.scenario(), max_frames=10)
+        self.assertEqual(value["status"], "incomplete")
+        self.assertFalse(value["qualified"])
+
+    def test_gpu_failure_during_startup_is_not_incomplete_success(self):
+        value = gfx_dual_run.classify_campaign(
+            self.base(health={
+                "verdict": "failed",
+                "first_failure": {"message": "draw refused"},
+            }),
+            self.scenario(), max_frames=4)
+        self.assertEqual(value["status"], "gpu_execution_failure")
+        self.assertFalse(value["qualified"])
+
+    def test_complete_clean_coverage_is_qualified(self):
+        value = gfx_dual_run.classify_campaign(
+            self.base(), self.scenario(), max_frames=4)
+        self.assertEqual(value["status"], "match")
+        self.assertTrue(value["qualified"])
 
 
 class RealIdentityAlignmentTests(unittest.TestCase):

@@ -489,7 +489,11 @@ static obs_ring_slot *ring_find(uint64_t index) {
 
 /* Minimal request parser: {"frames":[12,13], ...}.  A malformed request is
  * ignored; the coordinator must never crash the game with a bad file. */
-static int parse_frames(const char *text, uint64_t *frames, int capacity) {
+static int parse_frames(const char *text, uint64_t *frames, int capacity,
+                        int *overflow) {
+    if (overflow != NULL) {
+        *overflow = 0;
+    }
     const char *key = strstr(text, "\"frames\"");
     if (key == NULL) {
         return 0;
@@ -500,7 +504,7 @@ static int parse_frames(const char *text, uint64_t *frames, int capacity) {
     }
     cursor++;
     int count = 0;
-    while (*cursor != 0 && *cursor != ']' && count < capacity) {
+    while (*cursor != 0 && *cursor != ']') {
         while (*cursor == ' ' || *cursor == '\t' || *cursor == '\n' || *cursor == ',') {
             cursor++;
         }
@@ -510,6 +514,14 @@ static int parse_frames(const char *text, uint64_t *frames, int capacity) {
         char *end = NULL;
         unsigned long long value = strtoull(cursor, &end, 10);
         if (end == cursor) {
+            break;
+        }
+        if (count >= capacity) {
+            /* Never silently drop requested frames.  The ack reports an
+               invalid oversized request and the coordinator splits it. */
+            if (overflow != NULL) {
+                *overflow = 1;
+            }
             break;
         }
         frames[count++] = (uint64_t)value;
@@ -694,8 +706,10 @@ static void write_ack(const char *status, uint64_t request_id,
     }
 }
 
-static int read_request(uint64_t *request_id, uint64_t *frames, int *count) {
+static int read_request(uint64_t *request_id, uint64_t *frames, int *count,
+                        int *overflow) {
     *request_id = 0;
+    *overflow = 0;
     *count = 0;
     FILE *file = fopen(g_request, "r");
     if (file == NULL) return 0;
@@ -704,7 +718,7 @@ static int read_request(uint64_t *request_id, uint64_t *frames, int *count) {
     fclose(file);
     text[used] = 0;
     *request_id = parse_request_id(text);
-    *count = parse_frames(text, frames, OBS_MAX_DUMPS);
+    *count = parse_frames(text, frames, OBS_MAX_DUMPS, overflow);
     return 1;
 }
 
@@ -712,9 +726,14 @@ static void handle_request(void) {
     uint64_t request_id = 0;
     uint64_t requested[OBS_MAX_DUMPS];
     int requested_count = 0;
-    if (!read_request(&request_id, requested, &requested_count)) return;
+    int overflow = 0;
+    if (!read_request(&request_id, requested, &requested_count, &overflow)) return;
     if (request_id == 0) {
         write_ack("invalid", 0, NULL, 0, NULL, 0);
+        return;
+    }
+    if (overflow) {
+        write_ack("invalid", request_id, NULL, 0, NULL, 0);
         return;
     }
     if (request_id != g_request_id) {
@@ -915,7 +934,9 @@ int eu4_gfx_frame_observe_wants(uint32_t frame_index) {
     uint64_t request_id = 0;
     uint64_t frames[OBS_MAX_DUMPS];
     int count = 0;
-    if (!read_request(&request_id, frames, &count) || request_id == 0) return 0;
+    int overflow = 0;
+    if (!read_request(&request_id, frames, &count, &overflow) ||
+        request_id == 0 || overflow) return 0;
     for (int i = 0; i < count; i++) {
         if (frames[i] == (uint64_t)frame_index) return 1;
     }

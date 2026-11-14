@@ -337,6 +337,7 @@ class Session:
         self._tokens: list[str] = []
         self._temp_paths: list[Path] = []
         self._closed = False
+        self._display = None
 
     # -- construction -----------------------------------------------------
     @classmethod
@@ -418,6 +419,38 @@ class Session:
             "reason": "",
         })
         return cls(run_dir, session_id, marker, handle, state)
+
+    # -- display isolation ------------------------------------------------
+    def attach_display(self, display) -> None:
+        """Attach a prepared background display; it is restored on close."""
+        self._display = display
+        self._state["display"] = display.as_dict()
+        self._write_state()
+        directory = self.run_dir / "display"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "display-session.json").write_text(
+            json.dumps(display.as_dict(), indent=2) + "\n", encoding="utf-8"
+        )
+
+    @property
+    def display(self):
+        return self._display
+
+    def display_env(self) -> dict:
+        return dict(self._display.env) if self._display is not None else {}
+
+    def _restore_display(self) -> dict | None:
+        if self._display is None:
+            return None
+        if getattr(self, "_display_restored", False):
+            return self._display.record.get("restore")
+        self._display_restored = True
+        try:
+            result = self._display.restore()
+        except Exception as exc:  # noqa: BLE001 - restore must not mask the cause
+            result = {"restored": False, "error": str(exc)}
+        self._state["display_restore"] = result
+        return result
 
     # -- registry ---------------------------------------------------------
     @staticmethod
@@ -543,6 +576,10 @@ class Session:
         if self._closed:
             return _read_json(self.run_dir / "terminal-status.json") or {}
         self._closed = True
+        restore = self._restore_display()
+        if restore is not None:
+            extra = dict(extra or {})
+            extra.setdefault("display_restore", restore)
         self._write_terminal(status=status, reason=reason, extra=extra)
         self._state["status"] = status
         self._state["closed_utc"] = _now()

@@ -67,12 +67,20 @@ int main(int argc, char **argv) {
         fprintf(stderr, "init failed\n");
         return 3;
     }
-    char request[1024];
+    char request[4096];
     snprintf(request, sizeof request,
              "%s/capture-request.json", argv[1]);
     FILE *file = fopen(request, "wb");
     if (file != NULL) {
-        fputs("{\"schema\":\"gfx-frame-request/v1\",\"request_id\":42,\"frames\":[3,9]}\n", file);
+        if (strcmp(mode, "overflow") == 0) {
+            fputs("{\"schema\":\"gfx-frame-request/v1\",\"request_id\":43,\"frames\":[", file);
+            for (int index = 0; index < 300; index++) {
+                fprintf(file, "%d%s", index, index == 299 ? "" : ",");
+            }
+            fputs("]}\n", file);
+        } else {
+            fputs("{\"schema\":\"gfx-frame-request/v1\",\"request_id\":42,\"frames\":[3,9]}\n", file);
+        }
         fclose(file);
     }
     int frames = strcmp(mode, "gap") == 0 ? 4 : 10;

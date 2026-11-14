@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Callable
 
 from automation import gfx_align, gfx_artifacts, gfx_diagnostics, gfx_flight, gfx_frame_compare
-from automation import gfx_launch, gfx_scenario
+from automation import gfx_display, gfx_launch, gfx_scenario
 from automation import gfx_session, gfx_wait, launch_ledger, launch_lease
 
 import eu4_benchmark as base_benchmark
@@ -393,17 +393,39 @@ def _tail(run_dir: Path) -> dict:
 
 _REQUEST_IDS = itertools.count(time.time_ns())
 
+# Must match ``OBS_MAX_DUMPS`` in benchmark/eu4_gfx_frame_observe.c.  A request
+# larger than this is refused before it reaches the native observer; the
+# observer also rejects an oversized request instead of silently truncating it.
+NATIVE_REQUEST_CAPACITY = 256
+
+
+class RequestError(RuntimeError):
+    def __init__(self, kind: str, detail: str = ""):
+        super().__init__(kind if not detail else f"{kind}: {detail}")
+        self.kind = kind
+        self.detail = detail
+
 
 def _request_dumps(launched: dict, indices: list[int]) -> int | None:
     if not indices:
         return None
+    unique = sorted(set(indices))
+    if len(unique) > NATIVE_REQUEST_CAPACITY:
+        raise RequestError(
+            "request_too_large",
+            f"{len(unique)} frames requested; native capacity is "
+            f"{NATIVE_REQUEST_CAPACITY}. Split the request into bounded windows "
+            "instead of relying on truncation.",
+        )
     request_id = next(_REQUEST_IDS)
     path = Path(launched["observe_dir"]) / "capture-request.json"
     temporary = path.with_name(path.name + ".tmp")
     temporary.write_text(json.dumps({
         "schema": "gfx-frame-request/v1",
         "request_id": request_id,
-        "frames": sorted(set(indices)),
+        "frames": unique,
+        "requested": len(unique),
+        "capacity": NATIVE_REQUEST_CAPACITY,
     }) + "\n", encoding="utf-8")
     os.replace(temporary, path)
     return request_id
@@ -451,7 +473,16 @@ def _await_dump_meta(launched: dict, indices: list[int], timeout: float = 4.0,
             except (OSError, json.JSONDecodeError):
                 ack = {}
             if (isinstance(ack, dict) and ack.get("request_id") == request_id
-                    and ack.get("status") in ("captured", "expired", "missing")):
+                    and ack.get("status") in (
+                        "captured", "expired", "missing", "invalid"
+                    )):
+                if ack.get("status") == "invalid":
+                    return {
+                        "found": {},
+                        "missing": sorted(wanted),
+                        "ack": ack,
+                        "reason": "observer rejected the capture request",
+                    }
                 for value in ack.get("missing", []):
                     if type(value) is int and value in wanted:
                         wanted.discard(value)
@@ -470,8 +501,11 @@ def _await_dump_meta(launched: dict, indices: list[int], timeout: float = 4.0,
             wanted.discard(index)
         if wanted:
             time.sleep(0.02)
-    return {"found": found,
-            "missing": sorted((wanted | explicit_missing) - set(found))}
+    return {
+        "found": found,
+        "missing": sorted((wanted | explicit_missing) - set(found)),
+        "ack": None,
+    }
 
 
 def _collect_dumps(launched: dict, indices: list[int], store: gfx_artifacts.ArtifactStore,
@@ -492,6 +526,26 @@ def _collect_dumps(launched: dict, indices: list[int], store: gfx_artifacts.Arti
             raw = Path(value.get("raw_file", ""))
             if not raw.is_file():
                 continue
+            problems = _verify_dump_payload(
+                value, index,
+                expected_backend=launched.get("backend"),
+                expected_session=launched.get("session_id"),
+            )
+            if problems:
+                # Preserve malformed evidence for diagnosis but never present
+                # it as a valid comparison frame.
+                stored = store.put_file(raw, kind="frame-invalid", preserved=False,
+                                        logical_name=f"{launched['role']}-frame-{index}-invalid")
+                found.append({
+                    "frame_index": index,
+                    "meta": value,
+                    "sha256": stored.sha256 if stored else value.get("sha256"),
+                    "preserved": False,
+                    "valid": False,
+                    "reasons": problems,
+                })
+                wanted.discard(index)
+                continue
             stored = store.put_file(raw, kind="frame", preserved=True,
                                     logical_name=f"{launched['role']}-frame-{index}")
             found.append({
@@ -499,6 +553,8 @@ def _collect_dumps(launched: dict, indices: list[int], store: gfx_artifacts.Arti
                 "meta": value,
                 "sha256": stored.sha256 if stored else value.get("sha256"),
                 "preserved": bool(stored),
+                "valid": True,
+                "reasons": [],
             })
             wanted.discard(index)
         if not wanted:
@@ -584,8 +640,86 @@ def _preview_stats(reference: FrameRecord, candidate: FrameRecord) -> dict:
 
 
 
+DUMP_SCHEMA = "gfx-frame-dump/v1"
+
+
+def _verify_dump_payload(meta: dict, index: int, *,
+                         expected_backend: str | None = None,
+                         expected_session: str | None = None) -> list[str]:
+    """Verify a native frame dump before it is used as comparison evidence.
+
+    Declared dimensions, row stride, origin, pixel format, byte count and
+    SHA-256 must all agree with the payload.  A dump that fails any check is
+    rejected, not compared and not silently repaired.
+    """
+    reasons: list[str] = []
+    if not isinstance(meta, dict):
+        return ["dump metadata is not an object"]
+    if meta.get("schema") not in (None, DUMP_SCHEMA):
+        reasons.append(f"unexpected dump schema {meta.get('schema')!r}")
+    if type(meta.get("frame_index")) is int and meta["frame_index"] != index:
+        reasons.append(
+            f"dump frame_index {meta['frame_index']} != requested {index}"
+        )
+    width, height = meta.get("width"), meta.get("height")
+    if type(width) is not int or type(height) is not int or width <= 0 or height <= 0:
+        reasons.append("dump extent is missing or invalid")
+        width = height = 0
+    if meta.get("row_stride") is not None and type(meta.get("row_stride")) is int:
+        if meta["row_stride"] != width * 4:
+            reasons.append(
+                f"row stride {meta['row_stride']} != tightly packed {width * 4}"
+            )
+    elif meta.get("pixel_format") == "BGRA8":
+        reasons.append("BGRA8 dump does not declare its row stride")
+    if meta.get("pixel_format") not in (None, "BGRA8"):
+        reasons.append(f"unexpected pixel format {meta.get('pixel_format')!r}")
+    origin = meta.get("origin")
+    if origin is not None and origin not in ("lower_left", "top_left"):
+        reasons.append(f"unexpected origin {origin!r}")
+    if expected_backend is not None and meta.get("backend") not in (
+        None, expected_backend
+    ):
+        reasons.append(
+            f"dump backend {meta.get('backend')!r} != {expected_backend!r}"
+        )
+    if expected_session is not None and meta.get("session") not in (
+        None, expected_session
+    ):
+        reasons.append("dump session does not match the campaign session")
+    raw = meta.get("raw_file")
+    if not isinstance(raw, str) or not raw:
+        reasons.append("raw_file is absent")
+        return reasons
+    path = Path(raw)
+    if not path.is_absolute():
+        reasons.append("raw_file is not absolute")
+    try:
+        payload = path.read_bytes()
+    except OSError:
+        reasons.append("raw capture file is unreadable")
+        return reasons
+    raw_bytes = meta.get("raw_bytes")
+    expected_bytes = width * height * 4
+    if raw_bytes is not None and type(raw_bytes) is int and raw_bytes != expected_bytes:
+        reasons.append(
+            f"raw_bytes {raw_bytes} != {expected_bytes} for {width}x{height} BGRA8"
+        )
+    if len(payload) != expected_bytes:
+        reasons.append(
+            f"payload is {len(payload)} bytes, expected {expected_bytes}"
+        )
+    digest = meta.get("sha256")
+    if not isinstance(digest, str) or len(digest) != 64:
+        reasons.append("sha256 declaration is absent or malformed")
+    elif gfx_artifacts.sha256_file(path) != digest:
+        reasons.append("payload digest does not match its declaration")
+    return reasons
+
+
 def _compare_pair(pair: dict, reference_meta: dict | None,
-                  candidate_meta: dict | None, scenario: dict) -> dict:
+                  candidate_meta: dict | None, scenario: dict, *,
+                  expected: dict | None = None) -> dict:
     """Compare one lockstep pair from its preserved raw dumps.
 
     A pair whose alignment evidence is too weak is not compared; a pixel
@@ -595,6 +729,26 @@ def _compare_pair(pair: dict, reference_meta: dict | None,
         return {
             "status": "not_compared",
             "reason": "one or both paired raw frames are unavailable",
+        }
+    expected = expected or {}
+    reference_problems = _verify_dump_payload(
+        reference_meta, pair["frame_index"],
+        expected_backend=expected.get("reference_backend"),
+        expected_session=expected.get("session"),
+    )
+    candidate_problems = _verify_dump_payload(
+        candidate_meta, pair.get("candidate_frame_index", pair["frame_index"]),
+        expected_backend=expected.get("candidate_backend"),
+        expected_session=expected.get("session"),
+    )
+    if reference_problems or candidate_problems:
+        return {
+            "status": "not_compared",
+            "reason": "capture integrity failed; malformed evidence is not compared",
+            "integrity": {
+                "reference": reference_problems,
+                "candidate": candidate_problems,
+            },
         }
     reference_record = {
         "frame_index": pair["frame_index"],
@@ -704,19 +858,17 @@ def _compare_pair(pair: dict, reference_meta: dict | None,
     # being reported as a rendering difference.  A strong tick identity would
     # not need this guard.
     alignment["content"] = content
-    weak_guard = bool(policy.get("weak_identity_guard", True))
-    min_correlation = float(policy.get("weak_identity_min_correlation", 0.35))
-    correlation = content.get("normal_correlation")
-    if (weak_guard and identity_equal and reference_signature != candidate_signature
-            and (correlation is None or correlation < min_correlation)):
-        return {
-            "status": "not_compared",
-            "reason": (
-                "day-level identity and content do not corroborate the same "
-                f"scene (correlation {correlation} < {min_correlation})"
-            ),
-            "alignment": alignment,
-        }
+    # Image correlation is diagnostic only.  Correspondence is established by
+    # engine identity, draw workload and scene stability; a coarse image
+    # correlation is not allowed to veto (or authorize) a rendering verdict.
+    alignment["correspondence"] = {
+        "basis": "engine_day+draw_workload+scene_stability",
+        "render_stage_proven": bool(
+            (scenario.get("start") or {}).get("pause")
+            and (scenario.get("settle") or {}).get("stable_frames", 1) > 1
+        ),
+        "image_correlation_is_diagnostic": True,
+    }
     compare_policy = {
         "policy": policy["policy"],
         "pixel_tolerance": policy["max_channel_error"],
@@ -996,6 +1148,34 @@ def classify_campaign(result: dict, scenario: dict, *, max_frames: int) -> dict:
     }
 
 
+def _effective_scenario(scenario: dict) -> tuple[dict, dict]:
+    """Return an immutable effective launch specification and its provenance.
+
+    ``--continuelastsave`` is part of the arguments that are actually
+    executed, so it must be part of the digest recorded for the campaign.  The
+    caller's normalized scenario is never mutated.
+    """
+    declared_args = list(scenario.get("args") or [])
+    effective = {key: value for key, value in scenario.items()}
+    effective["args"] = list(declared_args)
+    if (scenario.get("start") or {}).get("kind") == "save":
+        if "--continuelastsave" not in effective["args"]:
+            effective["args"].append("--continuelastsave")
+    provenance = {
+        "declared_digest": scenario.get("digest"),
+        "declared_args": declared_args,
+        "effective_args": list(effective["args"]),
+        "args_changed": effective["args"] != declared_args,
+    }
+    provenance["args_sha256"] = gfx_scenario.scenario_digest(
+        {"args": provenance["effective_args"]}
+    )
+    if effective["args"] != declared_args:
+        effective["digest"] = gfx_scenario.scenario_digest(effective)
+    provenance["effective_digest"] = effective.get("digest")
+    return effective, provenance
+
+
 def run_campaign(
     scenario: dict,
     *,
@@ -1011,7 +1191,13 @@ def run_campaign(
     session_root: Path | None = None,
     staggered: bool = False,
     stagger_wait_seconds: float = 600.0,
+    background: bool = False,
+    display_name: str = gfx_display.DEFAULT_NAME,
+    display_window: tuple[int, int] | None = None,
+    display_timeout: float = 60.0,
+    display_focus_guard: bool = False,
 ) -> dict:
+    scenario, launch_provenance = _effective_scenario(scenario)
     run_root = Path(run_root).expanduser().resolve()
     ledger_path = Path(ledger_path).expanduser().resolve()
     shader_cache = Path(shader_cache).expanduser().resolve() if shader_cache else None
@@ -1029,9 +1215,6 @@ def run_campaign(
             "scenario executable_sha256 does not match the installed pinned build",
         )
     executable = Path(scenario.get("executable") or identity["executable"])
-    if (scenario.get("start") or {}).get("kind") == "save":
-        if "--continuelastsave" not in scenario["args"]:
-            scenario["args"].append("--continuelastsave")
     preflight = gfx_launch.preflight_user_data(executable)
 
     session = gfx_session.Session.create(
@@ -1041,6 +1224,18 @@ def run_campaign(
         scenario_digest=scenario["digest"],
         session_root_path=session_root,
     )
+    window_size = display_window or tuple(scenario["logical_extent"])
+    display_qualified = None
+    if background:
+        try:
+            display_qualified = gfx_display.prepare_background(
+                preflight["user_data"], session.run_dir, name=display_name,
+                window_size=window_size, focus_guard=display_focus_guard,
+            )
+        except gfx_display.DisplayError as exc:
+            session.fail(f"display_{exc.kind}", extra={"display_error": str(exc)})
+            raise gfx_launch.LaunchError("display", f"{exc.kind}: {exc}") from exc
+        session.attach_display(display_qualified)
     result: dict = {
         "schema": SCHEMA,
         "session_id": session.session_id,
@@ -1048,6 +1243,8 @@ def run_campaign(
         "scenario": {
             "name": scenario["name"],
             "digest": scenario["digest"],
+            "declared_digest": launch_provenance["declared_digest"],
+            "launch": launch_provenance,
             "mode": mode,
             "profile": wait_profile.name,
             "logical_extent": scenario["logical_extent"],
@@ -1130,6 +1327,12 @@ def run_campaign(
             pause_max_draws=int((scenario.get("start") or {}).get(
                 "pause_max_draws") or 0),
         )
+        result["launch_spec"] = {
+            "argv": list(config.args),
+            "args_sha256": gfx_scenario.scenario_digest({"args": list(config.args)}),
+            "cwd": str(config.executable.parent),
+            "executable_sha256": config.executable_sha256,
+        }
         lease = launch_lease.acquire(executable, output=session.run_dir)
         # Start both backends before waiting on either one's readiness.
         health = gfx_diagnostics.GpuHealth()
@@ -1230,12 +1433,64 @@ def run_campaign(
             stage="startup",
         )
         result["readiness"] = readiness.as_dict()
+        if background and display_qualified is not None:
+            window_checks = {}
+            for role, item in launched.items():
+                window_checks[role] = gfx_display.verify_window(
+                    item.process.pid, display_qualified.display, window_size,
+                    timeout=display_timeout,
+                )
+            result["display"] = {
+                "display": display_qualified.as_dict(),
+                "windows": window_checks,
+            }
+            failed = {
+                role: check for role, check in window_checks.items()
+                if not check.get("ok")
+            }
+            if failed:
+                result["stop"] = {
+                    "reason": "display_window_failed",
+                    "detail": failed,
+                    "trigger": "startup",
+                }
+                result["result"] = "incomplete"
+                raise _Finished()
         if not readiness.ok:
             result["stop"] = {
                 "reason": f"readiness_{readiness.status}",
                 "detail": readiness.as_dict(),
                 "trigger": "startup",
             }
+            result["result"] = "incomplete"
+            raise _Finished()
+
+        # Startup/settling health: a refused draw, failed pipeline or failed
+        # resolve during startup must stop the campaign before it spends the
+        # observation budget on an already-invalid process.
+        startup_health = {
+            role: gfx_diagnostics.scan_run(item.run_dir)
+            for role, item in launched.items()
+        }
+        result["startup_health"] = startup_health
+        startup_failure = {
+            role: summary for role, summary in startup_health.items()
+            if summary.get("verdict") == "failed"
+        }
+        if startup_failure:
+            first = next(iter(startup_failure.values()))
+            result["stop"] = {
+                "reason": "startup_gpu_failure",
+                "detail": {
+                    role: {
+                        "verdict": summary.get("verdict"),
+                        "first_failure": summary.get("first_failure"),
+                    }
+                    for role, summary in startup_failure.items()
+                },
+                "trigger": "startup",
+            }
+            result["health"] = next(iter(startup_failure.values()))
             result["result"] = "incomplete"
             raise _Finished()
 
@@ -1536,6 +1791,11 @@ def run_campaign(
                         pair, reference_dump.get("found", {}).get(ref_index),
                         candidate_dump.get("found", {}).get(cand_index),
                         scenario,
+                        expected={
+                            "session": session.session_id,
+                            "reference_backend": launched["reference"].backend,
+                            "candidate_backend": launched["candidate"].backend,
+                        },
                     )
                     pair["comparison"] = comparison
                     if len(state.samples) < 256:
@@ -1660,7 +1920,8 @@ def run_campaign(
             result["dumps"] = {
                 role: _collect_dumps(
                     {"role": role, "run_dir": item.run_dir,
-                     "observe_dir": item.observe_dir},
+                     "observe_dir": item.observe_dir, "backend": item.backend,
+                     "session_id": session.session_id},
                     wanted_by_role[role], store,
                 )
                 for role, item in launched.items()
@@ -1823,6 +2084,10 @@ def _parser():
     run.add_argument("--staggered", action="store_true",
                      help="start the reference and let it reach the target scene before the candidate")
     run.add_argument("--stagger-wait", type=float, default=600.0)
+    run.add_argument("--background", action="store_true",
+                     help="run on the reusable BetterDisplay virtual screen")
+    run.add_argument("--display-name", default=gfx_display.DEFAULT_NAME)
+    run.add_argument("--display-timeout", type=float, default=60.0)
     run.add_argument("--out", type=Path, default=None)
 
     template = sub.add_parser("template", help="write a validated scenario template")
@@ -1857,6 +2122,9 @@ def main(argv: list[str] | None = None) -> int:
             session_root=args.session_root,
             staggered=args.staggered,
             stagger_wait_seconds=args.stagger_wait,
+            background=args.background,
+            display_name=args.display_name,
+            display_timeout=args.display_timeout,
         )
     except (gfx_scenario.ScenarioError, gfx_launch.LaunchError,
             launch_ledger.LedgerError, launch_lease.LeaseError) as exc:

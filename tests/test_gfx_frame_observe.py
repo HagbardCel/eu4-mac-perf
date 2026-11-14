@@ -95,6 +95,16 @@ class FrameObserveHostTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(raw).hexdigest(), dump["sha256"])
         self.assertTrue((directory / "captured" / "frame-9.bgra").is_file())
 
+    def test_oversized_request_is_rejected_not_truncated(self):
+        directory, ran = self.run_host("overflow")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        ack = json.loads((directory / "capture-ack.json").read_text())
+        self.assertEqual(ack["schema"], "gfx-frame-ack/v1")
+        self.assertEqual(ack["request_id"], 43)
+        self.assertEqual(ack["status"], "invalid")
+        self.assertEqual(ack["captured"], [])
+        self.assertEqual(list((directory / "captured").glob("frame-*.bgra")), [])
+
     def test_gap_is_accounted_not_hidden(self):
         directory, ran = self.run_host("gap")
         self.assertEqual(ran.returncode, 0, ran.stderr)

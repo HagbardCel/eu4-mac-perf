@@ -217,6 +217,22 @@ def spawn(role: str, config: LaunchConfig, run_dir: Path, *, lease: launch_lease
     if backend is None:
         backend = "opengl" if role == "reference" else "metal"
     env, run_dir, observe = prepare(role, config, run_dir, libraries, backend=backend)
+    # A background session attaches the display placement before the process
+    # creates its SDL window.  The injected library, process group and lease
+    # are unchanged; only the window position environment differs.
+    env.update(session.display_env())
+    if session.display is not None and session.display.isolation_library:
+        isolate = session.display.isolation_library
+        existing = env.get("DYLD_INSERT_LIBRARIES") or ""
+        env["DYLD_INSERT_LIBRARIES"] = (
+            f"{isolate}:{existing}" if existing else str(isolate)
+        )
+        (run_dir / "display-env.json").write_text(
+            json.dumps({key: value for key, value in env.items()
+                        if key.startswith("EU4_DISPLAY_")
+                        or key.startswith("SDL_VIDEO_")
+                        or key == "DYLD_INSERT_LIBRARIES"},
+                       indent=2) + "\n", encoding="utf-8")
     stdout = (run_dir / "game.stdout").open("wb")
     stderr = (run_dir / "game.stderr").open("wb")
     argv = ["./eu4", *config.args]
