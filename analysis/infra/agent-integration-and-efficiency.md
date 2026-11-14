@@ -33,8 +33,12 @@ arguments to the Python core and returns its envelope.
 
 `dsh/eu4-tools-plugin` registers exactly the seven tools. `eu4-web` mounts
 `@eu4/dsh-tools`; the offline overlay leaves it enabled. Provisioning links the
-plugin, and preflight requires the `eu4-tools` row. Plugin tests run without
-DSH or EU4:
+plugin, and preflight requires the `eu4-tools` row. A temporary dedicated
+`DSH_HOME` was provisioned and its effective config was dumped: the dump
+contains the `eu4-tools` insert row and `name: '@eu4/dsh-tools'`. The only
+preflight failure in that temporary home is the pre-existing Node pin drift
+(`v26.13.0` pinned, `v26.13.1` installed); it is an environment issue, not a
+tools-plugin failure. Plugin tests run without DSH or EU4:
 
 ```sh
 npm test --prefix dsh/eu4-tools-plugin

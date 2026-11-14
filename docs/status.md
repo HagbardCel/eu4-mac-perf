@@ -49,8 +49,9 @@ are claimed.
 `@eu4/dsh-tools`; `dsh plugin add link:` succeeded for both and the profile row
 is present. `preflight.sh` reaches the plugin/runtime checks; its only failure
 is the pre-existing Node pin (`v26.13.0` vs installed `v26.13.1`), an
-environment drift, not a tools-plugin failure. The live profile was deliberately
-not mutated while the Web session and the M6 agent were active.
+environment drift, not a tools-plugin failure. The effective `--dump-config`
+contains the `eu4-tools` row and `name: '@eu4/dsh-tools'`. The live profile was
+deliberately not mutated while the Web session and the M6 agent were active.
 
 **Safety properties.** A rejected draw is detected on its first diagnostic
 execution in about 4 s; command-buffer completion is never reported as pixel
