@@ -135,7 +135,7 @@ def normalize(value: dict) -> dict:
     if not isinstance(settle, dict):
         raise ScenarioError("type", "settle must be an object")
     _check_keys(settle, {"min_frames", "stable_frames", "timeout_seconds",
-                         "min_draws"}, "settle")
+                         "min_draws", "draw_tolerance"}, "settle")
     min_frames = _optional(settle.get("min_frames"), int, "settle.min_frames", 3,
                            minimum=1, maximum=10000)
     stable_frames = _optional(settle.get("stable_frames"), int, "settle.stable_frames",
@@ -145,6 +145,9 @@ def normalize(value: dict) -> dict:
                                maximum=3600.0)
     settle_min_draws = _optional(settle.get("min_draws"), int, "settle.min_draws",
                                  0, minimum=0, maximum=100000)
+    settle_draw_tolerance = _optional(settle.get("draw_tolerance"), float,
+                                      "settle.draw_tolerance", 0.25,
+                                      minimum=0.0, maximum=1.0)
 
     observation = value.get("observation", {})
     if not isinstance(observation, dict):
@@ -249,6 +252,7 @@ def normalize(value: dict) -> dict:
             "stable_frames": stable_frames,
             "timeout_seconds": settle_timeout,
             "min_draws": settle_min_draws,
+            "draw_tolerance": settle_draw_tolerance,
         },
         "observation": {
             "max_frames": max_frames,

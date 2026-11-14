@@ -185,6 +185,13 @@ started yet).  The reference loading path/long-run behaviour needs a
 windowed/foreground or user-dir isolation experiment before the live title
 campaign is claimed.
 
+A further staggered run with a 40-draw phase threshold paired 110 observations,
+but every pair was `ambiguous`: the reference had 46 draws while the candidate
+had 273, i.e. different phases. No pixel verdict was issued. Phase readiness now
+requires both the minimum and a relative draw-count tolerance
+(`settle.draw_tolerance`, default 0.25), and pairing enforces the frame limit
+instead of consuming a whole buffered batch.
+
 ## Limits carried into PR 3
 
 1. The correspondence anchor is relative frame ordinal, not semantic scene /

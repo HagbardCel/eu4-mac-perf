@@ -50,7 +50,12 @@ attempts failed for different, now-understood reasons:
    campaign is not claimed.
 
 Metadata-only observation, phase-gated pairing, staggered launch and pre-requested
-full-resolution windows are implemented and tested.
+full-resolution windows are implemented and tested. A later real run did reach
+110 paired observations, but every pair was correctly reported `ambiguous`
+because the reference had 46 draws while the candidate had 273; no rendering
+verdict was issued. Phase readiness now also requires the two draw counts to be
+within `settle.draw_tolerance` (default 25%), and the frame limit is enforced
+while pairing rather than after a whole batch.
 
 **Lease preflight.** The agent surface now exposes `eu4_session lease`; on the
 current host it reports `busy`, holder worktree

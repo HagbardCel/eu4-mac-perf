@@ -175,7 +175,17 @@ def _record_health(record: FrameRecord, health: gfx_diagnostics.GpuHealth) -> No
         )
 
 
-def align_streams(state: CampaignState) -> list[dict]:
+def _phase_ready(reference_draws: int, candidate_draws: int,
+                 minimum: int, tolerance: float) -> bool:
+    if minimum > 0 and (reference_draws < minimum or candidate_draws < minimum):
+        return False
+    if reference_draws <= 0 or candidate_draws <= 0:
+        return False
+    larger = max(reference_draws, candidate_draws)
+    return abs(reference_draws - candidate_draws) / larger <= tolerance
+
+
+def align_streams(state: CampaignState, *, limit: int | None = None) -> list[dict]:
     """Pair observations by logical frame index.
 
     PR 2 uses the frame index as the correspondence key.  A pair is only
@@ -195,6 +205,8 @@ def align_streams(state: CampaignState) -> list[dict]:
     for offset in offsets:
         if offset < 0:
             continue
+        if limit is not None and len(new_pairs) >= limit:
+            break
         ref_index = ref_base + offset
         cand_index = cand_base + offset
         ref = state.ref_by_index.pop(ref_index)
@@ -931,7 +943,9 @@ def run_campaign(
                 latest_cand = _latest(state.cand_stream)
                 ref_draws = (latest_ref.value.get("draws") if latest_ref else 0) or 0
                 cand_draws = (latest_cand.value.get("draws") if latest_cand else 0) or 0
-                if (ref_draws >= minimum_draws and cand_draws >= minimum_draws):
+                tolerance = float((scenario.get("settle") or {}).get(
+                    "draw_tolerance", 0.25))
+                if _phase_ready(ref_draws, cand_draws, minimum_draws, tolerance):
                     break
                 if any(item.process.poll() is not None for item in launched.values()):
                     break
@@ -989,9 +1003,10 @@ def run_campaign(
                 latest_cand = _latest(state.cand_stream)
                 ref_draws = (latest_ref.value.get("draws") if latest_ref else 0) or 0
                 cand_draws = (latest_cand.value.get("draws") if latest_cand else 0) or 0
-                if latest_ref is not None and latest_cand is not None and (
-                    minimum_draws == 0
-                    or (ref_draws >= minimum_draws and cand_draws >= minimum_draws)
+                tolerance = float((scenario.get("settle") or {}).get(
+                    "draw_tolerance", 0.25))
+                if latest_ref is not None and latest_cand is not None and _phase_ready(
+                    ref_draws, cand_draws, minimum_draws, tolerance
                 ):
                     state.begin_pairing()
                     state.released_ref.add(latest_ref.index)
@@ -1030,7 +1045,8 @@ def run_campaign(
                     if latest_cand is not None and cand_draws < minimum_draws:
                         _release_once(launched, state, "candidate", latest_cand.index)
                     pairs = []
-            pairs = align_streams(state)
+            remaining = max_frames - len(state.pairs)
+            pairs = align_streams(state, limit=max(0, remaining))
             for pair in pairs:
                 flight.frame({
                     "frame_index": pair.get("frame_index"),

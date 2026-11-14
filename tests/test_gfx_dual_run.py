@@ -213,6 +213,23 @@ class AlignmentTests(unittest.TestCase):
         self.assertEqual((state.phase_entry_ref, state.phase_entry_cand), (11, 40))
         self.assertTrue(state.pairing)
 
+    def test_pairing_respects_the_frame_limit(self):
+        state = self.state()
+        for index in (1, 2, 3, 4, 5):
+            write_record(self.ref_path, index, sha=f"{index:064x}")
+            write_record(self.cand_path, index, sha=f"{index:064x}")
+        state.ref_by_index.update({r.index: r for r in state.ref_stream.poll()})
+        state.cand_by_index.update({r.index: r for r in state.cand_stream.poll()})
+        first = gfx_dual_run.align_streams(state, limit=2)
+        self.assertEqual([pair["frame_index"] for pair in first], [1, 2])
+        second = gfx_dual_run.align_streams(state, limit=2)
+        self.assertEqual([pair["frame_index"] for pair in second], [3, 4])
+
+    def test_phase_requires_similar_draw_counts(self):
+        self.assertFalse(gfx_dual_run._phase_ready(46, 273, 40, 0.25))
+        self.assertTrue(gfx_dual_run._phase_ready(252, 273, 40, 0.25))
+        self.assertFalse(gfx_dual_run._phase_ready(10, 273, 40, 0.25))
+
     def test_malformed_lines_are_counted_not_silently_dropped(self):
         self.ref_path.write_text("{not json}\n", encoding="utf-8")
         stream = gfx_dual_run.FrameStream(self.ref_path)
