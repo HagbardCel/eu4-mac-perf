@@ -184,5 +184,6 @@
     "match": true
   },
   "conclusion": "GL and Metal contents agree. The 168x63 text resources are render targets (render_target=1); their Metal storage is top-left, so the engine's GL bottom-up UVs sample them reflected. The normal-upload controls (1537x192, 111x111; render_target=0) are the exact vertical flip of the GL raw rows under the dump convention and render upright. Live UVs equal GL UVs; the first divergence is the render-target row origin.",
-  "dump_convention": "dump_texture_file copies Metal's top-left rows and flips them into a bottom-up file. Therefore a normal row-for-row upload appears as the vertical flip of the GL glGetTexImage capture, while a top-left render target appears in the same orientation as the GL capture."
+  "dump_convention": "dump_texture_file copies Metal's top-left rows and flips them into a bottom-up file. Therefore a normal row-for-row upload appears as the vertical flip of the GL glGetTexImage capture, while a top-left render target appears in the same orientation as the GL capture.",
+  "differing_fraction_definition": "fraction of pixels with any of the four BGRA channels differing, after BGRA->RGBA channel normalization; mean_abs_error is the mean over all channel bytes; max_channel_error is the maximum channel byte difference"
 }

@@ -126,8 +126,10 @@ settled map is green (mean 72.2, palette affinity 0.967 versus the 0.85 floor).
 
 ## Final live verification
 
-One targeted settled launch with the finalized implementation
-(`.local/m6/live-text-verify2/run-1`, identity `1794677277-29079`):
+One targeted settled launch on the same-command implementation
+(`.local/m6/live-text-verify2/run-1`, identity `1794677277-29079`, library
+`4e2599…`): it verified the corrected labels before the final guard-only source
+delta, so it is supporting evidence and not one of the three final starts.
 
 | Check | Result |
 | --- | --- |
@@ -139,9 +141,9 @@ One targeted settled launch with the finalized implementation
 | Options upright vs reflected correlation | 0.937 / 0.513 |
 | Text orientation verdict | pass |
 
-The accepted frame is
-[`analysis/m6/live-title-final-1728x1117.png`](live-title-final-1728x1117.png)
-for the pre-fix visual; the corrected run frame is under the run directory.
+`analysis/m6/live-title-final-1728x1117.png` is the **pre-fix** visual and
+shows the reflected labels; the corrected final frames are
+`.local/m6/live-start{3,4,5}/run-1/swap-frame.bgra` and the tight crops above.
 
 ## Three fresh independent starts
 
@@ -178,3 +180,31 @@ completed on the GPU. `clean_starts = 3`, `distinct_runs = true`,
 starts below pass. The text orientation defect is corrected at the reusable
 render-target sampling boundary; map orientation, palette, composition and the
 offline replay remain correct.
+
+## Independent review (final head)
+
+The final head was reviewed independently with no blocking findings. The
+reviewer confirmed the same-command-buffer ordering, ordinary-texture
+preservation, shadow lifetime and the absence of a feedback/double-flip in the
+accepted frames, and re-ran the acceptance on `live-start3/4/5` with results
+identical to the recorded evidence. Non-blocking notes, left as documented
+follow-ups rather than changing the qualified renderer:
+
+- The cached shadow generation is marked when the flip is encoded, not when
+  the command buffer completes. A draw that is refused after preparation would
+  leave the entry marked until the engine re-binds the render target (which
+  bumps the generation). The accepted runs have zero refused draws; hardening
+  this would require a commit-completion hook.
+- The native regression exercises the conversion helper; the live starts
+  exercise the generic-draw wiring. A route-level integration fixture would
+  additionally pin the call site.
+- The acceptance map check is palette/structure based, not a spatial map
+  orientation test; map orientation is covered by `test_resolve_orientation`
+  and the live visual.
+- The opt-in sample-texture sidecar can replace an existing BC sidecar; it is
+  diagnostic-only and not part of acceptance.
+- `_GfxResolveTexture` does not bump a render-target destination generation;
+  no accepted draw samples a resolve destination that is also a 0x19 header.
+- The flip allocates one sampler state per rebuilt shadow; the affected UI
+  render targets are 168x63 and the offline/live qualification shows no
+  performance regression.
