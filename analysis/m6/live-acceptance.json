@@ -1,17 +1,17 @@
 {
-  "schema": "m6-live-acceptance/v2",
+  "schema": "m6-live-acceptance/v3",
   "reference": ".local/m6/frames/menu-occ300/frame",
   "reference_ok": true,
   "reference_error": "",
   "runs": [
     {
-      "run": ".local/m6/live-orient/run-1",
+      "run": ".local/m6/live-final3/final-1",
       "status": {
         "executed": true,
         "gpu_completed": true,
         "presented": true,
-        "visual_match": false,
-        "accepted": false
+        "visual_match": true,
+        "accepted": true
       },
       "checks": {
         "probe_captured": true,
@@ -20,13 +20,14 @@
         "pixels_captured": true,
         "no_refused_draws": true,
         "no_failed_resolves": true,
+        "resolve_trace_present": true,
         "gpu_completed": true,
         "frame_dump": true,
         "presented_flag": true,
         "non_blank": true,
-        "frame_sha256": "20046fbd81b4d11b965edd23b8ae7caf7907cdff105db53dce3ed04fc1b0e38f",
+        "frame_sha256": "bbf3ad61855c1cfa156ec4e96b9a22f7e128a9e21d3f5e535fc596946bea1ac8",
         "ui_regions": true,
-        "map_region": false
+        "map_region": true
       },
       "stats": {
         "physical": [
@@ -35,67 +36,143 @@
         ],
         "scale": 2,
         "resampled": true,
-        "unique_colors": 240160,
+        "unique_colors": 247869,
         "ui_region_error": [
-          29.944,
-          9.178,
-          117.423
+          9.204,
+          8.944,
+          2.188
         ],
         "ui_region_correlation": [
-          0.752,
-          0.965,
-          0.506
+          0.87,
+          0.978,
+          0.976
         ],
-        "map_unique_colors": 96383,
-        "map_mean": 147.804,
+        "map_unique_colors": 95304,
+        "map_mean": 74.288,
         "map_structure": true,
-        "map_color_similarity": 0.441,
+        "map_color_similarity": 0.943,
         "ui_ok": true,
-        "map_ok": false
+        "map_ok": true
       },
-      "canonical": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m6/live-orient/run-1",
-      "identity": "1794651888-80470",
-      "ok": false,
-      "phase": "post-orientation-fix verification"
+      "canonical": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m6/live-final3/final-1",
+      "identity": "1794654646-82541",
+      "ok": true,
+      "phase": "final qualification"
+    },
+    {
+      "run": ".local/m6/live-final3/final-2",
+      "status": {
+        "executed": true,
+        "gpu_completed": true,
+        "presented": true,
+        "visual_match": true,
+        "accepted": true
+      },
+      "checks": {
+        "probe_captured": true,
+        "draw_reached": true,
+        "draw_encoded": true,
+        "pixels_captured": true,
+        "no_refused_draws": true,
+        "no_failed_resolves": true,
+        "resolve_trace_present": true,
+        "gpu_completed": true,
+        "frame_dump": true,
+        "presented_flag": true,
+        "non_blank": true,
+        "frame_sha256": "8a776c650c1b65bc646e11b4cdc2571d0d629514734fa807a9c952e3265d6200",
+        "ui_regions": true,
+        "map_region": true
+      },
+      "stats": {
+        "physical": [
+          3456,
+          2234
+        ],
+        "scale": 2,
+        "resampled": true,
+        "unique_colors": 247906,
+        "ui_region_error": [
+          9.208,
+          8.948,
+          2.189
+        ],
+        "ui_region_correlation": [
+          0.87,
+          0.978,
+          0.976
+        ],
+        "map_unique_colors": 95184,
+        "map_mean": 74.293,
+        "map_structure": true,
+        "map_color_similarity": 0.943,
+        "ui_ok": true,
+        "map_ok": true
+      },
+      "canonical": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m6/live-final3/final-2",
+      "identity": "1794655028-82721",
+      "ok": true,
+      "phase": "final qualification"
+    },
+    {
+      "run": ".local/m6/live-final3/final-3",
+      "status": {
+        "executed": true,
+        "gpu_completed": true,
+        "presented": true,
+        "visual_match": true,
+        "accepted": true
+      },
+      "checks": {
+        "probe_captured": true,
+        "draw_reached": true,
+        "draw_encoded": true,
+        "pixels_captured": true,
+        "no_refused_draws": true,
+        "no_failed_resolves": true,
+        "resolve_trace_present": true,
+        "gpu_completed": true,
+        "frame_dump": true,
+        "presented_flag": true,
+        "non_blank": true,
+        "frame_sha256": "de112eff6ad5c067801cb1f3e8939ebb8fa3138eab9bd3d5cf3abe7d0b15641c",
+        "ui_regions": true,
+        "map_region": true
+      },
+      "stats": {
+        "physical": [
+          3456,
+          2234
+        ],
+        "scale": 2,
+        "resampled": true,
+        "unique_colors": 247888,
+        "ui_region_error": [
+          9.207,
+          8.946,
+          2.188
+        ],
+        "ui_region_correlation": [
+          0.87,
+          0.978,
+          0.976
+        ],
+        "map_unique_colors": 95260,
+        "map_mean": 74.292,
+        "map_structure": true,
+        "map_color_similarity": 0.943,
+        "ui_ok": true,
+        "map_ok": true
+      },
+      "canonical": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m6/live-final3/final-3",
+      "identity": "1794655398-82866",
+      "ok": true,
+      "phase": "final qualification"
     }
   ],
-  "clean_starts": 0,
+  "clean_starts": 3,
   "distinct_runs": true,
   "distinct_identities": true,
-  "ok": false,
-  "historical_runs": [
-    {
-      "run": ".local/m6/live-lod/run-1",
-      "phase": "pre-orientation-fix",
-      "status": "historical"
-    },
-    {
-      "run": ".local/m6/live-verify2/run-1",
-      "phase": "pre-LOD",
-      "status": "historical"
-    },
-    {
-      "run": ".local/m6/live-final/verify-1",
-      "phase": "pre-sampler",
-      "status": "historical"
-    },
-    {
-      "run": ".local/m6/live/final-1",
-      "phase": "pre-viewport",
-      "status": "historical"
-    },
-    {
-      "run": ".local/m6/live/final-2",
-      "phase": "pre-viewport",
-      "status": "historical"
-    },
-    {
-      "run": ".local/m6/live/final-3",
-      "phase": "pre-viewport",
-      "status": "historical"
-    }
-  ],
-  "note": "Post-orientation-fix settled verification: operational gates pass; UI logo region now 0.506 (passes), bar 0.752, logo 0.965; map still beige (mean 147.8, affinity 0.441). visual_match=false.",
-  "qualified_clean_starts": 0,
-  "required_clean_starts": 3
+  "ok": true,
+  "note": "Three distinct final launches accepted with --require-resolve-trace: map mean 74.29 vs 71.9, palette affinity 0.943, UI 0.87/0.978/0.976. Credits/Options labels remain horizontally mirrored (visual residual)."
 }

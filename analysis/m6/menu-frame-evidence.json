@@ -1,5 +1,5 @@
 {
-  "schema": "m6-menu-frame-evidence/v8",
+  "schema": "m6-menu-frame-evidence/v9",
   "canonical_reference": {
     "frame_dir": ".local/m6/frames/menu-occ300/frame",
     "selection": {
@@ -129,26 +129,31 @@
     "consequence": "The pixel-exact offline result qualifies a captured-state replay, not an independent reconstruction of the terrain draw. Live terrain differences cannot be excluded or explained by the offline replay; they must be compared against the captured draw's inputs directly."
   },
   "live_verification": {
-    "run": ".local/m6/live-orient/run-1",
-    "operational": {
-      "executed": true,
-      "gpu_completed": true,
-      "presented": true,
-      "refused_draws": 0,
-      "failed_resolves": 0
-    },
+    "runs": [
+      ".local/m6/live-final3/final-1",
+      ".local/m6/live-final3/final-2",
+      ".local/m6/live-final3/final-3"
+    ],
+    "accepted": 3,
     "visual": {
-      "visual_match": false,
+      "visual_match": true,
       "ui_region_correlation": [
-        0.752,
-        0.965,
-        0.506
+        0.87,
+        0.978,
+        0.976
       ],
-      "map_mean": 147.804,
-      "map_color_similarity": 0.441,
+      "map_mean": 74.29,
+      "map_color_similarity": 0.943,
       "map_structure": true
     },
-    "remaining": "Land appearance is still wrong (white/tan instead of dark green). Water is relatively close. The orientation and UI-logo defects are corrected. The land-lighting/material branch remains the blocker."
+    "operational": {
+      "zero_refused_draws": true,
+      "no_failed_resolves": true,
+      "gpu_completed": true,
+      "presented": true,
+      "distinct_identities": true
+    },
+    "residual": "Credits/Options button labels remain horizontally mirrored; the UI region policy passes but the text is not visually correct."
   },
   "live_start_policy": {
     "required_clean_starts": 3,
@@ -205,6 +210,11 @@
       "finding": "_GfxResolve did not flip the Metal top-left framebuffer into the GL texture row convention.",
       "status": "confirmed",
       "evidence": "resolve source/destination dumps 99.9% same orientation; user-visible map 96.9% aligned only when flipped; native quadrant test red before / green after"
+    },
+    {
+      "finding": "Sampler names texN were compressed to declaration order when tex6 was absent, shifting every unit after the gap and feeding white/wrong textures to the land shader.",
+      "status": "confirmed",
+      "evidence": "map-base bindings after the fix map tex7->7..tex15->15; live map changed from beige mean 147.8 to green 74.29 and palette affinity 0.943; 3/3 accepted"
     }
   ],
   "sampler_effective_state": {
@@ -299,5 +309,10 @@
     "fix": "resolve_scaled flips V and is used for all _GfxResolve copies (1:1 and scaled); _GfxResolveTexture remains a 1:1 texture copy.",
     "regression": "tests.test_gfx_live_draw::test_resolve_orientation (asymmetric quadrants; fails with the old V and passes with the flip).",
     "live_result": "UI logo region improved 0.482 -> 0.506 and now passes; map orientation corrected, but land remains beige."
+  },
+  "sampler_unit_mapping": {
+    "defect": "The translator assigned sampler bindings sequentially (0..n-1) instead of the engine's texN unit N. The map-base shader omits tex6, so tex7..tex15 were shifted one unit: tex7 sampled the white default at unit6, tex8 sampled the FoW texture, etc. The live shader therefore fed the wrong textures (including white) to the land material.",
+    "fix": "_normalize_source now binds a sampler named texN to GL unit N (falling back to the next free unit for other names). Shader caches rebuilt; the live map-base bindings now map tex7->7, tex8->8, ... tex15->15.",
+    "regression": "tests.test_m6_frame.ShaderTranslationTests.test_sampler_binding_preserves_tex_unit_number (tex0/tex4/tex7 -> 0/4/7)."
   }
 }

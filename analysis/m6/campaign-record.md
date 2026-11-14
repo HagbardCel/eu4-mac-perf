@@ -1309,3 +1309,24 @@ The post-fix settled run (`live-orient/run-1`) has UI correlations
 0.752/0.965/0.506: the Paradox-logo region now passes. The map is correctly
 oriented but still beige (mean 147.8 vs 71.9, palette affinity 0.441). The
 remaining land-appearance defect is the blocker.
+
+## Sampler-unit mapping root cause and final live qualification (2026-11-14)
+
+The land was white/tan because the shader translator assigned sampler bindings
+by declaration order (0..n-1) rather than the engine's `texN` -> GL unit N.
+The map-base shader omits `tex6`; compressing the list shifted `tex7..tex15`
+down one unit. The live shader sampled the white default at unit 6, the FoW
+texture at tex8's slot, and so on. `_normalize_source` now binds `texN` to unit
+N (falling back to the next free unit for other names), with regression
+`test_sampler_binding_preserves_tex_unit_number`. The shader cache was rebuilt
+from the extension-variant sources.
+
+After the fix, the settled live map changed from beige (mean 147.8, palette
+affinity 0.441) to green (mean 74.29, affinity 0.943) and the UI correlations
+are 0.87/0.978/0.976. Three fresh, distinct launches were accepted with the
+final `--require-resolve-trace` policy; all have zero refused draws, no failed
+resolves, GPU completion and presentation.
+
+Residual: the Credits/Options button labels are still horizontally mirrored.
+The UI region policy passes, but the text is visibly reflected; this remains
+the M6 blocker for a visually complete title scene.

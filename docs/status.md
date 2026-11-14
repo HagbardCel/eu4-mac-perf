@@ -73,11 +73,19 @@ passed**, so M6 is not accepted and PR #189 remains Draft.
   upside down. `resolve_scaled` now flips V and serves every `_GfxResolve`
   copy; a native four-quadrant regression covers it. The post-fix run has UI
   correlations 0.752/0.965/0.506 — the logo region now passes.
-- **Remaining blocker.** The map is correctly oriented but land is still
-  white/tan (map mean 147.8 vs 71.9, palette affinity 0.441). Water is
-  relatively close and the UI regions pass. The land material/lighting branch
-  is the remaining defect; live acceptance reports `visual_match=false` and
-  the three-clean-start gate is not met.
+- **Land rendering (fixed).** The translator assigned sampler bindings
+  sequentially (0..n-1) instead of the engine's `texN` -> unit N. The map-base
+  shader omits `tex6`, so `tex7..tex15` were shifted one unit and sampled the
+  white default/wrong textures. Samplers named `texN` now bind to unit N;
+  caches were rebuilt and a unit-number regression added. The live map changed
+  from beige (mean 147.8, affinity 0.441) to green (mean 74.29, affinity 0.943).
+- **Live qualification.** Three fresh, distinct settled launches on the
+  corrected implementation were accepted with the final resolve-trace
+  requirement: UI 0.87/0.978/0.976, map affinity 0.943, zero refused draws, no
+  failed resolves, GPU completion and presentation.
+- **Residual UI defect.** The Credits/Options button labels remain horizontally
+  mirrored. The UI region policy passes, but the text is not visually correct;
+  this is the remaining M6 blocker.
 
 ## M4 — original-GL reference and Metal presentation (2026-11-12)
 
