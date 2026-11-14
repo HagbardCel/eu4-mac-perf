@@ -792,7 +792,7 @@ def run_campaign(
             ring=int(scenario["observation"]["ring"]),
             deadline_seconds=float(scenario["observation"]["max_runtime_seconds"]),
             lockstep=mode == "lockstep",
-            metadata_only=mode == "streaming",
+            metadata_only=True,
             session_id=session.session_id,
         )
         lease = launch_lease.acquire(executable, output=session.run_dir)
@@ -943,7 +943,7 @@ def run_campaign(
             latest_ref = _latest(state.ref_stream)
             latest_cand = _latest(state.cand_stream)
             if latest_ref is not None and latest_cand is not None:
-                window = 8
+                window = 32
                 _request_dumps(
                     {"observe_dir": launched["reference"].observe_dir},
                     list(range(latest_ref.index + 1, latest_ref.index + 1 + window)),
@@ -1000,6 +1000,15 @@ def run_campaign(
                              [latest_ref.index])
                     _release({"observe_dir": launched["candidate"].observe_dir},
                              [latest_cand.index])
+                    window = min(48, max_frames)
+                    _request_dumps(
+                        {"observe_dir": launched["reference"].observe_dir},
+                        list(range(state.ref_base, state.ref_base + window)),
+                    )
+                    _request_dumps(
+                        {"observe_dir": launched["candidate"].observe_dir},
+                        list(range(state.cand_base, state.cand_base + window)),
+                    )
                     result["alignment"] = {
                         "anchor": "relative frame ordinal after both reached the target phase",
                         "reference_base": state.ref_base,
@@ -1062,6 +1071,15 @@ def run_campaign(
                                    [ref_index])
                     _request_dumps({"observe_dir": launched["candidate"].observe_dir},
                                    [cand_index])
+                    if ref_index % 32 == 0:
+                        _request_dumps(
+                            {"observe_dir": launched["reference"].observe_dir},
+                            list(range(ref_index, ref_index + 32)),
+                        )
+                        _request_dumps(
+                            {"observe_dir": launched["candidate"].observe_dir},
+                            list(range(cand_index, cand_index + 32)),
+                        )
                     dump_timeout = 4.0 if mode == "lockstep" else 1.5
                     reference_dump = _await_dump_meta(
                         {"observe_dir": launched["reference"].observe_dir}, [ref_index],

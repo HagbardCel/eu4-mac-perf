@@ -2164,11 +2164,11 @@ void eu4_gfx_frame_trace_boundary_exit(eu4_gfx_capture_frame *frame,
             (uint32_t)g.scene_index, stream_draws, stream_signature,
             stream_distinct, stream_ok, stream_ok,
             stream_ok ? "" : "drawable_readback_failed");
-        if (eu4_gfx_frame_observe_lockstep_enabled != NULL &&
-            eu4_gfx_frame_observe_lockstep_enabled() &&
-            eu4_gfx_frame_observe_lockstep_wait != NULL) {
-            (void)eu4_gfx_frame_observe_lockstep_wait((uint32_t)g.scene_index, 0);
-        }
+    }
+    if (g.stream_only && eu4_gfx_frame_observe_lockstep_enabled != NULL &&
+        eu4_gfx_frame_observe_lockstep_enabled() &&
+        eu4_gfx_frame_observe_lockstep_wait != NULL) {
+        (void)eu4_gfx_frame_observe_lockstep_wait((uint32_t)g.scene_index, 0);
     }
     free(stream_pixels);
 }
