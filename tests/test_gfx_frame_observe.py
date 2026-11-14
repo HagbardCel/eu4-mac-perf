@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -22,6 +23,7 @@ class FrameObserveHostTests(unittest.TestCase):
         built = subprocess.run(
             [
                 "clang", "-O1", "-Wall", "-Wextra", "-I", str(ROOT / "benchmark"),
+                "-Wl,-export_dynamic",
                 "-o", str(binary),
                 str(ROOT / "tests" / "gfx_frame_observe_host.c"),
                 str(ROOT / "benchmark" / "eu4_gfx_frame_observe.c"),
@@ -36,11 +38,15 @@ class FrameObserveHostTests(unittest.TestCase):
     def tearDownClass(cls):
         cls._temporary.cleanup()
 
-    def run_host(self, mode: str) -> tuple[Path, subprocess.CompletedProcess]:
+    def run_host(self, mode: str, env: dict | None = None
+                 ) -> tuple[Path, subprocess.CompletedProcess]:
         binary = self.build()
         directory = Path(tempfile.mkdtemp(dir=self._temporary.name))
+        environment = dict(os.environ)
+        environment.update(env or {})
         ran = subprocess.run([str(binary), str(directory), mode],
-                             capture_output=True, text=True, check=False)
+                             capture_output=True, text=True, check=False,
+                             env=environment)
         return directory, ran
 
     def test_records_have_hash_preview_and_composition(self):
@@ -111,6 +117,18 @@ class FrameObserveHostTests(unittest.TestCase):
         self.assertIn("wants4=0", ran.stdout)
         self.assertEqual(list((directory / "captured").glob("frame-*")), [])
         self.assertEqual(list((directory / "previews").iterdir()), [])
+
+    def test_pause_request_posts_one_key_pair_once(self):
+        directory, ran = self.run_host(
+            "frames", env={"EU4_GFX_PAUSE_AT_DRAWS": "3"})
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        stdout = ran.stdout
+        self.assertIn("sdl_events=2", stdout)
+        self.assertIn("sdl_type=769", stdout)  # SDL_KEYUP is the second event
+        self.assertIn("sdl_scancode=44", stdout)
+        pause = json.loads((directory / "pause-requested.json").read_text())
+        self.assertEqual(pause["status"], "requested")
+        self.assertEqual(pause["draws"], 3)
 
     def test_lockstep_timeout_is_recorded(self):
         directory, ran = self.run_host("lockstep-timeout")

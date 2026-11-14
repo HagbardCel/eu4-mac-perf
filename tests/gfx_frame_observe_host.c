@@ -9,6 +9,32 @@
 #include <stdlib.h>
 #include <string.h>
 
+typedef struct {
+    uint32_t type;
+    uint32_t timestamp;
+    uint32_t window_id;
+    uint8_t state;
+    uint8_t repeat;
+    uint8_t pad2;
+    uint8_t pad3;
+    int32_t scancode;
+    int32_t sym;
+    uint16_t mod;
+    uint32_t unused;
+} host_key_event;
+
+static int host_sdl_events;
+static uint32_t host_sdl_type;
+static int32_t host_sdl_scancode;
+
+int SDL_PushEvent(void *event) {
+    const host_key_event *key = (const host_key_event *)event;
+    host_sdl_events += 1;
+    host_sdl_type = key->type;
+    host_sdl_scancode = key->scancode;
+    return 0;
+}
+
 static void fill(uint8_t *pixels, int width, int height, int frame) {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
@@ -97,7 +123,9 @@ int main(int argc, char **argv) {
             return 4;
         }
     }
-    printf("enabled=%d dropped=%u\n", eu4_gfx_frame_observe_enabled(),
-           eu4_gfx_frame_observe_dropped());
+    printf("enabled=%d dropped=%u sdl_events=%d sdl_type=%u sdl_scancode=%d\n",
+           eu4_gfx_frame_observe_enabled(),
+           eu4_gfx_frame_observe_dropped(), host_sdl_events, host_sdl_type,
+           host_sdl_scancode);
     return 0;
 }

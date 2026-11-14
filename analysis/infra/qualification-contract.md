@@ -92,8 +92,9 @@ therefore failed before any GL/Metal comparison; this is recorded as an
 by the observer when the frame draw count first reaches `settle.min_draws`. It is
 opt-in, recorded in `pause-requested.json`, and is not a general input framework;
 no input is sent during the comparison interval. If SDL cannot be reached the
-file records `unavailable` and observation continues. This path is implemented
-and unit-tested but not yet validated live.
+file records `unavailable` and observation continues. A native host test links a fake `SDL_PushEvent`, verifies exactly one
+space-key down/up pair at the threshold, and checks `pause-requested.json`. The
+path is natively tested but not yet validated against EU4.
 
 ## Comparison policy
 
