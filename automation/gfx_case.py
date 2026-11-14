@@ -56,17 +56,22 @@ def _copy(src: Path, dest: Path) -> dict:
 
 
 def _classify(result: dict, pair: dict | None, comparison: dict | None) -> str:
+    stop_reason = (result.get("stop") or {}).get("reason")
     for role, process in sorted((result.get("processes") or {}).items()):
         if not isinstance(process, dict):
             continue
-        code = process.get("exit_code")
-        if type(code) is int and code not in (0, -15):
+        code = process.get("exit_code_before_stop", process.get("exit_code"))
+        if code in (-9, -15) and stop_reason != "process_exit":
+            continue
+        if type(code) is int and code != 0:
             return PROCESS_FAILURE
     for termination in result.get("terminations") or []:
         if not isinstance(termination, dict):
             continue
         code = termination.get("returncode")
-        if type(code) is int and code not in (0, -15):
+        if code in (-9, -15) and stop_reason != "process_exit":
+            continue
+        if type(code) is int and code != 0:
             return PROCESS_FAILURE
     health = result.get("health") or {}
     if health.get("verdict") == "failed":

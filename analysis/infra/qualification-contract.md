@@ -94,7 +94,8 @@ opt-in, recorded in `pause-requested.json`, and is not a general input framework
 no input is sent during the comparison interval. If SDL cannot be reached the
 file records `unavailable` and observation continues. A native host test links a fake `SDL_PushEvent`, verifies exactly one
 space-key down/up pair at the threshold, and checks `pause-requested.json`. The
-path is natively tested but not yet validated against EU4.
+path is now live-validated: both OpenGL processes paused at 506 draws and showed
+the `Paused` banner. See [Experiment A](experiments/2026-11-14-experiment-a.md).
 
 ## Comparison policy
 

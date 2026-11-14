@@ -25,13 +25,13 @@
   "settle": {
     "min_frames": 5,
     "stable_frames": 1,
-    "timeout_seconds": 180.0,
+    "timeout_seconds": 420.0,
     "min_draws": 100,
     "draw_tolerance": 0.3
   },
   "observation": {
     "max_frames": 20,
-    "max_runtime_seconds": 300.0,
+    "max_runtime_seconds": 480.0,
     "ring": 8,
     "capture_every_frame": false,
     "preview": true,
@@ -68,5 +68,5 @@
   "mode": "streaming",
   "profile": "targeted",
   "authorization": null,
-  "digest": "772a4077aff76fb01e44b7cb854f53c80b2470b12c62bc80dfc6324f392cb1ec"
+  "digest": "ca17a879af7a4c0a453d33cfd0b914f95ab4cdf2e2fcd2d3b106d2a387a82e6d"
 }

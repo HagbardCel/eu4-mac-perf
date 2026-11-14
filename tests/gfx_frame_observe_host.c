@@ -32,7 +32,7 @@ int SDL_PushEvent(void *event) {
     host_sdl_events += 1;
     host_sdl_type = key->type;
     host_sdl_scancode = key->scancode;
-    return 0;
+    return 1;
 }
 
 static void fill(uint8_t *pixels, int width, int height, int frame) {

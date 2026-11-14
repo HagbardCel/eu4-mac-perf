@@ -595,7 +595,7 @@ static void maybe_request_pause(uint32_t draws) {
     int n = snprintf(body, sizeof body,
                      "{\"schema\":\"gfx-pause-request/v1\",\"status\":\"%s\","
                      "\"draws\":%u,\"down\":%d,\"up\":%d}\n",
-                     first == 0 && second == 0 ? "requested" : "rejected",
+                     first == 1 && second == 1 ? "requested" : "rejected",
                      draws, first, second);
     if (n > 0 && (size_t)n < sizeof body) (void)write_atomic(path, body, (size_t)n);
 }

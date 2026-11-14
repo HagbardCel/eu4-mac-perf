@@ -198,6 +198,7 @@ def normalize(value: dict) -> dict:
     _check_keys(comparison, {
         "policy", "max_channel_error", "max_mismatched_fraction",
         "max_mean_abs_error", "regions", "require_aligned",
+        "stop_on_first",
     }, "comparison")
     policy = comparison.get("policy", "exact")
     if policy not in POLICIES:
@@ -241,6 +242,8 @@ def normalize(value: dict) -> dict:
         normalized_regions[name] = region_value
     require_aligned = _optional(comparison.get("require_aligned"), bool,
                                 "comparison.require_aligned", True)
+    stop_on_first = _optional(comparison.get("stop_on_first"), bool,
+                              "comparison.stop_on_first", True)
 
     mode = value.get("mode", "streaming")
     if mode not in MODES:
@@ -306,6 +309,7 @@ def normalize(value: dict) -> dict:
             "max_mean_abs_error": max_mean,
             "regions": normalized_regions,
             "require_aligned": require_aligned,
+            "stop_on_first": stop_on_first,
         },
         "mode": mode,
         "profile": wait_profile,

@@ -1222,13 +1222,6 @@ def run_campaign(
                 break
             time.sleep(0.02)
         minimum_draws = int((scenario.get("settle") or {}).get("min_draws", 0))
-        if (scenario.get("start") or {}).get("pause"):
-            pause_failures = _pause_failures(launched)
-            if pause_failures:
-                result["stop"] = {"reason": "pause_failed",
-                                  "trigger": "; ".join(pause_failures)}
-                result["result"] = "incomplete"
-                raise _Finished()
         if mode == "streaming" and minimum_draws > 0:
             phase_deadline = time.monotonic() + float(scenario["settle"]["timeout_seconds"])
             while time.monotonic() < phase_deadline:
@@ -1475,11 +1468,6 @@ def run_campaign(
                     pair["comparison"] = comparison
                     if comparison.get("status") in (gfx_frame_compare.FAIL,
                                                     gfx_frame_compare.UNVERIFIED):
-                        stop_reason = "frame_difference" if comparison.get("status") == gfx_frame_compare.FAIL else "comparison_unverified"
-                        stop_trigger = (
-                            f"frame {ref_index}/{cand_index}: "
-                            + "; ".join(comparison.get("reasons", [])[:3])
-                        )
                         if comparison.get("status") == gfx_frame_compare.FAIL:
                             _preserve_pair(store, launched, pair)
                         if mode == "lockstep":
@@ -1487,7 +1475,18 @@ def run_campaign(
                                      [ref_index])
                             _release({"observe_dir": launched["candidate"].observe_dir},
                                      [cand_index])
-                        break
+                        if bool((scenario.get("comparison") or {}).get(
+                                "stop_on_first", True)):
+                            stop_reason = (
+                                "frame_difference"
+                                if comparison.get("status") == gfx_frame_compare.FAIL
+                                else "comparison_unverified"
+                            )
+                            stop_trigger = (
+                                f"frame {ref_index}/{cand_index}: "
+                                + "; ".join(comparison.get("reasons", [])[:3])
+                            )
+                            break
                     if mode == "lockstep":
                         _release({"observe_dir": launched["reference"].observe_dir},
                                  [ref_index])

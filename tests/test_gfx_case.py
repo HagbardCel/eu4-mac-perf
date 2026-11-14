@@ -190,6 +190,17 @@ class CaseBuilderTests(unittest.TestCase):
         self.assertIn("samplers.tex7.unit", analysis)
         self.assertNotIn("Per-draw semantic operation prefix (caller/shader", analysis)
 
+    def test_cleanup_sigkill_does_not_override_a_rendering_difference(self):
+        self.result["processes"]["candidate"]["exit_code"] = -9
+        self.result["terminations"] = [{"role": "candidate", "returncode": -9}]
+        self.result["stop"] = {"reason": "frame_difference"}
+        self.result["frames"]["comparison"]["status"] = "fail"
+        self.result["frames"]["last_pair"]["comparison"]["status"] = "fail"
+        (self.run / "result.json").write_text(json.dumps(self.result))
+        packaged = gfx_case.build_case(self.run)
+        self.assertEqual(packaged["classification"],
+                         gfx_case.CONFIRMED_RENDERING)
+
     def test_process_crash_is_classified_before_pixels(self):
         self.result["processes"]["candidate"]["exit_code"] = 11
         self.result["frames"] = {"comparison": {}, "last_pair": None}
