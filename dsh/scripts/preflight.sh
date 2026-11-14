@@ -75,7 +75,7 @@ def enabled(entry):
 # Every native goal service must be mounted, and enabled somewhere: web-app
 # disables tool-goal/command-goal at the host plane because presets own them,
 # so an enabled preset copy is the correct state for those two.
-required = ["goal", "goal-round-driver", "tool-goal", "command-goal", "eu4-goal"]
+required = ["goal", "goal-round-driver", "tool-goal", "command-goal", "eu4-goal", "eu4-tools"]
 for name in required:
     matches = [e for e in entries if e["id"] == name]
     if not matches:

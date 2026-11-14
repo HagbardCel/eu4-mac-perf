@@ -2,6 +2,52 @@
 
 Authoritative summary of what is established, qualified, and in flight. Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
 
+## Differential debugging infrastructure (2026-11-14, stacked PRs 1-5)
+
+Five stacked branches implement the autonomous OpenGL-vs-Metal differential
+harness on top of PR #189:
+
+| PR | Branch | Delivered |
+| --- | --- | --- |
+| 1 | `infra/pr1-diagnostics` | capture validity (`valid`/`invalid`/`unverified`), aggregated GPU health gate, event-driven waits/profiles, owned-session isolation, atomic dual ledger claims, bounded content-addressed artifacts, GL pack-state/PBO restoration, window-capture qualification |
+| 2 | `infra/pr2-dual-runner` | shared native per-frame observation module, bounded ring/dump protocol, scenario schema, concurrent dual runner with streaming and strict-lockstep modes, owned termination and evidence preservation |
+| 3 | `infra/pr3-differential-compare` | semantic alignment and content veto, settle draw threshold, normalized pixel/region metrics, exact/tolerant/diagnostic policies, mirror detection, same-backend consistency experiments |
+| 4 | `infra/pr4-first-divergence` | cross-API semantic/local resource comparison, ten synthetic historical regressions, bounded flight recorder, self-contained offline case package with analysis and replay |
+| 5 | `infra/pr5-agent-tools` | `eu4_re_query` over existing extracts, one JSON tool core for the seven agent tools, native DSH plugin, efficiency metrics, operational defaults |
+
+Evidence: [dual-process feasibility](infra/dual-process-feasibility.md),
+[dual-process campaigns](infra/dual-process-campaigns.md),
+[alignment and comparison](infra/frame-alignment-and-comparison.md),
+[first divergence and offline cases](infra/first-divergence-and-offline-cases.md),
+[agent integration and efficiency](infra/agent-integration-and-efficiency.md),
+[diagnostic integrity audit](infra/diagnostic-integrity-audit.md).
+
+**Established.** Two genuine pinned EU4 processes (authentic OpenGL and
+reconstructed Metal) ran concurrently twice for 20 s with on-screen windows and
+clean termination. A later campaign ran 60 and 80 paired lockstep frames with
+bounded evidence and no false rendering verdicts after the loading-stage gate
+was added. A recorded loading-stage comparison exposed a real correspondence
+bug (identical caller composition at different loading progress); it is now a
+regression and comparison is gated on `settle.min_draws`. The full 100-frame
+aligned demonstration and a real title-scene differential verdict are **not yet
+established**: lockstep through loading did not reach the title draw count in
+the tested 240 s window, and the last real comparison was correctly withheld as
+unaligned.
+
+**Safety properties.** A rejected draw is detected on its first diagnostic
+execution in about 4 s; command-buffer completion is never reported as pixel
+correctness; owned cleanup signals only re-verified session identities; an
+unrelated EU4 worktree cannot be terminated by a harness session; inconclusive
+alignment is counted separately from a rendering difference.
+
+**Open limits.** A per-frame update-state/scene fingerprint is still missing;
+without it loading progress cannot be aligned generally. The live campaign
+records frame payloads and health, not a per-draw operation prefix. The real
+GL/GL and Metal/Metal consistency campaigns remain to be run. Headless DSH
+tool discovery in the live Web GUI was not re-provisioned in this session; the
+plugin and profile row are tested independently. These stacks are local
+branches, not pushed PRs.
+
 ## M6 — authentic title scene through Metal (2026-11-14, interim)
 
 Offline captured-state replay **passes**; live visual acceptance **has not
