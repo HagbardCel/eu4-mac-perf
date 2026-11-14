@@ -1067,8 +1067,9 @@ static int capture_attributes(GLuint program, int indexed, int first, int count,
                     index_read_error = 1;
                     capture_error = 1;
                 } else {
-                    while (glGetError() != GL_NO_ERROR) {
-                    }
+                    /* Do not drain the application's pending GL error here:
+                       that is observable state. A pre-existing error makes the
+                       capture fail closed rather than being silently cleared. */
                     glGetBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0,
                                        (GLsizeiptr)index_bytes, index_data);
                     if (glGetError() != GL_NO_ERROR) {

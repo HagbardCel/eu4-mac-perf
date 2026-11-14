@@ -1611,6 +1611,7 @@ static int run_sampled_render_target_orientation(void) {
     [target replaceRegion:MTLRegionMake2D(0, 0, 4, 4) mipmapLevel:0
                 withBytes:second bytesPerRow:4 * 4];
     eu4_gfx_note_render_target_write(header);
+    uint64_t abandoned_before = eu4_gfx_sampling_conversion_count();
     @autoreleasepool {
         id<MTLCommandBuffer> abandoned = [backend.queue commandBuffer];
         uint64_t abandoned_token = 0;
@@ -1622,6 +1623,7 @@ static int run_sampled_render_target_orientation(void) {
         /* Do not commit; release the command at the autorelease-pool boundary
            so a later command may receive the same address. */
     }
+    uint64_t abandoned_after_a = eu4_gfx_sampling_conversion_count();
     id<MTLCommandBuffer> recovery = [backend.queue commandBuffer];
     uint64_t recovery_token = 0;
     if (!eu4_gfx_prepare_sampled_textures((__bridge void *)recovery,
@@ -1629,14 +1631,27 @@ static int run_sampled_render_target_orientation(void) {
                                           sizeof prepare_reason)) {
         fail("recovery shadow prepare");
     }
+    uint64_t abandoned_after_b = eu4_gfx_sampling_conversion_count();
     [recovery commit];
     [recovery waitUntilCompleted];
     void *recovered = eu4_gfx_texture_for_sampling(header, recovery_token);
     int abandoned_ok = shadow_matches((__bridge id<MTLTexture>)recovered,
-                                      backend.queue, second);
+                                      backend.queue, second) &&
+                       abandoned_after_a > abandoned_before &&
+                       abandoned_after_b > abandoned_after_a;
 
     /* An older completed command must not promote its stale generation after a
-       newer render-target write. */
+       newer render-target write. Invalidate first so command A actually
+       encodes a pending conversion; advance the generation before A completes;
+       then prepare B for the newer generation. */
+    uint32_t stale_pattern[16];
+    for (int i = 0; i < 16; i++) {
+        stale_pattern[i] = pattern[(i + 4) % 16];
+    }
+    [target replaceRegion:MTLRegionMake2D(0, 0, 4, 4) mipmapLevel:0
+                withBytes:stale_pattern bytesPerRow:4 * 4];
+    eu4_gfx_note_render_target_write(header);
+    uint64_t conversions_before_a = eu4_gfx_sampling_conversion_count();
     id<MTLCommandBuffer> stale_command = [backend.queue commandBuffer];
     uint64_t stale_token = 0;
     if (!eu4_gfx_prepare_sampled_textures((__bridge void *)stale_command,
@@ -1644,7 +1659,8 @@ static int run_sampled_render_target_orientation(void) {
                                           sizeof prepare_reason)) {
         fail("stale shadow prepare");
     }
-    [stale_command commit];
+    uint64_t conversions_after_a = eu4_gfx_sampling_conversion_count();
+
     uint32_t third[16];
     for (int i = 0; i < 16; i++) {
         third[i] = pattern[(i + 12) % 16];
@@ -1659,12 +1675,35 @@ static int run_sampled_render_target_orientation(void) {
                                           sizeof prepare_reason)) {
         fail("newer shadow prepare");
     }
+    uint64_t conversions_after_b = eu4_gfx_sampling_conversion_count();
+    [stale_command commit];
     [newer commit];
-    [newer waitUntilCompleted];
     [stale_command waitUntilCompleted];
+    [newer waitUntilCompleted];
     void *newer_sample = eu4_gfx_texture_for_sampling(header, newer_token);
-    int stale_ok = shadow_matches((__bridge id<MTLTexture>)newer_sample,
-                                  backend.queue, third);
+    int latest_ok = shadow_matches((__bridge id<MTLTexture>)newer_sample,
+                                   backend.queue, third);
+
+    /* A subsequent preparation for the unchanged newer generation must reuse
+       the completed conversion rather than encode another one. */
+    uint64_t conversions_before_c = eu4_gfx_sampling_conversion_count();
+    id<MTLCommandBuffer> settled = [backend.queue commandBuffer];
+    uint64_t settled_token = 0;
+    if (!eu4_gfx_prepare_sampled_textures((__bridge void *)settled,
+                                          &settled_token, prepare_reason,
+                                          sizeof prepare_reason)) {
+        fail("settled shadow prepare");
+    }
+    [settled commit];
+    [settled waitUntilCompleted];
+    uint64_t conversions_after_c = eu4_gfx_sampling_conversion_count();
+    void *settled_sample = eu4_gfx_texture_for_sampling(header, settled_token);
+    int settled_ok = shadow_matches((__bridge id<MTLTexture>)settled_sample,
+                                    backend.queue, third) &&
+                     conversions_after_c == conversions_before_c;
+    int stale_ok = conversions_after_a > conversions_before_a &&
+                   conversions_after_b > conversions_after_a &&
+                   latest_ok && settled_ok;
 
     /* A depth render-target header has no colour conversion; fail closed. */
     uint8_t depth_header[0x44];
@@ -1686,8 +1725,27 @@ static int run_sampled_render_target_orientation(void) {
                                                     &failure_token,
                                                     failure_reason,
                                                     sizeof failure_reason);
+
+    /* A nonnull render-target header with no registered Metal texture must not
+       silently substitute the generic fallback. */
+    uint8_t missing_header[0x44];
+    memset(missing_header, 0, sizeof missing_header);
+    missing_header[0x19] = 1;
+    [backend.boundTextures removeAllObjects];
+    [backend.boundTextures addObject:[NSValue valueWithPointer:missing_header]];
+    char missing_reason[256] = "";
+    uint64_t missing_token = 0;
+    id<MTLCommandBuffer> missing_command = [backend.queue commandBuffer];
+    int missing_refused =
+        !eu4_gfx_prepare_sampled_textures((__bridge void *)missing_command,
+                                          &missing_token, missing_reason,
+                                          sizeof missing_reason);
+    int missing_ok = missing_refused &&
+                     strstr(missing_reason, "no backing texture") != NULL &&
+                     eu4_gfx_texture_for_sampling(missing_header, missing_token) == NULL &&
+                     eu4_gfx_texture_for_sampling(NULL, 0) == NULL;
     int cache_ok = repeated_ok && modified_ok && abandoned_ok && stale_ok &&
-                   refused;
+                   refused && missing_ok;
 
     /* A previously correct ordinary texture keeps its exact rows. */
     uint8_t normal_header[0x44];
@@ -1730,9 +1788,10 @@ static int run_sampled_render_target_orientation(void) {
     }
     printf("sampled_rt_orientation=%d rt_flip=%d normal_preserved=%d "
            "shadow_cache=%d repeated=%d modified=%d abandoned=%d stale=%d "
-           "refused=%d\n",
+           "refused=%d missing_storage=%d\n",
            flipped && preserved && cache_ok, flipped, preserved, cache_ok,
-           repeated_ok, modified_ok, abandoned_ok, stale_ok, refused);
+           repeated_ok, modified_ok, abandoned_ok, stale_ok, refused,
+           missing_ok);
     return flipped && preserved && cache_ok ? 0 : 1;
 }
 

@@ -48,9 +48,11 @@ were introduced.
   alpha-only, RGB-only and a partial mask; checks the destination pixels of
   disabled channels.
 - `tests/gfx_live_draw_host.mm --sampled-rt-orientation`: initial conversion,
-  repeated sampling, modification, abandoned-command release/recovery, stale
-  completion after a newer write, conversion failure and ordinary-texture
-  preservation.
+  repeated sampling, modification, abandoned-command release/recovery,
+  a stale command that actually encodes a pending conversion before its
+  generation is advanced, stale completion after a newer write, conversion
+  failure, missing render-target storage, and ordinary-texture preservation.
+  A test-only conversion counter proves the pending path was entered.
 - `tests/gfx_live_draw_host.mm --production-bounds`: the production attribute
   bounds validator with tight 72/80-byte buffers, 71/79-byte rejects, nonzero
   slot/element offsets, instance-rate divisors and unsupported formats.
@@ -82,6 +84,7 @@ All new regressions fail on the merged implementation:
 | `tests.test_m6_live_accept` | 25 passed |
 | `tests.test_gfx_texture`, `test_gfx_contracts`, `test_gfx_compare`, `test_gfx_shader`, `test_gfx_default_target`, `test_m4_accept`, `test_m5_accept`, `test_m5_replay_cache` | pass |
 | Canonical 326-event replay | 326/326 encoded, zero failed, GPU completed, 0 differing pixels of 1,930,176 including alpha |
+| Missing render-target storage | rejected with `render-target header has no backing texture`; no fallback binding |
 | Existing three-start M6 acceptance | re-run against the committed artifacts; unchanged |
 | Fresh live start | `.local/m6/live-hardening3/run-1`, identity `1794689243-84463`, library `00eb43…`: executed, encoded, GPU completed, presented, **0 refused draws**, 0 failed resolves; UI 0.882/0.946/0.835, map mean 72.247 / affinity 0.967, text upright 0.905/0.937 vs reflected 0.486/0.513; accepted. |
 

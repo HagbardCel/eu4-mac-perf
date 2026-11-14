@@ -84,6 +84,10 @@ void *eu4_gfx_texture_for_sampling(void *header, uint64_t preparation_token);
    sampling shadow. Called when the engine binds or resolves into the target. */
 void eu4_gfx_note_render_target_write(void *header);
 
+/* Number of render-target sampling conversions encoded. Test/diagnostic use
+   only: proves a preparation actually installed a pending conversion. */
+uint64_t eu4_gfx_sampling_conversion_count(void);
+
 /* Encodes the GL-row conversion of every render-target texture bound for the
    current draw into command_buffer. Must run before the draw's render encoder
    is opened so the flip pass precedes the draw pass in the same command buffer.

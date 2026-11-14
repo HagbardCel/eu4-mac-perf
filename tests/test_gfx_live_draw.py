@@ -161,6 +161,7 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertIn("abandoned=1", ran.stdout)
         self.assertIn("stale=1", ran.stdout)
         self.assertIn("refused=1", ran.stdout)
+        self.assertIn("missing_storage=1", ran.stdout)
 
     def test_sampler_effective_min_filter_uses_texture_mip_state(self) -> None:
         ran = self._run("--sampler-effective")
