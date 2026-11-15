@@ -1,11 +1,42 @@
-# M7.0 validation against the base branch
+# M7.0 validation record
 
-This record reconciles the full-suite results for PR #195 on the current base.
-It exists because an earlier comparison mixed the branch worktree (with a
-populated `.local`) against a base checkout with a symlinked `.local`, and its
-failure counts were not directly comparable.
+This file keeps two records:
 
-## Environment
+- **Historical — PR #195:** the full-suite reconciliation of the static-scene,
+  correspondence and qualification corrections on base `5a0ac03`. These results
+  are provenance for the merged PR and are not re-measured by later
+  documentation-only commits.
+- **Current — PR #197:** the focused validation of the offline campaign-floor
+  correction (both case verdict paths require both explicit campaign status
+  fields).
+
+Sections are labelled accordingly; the historical material is kept as recorded.
+
+## Current validation — PR #197
+
+The offline campaign-floor correction resolves both `result.classification` and
+`result.qualification.status` for the passing and differing case paths, and
+fails closed with `incomplete_evidence` when either is missing, contradictory or
+flag-inconsistent. It changes no graphics comparison, alignment, staticity or
+campaign-execution code.
+
+Focused modules, re-run after the correction and after rebasing onto current
+`main`:
+
+```sh
+python3.14 -m automation.test_runner run --label m7-case-floor \
+  --module tests.test_gfx_qualification --module tests.test_gfx_case \
+  --module tests.test_agent_tools --module tests.test_offline_campaign \
+  --module tests.test_gfx_dual_run --module tests.test_gfx_metrics \
+  --module tests.test_gfx_replay_case
+```
+
+Result: **197 tests, OK** (1 skipped); `tests/test_gfx_qualification.py`
+contributes 52 tests. Portable GitHub Actions passes on the PR head.
+
+## Historical results — PR #195
+
+### Environment (PR #195)
 
 - macOS arm64, Python 3.14.10, `clang` toolchain available.
 - **Base:** `origin/main` `5a0ac03` in a clean detached worktree
@@ -15,26 +46,15 @@ failure counts were not directly comparable.
   (`/tmp/m7-cand-full`), same empty `.local` and `benchmark/.build` handling.
 - Command (identical): `python3.14 -m unittest discover -s tests`.
 
-The validated code commit is `5a78c95`; later commits are documentation
-(this file and the canary report).
+The validated code commit for that record was `5a78c95`; later commits were
+documentation.
 
 The base worktree's first run used a `.local` **symlink** to the main worktree;
 the DSH bridge tests resolve campaign roots through that symlink and refused
 them as "outside the trusted checkout", which produced ~50 spurious failures.
 That run is discarded. A real empty `.local` reproduces the candidate layout.
 
-## Focused validation (before the full suite)
-
-```sh
-python3.14 -m unittest tests.test_gfx_qualification tests.test_gfx_dual_run \
-  tests.test_gfx_case tests.test_agent_tools tests.test_offline_campaign \
-  tests.test_gfx_metrics tests.test_gfx_replay_case -q
-```
-
-Result: **197 tests, OK** (the qualification module contributes 52; re-run
-after the offline campaign-floor correction).
-
-## Full-suite results
+### Full-suite results (PR #195)
 
 Final qualification-review run (NumPy installed, same command; logs in
 `.local/m7/final-base-full-suite.log` and
@@ -56,9 +76,9 @@ Machine-readable comparison:
   oracle-pinned evidence and signed-division cases that pass in the populated
   worktree)
 
-## Classification
+### Failure classification (PR #195)
 
-### Already present on base — earlier run (20)
+#### Already present on base — earlier run (20)
 
 `test_dsh_bridge` (9) and `test_trace_tr3` (11). In the final run above the
 common set is the 11 `test_trace_tr3` ids; the nine `test_dsh_bridge` ids moved to
@@ -66,13 +86,13 @@ the base-only environmental group.
 
 - `test_trace_tr3.*`: the QBDI x86-64 release is not installed
   (`/Users/fabian/.cache/eu4-mac-perf/qbdi/0.12.1`), so the native harness cannot
-  build. Environmental, independent of this PR.
+  build. Environmental, independent of that PR.
 - `test_dsh_bridge.*`: the bridge tests run against the current checkout and
   refuse their temporary campaign/workspace layout with
   `integrity_refusal`/`execution_root` in this environment. Identical on base
   and candidate, in the same order and with the same exception types.
 
-### Environment-dependent — resolved, 0 remaining
+#### Environment-dependent — resolved, 0 remaining
 
 - The first clean candidate run also failed six `test_border_loop_*` tests with
   `CalledProcessError` from `clang`. Cause: those tests write into
@@ -87,23 +107,22 @@ the base-only environmental group.
   With the directory present the rerun has no `test_border_loop_*` failures on
   either side.
 
-### Flaky — 1 base-only
+#### Flaky — 1 base-only
 
 - `test_gfx_session.SessionTests.test_only_owned_process_is_terminated` failed on
   base with `identity_mismatch != exited` and passed on the candidate run. The
   test compares a freshly spawned process identity; the failure is timing
-  dependent and unrelated to this PR (the session module is untouched).
+  dependent and unrelated to that PR (the session module is untouched).
 
-### Not present in this environment
+#### Not present in this environment
 
 - `test_pre_ready_forensic.test_measured_193739Z_forensic_when_run_present`
   errored in the main worktree (which has recorded `.local` runs) and is skipped
   in the clean worktrees. Environment-dependent by design.
 
+### Previous-implementation behaviour (PR #195 review context)
 
-## Previous-implementation behaviour (regression justification)
-
-The new regressions were replayed against the first revision (`24a2d14`) and the
+The regressions were replayed against the first revision (`24a2d14`) and the
 pre-PR classifier (`b94b9e2`). Each row is a behaviour the corrected contract
 refuses:
 
@@ -121,10 +140,9 @@ refuses:
 | 120 vs 200 draws, equal identity (`b11d877`) | aligner `aligned`, pixel path `ambiguous` | `ambiguous` in both |
 | Repeated digests with `raw_bytes` absent (`b11d877`) | staticity accepted in the qualification re-check | rejected: payload declaration is required |
 
-## Final correctness review
+### Final correctness review (PR #195)
 
-The last review found three remaining qualification inconsistencies. They are
-now closed:
+That review found three remaining qualification inconsistencies, now closed:
 
 1. **No `match` from an unvalidated digest streak.** `classify_campaign()` no
    longer reads `result.stability.status` for the `match` decision. Every
@@ -143,7 +161,7 @@ now closed:
    from `pair_correspondence()`. Equal identity with 120 vs 200 draws at 0.30
    tolerance is `ambiguous` in both paths; 120 vs 150 remains aligned.
 
-The small metadata correction now requires the complete payload declaration in
+The small metadata correction required the complete payload declaration in
 `_static_frame()` (`raw_bytes` absent is rejected). Origin, pixel format and
 row-stride remain enforced by the authoritative `_verify_dump_payload()` /
 `_collect_dumps()` layer; a collector integration test proves a valid record
@@ -152,11 +170,11 @@ Per-pair evidence carries the collector's validity flag rather than synthesizing
 `valid=True`.
 
 CI now installs `numpy==2.5.4` from `benchmark/requirements-test.txt`, so the
-offline qualification tests execute in the portable workflow. The
-NumPy-dependent test class is skipped explicitly when the dependency is absent;
-the helper function no longer carries a misleading skip decorator.
+offline qualification tests execute in the portable workflow. The NumPy-dependent
+test class is skipped explicitly when the dependency is absent; the helper
+function no longer carries a misleading skip decorator.
 
-### New regression additions
+#### New regression additions during PR #195
 
 - campaign with two passing pairs, complete counts, healthy GPU and
   `stability.status=verified` but no pair-local evidence → `incomplete`;
@@ -172,12 +190,14 @@ the helper function no longer carries a misleading skip decorator.
 
 ## Conclusion
 
-The candidate introduces **no new full-suite failure**. Every failure in the
-candidate run is also present on the base commit with the same identifier; the
-only base-only failure is an unrelated flaky process-identity assertion. No
-module touched by this PR appears in either failure set.
+**Historical (PR #195):** the candidate introduced **no new full-suite failure**
+relative to `5a0ac03`; common failing ids were the 11 `test_trace_tr3` tests,
+candidate-only failing ids were 0, and the base-only failures were
+environment-dependent or flaky. No module touched by that PR appeared in either
+failure set.
 
-The acceptance criteria for the review are covered by
-`tests/test_gfx_qualification.py` (52 tests) plus the updated campaign and case
-fixtures; the full evidence is in
-[the canary report](starter-canary.md#8-correction-and-regression).
+**Current (PR #197):** the offline campaign-floor correction adds explicit
+both-status-field checks to the passing and differing case paths, with 52
+qualification tests and 197 focused tests passing; portable CI is green on the
+PR head. The historical M7.0 regressions remain covered by the same focused
+modules. Full evidence: [the canary report](starter-canary.md#8-correction-and-regression).
