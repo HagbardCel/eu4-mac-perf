@@ -196,6 +196,10 @@ class OfflineCampaignTests(unittest.TestCase):
             # The 100-frame campaign shows a static scene up to the injected
             # defect; the comparison still needs pair-local staticity evidence.
             "dumps": _static_dumps(DEFECT_FRAME, "offline-100"),
+            "classification": "rendering_difference",
+            "qualification": {"schema": "gfx-campaign-qualification/v1",
+                              "status": "rendering_difference",
+                              "qualified": False},
             "artifacts": {"bytes": 100, "max_bytes": 1000, "dropped": 0},
             "processes": {}, "ledger": {}, "preflight": {}, "terminal": {},
         }

@@ -130,7 +130,12 @@ the offline case builder.
    verdict is **not** healthy.
 6. **Case agreement.** The offline diagnostic case uses the same predicate and is
    floored by the campaign classification; it can never claim a stronger verdict
-   than its campaign evidence.
+   than its campaign evidence. Both offline paths resolve **both** explicit
+   statuses (`classification` and `qualification.status`): a missing or empty
+   field, disagreement, unknown vocabulary or an inconsistent `qualified` flag
+   is `incomplete_evidence`, never a `match` or `rendering_difference`, and is
+   reported as unresolved rather than as an authoritative verdict. Local comparison measurements are preserved when
+   attribution is withheld.
 
 When any one of these is missing the run is `incomplete`: the numerical
 difference statistics are preserved, the observation stays in the record, and

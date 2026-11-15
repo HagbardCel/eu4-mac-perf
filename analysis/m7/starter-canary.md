@@ -308,7 +308,7 @@ No new framework, no new tool, no tolerance change.
 
 ### 8.3 Regressions
 
-New `tests/test_gfx_qualification.py` (37 tests) covers every review item:
+New `tests/test_gfx_qualification.py` (52 tests) covers every review item:
 
 - repeated game-day identities with changing frame pixels → not static;
 - invalid captures with repeated hashes, and observer-marked capture-invalid dumps → not static;
@@ -380,12 +380,36 @@ same. The numerical difference statistics are unchanged.
   clean; this is deliberate. The per-pair dump metadata is bounded by
   `observation.max_frames` and does not add a new capture stream.
 
+### 8.5b Offline campaign floor (both verdict paths)
+
+The offline case is a package of evidence, never a second qualification pass. Its
+`campaign_status()` resolver requires **both** explicit status fields —
+`classification` and `qualification.status` — to exist and agree, and the
+`qualified` flag to match the status (`match` ⇒ qualified; every other status ⇒
+not qualified). A missing classification, missing qualification record or
+status, unknown vocabulary, or contradictory/flag-inconsistent evidence is
+unresolved. Both offline paths use it:
+
+- a passing pair yields `match` only when the campaign is a consistent, qualified
+  `match` with aligned correspondence;
+- a differing pair yields `rendering_difference` only when the campaign is a
+  consistent `rendering_difference` *and* the local predicate is supported;
+- absent, unknown or contradictory campaign evidence yields
+  `incomplete_evidence` in both paths.
+
+The local comparison measurements (including pixel-error statistics) are still
+written to `difference/statistics.json` and the analysis when attribution is
+withheld; generated analysis reports an unresolved campaign status with its
+reasons instead of presenting a contradictory recorded status as authoritative. Regressions cover absent classification with `qualification.status =
+incomplete`, absent campaign evidence, a consistent qualified difference, a
+contradictory status, an unqualified `match` flag, and the pass-path floor.
+
 ### 8.6 Validation against the current base
 
 The PR was rebased onto `origin/main` `5a0ac03` before validation. Focused
 modules (`test_gfx_dual_run`, `test_gfx_case`, `test_agent_tools`,
 `test_offline_campaign`, `test_gfx_metrics`, `test_gfx_replay_case`,
-`test_gfx_qualification`) pass: 152 tests, OK.
+`test_gfx_qualification`) pass: 197 tests, OK.
 
 Full suite on clean worktrees with the same command
 (`python3.14 -m unittest discover -s tests`):
@@ -397,13 +421,15 @@ Final qualification-review run (NumPy installed; base and candidate logs preserv
 | Base | `5a0ac03` | 2967 | 21 | 4 | 30 |
 | Candidate (validated code head) | `5a78c95` | 3001 | 11 | 0 | 26 |
 
-Common failing ids: 20 (`test_dsh_bridge` 9, `test_trace_tr3` 11, both
-environmental). Candidate-only failing ids: **0**. The single base-only failure
-is the unrelated flaky `test_gfx_session.test_only_owned_process_is_terminated`.
-Six `test_border_loop_*` failures in an earlier candidate run were traced to the
-gitignored `benchmark/.build` directory being absent and reproduce identically
-on base. Full details and the discarded symlinked-`.local` run:
-[`m7-validation.md`](m7-validation.md).
+Common failing ids: **11** (all `test_trace_tr3`; the QBDI release is not
+installed). Candidate-only failing ids: **0**. The 14 base-only failures are
+environment-only (clean-checkout/build layout, oracle-pinned evidence and
+signed-division cases that pass in the populated worktree), including the
+earlier flaky `test_gfx_session` identity check and the `test_dsh_bridge`
+workspace assertions. Six `test_border_loop_*` failures in an earlier candidate
+run were traced to the gitignored `benchmark/.build` directory being absent and
+reproduce identically on base. Full details and the discarded symlinked-`.local`
+run: [`m7-validation.md`](m7-validation.md).
 
 ## 9. Tooling limitations encountered
 
