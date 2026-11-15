@@ -108,6 +108,9 @@ class CaseBuilderTests(unittest.TestCase):
                 "last_pair": self.pair,
             },
             "stop": {"reason": "frame_difference", "trigger": "frame 4"},
+            # A confirmed renderer difference also requires the verified
+            # static scene the qualification contract demands.
+            "stability": {"status": "verified"},
             "artifacts": {"bytes": 100, "max_bytes": 1000, "dropped": 0},
             "ledger": {"tokens": ["a", "b"]},
             "preflight": {"writable": True},

@@ -15,7 +15,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from automation import gfx_frame_compare
+from automation import gfx_align, gfx_frame_compare
 
 SCHEMA = "gfx-diagnostic-case/v1"
 
@@ -87,7 +87,13 @@ def _classify(result: dict, pair: dict | None, comparison: dict | None) -> str:
         return INCOMPLETE
     status = comparison.get("status")
     if status == gfx_frame_compare.FAIL:
-        return CONFIRMED_RENDERING
+        # Keep the offline case consistent with the campaign verdict: a pixel
+        # difference is not attributable to a renderer unless the static scene
+        # was verified (campaign stability or preserved consecutive digests).
+        stable = str((result.get("stability") or {}).get("status")) == "verified"
+        if stable or gfx_align.staticity_evidence(result.get("dumps"))["verified"]:
+            return CONFIRMED_RENDERING
+        return INCOMPLETE
     if status == gfx_frame_compare.PASS:
         return MATCH
     if status in (gfx_frame_compare.UNVERIFIED, "not_compared", None):
@@ -215,6 +221,14 @@ def _analysis(result: dict, pair: dict | None, comparison: dict | None,
             "not an established pixel difference.",
             "- Inspect the process exit code, the last observation and the native "
             "crash/log evidence before comparing pixels.",
+        ]
+    elif (classification == INCOMPLETE and comparison
+          and comparison.get("status") == gfx_frame_compare.FAIL):
+        lines += [
+            "- A pixel difference was measured, but the static-scene correspondence "
+            "required to attribute it is unverified (no consecutive identical "
+            "full-frame digests on both sides). The pair may be two different "
+            "render stages; this is not an established renderer difference.",
         ]
     else:
         lines += [

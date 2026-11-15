@@ -303,6 +303,9 @@ class ToolTests(unittest.TestCase):
             "frames": {"comparison": {"status": "fail", "first_failure": pair},
                        "last_pair": pair},
             "stop": {"reason": "frame_difference"},
+            # The tool surface must report the campaign's own verdict, which
+            # requires the verified static scene a real difference needs.
+            "stability": {"status": "verified"},
             "artifacts": {"bytes": 10, "max_bytes": 100, "dropped": 0},
             "processes": {}, "ledger": {}, "preflight": {}, "terminal": {},
         }
