@@ -452,6 +452,9 @@ frame still replays with 0 differing pixels.
 
 ### Texture 442 blocker
 
+**Superseded by §13.** The in-frame copy was captured on 2026-11-15; the text
+below records the state before that capture.
+
 Texture 442 is 1728×1117, sampled by two in-frame passes, and has no in-frame
 producer. The earlier metrics claimed 5,618 `glCopyTexSubImage2D` events into
 texture 442. That record is **not authentic**: before the interposer fix,
@@ -515,3 +518,110 @@ Merge the integration branch as a coherent infrastructure PR. It contains the
 baseline synchronization, the executable fixes, fail-closed evidence, native
 pixel semantics, the authentic replay case and honest partial coverage. Do not
 claim texture 442 provenance or complete Strategy B qualification.
+
+
+## 13. Merge closure: in-frame copy and final validation (2026-11-15)
+
+### Copy correctness
+
+The final readback now uses the single `read_drawable_bgra()` path. It selects
+the default draw/read framebuffer and `GL_BACK`, verifies the bindings, restores
+draw/read bindings, read buffer, pixel-pack state and PBO, and does not call
+`glGetError` or `glFinish`. The reference is written only after dimensions,
+byte count and SHA-256 validate. `tests/gfx_trace_state_host.m` deliberately
+selects a non-default FBO, sets a pending GL error, and verifies restoration,
+error survival and exact reference pixels.
+
+The interposer now resolves the original binding from the `__DATA,__interpose`
+replacee, with `RTLD_FIRST` framework fallback and explicit self-rejection. A
+failed resolution writes `interpose-error.jsonl`, prints a diagnostic and aborts
+instead of silently dropping the copy. `tests/gfx_interpose_host.c` covers
+successful resolution, self-rejection, missing original, fatal visibility and
+argument-exact forwarding.
+
+One copy contract is shared by `automation/gfx_frame_graph.py` and the Metal
+replay host: operation identity, source framebuffer/read buffer/attachment,
+levels, dimensions, formats, rectangles, offsets and resolved identities.
+Coverage counts supported transfers and marks malformed ones invalid. The final
+capture path loads the frame through the Python JSON/blob/hash loader; a
+balanced but malformed JSON line is covered as an authoritative rejection.
+
+### Texture 442 is an in-frame producer
+
+`eu4_re_query` decompiles `_GfxResolve` as a full-extent
+`glCopyTexSubImage2D` of the bound texture from the default framebuffer, called
+only by `CEU3GraphicalMap::RenderPostEffects`. The bounded copy trace found the
+copy in the selected menu frame:
+
+- scene 75 capture: 283 events, 273 draws, 9 clears, **1 resolve**;
+- resolve event **271**: source framebuffer 0, read buffer GL_BACK, source rect
+  `[0,0,1728,1117]`, destination texture **442**, offset `[0,0]`, RGBA8;
+- consumers at events 273 and 277 sample texture 442 after the copy;
+- graph status **complete**, 0 unproven, 8 renderer-generated resources, 6 sampled.
+
+This is Case A. The copy is in the ordered event stream, sourced from the
+Metal-rendered default framebuffer and consumed from the Metal destination.
+
+### Why the copy-bearing replay is not exact
+
+The capture includes the default-framebuffer source pixels for the copy. The
+replay now checkpoints that source at event 271 (target `0`):
+
+| Checkpoint | Result |
+| --- | --- |
+| 431, 432 | exact |
+| 433 | diagnostic RGB8/BGRA8 |
+| 271 default source | 1,205,235 / 1,930,176 differ, max 106, mean max ~1.04 |
+| 273 texture 442 | 1,205,235 differ (same count) |
+| 275 / 277 downstream | 291,686 / 307,421 differ |
+| Final | 1,792,860 / 1,930,176 differ, max 24 |
+
+The first authoritative divergence is the **copy source**, event 271, producer
+event 270 (`_GfxDraw`, caller `0x10d25c3`, program 346). The captured draw state
+has `dither=true`; the Metal replay does not implement GL dithering. Two facts
+separate the copy from the source:
+
+- GL source BGRA→RGBA equals the captured GL 442 texture exactly (0 different
+  pixels), so GL's copy is a pure channel conversion.
+- Metal 442 equals the channel-swapped Metal default source exactly (0
+  different pixels), so the compute copy is faithful.
+
+The remaining difference is therefore GL default-framebuffer dithering /
+conversion, not a hidden captured-GL intermediate or a copy-kernel defect.
+Implementing GL dithering is outside this infrastructure milestone. The result
+is reported as `coverage=complete`, `semantic=match`, `pixels=divergent`,
+`qualified=false`, with the exact source coordinates preserved.
+
+### Requalification and portable cases
+
+- Canonical `menu-occ300`: 0 / 1,930,176 final differences, checkpoints 431,
+  432, 443, 447 exact; coverage partial (historical frame has no copy).
+- Scene 79: deterministic 4-pixel alpha-LSB difference, coverage partial.
+- Copy-bearing scene 75: deterministic source-localized difference, coverage
+  complete.
+- Controlled V-flip fault on the canonical frame: first divergence event 291 /
+  texture 443, producer 289.
+- Shifted-sampler fault: 806 binding mismatches, first semantic divergence
+  event 17.
+- Portable `case-copy-442-moved` (1,088 files) verifies with no problems and
+  replays from the moved inputs with the same candidate SHA-256.
+
+### Background title acquisition
+
+One longer background OpenGL capture reached the title scene and completed
+283 events; the window was placed at `(1755, 27)` on the `EU4 Test` display, the
+physical primary display remained unchanged, the observer did not stall, the
+process ended cleanly, and shared settings restored. A single sampled
+frontmost application was `eu4`, so unfocused rendering was not independently
+re-proven in this long run; the existing five-launch OpenGL/Metal isolation
+qualification remains the supported evidence for placement/focus.
+
+### Merge recommendation
+
+The infrastructure is merge-ready with complete, fail-closed diagnostic
+capability. Texture 442 is no longer an unresolved dependency: its in-frame
+producer is captured, replayed, checkpointed and localized. The remaining
+copy-bearing pixel difference is a documented GL dithering/conversion
+limitation, not a hidden seed. Do not describe the copy-bearing frame as
+bit-identical; exact pixel equivalence is established only for the canonical
+no-copy frame.

@@ -216,6 +216,8 @@ class GraphTests(unittest.TestCase):
             "destination_resolved": True,
             "source_rect": [0, 0, WIDTH, HEIGHT],
             "destination_offset": [0, 0], "width": WIDTH, "height": HEIGHT,
+            "source_width": WIDTH, "source_height": HEIGHT,
+            "source_internal_format": 0,
             "destination_width": WIDTH, "destination_height": HEIGHT,
             "internal_format": 0x8058,
         }
@@ -242,15 +244,55 @@ class GraphTests(unittest.TestCase):
                          [0, 0, WIDTH, HEIGHT])
         self.assertEqual(graph["unproven"], [])
 
+    def test_copy_source_image_becomes_a_source_checkpoint(self):
+        fixture = self.fixture
+        copy = {
+            "kind": "resolve", "operation": "glCopyTexSubImage2D",
+            "is_blit": False, "source_framebuffer": 0, "read_buffer": 0x0405,
+            "source": "0", "destination": "10", "source_level": 0,
+            "destination_level": 0, "source_resolved": True,
+            "destination_resolved": True,
+            "source_rect": [0, 0, WIDTH, HEIGHT],
+            "destination_offset": [0, 0], "width": WIDTH, "height": HEIGHT,
+            "source_width": WIDTH, "source_height": HEIGHT,
+            "source_internal_format": 0, "destination_width": WIDTH,
+            "destination_height": HEIGHT, "internal_format": 0x8058,
+            "source_image": {
+                "width": WIDTH, "height": HEIGHT,
+                "bytes": WIDTH * HEIGHT * 4,
+                "file": "copy-source.bgra",
+                "sha256": sha(bytes(WIDTH * HEIGHT * 4)),
+            },
+        }
+        fixture.events = [
+            clear(None, 7),
+            draw(1, None, [fixture.asset], program=1),
+            copy,
+            draw(2, None, [fixture.rt], program=3),
+        ]
+        fixture.events[1]["seed"] = None
+        fixture.write_blob("copy-source.bgra",
+                           bytes(WIDTH * HEIGHT * 4))
+        fixture.write()
+        graph = gfx_frame_graph.build(fixture.frame)
+        plan = gfx_frame_graph.checkpoint_plan(graph)
+        source = [item for item in plan if item["target"] == "0"]
+        self.assertEqual(len(source), 1)
+        self.assertEqual(source[0]["event"], 2)
+        self.assertEqual(source[0]["resource"], "fb:0")
+        self.assertEqual(source[0]["reference_file"], "copy-source.bgra")
+
     def test_unsupported_copy_variant_invalidates_the_capture(self):
         fixture = self.fixture
         fixture.events.append({
             "kind": "resolve", "operation": "glBlitFramebuffer",
-            "source_framebuffer": 0, "read_buffer": 0x0405,
+            "source_framebuffer": 0, "read_buffer": 0x0405, "source": "0",
             "destination": "10", "source_level": 0, "destination_level": 0,
             "source_resolved": True, "destination_resolved": True,
             "source_rect": [0, 0, 4, 4], "destination_offset": [0, 0],
-            "width": 4, "height": 4,
+            "width": 4, "height": 4, "source_width": 4, "source_height": 4,
+            "source_internal_format": 0, "destination_width": 4,
+            "destination_height": 4, "internal_format": 0x8058,
         })
         fixture.write()
         manifest = json.loads((fixture.frame / "frame-trace.json").read_text())
@@ -259,6 +301,60 @@ class GraphTests(unittest.TestCase):
         graph = gfx_frame_graph.build(fixture.frame)
         self.assertEqual(graph["status"], "invalid")
         self.assertTrue(any("unsupported copy operation" in reason
+                            for reason in graph["reasons"]), graph["reasons"])
+
+    def test_malformed_copy_contract_is_invalid(self):
+        base = {
+            "kind": "resolve", "operation": "glCopyTexSubImage2D",
+            "is_blit": False, "source_framebuffer": 0, "read_buffer": 0x0405,
+            "source": "0", "destination": "10", "source_level": 0,
+            "destination_level": 0, "source_resolved": True,
+            "destination_resolved": True,
+            "source_rect": [0, 0, WIDTH, HEIGHT],
+            "destination_offset": [0, 0], "width": WIDTH, "height": HEIGHT,
+            "source_width": WIDTH, "source_height": HEIGHT,
+            "source_internal_format": 0, "destination_width": WIDTH,
+            "destination_height": HEIGHT, "internal_format": 0x8058,
+        }
+        cases = {
+            "missing source": {"source": None},
+            "missing read buffer": {"read_buffer": None},
+            "bad level": {"source_level": 1},
+            "bad rectangle": {"source_rect": [0, 0, 0, 1]},
+            "bad dimensions": {"destination_width": 0},
+            "unresolved": {"source_resolved": False},
+        }
+        for label, override in cases.items():
+            with self.subTest(label=label):
+                fixture = self.fixture
+                fixture.events = [
+                    clear(None, 7),
+                    draw(1, None, [fixture.asset], program=1),
+                    dict(base, **override),
+                ]
+                fixture.write()
+                graph = gfx_frame_graph.build(fixture.frame)
+                self.assertEqual(graph["status"], "invalid", (label, graph["reasons"]))
+                self.assertTrue(graph["reasons"], label)
+
+    def test_non_default_attachment_must_match_read_buffer(self):
+        fixture = self.fixture
+        event = {
+            "kind": "resolve", "operation": "glCopyTexSubImage2D",
+            "is_blit": False, "source_framebuffer": 1, "read_buffer": 0x8CE0,
+            "source": "10", "source_attachment": 0x8CE1,
+            "destination": "11", "source_level": 0, "destination_level": 0,
+            "source_resolved": True, "destination_resolved": True,
+            "source_rect": [0, 0, 4, 4], "destination_offset": [0, 0],
+            "width": 4, "height": 4, "source_width": 4, "source_height": 4,
+            "source_internal_format": 0x8058, "destination_width": 4,
+            "destination_height": 4, "internal_format": 0x8058,
+        }
+        fixture.events.append(event)
+        fixture.write()
+        graph = gfx_frame_graph.build(fixture.frame)
+        self.assertEqual(graph["status"], "invalid")
+        self.assertTrue(any("does not match read buffer" in reason
                             for reason in graph["reasons"]), graph["reasons"])
 
     def test_missing_blob_is_invalid_not_silently_accepted(self):

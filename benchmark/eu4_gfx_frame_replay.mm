@@ -1920,12 +1920,40 @@ static BOOL encode_copy_event(NSDictionary *event, NSString *frameDir,
         }
         return NO;
     }
-    if (event[@"source_framebuffer"] == nil || event[@"read_buffer"] == nil ||
-        event[@"source_level"] == nil || event[@"destination_level"] == nil) {
+    for (NSString *field in @[@"source_framebuffer", @"read_buffer",
+                              @"source", @"destination", @"source_level",
+                              @"destination_level", @"source_rect",
+                              @"destination_offset", @"source_width",
+                              @"source_height", @"destination_width",
+                              @"destination_height", @"internal_format",
+                              @"source_resolved", @"destination_resolved",
+                              @"width", @"height"]) {
+        if (event[field] == nil) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:96
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        [NSString stringWithFormat:@"resolve/copy is missing %@", field]}];
+            }
+            return NO;
+        }
+    }
+    if (event[@"source_internal_format"] == nil) {
         if (error != NULL) {
             *error = [NSError errorWithDomain:kErrorDomain code:96
                                      userInfo:@{NSLocalizedDescriptionKey:
-                                                    @"resolve/copy is missing its effective source state"}];
+                                                    @"resolve/copy is missing source_internal_format"}];
+        }
+        return NO;
+    }
+    if (number(event[@"source_width"], 0) <= 0 ||
+        number(event[@"source_height"], 0) <= 0 ||
+        number(event[@"destination_width"], 0) <= 0 ||
+        number(event[@"destination_height"], 0) <= 0 ||
+        number(event[@"internal_format"], 0) <= 0) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:96
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"resolve/copy has invalid resource dimensions or format"}];
         }
         return NO;
     }
@@ -1986,6 +2014,16 @@ static BOOL encode_copy_event(NSDictionary *event, NSString *frameDir,
             }
             return NO;
         }
+        if (event[@"source_attachment"] == nil ||
+            number(event[@"source_attachment"], -1) !=
+                number(event[@"read_buffer"], -1)) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:98
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        @"non-default copy attachment does not match its read buffer"}];
+            }
+            return NO;
+        }
         source_info = g_render_targets[source_name];
     }
     if (source_info == nil) {
@@ -2022,6 +2060,19 @@ static BOOL encode_copy_event(NSDictionary *event, NSString *frameDir,
     NSInteger dy = number(offset[1], 0);
     id<MTLTexture> source_texture = source_info[@"color"];
     id<MTLTexture> destination_texture = destination_info[@"color"];
+    if (number(event[@"source_width"], 0) != (NSInteger)source_texture.width ||
+        number(event[@"source_height"], 0) != (NSInteger)source_texture.height ||
+        number(event[@"destination_width"], 0) !=
+            (NSInteger)destination_texture.width ||
+        number(event[@"destination_height"], 0) !=
+            (NSInteger)destination_texture.height) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:100
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"resolve/copy dimensions disagree with its resources"}];
+        }
+        return NO;
+    }
     if (width <= 0 || height <= 0 ||
         x < 0 || y < 0 || dx < 0 || dy < 0 ||
         x + width > (NSInteger)source_texture.width ||
@@ -2479,10 +2530,14 @@ int main(int argc, const char *argv[]) {
         NSDictionary *frame_info = manifest[@"frame"] ?: @{};
         g_default_target.width = number(frame_info[@"width"], 0);
         g_default_target.height = number(frame_info[@"height"], 0);
-        target_for(@{@"framebuffer": @0,
-                     @"width": @(g_default_target.width),
-                     @"height": @(g_default_target.height)},
-                   &error);
+        NSMutableDictionary *default_info =
+            target_for(@{@"framebuffer": @0,
+                         @"width": @(g_default_target.width),
+                         @"height": @(g_default_target.height)},
+                       &error);
+        if (default_info != nil) {
+            g_render_targets[@"0"] = default_info;
+        }
 
         NSDictionary *first_draw = nil;
         for (NSDictionary *event in events) {

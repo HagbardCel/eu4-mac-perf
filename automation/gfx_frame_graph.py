@@ -87,6 +87,127 @@ def _resource(resources: dict, key: str, *, kind: str, width=None, height=None,
     return value
 
 
+COPY_OPERATION = "glCopyTexSubImage2D"
+COPY_REQUIRED_FIELDS = (
+    "operation",
+    "source_framebuffer",
+    "read_buffer",
+    "source",
+    "destination",
+    "source_level",
+    "destination_level",
+    "source_rect",
+    "destination_offset",
+    "source_width",
+    "source_height",
+    "source_internal_format",
+    "destination_width",
+    "destination_height",
+    "internal_format",
+    "source_resolved",
+    "destination_resolved",
+)
+
+
+def copy_contract_problems(event: dict, index: int) -> list[str]:
+    """One supported-transfer contract shared by coverage and the graph.
+
+    The replay host implements exactly one variant.  Anything else is invalid
+    evidence, never a silently ignored event.
+    """
+    problems: list[str] = []
+    missing = [field for field in COPY_REQUIRED_FIELDS
+               if field not in event or event.get(field) is None]
+    if missing:
+        return [f"copy at event {index} is missing: {', '.join(missing)}"]
+    if event.get("operation") != COPY_OPERATION:
+        problems.append(
+            f"unsupported copy operation at event {index}: "
+            f"{event.get('operation')!r}")
+    if event.get("is_blit") not in (None, False, 0):
+        problems.append(f"unsupported blit at event {index}")
+    if event.get("source_level") != 0 or event.get("destination_level") != 0:
+        problems.append(f"unsupported mip level at event {index}")
+    if event.get("source_resolved") is not True or event.get(
+            "destination_resolved") is not True:
+        problems.append(f"unresolved copy source or destination at event {index}")
+    source_fbo = event.get("source_framebuffer")
+    read_buffer = event.get("read_buffer")
+    if not isinstance(source_fbo, int) or source_fbo < 0:
+        problems.append(f"invalid source framebuffer at event {index}")
+    if not isinstance(read_buffer, int) or read_buffer < 0:
+        problems.append(f"invalid read buffer at event {index}")
+    source = str(event.get("source") or "")
+    destination = str(event.get("destination") or "")
+    if not destination or destination == "0":
+        problems.append(f"missing copy destination at event {index}")
+    if source_fbo == 0:
+        if read_buffer != 0x0405:
+            problems.append(
+                f"default-framebuffer copy does not read GL_BACK at "
+                f"event {index}")
+        if source not in ("", "0"):
+            problems.append(
+                f"default-framebuffer copy names an attachment at event {index}")
+    else:
+        if not source or source == "0":
+            problems.append(
+                f"non-default copy has no source attachment at event {index}")
+        attachment = event.get("source_attachment")
+        if attachment is None:
+            problems.append(
+                f"non-default copy has no attachment selector at event {index}")
+        elif attachment != read_buffer:
+            problems.append(
+                f"copy attachment {attachment!r} does not match read buffer "
+                f"{read_buffer!r} at event {index}")
+    rect = event.get("source_rect")
+    offset = event.get("destination_offset")
+    if not isinstance(rect, list) or len(rect) != 4 or not all(
+            isinstance(value, int) for value in rect):
+        problems.append(f"malformed source rectangle at event {index}")
+        return problems
+    if not isinstance(offset, list) or len(offset) != 2 or not all(
+            isinstance(value, int) for value in offset):
+        problems.append(f"malformed destination offset at event {index}")
+        return problems
+    x, y, width, height = rect
+    dx, dy = offset
+    if width <= 0 or height <= 0 or x < 0 or y < 0 or dx < 0 or dy < 0:
+        problems.append(f"invalid copy rectangle at event {index}")
+    if event.get("width") != width or event.get("height") != height:
+        problems.append(f"copy width/height disagree with rectangle at event {index}")
+    source_width = event.get("source_width")
+    source_height = event.get("source_height")
+    destination_width = event.get("destination_width")
+    destination_height = event.get("destination_height")
+    for label, value in (("source_width", source_width),
+                         ("source_height", source_height),
+                         ("destination_width", destination_width),
+                         ("destination_height", destination_height)):
+        if not isinstance(value, int) or value <= 0:
+            problems.append(f"invalid {label} at event {index}")
+    if isinstance(source_width, int) and isinstance(source_height, int) and (
+            x + width > source_width or y + height > source_height):
+        problems.append(f"source rectangle exceeds source at event {index}")
+    if isinstance(destination_width, int) and isinstance(
+            destination_height, int) and (
+            dx + width > destination_width or dy + height > destination_height):
+        problems.append(
+            f"destination rectangle exceeds destination at event {index}")
+    for label in ("source_internal_format", "internal_format"):
+        value = event.get(label)
+        if label == "source_internal_format" and source_fbo == 0:
+            # The default drawable format is not GL-queryable; the read buffer
+            # and BGRA8 reference convention identify it.
+            if value not in (0, None) and not isinstance(value, int):
+                problems.append(f"invalid {label} at event {index}")
+            continue
+        if not isinstance(value, int) or value <= 0:
+            problems.append(f"invalid {label} at event {index}")
+    return problems
+
+
 def build(frame_dir: Path | str) -> dict:
     """Derive the resource graph and coverage classification for one frame."""
     from automation import m6_frame
@@ -207,22 +328,7 @@ def build(frame_dir: Path | str) -> dict:
             destination = _name(event.get("destination"))
             source_fbo = event.get("source_framebuffer")
             operation = event.get("operation")
-            if operation != "glCopyTexSubImage2D":
-                contract_problems.append(
-                    f"unsupported copy operation at event {index}: {operation!r}")
-            if event.get("source_level") not in (0, None) or event.get(
-                    "destination_level") not in (0, None):
-                contract_problems.append(
-                    f"unsupported mip level at event {index}")
-            if event.get("source_resolved") is False or event.get(
-                    "destination_resolved") is False:
-                contract_problems.append(
-                    f"unresolved copy source or destination at event {index}")
-            if source_fbo == 0 and event.get("read_buffer") not in (
-                    0x0405, None):
-                contract_problems.append(
-                    f"default-framebuffer copy does not read GL_BACK at "
-                    f"event {index}")
+            contract_problems.extend(copy_contract_problems(event, index))
             if source in ("", "0") or source_fbo == 0:
                 source_key = "fb:0"
             else:
@@ -252,7 +358,8 @@ def build(frame_dir: Path | str) -> dict:
                      "source_framebuffer": source_fbo,
                      "read_buffer": event.get("read_buffer"),
                      "source_level": event.get("source_level"),
-                     "destination_level": event.get("destination_level")})
+                     "destination_level": event.get("destination_level"),
+                     "source_image": event.get("source_image")})
                 row["writes"].append("color")
         else:
             unknown_events.append({"event": index, "kind": kind})
@@ -482,6 +589,32 @@ def checkpoint_plan(graph: dict) -> list[dict]:
                                 resource.get("producers") or []
                                 if item["event"] < first["event"]],
         })
+    # A captured in-frame copy may include the effective default-framebuffer
+    # source pixels.  That is the authoritative checkpoint for the copy input,
+    # distinct from the copied destination.
+    seen_sources: set[tuple[int, str]] = set()
+    for resource in resources.values():
+        for producer in resource.get("producers") or []:
+            image = producer.get("source_image")
+            if not image:
+                continue
+            if int(producer.get("source_framebuffer") or 0) != 0:
+                continue
+            event = int(producer["event"])
+            key = (event, "0")
+            if key in seen_sources:
+                continue
+            seen_sources.add(key)
+            plan.append({
+                "event": event,
+                "target": "0",
+                "resource": "fb:0",
+                "reference_file": image.get("file"),
+                "reference_sha256": image.get("sha256"),
+                "reference_width": image.get("width"),
+                "reference_height": image.get("height"),
+                "producer_events": [],
+            })
     plan.sort(key=lambda item: (item["event"], item["target"]))
     return plan
 

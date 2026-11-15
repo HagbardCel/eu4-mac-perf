@@ -276,6 +276,13 @@ static uint64_t now_ms(void);
 static uint64_t now_ns(void);
 static void timeline_write(const char *format, ...);
 static const char *bool_text(int value);
+static int write_reference_pixels(const uint8_t *pixels, uint32_t width,
+                                  uint32_t height);
+static int capture_reference(void);
+static int read_drawable_bgra(uint32_t *out_width, uint32_t *out_height,
+                              uint8_t **out_pixels);
+static void sha256_hex(const void *data, size_t size, char out[65]);
+static int write_atomic(const char *path, const void *data, size_t size);
 
 static void fail_capture_locked(const char *reason) {
     g.capture_failed = 1;
@@ -365,13 +372,53 @@ int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event) {
         destination_height = queried_height;
         internal_format = queried_format;
     }
-    char body[2048];
+    char source_image[512] = "";
+    if (g.armed && event->source_framebuffer == 0) {
+        const char *capture_source = getenv(
+            "EU4_GFX_FRAME_TRACE_CAPTURE_COPY_SOURCE");
+        if (capture_source != NULL && strcmp(capture_source, "1") == 0) {
+            uint32_t source_width = 0, source_height = 0;
+            uint8_t *source_pixels = NULL;
+            if (read_drawable_bgra(&source_width, &source_height,
+                                   &source_pixels) != 0 ||
+                source_width != (uint32_t)event->source_width ||
+                source_height != (uint32_t)event->source_height ||
+                source_pixels == NULL) {
+                free(source_pixels);
+                fail_capture_locked("copy_source_read");
+            } else {
+                size_t source_bytes = (size_t)source_width * source_height * 4u;
+                char source_path[FTRACE_PATH];
+                char source_file[FTRACE_NAME];
+                char source_sha[65];
+                snprintf(source_file, sizeof(source_file),
+                         "copy-source-%llu.bgra",
+                         (unsigned long long)(g.copy_count + 1));
+                snprintf(source_path, sizeof(source_path), "%s/blobs/%s",
+                         g.dir, source_file);
+                if (write_atomic(source_path, source_pixels, source_bytes) == 0) {
+                    sha256_hex(source_pixels, source_bytes, source_sha);
+                    snprintf(source_image, sizeof(source_image),
+                             ",\"source_image\":{\"width\":%u,"
+                             "\"height\":%u,\"bytes\":%zu,"
+                             "\"file\":\"%s\",\"sha256\":\"%s\"}",
+                             source_width, source_height, source_bytes,
+                             source_file, source_sha);
+                } else {
+                    fail_capture_locked("copy_source_write");
+                }
+                free(source_pixels);
+            }
+        }
+    }
+    char body[4096];
     int length = snprintf(
         body, sizeof body,
         "{\"kind\":\"resolve\",\"operation\":\"%s\",\"is_blit\":%s,"
         "\"source_framebuffer\":%d,\"read_buffer\":%d,\"draw_buffer\":%d,"
         "\"double_buffered\":%d,\"source\":\"%d\","
         "\"source_attachment_type\":%d,\"source_attachment_name\":%d,"
+        "\"source_attachment\":%d,"
         "\"source_level\":%d,\"source_resolved\":%s,"
         "\"source_width\":%d,\"source_height\":%d,"
         "\"source_internal_format\":%d,"
@@ -381,20 +428,21 @@ int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event) {
         "\"destination_offset\":[%d,%d],\"width\":%d,\"height\":%d,"
         "\"destination_width\":%d,\"destination_height\":%d,"
         "\"internal_format\":%d,\"sequence\":%llu,\"pid\":%d,"
-        "\"scene\":%d,\"present\":%d,\"captured_frame\":%d}",
+        "\"scene\":%d,\"present\":%d,\"captured_frame\":%d%s}",
         event->is_blit ? "glBlitFramebuffer" : "glCopyTexSubImage2D",
         bool_text(event->is_blit), event->source_framebuffer,
         event->read_buffer, event->draw_buffer, event->double_buffered,
         event->source_texture, event->source_color_type,
-        event->source_color_name, event->source_level,
-        bool_text(event->source_resolved), event->source_width,
+        event->source_color_name, event->source_attachment,
+        event->source_level, bool_text(event->source_resolved),
+        event->source_width,
         event->source_height, event->source_internal_format,
         event->destination_texture, event->destination_level,
         bool_text(event->destination_resolved), event->x, event->y,
         event->width, event->height, event->dx, event->dy,
         event->width, event->height, destination_width, destination_height,
         internal_format, (unsigned long long)++g.timeline_seq, (int)getpid(),
-        g.scene_index, g.present_index, g.capturing_frame);
+        g.scene_index, g.present_index, g.capturing_frame, source_image);
     if (length <= 0 || (size_t)length >= sizeof body) {
         fail_capture_locked("copy_event_oversized");
     } else if (emit_event(body)) {
@@ -2269,82 +2317,19 @@ static void finish_capture(const char *reason) {
     if (!g.armed) {
         return;
     }
-    uint32_t width = 0, height = 0;
     int have_reference = 0;
     if (g.test_only) {
         /* Offline writer host: exercise the real finalize/validation path
            without an OpenGL context. */
-        width = 4;
-        height = 4;
         uint8_t pixels[4 * 4 * 4];
         for (size_t i = 0; i < sizeof(pixels); i++) {
             pixels[i] = (uint8_t)(i * 37u);
         }
-        char path[FTRACE_PATH];
-        snprintf(path, sizeof(path), "%s/frame-reference.bgra", g.dir);
-        if (write_atomic(path, pixels, sizeof(pixels)) == 0) {
-            snprintf(g.reference_file, sizeof(g.reference_file),
-                     "frame-reference.bgra");
-            sha256_hex(pixels, sizeof(pixels), g.reference_sha);
-            g.reference_bytes = sizeof(pixels);
-            g.reference_width = width;
-            g.reference_height = height;
-            have_reference = 1;
-        }
+        have_reference = write_reference_pixels(pixels, 4, 4) == 0;
     } else {
-    GLint viewport[4] = {0, 0, 0, 0};
-    glGetIntegerv(GL_VIEWPORT, viewport);
-    if (eu4_gfx_gl_drawable_extent(&width, &height) == 0 || width == 0 ||
-        height == 0) {
-        width = (uint32_t)(viewport[2] > 0 ? viewport[2] : 0);
-        height = (uint32_t)(viewport[3] > 0 ? viewport[3] : 0);
-    }
-    if (width > 0 && height > 0 && width <= 8192 && height <= 8192) {
-        size_t bytes = (size_t)width * height * 4;
-        uint8_t *pixels = malloc(bytes);
-        if (pixels != NULL) {
-            GLint pack_alignment = 0, pack_row = 0, pack_skip_rows = 0,
-                  pack_skip_pixels = 0, pack_buffer = 0;
-            glGetIntegerv(GL_PACK_ALIGNMENT, &pack_alignment);
-            glGetIntegerv(GL_PACK_ROW_LENGTH, &pack_row);
-            glGetIntegerv(GL_PACK_SKIP_ROWS, &pack_skip_rows);
-            glGetIntegerv(GL_PACK_SKIP_PIXELS, &pack_skip_pixels);
-            glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_buffer);
-            glPixelStorei(GL_PACK_ALIGNMENT, 1);
-            glPixelStorei(GL_PACK_ROW_LENGTH, 0);
-            glPixelStorei(GL_PACK_SKIP_ROWS, 0);
-            glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
-            if (pack_buffer != 0) {
-                glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-            }
-            while (glGetError() != GL_NO_ERROR) {
-            }
-            glFinish();
-            glReadPixels(0, 0, (GLsizei)width, (GLsizei)height, GL_BGRA,
-                         GL_UNSIGNED_INT_8_8_8_8_REV, pixels);
-            if (glGetError() == GL_NO_ERROR) {
-                char path[FTRACE_PATH];
-                snprintf(path, sizeof(path), "%s/frame-reference.bgra", g.dir);
-                if (write_atomic(path, pixels, bytes) == 0) {
-                    snprintf(g.reference_file, sizeof(g.reference_file),
-                             "frame-reference.bgra");
-                    sha256_hex(pixels, bytes, g.reference_sha);
-                    g.reference_bytes = bytes;
-                    g.reference_width = width;
-                    g.reference_height = height;
-                    have_reference = 1;
-                }
-            }
-            glPixelStorei(GL_PACK_ALIGNMENT, pack_alignment);
-            glPixelStorei(GL_PACK_ROW_LENGTH, pack_row);
-            glPixelStorei(GL_PACK_SKIP_ROWS, pack_skip_rows);
-            glPixelStorei(GL_PACK_SKIP_PIXELS, pack_skip_pixels);
-            if (pack_buffer != 0) {
-                glBindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)pack_buffer);
-            }
-            free(pixels);
-        }
-    }
+        /* One passive readback implementation for both the probe and the
+           final reference; it never drains the engine's GL error queue. */
+        have_reference = capture_reference() == 0;
     }
     /* The manifest is published only after the event stream has been closed
        and validated.  A write/flush failure, malformed record, missing record
@@ -2446,6 +2431,22 @@ static int read_drawable_bgra(uint32_t *out_width, uint32_t *out_height,
         glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     }
     glReadBuffer(GL_BACK);
+    /* Verify the intended default framebuffer/back buffer without touching the
+       engine's error queue.  A mis-selected read target is a readback failure,
+       never evidence. */
+    GLint selected_read_framebuffer = -1, selected_draw_framebuffer = -1;
+    GLint selected_read_buffer = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &selected_read_framebuffer);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &selected_draw_framebuffer);
+    glGetIntegerv(GL_READ_BUFFER, &selected_read_buffer);
+    if (selected_read_framebuffer != 0 || selected_draw_framebuffer != 0 ||
+        selected_read_buffer != GL_BACK) {
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)draw_framebuffer);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)read_framebuffer);
+        glReadBuffer((GLenum)read_buffer);
+        free(pixels);
+        return -1;
+    }
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glPixelStorei(GL_PACK_ROW_LENGTH, 0);
     glPixelStorei(GL_PACK_SKIP_ROWS, 0);
@@ -2459,7 +2460,8 @@ static int read_drawable_bgra(uint32_t *out_width, uint32_t *out_height,
        that a failure of this readback cannot be distinguished from a pending
        engine error without consuming one.  The observer records the read as
        attempted and leaves the queue untouched. */
-    glFinish();
+    /* glReadPixels is synchronous; do not issue glFinish, which the Apple
+       driver implements as an error-queue flush. */
     glReadPixels(0, 0, (GLsizei)width, (GLsizei)height, GL_BGRA,
                  GL_UNSIGNED_INT_8_8_8_8_REV, pixels);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)draw_framebuffer);
@@ -2478,6 +2480,61 @@ static int read_drawable_bgra(uint32_t *out_width, uint32_t *out_height,
     return 0;
 }
 
+/* Validates and publishes the one final reference image.  Every dimension,
+   byte-count and digest check happens before the manifest can see it. */
+static int write_reference_pixels(const uint8_t *pixels, uint32_t width,
+                                  uint32_t height) {
+    if (pixels == NULL || width == 0 || height == 0 || width > 8192 ||
+        height > 8192) {
+        return -1;
+    }
+    if ((uint64_t)width * (uint64_t)height > (uint64_t)(SIZE_MAX / 4u)) {
+        return -1;
+    }
+    size_t bytes = (size_t)width * (size_t)height * 4u;
+    if (bytes == 0 || bytes / 4u / width != height) {
+        return -1;
+    }
+    char path[FTRACE_PATH];
+    snprintf(path, sizeof(path), "%s/frame-reference.bgra", g.dir);
+    if (write_atomic(path, pixels, bytes) != 0) {
+        return -1;
+    }
+    char sha[65];
+    sha256_hex(pixels, bytes, sha);
+    if (strlen(sha) != 64) {
+        unlink(path);
+        return -1;
+    }
+    snprintf(g.reference_file, sizeof(g.reference_file),
+             "frame-reference.bgra");
+    snprintf(g.reference_sha, sizeof(g.reference_sha), "%s", sha);
+    g.reference_bytes = bytes;
+    g.reference_width = width;
+    g.reference_height = height;
+    if (g.reference_bytes != (size_t)g.reference_width * g.reference_height * 4u ||
+        strlen(g.reference_sha) != 64) {
+        g.reference_file[0] = 0;
+        g.reference_bytes = 0;
+        g.reference_width = 0;
+        g.reference_height = 0;
+        return -1;
+    }
+    return 0;
+}
+
+static int capture_reference(void) {
+    uint32_t width = 0, height = 0;
+    uint8_t *pixels = NULL;
+    if (read_drawable_bgra(&width, &height, &pixels) != 0) {
+        free(pixels);
+        return -1;
+    }
+    int result = write_reference_pixels(pixels, width, height);
+    free(pixels);
+    return result;
+}
+
 /* Exported for the native state-restoration host: performs one readback using
    the same state-saving path without claiming an engine error. */
 int eu4_gfx_frame_trace_readback_probe(void) {
@@ -2486,6 +2543,19 @@ int eu4_gfx_frame_trace_readback_probe(void) {
     int result = read_drawable_bgra(&width, &height, &pixels);
     free(pixels);
     return result;
+}
+
+/* Host-test only: exercise the production final-reference writer/validator
+   without starting a capture. */
+int eu4_gfx_frame_trace_test_reference(const char *directory) {
+    if (directory == NULL || directory[0] != '/') {
+        return -1;
+    }
+    snprintf(g.dir, sizeof(g.dir), "%s", directory);
+    if (mkdir_p(g.dir) != 0) {
+        return -1;
+    }
+    return capture_reference();
 }
 
 void eu4_gfx_frame_trace_boundary_entry(eu4_gfx_capture_frame *frame,

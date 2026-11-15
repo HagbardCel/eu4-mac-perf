@@ -281,7 +281,10 @@ class ResolveReplayTests(unittest.TestCase):
             "draw_buffer": read_buffer,
             "double_buffered": 1,
             "source": source, "source_level": source_level,
+            "source_attachment": read_buffer if source_framebuffer else 0,
             "source_resolved": source_resolved,
+            "source_width": WIDTH, "source_height": HEIGHT,
+            "source_internal_format": 0x8058,
             "destination": destination, "destination_level": destination_level,
             "destination_resolved": destination_resolved,
             "source_rect": list(rect), "destination_offset": list(offset),
@@ -356,6 +359,19 @@ class ResolveReplayTests(unittest.TestCase):
         expected_bottom = bgra(source_color(0, 0))
         self.assertNotEqual(expected_top, expected_bottom)
         self.assertEqual(bytes(expected[:4]), expected_bottom)
+
+    def test_missing_copy_metadata_is_rejected(self):
+        event = self.copy("10")
+        event.pop("source_width")
+        events = [
+            self.clear(self.default_target(), 7),
+            self.draw(1, 1),
+            event,
+        ]
+        ran, report, _ = self.run_frame("missing-metadata", events, bytes(64))
+        self.assertNotEqual(ran.returncode, 0)
+        self.assertEqual(report["failed"], 1, report.get("failures"))
+        self.assertIn("missing source_width", report["failures"][0]["error"])
 
     def test_unknown_copy_variant_is_rejected(self):
         events = [

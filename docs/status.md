@@ -46,33 +46,36 @@ boundaries, bounds the Metal copy kernel to the requested rectangle, validates
 every clear flag combination against actual pixels, and rejects missing,
 duplicate or zero-index-shifted consumer provenance.
 
-A new authentic OpenGL menu capture (scene 79, 282 events / 273 draws,
-reference SHA-256 `3b832401…`) replays deterministically through Metal:
-273/273 draws execute, 2,573 bindings audit cleanly, checkpoints 431, 432, 443
-and 447 match exactly, and the final image differs in only four edge pixels by
-one alpha LSB. Coverage is still **partial**: texture 442 is sampled without an
-in-captured producer. The previously reported 5,618 copy events into texture 442
-are **retracted**: they were produced by an interposer that resolved
-`dlsym(RTLD_NEXT)` to itself and recursed in `GfxResolve`. After the fix, no
-authentic copy event is present in the captured menu frame, so texture 442
-remains an unresolved pre-frame dependency and the frame cannot be certified as
-complete. The controlled V-flip fault still localizes to event 291 / texture 443,
-and a shifted-sampler fault is detected semantically at event 17.
+The closure also makes the final reference readback passive and deterministic
+(one `read_drawable_bgra` path, explicit default framebuffer/`GL_BACK`, restored
+bindings/read buffer/pack state/PBO, no error drain), makes interposer
+resolution failure terminal instead of silently dropping the copy, shares one
+copy contract between graph and replay, recognizes transfers in coverage, and
+requires the Python JSON/blob/hash loader before a capture is accepted.
 
-Background placement/focus remains qualified 5/5 for OpenGL and 5/5 for Metal,
-but the three background title-capture attempts were made before the interposer
-self-recursion fix and stalled at the loading scene (6 draws, 70 scenes). They
-are therefore inconclusive, not evidence that background rendering cannot reach
-title. Background title rendering remains unverified; the authentic capture
-used the preserved foreground fallback. `strategy-b-metrics.json` records these categories
-separately and is reconstructed from the session records.
+Texture 442 is now resolved **in-frame**, not left as an unexplained input. A
+bounded copy trace and source capture produced a complete authentic menu frame
+(scene 75, 283 events / 273 draws / 1 resolve). `_GfxResolve` copies the default
+framebuffer (`GL_BACK`, 1728x1117) into texture 442 at event 271; events 273 and
+277 sample it. The graph is complete with 0 unproven resources.
 
-Relevant suites pass: 258 capture/replay/graph/display tests, 12 native
-copy/clear pixel tests, 7 trace-writer regressions and 40 DSH plugin tests.
-Full Python discovery runs 2,865 tests with 9 failures and 2 errors, all in
-pre-existing native-host build/environment tests (missing
-`_eu4_gfx_note_render_target_write` host link support and the documented
-shadow-worker texture-LOD expectation), not in the touched capture paths.
+The replay executes the copy faithfully: GL source BGRA→RGBA equals the
+captured GL 442 exactly, and Metal 442 equals the channel-swapped Metal default
+source exactly. The first divergence is the **copy source** (target `0`, event
+271, producer draw 270, program 346), where GL dithering (`dither=true`) makes
+the default framebuffer differ from Metal by mostly one LSB. The copy-bearing
+frame therefore reports `coverage=complete`, `semantic=match`,
+`pixels=divergent`, `qualified=false` (1,792,860 / 1,930,176 final pixels
+differ, max channel error 24). The canonical no-copy frame remains pixel-exact
+(0 differences); scene 79 remains the four-alpha-LSB case.
+
+One longer background OpenGL capture now reaches the title scene and completes
+283 events with the window placed on `EU4 Test`, physical display unchanged,
+clean termination and restored settings. A single sampled frontmost process was
+`eu4`, so unfocused rendering was not independently re-proven in that long run;
+the existing 5/5 OpenGL and 5/5 Metal short-run placement/focus qualification
+remains the supported evidence. `strategy-b-metrics.json` records these
+categories separately and is reconstructed from the session records.
 
 ## Differential debugging infrastructure (2026-11-14, stacked PRs 1-5)
 

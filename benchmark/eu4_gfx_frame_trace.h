@@ -58,6 +58,10 @@ void eu4_gfx_frame_trace_draw_exit(eu4_gfx_capture_frame *frame,
    state. Returns 0 when the bind took effect. */
 int eu4_gfx_frame_trace_texture_probe(unsigned target, unsigned name);
 int eu4_gfx_frame_trace_readback_probe(void);
+/* Host-test only: run the production final-reference readback/validation.
+   Returns 0 only when the reference was written and its digest/size checks
+   passed. */
+int eu4_gfx_frame_trace_test_reference(const char *directory);
 
 /* Effective state of one glCopyTexSubImage2D/glBlitFramebuffer call.  The
    source attachment and the default framebuffer's read buffer are part of the
@@ -71,6 +75,7 @@ typedef struct {
     int source_color_type;
     int source_color_name;
     int source_color_level;
+    int source_attachment;
     int source_texture;
     int source_level;
     int source_width;

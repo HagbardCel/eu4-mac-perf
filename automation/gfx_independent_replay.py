@@ -93,7 +93,7 @@ def compare_checkpoints(graph: dict, replay: dict, frame_dir: Path,
     for checkpoint in replay.get("checkpoints") or []:
         event = checkpoint.get("event")
         target = str(checkpoint.get("target"))
-        resource_id = f"tex:{target}"
+        resource_id = "fb:0" if target == "0" else f"tex:{target}"
         resource = resources.get(resource_id) or {}
         file_name = checkpoint.get("file")
         width = int(checkpoint.get("width") or 0)
