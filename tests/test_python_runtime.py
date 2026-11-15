@@ -61,8 +61,9 @@ class InterpreterEnvironmentTests(unittest.TestCase):
             value = python_runtime.resolve(
                 "python-under-test", ("numpy",),
                 environ={"PATH": f"{directory}{os.pathsep}{os.environ.get('PATH', '')}"})
+            real_target = os.path.realpath(link)
         self.assertEqual(value["executable"], str(link))
-        self.assertNotEqual(value["executable"], os.path.realpath(link))
+        self.assertNotEqual(value["executable"], real_target)
         self.assertTrue(os.path.isabs(value["executable"]))
 
     def test_a_symlinked_virtualenv_is_probed_as_its_own_environment(self):
