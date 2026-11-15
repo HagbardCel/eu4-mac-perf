@@ -319,6 +319,8 @@ def eu4_replay(args: argparse.Namespace) -> dict:
             "qualified": outcome.get("qualified"),
             "evaluation": report.get("evaluation"),
             "checkpoints": report.get("checkpoints"),
+            "checkpoint_validation": report.get("checkpoint_validation"),
+            "state_coverage": report.get("state_coverage"),
             "binding_audit": report.get("binding_audit"),
             "final": report.get("final"),
             "first_divergence": report.get("first_divergence"),
@@ -356,6 +358,8 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                     "qualified": outcome.get("qualified"),
                     "evaluation": report.get("evaluation"),
                     "checkpoints": report.get("checkpoints"),
+                    "checkpoint_validation": report.get("checkpoint_validation"),
+                    "state_coverage": report.get("state_coverage"),
                     "final": report.get("final"),
                     "first_divergence": report.get("first_divergence"),
                 })

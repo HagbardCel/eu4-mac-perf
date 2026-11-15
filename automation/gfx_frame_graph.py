@@ -336,7 +336,11 @@ def build(frame_dir: Path | str) -> dict:
             sampled = _resource(resources, source_key, kind="framebuffer"
                                 if source_key.startswith("fb:") else "texture")
             sampled["consumers"].append(
-                {"event": index, "unit": None, "sampler": kind})
+                {"event": index, "unit": None, "sampler": kind,
+                 "operation": operation,
+                 "destination": f"tex:{destination}" if destination else None,
+                 "source_framebuffer": source_fbo,
+                 "source_attachment": event.get("source_attachment")})
             row["samples"].append({"resource": source_key,
                                    "unit": None, "sampler": kind})
             if destination:
@@ -755,8 +759,103 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
         reasons.append(
             f"{len(consumer_problems)} expected consumer binding(s) failed")
         status = "invalid"
+    # Copy/resolve sources are not texture-unit bindings.  Validate them
+    # against the replay's ordered transfer records and generation changes.
+    transfer_problems: list[dict] = []
+    transfers = replay.get("transfers")
+    if transfers is None:
+        transfers = []
+    transfers_by_event: dict[int, list[dict]] = {}
+    for transfer in transfers:
+        if isinstance(transfer, dict):
+            transfers_by_event.setdefault(
+                event_index(transfer.get("event")), []).append(transfer)
+    for key, resource in resources.items():
+        for consumer in resource.get("consumers") or []:
+            sampler = str(consumer.get("sampler") or "")
+            if sampler not in ("resolve", "copy"):
+                continue
+            event = event_index(consumer.get("event"))
+            rows = transfers_by_event.get(event, [])
+            if len(rows) == 0:
+                transfer_problems.append({
+                    "event": event, "resource": key, "kind": "missing_transfer"})
+                continue
+            if len(rows) > 1:
+                transfer_problems.append({
+                    "event": event, "resource": key,
+                    "kind": "duplicate_transfer", "records": len(rows)})
+                continue
+            transfer = rows[0]
+            if transfer.get("status") != "ok":
+                transfer_problems.append({
+                    "event": event, "resource": key,
+                    "kind": "transfer_not_executed"})
+            expected_source = (key.split(":", 1)[1]
+                               if key.startswith("tex:") else "0")
+            if str(transfer.get("source") or "") != expected_source:
+                transfer_problems.append({
+                    "event": event, "resource": key,
+                    "kind": "wrong_source",
+                    "expected": expected_source,
+                    "actual": transfer.get("source")})
+            destination = consumer.get("destination")
+            if destination and str(transfer.get("destination") or "") != str(
+                    destination).split(":", 1)[-1]:
+                transfer_problems.append({
+                    "event": event, "resource": key,
+                    "kind": "wrong_destination",
+                    "expected": destination,
+                    "actual": transfer.get("destination")})
+            if key.startswith("tex:") and resource.get("origin") == GENERATED:
+                source_kind = str(transfer.get("source_kind") or "")
+                if source_kind not in ("metal_render_target",):
+                    transfer_problems.append({
+                        "event": event, "resource": key,
+                        "kind": "captured_source_substitution",
+                        "source_kind": source_kind})
+            if key.startswith("tex:"):
+                required = next(
+                    (int(row["required_generation"])
+                     for row in resource.get("consumer_generations") or []
+                     if event_index(row.get("event")) == event), None)
+                actual_generation = int(transfer.get("source_generation") or 0)
+                if required is not None and actual_generation != required:
+                    transfer_problems.append({
+                        "event": event, "resource": key,
+                        "kind": "stale_source_generation",
+                        "expected": required,
+                        "actual": actual_generation})
+            if destination:
+                destination_resource = resources.get(str(destination)) or {}
+                producers = destination_resource.get("producers") or []
+                expected_after = sum(
+                    1 for producer in producers
+                    if event_index(producer.get("event")) <= event)
+                before = int(transfer.get("destination_generation_before") or 0)
+                after = int(transfer.get("destination_generation_after") or 0)
+                if after != expected_after or after != before + 1:
+                    transfer_problems.append({
+                        "event": event, "resource": destination,
+                        "kind": "destination_generation",
+                        "expected_after": expected_after,
+                        "before": before, "after": after})
+    if transfer_problems:
+        reasons.append(
+            f"{len(transfer_problems)} copy/resolve provenance check(s) failed")
+        status = "invalid"
+
     seeded: list[dict] = []
     for key in graph.get("renderer_generated_sampled") or []:
+        resource = (graph.get("resources") or {}).get(key, {})
+        draw_consumers = [
+            consumer for consumer in resource.get("consumers") or []
+            if str(consumer.get("sampler") or "") not in ("resolve", "copy")
+        ]
+        if not draw_consumers:
+            # Copy-only resources are validated by transfer records above;
+            # they never create texture-unit bindings.
+            continue
         name = key.split(":", 1)[1]
         bindings = by_texture.get(name)
         if not bindings:
@@ -824,6 +923,11 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
                             for value in resources.values()),
             "problems": consumer_problems[:100],
             "problems_count": len(consumer_problems),
+        },
+        "transfer_validation": {
+            "executed": len(transfers),
+            "problems": transfer_problems[:100],
+            "problems_count": len(transfer_problems),
         },
         "provenance": {
             "bindings": provenance.get("bindings"),

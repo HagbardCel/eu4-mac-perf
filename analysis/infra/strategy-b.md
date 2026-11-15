@@ -574,23 +574,41 @@ replay now checkpoints that source at event 271 (target `0`):
 | 271 default source | 1,205,235 / 1,930,176 differ, max 106, mean max ~1.04 |
 | 273 texture 442 | 1,205,235 differ (same count) |
 | 275 / 277 downstream | 291,686 / 307,421 differ |
-| Final | 1,792,860 / 1,930,176 differ, max 24 |
+| Final | 1,792,005 / 1,930,176 differ, max 23 |
 
 The first authoritative divergence is the **copy source**, event 271, producer
-event 270 (`_GfxDraw`, caller `0x10d25c3`, program 346). The captured draw state
-has `dither=true`; the Metal replay does not implement GL dithering. Two facts
-separate the copy from the source:
+event 270 (`_GfxDraw`, caller `0x10d25c3`, program 346). Two facts separate the
+copy from the source:
 
 - GL source BGRA→RGBA equals the captured GL 442 texture exactly (0 different
   pixels), so GL's copy is a pure channel conversion.
 - Metal 442 equals the channel-swapped Metal default source exactly (0
   different pixels), so the compute copy is faithful.
 
-The remaining difference is therefore GL default-framebuffer dithering /
-conversion, not a hidden captured-GL intermediate or a copy-kernel defect.
-Implementing GL dithering is outside this infrastructure milestone. The result
-is reported as `coverage=complete`, `semantic=match`, `pixels=divergent`,
-`qualified=false`, with the exact source coordinates preserved.
+The captured draw state records `dither=true` and `multisample=true`, which the
+Metal host does not implement. The observed distribution is **not uniformly a
+one-LSB dithering artifact**:
+
+| Surface | Mismatched | abs=1 | abs=2 | >2 | Max | Alpha | RGB |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Copy source (event 271) | 1,204,600 | 910,637 | 124,596 | 169,367 | 105 | 7 | 1,204,600 |
+| Texture 442 (event 273) | 1,204,600 | 910,637 | 124,596 | 169,367 | 105 | 7 | 1,204,600 |
+| Final frame | 1,792,005 | 1,757,148 | 31,364 | 3,493 | 23 | 1,785,844 | 976,504 |
+
+Source channel maxima are `[105, 66, 71, 4]`; large differences occur across
+the whole frame (x 0–1727, y 0–1116), with only 4,075 of 169,367 larger
+differences within 8 pixels of an edge. The dominant 1–2 LSB population is
+consistent with default-framebuffer dithering/conversion, but the >2 outliers
+are not explained by dithering alone. The established fact is narrower: **the
+first observed difference is the default-framebuffer output before the copy**;
+the exact conversion/blending cause remains unresolved. Full evidence is in
+`analysis/infra/scene75-difference.json`.
+
+Implementing GL dithering or exact default-framebuffer conversion is outside
+this infrastructure milestone. The result is reported as `coverage=complete`,
+`semantic=match` (binding-audit scope), `state_coverage=partial` (unsupported
+`gl_dither`, `multisample`), `pixels=divergent`, `qualified=false`, with exact
+source coordinates preserved.
 
 ### Requalification and portable cases
 
@@ -625,3 +643,94 @@ copy-bearing pixel difference is a documented GL dithering/conversion
 limitation, not a hidden seed. Do not describe the copy-bearing frame as
 bit-identical; exact pixel equivalence is established only for the canonical
 no-copy frame.
+
+## 14. PR #191 final review corrections (2026-11-15)
+
+### Checkpoint qualification is reconciled end to end
+
+`automation/gfx_independent_replay.py` now reconciles the checkpoint request
+with the replay response. Every requested `(event, target)` must have exactly
+one result. Missing, duplicate and unexpected results, `ok=false`, absent output
+files, absent/corrupted references, dimension disagreement, byte-count errors
+and reference-SHA mismatches are instrumentation/qualification failures. A
+failed checkpoint cannot be hidden by a matching final frame: the outcome gains
+`checkpoints=invalid`, `qualified=false` and CLI exit code **1**. Valid
+`divergent_diagnostic` checkpoints remain non-authoritative; authoritative
+divergences remain rendering differences (exit 2).
+
+Regressions cover all requested checkpoints matching, a missing result,
+`ok=false`, a missing output file, a missing/corrupted reference, duplicate and
+unexpected results, a valid diagnostic RGB8/BGRA8 difference, an authoritative
+divergence, a matching final with one invalid checkpoint, the CLI exit contract
+and the DSH envelope.
+
+### Copy-only provenance uses transfer execution, not sampler bindings
+
+The replay host now emits an ordered `transfers` record for each successful
+resolve/copy: event, kind, operation, source, source kind, destination, source
+generation, destination generation before/after and status. `evaluate_replay()`
+validates copy/resolve consumers against those records:
+
+- event and source/destination identity;
+- expected source generation for texture sources;
+- destination generation advancement;
+- successful GPU execution;
+- no captured-OpenGL source substitution for a renderer-generated source.
+
+The sampler-binding requirement now applies only to resources with draw/sampler
+consumers. A copy-only source qualifies without an invented texture-unit
+binding, while stale, wrong-source, missing-transfer and captured-substitution
+cases fail closed. Seven synthetic graph/replay regressions cover draw→copy→
+sample, copy-only, stale generation, wrong source, missing transfer, default-FB
+copy and captured-source substitution.
+
+### Portable Linux CI
+
+The portable workflow's local dependency assumptions were removed from unit
+tests without changing production platform behaviour:
+
+- placement/isolation libraries are mocked in settings-lifecycle tests;
+- scenario/ledger tests use a deterministic pinned `gog_identity` fixture and a
+  mocked user-data preflight;
+- ownership tests use a test-only `/proc` identity reader on Linux, so foreign
+  process refusal, dead-identity rejection, parent/child validation, terminal
+  status persistence and cleanup after exceptions remain exercised;
+- the agent error-envelope test reaches the missing-ledger condition with a
+  controlled identity fixture.
+
+The exact GitHub command (`PYTHONPATH=benchmark:. python -m unittest discover -s
+tests`) was run in an amd64 Ubuntu 24.04 VM with Python 3.14 and Node 26; the
+previously failing modules pass. Full workflow evidence is recorded on PR #191.
+
+### Non-default framebuffer source metadata
+
+The interposer now queries the selected attachment's own texture on the active
+unit, saving and restoring the binding, and rejects cube/layered or
+non-texture attachments instead of reading the currently bound `GL_TEXTURE_2D`.
+It does not change framebuffer bindings or consume GL errors. The native fixture
+uses an 8×6 RGBA8 attachment while a 4×4 RGB8 texture is bound, and verifies the
+recorded extent/format/attachment, state restoration, sentinel-error survival
+and the unsupported renderbuffer path.
+
+### Qualification terminology and scene-75 evidence
+
+- `semantic` is now explicitly scoped: `semantic_scope=binding_audit`.
+- `state_coverage` reports captured state the Metal host does not implement.
+  The current menu frames record `gl_dither` and `multisample`, so state
+  coverage is `partial`; `qualified` requires complete state coverage.
+- Scene 75 remains an explicit rendering divergence. The source checkpoint
+  differs in 1,204,600 pixels: 910,637 at 1 LSB, 124,596 at 2 LSB and 169,367
+  above 2 (max 105, alpha only 7). The final frame differs in 1,792,005 pixels:
+  1,757,148 at 1 LSB, 31,364 at 2, above 2 3,493 (max 23, alpha 1,785,844, RGB
+  976,504). The first observed difference is the default-framebuffer output
+  before the copy; dithering/conversion is consistent with the dominant 1–2 LSB
+  population but is not established as the exclusive cause of the >2 outliers.
+  Full evidence: `analysis/infra/scene75-difference.json`.
+- Texture 442's producer/consumers and the copy's fidelity relative to the Metal
+  source remain established. Exact scene-75 equivalence is not claimed.
+
+### Merge status
+
+The two PR review threads are addressed by the code and regressions above. The
+historical five branches remain unchanged; this remains one consolidated
+integration PR.

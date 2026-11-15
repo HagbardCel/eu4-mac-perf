@@ -197,6 +197,37 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(value["result"]["classification"], "incomplete")
         self.assertFalse(value["result"]["qualified"])
 
+    def test_independent_replay_invalid_checkpoint_is_not_ok(self):
+        from types import SimpleNamespace
+        from automation import gfx_independent_replay
+
+        report = {
+            "status": "invalid",
+            "outcome": {"execution": "ok", "coverage": "complete",
+                        "pixels": "match", "semantic": "match",
+                        "checkpoints": "invalid", "qualified": False},
+            "checkpoint_validation": {
+                "status": "invalid",
+                "problems": [{"kind": "missing_result"}],
+            },
+            "checkpoints": [], "graph": {"status": "complete"},
+            "evaluation": {"status": "complete", "reasons": []},
+            "binding_audit": {"ok": True}, "final": {"status": "match"},
+            "first_divergence": {"kind": "invalid_checkpoint"},
+        }
+        args = SimpleNamespace(
+            replay_op="independent", frame="frame", replay_out=str(self.root / "out"),
+            shaders=None, disable_render_target_vflip=False,
+            sampler_shift=None, sampler_shift_min=7,
+        )
+        with mock.patch.object(gfx_independent_replay, "replay",
+                               return_value=report):
+            value = agent_tools.eu4_replay(args)
+        self.assertFalse(value["ok"])
+        self.assertEqual(value["status"], "invalid")
+        self.assertEqual(value["result"]["checkpoint_validation"]["status"],
+                         "invalid")
+
     def test_diff_run_without_ledger_is_an_error_envelope(self):
         scenario = self.root / "scenario.json"
         scenario.write_text(json.dumps({
@@ -206,10 +237,25 @@ class ToolTests(unittest.TestCase):
             "logical_extent": [64, 64],
             "comparison": {"regions": {"all": {"rect": [0, 64, 0, 64]}}},
         }))
-        code, value = self.call([
-            "eu4_diff_run", "--scenario", str(scenario),
-            "--run-root", str(self.root), "--ledger", str(self.root / "missing.json"),
-        ])
+        from automation import gfx_dual_run, gfx_launch
+
+        identity = {
+            "executable_sha256": json.loads(
+                (ROOT / "reverse_engineering" / "target.json").read_text())["sha256"],
+            "executable": "/tmp/eu4-fixture",
+        }
+        user_data = self.root / "user"
+        user_data.mkdir(exist_ok=True)
+        with mock.patch.object(gfx_dual_run.base_benchmark, "gog_identity",
+                               return_value=identity), \
+             mock.patch.object(gfx_launch, "preflight_user_data",
+                               return_value={"writable": True,
+                                             "user_data": str(user_data)}):
+            code, value = self.call([
+                "eu4_diff_run", "--scenario", str(scenario),
+                "--run-root", str(self.root),
+                "--ledger", str(self.root / "missing.json"),
+            ])
         self.assertEqual(code, 2)
         self.assertFalse(value["ok"])
         self.assertIn("LedgerError", value["result"].get("error", ""))

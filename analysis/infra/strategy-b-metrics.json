@@ -91,8 +91,8 @@
   "portable_case_verification": "pass",
   "case_files": 1084,
   "case_bytes": 441000000,
-  "tests_touched": 266,
-  "tests_touched_result": "266 relevant capture/replay/graph/display/native tests pass; 140 additional graphics tests and 40 DSH tests pass",
+  "tests_touched": 259,
+  "tests_touched_result": "259 relevant capture/replay/graph/display/session/tool tests pass; 140 additional graphics tests and 40 DSH tests pass",
   "dsh_tests": 40,
   "dsh_tests_result": "pass",
   "full_python_discovery": {
@@ -152,10 +152,11 @@
       "443": 307421
     },
     "final": {
-      "mismatched_pixels": 1792860,
+      "mismatched_pixels": 1792005,
       "pixels": 1930176,
-      "max_channel_error": 24,
-      "alpha_different_pixels": 1785847
+      "max_channel_error": 23,
+      "alpha_different_pixels": 1785844,
+      "rgb_different_pixels": 976504
     },
     "first_divergence": {
       "event": 271,
@@ -166,10 +167,619 @@
     },
     "copy_kernel_exact_against_metal_source": true,
     "gl_copy_is_pure_channel_conversion": true,
-    "cause": "gl_default_framebuffer_dithering_conversion",
-    "qualified": false
+    "cause": "unresolved_default_framebuffer_conversion_before_copy",
+    "qualified": false,
+    "cause_note": "The first observed difference is the default-framebuffer source at event 271. Dominant 1-2 LSB differences are consistent with dithering/conversion, but 169,367 source pixels differ by more than 2 (max 105), so dithering alone is not established as the exclusive cause."
   },
   "portable_copy_case_files": 1088,
   "portable_copy_case_replay": "pass_same_candidate_sha256",
-  "integration_pr": "https://github.com/HagbardCel/eu4-mac-perf/pull/191"
+  "integration_pr": "https://github.com/HagbardCel/eu4-mac-perf/pull/191",
+  "semantic_scope": "binding_audit",
+  "state_coverage": "partial",
+  "unsupported_state": [
+    "gl_dither",
+    "multisample"
+  ],
+  "scene75_difference": {
+    "schema": "gfx-scene75-difference/v1",
+    "results": [
+      {
+        "name": "source",
+        "pixels": 1930176,
+        "mismatched": 1204600,
+        "max_channel_error": 105,
+        "histogram": {
+          "1": 910637,
+          "2": 124596,
+          "0": 725576,
+          "3": 58124,
+          "5": 23785,
+          "7": 11081,
+          "4": 37965,
+          "8": 7640,
+          "6": 16175,
+          "10": 3193,
+          "9": 4837,
+          "11": 2111,
+          "13": 948,
+          "12": 1467,
+          "14": 616,
+          "16": 255,
+          "57": 5,
+          "63": 5,
+          "29": 14,
+          "40": 3,
+          "15": 433,
+          "68": 4,
+          "65": 4,
+          "17": 146,
+          "21": 24,
+          "18": 117,
+          "19": 64,
+          "23": 14,
+          "34": 5,
+          "30": 9,
+          "75": 1,
+          "74": 1,
+          "20": 47,
+          "28": 10,
+          "73": 3,
+          "24": 10,
+          "27": 7,
+          "25": 12,
+          "47": 11,
+          "55": 7,
+          "61": 4,
+          "71": 3,
+          "67": 5,
+          "42": 6,
+          "59": 9,
+          "32": 6,
+          "56": 6,
+          "45": 10,
+          "43": 5,
+          "38": 12,
+          "54": 3,
+          "37": 6,
+          "84": 1,
+          "39": 7,
+          "41": 6,
+          "49": 4,
+          "53": 8,
+          "48": 6,
+          "52": 5,
+          "66": 2,
+          "50": 4,
+          "70": 1,
+          "36": 6,
+          "80": 2,
+          "82": 1,
+          "69": 3,
+          "44": 7,
+          "72": 2,
+          "26": 12,
+          "35": 2,
+          "22": 18,
+          "105": 1,
+          "31": 3,
+          "86": 2,
+          "58": 4,
+          "87": 2,
+          "76": 2,
+          "46": 7,
+          "90": 1,
+          "94": 1,
+          "88": 1,
+          "85": 1,
+          "83": 1,
+          "91": 1,
+          "77": 1,
+          "33": 7,
+          "60": 2,
+          "51": 4,
+          "62": 1
+        },
+        "abs1": 910637,
+        "abs2": 124596,
+        "gt2": 169367,
+        "alpha_pixels": 7,
+        "rgb_pixels": 1204600,
+        "channel_max": [
+          105,
+          66,
+          71,
+          4
+        ],
+        "channel_mismatches": [
+          608210,
+          735977,
+          794494,
+          7
+        ],
+        "large_count": 169367,
+        "large_sample": [
+          {
+            "x": 13,
+            "y": 0,
+            "deltas": [
+              2,
+              2,
+              3,
+              0
+            ]
+          },
+          {
+            "x": 16,
+            "y": 0,
+            "deltas": [
+              2,
+              5,
+              4,
+              0
+            ]
+          },
+          {
+            "x": 17,
+            "y": 0,
+            "deltas": [
+              4,
+              7,
+              7,
+              0
+            ]
+          },
+          {
+            "x": 19,
+            "y": 0,
+            "deltas": [
+              4,
+              7,
+              7,
+              0
+            ]
+          },
+          {
+            "x": 20,
+            "y": 0,
+            "deltas": [
+              1,
+              2,
+              3,
+              0
+            ]
+          },
+          {
+            "x": 21,
+            "y": 0,
+            "deltas": [
+              1,
+              2,
+              4,
+              0
+            ]
+          },
+          {
+            "x": 37,
+            "y": 0,
+            "deltas": [
+              2,
+              2,
+              3,
+              0
+            ]
+          },
+          {
+            "x": 39,
+            "y": 0,
+            "deltas": [
+              1,
+              3,
+              4,
+              0
+            ]
+          },
+          {
+            "x": 44,
+            "y": 0,
+            "deltas": [
+              6,
+              7,
+              8,
+              0
+            ]
+          },
+          {
+            "x": 46,
+            "y": 0,
+            "deltas": [
+              4,
+              5,
+              6,
+              0
+            ]
+          }
+        ]
+      },
+      {
+        "name": "texture442",
+        "pixels": 1930176,
+        "mismatched": 1204600,
+        "max_channel_error": 105,
+        "histogram": {
+          "1": 910637,
+          "2": 124596,
+          "0": 725576,
+          "3": 58124,
+          "5": 23785,
+          "7": 11081,
+          "4": 37965,
+          "8": 7640,
+          "6": 16175,
+          "10": 3193,
+          "9": 4837,
+          "11": 2111,
+          "13": 948,
+          "12": 1467,
+          "14": 616,
+          "16": 255,
+          "57": 5,
+          "63": 5,
+          "29": 14,
+          "40": 3,
+          "15": 433,
+          "68": 4,
+          "65": 4,
+          "17": 146,
+          "21": 24,
+          "18": 117,
+          "19": 64,
+          "23": 14,
+          "34": 5,
+          "30": 9,
+          "75": 1,
+          "74": 1,
+          "20": 47,
+          "28": 10,
+          "73": 3,
+          "24": 10,
+          "27": 7,
+          "25": 12,
+          "47": 11,
+          "55": 7,
+          "61": 4,
+          "71": 3,
+          "67": 5,
+          "42": 6,
+          "59": 9,
+          "32": 6,
+          "56": 6,
+          "45": 10,
+          "43": 5,
+          "38": 12,
+          "54": 3,
+          "37": 6,
+          "84": 1,
+          "39": 7,
+          "41": 6,
+          "49": 4,
+          "53": 8,
+          "48": 6,
+          "52": 5,
+          "66": 2,
+          "50": 4,
+          "70": 1,
+          "36": 6,
+          "80": 2,
+          "82": 1,
+          "69": 3,
+          "44": 7,
+          "72": 2,
+          "26": 12,
+          "35": 2,
+          "22": 18,
+          "105": 1,
+          "31": 3,
+          "86": 2,
+          "58": 4,
+          "87": 2,
+          "76": 2,
+          "46": 7,
+          "90": 1,
+          "94": 1,
+          "88": 1,
+          "85": 1,
+          "83": 1,
+          "91": 1,
+          "77": 1,
+          "33": 7,
+          "60": 2,
+          "51": 4,
+          "62": 1
+        },
+        "abs1": 910637,
+        "abs2": 124596,
+        "gt2": 169367,
+        "alpha_pixels": 7,
+        "rgb_pixels": 1204600,
+        "channel_max": [
+          71,
+          66,
+          105,
+          4
+        ],
+        "channel_mismatches": [
+          794494,
+          735977,
+          608210,
+          7
+        ],
+        "large_count": 169367,
+        "large_sample": [
+          {
+            "x": 13,
+            "y": 0,
+            "deltas": [
+              3,
+              2,
+              2,
+              0
+            ]
+          },
+          {
+            "x": 16,
+            "y": 0,
+            "deltas": [
+              4,
+              5,
+              2,
+              0
+            ]
+          },
+          {
+            "x": 17,
+            "y": 0,
+            "deltas": [
+              7,
+              7,
+              4,
+              0
+            ]
+          },
+          {
+            "x": 19,
+            "y": 0,
+            "deltas": [
+              7,
+              7,
+              4,
+              0
+            ]
+          },
+          {
+            "x": 20,
+            "y": 0,
+            "deltas": [
+              3,
+              2,
+              1,
+              0
+            ]
+          },
+          {
+            "x": 21,
+            "y": 0,
+            "deltas": [
+              4,
+              2,
+              1,
+              0
+            ]
+          },
+          {
+            "x": 37,
+            "y": 0,
+            "deltas": [
+              3,
+              2,
+              2,
+              0
+            ]
+          },
+          {
+            "x": 39,
+            "y": 0,
+            "deltas": [
+              4,
+              3,
+              1,
+              0
+            ]
+          },
+          {
+            "x": 44,
+            "y": 0,
+            "deltas": [
+              8,
+              7,
+              6,
+              0
+            ]
+          },
+          {
+            "x": 46,
+            "y": 0,
+            "deltas": [
+              6,
+              5,
+              4,
+              0
+            ]
+          }
+        ]
+      },
+      {
+        "name": "final",
+        "pixels": 1930176,
+        "mismatched": 1792005,
+        "max_channel_error": 23,
+        "histogram": {
+          "11": 25,
+          "9": 45,
+          "7": 71,
+          "10": 33,
+          "14": 10,
+          "3": 2668,
+          "2": 31364,
+          "1": 1757148,
+          "6": 93,
+          "12": 24,
+          "20": 2,
+          "4": 320,
+          "13": 15,
+          "8": 56,
+          "15": 8,
+          "22": 1,
+          "21": 3,
+          "5": 103,
+          "23": 1,
+          "18": 2,
+          "0": 138171,
+          "16": 10,
+          "19": 1,
+          "17": 2
+        },
+        "abs1": 1757148,
+        "abs2": 31364,
+        "gt2": 3493,
+        "alpha_pixels": 1785844,
+        "rgb_pixels": 976504,
+        "channel_max": [
+          14,
+          20,
+          23,
+          1
+        ],
+        "channel_mismatches": [
+          424218,
+          497492,
+          549506,
+          1785844
+        ],
+        "large_count": 3493,
+        "large_sample": [
+          {
+            "x": 0,
+            "y": 0,
+            "deltas": [
+              7,
+              9,
+              11,
+              0
+            ]
+          },
+          {
+            "x": 1,
+            "y": 0,
+            "deltas": [
+              6,
+              7,
+              9,
+              0
+            ]
+          },
+          {
+            "x": 2,
+            "y": 0,
+            "deltas": [
+              6,
+              5,
+              7,
+              0
+            ]
+          },
+          {
+            "x": 3,
+            "y": 0,
+            "deltas": [
+              6,
+              8,
+              10,
+              0
+            ]
+          },
+          {
+            "x": 4,
+            "y": 0,
+            "deltas": [
+              8,
+              11,
+              14,
+              0
+            ]
+          },
+          {
+            "x": 5,
+            "y": 0,
+            "deltas": [
+              7,
+              10,
+              14,
+              0
+            ]
+          },
+          {
+            "x": 6,
+            "y": 0,
+            "deltas": [
+              4,
+              6,
+              7,
+              0
+            ]
+          },
+          {
+            "x": 7,
+            "y": 0,
+            "deltas": [
+              2,
+              2,
+              3,
+              0
+            ]
+          },
+          {
+            "x": 10,
+            "y": 0,
+            "deltas": [
+              8,
+              10,
+              11,
+              0
+            ]
+          },
+          {
+            "x": 11,
+            "y": 0,
+            "deltas": [
+              4,
+              6,
+              6,
+              0
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "canonical_replay_pixels": "match",
+  "canonical_replay_state_coverage": "partial",
+  "checkpoint_reconciliation": "every requested checkpoint must have exactly one valid result; missing/duplicate/unexpected/failed checkpoints are invalid and exit 1",
+  "checkpoint_regressions": 14,
+  "copy_only_provenance": "validated from ordered transfer records; sampler bindings required only for draw consumers",
+  "copy_provenance_regressions": 7,
+  "non_default_source_metadata": "queried from the selected attachment under saved/restored texture binding; unsupported attachments fail closed",
+  "portable_linux_vm": "Ubuntu 24.04 amd64, Python 3.14.10, Node 26.13.1; previously failing modules pass, full workflow verified on the PR head",
+  "scene75_difference_artifact": "analysis/infra/scene75-difference.json",
+  "review_threads": 2,
+  "review_threads_resolved": true
 }

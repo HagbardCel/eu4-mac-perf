@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -196,9 +197,16 @@ class DisplayModuleTests(unittest.TestCase):
 
         old = gfx_display._run_cli
         gfx_display._run_cli = broken
+        physical = gfx_display.Display(
+            display_id=1, name="Built-in Display", origin_x=0.0, origin_y=0.0,
+            width=1728.0, height=1117.0, pixel_width=3456, pixel_height=2234,
+            hidpi=True, main=True,
+        )
         try:
-            with self.assertRaises(gfx_display.DisplayError) as caught:
-                gfx_display.ensure_display(timeout=2.0)
+            with mock.patch.object(gfx_display, "main_display",
+                                   return_value=physical):
+                with self.assertRaises(gfx_display.DisplayError) as caught:
+                    gfx_display.ensure_display(timeout=2.0)
         finally:
             gfx_display._run_cli = old
         self.assertEqual(caught.exception.kind, "betterdisplay_missing")
@@ -443,8 +451,14 @@ class SettingsLifecycleTests(unittest.TestCase):
         self.user_data.mkdir()
         self.settings = self.user_data / "settings.txt"
         self.settings.write_text(SETTINGS, encoding="utf-8")
+        placement = self.root / "placement.dylib"
+        placement.write_bytes(b"test-placement")
+        self._placement_patch = mock.patch.object(
+            gfx_display, "ensure_placement_library", return_value=placement)
+        self._placement_patch.start()
 
     def tearDown(self):
+        self._placement_patch.stop()
         self.temporary.cleanup()
 
     def test_planning_does_not_touch_shared_settings(self):
@@ -545,8 +559,14 @@ class SessionDisplayTests(unittest.TestCase):
         self.user_data = self.root / "user"
         self.user_data.mkdir()
         (self.user_data / "settings.txt").write_text(SETTINGS, encoding="utf-8")
+        placement = self.root / "placement.dylib"
+        placement.write_bytes(b"test-placement")
+        self._placement_patch = mock.patch.object(
+            gfx_display, "ensure_placement_library", return_value=placement)
+        self._placement_patch.start()
 
     def tearDown(self):
+        self._placement_patch.stop()
         self.temporary.cleanup()
 
     def test_session_restores_display_settings_on_close(self):

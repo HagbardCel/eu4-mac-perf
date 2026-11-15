@@ -85,80 +85,187 @@ def _load_pixels(path: Path, width: int, height: int) -> bytes:
     return payload
 
 
-def compare_checkpoints(graph: dict, replay: dict, frame_dir: Path,
-                        out_dir: Path) -> list[dict]:
-    """Compare replay checkpoints with their captured OpenGL reference."""
+def _checkpoint_key(item: dict) -> tuple[int, str]:
+    return (int(item.get("event") if item.get("event") is not None else -1),
+            str(item.get("target")))
+
+
+def _invalid_checkpoint(item: dict, graph: dict, reason: str,
+                        *, requested: bool) -> dict:
+    target = str(item.get("target"))
+    event = item.get("event")
+    resource_id = "fb:0" if target == "0" else f"tex:{target}"
+    resource = (graph.get("resources") or {}).get(resource_id) or {}
+    return {
+        "event": event,
+        "target": target,
+        "resource": resource_id,
+        "width": int(item.get("reference_width")
+                     or item.get("width") or 0),
+        "height": int(item.get("reference_height")
+                      or item.get("height") or 0),
+        "format": item.get("format") or resource.get("format"),
+        "producer_events": list(item.get("producer_events") or []),
+        "metal_file": str(item.get("_metal_path") or ""),
+        "reference_file": str(item.get("_reference_path") or ""),
+        "authoritative": True,
+        "status": "invalid",
+        "reason": reason,
+        "requested": requested,
+    }
+
+
+def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
+                          frame_dir: Path, out_dir: Path
+                          ) -> tuple[list[dict], dict]:
+    """Reconcile every requested checkpoint with exactly one replay result.
+
+    Missing, duplicate, unexpected, unreadable or identity-mismatched evidence
+    is an instrumentation/qualification failure.  A later matching final frame
+    cannot hide it.
+    """
+    plan = list(request.get("checkpoints") or [])
+    actual = list(replay.get("checkpoints") or [])
+    problems: list[dict] = []
+
+    requested: dict[tuple[int, str], dict] = {}
+    for item in plan:
+        key = _checkpoint_key(item)
+        if key in requested:
+            problems.append({"kind": "duplicate_request", "event": key[0],
+                             "target": key[1]})
+            continue
+        requested[key] = item
+
+    returned: dict[tuple[int, str], list[dict]] = {}
+    for item in actual:
+        key = _checkpoint_key(item)
+        returned.setdefault(key, []).append(item)
+
+    for key in returned:
+        if key not in requested:
+            problems.append({"kind": "unexpected_result", "event": key[0],
+                             "target": key[1]})
+
     results: list[dict] = []
-    resources = graph.get("resources") or {}
-    for checkpoint in replay.get("checkpoints") or []:
-        event = checkpoint.get("event")
-        target = str(checkpoint.get("target"))
+    for key, wanted in requested.items():
+        event, target = key
+        rows = returned.get(key, [])
+        if len(rows) == 0:
+            problems.append({"kind": "missing_result", "event": event,
+                             "target": target})
+            results.append(_invalid_checkpoint(
+                wanted, graph, "requested checkpoint missing from replay response",
+                requested=True))
+            continue
+        if len(rows) > 1:
+            problems.append({"kind": "duplicate_result", "event": event,
+                             "target": target, "count": len(rows)})
+            results.append(_invalid_checkpoint(
+                wanted, graph, "duplicate checkpoint results in replay response",
+                requested=True))
+            continue
+        item = rows[0]
+        requested_width = int(wanted.get("reference_width")
+                              or wanted.get("width") or 0)
+        requested_height = int(wanted.get("reference_height")
+                               or wanted.get("height") or 0)
+        actual_width = int(item.get("width") or 0)
+        actual_height = int(item.get("height") or 0)
+        file_name = str(wanted.get("file") or item.get("file") or "")
+        reference_name = str(wanted.get("reference_file")
+                             or item.get("reference_file") or "")
+        expected_reference_sha = str(wanted.get("reference_sha256")
+                                     or item.get("reference_sha256") or "")
+        metal_path = out_dir / Path(file_name).name
+        reference_path = frame_dir / "blobs" / Path(reference_name).name
+        merged = dict(wanted)
+        merged.update(item)
+        merged["_metal_path"] = str(metal_path)
+        merged["_reference_path"] = str(reference_path)
+
+        def fail(reason: str) -> None:
+            problems.append({"kind": "invalid_result", "event": event,
+                             "target": target, "reason": reason})
+            results.append(_invalid_checkpoint(merged, graph, reason,
+                                               requested=True))
+
+        if item.get("ok") is not True:
+            fail(str(item.get("error") or "checkpoint readback reported failure"))
+            continue
+        if requested_width and actual_width != requested_width:
+            fail(f"checkpoint width {actual_width} != requested "
+                 f"{requested_width}")
+            continue
+        if requested_height and actual_height != requested_height:
+            fail(f"checkpoint height {actual_height} != requested "
+                 f"{requested_height}")
+            continue
+        if not file_name:
+            fail("checkpoint file name is missing")
+            continue
+        if item.get("file") and str(item.get("file")) != file_name:
+            fail("checkpoint file name disagrees with the request")
+            continue
+        if item.get("reference_sha256") and expected_reference_sha and str(
+                item.get("reference_sha256")) != expected_reference_sha:
+            fail("checkpoint reference sha256 disagrees with the request")
+            continue
+        if not metal_path.is_file():
+            fail("checkpoint output file is absent")
+            continue
+        if not reference_path.is_file():
+            fail("captured reference blob is absent")
+            continue
+        width = requested_width or actual_width
+        height = requested_height or actual_height
+        if width <= 0 or height <= 0:
+            fail("checkpoint dimensions are invalid")
+            continue
+        try:
+            metal = _load_pixels(metal_path, width, height)
+            reference = _load_pixels(reference_path, width, height)
+        except ReplayError as exc:
+            fail(str(exc))
+            continue
+        reference_sha = _sha(reference_path)
+        if expected_reference_sha and reference_sha != expected_reference_sha:
+            fail("captured reference sha256 does not match the request")
+            continue
         resource_id = "fb:0" if target == "0" else f"tex:{target}"
-        resource = resources.get(resource_id) or {}
-        file_name = checkpoint.get("file")
-        width = int(checkpoint.get("width") or 0)
-        height = int(checkpoint.get("height") or 0)
-        metal_path = out_dir / str(file_name or "")
-        reference_file = checkpoint.get("reference_file")
-        reference_path = frame_dir / "blobs" / Path(str(reference_file)).name
+        resource = (graph.get("resources") or {}).get(resource_id) or {}
+        internal = str(item.get("format") or resource.get("format") or "")
+        channel_swap = internal in ("RGB8", "SRGB8_ALPHA8")
+        candidate = _swap_red_blue(metal) if channel_swap else metal
+        statistics = m6_compare.compare_images(
+            reference, candidate, width, height)
         entry = {
             "event": event,
             "target": target,
             "resource": resource_id,
             "width": width,
             "height": height,
-            "format": checkpoint.get("format") or resource.get("format"),
-            "producer_events": [
-                item for item in
-                (next((row.get("producer_events") for row in
-                       (replay.get("_checkpoint_plan") or [])
-                       if row.get("event") == event and
-                       str(row.get("target")) == target), []) or [])
-            ],
+            "format": internal or None,
+            "producer_events": list(wanted.get("producer_events") or []),
             "metal_file": str(metal_path),
             "reference_file": str(reference_path),
-            "authoritative": True,
-            "status": "invalid",
+            "authoritative": not channel_swap,
+            "requested": True,
+            "normalization": {
+                "channel_swap": "bgra_to_rgba" if channel_swap else None,
+                "row_origin": "declared_lower_left",
+            },
+            "statistics": {
+                key: statistics[key] for key in (
+                    "pixels", "mismatched_pixels", "mismatched_fraction",
+                    "alpha_different_pixels", "max_channel_error",
+                    "mean_abs_error", "mean_max_channel_error",
+                )
+            },
+            "worst_regions": statistics["regions"][:4],
+            "metal_sha256": _sha(metal_path),
+            "reference_sha256": reference_sha,
         }
-        if not checkpoint.get("ok") or not metal_path.is_file():
-            entry["reason"] = checkpoint.get("error") or "checkpoint file is absent"
-            results.append(entry)
-            continue
-        if not reference_path.is_file():
-            entry["reason"] = "captured reference blob is absent"
-            results.append(entry)
-            continue
-        try:
-            metal = _load_pixels(metal_path, width, height)
-            reference = _load_pixels(reference_path, width, height)
-        except ReplayError as exc:
-            entry["reason"] = str(exc)
-            results.append(entry)
-            continue
-        internal = str(resource.get("format") or "")
-        channel_swap = internal in ("RGB8", "SRGB8_ALPHA8")
-        candidate = _swap_red_blue(metal) if channel_swap else metal
-        statistics = m6_compare.compare_images(
-            reference, candidate, width, height)
-        entry["normalization"] = {
-            "channel_swap": "bgra_to_rgba" if channel_swap else None,
-            "row_origin": "declared_lower_left",
-        }
-        entry["statistics"] = {
-            key: statistics[key] for key in (
-                "pixels", "mismatched_pixels", "mismatched_fraction",
-                "alpha_different_pixels", "max_channel_error",
-                "mean_abs_error", "mean_max_channel_error",
-            )
-        }
-        entry["worst_regions"] = statistics["regions"][:4]
-        entry["metal_sha256"] = _sha(metal_path)
-        entry["reference_sha256"] = _sha(reference_path)
-        if channel_swap:
-            # GL RGB8 has no alpha channel and Metal has no RGB8 target; the
-            # readback transform is a declared normalization.  Keep the
-            # checkpoint diagnostic, not authoritative.
-            entry["authoritative"] = False
         if statistics["mismatched_pixels"] == 0:
             entry["status"] = "match"
         elif entry["authoritative"]:
@@ -166,9 +273,34 @@ def compare_checkpoints(graph: dict, replay: dict, frame_dir: Path,
         else:
             entry["status"] = "divergent_diagnostic"
         results.append(entry)
-    results.sort(key=lambda item: (item.get("event") or 0, item.get("target") or ""))
-    return results
 
+    results.sort(key=lambda item: (item.get("event") or 0,
+                                   item.get("target") or ""))
+    validation = {
+        "schema": "gfx-checkpoint-validation/v1",
+        "status": "ok" if not problems else "invalid",
+        "requested": len(plan),
+        "returned": len(actual),
+        "matched": sum(1 for item in results if item["status"] == "match"),
+        "diagnostic": sum(1 for item in results
+                          if item["status"] == "divergent_diagnostic"),
+        "divergent": sum(1 for item in results
+                         if item["status"] == "divergent"),
+        "invalid": sum(1 for item in results if item["status"] == "invalid"),
+        "problems": problems[:100],
+        "problems_count": len(problems),
+    }
+    return results, validation
+
+
+def compare_checkpoints(graph: dict, replay: dict, frame_dir: Path,
+                        out_dir: Path, request: dict | None = None
+                        ) -> list[dict]:
+    """Backward-compatible wrapper around checkpoint reconciliation."""
+    if request is None:
+        request = {"checkpoints": replay.get("_checkpoint_plan") or []}
+    return reconcile_checkpoints(graph, request, replay, frame_dir,
+                                 out_dir)[0]
 
 def binding_audit(replay: dict) -> dict:
     """Verify each shader's declared texture unit resolves to its texture.
@@ -287,8 +419,24 @@ def final_comparison(frame_dir: Path, out_dir: Path,
 
 def first_divergence(graph: dict, checkpoints: list[dict],
                      final: dict, *, binding_audit: dict | None = None,
-                     fault: dict | None = None) -> dict:
+                     fault: dict | None = None,
+                     checkpoint_validation: dict | None = None) -> dict:
     """Earliest confirmed semantic, intermediate or final divergence."""
+    validation = checkpoint_validation or {}
+    if validation.get("status") == "invalid":
+        return {
+            "schema": "gfx-first-divergence/v1",
+            "kind": "invalid_checkpoint",
+            "event": None,
+            "statistics": None,
+            "semantic": None,
+            "intermediate": None,
+            "reason": (
+                "required checkpoint evidence is missing or unusable; "
+                "this is an instrumentation failure, not a Metal difference"),
+            "better_checkpoint_validation": validation,
+            "fault": fault,
+        }
     audit = binding_audit or {}
     first_semantic = (audit.get("mismatches") or [None])[0]
     divergent = [
@@ -381,17 +529,97 @@ def first_divergence(graph: dict, checkpoints: list[dict],
     }
 
 
+def state_coverage(frame_dir: Path) -> dict:
+    """Classify captured render state that the Metal host implements.
+
+    The binding audit establishes shader-resource equivalence only.  GL state
+    that the replay intentionally does not implement is reported here rather
+    than folded into an exact semantic verdict.
+    """
+    unsupported: set[str] = set()
+    try:
+        trace = m6_frame.load_trace(Path(frame_dir))
+    except m6_frame.FrameError as exc:
+        return {
+            "schema": "gfx-state-coverage/v1",
+            "status": "invalid",
+            "supported": [],
+            "unsupported": [],
+            "reason": str(exc),
+        }
+    for event in trace.get("_events") or []:
+        state = event.get("state") or {}
+        if not isinstance(state, dict):
+            continue
+        if state.get("dither") is True:
+            unsupported.add("gl_dither")
+        if state.get("multisample") is True:
+            unsupported.add("multisample")
+    return {
+        "schema": "gfx-state-coverage/v1",
+        "status": "partial" if unsupported else "complete",
+        "supported": ["shader_bindings", "render_targets", "samplers",
+                      "viewport", "scissor", "blend", "depth", "color_mask"],
+        "unsupported": sorted(unsupported),
+        "scope": "captured draw state observed by the replay host",
+    }
+
+
+def classify_replay(*, execution_ok: bool, coverage: str, semantic: str,
+                    pixels: str, checkpoints: list[dict],
+                    checkpoint_validation: dict, faults: dict | None,
+                    state_cov: str = "complete"
+                    ) -> tuple[str, dict]:
+    """Pure qualification classification used by replay() and its tests."""
+    intermediate_divergent = any(
+        item.get("status") == "divergent" and item.get("authoritative")
+        for item in checkpoints)
+    checkpoint_invalid = checkpoint_validation.get("status") != "ok"
+    fault_injection = bool(faults)
+    qualified = bool(
+        execution_ok and coverage == "complete" and state_cov == "complete"
+        and semantic == "match" and pixels == "match"
+        and not intermediate_divergent and not checkpoint_invalid
+        and not fault_injection
+    )
+    if not execution_ok or coverage == "invalid" or checkpoint_invalid:
+        status = "invalid"
+    elif semantic == "divergent":
+        status = "semantic_divergence"
+    elif pixels == "divergent" or intermediate_divergent:
+        status = ("confirmed_rendering_difference" if coverage == "complete"
+                  else "partial_rendering_difference")
+    elif coverage == "partial" or state_cov != "complete":
+        status = "partial"
+    else:
+        status = "qualified"
+    return status, {
+        "execution": "ok" if execution_ok else "failed",
+        "coverage": coverage,
+        "pixels": pixels,
+        "semantic": semantic,
+        "semantic_scope": "binding_audit",
+        "state_coverage": state_cov,
+        "checkpoints": "invalid" if checkpoint_invalid else "ok",
+        "qualified": qualified,
+        "intermediate_divergence": intermediate_divergent,
+        "fault_injection": fault_injection,
+    }
+
+
 def qualification_exit_code(report: dict) -> int:
     """Stable CLI policy for replay qualification.
 
-    0  qualified (execution, coverage, semantics and pixels all pass)
+    0  qualified (execution, coverage, semantics, checkpoints and pixels pass)
     2  executed but not qualified (partial coverage/divergence)
     3  deliberate fault injection executed; qualification is expected to fail
-    1  invalid execution or unusable report
+    1  invalid execution, invalid checkpoint evidence or unusable report
     """
     outcome = report.get("outcome") or {}
     execution = outcome.get("execution")
     if execution != "ok":
+        return 1
+    if outcome.get("checkpoints") == "invalid":
         return 1
     if outcome.get("qualified"):
         return 0
@@ -441,9 +669,12 @@ def main(argv: list[str] | None = None) -> int:
         "checkpoints": [
             {"event": item["event"], "target": item["target"],
              "status": item["status"],
-             "mismatched_pixels": item["statistics"]["mismatched_pixels"]}
+             "mismatched_pixels": (item.get("statistics") or {}).get(
+                 "mismatched_pixels")}
             for item in report.get("checkpoints") or []
         ],
+        "checkpoint_validation": report.get("checkpoint_validation"),
+        "state_coverage": report.get("state_coverage"),
         "binding_audit": {
             "ok": (report.get("binding_audit") or {}).get("ok"),
             "mismatched": (report.get("binding_audit") or {}).get("mismatched_bindings"),
@@ -516,12 +747,14 @@ def replay(
         out_dir / "replay-provenance.jsonl")
     replay_result["_checkpoint_plan"] = request.get("checkpoints") or []
     evaluation = gfx_frame_graph.evaluate_replay(graph, replay_result)
-    checkpoints = compare_checkpoints(graph, replay_result, frame_dir, out_dir)
+    checkpoints, checkpoint_validation = reconcile_checkpoints(
+        graph, request, replay_result, frame_dir, out_dir)
     audit = binding_audit(replay_result)
+    states = state_coverage(frame_dir)
     final = final_comparison(frame_dir, out_dir, policy)
     divergence = first_divergence(
         graph, checkpoints, final, binding_audit=audit,
-        fault=faults or None)
+        fault=faults or None, checkpoint_validation=checkpoint_validation)
     execution_ok = (
         replay_result.get("status") == "ok"
         and replay_result.get("encoded") == replay_result.get("events")
@@ -534,44 +767,24 @@ def replay(
         coverage = "partial"
     semantic = "match" if audit.get("ok") else "divergent"
     pixels = final.get("status", "invalid")
-    intermediate_divergent = any(
-        item.get("status") == "divergent" and item.get("authoritative")
-        for item in checkpoints)
-    qualified = bool(
-        execution_ok and coverage == "complete" and semantic == "match"
-        and pixels == "match" and not intermediate_divergent
-        and not faults
-    )
-    if not execution_ok or coverage == "invalid":
-        status = "invalid"
-    elif semantic == "divergent":
-        status = "semantic_divergence"
-    elif pixels == "divergent" or intermediate_divergent:
-        status = ("confirmed_rendering_difference" if coverage == "complete"
-                  else "partial_rendering_difference")
-    elif coverage == "partial":
-        status = "partial"
-    else:
-        status = "qualified"
+    status, outcome = classify_replay(
+        execution_ok=execution_ok, coverage=coverage, semantic=semantic,
+        pixels=pixels, checkpoints=checkpoints,
+        checkpoint_validation=checkpoint_validation, faults=faults,
+        state_cov=str(states.get("status") or "invalid"))
     report = {
         "schema": SCHEMA,
         "frame_dir": str(frame_dir),
         "out_dir": str(out_dir),
         "status": status,
-        "outcome": {
-            "execution": "ok" if execution_ok else "failed",
-            "coverage": coverage,
-            "pixels": pixels,
-            "semantic": semantic,
-            "qualified": qualified,
-            "intermediate_divergence": intermediate_divergent,
-            "fault_injection": bool(faults),
-        },
+        "outcome": outcome,
         "faults": faults,
         "graph": graph,
         "evaluation": evaluation,
         "checkpoints": checkpoints,
+        "checkpoint_validation": checkpoint_validation,
         "binding_audit": audit,
+        "state_coverage": states,
         "final": final,
         "first_divergence": divergence,
         "replay": {

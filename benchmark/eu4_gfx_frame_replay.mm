@@ -43,6 +43,7 @@ static NSMutableArray *g_provenance;
 static NSMutableDictionary *g_provenance_seen;
 static NSDictionary *g_checkpoints_by_event;
 static NSMutableArray *g_checkpoint_results;
+static NSMutableArray *g_transfer_records;
 static NSUInteger g_current_event;
 /* Metal's vertex buffer table is shared with vertex-stage constant buffers, so
    vertex streams start above the translated uniform block indices. */
@@ -2086,6 +2087,10 @@ static BOOL encode_copy_event(NSDictionary *event, NSString *frameDir,
         }
         return NO;
     }
+    NSInteger source_generation = number(event[@"source_framebuffer"], 0) == 0
+        ? -1 : number(source_info[@"generation"], -1);
+    NSInteger destination_generation_before =
+        number(destination_info[@"generation"], 0);
     id<MTLComputePipelineState> pipeline = copy_pipeline(error);
     if (pipeline == nil) {
         return NO;
@@ -2124,6 +2129,22 @@ static BOOL encode_copy_event(NSDictionary *event, NSString *frameDir,
     }
     destination_info[@"generation"] =
         @(number(destination_info[@"generation"], 0) + 1);
+    NSInteger destination_generation_after =
+        number(destination_info[@"generation"], 0);
+    [g_transfer_records addObject:@{
+        @"event": @(g_current_event),
+        @"kind": event[@"kind"] ?: @"copy",
+        @"operation": operation,
+        @"source": number(event[@"source_framebuffer"], 0) == 0
+            ? @"0" : source_name,
+        @"source_kind": number(event[@"source_framebuffer"], 0) == 0
+            ? @"metal_default" : @"metal_render_target",
+        @"destination": destination,
+        @"source_generation": @(source_generation),
+        @"destination_generation_before": @(destination_generation_before),
+        @"destination_generation_after": @(destination_generation_after),
+        @"status": @"ok",
+    }];
     return YES;
 }
 
@@ -2475,6 +2496,7 @@ int main(int argc, const char *argv[]) {
         g_provenance = [NSMutableArray array];
         g_provenance_seen = [NSMutableDictionary dictionary];
         g_checkpoint_results = [NSMutableArray array];
+        g_transfer_records = [NSMutableArray array];
 
         NSError *error = nil;
         NSDictionary *manifest = read_json(
@@ -2967,6 +2989,7 @@ int main(int argc, const char *argv[]) {
         if (g_checkpoints_by_event != nil) {
             result[@"checkpoints"] = g_checkpoint_results;
         }
+        result[@"transfers"] = g_transfer_records;
         result[@"readback"] = @(readback_ok);
         result[@"status"] = readback_ok && failed == 0 ? @"ok" : @"failed";
         NSData *json = [NSJSONSerialization dataWithJSONObject:result

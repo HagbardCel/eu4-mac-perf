@@ -556,6 +556,153 @@ class ReplayContractTests(unittest.TestCase):
         self.assertEqual(audit["mismatches"][0]["engine_unit"], 6)
 
 
+def copy_provenance_graph(*, source="tex:A", destination="tex:B",
+                          include_source_sampler=False,
+                          source_kind="draw", source_origin="renderer_generated",
+                          source_event=1, copy_event=2):
+    source_consumers = [{
+        "event": copy_event, "unit": None, "sampler": "resolve",
+        "operation": "glCopyTexSubImage2D", "destination": destination,
+        "source_framebuffer": 0 if source == "fb:0" else 0,
+        "source_attachment": 0,
+    }]
+    if include_source_sampler:
+        source_consumers.append({"event": 3, "unit": 1, "sampler": "tex1"})
+    resources = {
+        source: {
+            "origin": source_origin,
+            "consumers": source_consumers,
+            "consumer_generations": [
+                {"event": row["event"],
+                 "required_generation": 1 if source != "fb:0" else 0}
+                for row in source_consumers
+            ],
+            "producers": [{"event": source_event, "kind": source_kind}],
+        },
+        destination: {
+            "origin": "renderer_generated",
+            "consumers": [{"event": 3, "unit": 0, "sampler": "tex0"}],
+            "consumer_generations": [{"event": 3, "required_generation": 1}],
+            "producers": [{"event": copy_event, "kind": "resolve"}],
+        },
+    }
+    sampled = [destination]
+    if include_source_sampler:
+        sampled.append(source)
+    return {
+        "status": "complete", "resources": resources,
+        "renderer_generated_sampled": sampled,
+        "events": [], "boundary": {},
+    }
+
+
+def copy_provenance_replay(*, graph, source="A", destination="B",
+                           source_generation=1, transfer=True,
+                           seed_source=False):
+    samples = [{
+        "event": 3, "texture": destination.split(":")[-1],
+        "sampler": "tex0", "unit": 0, "source": "metal_render_target",
+        "generation": 1, "expected_texture": destination.split(":")[-1],
+        "selected_texture": destination.split(":")[-1],
+    }]
+    if seed_source:
+        samples.append({
+            "event": 1, "texture": source, "sampler": "tex0", "unit": 0,
+            "source": "external_capture", "generation": -1,
+            "expected_texture": source, "selected_texture": source,
+        })
+    transfers = []
+    if transfer:
+        transfers.append({
+            "event": 2, "kind": "resolve",
+            "operation": "glCopyTexSubImage2D",
+            "source": "0" if source == "fb:0" else source,
+            "destination": destination.split(":")[-1],
+            "source_generation": source_generation,
+            "source_kind": "metal_default" if source == "fb:0"
+            else "metal_render_target",
+            "destination_generation_before": 0,
+            "destination_generation_after": 1,
+            "status": "ok",
+        })
+    return {
+        "status": "ok", "events": 4, "encoded": 4, "failed": 0,
+        "command_status": 4, "readback": True,
+        "provenance": {
+            "bindings": len(samples), "metal_render_target_bindings": 1,
+            "external_capture_bindings": 1 if seed_source else 0,
+            "render_target_textures": [destination.split(":")[-1]],
+            "external_textures": [source] if seed_source else [],
+            "first_sample_before_any_write": [],
+        },
+        "_provenance_samples": samples,
+        "transfers": transfers,
+    }
+
+
+class CopyProvenanceTests(unittest.TestCase):
+    def test_copy_only_source_does_not_require_sampler_binding(self):
+        graph = copy_provenance_graph()
+        value = gfx_frame_graph.evaluate_replay(
+            graph, copy_provenance_replay(graph=graph))
+        self.assertEqual(value["status"], "complete", value["reasons"])
+        self.assertEqual(value["transfer_validation"]["problems_count"], 0)
+
+    def test_source_and_destination_both_sampled(self):
+        graph = copy_provenance_graph(include_source_sampler=True)
+        replay = copy_provenance_replay(graph=graph)
+        replay["_provenance_samples"].append({
+            "event": 3, "texture": "A", "sampler": "tex1", "unit": 1,
+            "source": "metal_render_target", "generation": 1,
+            "expected_texture": "A", "selected_texture": "A",
+        })
+        value = gfx_frame_graph.evaluate_replay(graph, replay)
+        self.assertEqual(value["status"], "complete", value["reasons"])
+
+    def test_stale_source_generation_is_invalid(self):
+        graph = copy_provenance_graph()
+        value = gfx_frame_graph.evaluate_replay(
+            graph, copy_provenance_replay(graph=graph, source_generation=0))
+        self.assertEqual(value["status"], "invalid")
+        self.assertIn("stale_source_generation",
+                      [row["kind"] for row in
+                       value["transfer_validation"]["problems"]])
+
+    def test_wrong_source_resource_is_invalid(self):
+        graph = copy_provenance_graph()
+        value = gfx_frame_graph.evaluate_replay(
+            graph, copy_provenance_replay(graph=graph, source="C"))
+        self.assertEqual(value["status"], "invalid")
+        self.assertIn("wrong_source",
+                      [row["kind"] for row in
+                       value["transfer_validation"]["problems"]])
+
+    def test_missing_transfer_is_invalid(self):
+        graph = copy_provenance_graph()
+        value = gfx_frame_graph.evaluate_replay(
+            graph, copy_provenance_replay(graph=graph, transfer=False))
+        self.assertEqual(value["status"], "invalid")
+        self.assertIn("missing_transfer",
+                      [row["kind"] for row in
+                       value["transfer_validation"]["problems"]])
+
+    def test_default_framebuffer_copy_is_valid(self):
+        graph = copy_provenance_graph(source="fb:0", source_origin="generated")
+        graph["resources"]["fb:0"]["consumer_generations"] = [
+            {"event": 2, "required_generation": 0}]
+        value = gfx_frame_graph.evaluate_replay(
+            graph, copy_provenance_replay(graph=graph, source="fb:0",
+                                          source_generation=-1))
+        self.assertEqual(value["status"], "complete", value["reasons"])
+
+    def test_captured_source_substitution_is_invalid(self):
+        graph = copy_provenance_graph()
+        replay = copy_provenance_replay(graph=graph)
+        replay["transfers"][0]["source_kind"] = "external_capture"
+        value = gfx_frame_graph.evaluate_replay(graph, replay)
+        self.assertEqual(value["status"], "invalid")
+
+
 class ExitCodePolicyTests(unittest.TestCase):
     def outcome(self, **overrides):
         value = {"execution": "ok", "coverage": "complete",

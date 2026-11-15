@@ -3,16 +3,68 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from automation import (gfx_align, gfx_artifacts, gfx_diagnostics, gfx_display,
-                        gfx_dual_run, gfx_launch, gfx_scenario)  # noqa: E402
+                        gfx_dual_run, gfx_launch, gfx_scenario,
+                        gfx_session)  # noqa: E402
+
+_REAL_PROCESS_INFO = gfx_session.process_info
+_MODULE_PATCHES = []
+
+
+def _portable_process_info(pid: int):
+    """Test-only /proc identity reader; production remains platform-gated."""
+    if not sys.platform.startswith("linux"):
+        return _REAL_PROCESS_INFO(pid)
+    if type(pid) is not int or pid <= 0:
+        return None
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        close = stat.rfind(")")
+        fields = stat[close + 2:].split()
+        executable = Path(f"/proc/{pid}/exe").resolve()
+    except OSError:
+        return None
+    ticks = int(fields[19])
+    hz = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+    return {
+        "pid": pid, "ppid": int(fields[1]), "pgid": int(fields[2]),
+        "uid": os.getuid() if hasattr(os, "getuid") else 0,
+        "start_seconds": ticks // max(1, hz),
+        "start_microseconds": ticks % max(1, hz),
+        "executable": str(executable),
+        "comm": Path(f"/proc/{pid}/comm").read_text().strip(),
+    }
+
+
+def setUpModule():
+    if not sys.platform.startswith("linux"):
+        return
+    identity = {
+        "executable_sha256": SHA,
+        "executable": "/tmp/eu4-fixture",
+    }
+    _MODULE_PATCHES.append(mock.patch.object(
+        gfx_dual_run.base_benchmark, "gog_identity", return_value=identity))
+    _MODULE_PATCHES.append(mock.patch.object(
+        gfx_session, "process_info", _portable_process_info))
+    for patch in _MODULE_PATCHES:
+        patch.start()
+
+
+def tearDownModule():
+    for patch in reversed(_MODULE_PATCHES):
+        patch.stop()
+    _MODULE_PATCHES.clear()
 
 try:
     import numpy as np

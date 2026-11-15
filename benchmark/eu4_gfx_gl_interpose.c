@@ -245,25 +245,42 @@ static void eu4_gfx_interposed_copy_tex_sub_image(GLenum target, GLint level,
            zero: a non-default resolve may read another color attachment. */
         if (read_buffer >= 0x8CE0 && read_buffer <= 0x8CEF) {
             source_attachment = read_buffer;
-            GLint previous = 0;
-            glGetIntegerv(0x8CAA, &previous);
-            glBindFramebuffer(0x8CA8, (GLuint)read_fbo);
+            /* The read framebuffer is already bound; query it directly so no
+               framebuffer binding is changed. */
             glGetFramebufferAttachmentParameteriv(
                 0x8CA8, (GLenum)source_attachment, 0x8CD0, &color_type);
             glGetFramebufferAttachmentParameteriv(
                 0x8CA8, (GLenum)source_attachment, 0x8CD1, &color_name);
             if (color_type == 0x1702) { /* GL_TEXTURE */
+                GLint cube_face = 0, layer = 0;
                 glGetFramebufferAttachmentParameteriv(
                     0x8CA8, (GLenum)source_attachment, 0x8CD2, &color_level);
-                glGetTexLevelParameteriv(GL_TEXTURE_2D, color_level,
-                                         GL_TEXTURE_WIDTH, &source_width);
-                glGetTexLevelParameteriv(GL_TEXTURE_2D, color_level,
-                                         GL_TEXTURE_HEIGHT, &source_height);
-                glGetTexLevelParameteriv(GL_TEXTURE_2D, color_level,
-                                         GL_TEXTURE_INTERNAL_FORMAT,
-                                         &source_format);
+                /* Only plain 2D texture attachments are supported.  A cube
+                   face or layered attachment cannot be inspected through the
+                   currently bound GL_TEXTURE_2D without guessing. */
+                glGetFramebufferAttachmentParameteriv(
+                    0x8CA8, (GLenum)source_attachment, 0x8CD3, &cube_face);
+                glGetFramebufferAttachmentParameteriv(
+                    0x8CA8, (GLenum)source_attachment, 0x8CD4, &layer);
+                if (cube_face == 0 && layer == 0 && color_name != 0) {
+                    GLint previous_active = 0;
+                    GLint previous_texture = 0;
+                    glGetIntegerv(0x84E0, &previous_active); /* ACTIVE_TEXTURE */
+                    glGetIntegerv(0x8069, &previous_texture); /* BINDING_2D */
+                    glBindTexture(GL_TEXTURE_2D, (GLuint)color_name);
+                    glGetTexLevelParameteriv(GL_TEXTURE_2D, color_level,
+                                             GL_TEXTURE_WIDTH, &source_width);
+                    glGetTexLevelParameteriv(GL_TEXTURE_2D, color_level,
+                                             GL_TEXTURE_HEIGHT, &source_height);
+                    glGetTexLevelParameteriv(GL_TEXTURE_2D, color_level,
+                                             GL_TEXTURE_INTERNAL_FORMAT,
+                                             &source_format);
+                    glBindTexture(GL_TEXTURE_2D, (GLuint)previous_texture);
+                    glActiveTexture((GLenum)previous_active);
+                } else {
+                    color_type = 0; /* unsupported attachment variant */
+                }
             }
-            glBindFramebuffer(0x8CA8, (GLuint)previous);
         }
     } else {
         uint32_t extent_width = 0, extent_height = 0;

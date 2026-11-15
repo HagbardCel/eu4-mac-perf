@@ -63,11 +63,15 @@ framebuffer (`GL_BACK`, 1728x1117) into texture 442 at event 271; events 273 and
 The replay executes the copy faithfully: GL source BGRA→RGBA equals the
 captured GL 442 exactly, and Metal 442 equals the channel-swapped Metal default
 source exactly. The first divergence is the **copy source** (target `0`, event
-271, producer draw 270, program 346), where GL dithering (`dither=true`) makes
-the default framebuffer differ from Metal by mostly one LSB. The copy-bearing
-frame therefore reports `coverage=complete`, `semantic=match`,
-`pixels=divergent`, `qualified=false` (1,792,860 / 1,930,176 final pixels
-differ, max channel error 24). The canonical no-copy frame remains pixel-exact
+271, producer draw 270, program 346). The captured draws record `dither=true`
+and `multisample=true`, which the Metal host does not implement; the source
+difference is dominated by 1–2 LSB but includes 169,367 pixels differing by
+more than 2 (max 105), so dithering is a hypothesis, not an established
+exclusive cause. The copy-bearing
+frame therefore reports `coverage=complete`, `semantic=match` (binding-audit
+scope), `state_coverage=partial` (`gl_dither`, `multisample` unsupported),
+`pixels=divergent`, `qualified=false` (1,792,005 / 1,930,176 final pixels
+differ, max channel error 23). The canonical no-copy frame remains pixel-exact
 (0 differences); scene 79 remains the four-alpha-LSB case.
 
 One longer background OpenGL capture now reaches the title scene and completes
@@ -77,6 +81,25 @@ clean termination and restored settings. A single sampled frontmost process was
 the existing 5/5 OpenGL and 5/5 Metal short-run placement/focus qualification
 remains the supported evidence. `strategy-b-metrics.json` records these
 categories separately and is reconstructed from the session records.
+
+Checkpoint evidence is now reconciled against the request: missing, duplicate,
+unexpected, failed or identity-mismatched checkpoints are instrumentation
+failures (CLI exit 1), never a qualified match. Copy-only resources are
+validated from ordered transfer records rather than invented sampler bindings.
+The semantic verdict is explicitly `semantic_scope=binding_audit`; unsupported
+captured state (`gl_dither`, `multisample`) makes `state_coverage=partial` and
+prevents full qualification. Non-default framebuffer source metadata is read
+from the selected attachment under saved/restored binding state, with
+unsupported attachment types failing closed.
+
+The portable Linux workflow's unit-test dependencies were made deterministic
+(mocked placement libraries, pinned identity fixtures, test-only `/proc`
+identity on Linux) without changing production platform restrictions. The
+exact GitHub command was run in an amd64 Ubuntu 24.04 VM with Python 3.14 and
+Node 26; the previously failing modules pass. Scene-75's difference is
+characterized quantitatively in `scene75-difference.json`: the first observed
+difference is the default framebuffer before the copy, with dithering a
+hypothesis rather than an exclusive established cause.
 
 ## Differential debugging infrastructure (2026-11-14, stacked PRs 1-5)
 

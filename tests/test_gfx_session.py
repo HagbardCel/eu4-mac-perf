@@ -15,13 +15,47 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from automation import gfx_session, launch_ledger  # noqa: E402
 
+_REAL_PROCESS_INFO = gfx_session.process_info
+
 CHILD = [sys.executable, "-c", "import time; time.sleep(60)"]
+
+
+def portable_process_info(pid: int) -> dict | None:
+    """Test-only /proc reader for the ownership-policy tests on Linux.
+
+    Production still uses libproc and continues to fail closed on unsupported
+    platforms.  These tests exercise ownership policy, not the OS reader.
+    """
+    if not sys.platform.startswith("linux"):
+        return _REAL_PROCESS_INFO(pid)
+    if type(pid) is not int or pid <= 0:
+        return None
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        close = stat.rfind(")")
+        fields = stat[close + 2:].split()
+        executable = os.readlink(f"/proc/{pid}/exe")
+    except OSError:
+        return None
+    ticks = int(fields[19])
+    hz = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+    return {
+        "pid": pid,
+        "ppid": int(fields[1]),
+        "pgid": int(fields[2]),
+        "uid": os.getuid() if hasattr(os, "getuid") else 0,
+        "start_seconds": ticks // max(1, hz),
+        "start_microseconds": ticks % max(1, hz),
+        "executable": executable,
+        "comm": Path(f"/proc/{pid}/comm").read_text().strip(),
+    }
 
 
 def spawn_child() -> subprocess.Popen:
@@ -36,6 +70,9 @@ class SessionTests(unittest.TestCase):
         self._old_sessions = os.environ.get("EU4_GFX_SESSION_ROOT")
         os.environ["EU4_GFX_SESSION_ROOT"] = str(self.root / "registry")
         self.children: list[subprocess.Popen] = []
+        self._process_info_patch = mock.patch.object(
+            gfx_session, "process_info", portable_process_info)
+        self._process_info_patch.start()
 
     def tearDown(self):
         for child in self.children:
@@ -46,6 +83,7 @@ class SessionTests(unittest.TestCase):
             os.environ.pop("EU4_GFX_SESSION_ROOT", None)
         else:
             os.environ["EU4_GFX_SESSION_ROOT"] = self._old_sessions
+        self._process_info_patch.stop()
         self._temporary.cleanup()
 
     def spawn(self) -> subprocess.Popen:
