@@ -40,13 +40,16 @@ def fake_interpreter(directory: Path, *, numpy: bool = False,
 class ResolutionTests(unittest.TestCase):
     def test_resolution_is_absolute_and_reports_the_current_interpreter(self):
         value = python_runtime.resolve(environ={})
-        self.assertTrue(value["ok"], value)
         self.assertTrue(value["absolute"])
         self.assertTrue(os.path.isabs(value["executable"]))
         self.assertEqual(value["source"], "current")
         self.assertEqual(Path(value["executable"]).resolve(),
                          Path(sys.executable).resolve())
         self.assertIn("numpy", value["dependencies"])
+        expected = importlib.util.find_spec("numpy") is not None
+        self.assertEqual(value["ok"], expected, value)
+        if not expected:
+            self.assertIn("cannot import numpy", value["reason"])
 
     def test_explicit_path_is_authoritative_and_never_falls_back(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -107,6 +110,11 @@ class ResolutionTests(unittest.TestCase):
             [sys.executable, "-m", "automation.python_runtime", "resolve",
              "--print-path"],
             cwd=ROOT, capture_output=True, text=True, check=False)
+        if importlib.util.find_spec("numpy") is None:
+            # The resolver fails closed without the comparison dependency.
+            self.assertEqual(completed.returncode, 1)
+            self.assertIn("cannot import numpy", completed.stderr)
+            return
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertTrue(os.path.isabs(completed.stdout.strip()))
 

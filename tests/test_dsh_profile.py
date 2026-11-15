@@ -198,6 +198,9 @@ class ProvisionAndRegistrationTests(unittest.TestCase):
         self.assertIn("npm test --prefix dsh/eu4-tools-plugin", text)
 
 
+@unittest.skipUnless(
+    importlib.util.find_spec("numpy") is not None,
+    "the launcher requires the diagnostic NumPy interpreter")
 class LauncherEnvironmentTests(unittest.TestCase):
     """The launchers must not reuse the bridge's candidate-workspace variable.
 
