@@ -4,6 +4,7 @@
 #import "eu4_gfx_init.h"
 #import "eu4_gfx_shader.h"
 #import "eu4_gfx_texture.h"
+#import "eu4_gfx_perf.h"
 
 #import <Metal/Metal.h>
 #import <string.h>
@@ -298,6 +299,7 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw_encode_into(
     if (encoder == nil) {
         return refuse(EU4_GFX_SIMPLE_DRAW_ENCODE, reason, "command encoding failed");
     }
+    eu4_gfx_perf_render_encoder_created();
     [encoder setRenderPipelineState:pipeline];
     /* The admitted default raster snapshot does not cull in the reconstructed
        pass (the full-screen strip has one triangle of each winding). State is
@@ -396,6 +398,7 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw_with_state(
     if (command == nil) {
         return refuse(EU4_GFX_SIMPLE_DRAW_ENCODE, reason, "command buffer creation failed");
     }
+    eu4_gfx_perf_command_buffer_created();
     eu4_gfx_simple_draw_status encoded = eu4_gfx_simple_draw_encode_into(
         immediate_context, count, first, inputs, (__bridge void *)command, reason, state);
     if (encoded != EU4_GFX_SIMPLE_DRAW_OK) {
@@ -407,7 +410,9 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw_with_state(
        must not wait after every draw. Resources referenced by the command
        buffer are retained by Metal until completion. */
     [command commit];
+    eu4_gfx_perf_command_buffer_committed();
     [command waitUntilCompleted];
+    eu4_gfx_perf_completion_wait();
     if (command.status != MTLCommandBufferStatusCompleted || command.error != nil) {
         return refuse(EU4_GFX_SIMPLE_DRAW_ENCODE, reason,
                       "command buffer did not complete");

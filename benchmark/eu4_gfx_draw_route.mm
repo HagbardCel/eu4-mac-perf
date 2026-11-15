@@ -8,6 +8,7 @@
 #import "eu4_gfx_checkpoint.h"
 #import "eu4_gfx_init.h"
 #import "eu4_gfx_logical_capture.h"
+#import "eu4_gfx_perf.h"
 #import "eu4_metal_events.h"
 
 #import <Metal/Metal.h>
@@ -203,11 +204,14 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
            sampling shadow for it is stale after this submission. */
         eu4_gfx_note_render_target_write(backend.currentTargetHeader);
     }
+    uint64_t encode_start = eu4_gfx_perf_encode_begin();
     id<MTLCommandBuffer> command = [backend.queue commandBuffer];
     if (command == nil) {
+        eu4_gfx_perf_encode_end(encode_start);
         return refuse(EU4_GFX_DRAW_ROUTE_FAILED, diagnostic, capacity,
                       "backend queue refused a command buffer");
     }
+    eu4_gfx_perf_command_buffer_created();
     void *current_shader = load_ptr(master, 0x70);
     if (current_shader == NULL) {
         return refuse(EU4_GFX_DRAW_ROUTE_UNSUPPORTED, diagnostic, capacity,
@@ -308,7 +312,22 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
                           text[0] != 0 ? text : "draw encoder refused the draw");
         }
     }
+    eu4_gfx_perf_encode_end(encode_start);
+    if (eu4_gfx_perf_enabled()) {
+        [command addCompletedHandler:^(id<MTLCommandBuffer> completed) {
+            double start = completed.GPUStartTime;
+            double end = completed.GPUEndTime;
+            if (start > 0.0 && end > start) {
+                eu4_gfx_perf_gpu_execution((uint64_t)((end - start) * 1e9));
+            }
+        }];
+    }
     [command commit];
+    eu4_gfx_perf_command_buffer_committed();
+    eu4_gfx_perf_draw_encoded(
+        generic_ready && !legacy_preferred
+            ? 0
+            : (identity != NULL && strstr(identity, "sprite") != NULL ? 2 : 1));
     /* pendingGameCommand now owns the last game submission. It is still one
        in-order queue: clear, every draw and the present blit are serialized by
        Metal. Present drains this last command; completion of the last command

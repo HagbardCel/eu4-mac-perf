@@ -2,6 +2,7 @@
 
 #import "eu4_gfx_buffers.h"
 #import "eu4_gfx_init.h"
+#import "eu4_gfx_perf.h"
 #import "eu4_metal_events.h"
 
 #import <Metal/Metal.h>
@@ -1029,6 +1030,7 @@ int eu4_gfx_prepare_sampled_textures(void *command_buffer,
             return 0;
         }
         __atomic_add_fetch(&g_sampling_conversion_count, 1, __ATOMIC_RELAXED);
+        eu4_gfx_perf_sampling_conversion();
         backend.sampledRenderTargetPendingTokens[key] = @(token);
         backend.sampledRenderTargetPendingGenerations[key] = generation;
         __weak EU4GfxBackend *prepared_backend = backend;

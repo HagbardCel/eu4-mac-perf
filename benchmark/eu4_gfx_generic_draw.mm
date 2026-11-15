@@ -6,6 +6,7 @@
 #import "eu4_gfx_init.h"
 #import "eu4_gfx_shader.h"
 #import "eu4_gfx_texture.h"
+#import "eu4_gfx_perf.h"
 #import "eu4_metal_events.h"
 
 #import <Metal/Metal.h>
@@ -1002,6 +1003,7 @@ static id<MTLRenderPipelineState> pipeline_for(EU4GfxPipelineKey *unused,
     id<MTLRenderPipelineState> pipeline = cache[key];
     if (pipeline != nil) {
         pipeline_hits++;
+        eu4_gfx_perf_pipeline(1);
         if (getenv("EU4_GFX_PIPELINE_STATS") != NULL) {
             char body[256];
             int length = snprintf(
@@ -1018,6 +1020,7 @@ static id<MTLRenderPipelineState> pipeline_for(EU4GfxPipelineKey *unused,
         return pipeline;
     }
     pipeline_misses++;
+    eu4_gfx_perf_pipeline(0);
     MTLRenderPipelineDescriptor *pipeline_descriptor = [MTLRenderPipelineDescriptor new];
     pipeline_descriptor.vertexFunction = vertex;
     pipeline_descriptor.fragmentFunction = fragment;
@@ -1669,6 +1672,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
         fail(reason, reason_capacity, "generic render encoder failed");
         return 0;
     }
+    eu4_gfx_perf_render_encoder_created();
     [encoder setRenderPipelineState:pipeline];
     /* The engine viewport is in logical pixels; the backbuffer can be the
        physical drawable (HiDPI). Scale exactly like the shared encoders. */
@@ -2088,6 +2092,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
         }
         /* Preserve the engine's 16-bit indices and let Metal apply the signed
            base vertex exactly like glDrawElementsBaseVertex. */
+        eu4_gfx_perf_index_temp_alloc(needed);
         id<MTLBuffer> index_buffer =
             [device newBufferWithBytes:indices
                                 length:(NSUInteger)needed

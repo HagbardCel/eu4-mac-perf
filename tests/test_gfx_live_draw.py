@@ -20,6 +20,7 @@ HOST = ROOT / "benchmark" / ".build" / "gfx_live_draw_host"
 SOURCES = [
     ROOT / "benchmark" / "eu4_gfx_shader.mm",
     ROOT / "benchmark" / "eu4_gfx_buffers.mm",
+    ROOT / "benchmark" / "eu4_gfx_perf.mm",
     ROOT / "benchmark" / "eu4_gfx_texture.mm",
     ROOT / "benchmark" / "eu4_gfx_init.mm",
     ROOT / "benchmark" / "eu4_gfx_simple_draw.mm",

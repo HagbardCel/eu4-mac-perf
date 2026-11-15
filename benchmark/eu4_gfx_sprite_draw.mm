@@ -4,6 +4,7 @@
 #import "eu4_gfx_init.h"
 #import "eu4_gfx_shader.h"
 #import "eu4_gfx_texture.h"
+#import "eu4_gfx_perf.h"
 
 #import <Metal/Metal.h>
 #import <string.h>
@@ -296,6 +297,7 @@ eu4_gfx_sprite_draw_status eu4_gfx_sprite_draw_encode_into(
     if (encoder == nil) {
         return refuse(EU4_GFX_SPRITE_DRAW_ENCODE, reason, "command encoding failed");
     }
+    eu4_gfx_perf_render_encoder_created();
     [encoder setRenderPipelineState:pipeline];
     /* The admitted raster snapshot is the backend default; the reconstructed
        pass has no depth attachment. The quad's two strip triangles carry the

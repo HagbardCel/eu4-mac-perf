@@ -9,6 +9,7 @@
 typedef int (*eu4_gfx_cache_loader)(const char *path);
 #import "eu4_gfx_logical_capture.h"
 #import "eu4_gfx_checkpoint.h"
+#import "eu4_gfx_perf.h"
 #import "eu4_metal_events.h"
 
 #import <Metal/Metal.h>
@@ -19,6 +20,31 @@ typedef int (*eu4_gfx_cache_loader)(const char *path);
 #import <stdio.h>
 #import <string.h>
 #import <unistd.h>
+
+/* Instrumented submission helpers: one hook per command buffer, commit and
+ * explicit completion wait. They are used by the lifecycle/clear/resolve/present
+ * paths, which are the only places this module submits work. */
+static id<MTLCommandBuffer> perf_command(id<MTLCommandQueue> queue) {
+    id<MTLCommandBuffer> command = queue != nil ? [queue commandBuffer] : nil;
+    if (command != nil) {
+        eu4_gfx_perf_command_buffer_created();
+    }
+    return command;
+}
+
+static void perf_commit(id<MTLCommandBuffer> command) {
+    if (command != nil) {
+        eu4_gfx_perf_command_buffer_committed();
+        [command commit];
+    }
+}
+
+static void perf_wait(id<MTLCommandBuffer> command) {
+    if (command != nil) {
+        eu4_gfx_perf_completion_wait();
+        [command waitUntilCompleted];
+    }
+}
 
 void eu4_gfx_write_default_depth_stencil(uint8_t desc[EU4_GFX_DEPTH_DESC_SIZE]) {
     uint64_t depth_word = 0x300000001ULL;
@@ -1586,7 +1612,7 @@ static eu4_gfx_clear_status drain_pending_clear(__unsafe_unretained EU4GfxBacken
         }
         return EU4_GFX_CLEAR_UNSUPPORTED;
     }
-    [command waitUntilCompleted];
+    perf_wait(command);
     MTLCommandBufferStatus status = command.status;
     if (command_status != NULL) {
         *command_status = (int)status;
@@ -1611,7 +1637,7 @@ static eu4_gfx_clear_status drain_pending_game(__unsafe_unretained EU4GfxBackend
         return EU4_GFX_CLEAR_UNSUPPORTED;
     }
     uint64_t generation = backend.pendingGameGeneration;
-    [command waitUntilCompleted];
+    perf_wait(command);
     MTLCommandBufferStatus status = command.status;
     if (g_fail_next_game_drain) {
         g_fail_next_game_drain = 0;
@@ -1642,7 +1668,7 @@ static eu4_gfx_clear_status encode_color_clear(__unsafe_unretained EU4GfxBackend
     static const float opaque_black[4] = {0.f, 0.f, 0.f, 1.f};
     const float *src = color != NULL ? color : opaque_black;
     id<MTLCommandQueue> queue = backend.queue;
-    id<MTLCommandBuffer> command = queue != nil ? [queue commandBuffer] : nil;
+    id<MTLCommandBuffer> command = perf_command(queue);
     if (command == nil) {
         return EU4_GFX_CLEAR_FAILED;
     }
@@ -1752,7 +1778,7 @@ eu4_gfx_clear_status eu4_gfx_clear_checked(void *handle, unsigned flags, const f
     }
     backend.contentsKnown = NO;
     backend.pendingClear = command;
-    [command commit];
+    perf_commit(command);
     return EU4_GFX_CLEAR_OK;
 }
 
@@ -1877,7 +1903,7 @@ static eu4_gfx_clear_status clear_game_checked(void *handle, unsigned flags, con
     backend.pendingGameGeneration = backend.geometryGeneration;
     backend.pendingGameCommand = command;
     backend.gameClearGeneration = backend.geometryGeneration;
-    [command commit];
+    perf_commit(command);
     return EU4_GFX_CLEAR_OK;
 }
 
@@ -2033,7 +2059,7 @@ static void dump_mtl_texture(id<MTLTexture> texture, const char *path) {
     EU4GfxBackend *dump_backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
     id<MTLCommandQueue> queue = (dump_backend != nil && dump_backend.queue != nil)
         ? dump_backend.queue : [texture.device newCommandQueue];
-    id<MTLCommandBuffer> command = [queue commandBuffer];
+    id<MTLCommandBuffer> command = perf_command(queue);
     id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
     [blit copyFromTexture:texture
               sourceSlice:0
@@ -2045,8 +2071,8 @@ static void dump_mtl_texture(id<MTLTexture> texture, const char *path) {
    destinationBytesPerRow:row
  destinationBytesPerImage:row * texture.height];
     [blit endEncoding];
-    [command commit];
-    [command waitUntilCompleted];
+    perf_commit(command);
+    perf_wait(command);
     uint8_t *flipped = (uint8_t *)malloc(row * texture.height);
     if (flipped == NULL) {
         return;
@@ -2144,7 +2170,7 @@ static int resolve_scaled(id<MTLTexture> src, id<MTLTexture> dst,
     pass.colorAttachments[0].loadAction = MTLLoadActionClear;
     pass.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 0.0);
     pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-    id<MTLCommandBuffer> command = [queue commandBuffer];
+    id<MTLCommandBuffer> command = perf_command(queue);
     if (command == nil) {
         return -1;
     }
@@ -2157,8 +2183,8 @@ static int resolve_scaled(id<MTLTexture> src, id<MTLTexture> dst,
     [encoder setFragmentSamplerState:sampler atIndex:0];
     [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [encoder endEncoding];
-    [command commit];
-    [command waitUntilCompleted];
+    perf_commit(command);
+    perf_wait(command);
     return command.status == MTLCommandBufferStatusCompleted ? 0 : -1;
 }
 
@@ -2338,7 +2364,7 @@ void eu4_gfx_resolve_texture_noop(void *handle, void *source, void *target) {
                      "size_mismatch");
         return;
     }
-    id<MTLCommandBuffer> command = [backend.queue commandBuffer];
+    id<MTLCommandBuffer> command = perf_command(backend.queue);
     if (command == nil) {
         resolve_emit("_GfxResolveTexture", target, src, dst, nil, seq,
                      "command_failed");
@@ -2360,8 +2386,8 @@ void eu4_gfx_resolve_texture_noop(void *handle, void *source, void *target) {
          destinationLevel:0
         destinationOrigin:MTLOriginMake(0, 0, 0)];
     [blit endEncoding];
-    [command commit];
-    [command waitUntilCompleted];
+    perf_commit(command);
+    perf_wait(command);
     if (command.status == MTLCommandBufferStatusCompleted) {
         eu4_gfx_note_render_target_write(target);
         resolve_dump_checkpoint(dst, resolve_dir, "dest", seq);
@@ -2395,7 +2421,7 @@ static void preserve_previous_frame(void) {
     if (copy == nil) {
         return;
     }
-    id<MTLCommandBuffer> command = [backend.queue commandBuffer];
+    id<MTLCommandBuffer> command = perf_command(backend.queue);
     id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
     if (blit == nil) {
         return;
@@ -2410,8 +2436,8 @@ static void preserve_previous_frame(void) {
          destinationLevel:0
         destinationOrigin:MTLOriginMake(0, 0, 0)];
     [blit endEncoding];
-    [command commit];
-    [command waitUntilCompleted];
+    perf_commit(command);
+    perf_wait(command);
 }
 
 uint64_t eu4_gfx_live_draw_sequence;
@@ -2548,7 +2574,7 @@ int eu4_gfx_swap_window(void *window) {
         destination.height != backend.gameHeight) {
         return 0;
     }
-    id<MTLCommandBuffer> command = [backend.queue commandBuffer];
+    id<MTLCommandBuffer> command = perf_command(backend.queue);
     if (command == nil) {
         return 0;
     }
@@ -2591,8 +2617,8 @@ int eu4_gfx_swap_window(void *window) {
     if (drawable != nil) {
         [command presentDrawable:drawable];
     }
-    [command commit];
-    [command waitUntilCompleted];
+    perf_commit(command);
+    perf_wait(command);
     if (dump_buffer != nil) {
         NSUInteger row = (NSUInteger)backend.gameWidth * 4;
         uint8_t *flipped = (uint8_t *)malloc(row * backend.gameHeight);
@@ -2680,7 +2706,7 @@ void eu4_gfx_clear(void *handle, unsigned flags, const float *color) {
             return;
         }
         (void)clear_stencil;
-        id<MTLCommandBuffer> command = [backend.queue commandBuffer];
+        id<MTLCommandBuffer> command = perf_command(backend.queue);
         if (command != nil) {
             MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
             pass.colorAttachments[0].texture = backend.currentTargetColor;
@@ -2713,7 +2739,7 @@ void eu4_gfx_clear(void *handle, unsigned flags, const float *color) {
                 if (clear_color) {
                     eu4_gfx_note_render_target_write(backend.currentTargetHeader);
                 }
-                [command commit];
+                perf_commit(command);
                 backend.pendingGameCommand = command;
                 backend.pendingGameGeneration = backend.geometryGeneration;
                 backend.gameContentsKnown = NO;
@@ -2949,7 +2975,7 @@ void eu4_gfx_set_render_target(void *handle, void *target) {
         id<MTLBuffer> buffer = [backend.device newBufferWithLength:row * color.height
                                                            options:MTLResourceStorageModeShared];
         if (buffer != nil) {
-            id<MTLCommandBuffer> command = [backend.queue commandBuffer];
+            id<MTLCommandBuffer> command = perf_command(backend.queue);
             id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
             if (blit != nil) {
                 [blit copyFromTexture:color
@@ -2963,8 +2989,8 @@ void eu4_gfx_set_render_target(void *handle, void *target) {
              destinationBytesPerImage:row * color.height];
                 [blit endEncoding];
             }
-            [command commit];
-            [command waitUntilCompleted];
+            perf_commit(command);
+            perf_wait(command);
             const char *dir = getenv("EU4_GFX_DUMP_TARGETS");
             char path[512];
             snprintf(path, sizeof path, "%s/rt-%p.bgra", dir, backend.currentTargetHeader);
@@ -3119,7 +3145,7 @@ eu4_gfx_clear_status eu4_gfx_present_checked(void *master) {
         }
     }
 
-    id<MTLCommandBuffer> command = [backend.queue commandBuffer];
+    id<MTLCommandBuffer> command = perf_command(backend.queue);
     if (command == nil) {
         return EU4_GFX_CLEAR_FAILED;
     }
@@ -3153,8 +3179,8 @@ eu4_gfx_clear_status eu4_gfx_present_checked(void *master) {
     if (drawable != nil) {
         [command presentDrawable:drawable];
     }
-    [command commit];
-    [command waitUntilCompleted];
+    perf_commit(command);
+    perf_wait(command);
     if (command.status != MTLCommandBufferStatusCompleted || command.error != nil) {
         backend.poisoned = YES;
         backend.readyForPresent = NO;
@@ -3195,7 +3221,7 @@ int eu4_gfx_present_diagnostic(void *master) {
         destination.pixelFormat != MTLPixelFormatBGRA8Unorm) {
         return 0;
     }
-    id<MTLCommandBuffer> command = [backend.queue commandBuffer];
+    id<MTLCommandBuffer> command = perf_command(backend.queue);
     if (command == nil) {
         return 0;
     }
@@ -3216,8 +3242,8 @@ int eu4_gfx_present_diagnostic(void *master) {
         destinationOrigin:origin];
     [blit endEncoding];
     [command presentDrawable:drawable];
-    [command commit];
-    [command waitUntilCompleted];
+    perf_commit(command);
+    perf_wait(command);
     return command.status == MTLCommandBufferStatusCompleted && command.error == nil ? 1 : 0;
 }
 

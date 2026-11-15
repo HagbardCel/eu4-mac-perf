@@ -13,6 +13,7 @@
 #import "eu4_gfx_sprite_draw.h"
 #import "eu4_gfx_texture.h"
 #import "eu4_gfx_draw_semantics.h"
+#import "eu4_gfx_perf.h"
 #import "eu4_metal_events.h"
 
 #import <CommonCrypto/CommonDigest.h>
@@ -24,6 +25,7 @@
 #import <sys/mman.h>
 #import <unistd.h>
 #import <sys/stat.h>
+#import <time.h>
 
 enum {
     kImageBytes = 0x2300000,
@@ -2156,7 +2158,316 @@ static int run_target_clear(void) {
                : 1;
 }
 
+/* ---- deterministic draw-stream benchmark (PR P0) ------------------------- */
+/* Synthetic geometry isolates backend submission/allocation overhead. It is
+ * not a gameplay benchmark and makes no EU4 performance claim. */
+
+static uint64_t bench_now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+static void bench_sha256_hex(const char *text, char out[65]) {
+    uint8_t digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(text, (CC_LONG)strlen(text), digest);
+    static const char digits[] = "0123456789abcdef";
+    for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) {
+        out[i * 2] = digits[digest[i] >> 4];
+        out[i * 2 + 1] = digits[digest[i] & 0xf];
+    }
+    out[CC_SHA256_DIGEST_LENGTH * 2] = 0;
+}
+
+static int bench_write_file(const char *path, const char *text) {
+    FILE *file = fopen(path, "wb");
+    if (file == NULL) {
+        return 0;
+    }
+    size_t length = strlen(text);
+    int ok = fwrite(text, 1, length, file) == length;
+    fclose(file);
+    return ok;
+}
+
+static void bench_put_u32(uint8_t *base, size_t offset, uint32_t value) {
+    memcpy(base + offset, &value, 4);
+}
+
+static uint8_t g_bench_elements[2 * 0x28];
+static char g_bench_cache_dir[256];
+
+static void *make_generic_bench_shader(void) {
+    snprintf(g_bench_cache_dir, sizeof g_bench_cache_dir,
+             "/tmp/eu4-gfx-bench-XXXXXX");
+    if (mkdtemp(g_bench_cache_dir) == NULL) {
+        fail("benchmark cache dir");
+    }
+    const char *vs_msl =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct VIn { float4 position [[attribute(0)]]; float4 color [[attribute(1)]]; };\n"
+        "struct VOut { float4 position [[position]]; float4 color; };\n"
+        "vertex VOut bench_vs(VIn in [[stage_in]]) {\n"
+        "    VOut o; o.position = in.position; o.color = in.color; return o;\n"
+        "}\n";
+    const char *ps_msl =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct VOut { float4 position [[position]]; float4 color; };\n"
+        "fragment float4 bench_ps(VOut in [[stage_in]]) { return in.color; }\n";
+    char vs_path[320], ps_path[320], cache_path[320];
+    snprintf(vs_path, sizeof vs_path, "%s/bench.vert.metal", g_bench_cache_dir);
+    snprintf(ps_path, sizeof ps_path, "%s/bench.frag.metal", g_bench_cache_dir);
+    snprintf(cache_path, sizeof cache_path, "%s/bench-cache.json", g_bench_cache_dir);
+    if (!bench_write_file(vs_path, vs_msl) || !bench_write_file(ps_path, ps_msl)) {
+        fail("benchmark shader cache files");
+    }
+    const char *vs_input =
+        "// synthetic benchmark compiler input (vertex)\n"
+        "attribute vec4 a_position; attribute vec4 a_color;\n";
+    const char *ps_input =
+        "// synthetic benchmark compiler input (pixel)\n"
+        "varying vec4 v_color;\n";
+    char vs_sha[65], ps_sha[65];
+    bench_sha256_hex(vs_input, vs_sha);
+    bench_sha256_hex(ps_input, ps_sha);
+    char cache[4096];
+    snprintf(cache, sizeof cache,
+             "{\"schema\":\"gfx-shader-cache/v1\",\"stages\":{"
+             "\"%s\":{\"stage\":\"vertex\",\"msl_file\":\"bench.vert.metal\","
+             "\"msl_entry\":\"bench_vs\",\"msl_uniform_buffer\":0,"
+             "\"attribute_locations\":{\"a_position\":0,\"a_color\":1},"
+             "\"attributes\":[{\"name\":\"a_position\",\"type\":\"float4\"},"
+             "{\"name\":\"a_color\",\"type\":\"float4\"}],"
+             "\"uniforms\":[],\"samplers\":[],\"varyings\":[]},"
+             "\"%s\":{\"stage\":\"pixel\",\"msl_file\":\"bench.frag.metal\","
+             "\"msl_entry\":\"bench_ps\",\"msl_uniform_buffer\":0,"
+             "\"attribute_locations\":{},\"attributes\":[],"
+             "\"uniforms\":[],\"samplers\":[],\"varyings\":[]}}}",
+             vs_sha, ps_sha);
+    if (!bench_write_file(cache_path, cache)) {
+        fail("benchmark shader cache json");
+    }
+    if (eu4_gfx_shader_load_cache(cache_path) <= 0) {
+        fail("benchmark shader cache load");
+    }
+    void *shader = eu4_gfx_create_shader();
+    if (shader == NULL ||
+        eu4_gfx_add_vertex_shader(NULL, shader, vs_input) != 1 ||
+        eu4_gfx_add_pixel_shader(NULL, shader, ps_input) != 1 ||
+        eu4_gfx_link_shader(NULL, shader) != 1 ||
+        !eu4_gfx_shader_is_generic(shader)) {
+        fail("generic benchmark shader admission");
+    }
+    memset(g_bench_elements, 0, sizeof g_bench_elements);
+    bench_put_u32(g_bench_elements, 0x0c, 0);       /* location a_position */
+    bench_put_u32(g_bench_elements, 0x10, 4);       /* components */
+    bench_put_u32(g_bench_elements, 0x14, 0x1406);  /* GL_FLOAT */
+    bench_put_u32(g_bench_elements, 0x18, 0);       /* offset */
+    bench_put_u32(g_bench_elements, 0x1c, 0);       /* slot 0 */
+    bench_put_u32(g_bench_elements + 0x28, 0x0c, 1);      /* location a_color */
+    bench_put_u32(g_bench_elements + 0x28, 0x10, 4);
+    bench_put_u32(g_bench_elements + 0x28, 0x14, 0x1406);
+    bench_put_u32(g_bench_elements + 0x28, 0x18, 16);     /* offset */
+    bench_put_u32(g_bench_elements + 0x28, 0x1c, 0);
+    void *elements = g_bench_elements;
+    int32_t element_count = 2;
+    memcpy((uint8_t *)shader + 0x10, &elements, sizeof elements);
+    memcpy((uint8_t *)shader + 0x18, &element_count, sizeof element_count);
+    return shader;
+}
+
+static void bench_vertices(uint8_t out[8 * 32]) {
+    memset(out, 0, 8 * 32);
+    const float positions[3][2] = {{-1.f, -1.f}, {3.f, -1.f}, {-1.f, 3.f}};
+    for (int i = 0; i < 8; i++) {
+        float *v = (float *)(out + i * 32);
+        v[0] = positions[i % 3][0];
+        v[1] = positions[i % 3][1];
+        v[2] = 0.5f;
+        v[3] = 1.f;
+        if (i < 4) {
+            v[4] = 1.f; /* red */
+        } else {
+            v[5] = 1.f; /* green */
+        }
+        v[7] = 1.f;
+    }
+}
+
+static void bench_install_generic(void *shader, void *vertex_header,
+                                  void *index_header) {
+    uint8_t *master = (uint8_t *)g_master;
+    struct {
+        void *master;
+    } ctx = {g_master};
+    uint32_t mode = 4, count = 3;
+    memcpy(master + EU4_GFX_MASTER_MODE, &mode, 4);
+    memcpy(master + EU4_GFX_MASTER_COUNT, &count, 4);
+    void *headers[1] = {vertex_header};
+    eu4_gfx_set_vertex_buffers(&ctx, 1, headers, 0, NULL, NULL);
+    eu4_gfx_set_shader(&ctx, shader);
+    eu4_gfx_set_index_buffer(&ctx, index_header);
+    uint32_t rect[6] = {kSize, kSize, 0x3f800000u, 0, 0, 0};
+    eu4_gfx_set_viewport(master, rect);
+    uint32_t mask = 0x01010101u;
+    memcpy(master + 0x2c, &mask, sizeof mask);
+    uint32_t fill = 0x1b02;
+    memcpy(master + 0x58, &fill, sizeof fill);
+    master[0x38] = 0;
+    master[0x60] = 0;
+}
+
+static int run_benchmark(const char *kind, int draws, int frames) {
+    if (draws < 1 || frames < 1 || draws > 100000 || frames > 1000) {
+        fail("benchmark bounds");
+    }
+    eu4_gfx_perf_set_enabled(1);
+    boot();
+    id<MTLDevice> device = (__bridge id<MTLDevice>)eu4_gfx_metal_device();
+    if (device == nil) {
+        fail("benchmark device");
+    }
+
+    int generic = strcmp(kind, "simple") != 0;
+    void *shader = NULL;
+    void *vertex_header = NULL;
+    void *index_header = NULL;
+    uint8_t red_header[0x44], green_header[0x44];
+    uint8_t red_bgr[4 * 4 * 3], green_bgr[4 * 4 * 3];
+    for (int i = 0; i < 4 * 4; i++) {
+        red_bgr[i * 3 + 0] = 0;
+        red_bgr[i * 3 + 1] = 0;
+        red_bgr[i * 3 + 2] = 0xff;
+        green_bgr[i * 3 + 0] = 0;
+        green_bgr[i * 3 + 1] = 0xff;
+        green_bgr[i * 3 + 2] = 0;
+    }
+    make_texture(4, 4, red_bgr, red_header);
+    make_texture(4, 4, green_bgr, green_header);
+
+    if (generic) {
+        shader = make_generic_bench_shader();
+        uint8_t vertices[8 * 32];
+        bench_vertices(vertices);
+        vertex_header = eu4_gfx_create_vertex_buffer(NULL, vertices, 8, 32, 0);
+        const uint16_t indices[3] = {0, 1, 2};
+        index_header = eu4_gfx_create_index_buffer(NULL, indices, 3);
+        if (vertex_header == NULL || index_header == NULL) {
+            fail("benchmark generic geometry");
+        }
+        bench_install_generic(shader, vertex_header, index_header);
+    } else {
+        shader = make_simple_shader();
+        uint8_t quad[96];
+        make_quad(quad);
+        vertex_header = eu4_gfx_create_vertex_buffer(NULL, quad, 4, 24, 0);
+        float matrix[16];
+        fill_matrix(matrix);
+        uint8_t constant[0x10];
+        memset(constant, 0, sizeof constant);
+        uint32_t words = 16;
+        memcpy(constant, &words, 4);
+        void *constant_data = matrix;
+        memcpy(constant + 8, &constant_data, sizeof constant_data);
+        install_geometry(shader, vertex_header, constant, red_header);
+    }
+
+    /* Present into an injected drawable so the frame boundary is observable
+       without a window server. */
+    MTLTextureDescriptor *desc =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                           width:kSize
+                                                          height:kSize
+                                                       mipmapped:NO];
+    desc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead |
+                 MTLTextureUsageShaderWrite;
+    desc.storageMode = MTLStorageModeShared;
+    id<MTLTexture> destination = [device newTextureWithDescriptor:desc];
+    if (destination == nil) {
+        fail("benchmark present drawable");
+    }
+    eu4_gfx_test_set_present_drawable((__bridge void *)destination);
+
+    struct {
+        void *master;
+    } ctx = {g_master};
+    uint8_t *master = (uint8_t *)g_master;
+    const float black[4] = {0.f, 0.f, 0.f, 1.f};
+    uint8_t default_blend[0x24];
+    memcpy(default_blend, master + 0xc, sizeof default_blend);
+    g_stopped = 0;
+    const int warmup = 3;
+    for (int frame = 0; frame < warmup + frames; frame++) {
+        eu4_gfx_perf_reset();
+        uint64_t wall_start = bench_now_ns();
+        eu4_gfx_clear(&ctx, 7, black);
+        if (g_stopped) {
+            fail("benchmark clear stopped");
+        }
+        for (int i = 0; i < draws; i++) {
+            eu4_gfx_draw_raw raw;
+            memset(&raw, 0, sizeof raw);
+            raw.rdi = (uint64_t)(uintptr_t)&ctx;
+            raw.retaddr = (uint64_t)(uintptr_t)(g_image + kCallerRva);
+            if (generic) {
+                raw.which = 2;
+                raw.rsi = 3;
+                /* Signed base vertices: alternate red (0) and green (4). */
+                raw.rcx = (i % 2 == 0) ? 0 : 4;
+                if (strcmp(kind, "mixed") == 0) {
+                    if (i % 3 == 0) {
+                        uint32_t enabled = 1;
+                        memcpy(master + 0xc, &enabled, 4);
+                    } else {
+                        memcpy(master + 0xc, default_blend, 0x24);
+                    }
+                    master[0x61] = (uint8_t)((i / 2) % 3 == 0 ? 1 : 0);
+                    uint32_t mask = (i % 2 == 0) ? 0x01010101u : 0x00ff00ffu;
+                    memcpy(master + 0x2c, &mask, 4);
+                }
+            } else {
+                raw.which = 1;
+                raw.rsi = 4;
+                void *texture = (i % 2 == 0) ? red_header : green_header;
+                eu4_gfx_set_textures(&ctx, 1, &texture, 1, 0, NULL);
+            }
+            if (eu4_gfx_draw_capture(&raw) != 1) {
+                fail("benchmark draw was not handled");
+            }
+        }
+        if (!generic) {
+            void *texture = red_header;
+            eu4_gfx_set_textures(&ctx, 1, &texture, 1, 0, NULL);
+        } else {
+            memcpy(master + 0xc, default_blend, 0x24);
+            uint32_t mask = 0x01010101u;
+            memcpy(master + 0x2c, &mask, 4);
+        }
+        if (eu4_gfx_present(g_master) != 1 || g_stopped) {
+            fail("benchmark present failed");
+        }
+        uint64_t wall_ns = bench_now_ns() - wall_start;
+        if (frame < warmup) {
+            continue;
+        }
+        char perf[4096];
+        if (eu4_gfx_perf_snapshot_json(perf, sizeof perf) == 0) {
+            fail("benchmark snapshot");
+        }
+        printf("BENCH {\"schema\":\"gfx-bench-frame/v1\",\"kind\":\"%s\","
+               "\"draws\":%d,\"frame\":%d,\"wall_ns\":%llu,\"perf\":%s}\n",
+               kind, draws, frame - warmup, (unsigned long long)wall_ns, perf);
+        fflush(stdout);
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
+    if (argc >= 5 && strcmp(argv[1], "--bench") == 0) {
+        return run_benchmark(argv[2], atoi(argv[3]), atoi(argv[4]));
+    }
     if (argc >= 2 && strcmp(argv[1], "--target-clear") == 0) {
         return run_target_clear();
     }
