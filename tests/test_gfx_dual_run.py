@@ -711,6 +711,60 @@ class QualificationTests(unittest.TestCase):
         value = self.classify(self.result(passed=99, failed=1))
         self.assertEqual(value["status"], "rendering_difference")
 
+    def test_pixel_difference_on_unverified_static_scene_is_incomplete(self):
+        # Recorded Experiment A session 20261114T181230Z-d28f6fee reached an
+        # aligned pair (same day, identity, caller signature and draw count) and
+        # still classified the pixel difference as a rendering difference while
+        # its own stability evidence was weak.
+        result = self.result(passed=0, failed=1, not_compared=0)
+        result["stability"] = {"status": "weak", "required_frames": 2,
+                               "identity_max_streak": 1}
+        value = self.classify(result, max_frames=1)
+        self.assertEqual(value["status"], "incomplete")
+        self.assertFalse(value["qualified"])
+        joined = " ".join(value["reasons"])
+        self.assertIn("unverified static scene", joined)
+        self.assertIn("correspondence is weak", joined)
+        # The measured difference stays visible in the evidence.
+        self.assertIn("pixel", joined)
+        self.assertEqual(value["staticity"]["verified"], False)
+
+    def test_missing_stability_evidence_is_not_a_rendering_difference(self):
+        result = self.result(passed=0, failed=1)
+        result.pop("stability")
+        value = self.classify(result, max_frames=1)
+        self.assertEqual(value["status"], "incomplete")
+
+    def test_preserved_static_frames_restore_a_rendering_difference(self):
+        result = self.result(passed=0, failed=1)
+        result["stability"] = {"status": "weak"}
+        digests = {"reference": ["a", "a"], "candidate": ["b", "b"]}
+        result["dumps"] = {
+            role: {"captured": [
+                {"frame_index": 4, "sha256": sha, "valid": True},
+                {"frame_index": 5, "sha256": sha, "valid": True},
+            ], "missing": []}
+            for role, sha in digests.items()
+        }
+        value = self.classify(result, max_frames=1)
+        self.assertEqual(value["status"], "rendering_difference")
+        self.assertTrue(value["staticity"]["verified"])
+
+    def test_gapped_or_changing_digests_are_not_static(self):
+        value = gfx_align.staticity_evidence({
+            "reference": {"captured": [
+                {"frame_index": 4, "sha256": "a"},
+                {"frame_index": 6, "sha256": "a"},
+            ]},
+            "candidate": {"captured": [
+                {"frame_index": 4, "sha256": "b"},
+                {"frame_index": 5, "sha256": "c"},
+            ]},
+        })
+        self.assertFalse(value["verified"])
+        self.assertEqual(value["roles"]["reference"]["max_streak"], 1)
+        self.assertEqual(value["roles"]["candidate"]["max_streak"], 1)
+
     def test_gpu_failure_takes_priority(self):
         value = self.classify(self.result(
             health={"verdict": "failed",

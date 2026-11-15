@@ -260,6 +260,66 @@ def align_sequences(reference: list[dict], candidate: list[dict], *,
     }
 
 
+STATICITY_SCHEMA = "gfx-scene-staticity/v1"
+
+
+def staticity_evidence(dumps: dict | None, required: int = 2) -> dict:
+    """Measure whether a process rendered consecutive identical frames.
+
+    Alignment evidence (engine day, caller composition, draw count) identifies
+    *which* logical frame was rendered, not whether the scene was static.  The
+    qualification contract requires a verified static scene before a pixel
+    difference may be attributed to a renderer, so this reads the bounded
+    full-frame digests preserved around the compared pair and looks for
+    ``required`` consecutive frames with the same digest in each process.
+
+    A role with missing frames, non-consecutive indices or differing digests is
+    not static.  Both roles must be static for the pair to be comparable.
+    """
+    required = max(2, int(required or 1))
+    roles: dict[str, dict] = {}
+    verified_roles: list[str] = []
+    for role in ("reference", "candidate"):
+        payload = (dumps or {}).get(role) or {}
+        captured = payload.get("captured") if isinstance(payload, dict) else None
+        ordered = []
+        for item in captured or []:
+            if not isinstance(item, dict):
+                continue
+            index = _int(item.get("frame_index"))
+            digest = item.get("sha256") or (item.get("meta") or {}).get("sha256")
+            if index and digest:
+                ordered.append((index, str(digest)))
+        ordered.sort()
+        best = 0
+        streak = 0
+        previous: tuple[int, str] | None = None
+        for index, digest in ordered:
+            if (previous is not None and index == previous[0] + 1
+                    and digest == previous[1]):
+                streak += 1
+            else:
+                streak = 1
+            previous = (index, digest)
+            best = max(best, streak)
+        roles[role] = {
+            "frames": [index for index, _ in ordered],
+            "max_streak": best,
+            "static": best >= required,
+        }
+        if best >= required:
+            verified_roles.append(role)
+    verified = len(verified_roles) == len(roles)
+    return {
+        "schema": STATICITY_SCHEMA,
+        "required_frames": required,
+        "roles": roles,
+        "verified": verified,
+        "reason": "" if verified else (
+            "no consecutive identical full-frame digests on both sides"),
+    }
+
+
 def load_observations(path: Path) -> list[dict]:
     rows: list[dict] = []
     try:

@@ -272,6 +272,27 @@ python3.14 -m automation.gfx_replay_case verify --case <case-dir>
 When a path is absent, report it as absent. Do not reconstruct it from a report,
 and do not treat missing local evidence as a passing result.
 
+### M7.0 correspondence canary (2026-11-15)
+
+One bounded offline investigation of the GL/GL Experiment A evidence established
+why metadata-aligned paused frames are not trustworthy: the preserved frame-74
+pair matched on day, `update_identity`, caller signature, draw count and extent,
+yet differed on 1.35 % of pixels, while the same process's consecutive frames
+differed by 3.7 % and 79.7 %; 92 % of the cross-process differing pixels also
+change between two consecutive reference frames, and the candidate pause
+released ~2 s after the request. Both recorded `rendering_difference` verdicts
+were emitted with `stability=weak` and `render_stage_proven=false`. The
+correction requires verified static-scene evidence before a pixel difference is
+attributed to a renderer (otherwise `incomplete`), extracts staticity from
+preserved consecutive digests (stop-time neighbour frames), and applies the same
+predicate to offline cases. No EU4 launch was made and no Metal claim is
+involved. Report: [M7.0 starter canary](../analysis/m7/starter-canary.md).
+
+`live-a6` and `live-a10` are therefore reclassified `incomplete`; the measured
+differences are unchanged. The remaining unknown is the mechanism of the
+residual border/HUD difference, which needs a per-frame full-resolution digest
+(or an implemented `capture_every_frame`) and a per-draw operation prefix.
+
 ## M6 — authentic title scene through Metal (accepted 2026-11-14)
 
 The authentic title scene renders through Metal and passes the three-start

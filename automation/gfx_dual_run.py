@@ -1080,6 +1080,9 @@ def classify_campaign(result: dict, scenario: dict, *, max_frames: int) -> dict:
         and not_aligned == 0
     )
     reasons = []
+    staticity = gfx_align.staticity_evidence(
+        result.get("dumps"),
+        int((scenario.get("settle") or {}).get("stable_frames", 1) or 1))
     if result.get("error") and "exception" in str(stop.get("reason") or ""):
         classification = "infrastructure_failure"
         reasons.append("campaign raised an internal error")
@@ -1104,8 +1107,19 @@ def classify_campaign(result: dict, scenario: dict, *, max_frames: int) -> dict:
         classification = "alignment_failure"
         reasons.append(f"{not_aligned} pair(s) not aligned")
     elif failed:
-        classification = "rendering_difference"
         reasons.extend((comparison.get("first_failure") or {}).get("comparison", {}).get("reasons", [])[:3])
+        # A pixel difference is only attributable to the renderer when the
+        # static-scene correspondence the contract requires was verified.
+        # Without that evidence the pair may be two different render stages, so
+        # the run is inconclusive rather than a rendering difference.
+        if ((result.get("stability") or {}).get("status") == "verified"
+                or staticity["verified"]):
+            classification = "rendering_difference"
+        else:
+            classification = "incomplete"
+            reasons.insert(
+                0, "pixel difference on an unverified static scene; "
+                   "correspondence is weak")
     elif valid_compared < required:
         classification = "incomplete"
         reasons.append(
@@ -1147,6 +1161,7 @@ def classify_campaign(result: dict, scenario: dict, *, max_frames: int) -> dict:
             "not_aligned": not_aligned,
         },
         "coverage_complete": coverage_complete,
+        "staticity": staticity,
         "reasons": [reason for reason in reasons if reason],
     }
 
@@ -1937,11 +1952,19 @@ def run_campaign(
 
         dump_count = int(scenario["observation"]["dump_on_stop"])
         selected = state.pairs[-dump_count:] if dump_count and state.pairs else []
-        wanted_by_role = {
-            "reference": [pair["frame_index"] for pair in selected],
-            "candidate": [pair.get("candidate_frame_index", pair["frame_index"])
-                          for pair in selected],
-        }
+        # A single compared frame cannot show whether the scene was static.
+        # Keep the failing frame's immediate neighbours from the observer's
+        # bounded ring so staticity is observable without another campaign.
+        wanted_by_role: dict[str, list[int]] = {}
+        for role, key in (("reference", "frame_index"),
+                          ("candidate", "candidate_frame_index")):
+            indices: list[int] = []
+            for pair in selected:
+                index = pair.get(key, pair["frame_index"])
+                for neighbour in (index - 1, index, index + 1):
+                    if neighbour >= 0 and neighbour not in indices:
+                        indices.append(neighbour)
+            wanted_by_role[role] = indices
         if selected:
             for role, item in launched.items():
                 _request_dumps({"observe_dir": item.observe_dir},
