@@ -40,7 +40,8 @@ cases, and `python3.14 -m automation.gfx_replay_case`.
 ### Final correctness closure (2026-11-15)
 
 The infrastructure branch was synchronized with `origin/main` (`61e7795`) as
-merge `cb35385`. The closure fixes the startup launcher interface, makes the
+merge `cb35385`; the consolidated integration PR is
+[#191](https://github.com/HagbardCel/eu4-mac-perf/pull/191). The closure fixes the startup launcher interface, makes the
 trace writer fail closed, applies one scene-occurrence semantic to both
 boundaries, bounds the Metal copy kernel to the requested rectangle, validates
 every clear flag combination against actual pixels, and rejects missing,

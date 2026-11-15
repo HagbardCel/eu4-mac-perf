@@ -114,7 +114,7 @@
     ]
   },
   "reviewed_head": "b8fdd0b",
-  "implementation_head": "24012a4",
+  "implementation_head": "dabca9f",
   "notes": [
     "The integration branch was synchronized with origin/main 61e7795 before these corrections; the merge commit is cb35385.",
     "Texture 442 remains the single unresolved dependency in both the historical canonical menu frame and the new menu scene 79.",
@@ -170,5 +170,6 @@
     "qualified": false
   },
   "portable_copy_case_files": 1088,
-  "portable_copy_case_replay": "pass_same_candidate_sha256"
+  "portable_copy_case_replay": "pass_same_candidate_sha256",
+  "integration_pr": "https://github.com/HagbardCel/eu4-mac-perf/pull/191"
 }

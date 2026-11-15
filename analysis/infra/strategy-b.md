@@ -390,8 +390,8 @@ M6 frame and PR #190 draw suites; 6/6 DSH plugin tests pass.
 The reviewed integration head was `b8fdd0b95567567aa4cf63203fe5cd3da278fe57`.
 It was synchronized with the current integration baseline `origin/main`
 (`61e7795`, the PR #190 merge) as merge commit `cb35385`, preserving the five
-historical infrastructure branches and all follow-up corrections. The code
-corrections are commit `24012a4`; no original branch was rewritten.
+historical infrastructure branches and all follow-up corrections. The merge-closure corrections are commit `dabca9f`; no original branch was
+rewritten. The integration PR is https://github.com/HagbardCel/eu4-mac-perf/pull/191.
 
 ### Executable defects fixed
 
