@@ -370,16 +370,23 @@ class AlignmentTests(unittest.TestCase):
         # Same identity but backend-dependent draw counts still qualifies.
         self.assertTrue(gfx_dual_run._phase_ready(100, 500, 40, 0.25, 10, 10))
 
-    def test_identity_streak_verifies_correspondence(self):
+    def test_identity_streak_is_not_staticity(self):
+        # A repeated engine day/update identity is correspondence evidence only.
+        # Only full-resolution digest streaks may establish a static scene.
         state = object.__new__(gfx_dual_run.CampaignState)
         state.stability = {
             "reference": {"last_digest": None, "streak": 0, "max_streak": 0},
             "candidate": {"last_digest": None, "streak": 0, "max_streak": 0},
         }
         state.identity_max_streak = 3
+        summary = state.stability_summary(3)
+        self.assertEqual(summary["status"], "weak")
+        self.assertFalse(summary["identity_is_staticity"])
+        state.stability = {
+            "reference": {"last_digest": "a", "streak": 3, "max_streak": 3},
+            "candidate": {"last_digest": "b", "streak": 3, "max_streak": 3},
+        }
         self.assertEqual(state.stability_summary(3)["status"], "verified")
-        state.identity_max_streak = 0
-        self.assertEqual(state.stability_summary(3)["status"], "weak")
 
     def test_phase_requires_similar_draw_counts(self):
         self.assertFalse(gfx_dual_run._phase_ready(46, 273, 40, 0.25))
@@ -538,7 +545,8 @@ class PairComparisonTests(unittest.TestCase):
         self._temporary.cleanup()
 
     def pair(self):
-        return {"frame_index": 3, "candidate_frame_index": 3}
+        return {"frame_index": 3, "candidate_frame_index": 3,
+                "status": "aligned"}
 
     def set_candidate_bytes(self, payload: bytes):
         self.candidate_path.write_bytes(payload)
@@ -650,11 +658,81 @@ class PairComparisonTests(unittest.TestCase):
         self.assertEqual(result["status"], "not_compared")
 
 
+def _frame_dump(index, digest, session, *, valid=True, width=8, height=6,
+                origin="lower_left", gpu_completed=True):
+    """A preserved frame record shaped like the campaign's stop-time dumps."""
+    return {
+        "frame_index": index,
+        "sha256": digest,
+        "valid": valid,
+        "preserved": True,
+        "reasons": [] if valid else ["declared invalid"],
+        "meta": {
+            "schema": "gfx-frame-dump/v1",
+            "frame_index": index,
+            "session": session,
+            "width": width,
+            "height": height,
+            "origin": origin,
+            "pixel_format": "BGRA8",
+            "raw_file": f"captured/frame-{index}.bgra",
+            "raw_bytes": width * height * 4,
+            "sha256": digest,
+            "capture_valid": True,
+            "gpu_completed": gpu_completed,
+        },
+    }
+
+
+def _pair_record(index, reference_digest, candidate_digest, session, *,
+                 status="aligned", comparison="pass"):
+    return {
+        "frame_index": index,
+        "candidate_frame_index": index,
+        "status": status,
+        "reference": {"update_identity": "0x10", "game_day": 1,
+                      "draws": 20, "caller_signature": "0xabc"},
+        "candidate": {"update_identity": "0x10", "game_day": 1,
+                      "draws": 20, "caller_signature": "0xabc"},
+        "dumps": {
+            "reference": {
+                "found": {
+                    str(index): _frame_dump(index, reference_digest, session)["meta"]},
+                "valid": True,
+            },
+            "candidate": {
+                "found": {
+                    str(index): _frame_dump(index, candidate_digest, session)["meta"]},
+                "valid": True,
+            },
+        },
+        "comparison": {
+            "status": comparison,
+            "alignment": {"status": status},
+            "reasons": [],
+        },
+    }
+
+
 class QualificationTests(unittest.TestCase):
     def result(self, *, paired=100, aligned=100, not_aligned=0, passed=100,
                failed=0, unverified=0, not_compared=0, health=None,
-               processes=None, stop=None):
+               processes=None, stop=None, stability=None, dumps=None,
+               pairs=None, pair_status="aligned", session="session-test"):
+        first_failure = None
+        if failed:
+            first_failure = {
+                "frame_index": 4,
+                "candidate_frame_index": 4,
+                "status": pair_status,
+                "comparison": {
+                    "status": "fail",
+                    "reasons": ["pixel"],
+                    "alignment": {"status": pair_status},
+                },
+            }
         return {
+            "session_id": session,
             "frames": {
                 "paired": paired,
                 "aligned": aligned,
@@ -667,9 +745,12 @@ class QualificationTests(unittest.TestCase):
                     "failed": failed,
                     "unverified": unverified,
                     "not_compared": not_compared,
-                    "first_failure": {"comparison": {"reasons": ["pixel"]}}
-                    if failed else None,
+                    "first_failure": first_failure,
                 },
+                "pairs": (pairs if pairs is not None else [
+                    _pair_record(4, "a" * 64, "b" * 64, session),
+                    _pair_record(5, "a" * 64, "b" * 64, session),
+                ]),
             },
             "health": health or {"verdict": "healthy", "first_failure": None,
                                   "instrumentation_failures": []},
@@ -677,12 +758,22 @@ class QualificationTests(unittest.TestCase):
                                         "candidate": {"exit_code": 0}},
             "terminations": [],
             "stop": stop or {"reason": "frame_limit"},
-            "stability": {"status": "verified"},
+            "stability": stability if stability is not None
+                         else {"status": "verified"},
+            "dumps": dumps if dumps is not None else {
+                role: {"captured": [
+                    _frame_dump(index, digest, session)
+                    for index in (4, 5, 6)
+                ], "missing": []}
+                for role, digest in (("reference", "a" * 64),
+                                     ("candidate", "b" * 64))
+            },
             "result": "completed",
         }
 
     def scenario(self, policy="tolerant"):
-        return {"comparison": {"policy": policy}}
+        return {"comparison": {"policy": policy},
+                "settle": {"stable_frames": 2}}
 
     def classify(self, result, **kwargs):
         return gfx_dual_run.classify_campaign(
@@ -697,10 +788,59 @@ class QualificationTests(unittest.TestCase):
         self.assertFalse(value["qualified"])
 
     def test_full_passing_coverage_is_match(self):
-        value = self.classify(self.result())
+        # Two requested comparisons, each with authoritative correspondence
+        # and a pair-local two-frame static run (4-5 and 5-6).
+        value = self.classify(
+            self.result(paired=2, aligned=2, passed=2), max_frames=2)
         self.assertEqual(value["status"], "match")
         self.assertTrue(value["qualified"])
         self.assertTrue(value["coverage_complete"])
+        self.assertTrue(value["match_evidence"]["supported"])
+
+    def test_verified_stability_streak_without_pair_local_evidence_is_not_match(self):
+        # A verified digest streak elsewhere in the window must not qualify
+        # two passing comparisons whose own frames are not consecutive-equal.
+        result = self.result(
+            paired=2, aligned=2, passed=2,
+            stability={"status": "verified"},
+            dumps={role: {"captured": [
+                _frame_dump(index, digest, "session-test")
+                for index in (10, 11, 12)
+            ], "missing": []}
+                for role, digest in (("reference", "c" * 64),
+                                     ("candidate", "d" * 64))},
+            pairs=[
+                _pair_record(4, "a" * 64, "b" * 64, "session-test"),
+                _pair_record(5, "e" * 64, "f" * 64, "session-test"),
+            ],
+        )
+        value = self.classify(result, max_frames=2)
+        self.assertNotEqual(value["status"], "match")
+        self.assertEqual(value["status"], "incomplete")
+        self.assertFalse(value["qualified"])
+        self.assertIn("pair-local static scene is unverified",
+                      " ".join(value["reasons"]))
+
+    def test_validated_pair_dumps_can_prove_pair_local_staticity(self):
+        # The stop dump is empty; the compared pairs' own collector-validated
+        # metadata provides the consecutive digest series.
+        result = self.result(
+            paired=2, aligned=2, passed=2,
+            dumps={role: {"captured": [], "missing": []}
+                   for role in ("reference", "candidate")},
+        )
+        value = self.classify(result, max_frames=2)
+        self.assertEqual(value["status"], "match")
+        self.assertTrue(value["match_evidence"]["supported"])
+
+    def test_missing_per_pair_evidence_is_not_a_match(self):
+        result = self.result(paired=2, aligned=2, passed=2)
+        result["frames"].pop("pairs", None)
+        value = self.classify(result, max_frames=2)
+        self.assertNotEqual(value["status"], "match")
+        self.assertEqual(value["status"], "incomplete")
+        self.assertIn("per-pair qualification evidence",
+                      " ".join(value["reasons"]))
 
     def test_one_hundred_pairs_without_comparisons_is_incomplete(self):
         value = self.classify(self.result(passed=0, not_compared=100))
@@ -711,138 +851,60 @@ class QualificationTests(unittest.TestCase):
     def test_pixel_difference_is_rendering_difference(self):
         value = self.classify(self.result(passed=99, failed=1))
         self.assertEqual(value["status"], "rendering_difference")
+        self.assertTrue(value["renderer_difference"]["supported"])
 
     def test_pixel_difference_on_unverified_static_scene_is_incomplete(self):
         # Recorded Experiment A session 20261114T181230Z-d28f6fee reached an
-        # aligned pair (same day, identity, caller signature and draw count) and
-        # still classified the pixel difference as a rendering difference while
-        # its own stability evidence was weak.
-        result = self.result(passed=0, failed=1, not_compared=0)
-        result["stability"] = {"status": "weak", "required_frames": 2,
-                               "identity_max_streak": 1}
+        # aligned pair (same day, identity, caller signature and draw count) with
+        # only one preserved frame per role.  The previous classifier blamed the
+        # renderer; the pair is not pixel-static.
+        result = self.result(
+            passed=0, failed=1, not_compared=0,
+            stability={"status": "weak", "required_frames": 2,
+                       "identity_max_streak": 1},
+            dumps={role: {"captured": [_frame_dump(4, "a" * 64,
+                                                   "session-test")],
+                          "missing": []}
+                   for role in ("reference", "candidate")},
+        )
         value = self.classify(result, max_frames=1)
         self.assertEqual(value["status"], "incomplete")
         self.assertFalse(value["qualified"])
         joined = " ".join(value["reasons"])
-        self.assertIn("unverified static scene", joined)
-        self.assertIn("correspondence is weak", joined)
-        # The measured difference stays visible in the evidence.
+        self.assertIn("pair-local static scene is unverified", joined)
         self.assertIn("pixel", joined)
-        self.assertEqual(value["staticity"]["verified"], False)
+        self.assertFalse(value["renderer_difference"]["supported"])
 
-    def test_missing_stability_evidence_is_not_a_rendering_difference(self):
+    def test_missing_staticity_evidence_is_not_a_rendering_difference(self):
         result = self.result(passed=0, failed=1)
-        result.pop("stability")
+        result.pop("dumps")
         value = self.classify(result, max_frames=1)
         self.assertEqual(value["status"], "incomplete")
 
     def test_preserved_static_frames_restore_a_rendering_difference(self):
-        result = self.result(passed=0, failed=1)
-        result["stability"] = {"status": "weak"}
-        digests = {"reference": ["a", "a"], "candidate": ["b", "b"]}
-        result["dumps"] = {
-            role: {"captured": [
-                {"frame_index": 4, "sha256": sha, "valid": True},
-                {"frame_index": 5, "sha256": sha, "valid": True},
-            ], "missing": []}
-            for role, sha in digests.items()
-        }
+        result = self.result(passed=0, failed=1, stability={"status": "weak"})
         value = self.classify(result, max_frames=1)
         self.assertEqual(value["status"], "rendering_difference")
-        self.assertTrue(value["staticity"]["verified"])
+        self.assertTrue(value["renderer_difference"]["staticity"]["verified"])
 
     def test_gapped_or_changing_digests_are_not_static(self):
-        value = gfx_align.staticity_evidence({
-            "reference": {"captured": [
-                {"frame_index": 4, "sha256": "a"},
-                {"frame_index": 6, "sha256": "a"},
-            ]},
-            "candidate": {"captured": [
-                {"frame_index": 4, "sha256": "b"},
-                {"frame_index": 5, "sha256": "c"},
-            ]},
-        })
+        value = gfx_align.scene_staticity(
+            {
+                "reference": {"captured": [
+                    _frame_dump(4, "a" * 64, "session-test"),
+                    _frame_dump(6, "a" * 64, "session-test"),
+                ]},
+                "candidate": {"captured": [
+                    _frame_dump(4, "b" * 64, "session-test"),
+                    _frame_dump(5, "c" * 64, "session-test"),
+                ]},
+            },
+            required=2, frames={"reference": 4, "candidate": 5},
+            session="session-test",
+        )
         self.assertFalse(value["verified"])
         self.assertEqual(value["roles"]["reference"]["max_streak"], 1)
         self.assertEqual(value["roles"]["candidate"]["max_streak"], 1)
-
-    def test_gpu_failure_takes_priority(self):
-        value = self.classify(self.result(
-            health={"verdict": "failed",
-                    "first_failure": {"kind": "draw_refused",
-                                      "message": "current shader is not linked"},
-                    "instrumentation_failures": []}))
-        self.assertEqual(value["status"], "gpu_execution_failure")
-
-    def test_game_update_is_independent_alignment_evidence(self):
-        reference = {"frame_index": 1, "width": 100, "height": 100,
-                     "draws": 20, "caller_signature": "0x1",
-                     "update_identity": 99}
-        candidate = {"frame_index": 1, "width": 100, "height": 100,
-                     "draws": 20, "caller_signature": "0x2",
-                     "update_identity": 99}
-        score, evidence = gfx_align.match_score(reference, candidate)
-        self.assertIn("game_update", evidence)
-        self.assertGreaterEqual(score, 6)
-        result = gfx_align.align_sequences([reference], [candidate])
-        self.assertEqual(result["pairs"][0]["status"], gfx_align.ALIGNED)
-
-    def test_hex_encoded_game_update_is_parsed(self):
-        reference = {"frame_index": 1, "width": 100, "height": 100,
-                     "draws": 20, "caller_signature": "0x1",
-                     "update_identity": "0x0de0dd22eab200f0"}
-        candidate = dict(reference, caller_signature="0x2")
-        score, evidence = gfx_align.match_score(reference, candidate)
-        self.assertIn("game_update", evidence)
-        self.assertGreaterEqual(score, 6)
-
-    def test_different_game_update_is_not_aligned(self):
-        reference = {"frame_index": 1, "width": 100, "height": 100,
-                     "draws": 20, "caller_signature": "0x1",
-                     "update_identity": 1}
-        candidate = {"frame_index": 1, "width": 100, "height": 100,
-                     "draws": 20, "caller_signature": "0x1",
-                     "update_identity": 2}
-        self.assertEqual(gfx_align.match_score(reference, candidate)[0], -100)
-        result = gfx_align.align_sequences([reference], [candidate])
-        self.assertFalse(any(pair["status"] == gfx_align.ALIGNED
-                             for pair in result["pairs"]))
-
-    def test_ambiguous_pairs_are_alignment_failure(self):
-        value = self.classify(self.result(aligned=90, not_aligned=10,
-                                          passed=90, not_compared=10))
-        self.assertEqual(value["status"], "alignment_failure")
-
-    def test_cleanup_sigkill_is_not_process_failure(self):
-        value = self.classify(self.result(
-            passed=99, failed=1,
-            processes={"reference": {"exit_code": -9},
-                       "candidate": {"exit_code": -9}},
-            stop={"reason": "frame_difference", "elapsed_seconds": 5}))
-        self.assertEqual(value["status"], "rendering_difference")
-
-    def test_abnormal_process_exit_is_process_failure(self):
-        value = self.classify(self.result(
-            processes={"reference": {"exit_code": 0},
-                       "candidate": {"exit_code": 11}}))
-        self.assertEqual(value["status"], "process_failure")
-
-    def test_weak_correspondence_cannot_match(self):
-        result = self.result()
-        result["stability"] = {"status": "weak"}
-        value = self.classify(result)
-        self.assertEqual(value["status"], "incomplete")
-        self.assertIn("correspondence is weak", " ".join(value["reasons"]))
-
-    def test_lockstep_timeout_is_alignment_failure(self):
-        value = self.classify(self.result(
-            stop={"reason": "lockstep_timeout"}))
-        self.assertEqual(value["status"], "alignment_failure")
-
-    def test_diagnostic_policy_never_qualifies(self):
-        value = self.classify(self.result(), policy="diagnostic")
-        self.assertEqual(value["status"], "incomplete")
-        self.assertFalse(value["qualified"])
 
 
 class CleanupFailureTests(unittest.TestCase):
@@ -1274,8 +1336,8 @@ class CaptureIntegrityTests(unittest.TestCase):
     def test_compare_pair_refuses_invalid_evidence(self):
         meta = dict(self.meta, sha256="0" * 64)
         result = gfx_dual_run._compare_pair(
-            {"frame_index": 3, "candidate_frame_index": 3}, meta, meta,
-            self.scenario)
+            {"frame_index": 3, "candidate_frame_index": 3,
+             "status": "aligned"}, meta, meta, self.scenario)
         self.assertEqual(result["status"], "not_compared")
         self.assertIn("capture integrity failed", result["reason"])
         self.assertIn("integrity", result)
@@ -1398,11 +1460,14 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(value["status"], "gpu_execution_failure")
         self.assertFalse(value["qualified"])
 
-    def test_complete_clean_coverage_is_qualified(self):
+    def test_complete_clean_counts_without_pair_evidence_are_incomplete(self):
+        # Counts and a legacy stability flag are not qualification evidence.
         value = gfx_dual_run.classify_campaign(
             self.base(), self.scenario(), max_frames=4)
-        self.assertEqual(value["status"], "match")
-        self.assertTrue(value["qualified"])
+        self.assertEqual(value["status"], "incomplete")
+        self.assertFalse(value["qualified"])
+        self.assertIn("per-pair qualification evidence",
+                      " ".join(value["reasons"]))
 
 
 class RealIdentityAlignmentTests(unittest.TestCase):

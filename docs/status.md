@@ -2,50 +2,6 @@
 
 Authoritative summary of what is established, qualified, and in flight. Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
 
-## M7 diagnostic infrastructure (2026-11-15)
-
-The PR #195 canary proved the offline diagnostic path works, then exposed where
-it wastes an autonomous agent's time. This infrastructure change makes the
-existing surface usable without a new tool family, agent loop or EU4 launch:
-
-- **One interpreter.** `run.sh`/`preflight.sh` resolve an absolute Python with
-  NumPy; the DSH adapter never falls back to a bare `python3`. Every tool
-  envelope reports the actual interpreter and NumPy state, and a missing
-  dependency is an `unavailable` diagnostic, not a success.
-- **Unambiguous outcomes.** `eu4-agent-tool/v2` separates execution, diagnostic
-  completion, rendering/comparison verdict, evidence validity and
-  qualification. A difference verdict remains a successful comparison; an
-  aborted comparison does not.
-- **Focused inspection.** `eu4_session list` is active-only by default with
-  explicit counts; `eu4_diff_inspect` accepts a campaign root (listing sessions
-  rather than choosing one) and returns health provenance, correspondence,
-  staticity, first discrepancy, missing evidence and a category-specific next
-  step; `eu4_capture frames` honours exact frame/role filters with bounded
-  pagination and compact records. `eu4_capture health` and `eu4_diff_inspect`
-  reconcile persisted and freshly scanned health and never treat unknown health
-  as healthy.
-- **Temporal diagnostics.** `gfx_frame_compare.compare_temporal` compares
-  reference N/N+1, candidate M/M+1 and reference N/candidate M using the existing
-  decoder, normalization and metrics, and reports mask overlap. On the recorded
-  Experiment A session it recovers the canary's findings (3.77 %, 79.81 %,
-  6.43 %, 1.35 %, 92.0 % overlap) in one 0.4 s call.
-- **Verification and discovery.** `automation.test_runner` runs focused modules,
-  preserves exit codes, logs outside the shell and refuses duplicate suites;
-  `EU4_EVIDENCE_ROOT` indexes historical campaigns read-only across worktrees.
-- **Measurement.** `automation.dsh_efficiency` reports tool mix, failures,
-  repeats, oversized/truncated outputs, long jobs, tool wait, cache-aware token
-  use, launches, human interventions and goal outcome from an existing DSH JSONL
-  export.
-- `observation.capture_every_frame` now fails closed rather than being silently
-  ignored.
-
-No EU4 launch was made and no Metal claim is involved. Efficiency evidence:
-[M7 diagnostic infrastructure efficiency report](../analysis/m7/efficiency.md);
-verification record:
-[M7 infrastructure verification evidence](../analysis/m7/infrastructure-verification.md).
-Deferred native instrumentation: [M7 follow-up plan](../analysis/m7/m7-instrumentation-followup.md).
-Tool surface: [structured EU4 reconstruction tools](agent-tools.md).
-
 ## Strategy B — independent replay (2026-11-14)
 
 Capture once, replay independently. A canonical authentic OpenGL title frame
@@ -325,12 +281,24 @@ yet differed on 1.35 % of pixels, while the same process's consecutive frames
 differed by 3.7 % and 79.7 %; 92 % of the cross-process differing pixels also
 change between two consecutive reference frames, and the candidate pause
 released ~2 s after the request. Both recorded `rendering_difference` verdicts
-were emitted with `stability=weak` and `render_stage_proven=false`. The
-correction requires verified static-scene evidence before a pixel difference is
-attributed to a renderer (otherwise `incomplete`), extracts staticity from
-preserved consecutive digests (stop-time neighbour frames), and applies the same
-predicate to offline cases. No EU4 launch was made and no Metal claim is
-involved. Report: [M7.0 starter canary](../analysis/m7/starter-canary.md).
+were emitted with `stability=weak` and `render_stage_proven=false`.
+
+The correction requires verified static-scene evidence before a pixel difference
+is attributed to a renderer (otherwise `incomplete`), and the same evidence for
+a `match` on **every** requested comparison: `settle.stable_frames` consecutive
+identical full-resolution digests whose run contains the compared frame, from
+valid dumps that belong to the campaign session. A passing local comparison in
+a packaged case is reported as local equality; the case can report `match` only
+when its source campaign is a qualified `match`. Engine day, update
+identity, caller composition and draw count are correspondence evidence and
+never establish staticity. The same predicate
+(`automation/gfx_qualification.py`) gates campaign and offline case
+classification, requires healthy (not `unknown`) GPU execution, and the pixel
+path may not promote a pair the sequence aligner rejected. Stop-time neighbour
+frames make staticity observable without another campaign. No EU4 launch was
+made and no Metal claim is involved. Report and validation:
+[M7.0 starter canary](../analysis/m7/starter-canary.md),
+[validation](../analysis/m7/m7-validation.md).
 
 `live-a6` and `live-a10` are therefore reclassified `incomplete`; the measured
 differences are unchanged. The remaining unknown is the mechanism of the

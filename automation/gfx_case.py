@@ -15,7 +15,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from automation import gfx_align, gfx_frame_compare
+from automation import gfx_align, gfx_frame_compare, gfx_qualification
 
 SCHEMA = "gfx-diagnostic-case/v1"
 
@@ -87,18 +87,76 @@ def _classify(result: dict, pair: dict | None, comparison: dict | None) -> str:
         return INCOMPLETE
     status = comparison.get("status")
     if status == gfx_frame_compare.FAIL:
-        # Keep the offline case consistent with the campaign verdict: a pixel
-        # difference is not attributable to a renderer unless the static scene
-        # was verified (campaign stability or preserved consecutive digests).
-        stable = str((result.get("stability") or {}).get("status")) == "verified"
-        if stable or gfx_align.staticity_evidence(result.get("dumps"))["verified"]:
-            return CONFIRMED_RENDERING
-        return INCOMPLETE
+        return _difference_classification(result, pair, comparison)
     if status == gfx_frame_compare.PASS:
-        return MATCH
+        return _pass_classification(result, pair, comparison)
     if status in (gfx_frame_compare.UNVERIFIED, "not_compared", None):
         return UNALIGNED
     return INCOMPLETE
+
+
+_CAMPAIGN_FLOOR = {
+    "alignment_failure": UNALIGNED,
+    "incomplete": INCOMPLETE,
+    "gpu_execution_failure": GPU_FAILURE,
+    "infrastructure_failure": INSTRUMENTATION,
+    "process_failure": PROCESS_FAILURE,
+}
+
+
+def campaign_classification(result: dict) -> str | None:
+    """The source campaign's recorded qualification, if it has one."""
+    value = result.get("classification")
+    if isinstance(value, str) and value:
+        return value
+    qualification = result.get("qualification")
+    if isinstance(qualification, dict):
+        value = qualification.get("status")
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _pass_classification(result: dict, pair: dict | None,
+                         comparison: dict | None) -> str:
+    """Local pixel equality is not campaign qualification.
+
+    The case may report ``match`` only when its source campaign is a qualified
+    ``match``; a passing pair from an incomplete/alignment-failed/unqualified
+    campaign keeps the campaign floor.  Missing campaign evidence is
+    conservatively incomplete.
+    """
+    campaign = campaign_classification(result)
+    if campaign != MATCH:
+        return _CAMPAIGN_FLOOR.get(campaign or "", INCOMPLETE)
+    qualification = result.get("qualification")
+    if isinstance(qualification, dict) and qualification.get("qualified") is False:
+        return INCOMPLETE
+    pair_status = (pair or {}).get("status")
+    alignment = (comparison or {}).get("alignment")
+    alignment_status = (alignment or {}).get("status") if isinstance(
+        alignment, dict) else None
+    if pair_status != gfx_align.ALIGNED or alignment_status != gfx_align.ALIGNED:
+        return UNALIGNED
+    return MATCH
+
+
+def difference_evidence(result: dict, pair: dict | None,
+                        comparison: dict | None) -> dict:
+    """The campaign-wide renderer-difference predicate for this case."""
+    return gfx_qualification.renderer_difference_evidence(
+        result, pair=pair, comparison=comparison)
+
+
+def _difference_classification(result: dict, pair: dict | None,
+                               comparison: dict | None) -> str:
+    """Never claim more than the campaign evidence supports."""
+    evidence = difference_evidence(result, pair, comparison)
+    campaign = result.get("classification")
+    if evidence["supported"] and campaign in (None, CONFIRMED_RENDERING):
+        return CONFIRMED_RENDERING
+    floor = _CAMPAIGN_FLOOR.get(campaign)
+    return floor or INCOMPLETE
 
 
 def _choose_pair(result: dict, pair_index: int | None = None) -> dict | None:
@@ -170,6 +228,14 @@ def _analysis(result: dict, pair: dict | None, comparison: dict | None,
         f"- GPU health verdict: `{health.get('verdict')}`; first failure: "
         f"`{(health.get('first_failure') or {}).get('kind')}`.",
     ]
+    if (comparison or {}).get("status") == gfx_frame_compare.PASS \
+            and classification != MATCH:
+        lines.append(
+            "- Local pixel equality is recorded here, but it does not qualify "
+            f"the campaign: the campaign verdict is `{campaign_classification(result)}`. "
+            "A packaged case cannot claim stronger equivalence than its source "
+            "campaign."
+        )
     if semantic:
         first = (semantic.get("first") or {})
         lines.append(
@@ -224,11 +290,16 @@ def _analysis(result: dict, pair: dict | None, comparison: dict | None,
         ]
     elif (classification == INCOMPLETE and comparison
           and comparison.get("status") == gfx_frame_compare.FAIL):
+        evidence = difference_evidence(result, pair, comparison)
         lines += [
-            "- A pixel difference was measured, but the static-scene correspondence "
-            "required to attribute it is unverified (no consecutive identical "
-            "full-frame digests on both sides). The pair may be two different "
-            "render stages; this is not an established renderer difference.",
+            "- A pixel difference was measured, but renderer attribution is "
+            "withheld: the qualification preconditions are not all satisfied. "
+            "The pair may be two different render stages or a non-static scene; "
+            "this is not an established renderer difference.",
+            "- Qualification blockers: "
+            + "; ".join(evidence["problems"]),
+            "- The numerical difference is preserved in `difference/`; withholding "
+            "attribution does not discard the measurement.",
         ]
     else:
         lines += [

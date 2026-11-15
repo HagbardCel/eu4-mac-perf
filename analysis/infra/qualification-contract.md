@@ -19,11 +19,19 @@ A `match` requires all of:
 3. no unverified/not-compared/not-aligned required pair;
 4. clean GPU health and no instrumentation/process failure;
 5. the configured policy is exact or tolerant (never diagnostic);
-6. **verified static-scene correspondence** (`settle.stable_frames`
-   consecutive identical full-frame digests on both sides).
+6. **pair-local static-scene correspondence for every requested comparison**:
+   for each requested pair, a `settle.stable_frames` consecutive identical
+   full-resolution digest run that contains that pair's frame on both sides,
+   plus authoritative pair correspondence. A digest streak elsewhere in the
+   campaign, a global `stability.status` flag, or only some qualified pairs does
+   not qualify a `match`. Engine day, update identity and caller composition are
+   correspondence evidence and never establish staticity. See
+   [static-scene contract](#static-scene-contract-m70).
 
 Frame-limit alone never qualifies: 100 paired observations with zero valid
-comparisons classify as `incomplete` and report the exact coverage gap.
+comparisons classify as `incomplete` and report the exact coverage gap. Missing
+per-pair qualification evidence is also `incomplete`; it is never inferred from
+aggregate counts.
 
 ## Scenario controls
 
@@ -40,6 +48,15 @@ veto. A catastrophically wrong candidate frame is compared when scene/caller/
 draw/extent correspondence is otherwise established. Conversely, a `match`
 requires a verified static scene; animated or weakly identified scenes remain
 `incomplete` with an explicit weak-correspondence reason.
+
+The sequence aligner and the pixel path share one final decision,
+`gfx_align.pair_correspondence()`. `align_sequences()` still uses its bounded
+monotonic DP to propose pairings, but the pair's authoritative status is the
+shared predicate. A pair with equal engine identity but an incompatible draw
+workload (for example 120 vs 200 draws at a 0.30 tolerance) is `ambiguous` in
+both paths, not aligned in one and ambiguous in the other. Shared identity plus
+a comparable workload remains valid across GL/Metal draw batching; identical
+draw counts are not required.
 
 An engine-level update identity is now emitted per observation. The observer reads the exported `CCurrentGameState::_pInstance` singleton at
 RVA `0x2244620` with `vm_read_overwrite` (so a stale pointer cannot fault the
@@ -85,6 +102,41 @@ qualify. The save
 continues running, so the two processes are not at the same update. Experiment A
 therefore failed before any GL/Metal comparison; this is recorded as an
 `alignment_failure`, not as a renderer difference.
+
+## Static-scene contract (M7.0)
+
+A confirmed pixel difference may only be attributed to a renderer when all of
+the following hold. The predicate lives in
+`automation/gfx_qualification.py` and is shared by campaign classification and
+the offline case builder.
+
+1. **Valid capture.** Each contributing dump is marked valid and its metadata
+   agrees on frame index, SHA-256, extent, origin, pixel format, payload size and
+   GPU completion. A bare hash value is not evidence.
+2. **Provenance.** The dump belongs to the campaign session; a missing or foreign
+   session, missing metadata or a missing payload declaration is rejected.
+3. **Pair-local staticity.** `settle.stable_frames` consecutive identical
+   full-resolution digests must form a run that **contains the compared frame**
+   in each process. Gaps, conflicting duplicate indices and stable runs
+   elsewhere in the capture window do not qualify the pair. Identity streaks are
+   reported for diagnosis only (`identity_is_staticity: false`).
+4. **Authoritative correspondence.** The same decision (`gfx_align.pair_correspondence`)
+   must accept the pair for the sequence aligner *and* for the pixel path. The
+   pixel path may not re-derive a weaker rule. A shared engine update plus a
+   comparable render workload remains valid across backends with different draw
+   batching; identical draw counts are not required.
+5. **Healthy execution.** The GPU/API health verdict must be `healthy` and no
+   disqualifying instrumentation failure may be present. An absent or `unknown`
+   verdict is **not** healthy.
+6. **Case agreement.** The offline diagnostic case uses the same predicate and is
+   floored by the campaign classification; it can never claim a stronger verdict
+   than its campaign evidence.
+
+When any one of these is missing the run is `incomplete`: the numerical
+difference statistics are preserved, the observation stays in the record, and
+the attribution is withheld. This contract is scoped to the paused, pixel-static
+experiment; it does not require bit-identical consecutive frames for animated
+gameplay.
 
 ## Optional pause request
 
