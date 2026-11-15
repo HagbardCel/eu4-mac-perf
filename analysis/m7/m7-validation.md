@@ -42,7 +42,7 @@ Final qualification-review run (NumPy installed, same command; logs in
 | Run | Commit | Tests | Failures | Errors | Skipped | Exit |
 | --- | --- | --- | --- | --- | --- | --- |
 | Base | `5a0ac03` | 2967 | 21 | 4 | 30 | 1 |
-| Candidate (final review head) | see PR head | 3001 | 11 | 0 | 26 | 1 |
+| Candidate (final review head) | `5a78c95` | 3001 | 11 | 0 | 26 | 1 |
 
 Machine-readable comparison:
 `.local/m7/validation-summary.json` (local). Raw logs:

@@ -284,9 +284,12 @@ released ~2 s after the request. Both recorded `rendering_difference` verdicts
 were emitted with `stability=weak` and `render_stage_proven=false`.
 
 The correction requires verified static-scene evidence before a pixel difference
-is attributed to a renderer (otherwise `incomplete`): `settle.stable_frames`
-consecutive identical full-resolution digests whose run contains the compared
-frame, from valid dumps that belong to the campaign session. Engine day, update
+is attributed to a renderer (otherwise `incomplete`), and the same evidence for
+a `match` on **every** requested comparison: `settle.stable_frames` consecutive
+identical full-resolution digests whose run contains the compared frame, from
+valid dumps that belong to the campaign session. A passing local comparison in
+a packaged case is reported as local equality; the case can report `match` only
+when its source campaign is a qualified `match`. Engine day, update
 identity, caller composition and draw count are correspondence evidence and
 never establish staticity. The same predicate
 (`automation/gfx_qualification.py`) gates campaign and offline case

@@ -395,7 +395,7 @@ Final qualification-review run (NumPy installed; base and candidate logs preserv
 | Run | Commit | Tests | Failures | Errors | Skipped |
 | --- | --- | --- | --- | --- | --- |
 | Base | `5a0ac03` | 2967 | 21 | 4 | 30 |
-| Candidate (final review head) | see PR head | 3001 | 11 | 0 | 26 |
+| Candidate (final review head) | `5a78c95` | 3001 | 11 | 0 | 26 |
 
 Common failing ids: 20 (`test_dsh_bridge` 9, `test_trace_tr3` 11, both
 environmental). Candidate-only failing ids: **0**. The single base-only failure
