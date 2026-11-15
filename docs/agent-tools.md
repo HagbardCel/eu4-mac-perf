@@ -278,9 +278,14 @@ never silently replaced by a different pair. Only the selected frames and their
 required neighbours are decoded.
 
 Without explicit indices, the selector prefers the recorded pair only when its
-payload files are present and plausibly sized; otherwise it probes candidate
-windows incrementally (bounded) and reports `selected.source`,
-`selected.fallback` and `fallback_used`. A payload is decoded and, when its
+payload files are present and plausibly sized; otherwise it inspects candidate
+starts in order (bounded metadata scan) and probes a window only when metadata
+and cheap payload availability make it worth decoding. The decode-attempt bound
+is separate from the metadata scan, so many metadata-only or missing-payload
+frames cannot exhaust the decode allowance. `selected.source`,
+`selected.fallback`, `selected.probes`, `selected.candidates_considered`,
+`selected.search_exhausted` and `fallback_used` are reported; an exhausted
+search is explicit rather than implying that no usable window exists. A payload is decoded and, when its
 metadata declares a digest, verified before comparison; a digest mismatch or
 undecodable payload is reported in `invalid` and cannot produce completed
 statistics. Metadata enumeration never hashes unselected payloads.

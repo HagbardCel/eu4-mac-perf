@@ -1075,6 +1075,7 @@ def _frame_candidates(run: Path, role: str, meta: dict) -> list[Path]:
 TEMPORAL_MAX_WINDOW = 4
 TEMPORAL_MAX_COMPARISONS = 12
 TEMPORAL_MAX_SELECTION_PROBES = 16
+TEMPORAL_MAX_METADATA_CANDIDATES = 4096
 
 
 def _decode_frame_meta(run: Path, role: str, index: int,
@@ -1229,6 +1230,9 @@ def _temporal_report(run: Path, pair: dict | None,
                 "source": "explicit",
                 "fallback": False,
                 "probes": 0,
+                "candidates_considered": 0,
+                "search_exhausted": False,
+                "search_reason": "",
                 "probe_problems": [],
             }
         starts: list[int] = []
@@ -1236,14 +1240,30 @@ def _temporal_report(run: Path, pair: dict | None,
             starts.append(preferred)
         starts.extend(index for index in available if index not in starts)
         probes = 0
+        considered = 0
+        search_exhausted = False
+        search_reason = ""
         probe_problems: list[dict] = []
-        for start in starts[:TEMPORAL_MAX_SELECTION_PROBES]:
+        # Metadata presence and cheap payload availability are checked for
+        # every candidate; only a candidate worth decoding consumes a probe.
+        # The two bounds are separate so many metadata-only or missing-payload
+        # frames cannot exhaust the decode allowance.
+        for start in starts:
+            if considered >= TEMPORAL_MAX_METADATA_CANDIDATES:
+                search_exhausted = True
+                search_reason = "metadata candidate scan bound reached"
+                break
+            considered += 1
             indices = window_indices(start)
             if not all(index in metas for index in indices):
                 continue
             if not all(_payload_available(run, role, index, metas[index])
                        for index in indices):
                 continue
+            if probes >= TEMPORAL_MAX_SELECTION_PROBES:
+                search_exhausted = True
+                search_reason = "decode-attempt bound reached"
+                break
             probes += 1
             frames, missing, problems = _load_preserved_frames(
                 run, role, indices)
@@ -1261,6 +1281,9 @@ def _temporal_report(run: Path, pair: dict | None,
                                else "first_usable"),
                     "fallback": fallback,
                     "probes": probes,
+                    "candidates_considered": considered,
+                    "search_exhausted": False,
+                    "search_reason": "",
                     "probe_problems": probe_problems,
                 }
         # No complete usable window.  Keep the recorded pair (or the first
@@ -1278,6 +1301,9 @@ def _temporal_report(run: Path, pair: dict | None,
             "source": "first_available",
             "fallback": type(preferred) is int and start != preferred,
             "probes": probes,
+            "candidates_considered": considered,
+            "search_exhausted": search_exhausted,
+            "search_reason": search_reason,
             "probe_problems": probe_problems,
         }
 
@@ -1363,6 +1389,18 @@ def _temporal_report(run: Path, pair: dict | None,
             "reference": reference_selection["probes"],
             "candidate": candidate_selection["probes"],
         },
+        "candidates_considered": {
+            "reference": reference_selection["candidates_considered"],
+            "candidate": candidate_selection["candidates_considered"],
+        },
+        "search_exhausted": {
+            "reference": reference_selection["search_exhausted"],
+            "candidate": candidate_selection["search_exhausted"],
+        },
+        "search_reason": {
+            "reference": reference_selection["search_reason"],
+            "candidate": candidate_selection["search_reason"],
+        },
         "indices": {
             "reference": reference_indices,
             "candidate": candidate_indices,
@@ -1370,6 +1408,9 @@ def _temporal_report(run: Path, pair: dict | None,
     }
     report["fallback_used"] = bool(
         reference_selection["fallback"] or candidate_selection["fallback"])
+    report["selection_search_exhausted"] = bool(
+        reference_selection["search_exhausted"]
+        or candidate_selection["search_exhausted"])
     report["preserved"] = {
         "reference": reference_available,
         "candidate": candidate_available,

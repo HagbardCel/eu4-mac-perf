@@ -801,7 +801,8 @@ class DiagnosticSurfaceTests(ToolTests):
 
     def temporal_fixture(self, root: Path, *, preferred=(1, 1),
                          payload_indices=(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
-                         broken_indices=(), digest_mismatch_indices=()) -> Path:
+                         broken_indices=(), digest_mismatch_indices=(),
+                         frame_count=12) -> Path:
         import hashlib
         try:
             import numpy as np
@@ -832,7 +833,7 @@ class DiagnosticSurfaceTests(ToolTests):
         for role in ("reference", "candidate"):
             directory = run / role / "observe" / "captured"
             directory.mkdir(parents=True, exist_ok=True)
-            for index in range(1, 13):
+            for index in range(1, frame_count + 1):
                 image = np.full((6, 8, 4), 20, dtype=np.uint8)
                 image[:, :, 3] = 255
                 payload = image.tobytes()
@@ -925,6 +926,55 @@ class DiagnosticSurfaceTests(ToolTests):
         self.assertEqual(temporal["selected"]["reference"], 1)
         self.assertFalse(temporal["selected"]["fallback"]["reference"])
         self.assertEqual(temporal["status"], "incomplete")
+        self.assertIn(1, temporal["missing"]["reference"])
+
+    def test_auto_selection_finds_window_after_many_unusable_frames(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = self.temporal_fixture(
+                Path(temporary), preferred=(1, 1), frame_count=30,
+                payload_indices=(20, 21))
+            real = agent_tools._decode_frame_meta
+            decoded = []
+
+            def recording(inner_run, role, index, meta):
+                decoded.append((role, index))
+                return real(inner_run, role, index, meta)
+
+            with mock.patch.object(agent_tools, "_decode_frame_meta",
+                                   side_effect=recording):
+                code, value = self.call([
+                    "eu4_diff_inspect", "--run", str(run), "--temporal"])
+        self.assertEqual(code, 0)
+        temporal = value["result"]["temporal"]
+        self.assertEqual(temporal["status"], "completed")
+        self.assertEqual(temporal["selected"]["reference"], 20)
+        self.assertEqual(temporal["selected"]["candidate"], 20)
+        self.assertTrue(temporal["fallback_used"])
+        self.assertEqual(temporal["completion"]["completed"], 3)
+        self.assertFalse(temporal["selection_search_exhausted"])
+        for role in ("reference", "candidate"):
+            self.assertLessEqual(temporal["selected"]["probes"][role],
+                                 agent_tools.TEMPORAL_MAX_SELECTION_PROBES)
+            self.assertEqual(
+                temporal["selected"]["candidates_considered"][role], 20)
+        self.assertEqual({index for _role, index in decoded}, {20, 21})
+        self.assertLessEqual(len(decoded),
+                             2 * agent_tools.TEMPORAL_MAX_SELECTION_PROBES)
+
+    def test_explicit_unusable_frame_remains_incomplete_with_large_session(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = self.temporal_fixture(
+                Path(temporary), preferred=(1, 1), frame_count=30,
+                payload_indices=(20, 21))
+            code, value = self.call([
+                "eu4_diff_inspect", "--run", str(run), "--temporal",
+                "--reference-frame", "1", "--candidate-frame", "1"])
+        self.assertEqual(code, 2)
+        temporal = value["result"]["temporal"]
+        self.assertEqual(temporal["selected"]["reference"], 1)
+        self.assertEqual(temporal["selected"]["candidate"], 1)
+        self.assertEqual(temporal["status"], "incomplete")
+        self.assertFalse(temporal["selected"]["fallback"]["reference"])
         self.assertIn(1, temporal["missing"]["reference"])
 
     def test_auto_selection_skips_an_undecodable_payload(self):

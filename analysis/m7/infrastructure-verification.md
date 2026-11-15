@@ -156,18 +156,21 @@ The follow-up closes four correctness gaps found after PR #196 merged:
 Verification at the follow-up head:
 
 - Required focused selection (`test_gfx_frame_compare`, `test_agent_tools`,
-  `test_test_runner`): **104 tests, OK**.
+  `test_test_runner`): **106 tests, OK** at the final selection fix.
 - Dependent suites (dual-run, qualification, case, offline, evidence, DSH
-  bridge/profile/efficiency): **196 tests, OK**.
+  bridge/profile): **188 tests, OK** at the final selection fix.
 - Node plugin: **9/9 pass**.
-- Full suite at the follow-up head: **3132 tests, 11 failures, 0 errors,
-  26 skipped**. All 11 are the pre-existing `test_trace_tr3` environmental
-  failures; the same module has the identical 11 failures at base `a655fc1`.
-  No candidate-only regression.
+- Full suite at `306e93a` (the commit before the final selection-only fix):
+  **3132 tests, 11 failures, 0 errors, 26 skipped**. All 11 are the
+  pre-existing `test_trace_tr3` environmental failures; the same module has the
+  identical 11 failures at base. No candidate-only regression. The final
+  selection fix changes only `automation/agent_tools.py` and its tests; the
+  final head's portable CI runs the full suite.
 
 The final correction also records unavailable comparisons even when a role has
 zero decodable frames, selects automatic windows by payload availability and
-incremental probing (explicit indices are never substituted), and verifies a
-selected payload's declared digest without hashing unselected `.bgra` files.
+incremental probing (explicit indices are never substituted), separates the
+metadata-scan limit from the decode-attempt limit, and verifies a selected
+payload's declared digest without hashing unselected `.bgra` files.
 - Portable PNG content test uses a standard-library reader; Pillow is not
   required.
