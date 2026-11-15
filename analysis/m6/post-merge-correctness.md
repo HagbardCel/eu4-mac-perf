@@ -191,8 +191,8 @@ regression. It builds a frame-trace document in the captured format (it does
 not exercise the OpenGL capture writer, so it covers the capture-format fields
 and replay-side rebasing, not the GL recorder) with 16-bit indices `[3, 5, 7]`,
 signed base vertex `2` and captured `vertex_origin` `5`, replays the selected
-draw through the production frame replay host with the authentic pre-image, and
-checks the rendered pixels.
+draw through the production frame replay host with the fixture-supplied
+synthetic pre-image, and checks the rendered pixels.
 
 A second case omits `vertex_origin` and appends off-screen vertices so the
 unrebased indices stay in range. The replay still completes, but it fetches the
