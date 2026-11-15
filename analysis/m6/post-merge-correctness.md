@@ -185,11 +185,18 @@ fully exercise.
 
 ## Follow-up status (2026-11-15)
 
-The non-zero-`vertex_origin` capture-to-replay follow-up is now covered by
-`tests.test_m6_frame.SparseIndexReplayTests`. It builds a synthetic captured
-frame with 16-bit indices `[3, 5, 7]`, signed base vertex `2` and captured
-`vertex_origin` `5`, replays the selected draw through the production frame
-replay host with the authentic pre-image, and checks the rendered pixels. The
-historical canonical-frame replay above is unchanged and remains the
-full-frame qualification; this follow-up only exercises the sparse-index
-origin path that the canonical frame's zero origins do not.
+The non-zero-`vertex_origin` follow-up is now covered by
+`tests.test_m6_frame.SparseIndexReplayTests`, a capture-format/replay
+regression. It builds a frame-trace document in the captured format (it does
+not exercise the OpenGL capture writer, so it covers the capture-format fields
+and replay-side rebasing, not the GL recorder) with 16-bit indices `[3, 5, 7]`,
+signed base vertex `2` and captured `vertex_origin` `5`, replays the selected
+draw through the production frame replay host with the authentic pre-image, and
+checks the rendered pixels.
+
+A second case omits `vertex_origin` and appends off-screen vertices so the
+unrebased indices stay in range. The replay still completes, but it fetches the
+wrong vertices and cannot reproduce the captured triangle, so a missing origin
+cannot produce a falsely successful, correct draw. The historical
+canonical-frame replay above is unchanged and remains the full-frame
+qualification.

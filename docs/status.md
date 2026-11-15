@@ -290,10 +290,14 @@ Evidence: [qualification report](../analysis/m6/qualification-report.md),
 - **Offline captured-state replay.** 326/326 events encoded, 0 failed, GPU
   completion, 0 differing pixels of 1,930,176 including alpha. This is a
   captured-state replay; it does not independently reconstruct the upstream
-  terrain pass. A synthetic capture-to-replay regression now covers a sparse
-  16-bit index list with a nonzero signed base vertex and a nonzero captured
-  `vertex_origin` (`tests.test_m6_frame.SparseIndexReplayTests`); the historical
-  canonical frame's origins are zero, so it does not exercise that path.
+  terrain pass. A synthetic capture-format/replay regression now covers a
+  sparse 16-bit index list with a nonzero signed base vertex and a nonzero
+  captured `vertex_origin` (`tests.test_m6_frame.SparseIndexReplayTests`). It
+  builds a frame-trace document in the captured format and does not exercise
+  the OpenGL capture writer; the historical canonical frame's origins are zero,
+  so it does not exercise that path either. A negative case omits the origin and
+  proves the replay cannot fetch the captured triangle while still reporting a
+  successful command.
 - **Text root cause (fixed).** The Credits/Options labels are directly sampled
   render targets. GL stores render-target row 0 at the bottom; Metal stores it
   at the top, so the engine's GL bottom-up UVs reflected the label. Live vertex

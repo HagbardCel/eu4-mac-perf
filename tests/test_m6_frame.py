@@ -1185,13 +1185,19 @@ fragment FOut test_fragment(float4 position [[position]]) {
 
 @unittest.skipUnless(sys.platform == "darwin", "the replay host needs Metal")
 class SparseIndexReplayTests(unittest.TestCase):
-    """Capture-to-replay regression for sparse indices and a nonzero origin.
+    """Capture-format/replay regression for sparse indices and a nonzero origin.
 
-    The capture records 16-bit indices ``[3, 5, 7]`` for a vertex buffer whose
+    This builds a frame-trace document in the captured format and replays it
+    through the production frame replay host. It does not exercise the OpenGL
+    capture writer, so it covers the capture-format fields and the replay-side
+    rebasing, not the GL recorder that produces them.
+
+    The fixture records 16-bit indices ``[3, 5, 7]`` for a vertex buffer whose
     captured slice begins at vertex 5, and the draw carries signed base vertex
     2. The only valid rebasing is ``index + base - origin`` -> ``[0, 2, 4]``.
-    The replay host must reject the draw if either the base vertex or the
-    captured origin is ignored, so the positive case is not a no-op check.
+    The negative case appends off-screen vertices so that dropping the captured
+    origin still produces a successfully executed draw, but not the captured
+    triangle; it cannot pass the positive assertion.
     """
 
     VERTEX = """#include <metal_stdlib>
@@ -1238,7 +1244,8 @@ fragment FOut test_fragment() {
                                  180 + x, 255])
         return bytes(pixels)
 
-    def _frame(self, root: Path, *, record_origin: bool) -> tuple[Path, Path, bytes]:
+    def _frame(self, root: Path, *, record_origin: bool,
+               vertices: int | None = None) -> tuple[Path, Path, bytes]:
         frame = root / "frame"
         blobs = frame / "blobs"
         width, height = self.WIDTH, self.HEIGHT
@@ -1249,9 +1256,13 @@ fragment FOut test_fragment() {
         (frame / "frame-reference.bgra").write_bytes(reference)
 
         # Vertices 0/2/4 form the visible triangle; 1/3 are far outside clip
-        # space, so a wrong rebasing either produces no pixels or is refused.
+        # space. Extra vertices stay off-screen so the negative case can keep
+        # the rebased indices in range while fetching the wrong vertices.
         positions = [(-1.0, -1.0), (99.0, 99.0), (1.0, -1.0),
                      (99.0, 99.0), (-1.0, 1.0)]
+        count = vertices if vertices is not None else self.VERTICES
+        self.assertGreaterEqual(count, len(positions))
+        positions.extend([(99.0, 99.0)] * (count - len(positions)))
         vertex_data = b"".join(struct.pack("<2f", *value) for value in positions)
         vertex_member = self._write(blobs / "vertices.bin", vertex_data)
         index_member = self._write(blobs / "indices.bin", struct.pack("<3H", 3, 5, 7))
@@ -1419,6 +1430,28 @@ fragment FOut test_fragment() {
             # The visible triangle covers part, not all, of the target.
             self.assertGreater(changed, 0)
             self.assertLess(changed, self.WIDTH * self.HEIGHT)
+
+    def test_missing_origin_cannot_fetch_the_captured_vertices(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # Ten vertices keep the unrebased indices 5/7/9 inside the buffer.
+            # They are off-screen, so the draw completes without reproducing
+            # the captured triangle.
+            frame, shaders, pre = self._frame(
+                root, record_origin=False, vertices=10)
+            ran = self._replay(root, frame, shaders)
+            self.assertEqual(ran.returncode, 0, ran.stderr + ran.stdout)
+            result = json.loads(ran.stdout)
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["encoded"], 1)
+            self.assertEqual(result["failed"], 0)
+            post = (root / "replay" / "isolated-post-0.bgra").read_bytes()
+            self.assertEqual(post, pre)
+            for pixel in range(self.WIDTH * self.HEIGHT):
+                before = pre[pixel * 4:pixel * 4 + 4]
+                after = post[pixel * 4:pixel * 4 + 4]
+                self.assertEqual(after, before,
+                                 f"pixel {pixel} exposed a falsely correct draw")
 
 
 if __name__ == "__main__":

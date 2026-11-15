@@ -25,30 +25,60 @@ Saved evidence: [p0-baseline.json](p0-baseline.json),
 [stages.json](stages.json). Raw per-frame samples are reproducible with
 `--records`.
 
-## PR P0 baseline
+## Reproducing the historical P0 baseline and the current optimized benchmark
 
 `benchmark/eu4_gfx_stream_bench.py` builds the native live-draw host
 (`tests/gfx_live_draw_host.mm`) with the real backend modules and drives a
 deterministic synthetic draw stream through the same `_Gfx*` replacement route
 the game uses.
 
-Reproduce (from the repository root). This writes to gitignored `.local/`, so
-the tracked baseline is not overwritten:
+The P0 baseline is **historical**: it requires commit `db69a62`, the P0 commit,
+not current `main`. Running the benchmark on current `main` reproduces the
+optimized result, not the baseline. Both commands use Python 3.14 and
+`--no-debug-layer` (the measured configuration, without Metal validation) and
+write only to ignored `.local/`; the tracked `p0-baseline.json`, `final.json`
+and `stages.json` are evidence and are never overwritten.
+
+### Historical P0 baseline (`db69a62`)
+
+Use a detached worktree so the checkout you are reviewing is untouched:
+
+```sh
+# from the repository root; the P0 commit must be present in history
+MAIN=$PWD
+mkdir -p .local/perf
+git worktree add --detach .local/perf/p0-worktree db69a62
+(
+  cd .local/perf/p0-worktree
+  python3.14 benchmark/eu4_gfx_stream_bench.py \
+    --draws 1000 --frames 30 --kinds simple,indexed,mixed \
+    --no-debug-layer --summary \
+    --output "$MAIN/.local/perf/p0-baseline-repro.json"
+)
+git worktree remove .local/perf/p0-worktree
+```
+
+Compare that output with the tracked [p0-baseline.json](p0-baseline.json).
+`MAIN` deliberately points back at the checkout that created the worktree.
+
+### Current optimized benchmark (`main`, including PR #192)
+
+Run from the repository root at the reviewed merge or later:
 
 ```sh
 python3.14 benchmark/eu4_gfx_stream_bench.py \
   --draws 1000 --frames 30 --kinds simple,indexed,mixed \
   --no-debug-layer --summary \
-  --output .local/perf/p0-baseline-repro.json
+  --output .local/perf/current-repro.json
 ```
 
-`--no-debug-layer` matches the measured configuration; omit it only for a
-validation run. Add `--records` to retain every per-frame sample (the tracked
-`p0-baseline.json` is the compact summary).
+Compare that output with [final.json](final.json) and the per-stage
+[stages.json](stages.json). `--records` retains every per-frame sample; the
+tracked baseline and final files are compact summaries.
 
 By default the runner sets `MTL_DEBUG_LAYER=1` and
 `MTL_DEBUG_LAYER_ERROR_MODE=assert` for validation. `--no-debug-layer` disables
-them for the performance measurement above. Three warm-up frames precede the
+them for both performance measurements above. Three warm-up frames precede the
 measured frames, and the instrumented build runs the same workload, so pipeline
 compilation and Metal shader compilation are warm before sampling.
 
