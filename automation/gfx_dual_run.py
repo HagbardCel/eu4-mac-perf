@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Callable
 
 from automation import gfx_align, gfx_artifacts, gfx_diagnostics, gfx_flight, gfx_frame_compare
+from automation import gfx_qualification
 from automation import gfx_display, gfx_launch, gfx_scenario
 from automation import gfx_session, gfx_wait, launch_ledger, launch_lease
 
@@ -159,16 +160,21 @@ class CampaignState:
                                        self.identity_streak)
 
     def stability_summary(self, required: int) -> dict:
+        """Full-resolution digest stability only.
+
+        A repeated engine day/update identity is correspondence evidence, not
+        proof that the renderer output was stable.  ``identity_max_streak`` is
+        reported for diagnosis and never contributes to ``status``.
+        """
         if required <= 1:
             required = 2
-        verified = (
-            all(item["max_streak"] >= required for item in self.stability.values())
-            or self.identity_max_streak >= required
-        )
+        verified = all(
+            item["max_streak"] >= required for item in self.stability.values())
         return {
             "status": "verified" if verified else "weak",
             "required_frames": required,
             "identity_max_streak": self.identity_max_streak,
+            "identity_is_staticity": False,
             "roles": {key: dict(value) for key, value in self.stability.items()},
         }
 
@@ -309,35 +315,14 @@ def align_streams(state: CampaignState, *, limit: int | None = None,
         ref_valid = ref.value.get("capture_valid") is True
         cand_valid = cand.value.get("capture_valid") is True
         extent = _extent_relation(ref, cand)
-        reference_signature = gfx_align._signature(ref.value)
-        candidate_signature = gfx_align._signature(cand.value)
-        same_draws = (
-            type(ref.value.get("draws")) is int
-            and ref.value.get("draws") == cand.value.get("draws")
-            and ref.value.get("draws") > 0
-        )
-        ref_draws = ref.value.get("draws") or 0
-        cand_draws = cand.value.get("draws") or 0
-        draw_relation = (
-            abs(ref_draws - cand_draws) / max(ref_draws, cand_draws)
-            if ref_draws and cand_draws else 1.0
-        )
-        ref_identity = _identity_value(ref)
-        cand_identity = _identity_value(cand)
-        identity_equal = bool(ref_identity and ref_identity == cand_identity)
-        strong = extent["normalized"] and (
-            (identity_equal and draw_relation <= draw_tolerance)
-            or (same_draws and reference_signature
-                and reference_signature == candidate_signature)
-        )
+        correspondence = gfx_align.pair_correspondence(
+            ref.value, cand.value, draw_tolerance=draw_tolerance)
         if not ref_valid or not cand_valid:
             status = NOT_ALIGNED
-        elif not strong:
-            status = AMBIGUOUS
-        elif ref.digest and ref.digest == cand.digest:
-            status = ALIGNED
+            reason = "capture is invalid"
         else:
-            status = ALIGNED
+            status = correspondence["status"]
+            reason = correspondence["reason"]
         pair = {
             "frame_index": ref_index,
             "candidate_frame_index": cand_index,
@@ -364,6 +349,8 @@ def align_streams(state: CampaignState, *, limit: int | None = None,
             "extent": _extent_relation(ref, cand),
             "preview": _preview_stats(ref, cand),
             "alignment_key": "frame_index",
+            "correspondence": correspondence,
+            "reason": reason,
         }
         state.pairs.append(pair)
         new_pairs.append(pair)
@@ -730,6 +717,17 @@ def _compare_pair(pair: dict, reference_meta: dict | None,
             "status": "not_compared",
             "reason": "one or both paired raw frames are unavailable",
         }
+    authoritative = pair.get("status")
+    if authoritative != gfx_align.ALIGNED:
+        # The sequence aligner is authoritative.  The pixel path must never
+        # re-derive a weaker rule and promote a pair it rejected.
+        return {
+            "status": "not_compared",
+            "reason": "authoritative alignment rejected the pair "
+                      f"({authoritative or 'no status'})",
+            "alignment": {"status": authoritative or "",
+                          "reason": pair.get("reason") or ""},
+        }
     expected = expected or {}
     reference_problems = _verify_dump_payload(
         reference_meta, pair["frame_index"],
@@ -770,67 +768,16 @@ def _compare_pair(pair: dict, reference_meta: dict | None,
         "game_day": candidate_meta.get("game_day"),
         "update_identity": candidate_meta.get("update_identity"),
     }
-    score, evidence = gfx_align.match_score(reference_record, candidate_record)
-    relation = gfx_align.extent_relation(reference_record, candidate_record)
-    reference_signature = gfx_align._signature(reference_record)
-    candidate_signature = gfx_align._signature(candidate_record)
-    same_draws = (
-        type(reference_record.get("draws")) is int
-        and reference_record.get("draws") == candidate_record.get("draws")
-        and reference_record.get("draws") > 0
-    )
-    reference_identity = _identity_value(reference_record)
-    candidate_identity = _identity_value(candidate_record)
-    identity_equal = bool(
-        reference_identity and reference_identity == candidate_identity
-    )
-    draw_tolerance = float((scenario.get("settle") or {}).get(
-        "draw_tolerance", 0.25))
-    ref_draws = reference_record.get("draws") or 0
-    cand_draws = candidate_record.get("draws") or 0
-    draw_relation = (
-        abs(ref_draws - cand_draws) / max(ref_draws, cand_draws)
-        if ref_draws and cand_draws else 1.0
-    )
-    strong = (
-        relation["normalized"]
-        and "scene_mismatch" not in evidence
-        and "game_update_mismatch" not in evidence
-        and (
-            # A shared engine day plus a comparable render workload is strong
-            # across backends even when GL/Metal batch draws differently.
-            (identity_equal and draw_relation <= draw_tolerance)
-            or (
-                same_draws
-                and (
-                    (reference_signature
-                     and reference_signature == candidate_signature)
-                    or "scene" in evidence
-                )
-            )
-        )
-    )
-    alignment = {
-        "score": score,
-        "evidence": evidence,
-        "extent": relation,
-        "draw_counts": [reference_record.get("draws"),
-                        candidate_record.get("draws")],
-        "signatures": [reference_signature, candidate_signature],
-        "identity_equal": identity_equal,
-        "draw_relation": round(draw_relation, 6),
-        "status": gfx_align.ALIGNED if strong else gfx_align.AMBIGUOUS,
-    }
+    # The same predicate the sequence aligner used.  A shared engine day plus a
+    # comparable render workload stays valid across backends with legitimately
+    # different draw batching; identical draw counts are not required.
+    alignment = gfx_align.pair_correspondence(
+        reference_record, candidate_record,
+        draw_tolerance=float((scenario.get("settle") or {}).get(
+            "draw_tolerance", 0.25)))
     if alignment["status"] != gfx_align.ALIGNED:
-        if identity_equal and draw_relation > draw_tolerance:
-            reason = (
-                "same engine day but render workload differs "
-                f"({draw_relation:.1%} > {draw_tolerance:.0%}); "
-                "intra-day state is not established"
-            )
-        else:
-            reason = "alignment is ambiguous"
-        return {"status": "not_compared", "reason": reason,
+        return {"status": "not_compared",
+                "reason": alignment["reason"] or "alignment is ambiguous",
                 "alignment": alignment}
     policy = scenario["comparison"]
     minimum_draws = int((scenario.get("settle") or {}).get("min_draws", 0))
@@ -1080,9 +1027,7 @@ def classify_campaign(result: dict, scenario: dict, *, max_frames: int) -> dict:
         and not_aligned == 0
     )
     reasons = []
-    staticity = gfx_align.staticity_evidence(
-        result.get("dumps"),
-        int((scenario.get("settle") or {}).get("stable_frames", 1) or 1))
+    renderer_evidence = None
     if result.get("error") and "exception" in str(stop.get("reason") or ""):
         classification = "infrastructure_failure"
         reasons.append("campaign raised an internal error")
@@ -1107,19 +1052,24 @@ def classify_campaign(result: dict, scenario: dict, *, max_frames: int) -> dict:
         classification = "alignment_failure"
         reasons.append(f"{not_aligned} pair(s) not aligned")
     elif failed:
-        reasons.extend((comparison.get("first_failure") or {}).get("comparison", {}).get("reasons", [])[:3])
-        # A pixel difference is only attributable to the renderer when the
-        # static-scene correspondence the contract requires was verified.
-        # Without that evidence the pair may be two different render stages, so
-        # the run is inconclusive rather than a rendering difference.
-        if ((result.get("stability") or {}).get("status") == "verified"
-                or staticity["verified"]):
+        first_failure = comparison.get("first_failure") or {}
+        first_reasons = list(
+            ((first_failure.get("comparison") or {}).get("reasons") or [])[:3])
+        # A pixel difference is only attributable to the renderer when every
+        # qualification precondition holds: valid capture, authoritative
+        # correspondence, a pair-local pixel-static scene and healthy GPU
+        # execution.  Otherwise the observation is kept and the run is
+        # inconclusive rather than a rendering difference.
+        renderer_evidence = gfx_qualification.renderer_difference_evidence(
+            result, scenario=scenario, pair=first_failure or None)
+        if renderer_evidence["supported"]:
             classification = "rendering_difference"
         else:
             classification = "incomplete"
-            reasons.insert(
-                0, "pixel difference on an unverified static scene; "
-                   "correspondence is weak")
+            reasons.append(
+                "pixel difference is not attributable: "
+                + "; ".join(renderer_evidence["problems"]))
+        reasons.extend(first_reasons)
     elif valid_compared < required:
         classification = "incomplete"
         reasons.append(
@@ -1161,7 +1111,7 @@ def classify_campaign(result: dict, scenario: dict, *, max_frames: int) -> dict:
             "not_aligned": not_aligned,
         },
         "coverage_complete": coverage_complete,
-        "staticity": staticity,
+        "renderer_difference": renderer_evidence,
         "reasons": [reason for reason in reasons if reason],
     }
 

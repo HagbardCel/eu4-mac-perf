@@ -15,7 +15,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from automation import gfx_align, gfx_frame_compare
+from automation import gfx_frame_compare, gfx_qualification
 
 SCHEMA = "gfx-diagnostic-case/v1"
 
@@ -87,18 +87,39 @@ def _classify(result: dict, pair: dict | None, comparison: dict | None) -> str:
         return INCOMPLETE
     status = comparison.get("status")
     if status == gfx_frame_compare.FAIL:
-        # Keep the offline case consistent with the campaign verdict: a pixel
-        # difference is not attributable to a renderer unless the static scene
-        # was verified (campaign stability or preserved consecutive digests).
-        stable = str((result.get("stability") or {}).get("status")) == "verified"
-        if stable or gfx_align.staticity_evidence(result.get("dumps"))["verified"]:
-            return CONFIRMED_RENDERING
-        return INCOMPLETE
+        return _difference_classification(result, pair, comparison)
     if status == gfx_frame_compare.PASS:
         return MATCH
     if status in (gfx_frame_compare.UNVERIFIED, "not_compared", None):
         return UNALIGNED
     return INCOMPLETE
+
+
+_CAMPAIGN_FLOOR = {
+    "alignment_failure": UNALIGNED,
+    "incomplete": INCOMPLETE,
+    "gpu_execution_failure": GPU_FAILURE,
+    "infrastructure_failure": INSTRUMENTATION,
+    "process_failure": PROCESS_FAILURE,
+}
+
+
+def difference_evidence(result: dict, pair: dict | None,
+                        comparison: dict | None) -> dict:
+    """The campaign-wide renderer-difference predicate for this case."""
+    return gfx_qualification.renderer_difference_evidence(
+        result, pair=pair, comparison=comparison)
+
+
+def _difference_classification(result: dict, pair: dict | None,
+                               comparison: dict | None) -> str:
+    """Never claim more than the campaign evidence supports."""
+    evidence = difference_evidence(result, pair, comparison)
+    campaign = result.get("classification")
+    if evidence["supported"] and campaign in (None, CONFIRMED_RENDERING):
+        return CONFIRMED_RENDERING
+    floor = _CAMPAIGN_FLOOR.get(campaign)
+    return floor or INCOMPLETE
 
 
 def _choose_pair(result: dict, pair_index: int | None = None) -> dict | None:
@@ -224,11 +245,16 @@ def _analysis(result: dict, pair: dict | None, comparison: dict | None,
         ]
     elif (classification == INCOMPLETE and comparison
           and comparison.get("status") == gfx_frame_compare.FAIL):
+        evidence = difference_evidence(result, pair, comparison)
         lines += [
-            "- A pixel difference was measured, but the static-scene correspondence "
-            "required to attribute it is unverified (no consecutive identical "
-            "full-frame digests on both sides). The pair may be two different "
-            "render stages; this is not an established renderer difference.",
+            "- A pixel difference was measured, but renderer attribution is "
+            "withheld: the qualification preconditions are not all satisfied. "
+            "The pair may be two different render stages or a non-static scene; "
+            "this is not an established renderer difference.",
+            "- Qualification blockers: "
+            + "; ".join(evidence["problems"]),
+            "- The numerical difference is preserved in `difference/`; withholding "
+            "attribution does not discard the measurement.",
         ]
     else:
         lines += [

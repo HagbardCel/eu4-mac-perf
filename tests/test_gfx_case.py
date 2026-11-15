@@ -19,6 +19,41 @@ except Exception:  # noqa: BLE001
     np = None
 
 
+def _static_dump(index, digest, session, *, width=8, height=6):
+    """A valid preserved frame record used to prove pair-local staticity."""
+    return {
+        "frame_index": index,
+        "sha256": digest,
+        "valid": True,
+        "preserved": True,
+        "reasons": [],
+        "meta": {
+            "schema": "gfx-frame-dump/v1",
+            "frame_index": index,
+            "session": session,
+            "width": width,
+            "height": height,
+            "origin": "lower_left",
+            "pixel_format": "BGRA8",
+            "raw_file": f"captured/frame-{index}.bgra",
+            "raw_bytes": width * height * 4,
+            "sha256": digest,
+            "gpu_completed": True,
+        },
+    }
+
+
+def _static_dumps(frame, session, *, width=8, height=6):
+    return {
+        role: {"captured": [
+            _static_dump(frame - 1 + offset, digest, session,
+                         width=width, height=height)
+            for offset in range(3)
+        ], "missing": []}
+        for role, digest in (("reference", "a" * 64), ("candidate", "b" * 64))
+    }
+
+
 class FlightRecorderTests(unittest.TestCase):
     def test_bounds_and_freeze(self):
         recorder = gfx_flight.FlightRecorder(max_frames=2, max_events=2)
@@ -101,16 +136,16 @@ class CaseBuilderTests(unittest.TestCase):
                                         "max_mean_abs_error": 1.5, "regions": {}}},
             "build": {"candidate_library_sha256": "c" * 64},
             "processes": {"reference": {"pid": 1}, "candidate": {"pid": 2}},
-            "health": {"verdict": "unknown", "first_failure": None,
+            "health": {"verdict": "healthy", "first_failure": None,
                        "instrumentation_failures": []},
             "frames": {
                 "comparison": {"status": "fail", "first_failure": self.pair},
                 "last_pair": self.pair,
             },
             "stop": {"reason": "frame_difference", "trigger": "frame 4"},
-            # A confirmed renderer difference also requires the verified
-            # static scene the qualification contract demands.
-            "stability": {"status": "verified"},
+            # A confirmed renderer difference needs pair-local pixel staticity:
+            # valid preserved frames whose identical digests include frame 4.
+            "dumps": _static_dumps(4, "session-test"),
             "artifacts": {"bytes": 100, "max_bytes": 1000, "dropped": 0},
             "ledger": {"tokens": ["a", "b"]},
             "preflight": {"writable": True},
