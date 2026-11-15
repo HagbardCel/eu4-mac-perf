@@ -127,7 +127,11 @@ dsh plugin --profile <profile> add link:$PWD/dsh/eu4-tools-plugin
 
 The `eu4-web` profile overlay mounts it as the `eu4-tools` row. The offline
 overlay keeps it enabled (only the campaign goal plugin is disabled there).
-Plugin tests: `npm test --prefix dsh/eu4-tools-plugin` (Node `--test`, no EU4).
+`run.sh` exports `EU4_DSH_INFRA_ROOT` for the plugin's Python core; it must not
+reuse `EU4_DSH_WORKSPACE`, which the campaign bridge reserves for its candidate
+workspace assertion. `run-campaign.sh` mounts the plugin in its headless
+overlay with `infra` pinned to the trusted checkout. Plugin tests:
+`npm test --prefix dsh/eu4-tools-plugin` (Node `--test`, no EU4).
 
 ## Metrics
 

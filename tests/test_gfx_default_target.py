@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "benchmark" / "eu4_gfx_init.mm"
 FRAME_OBSERVE = ROOT / "benchmark" / "eu4_gfx_frame_observe.c"
 BUFFERS = ROOT / "benchmark" / "eu4_gfx_buffers.mm"
+TEXTURE = ROOT / "benchmark" / "eu4_gfx_texture.mm"
 HOST_SOURCE = ROOT / "tests" / "gfx_default_target_host.mm"
 EVENTS = ROOT / "benchmark" / "eu4_metal_events.c"
 HOST = ROOT / "benchmark" / ".build" / "gfx_default_target_host"
@@ -20,7 +21,8 @@ class GfxDefaultTargetTests(unittest.TestCase):
         command = [
             "clang", "-arch", "x86_64", "-O2", "-Wall", "-Wextra", "-fobjc-arc", "-lc++",
             "-framework", "Foundation", "-framework", "Metal", "-framework", "QuartzCore",
-            "-o", str(HOST), str(HOST_SOURCE), str(SOURCE), str(FRAME_OBSERVE), str(BUFFERS), str(EVENTS),
+            "-o", str(HOST), str(HOST_SOURCE), str(SOURCE), str(FRAME_OBSERVE), str(BUFFERS),
+            str(TEXTURE), str(EVENTS),
         ]
         built = subprocess.run(command, capture_output=True, text=True, check=False)
         if built.returncode:

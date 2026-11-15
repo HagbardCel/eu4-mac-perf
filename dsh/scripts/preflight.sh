@@ -20,6 +20,8 @@ export DSH_HOME
 export EU4_DSH_SKILL_ROOT=${EU4_DSH_SKILL_ROOT:-$INFRA/.opencode/skills}
 PROFILE_DIR=$DSH_HOME/profiles/$PROFILE
 PATCH=$PROFILE_DIR/cordis.patch.yml
+DSH_ENTRY=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$(command -v dsh)")
+DSH_PACKAGE=$(CDPATH= cd -- "$(dirname -- "$(dirname -- "$DSH_ENTRY")")" && pwd)
 DUMP=$(mktemp -t eu4-dsh-dump.XXXXXX)
 trap 'rm -f "$DUMP"' EXIT
 
@@ -34,12 +36,14 @@ fail() {
 dsh --profile "$PROFILE" --dump-config >"$DUMP" 2>&1 ||
   fail dump-config "dsh --dump-config failed"
 
-python3 - "$DUMP" "$RUNTIME" "$PATCH" "$EU4_DSH_SKILL_ROOT" <<'PY' || exit 1
-import json, re, sys
+python3 - "$DUMP" "$RUNTIME" "$PATCH" "$EU4_DSH_SKILL_ROOT" "$INFRA" "$DSH_PACKAGE" "$PROFILE_DIR" <<'PY' || exit 1
+import hashlib, json, os, re, sys
 
-dump_path, runtime_path, patch_path, skill_root = sys.argv[1:5]
+dump_path, runtime_path, patch_path, skill_root, infra, dsh_package, profile_dir = sys.argv[1:8]
 text = open(dump_path, encoding="utf-8").read()
 runtime = json.load(open(runtime_path, encoding="utf-8"))
+sys.path.insert(0, infra)
+from automation import dsh_profile
 
 
 def bail(stage, detail):
@@ -72,16 +76,46 @@ def enabled(entry):
     return not re.search(r"^\s*disabled:\s*true\s*$", entry["body"], re.M)
 
 
-# Every native goal service must be mounted, and enabled somewhere: web-app
-# disables tool-goal/command-goal at the host plane because presets own them,
-# so an enabled preset copy is the correct state for those two.
-required = ["goal", "goal-round-driver", "tool-goal", "command-goal", "eu4-goal", "eu4-tools"]
+# Every required plugin is named once, in runtime.json; preflight requires the
+# effective profile to mount and enable all of them. This keeps runtime.json,
+# provision.sh and the tracked overlay from drifting apart.
+required = list(runtime["required_plugins"])
 for name in required:
     matches = [e for e in entries if e["id"] == name]
     if not matches:
         bail(name, "required plugin row '%s' absent from the effective profile" % name)
     if not any(enabled(e) for e in matches):
         bail(name, "plugin row '%s' is present but disabled everywhere" % name)
+
+# Package identity pins: the DSH release itself, the five native bundles the
+# profile depends on, and the two local plugins linked from this checkout.
+def pin(path, expected, label):
+    if not os.path.isfile(path):
+        bail("plugin-pin", "%s package.json missing: %s" % (label, path))
+    with open(path, "rb") as source:
+        digest = hashlib.sha256(source.read()).hexdigest()
+    if not expected:
+        bail("plugin-pin", "%s has no package_json_sha256" % label)
+    if digest != expected:
+        bail("plugin-pin", "%s package.json sha256 %s != pinned %s"
+             % (label, digest, expected))
+
+
+pin(os.path.join(dsh_package, "package.json"),
+    runtime["dsh"].get("package_json_sha256"), "dsh")
+
+for plugin_id, spec in runtime["required_plugins"].items():
+    if spec.get("package_json"):
+        # Local plugin: validate the package the profile actually resolves,
+        # and require it to be the canonical package from this checkout.
+        problems = dsh_profile.verify_local_plugin(
+            plugin_id, spec, profile_dir, infra)
+        if problems:
+            bail("plugin-pin", "; ".join(problems))
+    else:
+        # Shipped bundle: resolve from the DSH install the launcher will boot.
+        path = os.path.join(dsh_package, "node_modules", spec["name"], "package.json")
+        pin(path, spec.get("package_json_sha256"), plugin_id)
 
 # The host-plane skill root must be ours and must win over the bundle disable.
 host = [e for e in entries if e["id"] == "skill-filesystem" and e["indent"] == 0]
@@ -97,8 +131,6 @@ if "EU4_DSH_SKILL_ROOT" not in host[0]["body"]:
 # Provenance: our tracked overlay must be the layer that patched that row.
 if patch_path not in text:
     bail("patch-provenance", "profile overlay %s is not in the composed tree" % patch_path)
-
-print(json.dumps({"ok": True}))
 PY
 
 # Version pins recorded in runtime.json.
@@ -121,13 +153,23 @@ PY
 SKILL=$INFRA/.opencode/skills/opengl-metal-reconstruction/SKILL.md
 [ -f "$SKILL" ] || fail skill-bytes "skill file missing: $SKILL"
 
-# The plugin must resolve from the profile root and expose a cordis plugin shape.
+# Both local plugins must resolve from the profile root and expose a cordis
+# plugin shape. web-app disables tool-goal/command-goal on the host plane
+# because presets own them, so the plugin-id check above accepts an enabled
+# preset copy for those two.
 ( cd "$PROFILE_DIR" && node --input-type=module -e '
-const m = await import("@eu4/dsh-goal")
-if (typeof m.apply !== "function") throw new Error("apply() missing")
-if (typeof m.name !== "string") throw new Error("name missing")
-if (!Array.isArray(m.inject)) throw new Error("inject missing")
-' ) || fail plugin-resolve "@eu4/dsh-goal does not resolve to a cordis plugin from $PROFILE_DIR"
+for (const name of ["@eu4/dsh-goal", "@eu4/dsh-tools"]) {
+  let m
+  try {
+    m = await import(name)
+  } catch (error) {
+    throw new Error(`${name}: ${error.message}`)
+  }
+  if (typeof m.apply !== "function") throw new Error(`${name}: apply() missing`)
+  if (typeof m.name !== "string") throw new Error(`${name}: name missing`)
+  if (!Array.isArray(m.inject)) throw new Error(`${name}: inject missing`)
+}
+' ) || fail plugin-resolve "a local EU4 plugin does not resolve to a cordis plugin from $PROFILE_DIR"
 
 SKILL_SHA=$(shasum -a 256 "$SKILL" | cut -d' ' -f1)
 printf '{"ok":true,"profile":"%s","dsh_home":"%s","dsh_version":"%s","node":"%s","skill_root":"%s","skill_sha256":"%s"}\n' \

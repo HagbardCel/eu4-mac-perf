@@ -34,7 +34,13 @@
     },
     "eu4-goal": {
       "name": "@eu4/dsh-goal",
-      "package_json_sha256": "7d3c20c27d07e563b08523682b22669bb837c630253856c014c0b94c4e6ca2a4"
+      "package_json": "dsh/eu4-goal-plugin/package.json",
+      "package_json_sha256": "2f854108f256e18454fe7a2185838ce6e0693830cc258b1767fa8a537585cdc1"
+    },
+    "eu4-tools": {
+      "name": "@eu4/dsh-tools",
+      "package_json": "dsh/eu4-tools-plugin/package.json",
+      "package_json_sha256": "261b6b4f0f1d65cdb740b580a20db680d78a658cec2d1d9895da732ff3cbc43d"
     }
   },
   "skill": {
@@ -46,8 +52,10 @@
   "notes": [
     "No absolute machine paths are tracked. preflight.sh resolves the DSH install",
     "root and the infrastructure checkout at run time and prints them.",
-    "package_json_sha256 values pin the identity of the DSH release this profile was",
-    "verified against; a mismatch is a preflight failure, not a warning."
+    "package_json_sha256 values pin the identity of the DSH release and the two",
+    "tracked local plugins this profile was verified against; a mismatch is a",
+    "preflight failure, not a warning. Local plugin entries also carry the",
+    "repository-relative package_json path used to check them."
   ],
   "note": "Requalified on 0.2.2-rc.1: the environment upgraded the installed CLI, and downgrading a global install the running Web GUI depends on is not this PR's call. Verified against the installed package: goal service (get/create/complete), ctx.tools.guard with the same denial-only ToolGuard contract, headless --json events (session/final/text/status/thinking/tool_call/tool_result), skill-filesystem customSkillDirs/includeDefaultRoots, and the session header cwd. The live profile checks pass: 2 tools, 1 guard, 1 skill. Node pin reconciled to the installed v26.13.1 patch; the profile was re-preflighted against it."
 }

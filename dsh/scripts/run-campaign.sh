@@ -24,8 +24,10 @@ export EU4_DSH_SKILL_ROOT=${EU4_DSH_SKILL_ROOT:-$INFRA/.opencode/skills}
 export EU4_DSH_SIDECAR=$(CDPATH= cd -- "$(dirname -- "$SIDECAR")" && pwd)/$(basename -- "$SIDECAR")
 export EU4_DSH_PYTHON=${EU4_DSH_PYTHON:-$INFRA/.venv/bin/python3}
 PLUGIN=$INFRA/dsh/eu4-goal-plugin/lib/index.js
+TOOLS_PLUGIN=$INFRA/dsh/eu4-tools-plugin/lib/index.js
 
 [ -f "$PLUGIN" ] || { echo "run-campaign: plugin missing at $PLUGIN" >&2; exit 1; }
+[ -f "$TOOLS_PLUGIN" ] || { echo "run-campaign: tools plugin missing at $TOOLS_PLUGIN" >&2; exit 1; }
 
 # dsh 'headless' does not mount the credentials service on 0.2.2-rc.1, so the
 # provider can only authenticate from the environment. Fail before spending a turn
@@ -71,6 +73,11 @@ cat > "$OVERLAY" <<PATCH
         sidecar: $EU4_DSH_SIDECAR
         python: $EU4_DSH_PYTHON
         requireReview: $REQUIRE_REVIEW
+    - id: eu4-tools
+      name: '$TOOLS_PLUGIN'
+      config:
+        python: '$EU4_DSH_PYTHON'
+        infra: '$INFRA'
 PATCH
 
 # dsh --profile headless answers ONE turn and exits, measured: a goal created in

@@ -55,4 +55,4 @@
       name: '@eu4/dsh-tools'
       config:
         python: !!js process.env.EU4_DSH_PYTHON ?? 'python3.14'
-        infra: !!js process.env.EU4_DSH_WORKSPACE ?? process.cwd()
+        infra: !!js process.env.EU4_DSH_INFRA_ROOT ?? process.cwd()
