@@ -20,10 +20,10 @@ only reported for the reviewed head because the earlier per-draw accounting was
 invalid. These are synthetic backend-overhead measurements, not gameplay or FPS
 claims.
 
-Saved compact summaries: [p0-baseline.json](p0-baseline.json),
-[p1.json](p1.json), [p2.json](p2.json), [p3.json](p3.json),
-[p4.json](p4.json), [final.json](final.json). Raw per-frame samples are
-reproducible with `--records`.
+Saved evidence: [p0-baseline.json](p0-baseline.json),
+[final.json](final.json) and the combined per-stage
+[stages.json](stages.json). Raw per-frame samples are reproducible with
+`--records`.
 
 ## PR P0 baseline
 

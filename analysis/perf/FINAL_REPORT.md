@@ -50,7 +50,7 @@ framework or second renderer was introduced.
 - Tests: `tests/gfx_live_draw_host.mm`, `tests/test_gfx_live_draw.py`,
   `tests/test_gfx_stream_bench.py`; `test_gfx_shadow_worker.py` expectation
   aligned with the M6 `texture_lod=1` capability contract.
-- Evidence: `analysis/perf/*.json`, `analysis/m6/review-live-acceptance.json`.
+- Evidence: `analysis/perf/p0-baseline.json`, `final.json`, `stages.json` and `analysis/m6/review-live-acceptance.json`.
 
 ## 3. Review findings and fixes
 
