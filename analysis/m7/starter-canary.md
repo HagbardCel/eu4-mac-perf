@@ -255,7 +255,7 @@ contract:
 | Requirement | Rule |
 | --- | --- |
 | Staticity evidence | Only `settle.stable_frames` consecutive **identical full-resolution digests** count. Engine day, `update_identity`, caller composition and draw count are correspondence evidence and never staticity (`stability_summary` no longer ORs `identity_max_streak`). |
-| Valid dump | The record must be marked `valid`, and its metadata must agree on frame index, digest, extent, origin, pixel format, payload size and GPU completion. A bare SHA-256 proves nothing. |
+| Valid dump | The record must be marked `valid` by the collector and `capture_valid` by the observer, and its metadata must agree on frame index, digest, extent, origin, pixel format, payload size and GPU completion. A bare SHA-256 proves nothing. |
 | Provenance | The dump must belong to the campaign session; a missing or foreign session is rejected. Missing metadata/payload declarations are rejected. |
 | Pair-local | The identical-digest run must **contain the compared frame**. A stable run elsewhere in the capture window does not qualify a difference elsewhere. |
 | Continuity | Gaps and conflicting duplicate indices never form a run. |
@@ -297,10 +297,10 @@ No new framework, no new tool, no tolerance change.
 
 ### 8.3 Regressions
 
-New `tests/test_gfx_qualification.py` (25 tests) covers every review item:
+New `tests/test_gfx_qualification.py` (28 tests) covers every review item:
 
 - repeated game-day identities with changing frame pixels → not static;
-- invalid captures with repeated hashes → not static;
+- invalid captures with repeated hashes, and observer-marked capture-invalid dumps → not static;
 - missing metadata, wrong session, inconsistent metadata, unfinished GPU frame →
   not static;
 - a stable streak that does not contain the compared frame → not static;
@@ -320,9 +320,13 @@ The campaign/case fixtures in `tests/test_gfx_dual_run.py`,
 `tests/test_agent_tools.py` now **construct** consecutive valid digest evidence
 instead of declaring `stability.status=verified`.
 
-Each regression was checked against the previous implementation (`24a2d14`),
-where the identity/dump/streak/correspondence cases returned
-`rendering_difference` or a compared verdict.
+Each regression was replayed against the first revision (`24a2d14`) and the
+pre-PR classifier (`b94b9e2`); the previous outcomes (identity-verified
+stability, bare-digest staticity, a stable run elsewhere qualifying the pair, a
+two-frame case verdict where three were required, an ambiguous pair promoted by
+the pixel path, unknown health attributed to the renderer, and the recorded
+`live-a6`/`live-a10` renderer verdicts) are tabulated in
+[`m7-validation.md`](m7-validation.md#previous-implementation-behaviour-regression-justification).
 
 ### 8.4 Historical reclassification
 
@@ -358,8 +362,22 @@ same. The numerical difference statistics are unchanged.
 The PR was rebased onto `origin/main` `5a0ac03` before validation. Focused
 modules (`test_gfx_dual_run`, `test_gfx_case`, `test_agent_tools`,
 `test_offline_campaign`, `test_gfx_metrics`, `test_gfx_replay_case`,
-`test_gfx_qualification`) pass. Full-suite results and the base/candidate
-failure reconciliation are recorded in
+`test_gfx_qualification`) pass: 138 tests, OK.
+
+Full suite on clean worktrees with the same command
+(`python3.14 -m unittest discover -s tests`):
+
+| Run | Commit | Tests | Failures | Errors | Skipped |
+| --- | --- | --- | --- | --- | --- |
+| Base | `5a0ac03` | 2967 | 19 | 2 | 30 |
+| Candidate | `1f0041b` | 2989 | 18 | 2 | 30 |
+
+Common failing ids: 20 (`test_dsh_bridge` 9, `test_trace_tr3` 11, both
+environmental). Candidate-only failing ids: **0**. The single base-only failure
+is the unrelated flaky `test_gfx_session.test_only_owned_process_is_terminated`.
+Six `test_border_loop_*` failures in an earlier candidate run were traced to the
+gitignored `benchmark/.build` directory being absent and reproduce identically
+on base. Full details and the discarded symlinked-`.local` run:
 [`m7-validation.md`](m7-validation.md).
 
 ## 9. Tooling limitations encountered
