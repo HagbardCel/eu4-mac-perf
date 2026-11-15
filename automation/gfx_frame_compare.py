@@ -409,6 +409,25 @@ def write_png(path: Path, rgba: "np.ndarray") -> None:
     path.write_bytes(value)
 
 
+def _apply_normalization_policy(result: dict, normalization: dict,
+                                policy: dict) -> dict:
+    """Apply exact-policy semantics to a resampled comparison.
+
+    A genuine difference stays a difference; equality after resampling cannot
+    be qualified as bit-identical under the exact policy.
+    """
+    if policy.get("policy") != "exact" or int(normalization.get("scale", 1)) <= 1:
+        return result
+    result["exact_qualified"] = False
+    reason = "exact policy cannot treat a scale-normalized candidate as bit-identical"
+    if result.get("status") == FAIL:
+        result.setdefault("reasons", []).append(reason)
+    elif result.get("status") == PASS:
+        result["status"] = UNVERIFIED
+        result.setdefault("reasons", []).append(reason)
+    return result
+
+
 def compare_payloads(
     reference_payload: bytes,
     reference_meta: dict,
@@ -434,13 +453,7 @@ def compare_payloads(
     )
     result = compare_frames(ref, cand, policy=policy, regions=regions,
                             candidate_meta=candidate_meta)
-    if policy.get("policy") == "exact" and normalization["scale"] > 1:
-        result["exact_qualified"] = False
-        if result["status"] == PASS:
-            result["status"] = UNVERIFIED
-            result["reasons"].append(
-                "exact policy cannot treat a scale-normalized candidate as bit-identical"
-            )
+    _apply_normalization_policy(result, normalization, policy)
     result["normalization"] = normalization
     result["reference"] = {
         "width": reference_meta.get("width"),
@@ -483,9 +496,20 @@ def difference_mask(reference: "np.ndarray", candidate: "np.ndarray",
 
 
 def _temporal_pair(left: dict, right: dict, relation: str, *,
-                   policy: dict, regions: dict | None) -> dict:
+                   policy: dict, regions: dict | None,
+                   normalization: dict | None = None) -> dict:
     result = compare_frames(
         left["image"], right["image"], policy=policy, regions=regions)
+    normalization = normalization or {
+        "reference_extent": [int(left["image"].shape[1]), int(left["image"].shape[0])],
+        "candidate_extent": [int(right["image"].shape[1]), int(right["image"].shape[0])],
+        "scale": 1,
+        "method": "none",
+        "allowed": bool(policy.get("allow_scale_normalization", True)),
+        "origin": {"reference": "top_left_after_decode",
+                   "candidate": "top_left_after_decode"},
+    }
+    _apply_normalization_policy(result, normalization, policy)
     statistics = result.get("statistics") or {}
     return {
         "relation": relation,
@@ -502,6 +526,7 @@ def _temporal_pair(left: dict, right: dict, relation: str, *,
         "status": result.get("status"),
         "pixel_verdict": result.get("pixel_verdict"),
         "would_fail": result.get("would_fail"),
+        "exact_qualified": result.get("exact_qualified", False),
         "reasons": result.get("reasons") or [],
         "statistics": {
             key: statistics.get(key) for key in (
@@ -510,7 +535,7 @@ def _temporal_pair(left: dict, right: dict, relation: str, *,
                 "tolerance", "per_channel")
         },
         "regions": result.get("regions") or {},
-        "normalization": result.get("normalization"),
+        "normalization": normalization,
     }
 
 
@@ -538,38 +563,30 @@ def compare_temporal(
     policy: dict,
     regions: dict | None = None,
     cross_pairs: list[tuple[int, int]] | None = None,
+    reference_consecutive: list[tuple[int, int]] | None = None,
+    candidate_consecutive: list[tuple[int, int]] | None = None,
     include_overlap: bool = True,
     max_pairs: int = TEMPORAL_MAX_PAIRS,
     artifacts: dict | None = None,
 ) -> dict:
-    """Compare consecutive within-process frames and the cross-process pair.
+    """Compare requested consecutive and cross-process frames with completion.
 
-    ``reference_frames``/``candidate_frames`` are decoded top-left RGBA frames
-    with ``frame_index``, ``sha256`` and ``identity``.  Exactly the comparisons
-    the canary needed are produced:
+    ``reference_consecutive`` / ``candidate_consecutive`` name the requested
+    within-process pairs explicitly; when omitted, adjacent available frames are
+    requested.  ``cross_pairs`` names the requested cross-process pairs; when
+    omitted, the first shared index is requested.  Every requested comparison is
+    reported as ``completed``, ``skipped`` (pair bound) or ``unavailable`` (a
+    missing frame or normalization failure), and the top-level status is derived
+    from those records rather than from whichever pairs happened to run.
 
-    * reference N vs reference N+1 (consecutive, same process);
-    * candidate M vs candidate M+1 (consecutive, same process);
-    * reference N vs candidate M (cross-process).
-
-    The cross-process difference mask is optionally intersected with each
-    within-process mask, so ``cross_also_temporal_fraction`` answers "how much
-    of the cross-process difference is also temporal variability?" without a
-    private script.  Artifacts are written only when ``artifacts`` names a
-    directory; raw full-resolution images are never emitted by default.
+    Normalization follows the scenario policy.  Cross-process pairs are
+    normalized to the reference extent once, using the same normalized arrays
+    for metrics, masks and artifacts.  Candidate-temporal pairs stay in the
+    candidate's own coordinate space.
     """
     _require_numpy()
-    if not reference_frames or not candidate_frames:
-        return {
-            "schema": TEMPORAL_SCHEMA,
-            "status": "incomplete",
-            "reason": "both roles need at least one preserved frame",
-            "pairs": [],
-            "overlap": None,
-        }
     if max_pairs < 1:
         raise CompareError("bound", "max_pairs must be >= 1")
-
     def ordered(rows: list[dict]) -> list[dict]:
         return sorted(
             (row for row in rows if isinstance(row, dict)
@@ -579,73 +596,131 @@ def compare_temporal(
     def by_index(rows: list[dict]) -> dict[int, dict]:
         return {int(row["frame_index"]): row for row in rows}
 
+    def consecutive(rows: list[dict]) -> list[tuple[int, int]]:
+        pairs: list[tuple[int, int]] = []
+        for left, right in zip(rows, rows[1:]):
+            if int(right["frame_index"]) == int(left["frame_index"]) + 1:
+                pairs.append((int(left["frame_index"]),
+                               int(right["frame_index"])))
+        return pairs
+
     reference = ordered(reference_frames)
     candidate = ordered(candidate_frames)
     reference_index = by_index(reference)
     candidate_index = by_index(candidate)
+    requested_reference = (reference_consecutive
+                           if reference_consecutive is not None
+                           else consecutive(reference))
+    requested_candidate = (candidate_consecutive
+                           if candidate_consecutive is not None
+                           else consecutive(candidate))
     tolerance = int(policy.get("pixel_tolerance", policy.get("max_channel_error", 0)))
+    allow_scale = bool(policy.get("allow_scale_normalization", True))
     pairs: list[dict] = []
-    skipped: list[dict] = []
+    comparisons: list[dict] = []
 
-    def add_pair(left: dict, right: dict, relation: str) -> None:
+    def record(relation: str, ref_index: int | None, cand_index: int | None,
+               status: str, reason: str = "") -> None:
+        comparisons.append({
+            "relation": relation,
+            "reference_frame": ref_index,
+            "candidate_frame": cand_index,
+            "status": status,
+            "reason": reason,
+        })
+
+    def add_pair(left: dict, right: dict, relation: str, *,
+                 normalization: dict | None = None) -> None:
         if len(pairs) >= max_pairs:
-            skipped.append({"relation": relation,
-                            "reason": "max_pairs bound reached"})
+            record(relation, left.get("frame_index"), right.get("frame_index"),
+                   "skipped", "pair bound reached")
             return
         try:
             pairs.append(_temporal_pair(
-                left, right, relation, policy=policy, regions=regions))
+                left, right, relation, policy=policy, regions=regions,
+                normalization=normalization))
+            record(relation, left.get("frame_index"), right.get("frame_index"),
+                   "completed")
         except CompareError as exc:
-            skipped.append({
-                "relation": relation,
-                "reference_frame": left.get("frame_index"),
-                "candidate_frame": right.get("frame_index"),
-                "reason": f"{exc.kind}: {exc.detail or exc}",
-            })
+            record(relation, left.get("frame_index"), right.get("frame_index"),
+                   "unavailable", f"{exc.kind}: {exc.detail or exc}")
 
-    for rows, role in ((reference, "reference"), (candidate, "candidate")):
-        for left, right in zip(rows, rows[1:]):
-            if int(right["frame_index"]) == int(left["frame_index"]) + 1:
-                add_pair(left, right, f"{role}_temporal")
+    for requested, relation, index, role_rows in (
+            (requested_reference, "reference_temporal", reference_index,
+             reference),
+            (requested_candidate, "candidate_temporal", candidate_index,
+             candidate)):
+        for left_index, right_index in requested:
+            left = index.get(int(left_index))
+            right = index.get(int(right_index))
+            if left is None or right is None:
+                missing = [value for value, row in (
+                    (left_index, left), (right_index, right)) if row is None]
+                record(relation, int(left_index), int(right_index),
+                       "unavailable",
+                       f"preserved frame(s) missing: {missing}")
+                continue
+            add_pair(left, right, relation)
 
     cross: list[dict] = []
-    requested = cross_pairs
-    if requested is None:
+    requested_cross = cross_pairs
+    cross_required = requested_cross is not None
+    if requested_cross is None:
         shared = sorted(set(reference_index) & set(candidate_index))
-        requested = [(index, index) for index in shared[:1]]
-    for ref_index, cand_index in requested or []:
-        left = reference_index.get(int(ref_index))
-        right = candidate_index.get(int(cand_index))
+        requested_cross = [(index, index) for index in shared[:1]]
+        # The default temporal diagnostic requires a cross-process comparison;
+        # no shared index means the request cannot be satisfied.
+        cross_required = True
+    for ref_index, cand_index in requested_cross or []:
+        ref_index, cand_index = int(ref_index), int(cand_index)
+        left = reference_index.get(ref_index)
+        right = candidate_index.get(cand_index)
         if left is None or right is None:
-            skipped.append({
-                "relation": "cross_process",
-                "reference_frame": int(ref_index),
-                "candidate_frame": int(cand_index),
-                "reason": "preserved full-resolution frame is missing",
-            })
+            missing = [value for value, row in (
+                (ref_index, left), (cand_index, right)) if row is None]
+            record("cross_process", ref_index, cand_index, "unavailable",
+                   f"preserved frame(s) missing: {missing}")
             continue
+        normalization = {
+            "reference_extent": [int(left["image"].shape[1]),
+                                 int(left["image"].shape[0])],
+            "candidate_extent": [int(right["image"].shape[1]),
+                                 int(right["image"].shape[0])],
+            "scale": 1,
+            "method": "none",
+            "allowed": allow_scale,
+            "origin": {"reference": "top_left_after_decode",
+                       "candidate": "top_left_after_decode"},
+        }
         normalized = right
-        scale = 1
-        try:
-            if left["image"].shape != right["image"].shape:
+        if left["image"].shape != right["image"].shape:
+            try:
                 image, normalization = normalize_candidate(
                     left["image"], right["image"],
-                    policy={"allow_scale_normalization": True},
+                    policy={"allow_scale_normalization": allow_scale},
                     candidate_meta={})
-                normalized = dict(right)
-                normalized["image"] = image
-                scale = int(normalization.get("scale") or 1)
-        except CompareError as exc:
-            skipped.append({
-                "relation": "cross_process",
-                "reference_frame": int(ref_index),
-                "candidate_frame": int(cand_index),
-                "reason": f"{exc.kind}: {exc.detail or exc}",
-            })
+            except CompareError as exc:
+                record("cross_process", ref_index, cand_index, "unavailable",
+                       f"normalization failed: {exc.kind}: {exc.detail or exc}")
+                continue
+            normalized = dict(right)
+            normalized["image"] = image
+            normalized["identity"] = dict(right.get("identity") or {})
+            normalized["identity"]["normalization_scale"] = normalization["scale"]
+        if len(pairs) >= max_pairs:
+            record("cross_process", ref_index, cand_index, "skipped",
+                   "pair bound reached")
             continue
-        normalized["identity"] = dict(right.get("identity") or {})
-        normalized["identity"]["normalization_scale"] = scale
-        add_pair(left, normalized, "cross_process")
+        try:
+            pair = _temporal_pair(
+                left, normalized, "cross_process", policy=policy,
+                regions=regions, normalization=normalization)
+        except CompareError as exc:
+            record("cross_process", ref_index, cand_index, "unavailable",
+                   f"{exc.kind}: {exc.detail or exc}")
+            continue
+        pairs.append(pair)
+        record("cross_process", ref_index, cand_index, "completed")
         cross.append({"reference": left, "candidate": normalized})
 
     overlap = None
@@ -714,26 +789,75 @@ def compare_temporal(
                 left = right = None
             if left is None or right is None:
                 continue
-            name = (f"{pair['relation']}-{pair['reference']['frame_index']}"
-                    f"-{pair['candidate']['frame_index']}.png")
+            name = (f"{relation}-{reference_frame}-{candidate_frame}.png")
             image = difference_image(left["image"], right["image"],
                                      amplification=amplification)
             write_png(directory / name, image)
             artifact_paths.append(str(directory / name))
 
-    complete = bool(pairs) and not any(
-        entry.get("reason") == "preserved full-resolution frame is missing"
-        for entry in skipped)
+    completed = [item for item in comparisons if item["status"] == "completed"]
+    skipped = [item for item in comparisons if item["status"] == "skipped"]
+    unavailable = [item for item in comparisons if item["status"] == "unavailable"]
+    cross_comparisons = [item for item in comparisons
+                         if item["relation"] == "cross_process"]
+    cross_complete = bool(cross_comparisons) and all(
+        item["status"] == "completed" for item in cross_comparisons)
+    temporal_complete = all(
+        item["status"] == "completed" for item in comparisons
+        if item["relation"] != "cross_process")
+    if unavailable:
+        status = "incomplete"
+        reason = "requested comparison(s) unavailable: " + "; ".join(
+            f"{item['relation']} {item['reference_frame']}/"
+            f"{item['candidate_frame']}: {item['reason']}"
+            for item in unavailable[:4])
+    elif any(item["relation"] == "cross_process" for item in skipped):
+        status = "incomplete"
+        reason = "requested cross-process comparison was skipped by the pair bound"
+    elif skipped:
+        status = "partial"
+        reason = "some requested comparisons were skipped by the pair bound"
+    elif not pairs:
+        status = "incomplete"
+        reason = "no temporal comparison could be completed"
+    elif cross_required and not cross_complete:
+        status = "incomplete"
+        reason = "cross-process comparison did not complete"
+    elif not temporal_complete:
+        status = "incomplete"
+        reason = "requested within-process variability was not fully assessed"
+    else:
+        status = "completed"
+        reason = ""
     return {
         "schema": TEMPORAL_SCHEMA,
-        "status": "completed" if complete else "incomplete",
+        "status": status,
+        "reason": reason,
         "policy": {
             "pixel_tolerance": tolerance,
             "max_mismatched_fraction": float(policy.get("max_mismatched_fraction", 0.0)),
             "max_mean_abs_error": float(policy.get("max_mean_abs_error", 0.0)),
+            "allow_scale_normalization": allow_scale,
         },
         "pairs": pairs,
+        "comparisons": comparisons,
+        "completion": {
+            "requested": len(comparisons),
+            "completed": len(completed),
+            "skipped": len(skipped),
+            "unavailable": len(unavailable),
+            "cross_process_complete": cross_complete,
+            "temporal_variability_complete": temporal_complete,
+            "cross_process_requested": cross_required,
+        },
+        "truncated": {
+            "pairs": len(skipped),
+            "max_pairs": max_pairs,
+            "cross_process": any(item["relation"] == "cross_process"
+                                 for item in skipped),
+        },
         "skipped": skipped,
+        "unavailable": unavailable,
         "overlap": overlap,
         "frames": {
             "reference": [int(row["frame_index"]) for row in reference],

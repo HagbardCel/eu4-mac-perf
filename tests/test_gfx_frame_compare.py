@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import struct
 import sys
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +24,42 @@ def bgra(image: "np.ndarray") -> bytes:
     """Encode top-left RGBA as lower-left BGRA (the GL on-disk convention)."""
     rgba = image[::-1, :, :]
     return rgba[:, :, [2, 1, 0, 3]].tobytes()
+
+
+def read_png_rgba(path: Path) -> "np.ndarray":
+    """Minimal standard-library reader for the writer's RGBA8 PNGs."""
+    data = Path(path).read_bytes()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("not a PNG")
+    position = 8
+    width = height = None
+    compressed = bytearray()
+    while position < len(data):
+        length = struct.unpack(">I", data[position:position + 4])[0]
+        kind = data[position + 4:position + 8]
+        payload = data[position + 8:position + 8 + length]
+        position += 12 + length
+        if kind == b"IHDR":
+            width, height, depth, color, compression, filter_method, interlace = \
+                struct.unpack(">IIBBBBB", payload)
+            if (depth, color, interlace) != (8, 6, 0):
+                raise ValueError("expected RGBA8 non-interlaced PNG")
+        elif kind == b"IDAT":
+            compressed.extend(payload)
+        elif kind == b"IEND":
+            break
+    if not width or not height:
+        raise ValueError("missing IHDR")
+    raw = zlib.decompress(bytes(compressed))
+    stride = width * 4
+    rows = []
+    for row in range(height):
+        offset = row * (stride + 1)
+        if raw[offset] != 0:
+            raise ValueError("unexpected PNG filter")
+        rows.append(np.frombuffer(raw[offset + 1:offset + 1 + stride],
+                                  dtype=np.uint8).reshape(width, 4))
+    return np.stack(rows)
 
 
 def observation(index: int, *, signature: str = "0xabc", draws: int = 2,
@@ -420,7 +458,8 @@ class TemporalDiagnosticsTests(unittest.TestCase):
         self.assertFalse(any(pair["relation"] == "cross_process"
                              for pair in value["pairs"]))
         self.assertTrue(any("missing" in entry["reason"]
-                            for entry in value["skipped"]))
+                            for entry in value["unavailable"]))
+        self.assertFalse(value["completion"]["cross_process_complete"])
         self.assertIsNone(value["overlap"])
 
     def test_pair_bound_is_reported(self):
@@ -461,6 +500,182 @@ class TemporalDiagnosticsTests(unittest.TestCase):
 
 
 @unittest.skipUnless(np is not None, "numpy is required")
+class TemporalCompletionTests(unittest.TestCase):
+    """Completion reflects the requested comparisons, not incidental pairs."""
+
+    def frame(self, index, image, role):
+        return {"frame_index": index, "image": image,
+                "sha256": f"{role}{index:060d}", "identity": {"role": role}}
+
+    def image(self, value=20, *, width=8, height=6, marker=0):
+        image = np.full((height, width, 4), value, dtype=np.uint8)
+        image[:, :, 3] = 255
+        image[0:2, 0:2, :3] = marker
+        return image
+
+    def compare(self, reference, candidate, **kwargs):
+        policy = kwargs.pop("policy", {
+            "policy": "tolerant", "pixel_tolerance": 8,
+            "max_mismatched_fraction": 1.0, "max_mean_abs_error": 255.0,
+            "allow_scale_normalization": True})
+        return gfx_frame_compare.compare_temporal(
+            reference, candidate, policy=policy, **kwargs)
+
+    def test_normalization_failure_leaves_temporal_statistics_intact(self):
+        reference = [self.frame(1, self.image(20), "reference"),
+                     self.frame(2, self.image(30), "reference")]
+        candidate = [self.frame(1, self.image(40, width=9, height=7), "candidate"),
+                     self.frame(2, self.image(50, width=9, height=7), "candidate")]
+        value = self.compare(
+            reference, candidate,
+            reference_consecutive=[(1, 2)],
+            candidate_consecutive=[(1, 2)],
+            cross_pairs=[(1, 1)])
+        self.assertEqual(value["status"], "incomplete")
+        self.assertEqual(len(value["pairs"]), 2)
+        self.assertEqual({pair["relation"] for pair in value["pairs"]},
+                         {"reference_temporal", "candidate_temporal"})
+        self.assertFalse(value["completion"]["cross_process_complete"])
+        self.assertEqual(value["comparisons"][-1]["status"], "unavailable")
+        self.assertIn("normalization failed", value["comparisons"][-1]["reason"])
+
+    def test_available_cross_with_missing_consecutive_is_not_complete(self):
+        reference = [self.frame(1, self.image(20), "reference")]
+        candidate = [self.frame(1, self.image(40), "candidate"),
+                     self.frame(2, self.image(50), "candidate")]
+        value = self.compare(
+            reference, candidate,
+            reference_consecutive=[(1, 2)],
+            candidate_consecutive=[(1, 2)],
+            cross_pairs=[(1, 1)])
+        self.assertEqual(value["status"], "incomplete")
+        self.assertTrue(value["completion"]["cross_process_complete"])
+        self.assertFalse(value["completion"]["temporal_variability_complete"])
+        unavailable = [item for item in value["comparisons"]
+                       if item["status"] == "unavailable"]
+        self.assertEqual(len(unavailable), 1)
+        self.assertEqual(unavailable[0]["relation"], "reference_temporal")
+
+    def test_pair_limit_truncation_is_separate_and_cross_skipped(self):
+        reference = [self.frame(1, self.image(20), "reference"),
+                     self.frame(2, self.image(30), "reference")]
+        candidate = [self.frame(1, self.image(40), "candidate")]
+        value = self.compare(
+            reference, candidate,
+            reference_consecutive=[(1, 2)],
+            candidate_consecutive=[],
+            cross_pairs=[(1, 1)],
+            max_pairs=1)
+        self.assertEqual(value["status"], "incomplete")
+        self.assertEqual(len(value["pairs"]), 1)
+        self.assertTrue(value["truncated"]["cross_process"])
+        self.assertEqual(value["truncated"]["pairs"], 1)
+        self.assertFalse(value["completion"]["cross_process_complete"])
+
+    def test_full_requested_triplet_completes(self):
+        reference = [self.frame(1, self.image(20), "reference"),
+                     self.frame(2, self.image(30), "reference")]
+        candidate = [self.frame(1, self.image(40), "candidate"),
+                     self.frame(2, self.image(50), "candidate")]
+        value = self.compare(
+            reference, candidate,
+            reference_consecutive=[(1, 2)],
+            candidate_consecutive=[(1, 2)],
+            cross_pairs=[(1, 1)])
+        self.assertEqual(value["status"], "completed")
+        self.assertEqual(value["completion"]["requested"], 3)
+        self.assertEqual(value["completion"]["completed"], 3)
+        self.assertTrue(value["completion"]["cross_process_complete"])
+        self.assertTrue(value["completion"]["temporal_variability_complete"])
+        self.assertEqual(value["truncated"]["pairs"], 0)
+
+
+@unittest.skipUnless(np is not None, "numpy is required")
+class TemporalNormalizationTests(unittest.TestCase):
+    def frame(self, index, image, role):
+        return {"frame_index": index, "image": image,
+                "sha256": f"{role}{index:060d}", "identity": {"role": role}}
+
+    def policy(self, name="exact", *, allow=True):
+        return {"policy": name, "pixel_tolerance": 0 if name == "exact" else 8,
+                "max_mismatched_fraction": 0.0 if name == "exact" else 1.0,
+                "max_mean_abs_error": 0.0 if name == "exact" else 255.0,
+                "allow_scale_normalization": allow}
+
+    def cross(self, reference, candidate, policy):
+        return gfx_frame_compare.compare_temporal(
+            [self.frame(10, reference, "reference")],
+            [self.frame(20, candidate, "candidate")],
+            policy=policy, cross_pairs=[(10, 20)],
+            reference_consecutive=[], candidate_consecutive=[])
+
+    def test_exact_scale_one_equal_and_different(self):
+        base = np.full((6, 8, 4), 20, dtype=np.uint8)
+        equal = self.cross(base, base.copy(), self.policy())
+        self.assertEqual(equal["pairs"][0]["status"], "pass")
+        changed = base.copy()
+        changed[0, 0, 0] = 200
+        different = self.cross(base, changed, self.policy())
+        self.assertEqual(different["pairs"][0]["status"], "fail")
+        self.assertEqual(different["pairs"][0]["pixel_verdict"], "different")
+
+    def test_exact_scale_two_equality_is_not_bit_identical(self):
+        base = np.full((6, 8, 4), 20, dtype=np.uint8)
+        scaled = np.repeat(np.repeat(base, 2, axis=0), 2, axis=1)
+        value = self.cross(base, scaled, self.policy())
+        pair = value["pairs"][0]
+        self.assertEqual(pair["status"], "unverified")
+        self.assertFalse(pair["exact_qualified"])
+        self.assertEqual(pair["normalization"]["scale"], 2)
+        self.assertEqual(pair["normalization"]["method"],
+                         "area_average_downscale_x2")
+        self.assertEqual(pair["normalization"]["reference_extent"], [8, 6])
+        self.assertEqual(pair["normalization"]["candidate_extent"], [16, 12])
+        self.assertIn("bit-identical", " ".join(pair["reasons"]))
+
+    def test_exact_scale_two_difference_remains_a_difference(self):
+        base = np.full((6, 8, 4), 20, dtype=np.uint8)
+        scaled = np.repeat(np.repeat(base, 2, axis=0), 2, axis=1)
+        scaled[0, 0, 0] = 240
+        value = self.cross(base, scaled, self.policy())
+        pair = value["pairs"][0]
+        self.assertEqual(pair["status"], "fail")
+        self.assertIn("bit-identical", " ".join(pair["reasons"]))
+
+    def test_tolerant_scale_two_equality_passes(self):
+        base = np.full((6, 8, 4), 20, dtype=np.uint8)
+        scaled = np.repeat(np.repeat(base, 2, axis=0), 2, axis=1)
+        value = self.cross(base, scaled, self.policy("tolerant"))
+        self.assertEqual(value["pairs"][0]["status"], "pass")
+
+    def test_scale_normalization_can_be_refused_by_policy(self):
+        base = np.full((6, 8, 4), 20, dtype=np.uint8)
+        scaled = np.repeat(np.repeat(base, 2, axis=0), 2, axis=1)
+        value = self.cross(base, scaled, self.policy("tolerant", allow=False))
+        self.assertEqual(value["status"], "incomplete")
+        self.assertEqual(value["pairs"], [])
+        self.assertIn("normalization failed", value["comparisons"][0]["reason"])
+
+    def test_candidate_temporal_stays_in_candidate_coordinates(self):
+        first = np.full((12, 16, 4), 40, dtype=np.uint8)
+        second = first.copy()
+        second[0:2, 0:2, 0] = 220
+        value = gfx_frame_compare.compare_temporal(
+            [self.frame(10, np.full((6, 8, 4), 20, dtype=np.uint8),
+                        "reference")],
+            [self.frame(20, first, "candidate"),
+             self.frame(21, second, "candidate")],
+            policy=self.policy("tolerant"),
+            reference_consecutive=[], candidate_consecutive=[(20, 21)],
+            cross_pairs=[])
+        pair = value["pairs"][0]
+        self.assertEqual(pair["relation"], "candidate_temporal")
+        self.assertEqual(pair["statistics"]["pixels"], 16 * 12)
+        self.assertEqual(pair["normalization"]["scale"], 1)
+        self.assertEqual(pair["normalization"]["candidate_extent"], [16, 12])
+
+
+@unittest.skipUnless(np is not None, "numpy is required")
 class TemporalArtifactTests(unittest.TestCase):
     """Every PNG must depict the pair and normalization behind its statistics."""
 
@@ -469,10 +684,6 @@ class TemporalArtifactTests(unittest.TestCase):
                 "sha256": f"{role}{index:060d}", "identity": {"role": role}}
 
     def test_artifacts_use_the_same_images_and_normalization_as_metrics(self):
-        try:
-            from PIL import Image
-        except Exception:  # noqa: BLE001
-            self.skipTest("Pillow is required to inspect PNG artifacts")
         reference = np.full((6, 8, 4), 20, dtype=np.uint8)
         reference[:, :, 3] = 255
         reference[0:2, 0:2, :3] = 200
@@ -509,6 +720,6 @@ class TemporalArtifactTests(unittest.TestCase):
             }
             self.assertEqual(set(paths), set(expected))
             for name, image in expected.items():
-                actual = np.asarray(Image.open(paths[name]).convert("RGBA"))
+                actual = read_png_rgba(paths[name])
                 self.assertEqual(actual.shape, image.shape, name)
                 self.assertTrue(np.array_equal(actual, image), name)

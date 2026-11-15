@@ -1049,10 +1049,11 @@ def _frame_meta_entries(run: Path, role: str) -> tuple[dict[int, dict], list[str
             index = int(path.stem.rsplit("-", 1)[-1])
         except ValueError:
             continue
+        # Do not read or hash every payload while merely enumerating
+        # candidates; the selected window is verified during decoding.
         metas.setdefault(index, {
             "frame_index": index,
             "raw_file": str(path),
-            "sha256": _sha256_file(path),
         })
     return metas, notes
 
@@ -1071,54 +1072,108 @@ def _frame_candidates(run: Path, role: str, meta: dict) -> list[Path]:
     return paths
 
 
-def _load_preserved_frames(run: Path, role: str) -> tuple[list[dict], list[int]]:
-    """Decode every preserved full-resolution frame for one role."""
-    metas, notes = _frame_meta_entries(run, role)
+TEMPORAL_MAX_WINDOW = 4
+TEMPORAL_MAX_COMPARISONS = 12
+TEMPORAL_MAX_SELECTION_PROBES = 16
+TEMPORAL_MAX_METADATA_CANDIDATES = 4096
+
+
+def _decode_frame_meta(run: Path, role: str, index: int,
+                       meta: dict) -> tuple[dict | None, str]:
+    path = next((item for item in _frame_candidates(run, role, meta)
+                 if item.is_file()), None)
+    if path is None:
+        return None, "payload file is absent"
+    try:
+        payload = path.read_bytes()
+    except OSError as exc:
+        return None, f"payload is unreadable: {exc}"
+    declared = meta.get("sha256")
+    if declared is not None:
+        if not isinstance(declared, str) or len(declared) != 64:
+            return None, "declared payload digest is malformed"
+        if hashlib.sha256(payload).hexdigest() != declared.lower():
+            return None, "payload digest does not match its declaration"
+    try:
+        width = int(meta.get("width") or 0)
+        height = int(meta.get("height") or 0)
+        if width <= 0 or height <= 0:
+            return None, "frame extent is absent or invalid"
+        image = gfx_frame_compare.decode_frame(
+            payload, width, height,
+            origin=str(meta.get("origin") or "top_left"),
+            pixel_format=str(meta.get("pixel_format") or "BGRA8"),
+        )
+    except (OSError, ValueError, TypeError, gfx_frame_compare.CompareError) as exc:
+        return None, f"payload cannot be decoded: {exc}"
+    return {
+        "frame_index": index,
+        "image": image,
+        "sha256": declared,
+        "identity": {
+            key: meta.get(key) for key in (
+                "backend", "game_day", "update_identity", "caller_signature",
+                "draws", "width", "height", "origin", "pixel_format")
+            if meta.get(key) is not None
+        },
+        "path": str(path),
+    }, ""
+
+
+def _load_preserved_frames(
+    run: Path, role: str, indices: list[int] | None = None,
+) -> tuple[list[dict], list[int], list[dict]]:
+    """Index metadata cheaply and decode only the requested frame indices."""
+    metas, _notes = _frame_meta_entries(run, role)
+    if indices is None:
+        selected = sorted(metas)
+    else:
+        selected = sorted({int(index) for index in indices})
     frames: list[dict] = []
     missing: list[int] = []
-    for index in sorted(metas):
-        meta = metas[index]
-        path = next((item for item in _frame_candidates(run, role, meta)
-                     if item.is_file()), None)
-        if path is None:
+    problems: list[dict] = []
+    for index in selected:
+        meta = metas.get(index)
+        if meta is None:
             missing.append(index)
+            problems.append({"role": role, "frame_index": index,
+                             "reason": "no preserved metadata"})
             continue
-        try:
-            payload = path.read_bytes()
-            width = int(meta.get("width") or 0)
-            height = int(meta.get("height") or 0)
-            if width <= 0 or height <= 0:
-                missing.append(index)
-                continue
-            image = gfx_frame_compare.decode_frame(
-                payload, width, height,
-                origin=str(meta.get("origin") or "top_left"),
-                pixel_format=str(meta.get("pixel_format") or "BGRA8"),
-            )
-        except (OSError, ValueError, TypeError, gfx_frame_compare.CompareError):
+        frame, problem = _decode_frame_meta(run, role, index, meta)
+        if frame is None:
             missing.append(index)
+            problems.append({"role": role, "frame_index": index,
+                             "reason": problem})
             continue
-        frames.append({
-            "frame_index": index,
-            "image": image,
-            "sha256": meta.get("sha256"),
-            "identity": {
-                key: meta.get(key) for key in (
-                    "backend", "game_day", "update_identity", "caller_signature",
-                    "draws", "width", "height", "origin", "pixel_format")
-                if meta.get(key) is not None
-            },
-            "path": str(path),
-        })
-    return frames, sorted(set(missing))
+        frames.append(frame)
+    return frames, sorted(set(missing)), problems
 
 
-def _first_preserved_pair(frames: list[dict], window: int) -> list[dict]:
-    ordered = {int(row["frame_index"]): row for row in frames}
-    for index in sorted(ordered):
-        if all(number in ordered for number in range(index, index + window + 1)):
-            return [ordered[number] for number in range(index, index + window + 1)]
-    return []
+def _payload_available(run: Path, role: str, index: int, meta: dict) -> bool:
+    """Cheap availability probe: the selected payload exists and fits metadata.
+
+    This deliberately does not decode or hash the payload; decoding the chosen
+    window is the authoritative check.  It prevents an automatic selection from
+    preferring a metadata record whose payload is absent.
+    """
+    path = next((item for item in _frame_candidates(run, role, meta)
+                 if item.is_file()), None)
+    if path is None:
+        return False
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return False
+    if size <= 0:
+        return False
+    raw_bytes = meta.get("raw_bytes")
+    if type(raw_bytes) is int and raw_bytes > 0:
+        return size == raw_bytes
+    width = meta.get("width")
+    height = meta.get("height")
+    if type(width) is int and width > 0 and type(height) is int and height > 0:
+        return size == width * height * 4
+    return True
 
 
 def _temporal_report(run: Path, pair: dict | None,
@@ -1127,43 +1182,172 @@ def _temporal_report(run: Path, pair: dict | None,
     policy = dict(scenario.get("comparison") or {})
     policy.setdefault("policy", "diagnostic")
     regions = policy.get("regions") or {}
-    reference, reference_missing = _load_preserved_frames(run, "reference")
-    candidate, candidate_missing = _load_preserved_frames(run, "candidate")
-    window = max(0, int(getattr(args, "temporal_window", 1) or 0))
-    reference_available = {int(row["frame_index"]) for row in reference}
-    candidate_available = {int(row["frame_index"]) for row in candidate}
-    selected_reference = getattr(args, "reference_frame", None)
-    selected_candidate = getattr(args, "candidate_frame", None)
-    if selected_reference is None:
-        selected_reference = (pair or {}).get("frame_index")
-    if selected_candidate is None:
-        selected_candidate = (pair or {}).get("candidate_frame_index")
-    if selected_reference is None and reference:
-        selected_reference = int(reference[0]["frame_index"])
-    if selected_candidate is None and candidate:
-        selected_candidate = int(candidate[0]["frame_index"])
-    reference_frames = [
-        row for row in reference
-        if type(selected_reference) is int
-        and int(selected_reference) <= int(row["frame_index"])
-        <= int(selected_reference) + window
-    ]
-    candidate_frames = [
-        row for row in candidate
-        if type(selected_candidate) is int
-        and int(selected_candidate) <= int(row["frame_index"])
-        <= int(selected_candidate) + window
-    ]
-    if not reference_frames:
-        fallback = _first_preserved_pair(reference, window)
-        if fallback:
-            selected_reference = int(fallback[0]["frame_index"])
-            reference_frames = fallback
-    if not candidate_frames:
-        fallback = _first_preserved_pair(candidate, window)
-        if fallback:
-            selected_candidate = int(fallback[0]["frame_index"])
-            candidate_frames = fallback
+    ref_metas, _ = _frame_meta_entries(run, "reference")
+    cand_metas, _ = _frame_meta_entries(run, "candidate")
+    reference_available = sorted(ref_metas)
+    candidate_available = sorted(cand_metas)
+    window = int(getattr(args, "temporal_window", 1) or 1)
+    window = max(1, window)
+    if window > TEMPORAL_MAX_WINDOW:
+        return {
+            "schema": gfx_frame_compare.TEMPORAL_SCHEMA,
+            "status": "error",
+            "reason": (
+                f"temporal window {window} exceeds the documented bound "
+                f"({TEMPORAL_MAX_WINDOW} consecutive frames per role)"),
+            "bounds": {
+                "max_window": TEMPORAL_MAX_WINDOW,
+                "max_comparisons": TEMPORAL_MAX_COMPARISONS,
+                "requested_window": window,
+            },
+        }
+    explicit_reference = getattr(args, "reference_frame", None) is not None
+    explicit_candidate = getattr(args, "candidate_frame", None) is not None
+    requested_reference = getattr(args, "reference_frame", None)
+    requested_candidate = getattr(args, "candidate_frame", None)
+    if requested_reference is None:
+        requested_reference = (pair or {}).get("frame_index")
+    if requested_candidate is None:
+        requested_candidate = (pair or {}).get("candidate_frame_index")
+
+    def window_indices(start) -> list[int]:
+        return ([start + offset for offset in range(window + 1)]
+                if type(start) is int else [])
+
+    def select(role: str, metas: dict[int, dict], preferred,
+               explicit: bool) -> dict:
+        available = sorted(metas)
+        if explicit:
+            indices = window_indices(preferred)
+            frames, missing, problems = _load_preserved_frames(
+                run, role, indices)
+            return {
+                "start": preferred,
+                "indices": indices,
+                "frames": frames,
+                "missing": missing,
+                "problems": problems,
+                "source": "explicit",
+                "fallback": False,
+                "probes": 0,
+                "candidates_considered": 0,
+                "search_exhausted": False,
+                "search_reason": "",
+                "probe_problems": [],
+            }
+        starts: list[int] = []
+        if type(preferred) is int and preferred in metas:
+            starts.append(preferred)
+        starts.extend(index for index in available if index not in starts)
+        probes = 0
+        considered = 0
+        search_exhausted = False
+        search_reason = ""
+        probe_problems: list[dict] = []
+        # Metadata presence and cheap payload availability are checked for
+        # every candidate; only a candidate worth decoding consumes a probe.
+        # The two bounds are separate so many metadata-only or missing-payload
+        # frames cannot exhaust the decode allowance.
+        for start in starts:
+            if considered >= TEMPORAL_MAX_METADATA_CANDIDATES:
+                search_exhausted = True
+                search_reason = "metadata candidate scan bound reached"
+                break
+            considered += 1
+            indices = window_indices(start)
+            if not all(index in metas for index in indices):
+                continue
+            if not all(_payload_available(run, role, index, metas[index])
+                       for index in indices):
+                continue
+            if probes >= TEMPORAL_MAX_SELECTION_PROBES:
+                search_exhausted = True
+                search_reason = "decode-attempt bound reached"
+                break
+            probes += 1
+            frames, missing, problems = _load_preserved_frames(
+                run, role, indices)
+            probe_problems.extend(problems)
+            if not missing and not problems:
+                fallback = type(preferred) is int and start != preferred
+                return {
+                    "start": start,
+                    "indices": indices,
+                    "frames": frames,
+                    "missing": missing,
+                    "problems": problems,
+                    "source": ("recorded_pair" if start == preferred
+                               else "fallback_window" if type(preferred) is int
+                               else "first_usable"),
+                    "fallback": fallback,
+                    "probes": probes,
+                    "candidates_considered": considered,
+                    "search_exhausted": False,
+                    "search_reason": "",
+                    "probe_problems": probe_problems,
+                }
+        # No complete usable window.  Keep the recorded pair (or the first
+        # available index) and report exactly why it is incomplete.
+        start = (preferred if type(preferred) is int and preferred in metas
+                 else available[0] if available else None)
+        indices = window_indices(start)
+        frames, missing, problems = _load_preserved_frames(run, role, indices)
+        return {
+            "start": start,
+            "indices": indices,
+            "frames": frames,
+            "missing": missing,
+            "problems": problems,
+            "source": "first_available",
+            "fallback": type(preferred) is int and start != preferred,
+            "probes": probes,
+            "candidates_considered": considered,
+            "search_exhausted": search_exhausted,
+            "search_reason": search_reason,
+            "probe_problems": probe_problems,
+        }
+
+    reference_selection = select("reference", ref_metas, requested_reference,
+                                explicit_reference)
+    candidate_selection = select("candidate", cand_metas, requested_candidate,
+                                 explicit_candidate)
+    selected_reference = reference_selection["start"]
+    selected_candidate = candidate_selection["start"]
+    reference_indices = reference_selection["indices"]
+    candidate_indices = candidate_selection["indices"]
+    reference_frames = reference_selection["frames"]
+    candidate_frames = candidate_selection["frames"]
+    reference_missing = reference_selection["missing"]
+    candidate_missing = candidate_selection["missing"]
+    reference_problems = reference_selection["problems"]
+    candidate_problems = candidate_selection["problems"]
+    reference_pairs = ([(index, index + 1)
+                        for index in range(selected_reference,
+                                           selected_reference + window)]
+                       if type(selected_reference) is int else [])
+    candidate_pairs = ([(index, index + 1)
+                        for index in range(selected_candidate,
+                                           selected_candidate + window)]
+                       if type(selected_candidate) is int else [])
+    cross_pairs = ([(int(selected_reference), int(selected_candidate))]
+                   if type(selected_reference) is int
+                   and type(selected_candidate) is int else [])
+    requested_comparisons = (len(reference_pairs) + len(candidate_pairs)
+                             + len(cross_pairs))
+    if requested_comparisons > TEMPORAL_MAX_COMPARISONS:
+        return {
+            "schema": gfx_frame_compare.TEMPORAL_SCHEMA,
+            "status": "error",
+            "reason": (
+                f"{requested_comparisons} requested temporal comparisons "
+                f"exceed the documented bound ({TEMPORAL_MAX_COMPARISONS})"),
+            "bounds": {
+                "max_window": TEMPORAL_MAX_WINDOW,
+                "max_comparisons": TEMPORAL_MAX_COMPARISONS,
+                "requested_comparisons": requested_comparisons,
+            },
+        }
+
     artifacts = None
     if getattr(args, "temporal_artifacts", False):
         directory = getattr(args, "temporal_artifact_dir", None)
@@ -1171,49 +1355,84 @@ def _temporal_report(run: Path, pair: dict | None,
             "dir": Path(directory) if directory else run / "temporal",
             "amplification": 4,
         }
-    if not reference_frames or not candidate_frames:
-        return {
-            "schema": gfx_frame_compare.TEMPORAL_SCHEMA,
-            "status": "incomplete",
-            "reason": (
-                "no preserved full-resolution frames for the requested window"),
-            "preserved": {
-                "reference": sorted(reference_available),
-                "candidate": sorted(candidate_available),
-            },
-            "missing": {
-                "reference": reference_missing,
-                "candidate": candidate_missing,
-            },
-            "selected": {
-                "reference": selected_reference,
-                "candidate": selected_candidate,
-                "window": window,
-            },
-            "pairs": [],
-            "overlap": None,
-        }
     report = gfx_frame_compare.compare_temporal(
         reference_frames, candidate_frames,
         policy=policy, regions=regions,
-        cross_pairs=[(int(selected_reference), int(selected_candidate))],
-        max_pairs=max(3, 2 * (window + 1) + 1),
+        cross_pairs=cross_pairs,
+        reference_consecutive=reference_pairs,
+        candidate_consecutive=candidate_pairs,
+        max_pairs=min(TEMPORAL_MAX_COMPARISONS,
+                      max(1, requested_comparisons)),
         artifacts=artifacts,
     )
     report["selected"] = {
         "reference": selected_reference,
         "candidate": selected_candidate,
         "window": window,
+        "explicit": {
+            "reference": explicit_reference,
+            "candidate": explicit_candidate,
+        },
+        "requested_pair": {
+            "reference": requested_reference,
+            "candidate": requested_candidate,
+        },
+        "source": {
+            "reference": reference_selection["source"],
+            "candidate": candidate_selection["source"],
+        },
+        "fallback": {
+            "reference": reference_selection["fallback"],
+            "candidate": candidate_selection["fallback"],
+        },
+        "probes": {
+            "reference": reference_selection["probes"],
+            "candidate": candidate_selection["probes"],
+        },
+        "candidates_considered": {
+            "reference": reference_selection["candidates_considered"],
+            "candidate": candidate_selection["candidates_considered"],
+        },
+        "search_exhausted": {
+            "reference": reference_selection["search_exhausted"],
+            "candidate": candidate_selection["search_exhausted"],
+        },
+        "search_reason": {
+            "reference": reference_selection["search_reason"],
+            "candidate": candidate_selection["search_reason"],
+        },
+        "indices": {
+            "reference": reference_indices,
+            "candidate": candidate_indices,
+        },
     }
+    report["fallback_used"] = bool(
+        reference_selection["fallback"] or candidate_selection["fallback"])
+    report["selection_search_exhausted"] = bool(
+        reference_selection["search_exhausted"]
+        or candidate_selection["search_exhausted"])
     report["preserved"] = {
-        "reference": sorted(reference_available),
-        "candidate": sorted(candidate_available),
+        "reference": reference_available,
+        "candidate": candidate_available,
     }
     report["missing"] = {
         "reference": reference_missing,
         "candidate": candidate_missing,
+        "requested_reference": [index for index in reference_indices
+                                if index not in ref_metas],
+        "requested_candidate": [index for index in candidate_indices
+                                if index not in cand_metas],
     }
-    report["artifacts_requested"] = bool(getattr(args, "temporal_artifacts", False))
+    report["invalid"] = (
+        reference_problems + candidate_problems
+        + reference_selection.get("probe_problems", [])
+        + candidate_selection.get("probe_problems", []))
+    report["bounds"] = {
+        "max_window": TEMPORAL_MAX_WINDOW,
+        "max_comparisons": TEMPORAL_MAX_COMPARISONS,
+        "requested_window": window,
+        "requested_comparisons": requested_comparisons,
+    }
     return report
 
 
@@ -1308,9 +1527,14 @@ def eu4_diff_inspect(args: argparse.Namespace) -> dict:
         evidence = "unverified"
     diagnostic = "complete"
     reason = ""
-    if temporal is not None and temporal.get("status") == "incomplete":
+    temporal_status = temporal.get("status") if temporal is not None else None
+    if temporal_status == "error":
+        diagnostic = "refused"
+        reason = str(temporal.get("reason") or "temporal diagnostics refused")
+    elif temporal_status in ("incomplete", "partial"):
         diagnostic = "incomplete"
-        reason = str(temporal.get("reason") or "temporal diagnostics incomplete")
+        reason = str(temporal.get("reason") or
+                     "temporal diagnostics are not complete")
     processes = {
         role: {
             "exit_code": (value or {}).get("exit_code"),
@@ -1361,9 +1585,13 @@ def eu4_diff_inspect(args: argparse.Namespace) -> dict:
         "next": steps[0] if steps else "",
         "case": package,
         "temporal": temporal,
+        "temporal_status": temporal_status,
     }
+    envelope_status = ("ok" if diagnostic == "complete"
+                       else "refused" if diagnostic == "refused"
+                       else "incomplete")
     return _envelope(
-        "eu4_diff_inspect", "ok" if diagnostic == "complete" else "incomplete",
+        "eu4_diff_inspect", envelope_status,
         payload, reason=reason, diagnostic=diagnostic,
         verdict=_verdict_from_status(comparison.get("status")),
         evidence=evidence,

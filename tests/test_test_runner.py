@@ -82,6 +82,23 @@ class RunnerTests(unittest.TestCase):
         # The log is complete, not just the tail the CLI prints.
         self.assertIn("FAILED (failures=1)", Path(value["log"]).read_text())
 
+    def test_zero_test_success_is_not_a_passing_run(self):
+        (self.root / "runner_empty.py").write_text("VALUE = 1\n")
+        value = self.run_module("runner_empty")
+        self.assertEqual(value["status"], "incomplete")
+        self.assertFalse(value["ok"])
+        self.assertEqual(value["counts"]["ran"], 0)
+        self.assertEqual(value["exit_code"], 5)
+        self.assertIn("zero tests", value["reason"])
+        import contextlib
+        import io
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = test_runner.main([
+                "run", "--module", "runner_empty", "--cwd", str(self.root),
+                "--state-dir", str(self.state)])
+        self.assertNotEqual(code, 0, buffer.getvalue())
+
     def test_timeout_is_reported_and_the_child_is_stopped(self):
         value = self.run_module("runner_slow", timeout=1.0)
         self.assertEqual(value["status"], "timeout")

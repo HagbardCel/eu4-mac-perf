@@ -829,7 +829,8 @@ def _compare_pair(pair: dict, reference_meta: dict | None,
         "pixel_tolerance": policy["max_channel_error"],
         "max_mismatched_fraction": policy["max_mismatched_fraction"],
         "max_mean_abs_error": policy["max_mean_abs_error"],
-        "allow_scale_normalization": True,
+        "allow_scale_normalization": bool(
+            policy.get("allow_scale_normalization", True)),
     }
     try:
         reference_payload = Path(reference_meta["raw_file"]).read_bytes()

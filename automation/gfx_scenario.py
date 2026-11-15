@@ -217,6 +217,7 @@ def normalize(value: dict) -> dict:
         "policy", "max_channel_error", "max_mismatched_fraction",
         "max_mean_abs_error", "regions", "require_aligned",
         "stop_on_first", "weak_identity_guard", "weak_identity_min_correlation",
+        "allow_scale_normalization",
     }, "comparison")
     policy = comparison.get("policy", "exact")
     if policy not in POLICIES:
@@ -268,6 +269,9 @@ def normalize(value: dict) -> dict:
         comparison.get("weak_identity_min_correlation"), float,
         "comparison.weak_identity_min_correlation", 0.35,
         minimum=0.0, maximum=1.0)
+    allow_scale_normalization = _optional(
+        comparison.get("allow_scale_normalization"), bool,
+        "comparison.allow_scale_normalization", True)
 
     mode = value.get("mode", "streaming")
     if mode not in MODES:
@@ -350,6 +354,7 @@ def normalize(value: dict) -> dict:
             "stop_on_first": stop_on_first,
             "weak_identity_guard": weak_identity_guard,
             "weak_identity_min_correlation": weak_identity_min_correlation,
+            "allow_scale_normalization": allow_scale_normalization,
         },
         "mode": mode,
         "profile": wait_profile,

@@ -252,8 +252,43 @@ absolute error, per-region statistics, difference bounding box and the temporal
 frame identities/digests. `overlap` intersects the cross-process mask with each
 within-process mask: `cross_also_temporal_fraction` is the share of
 cross-process differing pixels that also change between consecutive frames of
-that process. Processing is bounded (`max_pairs`) and difference PNGs are
-written only with `--temporal-artifacts`.
+that process. Difference PNGs are written only with `--temporal-artifacts` and
+always use the same pair and normalized arrays as their statistics.
+
+Completion is explicit. Every requested comparison is reported as `completed`,
+`skipped` (the documented pair bound) or `unavailable` (missing frame or
+normalization failure), with separate cross-process and temporal-variability
+flags. Successful within-process pairs never imply that a requested
+cross-process pair ran. If a requested cross-process or consecutive comparison
+cannot be performed, the top-level status is `incomplete` and the useful
+statistics that did run are retained; pair-bound truncation is reported
+separately. `eu4_diff_inspect` propagates an incomplete/partial temporal result
+instead of claiming a complete diagnostic.
+
+Cross-process normalization follows the scenario's
+`comparison.allow_scale_normalization` policy, records the original extents,
+scale and method, and applies exact-policy semantics: equality after resampling
+is `unverified`, not bit-identical, while a genuine difference remains a
+difference. Candidate-temporal pairs remain in candidate coordinates.
+
+The temporal window is bounded (4 consecutive frames per role, 12 requested
+comparisons). An explicit request beyond that bound is refused with the bounds
+in the response; an explicitly requested missing index is reported as missing,
+never silently replaced by a different pair. Only the selected frames and their
+required neighbours are decoded.
+
+Without explicit indices, the selector prefers the recorded pair only when its
+payload files are present and plausibly sized; otherwise it inspects candidate
+starts in order (bounded metadata scan) and probes a window only when metadata
+and cheap payload availability make it worth decoding. The decode-attempt bound
+is separate from the metadata scan, so many metadata-only or missing-payload
+frames cannot exhaust the decode allowance. `selected.source`,
+`selected.fallback`, `selected.probes`, `selected.candidates_considered`,
+`selected.search_exhausted` and `fallback_used` are reported; an exhausted
+search is explicit rather than implying that no usable window exists. A payload is decoded and, when its
+metadata declares a digest, verified before comparison; a digest mismatch or
+undecodable payload is reported in `invalid` and cannot produce completed
+statistics. Metadata enumeration never hashes unselected payloads.
 
 This recovers the recorded Experiment A findings without a private script:
 
@@ -294,7 +329,9 @@ does that for the session you select.
 `unittest` modules, writes the complete log under `.local/test-runs/`, and
 returns a compact machine-readable summary. It preserves the child exit code.
 An identical suite already running is returned as **pending** (`ok: false`,
-CLI exit 2) — never as a completed pass. A base/candidate comparison requires
+CLI exit 2) — never as a completed pass. A process that exits successfully
+while executing zero tests is **incomplete**, not a pass, and the original
+child exit code is preserved separately. A base/candidate comparison requires
 the same executed selection (different checkout directories are allowed),
 completed runs and a non-zero test count; otherwise the verdict is
 **`incomparable`** with the reasons, not `no_new_failures`.

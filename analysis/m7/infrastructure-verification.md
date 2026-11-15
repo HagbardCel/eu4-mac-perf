@@ -127,3 +127,50 @@ python3 -m automation.agent_tools eu4_session discover --limit 5
   failures are identical and pre-existing on both sides (QBDI release absent).
 - The recorded evidence under `.local/` is not committed; portable tests use
   synthetic frames and the sanitized DSH fixture.
+
+## Post-merge follow-up (fix/m7-diagnostic-correctness)
+
+The follow-up closes four correctness gaps found after PR #196 merged:
+
+1. **Temporal completion is explicit.** `compare_temporal` records every
+   requested comparison as `completed`, `skipped` (pair bound) or `unavailable`
+   (missing frame/normalization failure), with separate cross-process and
+   temporal-variability flags. A successful within-process pair never implies a
+   cross-process comparison ran; missing requested comparisons make the result
+   `incomplete`, and pair-bound truncation is reported separately.
+2. **Normalization provenance and policy.** Cross-process normalization records
+   the original extents, scale and method, uses the scenario's
+   `comparison.allow_scale_normalization`, and applies exact-policy semantics:
+   resampled equality is `unverified`, while a genuine difference stays
+   `fail`. Candidate-temporal pairs remain in candidate coordinates; metrics and
+   PNG artifacts use the same normalized arrays.
+3. **Bounded temporal loading.** The temporal inspector indexes metadata without
+   decoding, decodes only the selected window, and refuses explicit requests
+   beyond 4 consecutive frames per role / 12 comparisons. An explicitly missing
+   index is reported, not replaced.
+4. **Zero-test runs are incomplete.** A unittest process that exits successfully
+   with zero executed tests now reports `status=incomplete`, `ok=false`, a
+   nonzero CLI status and the original child exit code; `compare_records`
+   continues to reject it.
+
+Verification at the follow-up head:
+
+- Required focused selection (`test_gfx_frame_compare`, `test_agent_tools`,
+  `test_test_runner`): **106 tests, OK** at the final selection fix.
+- Dependent suites (dual-run, qualification, case, offline, evidence, DSH
+  bridge/profile): **188 tests, OK** at the final selection fix.
+- Node plugin: **9/9 pass**.
+- Full suite at `306e93a` (the commit before the final selection-only fix):
+  **3132 tests, 11 failures, 0 errors, 26 skipped**. All 11 are the
+  pre-existing `test_trace_tr3` environmental failures; the same module has the
+  identical 11 failures at base. No candidate-only regression. The final
+  selection fix changes only `automation/agent_tools.py` and its tests; the
+  final head's portable CI runs the full suite.
+
+The final correction also records unavailable comparisons even when a role has
+zero decodable frames, selects automatic windows by payload availability and
+incremental probing (explicit indices are never substituted), separates the
+metadata-scan limit from the decode-attempt limit, and verifies a selected
+payload's declared digest without hashing unselected `.bgra` files.
+- Portable PNG content test uses a standard-library reader; Pillow is not
+  required.
