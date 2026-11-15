@@ -25,25 +25,102 @@ Saved evidence: [p0-baseline.json](p0-baseline.json),
 [stages.json](stages.json). Raw per-frame samples are reproducible with
 `--records`.
 
-## PR P0 baseline
+## Reproducing the historical P0 baseline and the current optimized benchmark
 
 `benchmark/eu4_gfx_stream_bench.py` builds the native live-draw host
 (`tests/gfx_live_draw_host.mm`) with the real backend modules and drives a
 deterministic synthetic draw stream through the same `_Gfx*` replacement route
 the game uses.
 
-Reproduce (from the repository root):
+The P0 baseline is **historical**: it requires commit `db69a62`, the P0 commit,
+not current `main`. Running the benchmark on current `main` reproduces the
+optimized result, not the baseline. Both runs use Python 3.14 and write only to
+ignored `.local/`; the tracked `p0-baseline.json`, `final.json` and
+`stages.json` are evidence and are never overwritten.
+
+The P0 driver at `db69a62` has no `--no-debug-layer` option: `run_kind()` always
+sets `MTL_DEBUG_LAYER=1` and `MTL_DEBUG_LAYER_ERROR_MODE=assert`. The baseline
+was measured without that validation layer, so reproducing it needs a
+**temporary, untracked copy of the Python driver** with those two assignments
+removed. This does not modify the historical renderer or host sources, and the
+copy disappears with the detached worktree.
+
+### Historical P0 baseline (`db69a62`)
 
 ```sh
-python3 benchmark/eu4_gfx_stream_bench.py \
-  --draws 1000 --frames 30 --kinds simple,indexed,mixed \
-  --output analysis/perf/p0-baseline.json --summary
+# from the repository root; the P0 commit must be present in history
+MAIN=$PWD
+mkdir -p .local/perf
+git worktree add --detach .local/perf/p0-worktree db69a62
+(
+  cd .local/perf/p0-worktree
+
+  # Minimal temporary driver adaptation: keep the P0 host/workload, remove only
+  # the validation-layer environment assignments. The tracked driver is not
+  # edited.
+  python3.14 - <<'PY'
+from pathlib import Path
+source = Path("benchmark/eu4_gfx_stream_bench.py")
+target = Path("benchmark/eu4_gfx_stream_bench_nodebug.py")
+text = source.read_text()
+old = '    env["MTL_DEBUG_LAYER"] = "1"\n    env["MTL_DEBUG_LAYER_ERROR_MODE"] = "assert"\n'
+if old not in text:
+    raise SystemExit("unexpected P0 driver shape")
+target.write_text(text.replace(old, "    # Historical P0 baseline: validation disabled.\n", 1))
+PY
+
+  python3.14 benchmark/eu4_gfx_stream_bench_nodebug.py \
+    --draws 1000 --frames 30 --kinds simple,indexed,mixed \
+    --summary \
+    --output "$MAIN/.local/perf/p0-baseline-repro.json"
+)
 ```
 
-`MTL_DEBUG_LAYER=1` and `MTL_DEBUG_LAYER_ERROR_MODE=assert` are set by the
-runner. Three warm-up frames precede the measured frames, and the instrumented
-build runs the same workload, so pipeline compilation and Metal shader
-compilation are warm before sampling.
+Confirm the measurement configuration before trusting the numbers:
+
+```sh
+# No active validation assignment remains in the adapted driver.
+grep -n 'MTL_DEBUG_LAYER' .local/perf/p0-worktree/benchmark/eu4_gfx_stream_bench_nodebug.py
+# The direct host prints "Metal API Validation Enabled" only when the layer is on.
+env -u MTL_DEBUG_LAYER -u MTL_DEBUG_LAYER_ERROR_MODE \
+  .local/perf/p0-worktree/benchmark/.build/gfx_live_draw_host --bench simple 1000 1 2>&1 | head
+```
+
+The reproduced structural counters must match the tracked baseline:
+`command_buffers=1002`, `encoders=1000`, and `index_temp=1000` for
+`indexed`/`mixed` (`0` for `simple`). Absolute CPU and wall times vary with
+machine load; compare them as the same order of magnitude, not as exact
+numbers. `MAIN` deliberately points back at the checkout that created the
+worktree.
+
+Clean up after the confirmation:
+
+```sh
+rm -f .local/perf/p0-worktree/benchmark/eu4_gfx_stream_bench_nodebug.py
+git worktree remove .local/perf/p0-worktree
+```
+
+### Current optimized benchmark (`main`, including PR #192)
+
+Run from the repository root at the reviewed merge or later:
+
+```sh
+python3.14 benchmark/eu4_gfx_stream_bench.py \
+  --draws 1000 --frames 30 --kinds simple,indexed,mixed \
+  --no-debug-layer --summary \
+  --output .local/perf/current-repro.json
+```
+
+Compare that output with [final.json](final.json) and the per-stage
+[stages.json](stages.json). `--records` retains every per-frame sample; the
+tracked baseline and final files are compact summaries.
+
+By default the current-main runner sets `MTL_DEBUG_LAYER=1` and
+`MTL_DEBUG_LAYER_ERROR_MODE=assert` for validation. `--no-debug-layer` disables
+them for this optimized run; the historical P0 run uses the temporary adapted
+driver described above. Three warm-up frames precede the measured frames, and
+the instrumented build runs the same workload, so pipeline compilation and
+Metal shader compilation are warm before sampling.
 
 The saved baseline is [p0-baseline.json](p0-baseline.json).
 

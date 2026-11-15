@@ -57,16 +57,18 @@ pixel-identical (0 / 1,930,176, SHA-256 `ff2f4e2b…`) and two consecutive repla
 are deterministic (4.12 s each). Checkpoints for textures 431, 432, 443 and 447
 match exactly; the GL-RGB8/Metal-BGRA8 checkpoint 433 is diagnostic.
 
-The capture is **partial**, not complete: sampled full-extent texture 442 has no
-captured producer because resolve/copy operations are not recorded by the frame
-trace. Resolve/copy events are now rejected by the replay host rather than
-counted as successful no-ops; executing them remains open. A controlled V-flip fault localizes the earliest divergence to event 291
-(producer 289, program 349). The historical `tex7` defect is injected offline
-and the binding audit identifies the exact wrong engine unit at event 14 (842
-state mismatches) even though the title frame's terrain is overdrawn and its
-pixels do not change. Replay outcome is reported as separate `execution`,
-`coverage`, `pixels`, `semantic` and `qualified` fields; PR #190's corrected
-draw semantics are merged into the infrastructure branch.
+The historical canonical capture (326 events, 317 draws) is **partial** in one
+respect: texture 442 has no captured producer because that frame predates copy
+recording. Current trace writers record resolve/copy events and replay executes
+them rather than counting them as successful no-ops; the newer copy-bearing
+scene-75 frame resolves texture 442 in-frame (see the final closure below). A
+controlled V-flip fault localizes the earliest divergence in the canonical frame
+to event 291 (producer 289, program 349). The historical `tex7` defect is
+injected offline and the binding audit identifies the exact wrong engine unit at
+event 14 (842 state mismatches) even though the title frame's terrain is
+overdrawn and its pixels do not change. Replay outcome is reported as separate
+`execution`, `coverage`, `pixels`, `semantic` and `qualified` fields; PR #190's
+corrected draw semantics are merged into `main` through PR #191.
 
 BetterDisplay `EU4 Test` (1920x1200, 1x, non-main) is created once and reused.
 The shared-settings lifecycle is lease-ordered, with durable backup, rollback,
@@ -83,13 +85,15 @@ cases, and `python3.14 -m automation.gfx_replay_case`.
 
 ### Final correctness closure (2026-11-15)
 
-The infrastructure branch was synchronized with `origin/main` (`61e7795`) as
-merge `cb35385`; the consolidated integration PR is
-[#191](https://github.com/HagbardCel/eu4-mac-perf/pull/191). The closure fixes the startup launcher interface, makes the
-trace writer fail closed, applies one scene-occurrence semantic to both
-boundaries, bounds the Metal copy kernel to the requested rectangle, validates
-every clear flag combination against actual pixels, and rejects missing,
-duplicate or zero-index-shifted consumer provenance.
+PR #191 merged the infrastructure closure to `main` as merge `7456a7c`; PR #192
+then merged the P4 submission/draw-overhead work as merge `66f4178`, which is
+the current `origin/main` base for this document. The performance changes
+preserve the M6 acceptance and the replay contracts. The closure fixes the
+startup launcher interface, makes the trace writer fail closed, applies one
+scene-occurrence semantic to both boundaries, bounds the Metal copy kernel to
+the requested rectangle, validates every clear flag combination against actual
+pixels, and rejects missing, duplicate or zero-index-shifted consumer
+provenance.
 
 The closure also makes the final reference readback passive and deterministic
 (one `read_drawable_bgra` path, explicit default framebuffer/`GL_BACK`, restored
@@ -259,9 +263,9 @@ worktree is active.
 **DSH tools mount.** A temporary dedicated DSH home
 (`EU4_DSH_HOME=/tmp/eu4-dsh-tools-test`) provisioned both `@eu4/dsh-goal` and
 `@eu4/dsh-tools`; `dsh plugin add link:` succeeded for both and the profile row
-is present. `preflight.sh` reaches the plugin/runtime checks; its only failure
-is the pre-existing Node pin (`v26.13.0` vs installed `v26.13.1`), an
-environment drift, not a tools-plugin failure. The effective `--dump-config`
+is present. `preflight.sh` reaches the plugin/runtime checks. The Node pin was
+reconciled to the installed `v26.13.1` patch, so the earlier `v26.13.0`
+mismatch is no longer an environmental failure. The effective `--dump-config`
 contains the `eu4-tools` row and `name: '@eu4/dsh-tools'`. The live profile was
 deliberately not mutated while the Web session and the M6 agent were active.
 
@@ -276,8 +280,41 @@ without it loading progress cannot be aligned generally. The live campaign
 records frame payloads and health, not a per-draw operation prefix. The real
 GL/GL and Metal/Metal consistency campaigns remain to be run. Headless DSH
 tool discovery in the live Web GUI was not re-provisioned in this session; the
-plugin and profile row are tested independently. These stacks are local
-branches, not pushed PRs.
+plugin and profile row are tested independently. The differential stacks are
+merged PRs #189-#192, not local branches; the limits above still apply.
+
+## Artifact ownership
+
+One stage owns each artifact directory. Later stages read it; they do not
+rewrite it, and a derived artifact never upgrades a capture's coverage claim.
+
+| Stage | Producer / entry point | Owns | Never does |
+| --- | --- | --- | --- |
+| Capture | `eu4_capture` probe/request; the frame-trace writer | the run/session directory and the immutable frame trace, blobs and reference | rewrite a captured frame, synthesize a missing producer, or count a failed event as captured |
+| Graph | `eu4_capture graph`; `automation.gfx_frame_graph` | derived `graph.json` and its coverage/provenance report | resolve a resource the capture did not record |
+| Replay | `eu4_replay independent` / `case`; `automation.gfx_independent_replay`, `automation.gfx_replay_case` | the replay output directory and its readbacks | overwrite the capture or an existing case, or report command-buffer completion as pixel correctness |
+| Live comparison | `eu4_diff_run` and `eu4_diff_inspect` | the campaign session/run directory, paired observations, health, first divergence | terminate an unrelated process, or turn inconclusive alignment into a rendering verdict |
+| Offline case | `eu4_diff_inspect --build-case`; `gfx_replay_case package` | one self-contained, relative-path, digest-verified case directory | copy an unverified or partial frame as a complete case |
+
+The tool-level commands and envelopes are in [structured EU4 reconstruction
+tools](agent-tools.md).
+
+## Local evidence prerequisites
+
+The canonical frame (`.local/m6/frames/menu-occ300/frame`), the portable replay
+case, and live session/run directories live under `.local/`, which is
+gitignored. A clean clone and CI do not contain them. A committed report is the
+historical record of a run; it is not a substitute for the bytes.
+
+Check a prerequisite before citing or replaying it:
+
+```sh
+test -f .local/m6/frames/menu-occ300/frame/frame-trace.json
+python3.14 -m automation.gfx_replay_case verify --case <case-dir>
+```
+
+When a path is absent, report it as absent. Do not reconstruct it from a report,
+and do not treat missing local evidence as a passing result.
 
 ### M7.0 correspondence canary (2026-11-15)
 
@@ -318,7 +355,14 @@ Evidence: [qualification report](../analysis/m6/qualification-report.md),
 - **Offline captured-state replay.** 326/326 events encoded, 0 failed, GPU
   completion, 0 differing pixels of 1,930,176 including alpha. This is a
   captured-state replay; it does not independently reconstruct the upstream
-  terrain pass.
+  terrain pass. A synthetic capture-format/replay regression now covers a
+  sparse 16-bit index list with a nonzero signed base vertex and a nonzero
+  captured `vertex_origin` (`tests.test_m6_frame.SparseIndexReplayTests`). It
+  builds a frame-trace document in the captured format and does not exercise
+  the OpenGL capture writer; the historical canonical frame's origins are zero,
+  so it does not exercise that path either. A negative case omits the origin and
+  proves the replay cannot fetch the captured triangle while still reporting a
+  successful command.
 - **Text root cause (fixed).** The Credits/Options labels are directly sampled
   render targets. GL stores render-target row 0 at the bottom; Metal stores it
   at the top, so the engine's GL bottom-up UVs reflected the label. Live vertex

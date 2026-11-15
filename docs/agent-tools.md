@@ -3,6 +3,9 @@
 One Python core serves every agent surface. The CLI prints exactly one JSON
 envelope; the DSH/OpenCode adapters are thin argument mappers.
 
+Artifact ownership (which stage owns a capture, graph, replay, live comparison
+or offline case) is recorded in [current project status](status.md#artifact-ownership).
+
 ```json
 {
   "schema": "eu4-agent-tool/v2",
