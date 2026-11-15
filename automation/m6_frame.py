@@ -144,16 +144,24 @@ def load_trace(frame_dir: Path, *, verify_blobs: bool = True) -> dict:
 
 
 SEAL_SCHEMA = "gfx-frame-seal/v1"
-SEAL_ABI_VERSION = 1
+SEAL_ABI_VERSION = 2
 
 
-def load_seal(frame_dir: Path, *, verify_counts: bool = True) -> dict:
+def load_seal(
+    frame_dir: Path,
+    *,
+    trace: dict | None = None,
+    verify_counts: bool = True,
+    verify_blobs: bool = True,
+) -> dict:
     """Loads and validates the authoritative same-process frame seal.
 
     The seal is the handoff contract: a consumer may act only on a document
-    whose ``sealed`` flag is true, whose trace manifest and GL reference still
-    match their declared digests, and whose ordered operation accounting matches
-    the event stream on disk.
+    whose ``sealed`` flag is true, whose trace manifest, GL reference and
+    immutable event stream still match their declared digests, and whose
+    ordered operation accounting matches the event stream on disk.  Referenced
+    blobs are checked by the canonical ``load_trace`` verifier; pass an already
+    verified ``trace`` to avoid hashing them twice.
     """
     frame_dir = Path(frame_dir)
     path = frame_dir / "frame-seal.json"
@@ -173,9 +181,7 @@ def load_seal(frame_dir: Path, *, verify_counts: bool = True) -> dict:
     except (TypeError, ValueError) as exc:
         raise FrameError("frame seal has no ABI identity") from exc
     if abi_version != SEAL_ABI_VERSION:
-        raise FrameError(
-            f"unsupported frame seal ABI {abi_version}"
-        )
+        raise FrameError(f"unsupported frame seal ABI {abi_version}")
     if struct_size < 128 or struct_size > 65536:
         raise FrameError("frame seal descriptor size is invalid")
     if seal.get("trace_complete") is not True:
@@ -184,6 +190,8 @@ def load_seal(frame_dir: Path, *, verify_counts: bool = True) -> dict:
         raise FrameError("sealed trace integrity is not validated")
     if seal.get("readback_ok") is not True:
         raise FrameError("sealed frame has no reference readback")
+    if seal.get("event_stream_verified") is not True:
+        raise FrameError("sealed event stream is not verified")
     try:
         capture_id = int(seal.get("capture_frame_id"))
         pid = int(seal.get("pid"))
@@ -216,16 +224,18 @@ def load_seal(frame_dir: Path, *, verify_counts: bool = True) -> dict:
     if _sha256(reference_path) != seal.get("reference_sha256"):
         raise FrameError("sealed reference digest does not match")
 
+    events_path = member(seal.get("event_stream_file"), "event stream")
+    if not events_path.is_file():
+        raise FrameError("sealed event stream is absent")
+    if events_path.stat().st_size != seal.get("event_stream_bytes"):
+        raise FrameError("sealed event stream size does not match")
+    if _sha256(events_path) != seal.get("event_stream_sha256"):
+        raise FrameError("sealed event stream digest does not match")
+
+    if trace is None:
+        trace = load_trace(frame_dir, verify_blobs=verify_blobs)
+    events = trace.get("_events") or []
     if verify_counts:
-        events_path = frame_dir / "frame-events.jsonl"
-        try:
-            events = [
-                json.loads(line)
-                for line in events_path.read_text().splitlines()
-                if line.strip()
-            ]
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise FrameError(f"unreadable sealed frame events: {exc}") from exc
         kinds = [event.get("kind") for event in events]
         counts = {
             "operation_count": len(events),
@@ -247,6 +257,16 @@ def load_seal(frame_dir: Path, *, verify_counts: bool = True) -> dict:
             raise FrameError("sealed manifest event count does not match")
         if manifest.get("complete") is not True:
             raise FrameError("sealed manifest is incomplete")
+    seal["verification"] = {
+        "event_stream": True,
+        "manifest": True,
+        "reference": True,
+        "blobs": (
+            trace.get("_blob_count_verified") if verify_blobs else None
+        ),
+        "counts": bool(verify_counts),
+    }
+    seal["_verified"] = True
     seal["_seal_path"] = str(path)
     seal["_frame_dir"] = str(frame_dir)
     return seal
@@ -1214,7 +1234,7 @@ def inspect(args: argparse.Namespace) -> int:
     seal_path = frame_dir / "frame-seal.json"
     if seal_path.is_file():
         try:
-            summary["seal"] = load_seal(frame_dir)
+            summary["seal"] = load_seal(frame_dir, trace=trace)
         except FrameError as exc:
             summary["seal"] = {"invalid": str(exc)}
     print(json.dumps(summary, indent=2))

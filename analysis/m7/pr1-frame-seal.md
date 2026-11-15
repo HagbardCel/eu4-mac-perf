@@ -129,10 +129,10 @@ checkpoint, semantics and resolve suites remain green.
 
 ### Authentic one-frame launch
 
-One original x86_64 EU4 process (pid `7100`, session
-`38e457ef-0b49-4d57-a32c-7f826e4ab1b2`) was launched with the existing host
+One original x86_64 EU4 process (pid `16791`, session
+`9f036235-9cc0-4357-9e45-c35d12eb1619`) was launched with the existing host
 lease/background-display tooling. The canonical menu selection (caller
-`0x103b3c8`, occurrence 300, scene boundary) selected scene 595:
+`0x103b3c8`, occurrence 300, scene boundary) selected scene 617:
 
 | Field | Value |
 | --- | --- |
@@ -140,12 +140,13 @@ lease/background-display tooling. The canonical menu selection (caller
 | boundary | `scene`, finalized at `PresentScene` entry (pre-swap) |
 | ordered operations | 325 (315 draws, 9 clears, 1 resolve/copy) |
 | render target | 1728×1117 `BGRA8`, lower-left |
-| manifest | `38570603…` (`frame-trace.json`, complete + stream validated) |
-| GL reference | `bac710c6…`, 7,720,704 bytes |
+| event stream | `31d03c73…`, 6,392,559 bytes, hashed only after validation |
+| manifest | `b9de8e33…` (`frame-trace.json`, complete + stream validated) |
+| GL reference | `cd0e7a16…`, 7,720,704 bytes |
 | seal | `gfx-frame-seal/v1`, `sealed=true`, empty failure/unsupported fields |
 | notifications | exactly 1, index 1, manifest/reference verified by the consumer |
-| readback / finalize | 24.9 ms / 1.7 ms (total sealing cost 26.6 ms) |
-| notification callback | 18.7 ms, outside the trace mutex |
+| readback / finalize | 23.9 ms / 17.0 ms (total sealing cost 40.9 ms; includes stream hashing) |
+| notification callback | 18.6 ms, outside the trace mutex |
 | game stdout/stderr | 0 / 0 bytes |
 | launcher termination | `terminated=true`, `killed=false`, settings restored |
 | startup summary | complete, 0 overflow/unmatched/unavailable; the generic ops observer reported 4 refused at shutdown |

@@ -31,17 +31,30 @@ def _write_frame(directory: Path, *, sealed: bool = True,
     directory.mkdir(parents=True, exist_ok=True)
     reference = bytes((index * 7) & 0xFF for index in range(4 * 4 * 4))
     (directory / "frame-reference.bgra").write_bytes(reference)
+    blob = b"attribute-payload"
+    (directory / "blobs").mkdir(exist_ok=True)
+    (directory / "blobs" / "attr.bin").write_bytes(blob)
     events = [
-        {"kind": "draw", "draw": {"entry": "_GfxDraw", "caller_rva": "0x1000"}},
+        {
+            "kind": "draw",
+            "draw": {"entry": "_GfxDraw", "caller_rva": "0x1000"},
+            "attributes": [
+                {
+                    "name": "in_POSITION",
+                    "data": "attr.bin",
+                    "sha256": _sha(blob),
+                    "bytes": len(blob),
+                }
+            ],
+        },
         {"kind": "clear", "flags": 1},
         {"kind": "draw", "draw": {"entry": "_GfxDraw", "caller_rva": "0x1000"}},
         {"kind": "resolve", "operation": "glCopyTexSubImage2D"},
     ]
     if operation_count != len(events):
         events = events[:operation_count]
-    (directory / "frame-events.jsonl").write_text(
-        "".join(json.dumps(event) + "\n" for event in events)
-    )
+    events_bytes = "".join(json.dumps(event) + "\n" for event in events).encode()
+    (directory / "frame-events.jsonl").write_bytes(events_bytes)
     manifest = {
         "schema": "gfx-frame-trace/v1",
         "complete": True,
@@ -75,7 +88,7 @@ def _write_frame(directory: Path, *, sealed: bool = True,
         "schema": "gfx-frame-seal/v1",
         "sealed": sealed,
         "struct_size": 2040,
-        "abi_version": 1,
+        "abi_version": 2,
         "capture_frame_id": 7,
         "session_id": "session-1",
         "pid": 4242,
@@ -87,6 +100,10 @@ def _write_frame(directory: Path, *, sealed: bool = True,
         "draw_count": sum(1 for event in events if event["kind"] == "draw"),
         "clear_count": sum(1 for event in events if event["kind"] == "clear"),
         "copy_count": sum(1 for event in events if event["kind"] == "resolve"),
+        "event_stream_file": "frame-events.jsonl",
+        "event_stream_bytes": len(events_bytes),
+        "event_stream_sha256": _sha(events_bytes),
+        "event_stream_verified": True,
         "width": 4,
         "height": 4,
         "pixel_format": "BGRA8",
@@ -144,6 +161,18 @@ class FrameSealValidationTests(unittest.TestCase):
             trace = m6_frame.load_trace(frame)
             self.assertEqual(len(trace["_events"]), 4)
 
+    def test_legacy_m6_frame_without_a_seal_still_loads(self):
+        candidates = [
+            ROOT / ".local/m6/frames/menu-occ300/frame",
+            ROOT.parent / "eu4-mac-perf/.local/m6/frames/menu-occ300/frame",
+        ]
+        fixture = next((path for path in candidates if (path / "frame-trace.json").is_file()), None)
+        if fixture is None:
+            self.skipTest("canonical M6 frame is absent in this worktree")
+        trace = m6_frame.load_trace(fixture)
+        self.assertGreater(len(trace["_events"]), 0)
+        self.assertFalse((fixture / "frame-seal.json").exists())
+
     def test_unsealed_frame_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             frame = Path(temporary) / "frame"
@@ -180,7 +209,7 @@ class FrameSealValidationTests(unittest.TestCase):
             frame = Path(temporary) / "frame"
             _write_frame(frame)
             seal = json.loads((frame / "frame-seal.json").read_text())
-            seal["abi_version"] = 2
+            seal["abi_version"] = 3
             (frame / "frame-seal.json").write_text(json.dumps(seal))
             with self.assertRaisesRegex(m6_frame.FrameError, "ABI"):
                 m6_frame.load_seal(frame)
@@ -225,8 +254,48 @@ class FrameSealValidationTests(unittest.TestCase):
             seal = json.loads((frame / "frame-seal.json").read_text())
             seal["manifest_sha256"] = _sha(data)
             (frame / "frame-seal.json").write_text(json.dumps(seal))
-            with self.assertRaisesRegex(m6_frame.FrameError,
-                                        "manifest is incomplete"):
+            with self.assertRaisesRegex(m6_frame.FrameError, "incomplete"):
+                m6_frame.load_seal(frame)
+
+    def test_event_field_change_invalidates_the_seal(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            frame = Path(temporary) / "frame"
+            _write_frame(frame)
+            events_path = frame / "frame-events.jsonl"
+            data = events_path.read_bytes()
+            self.assertIn(b'"0x1000"', data)
+            events_path.write_bytes(data.replace(b'"0x1000"', b'"0x1001"', 1))
+            with self.assertRaisesRegex(m6_frame.FrameError, "event stream"):
+                m6_frame.load_seal(frame)
+
+    def test_truncated_or_appended_event_stream_invalidates_the_seal(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            frame = Path(temporary) / "frame"
+            _write_frame(frame)
+            events_path = frame / "frame-events.jsonl"
+            original = events_path.read_bytes()
+            events_path.write_bytes(original[:-1])
+            with self.assertRaisesRegex(m6_frame.FrameError, "event stream"):
+                m6_frame.load_seal(frame)
+            _write_frame(frame)
+            (frame / "frame-events.jsonl").write_bytes(original + b"\n")
+            with self.assertRaisesRegex(m6_frame.FrameError, "event stream"):
+                m6_frame.load_seal(frame)
+
+    def test_missing_event_stream_invalidates_the_seal(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            frame = Path(temporary) / "frame"
+            _write_frame(frame)
+            (frame / "frame-events.jsonl").unlink()
+            with self.assertRaisesRegex(m6_frame.FrameError, "event stream"):
+                m6_frame.load_seal(frame)
+
+    def test_modified_referenced_blob_is_rejected_before_qualification(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            frame = Path(temporary) / "frame"
+            _write_frame(frame)
+            (frame / "blobs" / "attr.bin").write_bytes(b"tampered")
+            with self.assertRaisesRegex(m6_frame.FrameError, "blob"):
                 m6_frame.load_seal(frame)
 
     def test_notification_must_be_single_and_verified(self):

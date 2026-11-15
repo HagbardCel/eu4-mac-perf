@@ -29,7 +29,7 @@
 extern "C" {
 #endif
 
-#define EU4_FRAME_CAPTURE_ABI_VERSION 1u
+#define EU4_FRAME_CAPTURE_ABI_VERSION 2u
 #define EU4_FRAME_CAPTURE_PATH_MAX 1024u
 #define EU4_FRAME_CAPTURE_SHA_MAX 65u
 #define EU4_FRAME_SEAL_SCHEMA "gfx-frame-seal/v1"
@@ -56,6 +56,13 @@ typedef struct eu4_frame_capture_descriptor {
     uint64_t draw_count;
     uint64_t clear_count;
     uint64_t copy_count; /* resolve/copy events in the ordered stream */
+
+    /* Immutable event stream, hashed only after it was closed and validated. */
+    uint64_t event_stream_bytes;
+    uint32_t event_stream_verified;
+    uint32_t reserved_stream;
+    char event_stream_file[128];
+    char event_stream_sha256[EU4_FRAME_CAPTURE_SHA_MAX];
 
     /* Original render target and pixel format. */
     uint32_t width;

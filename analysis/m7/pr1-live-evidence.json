@@ -20,11 +20,11 @@
       "boundary": "scene",
       "max_draws": 1024
     },
-    "pid": 7100,
-    "session_id": "38e457ef-0b49-4d57-a32c-7f826e4ab1b2",
+    "pid": 16791,
+    "session_id": "9f036235-9cc0-4357-9e45-c35d12eb1619",
     "eu4_processes": 1,
     "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
-    "instrumentation_library_sha256": "2f244cc251934da5eb6ac3d5dbcad7e1b75b98dacd5c831717f76834358e8665",
+    "instrumentation_library_sha256": "0ab6017f6e9dc1274b5b48ab57ba62a6cf3cdc0cc501dc2b03ac5de036e89a4d",
     "startup_status": "installed",
     "startup_summary_complete": true,
     "startup_summary": {
@@ -32,11 +32,10 @@
       "event_count": 4,
       "overflow": 0,
       "unmatched": 0,
-      "refused": 4,
+      "refused": 327,
       "unavailable": 0,
       "in_flight": 0,
-      "reason": "",
-      "note": "The generic ops observer reported refused=4/unavailable=11189 at shutdown; the frame trace and seal were already complete. No GL error was recorded."
+      "reason": ""
     },
     "game_stdout_bytes": 0,
     "game_stderr_bytes": 0,
@@ -55,9 +54,9 @@
   "frame": {
     "capture_frame_id": 1,
     "boundary": "scene",
-    "present_index": 595,
-    "scene_index": 595,
-    "capture_dir": ".local/m7/pr1-live-seal-4/frame",
+    "present_index": 617,
+    "scene_index": 617,
+    "capture_dir": ".local/m7/pr1-live-seal-5/frame",
     "width": 1728,
     "height": 1117,
     "pixel_format": "BGRA8",
@@ -74,23 +73,29 @@
       "draw"
     ],
     "manifest_file": "frame-trace.json",
-    "manifest_sha256": "38570603472663f5f07d083ca3cf8991b0885f89ef678a9c7108c0e235d01de0",
+    "manifest_sha256": "b9de8e336880752af05cac5a87f95117658aaa745e317f2d2edde30db4e3e22f",
     "manifest_events": 325,
     "manifest_complete": true,
     "manifest_stream_validated": true,
-    "frame_events_sha256": "26f9575c264c934f451e70adc0a54bac7b54f118db72831c536880c541a4facd",
-    "frame_events_bytes": 6392558,
+    "frame_events_sha256": "31d03c730ebe913e83c3ca3627bf01fa6b1865ecf1c7d15718e6c4574dfbaca6",
+    "frame_events_bytes": 6392559,
     "blob_count": 1119,
     "reference_file": "frame-reference.bgra",
     "reference_bytes": 7720704,
-    "reference_sha256": "bac710c6b9be8361130e3b18d33d8a069f7a6182388efd34966f3458216507a2",
+    "reference_sha256": "cd0e7a1610e25567d508dddb51cdf2fc434db30b9289340dc28c488c2499b2c9",
     "seal_file": "frame-seal.json",
-    "seal_sha256": "11f5c72f8016f188fee9a9f1610fae49ca6ea0297fb1805019b5d2ccbe6a3c12",
+    "seal_sha256": "37b76727d1017afa73997530964539961131f3669c693f571de23b8d20464e7e",
     "seal_schema": "gfx-frame-seal/v1",
     "sealed": true,
     "failure_reason": "",
     "unsupported_dependencies": "",
-    "entry_boundary": "PresentScene entry (after frame draws, before conditional _GfxPresent)"
+    "entry_boundary": "PresentScene entry (after frame draws, before conditional _GfxPresent)",
+    "readback_ns": 23947000,
+    "finalize_ns": 16961000,
+    "seal_ns": 40909000,
+    "event_stream_sha256": "31d03c730ebe913e83c3ca3627bf01fa6b1865ecf1c7d15718e6c4574dfbaca6",
+    "event_stream_bytes": 6392559,
+    "event_stream_verified": true
   },
   "notification": {
     "consumer": "in-process logging sink registered with eu4_gfx_frame_sealed_subscribe",
@@ -99,13 +104,13 @@
     "verified_manifest": true,
     "verified_reference": true,
     "callback_outside_trace_mutex": "proven by the native lock-probe test; the live artifact records the callback but does not probe the mutex",
-    "notification_duration_ns": 18674000,
-    "notified_since_process_start_ns": 29694645000
+    "notification_duration_ns": 18583000,
+    "notified_since_process_start_ns": 27759788000
   },
   "performance": {
-    "readback_ns": 24873000,
-    "finalize_ns": 1745000,
-    "seal_total_ns": 26618000,
+    "readback_ns": 23947000,
+    "finalize_ns": 16961000,
+    "seal_total_ns": 40909000,
     "note": "seal_total_ns includes readback and finalize. The frame capture itself (325 events, 1,119 blobs) dominates; no callback ran on unselected frames and no Metal work occurred."
   },
   "validation": {

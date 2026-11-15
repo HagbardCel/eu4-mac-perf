@@ -178,6 +178,13 @@ class FrameTraceWriterTests(unittest.TestCase):
             self.assertEqual(fields["frame_id"], "1")
             seal = self._seal(directory)
             self.assertTrue(seal["sealed"])
+            self.assertTrue(seal["event_stream_verified"])
+            events_bytes = (directory / "frame-events.jsonl").read_bytes()
+            self.assertEqual(seal["event_stream_bytes"], len(events_bytes))
+            self.assertEqual(
+                seal["event_stream_sha256"],
+                hashlib.sha256(events_bytes).hexdigest(),
+            )
             self.assertEqual(seal["boundary"], "present")
             self.assertEqual(
                 [event["kind"] for event in self._events(directory)],

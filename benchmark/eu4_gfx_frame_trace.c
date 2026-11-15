@@ -154,6 +154,9 @@ static struct {
     uint64_t finalize_ns;
     uint64_t seal_ns;
     char manifest_sha[65];
+    uint64_t events_bytes;
+    char events_sha[65];
+    int events_verified;
 
     /* Caller set of the frame currently being observed (cheap, always on). */
     uint64_t frame_callers[FTRACE_MAX_CALLERS];
@@ -2622,6 +2625,12 @@ static void build_capture_descriptor(eu4_frame_capture_descriptor *out,
     out->draw_count = g.draw_events;
     out->clear_count = g.clear_events;
     out->copy_count = g.copy_events;
+    out->event_stream_bytes = g.events_bytes;
+    out->event_stream_verified = g.events_verified ? 1u : 0u;
+    snprintf(out->event_stream_file, sizeof(out->event_stream_file), "%s",
+             "frame-events.jsonl");
+    snprintf(out->event_stream_sha256, sizeof(out->event_stream_sha256), "%s",
+             g.events_sha);
     out->width = g.reference_width;
     out->height = g.reference_height;
     snprintf(out->pixel_format, sizeof(out->pixel_format), "BGRA8");
@@ -2693,6 +2702,14 @@ static int write_seal_manifest(const eu4_frame_capture_descriptor *descriptor,
             (unsigned long long)descriptor->clear_count);
     fprintf(file, "\"copy_count\":%llu,",
             (unsigned long long)descriptor->copy_count);
+    fprintf(file, "\"event_stream_file\":\"%s\",",
+            descriptor->event_stream_file);
+    fprintf(file, "\"event_stream_bytes\":%llu,",
+            (unsigned long long)descriptor->event_stream_bytes);
+    fprintf(file, "\"event_stream_sha256\":\"%s\",",
+            descriptor->event_stream_sha256);
+    fprintf(file, "\"event_stream_verified\":%s,",
+            bool_text(descriptor->event_stream_verified));
     fprintf(file, "\"width\":%u,", descriptor->width);
     fprintf(file, "\"height\":%u,", descriptor->height);
     fprintf(file, "\"pixel_format\":\"%s\",", descriptor->pixel_format);
@@ -2785,6 +2802,21 @@ static void finish_capture_ex(const char *reason, int allow_reference) {
        or count mismatch therefore cannot produce complete=true. */
     uint64_t finalize_started = now_ns();
     int stream_validated = finalize_event_stream();
+    g.events_verified = 0;
+    if (stream_validated) {
+        char events_path[FTRACE_PATH];
+        snprintf(events_path, sizeof(events_path), "%s/frame-events.jsonl",
+                 g.dir);
+        struct stat events_stat;
+        if (stat(events_path, &events_stat) == 0 && events_stat.st_size > 0 &&
+            file_sha256(events_path, g.events_sha) == 0) {
+            g.events_bytes = (uint64_t)events_stat.st_size;
+            g.events_verified = 1;
+        } else {
+            fail_capture_locked("event_stream_digest");
+        }
+    }
+    stream_validated = stream_validated && g.events_verified;
     const char *manifest_reason;
     if (g.capture_failed) {
         manifest_reason = g_capture_failure_reason != NULL
@@ -2900,6 +2932,9 @@ static void start_capture_at_frame(int next_frame) {
     g.stream_validated = 0;
     g.seal_written = 0;
     g.manifest_sha[0] = 0;
+    g.events_bytes = 0;
+    g.events_sha[0] = 0;
+    g.events_verified = 0;
     g.readback_ns = 0;
     g.finalize_ns = 0;
     g.seal_ns = 0;
