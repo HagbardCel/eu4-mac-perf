@@ -32,18 +32,25 @@ Saved evidence: [p0-baseline.json](p0-baseline.json),
 deterministic synthetic draw stream through the same `_Gfx*` replacement route
 the game uses.
 
-Reproduce (from the repository root):
+Reproduce (from the repository root). This writes to gitignored `.local/`, so
+the tracked baseline is not overwritten:
 
 ```sh
-python3 benchmark/eu4_gfx_stream_bench.py \
+python3.14 benchmark/eu4_gfx_stream_bench.py \
   --draws 1000 --frames 30 --kinds simple,indexed,mixed \
-  --output analysis/perf/p0-baseline.json --summary
+  --no-debug-layer --summary \
+  --output .local/perf/p0-baseline-repro.json
 ```
 
-`MTL_DEBUG_LAYER=1` and `MTL_DEBUG_LAYER_ERROR_MODE=assert` are set by the
-runner. Three warm-up frames precede the measured frames, and the instrumented
-build runs the same workload, so pipeline compilation and Metal shader
-compilation are warm before sampling.
+`--no-debug-layer` matches the measured configuration; omit it only for a
+validation run. Add `--records` to retain every per-frame sample (the tracked
+`p0-baseline.json` is the compact summary).
+
+By default the runner sets `MTL_DEBUG_LAYER=1` and
+`MTL_DEBUG_LAYER_ERROR_MODE=assert` for validation. `--no-debug-layer` disables
+them for the performance measurement above. Three warm-up frames precede the
+measured frames, and the instrumented build runs the same workload, so pipeline
+compilation and Metal shader compilation are warm before sampling.
 
 The saved baseline is [p0-baseline.json](p0-baseline.json).
 

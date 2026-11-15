@@ -1,10 +1,11 @@
 # EU4 Metal backend — submission and draw-overhead optimization
 
-Final report for the P0–P4 sequence, updated after the PR #192 review. Reviewed
-head: `704c0db` (implementation through `614a0da`, final correctness patch
-`704c0db`). Work is local; no branch was merged. PR #190 is present in `origin/main` (merge
-`61e7795`), and every stage below is stacked on that merge plus the review-fix
-commit.
+Final report for the P0–P4 sequence. Reviewed head: `704c0db` (implementation
+through `614a0da`, final correctness patch `704c0db`). The work merged to
+`origin/main` as PR #192 (merge `66f4178`); its base includes the PR #190
+correctness merge (`61e7795`) and the PR #191 infrastructure merge (`7456a7c`).
+The measurements below were taken on the reviewed head, not re-measured after
+the merge commit.
 
 ## 1. PRs and commits
 
@@ -138,10 +139,11 @@ FPS claims.**
   `--blend-order`, `--sampled-batch` and `--layout-stability`.
 - M6 captured-frame replay: **326/326 encoded, 0 failed, command completed**;
   differential **0 differing pixels of 1,930,176**, max channel error 0.
-- One pre-existing failure remains: `tests.test_gfx_init` →
-  `test_default_depth_stencil_contract` ("capability span was not otherwise
-  zero"). It fails identically on `origin/main` once that host links, and is
-  unrelated.
+- One pre-existing failure remained at the measured head:
+  `tests.test_gfx_init` → `test_default_depth_stencil_contract`
+  ("capability span was not otherwise zero"). It was a test-host integration
+  failure, not a P4 result. The historical numbers above are reported as
+  measured; this report does not re-run them.
 
 ## 7. Live EU4 title-scene qualification
 
