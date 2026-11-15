@@ -1183,6 +1183,275 @@ fragment FOut test_fragment(float4 position [[position]]) {
                              hashlib.sha256(pre).hexdigest())
 
 
+@unittest.skipUnless(sys.platform == "darwin", "the replay host needs Metal")
+class SparseIndexReplayTests(unittest.TestCase):
+    """Capture-format/replay regression for sparse indices and a nonzero origin.
+
+    This builds a frame-trace document in the captured format and replays it
+    through the production frame replay host. It does not exercise the OpenGL
+    capture writer, so it covers the capture-format fields and the replay-side
+    rebasing, not the GL recorder that produces them.
+
+    The fixture records 16-bit indices ``[3, 5, 7]`` for a vertex buffer whose
+    captured slice begins at vertex 5, and the draw carries signed base vertex
+    2. The only valid rebasing is ``index + base - origin`` -> ``[0, 2, 4]``.
+    The negative case appends off-screen vertices so that dropping the captured
+    origin still produces a successfully executed draw, but not the captured
+    triangle; it cannot pass the positive assertion.
+    """
+
+    VERTEX = """#include <metal_stdlib>
+using namespace metal;
+struct VIn { float2 position [[attribute(0)]]; };
+struct VOut { float4 position [[position]]; };
+vertex VOut test_vertex(VIn in [[stage_in]]) {
+    VOut out;
+    out.position = float4(in.position, 0.0, 1.0);
+    return out;
+}
+"""
+
+    FRAGMENT = """#include <metal_stdlib>
+using namespace metal;
+struct FOut { float4 color [[color(0)]]; };
+fragment FOut test_fragment() {
+    FOut out;
+    out.color = float4(1.0, 0.0, 0.0, 1.0);
+    return out;
+}
+"""
+
+    WIDTH = 8
+    HEIGHT = 6
+    VERTICES = 5
+    RED = bytes([0, 0, 255, 255])
+
+    def _write(self, path: Path, data: bytes) -> dict:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return {
+            "file": path.name,
+            "bytes": len(data),
+            "sha256": _sha(data),
+        }
+
+    def _pre_image(self) -> bytes:
+        pixels = bytearray()
+        for y in range(self.HEIGHT):
+            for x in range(self.WIDTH):
+                pixels += bytes([(x * 11 + y * 3) & 0xFF,
+                                 (x * 5 + y * 13) & 0xFF,
+                                 180 + x, 255])
+        return bytes(pixels)
+
+    def _frame(self, root: Path, *, record_origin: bool,
+               vertices: int | None = None) -> tuple[Path, Path, bytes]:
+        frame = root / "frame"
+        blobs = frame / "blobs"
+        width, height = self.WIDTH, self.HEIGHT
+        pre = self._pre_image()
+        pre_member = self._write(blobs / "pre-image.bin", pre)
+        post_member = self._write(blobs / "post-image.bin", pre)
+        reference = bytes([9, 8, 7, 255] * (width * height))
+        (frame / "frame-reference.bgra").write_bytes(reference)
+
+        # Vertices 0/2/4 form the visible triangle; 1/3 are far outside clip
+        # space. Extra vertices stay off-screen so the negative case can keep
+        # the rebased indices in range while fetching the wrong vertices.
+        positions = [(-1.0, -1.0), (99.0, 99.0), (1.0, -1.0),
+                     (99.0, 99.0), (-1.0, 1.0)]
+        count = vertices if vertices is not None else self.VERTICES
+        self.assertGreaterEqual(count, len(positions))
+        positions.extend([(99.0, 99.0)] * (count - len(positions)))
+        vertex_data = b"".join(struct.pack("<2f", *value) for value in positions)
+        vertex_member = self._write(blobs / "vertices.bin", vertex_data)
+        index_member = self._write(blobs / "indices.bin", struct.pack("<3H", 3, 5, 7))
+
+        indices = {
+            "buffer": 4,
+            "bytes": index_member["bytes"],
+            "count": 3,
+            "instance_count": 1,
+            "file": index_member["file"],
+            "sha256": index_member["sha256"],
+            "range_valid": True,
+            "read_error": False,
+        }
+        if record_origin:
+            indices["vertex_origin"] = 5
+
+        event = {
+            "kind": "draw",
+            "index": 0,
+            "pre_image": {
+                "width": width,
+                "height": height,
+                "file": pre_member["file"],
+                "sha256": pre_member["sha256"],
+            },
+            "post_image": {
+                "width": width,
+                "height": height,
+                "file": post_member["file"],
+                "sha256": post_member["sha256"],
+            },
+            "state": {
+                "blend": {"enabled": False},
+                "color_mask": [1, 1, 1, 1],
+                "depth": {"test": False, "func": "0x203", "write": False},
+                "stencil": {"test": False},
+                "cull": {"enabled": False, "mode": "0x405", "front": "0x901"},
+                "scissor": {"enabled": False, "box": [0, 0, width, height]},
+                "viewport": [0, 0, width, height],
+            },
+            "program_diagnostics": {
+                "active_attributes": 1,
+                "active_uniforms": 0,
+                "link": True,
+                "enabled_bits": [1] + [0] * 15,
+            },
+            "program": {"name": 1, "shaders": [], "uniforms": []},
+            "textures": [],
+            "target": {
+                "framebuffer": 0,
+                "width": width,
+                "height": height,
+                "viewport": [0, 0, width, height],
+            },
+            "attributes": [{
+                "index": 0,
+                "name": "in_POSITION",
+                "location": 0,
+                "enabled": True,
+                "components": 2,
+                "gl_type": "0x1406",
+                "normalized": False,
+                "stride": 8,
+                "offset": 0,
+                "divisor": 0,
+                "buffer": 3,
+                "range_bytes": vertex_member["bytes"],
+                "data": vertex_member["file"],
+                "sha256": vertex_member["sha256"],
+            }],
+            "indices": indices,
+            "draw": {
+                "entry": "_GfxDrawIndexed",
+                "mode": 5,  # GL_TRIANGLE_STRIP
+                "first": 0,
+                "count": 3,
+                "instance_count": 1,
+                "indexed": True,
+                "base_vertex": 2,
+                "caller_rva": "0x456",
+            },
+        }
+        manifest = {
+            "schema": m6_frame.TRACE_SCHEMA,
+            "complete": True,
+            "reason": "present",
+            "truncated": False,
+            "pid": 1,
+            "present_index": 1,
+            "events": 1,
+            "gl": {"vendor": "Apple", "renderer": "test", "version": "2.1"},
+            "frame": {
+                "width": width,
+                "height": height,
+                "origin": "lower_left",
+                "pixel_format": "BGRA8",
+                "row_stride": width * 4,
+                "reference": "frame-reference.bgra",
+                "reference_bytes": len(reference),
+                "reference_sha256": _sha(reference),
+            },
+            "selection": {"callers": ["0x456"], "min_draws": 1,
+                          "occurrence": 1, "required": True},
+            "seed": {"width": width, "height": height},
+            "blobs": 4,
+        }
+        (frame / "frame-trace.json").write_text(json.dumps(manifest))
+        (frame / "frame-events.jsonl").write_text(json.dumps(event) + "\n")
+
+        shaders = root / "shaders"
+        shaders.mkdir()
+        (shaders / "sparse.vert.metal").write_text(self.VERTEX)
+        (shaders / "sparse.frag.metal").write_text(self.FRAGMENT)
+        (shaders / "shaders.json").write_text(json.dumps({
+            "programs": [{
+                "program": 1,
+                "status": "ok",
+                "stages": {
+                    "vertex": {
+                        "msl_file": "sparse.vert.metal",
+                        "msl_entry": "test_vertex",
+                        "attributes": [],
+                        "attribute_locations": {},
+                        "uniforms": [],
+                    },
+                    "pixel": {
+                        "msl_file": "sparse.frag.metal",
+                        "msl_entry": "test_fragment",
+                        "attributes": [],
+                        "attribute_locations": {},
+                        "uniforms": [],
+                    },
+                },
+            }]
+        }))
+        return frame, shaders, pre
+
+    def _replay(self, root: Path, frame: Path, shaders: Path) -> subprocess.CompletedProcess:
+        out = root / "replay"
+        host = m6_frame.build_replay_host(force=True)
+        return subprocess.run(
+            [str(host), "--frame", str(frame), "--shaders", str(shaders),
+             "--out", str(out), "--only-event", "0", "--seed-marked",
+             "--capture-pre", "--capture-post"],
+            capture_output=True, text=True, check=False, timeout=120,
+        )
+
+    def test_sparse_index_with_nonzero_origin_rebases_into_the_capture(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            frame, shaders, pre = self._frame(root, record_origin=True)
+            ran = self._replay(root, frame, shaders)
+            self.assertEqual(ran.returncode, 0, ran.stderr + ran.stdout)
+            post = (root / "replay" / "isolated-post-0.bgra").read_bytes()
+            self.assertEqual(len(post), self.WIDTH * self.HEIGHT * 4)
+            changed = 0
+            for pixel in range(self.WIDTH * self.HEIGHT):
+                before = pre[pixel * 4:pixel * 4 + 4]
+                after = post[pixel * 4:pixel * 4 + 4]
+                if before == after:
+                    continue
+                changed += 1
+                self.assertEqual(after, self.RED, pixel)
+            # The visible triangle covers part, not all, of the target.
+            self.assertGreater(changed, 0)
+            self.assertLess(changed, self.WIDTH * self.HEIGHT)
+
+    def test_missing_origin_cannot_fetch_the_captured_vertices(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # Ten vertices keep the unrebased indices 5/7/9 inside the buffer.
+            # They are off-screen, so the draw completes without reproducing
+            # the captured triangle.
+            frame, shaders, pre = self._frame(
+                root, record_origin=False, vertices=10)
+            ran = self._replay(root, frame, shaders)
+            self.assertEqual(ran.returncode, 0, ran.stderr + ran.stdout)
+            result = json.loads(ran.stdout)
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["encoded"], 1)
+            self.assertEqual(result["failed"], 0)
+            post = (root / "replay" / "isolated-post-0.bgra").read_bytes()
+            self.assertEqual(post, pre)
+            for pixel in range(self.WIDTH * self.HEIGHT):
+                before = pre[pixel * 4:pixel * 4 + 4]
+                after = post[pixel * 4:pixel * 4 + 4]
+                self.assertEqual(after, before,
+                                 f"pixel {pixel} exposed a falsely correct draw")
 
 
 if __name__ == "__main__":
