@@ -25,6 +25,12 @@ set -eu
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 INFRA=$(CDPATH= cd -- "$HERE/../.." && pwd)
 
+# The tools plugin's Python core must run from this trusted infrastructure
+# checkout, not from the launcher's shell cwd and not from the editable
+# --workspace worktree. The tracked profile reads this variable explicitly.
+: "${EU4_DSH_WORKSPACE:=$INFRA}"
+export EU4_DSH_WORKSPACE
+
 # The dedicated home is deliberate. An inherited DSH_HOME (the interactive
 # session's ~/.dsh) must never be reused: this profile owns its own sessions,
 # plugins and settings, and must not touch the user's normal installation.

@@ -36,12 +36,14 @@ fail() {
 dsh --profile "$PROFILE" --dump-config >"$DUMP" 2>&1 ||
   fail dump-config "dsh --dump-config failed"
 
-python3 - "$DUMP" "$RUNTIME" "$PATCH" "$EU4_DSH_SKILL_ROOT" "$INFRA" "$DSH_PACKAGE" <<'PY' || exit 1
+python3 - "$DUMP" "$RUNTIME" "$PATCH" "$EU4_DSH_SKILL_ROOT" "$INFRA" "$DSH_PACKAGE" "$PROFILE_DIR" <<'PY' || exit 1
 import hashlib, json, os, re, sys
 
-dump_path, runtime_path, patch_path, skill_root, infra, dsh_package = sys.argv[1:7]
+dump_path, runtime_path, patch_path, skill_root, infra, dsh_package, profile_dir = sys.argv[1:8]
 text = open(dump_path, encoding="utf-8").read()
 runtime = json.load(open(runtime_path, encoding="utf-8"))
+sys.path.insert(0, infra)
+from automation import dsh_profile
 
 
 def bail(stage, detail):
@@ -103,14 +105,17 @@ pin(os.path.join(dsh_package, "package.json"),
     runtime["dsh"].get("package_json_sha256"), "dsh")
 
 for plugin_id, spec in runtime["required_plugins"].items():
-    relative = spec.get("package_json")
-    if relative:
-        # Local plugin: repository-relative, linked from this checkout.
-        path = os.path.join(infra, relative)
+    if spec.get("package_json"):
+        # Local plugin: validate the package the profile actually resolves,
+        # and require it to be the canonical package from this checkout.
+        problems = dsh_profile.verify_local_plugin(
+            plugin_id, spec, profile_dir, infra)
+        if problems:
+            bail("plugin-pin", "; ".join(problems))
     else:
         # Shipped bundle: resolve from the DSH install the launcher will boot.
         path = os.path.join(dsh_package, "node_modules", spec["name"], "package.json")
-    pin(path, spec.get("package_json_sha256"), plugin_id)
+        pin(path, spec.get("package_json_sha256"), plugin_id)
 
 # The host-plane skill root must be ours and must win over the bundle disable.
 host = [e for e in entries if e["id"] == "skill-filesystem" and e["indent"] == 0]

@@ -78,20 +78,54 @@ else
   echo "provision: export OPENCODE_GO_API_KEY in the shell that runs run.sh" >&2
 fi
 
-if [ ! -e "$PROFILE_DIR/node_modules/@eu4/dsh-goal" ]; then
-  echo "provision: installing plugin via link:$PLUGIN"
-  dsh plugin --profile "$PROFILE" add "link:$PLUGIN"
-else
-  echo "provision: goal plugin already installed"
-fi
+link_is_expected() {
+  python3 - "$PROFILE_DIR/node_modules/$1" "$2" "$INFRA" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[3])
+from automation import dsh_profile
+raise SystemExit(0 if dsh_profile.link_matches(sys.argv[1], sys.argv[2]) else 1)
+PY
+}
 
+link_target() {
+  python3 - "$PROFILE_DIR/node_modules/$1" <<'PY'
+import os, sys
+print(os.path.realpath(sys.argv[1]))
+PY
+}
+
+# A link that already exists is not proof it belongs to this checkout. Repair a
+# stale link with the supported DSH/pnpm commands, then fail closed if it still
+# does not resolve to the intended package.
+install_local_plugin() {
+  name=$1
+  package=$2
+  if [ -e "$PROFILE_DIR/node_modules/$name" ]; then
+    if link_is_expected "$name" "$package"; then
+      echo "provision: $name already linked to $package"
+      return 0
+    fi
+    echo "provision: $name points at $(link_target "$name"), not $package; relinking" >&2
+  else
+    echo "provision: installing $name via link:$package"
+  fi
+  dsh plugin --profile "$PROFILE" add "link:$package"
+  if ! link_is_expected "$name" "$package"; then
+    echo "provision: relink did not take; removing and reinstalling $name" >&2
+    dsh plugin --profile "$PROFILE" remove "$name"
+    dsh plugin --profile "$PROFILE" add "link:$package"
+  fi
+  if ! link_is_expected "$name" "$package"; then
+    echo "provision: $name still resolves to $(link_target "$name"), not $package" >&2
+    echo "provision: remove it with: dsh plugin --profile $PROFILE remove $name" >&2
+    echo "provision: then re-run dsh/scripts/provision.sh" >&2
+    exit 1
+  fi
+}
+
+install_local_plugin @eu4/dsh-goal "$PLUGIN"
 TOOLS_PLUGIN=$INFRA/dsh/eu4-tools-plugin
-if [ ! -e "$PROFILE_DIR/node_modules/@eu4/dsh-tools" ]; then
-  echo "provision: installing tools plugin via link:$TOOLS_PLUGIN"
-  dsh plugin --profile "$PROFILE" add "link:$TOOLS_PLUGIN"
-else
-  echo "provision: tools plugin already installed"
-fi
+install_local_plugin @eu4/dsh-tools "$TOOLS_PLUGIN"
 
 echo "provision: DSH_HOME=$DSH_HOME"
 echo "provision: profile=$PROFILE_DIR"
