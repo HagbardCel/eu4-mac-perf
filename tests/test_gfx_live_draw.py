@@ -20,6 +20,7 @@ HOST = ROOT / "benchmark" / ".build" / "gfx_live_draw_host"
 SOURCES = [
     ROOT / "benchmark" / "eu4_gfx_shader.mm",
     ROOT / "benchmark" / "eu4_gfx_buffers.mm",
+    ROOT / "benchmark" / "eu4_gfx_perf.mm",
     ROOT / "benchmark" / "eu4_gfx_texture.mm",
     ROOT / "benchmark" / "eu4_gfx_init.mm",
     ROOT / "benchmark" / "eu4_gfx_frame_observe.c",
@@ -154,6 +155,130 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertIn("indexed_base_vertex=1", ran.stdout)
         self.assertIn("base4_green=1", ran.stdout)
         self.assertIn("base0_red=1", ran.stdout)
+
+    def test_geometry_publication_is_thread_safe(self) -> None:
+        ran = self._run("--geometry-thread")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("geometry_thread=1", ran.stdout)
+        for token in ("no_encoder_end=1", "no_submit=1", "transition=1",
+                      "draw_refused=1", "epoch=1", "older_refused=1",
+                      "stale_present=1", "same_size=1"):
+            self.assertIn(token, ran.stdout)
+
+    def test_scissor_does_not_leak_into_simple_or_sprite(self) -> None:
+        ran = self._run("--scissor-handoff")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("scissor_handoff=1", ran.stdout)
+        self.assertIn("one_encoder=1", ran.stdout)
+        self.assertIn("corner_green=1", ran.stdout)
+        self.assertIn("center_blue=1", ran.stdout)
+
+    def test_multiple_render_target_conversions_in_external_command(self) -> None:
+        ran = self._run("--sampled-multi")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("sampled_multi=1", ran.stdout)
+        for token in ("external=1", "bindings=1", "pixels=1", "second=1",
+                      "superseded=1", "abandoned=1", "active=1"):
+            self.assertIn(token, ran.stdout)
+
+    def test_failed_generic_draw_closes_only_its_pass(self) -> None:
+        ran = self._run("--encoder-cleanup")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("encoder_cleanup=1", ran.stdout)
+        for token in ("failed=1", "refused=1", "diagnostic=1", "no_encoder=1",
+                      "preserved_before=1", "preserved=1", "presented=1",
+                      "pixels=1"):
+            self.assertIn(token, ran.stdout)
+
+    def test_cached_layout_preserves_attribute_locations(self) -> None:
+        ran = self._run("--element-locations")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("element_locations=1", ran.stdout)
+        for token in ("cached=1", "trace=1", "fallback=1", "stable=1"):
+            self.assertIn(token, ran.stdout)
+
+    def test_resource_update_drain_success(self) -> None:
+        ran = self._run("--update-success")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("update_success=1", ran.stdout)
+
+    def _assert_update_drain_failure(self, kind: str, symbol: str) -> None:
+        ran = self._run("--update-drain-failure", kind)
+        self.assertEqual(ran.returncode, 2, ran.stderr)
+        self.assertNotIn("update_unexpected_return=1", ran.stdout)
+        marker = "EVENT_DIR="
+        line = next(
+            (part for part in ran.stderr.splitlines() if marker in part), ""
+        )
+        self.assertIn(marker, line)
+        directory = Path(line.split(marker, 1)[1].strip())
+        stop = json.loads((directory / "stop.json").read_text())
+        self.assertEqual(stop["symbol"], symbol)
+        self.assertEqual(stop["reason"], "gpu_failed")
+
+    def test_vertex_update_fails_closed_on_drain_error(self) -> None:
+        self._assert_update_drain_failure("vertex", "_GfxUpdateVertexBuffer")
+
+    def test_multi_update_fails_closed_on_drain_error(self) -> None:
+        self._assert_update_drain_failure(
+            "multiple", "_GfxUpdateVertexBufferMultiple"
+        )
+
+    def test_texture_update_fails_closed_on_drain_error(self) -> None:
+        self._assert_update_drain_failure("texture", "_GfxUpdateTexture")
+
+    def test_gpu_timing_is_counted_once_per_command_buffer(self) -> None:
+        ran = self._run("--gpu-timing")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("gpu_timing=1", ran.stdout)
+        self.assertIn("epoch_isolated=1", ran.stdout)
+
+    def test_dynamic_slot_offset_does_not_create_layout_variant(self) -> None:
+        ran = self._run("--layout-stability")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("layout_stability=1", ran.stdout)
+        self.assertIn("misses=0", ran.stdout)
+        self.assertIn("encoders=0", ran.stdout)
+
+    def test_render_pass_coalescing_preserves_blend_order(self) -> None:
+        """Two blend states share one pass; the exact pixel proves order."""
+        ran = self._run("--blend-order")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("blend_order=1", ran.stdout)
+        self.assertIn("one_pass=1", ran.stdout)
+        self.assertIn("order=1", ran.stdout)
+        self.assertIn("clear_split=1", ran.stdout)
+
+    def test_sampled_render_target_reuse_within_command(self) -> None:
+        """One conversion serves every draw in the shared command buffer."""
+        ran = self._run("--sampled-batch")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("sampled_batch=1", ran.stdout)
+        self.assertIn("reused=1", ran.stdout)
+        self.assertIn("shadow=1", ran.stdout)
+        self.assertIn("reconverted=1", ran.stdout)
+
+    def test_shared_command_batch_sequences(self) -> None:
+        """Refusal, target change, in-place update, 1000 draws and shutdown."""
+        ran = self._run("--batch-sequences")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("batch_sequences=1", ran.stdout)
+        for token in ("refused=1", "preserved_draws=1", "preserved_pixels=1",
+                      "target_switch=1", "resource_update=1", "one_submission=1",
+                      "flushes=1", "shutdown=1"):
+            self.assertIn(token, ran.stdout)
+
+    def test_indexed_draw_reuses_engine_index_buffer(self) -> None:
+        """The draw path binds the registry's Metal buffer directly."""
+        ran = self._run("--indexed-resource")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("indexed_resource=1", ran.stdout)
+        self.assertIn("reuse=1", ran.stdout)
+        self.assertIn("update=1", ran.stdout)
+        self.assertIn("recycle=1", ran.stdout)
+        self.assertIn("negative_refused=1", ran.stdout)
+        self.assertIn("bounds_refused=1", ran.stdout)
+        self.assertIn("zero_alloc=1", ran.stdout)
 
     def test_draw_semantics_contracts(self) -> None:
         ran = self._run("--draw-semantics")

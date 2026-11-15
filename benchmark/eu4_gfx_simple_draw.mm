@@ -4,6 +4,7 @@
 #import "eu4_gfx_init.h"
 #import "eu4_gfx_shader.h"
 #import "eu4_gfx_texture.h"
+#import "eu4_gfx_perf.h"
 
 #import <Metal/Metal.h>
 #import <string.h>
@@ -252,7 +253,7 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw_encode_into(
     /* The blend/depth/raster snapshots are original master state written by the
        replacement state entry points. The Simple pass admits only the backend's
        known default snapshots and a full-attachment (or unset) scissor. */
-    char state_reason[128];
+    static _Thread_local char state_reason[160];
     if (!eu4_gfx_simple_state_supported((void *)master, state_reason,
                                         sizeof state_reason)) {
         return refuse(EU4_GFX_SIMPLE_DRAW_STATE, reason, state_reason);
@@ -283,22 +284,35 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw_encode_into(
     uint8_t matrix[64];
     memcpy(matrix, constant_data, sizeof matrix);
 
-    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
-    pass.colorAttachments[0].texture = target;
-    pass.colorAttachments[0].loadAction =
-        inputs->clear_color != NULL ? MTLLoadActionClear : MTLLoadActionLoad;
-    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-    if (inputs->clear_color != NULL) {
-        pass.colorAttachments[0].clearColor =
-            MTLClearColorMake(inputs->clear_color[0], inputs->clear_color[1],
-                              inputs->clear_color[2], inputs->clear_color[3]);
+    int batch_owned = eu4_gfx_batch_owns_command((__bridge void *)command);
+    id<MTLRenderCommandEncoder> encoder = nil;
+    if (batch_owned) {
+        encoder = (__bridge id<MTLRenderCommandEncoder>)eu4_gfx_batch_encoder(
+            (__bridge void *)target, NULL, inputs->clear_color, NULL);
+    } else {
+        MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+        pass.colorAttachments[0].texture = target;
+        pass.colorAttachments[0].loadAction =
+            inputs->clear_color != NULL ? MTLLoadActionClear : MTLLoadActionLoad;
+        pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        if (inputs->clear_color != NULL) {
+            pass.colorAttachments[0].clearColor =
+                MTLClearColorMake(inputs->clear_color[0], inputs->clear_color[1],
+                                  inputs->clear_color[2], inputs->clear_color[3]);
+        }
+        encoder = [command renderCommandEncoderWithDescriptor:pass];
+        if (encoder != nil) {
+            eu4_gfx_perf_render_encoder_created();
+        }
     }
-
-    id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
     if (encoder == nil) {
         return refuse(EU4_GFX_SIMPLE_DRAW_ENCODE, reason, "command encoding failed");
     }
     [encoder setRenderPipelineState:pipeline];
+    /* This admitted pass always draws the full target. Establish it explicitly:
+       a shared encoder may still carry a partial scissor from a preceding
+       generic draw even after the engine restored a full-target box. */
+    [encoder setScissorRect:(MTLScissorRect){0, 0, target.width, target.height}];
     /* The admitted default raster snapshot does not cull in the reconstructed
        pass (the full-screen strip has one triangle of each winding). State is
        still validated above; a non-default snapshot is refused. */
@@ -327,7 +341,9 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw_encode_into(
     [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
                 vertexStart:(NSUInteger)first
                 vertexCount:(NSUInteger)count];
-    [encoder endEncoding];
+    if (!batch_owned) {
+        [encoder endEncoding];
+    }
 
     if (state != NULL) {
         copy_identity(state->shader_identity, sizeof state->shader_identity, identity);
@@ -396,6 +412,7 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw_with_state(
     if (command == nil) {
         return refuse(EU4_GFX_SIMPLE_DRAW_ENCODE, reason, "command buffer creation failed");
     }
+    eu4_gfx_perf_command_buffer_created();
     eu4_gfx_simple_draw_status encoded = eu4_gfx_simple_draw_encode_into(
         immediate_context, count, first, inputs, (__bridge void *)command, reason, state);
     if (encoded != EU4_GFX_SIMPLE_DRAW_OK) {
@@ -407,7 +424,9 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw_with_state(
        must not wait after every draw. Resources referenced by the command
        buffer are retained by Metal until completion. */
     [command commit];
+    eu4_gfx_perf_command_buffer_committed();
     [command waitUntilCompleted];
+    eu4_gfx_perf_completion_wait();
     if (command.status != MTLCommandBufferStatusCompleted || command.error != nil) {
         return refuse(EU4_GFX_SIMPLE_DRAW_ENCODE, reason,
                       "command buffer did not complete");

@@ -1,0 +1,234 @@
+{
+  "note": "P0 and each optimization stage rebuilt in temporary worktrees and measured without MTL_DEBUG_LAYER. GPU timing is only valid for final (per-command accounting); earlier values are omitted. Raw per-frame samples are reproducible with --records.",
+  "schema": "gfx-bench-stages/v1",
+  "stages": {
+    "final": {
+      "commit": "704c0db",
+      "kinds": {
+        "indexed": {
+          "command_buffers": 3.0,
+          "cpu_median_ns": 3308613.5,
+          "cpu_p95_ns": 3373492,
+          "gpu_median_ns": 945811.0,
+          "gpu_records": 3.0,
+          "index_temp_allocs": 0.0,
+          "render_encoders": 1.0,
+          "wall_median_ns": 13902458.0,
+          "wall_p95_ns": 14272583
+        },
+        "mixed": {
+          "command_buffers": 3.0,
+          "cpu_median_ns": 3365571.0,
+          "cpu_p95_ns": 3436189,
+          "gpu_median_ns": 845373.0,
+          "gpu_records": 3.0,
+          "index_temp_allocs": 0.0,
+          "render_encoders": 1.0,
+          "wall_median_ns": 13787583.5,
+          "wall_p95_ns": 14284750
+        },
+        "simple": {
+          "command_buffers": 3.0,
+          "cpu_median_ns": 2020213.0,
+          "cpu_p95_ns": 2061003,
+          "gpu_median_ns": 1360061.5,
+          "gpu_records": 3.0,
+          "index_temp_allocs": 0.0,
+          "render_encoders": 1.0,
+          "wall_median_ns": 13808562.5,
+          "wall_p95_ns": 14522833
+        }
+      }
+    },
+    "p0": {
+      "commit": "db69a62",
+      "kinds": {
+        "indexed": {
+          "command_buffers": 1002.0,
+          "cpu_median_ns": 17625180.5,
+          "cpu_p95_ns": 19531228,
+          "gpu_median_ns": null,
+          "gpu_records": null,
+          "index_temp_allocs": 1000.0,
+          "render_encoders": 1000.0,
+          "wall_median_ns": 30854229.0,
+          "wall_p95_ns": 33278459
+        },
+        "mixed": {
+          "command_buffers": 1002.0,
+          "cpu_median_ns": 17360422.0,
+          "cpu_p95_ns": 19701015,
+          "gpu_median_ns": null,
+          "gpu_records": null,
+          "index_temp_allocs": 1000.0,
+          "render_encoders": 1000.0,
+          "wall_median_ns": 30684541.5,
+          "wall_p95_ns": 33775833
+        },
+        "simple": {
+          "command_buffers": 1002.0,
+          "cpu_median_ns": 7829972.5,
+          "cpu_p95_ns": 8389426,
+          "gpu_median_ns": null,
+          "gpu_records": null,
+          "index_temp_allocs": 0.0,
+          "render_encoders": 1000.0,
+          "wall_median_ns": 21926937.5,
+          "wall_p95_ns": 23168750
+        }
+      }
+    },
+    "p1": {
+      "commit": "7f5fc08",
+      "kinds": {
+        "indexed": {
+          "command_buffers": 1002.0,
+          "cpu_median_ns": 16161013.5,
+          "cpu_p95_ns": 17231070,
+          "gpu_median_ns": null,
+          "gpu_records": null,
+          "index_temp_allocs": 0.0,
+          "render_encoders": 1000.0,
+          "wall_median_ns": 29634104.0,
+          "wall_p95_ns": 31115042
+        },
+        "mixed": {
+          "command_buffers": 1002.0,
+          "cpu_median_ns": 15410876.5,
+          "cpu_p95_ns": 16634361,
+          "gpu_median_ns": null,
+          "gpu_records": null,
+          "index_temp_allocs": 0.0,
+          "render_encoders": 1000.0,
+          "wall_median_ns": 28535312.5,
+          "wall_p95_ns": 30130208
+        },
+        "simple": {
+          "command_buffers": 1002.0,
+          "cpu_median_ns": 7858242.0,
+          "cpu_p95_ns": 8192282,
+          "gpu_median_ns": null,
+          "gpu_records": null,
+          "index_temp_allocs": 0.0,
+          "render_encoders": 1000.0,
+          "wall_median_ns": 21952792.0,
+          "wall_p95_ns": 22829000
+        }
+      }
+    },
+    "p2": {
+      "commit": "a483f8b",
+      "kinds": {
+        "indexed": {
+          "command_buffers": 4.0,
+          "cpu_median_ns": 12518105.5,
+          "cpu_p95_ns": 12738999,
+          "gpu_median_ns": null,
+          "gpu_records": null,
+          "index_temp_allocs": 0.0,
+          "render_encoders": 1000.0,
+          "wall_median_ns": 30378729.0,
+          "wall_p95_ns": 31423291
+        },
+        "mixed": {
+          "command_buffers": 4.0,
+          "cpu_median_ns": 12527549.5,
+          "cpu_p95_ns": 12894892,
+          "gpu_median_ns": null,
+          "gpu_records": null,
+          "index_temp_allocs": 0.0,
+          "render_encoders": 1000.0,
+          "wall_median_ns": 30213520.5,
+          "wall_p95_ns": 31127166
+        },
+        "simple": {
+          "command_buffers": 4.0,
+          "cpu_median_ns": 5738533.5,
+          "cpu_p95_ns": 5844136,
+          "gpu_median_ns": null,
+          "gpu_records": null,
+          "index_temp_allocs": 0.0,
+          "render_encoders": 1000.0,
+          "wall_median_ns": 23633687.5,
+          "wall_p95_ns": 24593792
+        }
+      }
+    },
+    "p3": {
+      "commit": "8bde44a",
+      "kinds": {
+        "indexed": {
+          "command_buffers": 3.0,
+          "cpu_median_ns": 8748325.5,
+          "cpu_p95_ns": 8902132,
+          "gpu_median_ns": null,
+          "gpu_records": null,
+          "index_temp_allocs": 0.0,
+          "render_encoders": 1.0,
+          "wall_median_ns": 20035062.5,
+          "wall_p95_ns": 20617375
+        },
+        "mixed": {
+          "command_buffers": 3.0,
+          "cpu_median_ns": 8874869.0,
+          "cpu_p95_ns": 9060424,
+          "gpu_median_ns": null,
+          "gpu_records": null,
+          "index_temp_allocs": 0.0,
+          "render_encoders": 1.0,
+          "wall_median_ns": 20534333.5,
+          "wall_p95_ns": 21470208
+        },
+        "simple": {
+          "command_buffers": 3.0,
+          "cpu_median_ns": 2114391.5,
+          "cpu_p95_ns": 2202798,
+          "gpu_median_ns": null,
+          "gpu_records": null,
+          "index_temp_allocs": 0.0,
+          "render_encoders": 1.0,
+          "wall_median_ns": 15381312.5,
+          "wall_p95_ns": 15829625
+        }
+      }
+    },
+    "p4": {
+      "commit": "37e9284",
+      "kinds": {
+        "indexed": {
+          "command_buffers": 3.0,
+          "cpu_median_ns": 4210897.5,
+          "cpu_p95_ns": 4303581,
+          "gpu_median_ns": null,
+          "gpu_records": null,
+          "index_temp_allocs": 0.0,
+          "render_encoders": 1.0,
+          "wall_median_ns": 15532542.0,
+          "wall_p95_ns": 15849375
+        },
+        "mixed": {
+          "command_buffers": 3.0,
+          "cpu_median_ns": 4269981.0,
+          "cpu_p95_ns": 4415743,
+          "gpu_median_ns": null,
+          "gpu_records": null,
+          "index_temp_allocs": 0.0,
+          "render_encoders": 1.0,
+          "wall_median_ns": 15455521.0,
+          "wall_p95_ns": 16012041
+        },
+        "simple": {
+          "command_buffers": 3.0,
+          "cpu_median_ns": 2108076.0,
+          "cpu_p95_ns": 2166839,
+          "gpu_median_ns": null,
+          "gpu_records": null,
+          "index_temp_allocs": 0.0,
+          "render_encoders": 1.0,
+          "wall_median_ns": 16098750.0,
+          "wall_p95_ns": 17314750
+        }
+      }
+    }
+  }
+}

@@ -6,6 +6,7 @@
 #import "eu4_gfx_init.h"
 #import "eu4_gfx_shader.h"
 #import "eu4_gfx_texture.h"
+#import "eu4_gfx_perf.h"
 #import "eu4_metal_events.h"
 
 #import <Metal/Metal.h>
@@ -66,7 +67,21 @@ typedef struct {
     int converted;
 } eu4_logged_element;
 static eu4_logged_element g_logged_elements[EU4_GFX_MAX_TRACKED_ATTRIBUTES];
+
 static int g_logged_element_count;
+
+int eu4_gfx_generic_last_element_count(void) {
+    return g_logged_element_count;
+}
+
+int eu4_gfx_generic_last_element_location(int index, uint32_t *location) {
+    if (index < 0 || index >= g_logged_element_count || location == NULL) {
+        return -1;
+    }
+    *location = g_logged_elements[index].location;
+    return 0;
+}
+
 
 /* Storage width of the Metal vertex format used by the descriptor. Converted
    integer attributes use the FloatN format, so their effective width differs
@@ -470,36 +485,45 @@ static id<MTLSamplerState> generic_sampler(id<MTLDevice> device,
 }
 
 /* Packs one stage's std140 uniform block from the engine constant slots. */
-static NSData *pack_stage_uniforms(NSDictionary *stage, const uint8_t *master,
-                                   char *reason, size_t capacity) {
+static int pack_stage_uniforms_into(NSDictionary *stage, const uint8_t *master,
+                                    uint8_t *out, size_t scratch_capacity,
+                                    size_t *out_length, char *reason,
+                                    size_t capacity) {
+    if (out_length != NULL) {
+        *out_length = 0;
+    }
     NSArray *members = stage[@"uniforms"];
     if (![members isKindOfClass:[NSArray class]] || members.count == 0) {
-        return [NSData data];
+        return 1;
     }
     NSUInteger size = 0;
     for (NSDictionary *member in members) {
         NSUInteger components = num(member[@"components"], 0);
         NSUInteger elements = MAX((NSUInteger)1, num(member[@"elements"], 0));
-        NSUInteger end = num(member[@"offset"], 0) + components * elements * 4;
-        size = MAX(size, end);
+        NSUInteger end_offset = num(member[@"offset"], 0) + components * elements * 4;
+        size = MAX(size, end_offset);
     }
     size = (size + 15) / 16 * 16;
     if (size == 0) {
         size = 16;
     }
-    NSMutableData *data = [NSMutableData dataWithLength:size];
+    if (out == NULL || size > scratch_capacity) {
+        fail(reason, capacity, "uniform block exceeds the binding scratch buffer");
+        return 0;
+    }
+    memset(out, 0, size);
     for (NSDictionary *member in members) {
         NSString *name = member[@"name"];
         NSRange prefix = [name rangeOfString:@"UNIFORM"];
         if (prefix.location != 0 || name.length <= prefix.length) {
             fail(reason, capacity, "uniform block member is not an engine constant array");
-            return nil;
+            return 0;
         }
         NSString *index_text = [name substringFromIndex:prefix.length];
         NSUInteger slot = (NSUInteger)index_text.integerValue;
         if (slot >= 6) {
             fail(reason, capacity, "constant slot out of range");
-            return nil;
+            return 0;
         }
         /* The engine's constant-slot records are 16 bytes apart: the original
            draw bodies index them with a byte offset `rbx` that advances by 4
@@ -519,11 +543,11 @@ static NSData *pack_stage_uniforms(NSDictionary *stage, const uint8_t *master,
         NSUInteger available = (NSUInteger)count * 16;
         NSUInteger copy = MIN(member_bytes, available);
         NSUInteger member_offset = num(member[@"offset"], 0);
-        if (member_offset >= data.length) {
+        if (member_offset >= size) {
             continue;
         }
-        if (copy > data.length - member_offset) {
-            copy = data.length - member_offset;
+        if (copy > size - member_offset) {
+            copy = size - member_offset;
         }
         if (getenv("EU4_GFX_UNIFORM_TRACE") != NULL) {
             char body[768];
@@ -541,9 +565,9 @@ static NSData *pack_stage_uniforms(NSDictionary *stage, const uint8_t *master,
                 (void)eu4_metal_events_write("uniform-pack.json", body);
             }
         }
-        memcpy((uint8_t *)data.mutableBytes + member_offset, values, copy);
+        memcpy(out + member_offset, values, copy);
     }
-    if (getenv("EU4_GFX_UNIFORM_DUMP") != NULL && data.length > 0) {
+    if (getenv("EU4_GFX_UNIFORM_DUMP") != NULL && size > 0) {
         NSString *file = stage[@"msl_file"] ?: @"";
         NSString *stem = file.lastPathComponent.stringByDeletingPathExtension;
         if (stem.length > 16) {
@@ -556,12 +580,12 @@ static NSData *pack_stage_uniforms(NSDictionary *stage, const uint8_t *master,
         snprintf(meta, sizeof meta, "%s/uniform-%s.json", dir, stem.UTF8String);
         FILE *bf = fopen(bin, "wb");
         if (bf != NULL) {
-            fwrite(data.bytes, 1, data.length, bf);
+            fwrite(out, 1, size, bf);
             fclose(bf);
         }
         NSMutableString *info = [NSMutableString stringWithFormat:
             @"{\"stage\":\"%s\",\"size\":%lu,\"slots\":[",
-            stem.UTF8String, (unsigned long)data.length];
+            stem.UTF8String, (unsigned long)size];
         for (int slot = 0; slot < 6; slot++) {
             uint32_t count = load_u32(master, 0xc8 + slot * 16);
             void *header = load_ptr(master, 0xd0 + slot * 16);
@@ -576,7 +600,278 @@ static NSData *pack_stage_uniforms(NSDictionary *stage, const uint8_t *master,
             fclose(mf);
         }
     }
-    return data;
+    if (out_length != NULL) {
+        *out_length = size;
+    }
+    return 1;
+}
+
+static BOOL glsl_type_is_float(NSString *type);
+static BOOL gl_type_is_integer(uint32_t type);
+
+/* Immutable vertex layout shared by draws whose engine element table and slot
+   strides are unchanged. Slot offsets are deliberately not part of the layout:
+   they move to setVertexBuffer:offset:, which keeps one pipeline variant per
+   actual layout instead of one per dynamic byte offset. */
+typedef struct {
+    NSUInteger buffer_index;
+    int32_t slot;
+    uint32_t element_offset;
+    uint32_t format;
+    uint32_t divisor;
+    uint32_t gl_type;
+    uint32_t size;
+    uint32_t location;
+    uint8_t normalized;
+    uint8_t constant;
+} eu4_layout_binding;
+
+@interface EU4VertexLayout : NSObject {
+@public
+    MTLVertexDescriptor *descriptor;
+    uint64_t stable_id;
+    eu4_layout_binding bindings[EU4_GFX_MAX_TRACKED_ATTRIBUTES];
+    int binding_count;
+}
+@end
+
+@implementation EU4VertexLayout
+@end
+
+typedef struct {
+    void *buffer;
+    NSUInteger offset;
+    NSUInteger index;
+    int constant;
+} eu4_prepared_binding;
+
+static uint64_t layout_hash(void *shader, const uint8_t *master,
+                            const void *elements, int32_t count) {
+    uint64_t hash = 14695981039346656037ULL;
+    const uint8_t *bytes = (const uint8_t *)elements;
+    uint64_t lifetime = eu4_gfx_shader_lifetime_id(shader);
+    for (int i = 0; i < 8; i++) {
+        hash ^= (uint8_t)(lifetime >> (i * 8));
+        hash *= 1099511628211ULL;
+    }
+    hash ^= (uint32_t)count;
+    hash *= 1099511628211ULL;
+    for (int32_t i = 0; i < count; i++) {
+        for (size_t b = 0; b < 0x28; b++) {
+            hash ^= bytes[(size_t)i * 0x28 + b];
+            hash *= 1099511628211ULL;
+        }
+    }
+    for (int slot = 0; slot < EU4_GFX_VERTEX_SLOTS; slot++) {
+        uint32_t stride = load_u32(master, 0x160 + (size_t)slot * 4);
+        for (int b = 0; b < 4; b++) {
+            hash ^= (uint8_t)(stride >> (b * 8));
+            hash *= 1099511628211ULL;
+        }
+    }
+    return hash;
+}
+
+/* Returns a cached layout, or builds one. *fallback is set when an attribute
+   needs the integer-to-float conversion path, which is rebuilt per draw. */
+static EU4VertexLayout *cached_vertex_layout(void *shader, const uint8_t *master,
+                                             id<MTLDevice> device,
+                                             NSDictionary *stage, int *fallback,
+                                             char *reason, size_t capacity) {
+    *fallback = 0;
+    void *elements = load_ptr((const uint8_t *)shader, 0x10);
+    int32_t count = (int32_t)load_u32((const uint8_t *)shader, 0x18);
+    if (elements == NULL || count <= 0 || count > 64) {
+        fail(reason, capacity, "shader has no vertex element table");
+        return nil;
+    }
+    static NSMutableDictionary *cache;
+    static id<MTLDevice> cached_device;
+    if (cache == nil || cached_device != device) {
+        cache = [NSMutableDictionary dictionary];
+        cached_device = device;
+    }
+    uint64_t hash = layout_hash(shader, master, elements, count);
+    NSNumber *cache_key = @(hash);
+    EU4VertexLayout *cached = cache[cache_key];
+    if (cached != nil) {
+        return cached;
+    }
+    NSDictionary *locations = stage[@"attribute_locations"];
+    NSMutableDictionary *attribute_types = [NSMutableDictionary dictionary];
+    NSMutableSet *declared = [NSMutableSet set];
+    if ([stage[@"attributes"] isKindOfClass:[NSArray class]] &&
+        [locations isKindOfClass:[NSDictionary class]]) {
+        for (NSDictionary *attribute in stage[@"attributes"]) {
+            NSNumber *location = locations[attribute[@"name"]];
+            if (location != nil) {
+                attribute_types[location] = attribute[@"type"] ?: @"";
+                [declared addObject:location];
+            }
+        }
+    }
+    EU4VertexLayout *layout = [EU4VertexLayout new];
+    layout->descriptor = [MTLVertexDescriptor vertexDescriptor];
+    layout->binding_count = 0;
+    NSMutableSet *covered = [NSMutableSet set];
+    NSUInteger next_buffer = 8;
+    for (int32_t i = 0; i < count; i++) {
+        const uint8_t *element = (const uint8_t *)elements + (size_t)i * 0x28;
+        uint32_t location = 0, size = 0, type = 0, offset = 0;
+        int32_t slot = 0;
+        uint8_t divisor = 0, normalized = 0;
+        memcpy(&location, element + 0xc, 4);
+        memcpy(&size, element + 0x10, 4);
+        memcpy(&type, element + 0x14, 4);
+        memcpy(&offset, element + 0x18, 4);
+        memcpy(&slot, element + 0x1c, 4);
+        divisor = element[0x20];
+        normalized = element[0x21];
+        if (slot < 0 || slot >= EU4_GFX_VERTEX_SLOTS) {
+            fail(reason, capacity, "vertex element slot out of range");
+            return nil;
+        }
+        if ([declared count] > 0 && ![declared containsObject:@(location)]) {
+            continue;
+        }
+        if (!descriptor_capacity_ok((uint32_t)next_buffer, location, reason,
+                                    capacity)) {
+            return nil;
+        }
+        NSString *declared_type = attribute_types[@(location)] ?: @"";
+        BOOL convert = glsl_type_is_float(declared_type) &&
+                       gl_type_is_integer(type) && normalized == 0 &&
+                       size >= 1 && size <= 4 && divisor == 0;
+        if (convert) {
+            /* Converted attributes create a transient buffer with contents that
+               can change per draw; keep that path out of the layout cache. */
+            *fallback = 1;
+            return nil;
+        }
+        MTLVertexFormat format = vertex_format(type, size, normalized != 0);
+        if (format == 0) {
+            fail(reason, capacity, "unsupported vertex element format");
+            return nil;
+        }
+        uint32_t stride = load_u32(master, 0x160 + (size_t)slot * 4);
+        if (stride == 0) {
+            fail(reason, capacity, "vertex buffer slot is incomplete");
+            return nil;
+        }
+        NSUInteger buffer_index = next_buffer++;
+        MTLVertexAttributeDescriptor *attribute = layout->descriptor.attributes[location];
+        attribute.format = format;
+        attribute.offset = offset;
+        attribute.bufferIndex = buffer_index;
+        layout->descriptor.layouts[buffer_index].stride = stride;
+        if (divisor > 0) {
+            layout->descriptor.layouts[buffer_index].stepFunction =
+                MTLVertexStepFunctionPerInstance;
+            layout->descriptor.layouts[buffer_index].stepRate = divisor;
+        } else {
+            layout->descriptor.layouts[buffer_index].stepFunction =
+                MTLVertexStepFunctionPerVertex;
+            layout->descriptor.layouts[buffer_index].stepRate = 1;
+        }
+        eu4_layout_binding *binding = &layout->bindings[layout->binding_count++];
+        binding->buffer_index = buffer_index;
+        binding->slot = slot;
+        binding->element_offset = offset;
+        binding->format = (uint32_t)format;
+        binding->divisor = divisor;
+        binding->gl_type = type;
+        binding->size = size;
+        binding->location = location;
+        binding->normalized = normalized;
+        binding->constant = 0;
+        [covered addObject:@(location)];
+    }
+    for (NSNumber *location in declared) {
+        if ([covered containsObject:location]) {
+            continue;
+        }
+        if (!descriptor_capacity_ok((uint32_t)next_buffer,
+                                    (uint32_t)location.unsignedIntegerValue,
+                                    reason, capacity)) {
+            return nil;
+        }
+        NSUInteger buffer_index = next_buffer++;
+        MTLVertexAttributeDescriptor *attribute =
+            layout->descriptor.attributes[location.unsignedIntegerValue];
+        attribute.format = MTLVertexFormatFloat4;
+        attribute.offset = 0;
+        attribute.bufferIndex = buffer_index;
+        layout->descriptor.layouts[buffer_index].stride = 16;
+        layout->descriptor.layouts[buffer_index].stepFunction =
+            MTLVertexStepFunctionConstant;
+        layout->descriptor.layouts[buffer_index].stepRate = 0;
+        eu4_layout_binding *binding = &layout->bindings[layout->binding_count++];
+        memset(binding, 0, sizeof *binding);
+        binding->buffer_index = buffer_index;
+        binding->location = (uint32_t)location.unsignedIntegerValue;
+        binding->constant = 1;
+    }
+    layout->stable_id = hash;
+    if (cache.count >= 256) {
+        [cache removeAllObjects];
+    }
+    cache[cache_key] = layout;
+    return layout;
+}
+
+/* Resolves the per-draw buffers and fills the attribute-range diagnostics. */
+static BOOL prepare_cached_bindings(EU4VertexLayout *layout, const uint8_t *master,
+                                    eu4_prepared_binding *prepared, int *out_count,
+                                    char *reason, size_t capacity) {
+    memset(g_logged_elements, 0, sizeof g_logged_elements);
+    g_logged_element_count = 0;
+    int prepared_count = 0;
+    for (int i = 0; i < layout->binding_count; i++) {
+        const eu4_layout_binding *binding = &layout->bindings[i];
+        eu4_prepared_binding *entry = &prepared[prepared_count++];
+        memset(entry, 0, sizeof *entry);
+        entry->index = binding->buffer_index;
+        if (binding->constant) {
+            entry->constant = 1;
+            continue;
+        }
+        void *header = load_ptr(master, 0x130 + (size_t)binding->slot * 8);
+        uint32_t slot_offset = load_u32(master, 0x150 + (size_t)binding->slot * 4);
+        uint32_t stride = load_u32(master, 0x160 + (size_t)binding->slot * 4);
+        if (header == NULL || stride == 0) {
+            fail(reason, capacity, "vertex buffer slot is incomplete");
+            return NO;
+        }
+        void *metal_buffer = eu4_gfx_vertex_buffer_for_header(header);
+        if (metal_buffer == NULL) {
+            fail(reason, capacity, "vertex buffer has no Metal storage");
+            return NO;
+        }
+        NSUInteger bound_offset = (NSUInteger)binding->element_offset + slot_offset;
+        if (g_logged_element_count < EU4_GFX_MAX_TRACKED_ATTRIBUTES) {
+            eu4_logged_element *logged =
+                &g_logged_elements[g_logged_element_count++];
+            logged->location = binding->location;
+            logged->format = binding->format;
+            logged->divisor = binding->divisor;
+            logged->slot = binding->slot;
+            logged->offset = binding->element_offset;
+            logged->stride = stride;
+            logged->normalized = binding->normalized;
+            logged->type = binding->gl_type;
+            logged->size = binding->size;
+            logged->bound_offset = bound_offset;
+            logged->bound_stride = stride;
+            logged->bound_length =
+                ((__bridge id<MTLBuffer>)metal_buffer).length;
+            logged->slot_offset = slot_offset;
+            logged->converted = 0;
+        }
+        entry->buffer = metal_buffer;
+        entry->offset = slot_offset;
+    }
+    *out_count = prepared_count;
+    return YES;
 }
 
 /* Collects the engine vertex elements and builds a Metal vertex descriptor. */
@@ -949,6 +1244,57 @@ static BOOL build_vertex_descriptor(void *shader, const uint8_t *master,
     return YES;
 }
 
+static id<MTLDepthStencilState> depth_state_for(id<MTLDevice> device,
+                                             BOOL test, BOOL write,
+                                             uint32_t compare) {
+    static NSMutableDictionary *cache;
+    static id<MTLDevice> cached_device;
+    if (cache == nil || cached_device != device) {
+        cache = [NSMutableDictionary dictionary];
+        cached_device = device;
+    }
+    NSNumber *key = @(((uint64_t)(test ? 1 : 0) << 33) |
+                      ((uint64_t)(write ? 1 : 0) << 32) | compare);
+    id<MTLDepthStencilState> state = cache[key];
+    if (state != nil) {
+        return state;
+    }
+    MTLDepthStencilDescriptor *descriptor = [MTLDepthStencilDescriptor new];
+    descriptor.depthCompareFunction = test ? compare_function(compare)
+                                           : MTLCompareFunctionAlways;
+    descriptor.depthWriteEnabled = write ? YES : NO;
+    state = [device newDepthStencilStateWithDescriptor:descriptor];
+    if (state != nil) {
+        cache[key] = state;
+    }
+    return state;
+}
+
+/* MTLVertexDescriptor.hash is not stable across lookups of the same object.
+   Pipeline identity therefore uses this explicit, immutable field hash. */
+static uint64_t stable_descriptor_id(MTLVertexDescriptor *descriptor) {
+    uint64_t hash = 14695981039346656037ULL;
+    for (NSUInteger i = 0; i < 31; i++) {
+        MTLVertexAttributeDescriptor *attribute = descriptor.attributes[i];
+        MTLVertexBufferLayoutDescriptor *layout = descriptor.layouts[i];
+        uint64_t values[6] = {
+            (uint64_t)i,
+            (uint64_t)attribute.format,
+            (uint64_t)attribute.offset,
+            (uint64_t)attribute.bufferIndex,
+            ((uint64_t)layout.stride << 16) |
+                ((uint64_t)layout.stepFunction << 8) | (uint64_t)layout.stepRate,
+            0};
+        for (int v = 0; v < 5; v++) {
+            for (int b = 0; b < 8; b++) {
+                hash ^= (uint8_t)(values[v] >> (b * 8));
+                hash *= 1099511628211ULL;
+            }
+        }
+    }
+    return hash;
+}
+
 static id<MTLRenderPipelineState> pipeline_for(EU4GfxPipelineKey *unused,
                                                id<MTLDevice> device,
                                                id<MTLFunction> vertex,
@@ -958,30 +1304,14 @@ static id<MTLRenderPipelineState> pipeline_for(EU4GfxPipelineKey *unused,
                                                MTLPixelFormat depth_format,
                                                const uint8_t *blend_snapshot,
                                                BOOL depth_test, BOOL depth_write,
-                                               uint32_t depth_compare) {
+                                               uint32_t depth_compare,
+                                               uint64_t descriptor_id) {
     (void)unused;
     static NSMutableDictionary *cache;
     static id<MTLDevice> cached_device;
     if (cache == nil || cached_device != device) {
         cache = [NSMutableDictionary dictionary];
         cached_device = device;
-    }
-    NSMutableString *vertex_signature = [NSMutableString string];
-    /* Metal exposes attribute indices 0..30 (31 in total). */
-    for (NSUInteger i = 0; i < 31; i++) {
-        MTLVertexAttributeDescriptor *attribute = descriptor.attributes[i];
-        if (attribute.format != 0) {
-            [vertex_signature appendFormat:@"a%lu:%lu:%lu;", (unsigned long)i,
-                                           (unsigned long)attribute.format,
-                                           (unsigned long)attribute.bufferIndex];
-        }
-        MTLVertexBufferLayoutDescriptor *layout = descriptor.layouts[i];
-        if (layout.stride != 0) {
-            [vertex_signature appendFormat:@"l%lu:%lu:%lu:%lu;", (unsigned long)i,
-                                           (unsigned long)layout.stride,
-                                           (unsigned long)layout.stepFunction,
-                                           (unsigned long)layout.stepRate];
-        }
     }
     uint32_t enabled = load_u32(blend_snapshot, 0);
     uint32_t src = load_u32(blend_snapshot, 4);
@@ -991,17 +1321,18 @@ static id<MTLRenderPipelineState> pipeline_for(EU4GfxPipelineKey *unused,
     uint32_t dst_a = load_u32(blend_snapshot, 0x14);
     uint32_t equation_a = load_u32(blend_snapshot, 0x18);
     uint32_t color_mask = load_u32(blend_snapshot, 0x20);
-    NSString *key = [NSString stringWithFormat:@"%p-%p-%lu-%lu-%u-%u-%u-%u-%u-%u-%u-%u-%d-%d-%u-%u",
+    NSString *key = [NSString stringWithFormat:@"%p-%p-%lu-%lu-%u-%u-%u-%u-%u-%u-%u-%u-%d-%d-%llu-%u",
                      (__bridge void *)vertex, (__bridge void *)fragment,
                      (unsigned long)color_format, (unsigned long)depth_format, enabled, src, dst, equation,
                      src_a, dst_a, equation_a, depth_test ? 1u : 0u,
                      depth_write ? 1 : 0, (unsigned)depth_compare,
-                     (unsigned)descriptor.hash, color_mask];
+                     (unsigned long long)descriptor_id, color_mask];
     static uint64_t pipeline_hits;
     static uint64_t pipeline_misses;
     id<MTLRenderPipelineState> pipeline = cache[key];
     if (pipeline != nil) {
         pipeline_hits++;
+        eu4_gfx_perf_pipeline(1);
         if (getenv("EU4_GFX_PIPELINE_STATS") != NULL) {
             char body[256];
             int length = snprintf(
@@ -1018,6 +1349,7 @@ static id<MTLRenderPipelineState> pipeline_for(EU4GfxPipelineKey *unused,
         return pipeline;
     }
     pipeline_misses++;
+    eu4_gfx_perf_pipeline(0);
     MTLRenderPipelineDescriptor *pipeline_descriptor = [MTLRenderPipelineDescriptor new];
     pipeline_descriptor.vertexFunction = vertex;
     pipeline_descriptor.fragmentFunction = fragment;
@@ -1162,7 +1494,8 @@ void *eu4_gfx_generic_pipeline_test(void *device, void *vertex, void *fragment,
         (__bridge id<MTLFunction>)fragment,
         (__bridge MTLVertexDescriptor *)vertex_descriptor,
         (MTLPixelFormat)color_format, MTLPixelFormatInvalid, blend_snapshot,
-        NO, NO, 0x0203);
+        NO, NO, 0x0203,
+        stable_descriptor_id((__bridge MTLVertexDescriptor *)vertex_descriptor));
 }
 
 int eu4_gfx_generic_draw_supported(const void *immediate_context,
@@ -1501,6 +1834,14 @@ static int dump_texture_file(id<MTLTexture> texture, const char *path) {
     return result;
 }
 
+static void end_encoder(id<MTLRenderCommandEncoder> encoder, int batch_owned) {
+    if (batch_owned) {
+        eu4_gfx_batch_end_pass();
+    } else if (encoder != nil) {
+        [encoder endEncoding];
+    }
+}
+
 static int generic_draw_encode_impl(const void *immediate_context,
                                     const eu4_gfx_generic_call *call,
                                     const eu4_gfx_simple_draw_inputs *inputs,
@@ -1540,18 +1881,43 @@ static int generic_draw_encode_impl(const void *immediate_context,
         return 0;
     }
 
-    MTLVertexDescriptor *descriptor = [MTLVertexDescriptor vertexDescriptor];
-    NSMutableDictionary *buffers = [NSMutableDictionary dictionary];
-    if (!build_vertex_descriptor(shader, master, device, descriptor, buffers,
-                                 vertex_stage, reason,
-                                 reason_capacity)) {
+    MTLVertexDescriptor *descriptor = nil;
+    NSMutableDictionary *buffers = nil;
+    EU4VertexLayout *layout = nil;
+    eu4_prepared_binding prepared[EU4_GFX_MAX_TRACKED_ATTRIBUTES];
+    int prepared_count = 0;
+    int layout_fallback = 0;
+    layout = cached_vertex_layout(shader, master, device, vertex_stage,
+                                  &layout_fallback, reason, reason_capacity);
+    if (layout != nil) {
+        descriptor = layout->descriptor;
+        if (!prepare_cached_bindings(layout, master, prepared, &prepared_count,
+                                     reason, reason_capacity)) {
+            return 0;
+        }
+    } else if (layout_fallback) {
+        descriptor = [MTLVertexDescriptor vertexDescriptor];
+        buffers = [NSMutableDictionary dictionary];
+        if (!build_vertex_descriptor(shader, master, device, descriptor, buffers,
+                                     vertex_stage, reason,
+                                     reason_capacity)) {
+            return 0;
+        }
+    } else {
         return 0;
     }
-    NSData *vertex_uniforms = pack_stage_uniforms(vertex_stage, master, reason,
-                                                  reason_capacity);
-    NSData *pixel_uniforms = pack_stage_uniforms(pixel_stage, master, reason,
-                                                 reason_capacity);
-    if (vertex_uniforms == nil || pixel_uniforms == nil) {
+    uint8_t vertex_uniform_scratch[4096];
+    uint8_t pixel_uniform_scratch[4096];
+    size_t vertex_uniform_length = 0;
+    size_t pixel_uniform_length = 0;
+    if (!pack_stage_uniforms_into(vertex_stage, master, vertex_uniform_scratch,
+                                  sizeof vertex_uniform_scratch,
+                                  &vertex_uniform_length, reason,
+                                  reason_capacity) ||
+        !pack_stage_uniforms_into(pixel_stage, master, pixel_uniform_scratch,
+                                  sizeof pixel_uniform_scratch,
+                                  &pixel_uniform_length, reason,
+                                  reason_capacity)) {
         return 0;
     }
     uint8_t blend_snapshot[0x24];
@@ -1615,7 +1981,9 @@ static int generic_draw_encode_impl(const void *immediate_context,
                      target.pixelFormat,
                      depth_texture != nil ? MTLPixelFormatDepth32Float
                                           : MTLPixelFormatInvalid,
-                     blend_snapshot, depth_test, depth_write, depth_compare);
+                     blend_snapshot, depth_test, depth_write, depth_compare,
+                     layout != nil ? layout->stable_id
+                                   : stable_descriptor_id(descriptor));
     if (pipeline == nil) {
         fail(reason, reason_capacity, "generic pipeline creation failed");
         return 0;
@@ -1646,25 +2014,37 @@ static int generic_draw_encode_impl(const void *immediate_context,
             }
         }
     }
-    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
-    pass.colorAttachments[0].texture = target;
-    pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
-    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-    if (depth_texture != nil) {
-        pass.depthAttachment.texture = depth_texture;
-        pass.depthAttachment.loadAction = MTLLoadActionLoad;
-        pass.depthAttachment.storeAction = MTLStoreActionStore;
-    }
-    /* Render-target textures are converted to GL row order into this command
-       buffer before the draw encoder opens, so the flip pass precedes the draw
-       pass and no separate command buffer is committed. */
+    /* Draws routed through the backend share one active command buffer and,
+       when the attachment set is compatible, one render pass. A standalone
+       caller-owned command buffer keeps the single-draw pass behaviour. */
+    int batch_owned = eu4_gfx_batch_owns_command((__bridge void *)command);
+    /* Render-target textures are converted to GL row order before the draw
+       encoder opens; a conversion closes the shared pass first. */
     uint64_t sampling_token = 0;
     if (!eu4_gfx_prepare_sampled_textures((__bridge void *)command,
                                           &sampling_token, reason,
                                           reason_capacity)) {
         return 0;
     }
-    id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
+    id<MTLRenderCommandEncoder> encoder = nil;
+    if (batch_owned) {
+        encoder = (__bridge id<MTLRenderCommandEncoder>)eu4_gfx_batch_encoder(
+            (__bridge void *)target, (__bridge void *)depth_texture, NULL, NULL);
+    } else {
+        MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+        pass.colorAttachments[0].texture = target;
+        pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
+        pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        if (depth_texture != nil) {
+            pass.depthAttachment.texture = depth_texture;
+            pass.depthAttachment.loadAction = MTLLoadActionLoad;
+            pass.depthAttachment.storeAction = MTLStoreActionStore;
+        }
+        encoder = [command renderCommandEncoderWithDescriptor:pass];
+        if (encoder != nil) {
+            eu4_gfx_perf_render_encoder_created();
+        }
+    }
     if (encoder == nil) {
         fail(reason, reason_capacity, "generic render encoder failed");
         return 0;
@@ -1700,7 +2080,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
             1, backend.scissorGlX, backend.scissorGlY, backend.scissorWidth,
             backend.scissorHeight, logical_w, logical_h, &box);
         if (status == EU4_GFX_SCISSOR_EMPTY) {
-            [encoder endEncoding];
+            end_encoder(encoder, batch_owned);
             fail(reason, reason_capacity, "empty scissor rectangle");
             return 0;
         }
@@ -1718,7 +2098,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
                 scissor.height = target.height - scissor.y;
             }
             if (scissor.width == 0 || scissor.height == 0) {
-                [encoder endEncoding];
+                end_encoder(encoder, batch_owned);
                 fail(reason, reason_capacity, "empty scissor rectangle");
                 return 0;
             }
@@ -1741,12 +2121,8 @@ static int generic_draw_encode_impl(const void *immediate_context,
         [encoder setCullMode:MTLCullModeNone];
     }
     if (depth_texture != nil) {
-        MTLDepthStencilDescriptor *depth_descriptor = [MTLDepthStencilDescriptor new];
-        depth_descriptor.depthCompareFunction = depth_test
-            ? compare_function(depth_compare) : MTLCompareFunctionAlways;
-        depth_descriptor.depthWriteEnabled = depth_write ? YES : NO;
         id<MTLDepthStencilState> depth_state =
-            [device newDepthStencilStateWithDescriptor:depth_descriptor];
+            depth_state_for(device, depth_test, depth_write, depth_compare);
         if (depth_state != nil) {
             [encoder setDepthStencilState:depth_state];
         }
@@ -1769,24 +2145,26 @@ static int generic_draw_encode_impl(const void *immediate_context,
         uint8_t sprite_uniform[EU4_GFX_SPRITE_CONSTANT_BYTES];
         if (eu4_gfx_sprite_uniform_data(master, sprite_uniform,
                                         sizeof sprite_uniform) != 0) {
+            end_encoder(encoder, batch_owned);
             fail(reason, reason_capacity,
                  "synthetic stage has no engine uniform block");
             return 0;
         }
-        vertex_uniforms = [NSData dataWithBytes:sprite_uniform
-                                         length:sizeof sprite_uniform];
-        pixel_uniforms = vertex_uniforms;
+        memcpy(vertex_uniform_scratch, sprite_uniform, sizeof sprite_uniform);
+        memcpy(pixel_uniform_scratch, sprite_uniform, sizeof sprite_uniform);
+        vertex_uniform_length = sizeof sprite_uniform;
+        pixel_uniform_length = sizeof sprite_uniform;
         vertex_uniform_buffer = 1;
         pixel_uniform_buffer = 1;
     }
-    if (vertex_uniforms.length > 0) {
-        [encoder setVertexBytes:vertex_uniforms.bytes
-                         length:vertex_uniforms.length
+    if (vertex_uniform_length > 0) {
+        [encoder setVertexBytes:vertex_uniform_scratch
+                         length:vertex_uniform_length
                         atIndex:vertex_uniform_buffer];
     }
-    if (pixel_uniforms.length > 0) {
-        [encoder setFragmentBytes:pixel_uniforms.bytes
-                           length:pixel_uniforms.length
+    if (pixel_uniform_length > 0) {
+        [encoder setFragmentBytes:pixel_uniform_scratch
+                           length:pixel_uniform_length
                           atIndex:pixel_uniform_buffer];
     }
     /* Textures: the engine binds units in the shader's sampler declaration
@@ -1842,7 +2220,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
                 texture = backend.fallback;
             }
             if (texture == nil) {
-                [encoder endEncoding];
+                end_encoder(encoder, batch_owned);
                 fail(reason, reason_capacity, "sampled texture is absent");
                 return 0;
             }
@@ -1864,7 +2242,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
                     if (!eu4_gfx_texture_binding_decision(
                             expects_cube ? 1 : 0, (int)texture.textureType,
                             allow ? 1 : 0, &substitute)) {
-                        [encoder endEncoding];
+                        end_encoder(encoder, batch_owned);
                         fail(reason, reason_capacity,
                              "sampled texture type does not match the shader declaration");
                         return 0;
@@ -1997,7 +2375,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
                 sampler_for_unit(device, backend != nil ? backend.boundSamplers : nil,
                                  unit, texture.mipmapLevelCount > 1);
             if (sampler == nil) {
-                [encoder endEncoding];
+                end_encoder(encoder, batch_owned);
                 fail(reason, reason_capacity, "no sampler state available");
                 return 0;
             }
@@ -2010,21 +2388,37 @@ static int generic_draw_encode_impl(const void *immediate_context,
             }
         }
     }
-    for (NSNumber *key in buffers) {
-        NSDictionary *entry = buffers[key];
-        if (entry[@"constant"] != nil) {
-            float values[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-            NSArray *constant = entry[@"constant"];
-            for (NSUInteger i = 0; i < 4 && i < constant.count; i++) {
-                values[i] = [constant[i] floatValue];
+    if (layout != nil) {
+        static const float constant_attribute[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+        for (int i = 0; i < prepared_count; i++) {
+            const eu4_prepared_binding *entry = &prepared[i];
+            if (entry->constant) {
+                [encoder setVertexBytes:constant_attribute
+                                 length:sizeof constant_attribute
+                                atIndex:entry->index];
+            } else {
+                [encoder setVertexBuffer:(__bridge id<MTLBuffer>)entry->buffer
+                                  offset:entry->offset
+                                 atIndex:entry->index];
             }
-            [encoder setVertexBytes:values
-                             length:sizeof values
-                            atIndex:[key unsignedIntegerValue]];
-        } else {
-            [encoder setVertexBuffer:entry[@"buffer"]
-                              offset:[entry[@"offset"] unsignedIntegerValue]
-                             atIndex:[key unsignedIntegerValue]];
+        }
+    } else {
+        for (NSNumber *key in buffers) {
+            NSDictionary *entry = buffers[key];
+            if (entry[@"constant"] != nil) {
+                float values[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+                NSArray *constant = entry[@"constant"];
+                for (NSUInteger i = 0; i < 4 && i < constant.count; i++) {
+                    values[i] = [constant[i] floatValue];
+                }
+                [encoder setVertexBytes:values
+                                 length:sizeof values
+                                atIndex:[key unsignedIntegerValue]];
+            } else {
+                [encoder setVertexBuffer:entry[@"buffer"]
+                                  offset:[entry[@"offset"] unsignedIntegerValue]
+                                 atIndex:[key unsignedIntegerValue]];
+            }
         }
     }
     MTLPrimitiveType primitive = MTLPrimitiveTypeTriangle;
@@ -2033,7 +2427,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
     uint32_t primitive_mode = load_u32(master, 0x08);
     int topology = eu4_gfx_metal_topology(primitive_mode);
     if (topology < 0) {
-        [encoder endEncoding];
+        end_encoder(encoder, batch_owned);
         fail(reason, reason_capacity,
              primitive_mode == 2 ? "line-loop primitive is unsupported"
                                  : "unsupported primitive mode");
@@ -2044,55 +2438,61 @@ static int generic_draw_encode_impl(const void *immediate_context,
     if (call->indexed) {
         void *index_header = eu4_gfx_current_index_header();
         if (index_header == NULL) {
-            [encoder endEncoding];
+            end_encoder(encoder, batch_owned);
             fail(reason, reason_capacity, "indexed draw has no bound index buffer");
             return 0;
         }
         size_t bytes = eu4_gfx_index_buffer_length(index_header);
         size_t needed = (size_t)call->count * 2;
         if (bytes == (size_t)-1 || bytes < needed || bytes == 0) {
-            [encoder endEncoding];
+            end_encoder(encoder, batch_owned);
             fail(reason, reason_capacity, "index buffer is too short");
             return 0;
         }
-        uint16_t *indices = (uint16_t *)malloc(bytes);
-        if (indices == NULL || eu4_gfx_index_buffer_read(index_header, indices, bytes) != 0) {
-            free(indices);
-            [encoder endEncoding];
-            fail(reason, reason_capacity, "index buffer read failed");
+        /* Bind the engine's own Metal index buffer directly. The registry
+           resolves the current resource version on every call, so an update or
+           header recycle cannot leave a stale pointer behind. Metal retains the
+           buffer for the encoded draw, so destroying the engine header after
+           encoding cannot free storage the GPU still reads. */
+        id<MTLBuffer> index_buffer = (__bridge id<MTLBuffer>)
+            eu4_gfx_index_buffer_for_header(index_header);
+        if (index_buffer == nil || index_buffer.length < needed) {
+            end_encoder(encoder, batch_owned);
+            fail(reason, reason_capacity, "index buffer has no Metal storage");
             return 0;
         }
+        const uint16_t *indices = (const uint16_t *)index_buffer.contents;
+        if (indices == NULL) {
+            end_encoder(encoder, batch_owned);
+            fail(reason, reason_capacity, "index buffer is not CPU-visible");
+            return 0;
+        }
+        /* Validate only the prefix this draw consumes, against the actual
+           resource version that is about to be encoded. */
         int32_t first_effective = 0, last_effective = 0;
         int range_status = eu4_gfx_indexed_range(indices, call->count,
                                                  call->base_vertex,
                                                  &first_effective,
                                                  &last_effective);
         if (range_status == -1) {
-            free(indices);
-            [encoder endEncoding];
+            end_encoder(encoder, batch_owned);
             fail(reason, reason_capacity, "indexed draw has a negative effective vertex");
             return 0;
         }
         if (range_status != 0) {
-            free(indices);
-            [encoder endEncoding];
+            end_encoder(encoder, batch_owned);
             fail(reason, reason_capacity, "indexed draw has no readable indices");
             return 0;
         }
         if (!validate_attribute_ranges((uint32_t)last_effective,
                                        (uint32_t)instance_count, reason,
                                        reason_capacity)) {
-            free(indices);
-            [encoder endEncoding];
+            end_encoder(encoder, batch_owned);
             return 0;
         }
         /* Preserve the engine's 16-bit indices and let Metal apply the signed
-           base vertex exactly like glDrawElementsBaseVertex. */
-        id<MTLBuffer> index_buffer =
-            [device newBufferWithBytes:indices
-                                length:(NSUInteger)needed
-                               options:MTLResourceStorageModeManaged];
-        free(indices);
+           base vertex exactly like glDrawElementsBaseVertex. The verified
+           _GfxDrawIndexed contract uses offset zero. */
         [encoder drawIndexedPrimitives:primitive
                             indexCount:(NSUInteger)call->count
                              indexType:MTLIndexTypeUInt16
@@ -2107,7 +2507,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
         if (!validate_attribute_ranges(last_vertex,
                                        (uint32_t)instance_count, reason,
                                        reason_capacity)) {
-            [encoder endEncoding];
+            end_encoder(encoder, batch_owned);
             return 0;
         }
         [encoder drawPrimitives:primitive
@@ -2197,7 +2597,9 @@ static int generic_draw_encode_impl(const void *immediate_context,
             (void)eu4_metal_events_write(name.UTF8String, json.UTF8String);
         }
     }
-    [encoder endEncoding];
+    if (!batch_owned) {
+        [encoder endEncoding];
+    }
     g_generic_draws++;
     if (state != NULL) {
         memset(state, 0, sizeof *state);

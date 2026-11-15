@@ -13,6 +13,7 @@
 #import "eu4_gfx_sprite_draw.h"
 #import "eu4_gfx_texture.h"
 #import "eu4_gfx_draw_semantics.h"
+#import "eu4_gfx_perf.h"
 #import "eu4_metal_events.h"
 
 #import <CommonCrypto/CommonDigest.h>
@@ -24,6 +25,9 @@
 #import <sys/mman.h>
 #import <unistd.h>
 #import <sys/stat.h>
+#import <time.h>
+#import <pthread.h>
+#import <dirent.h>
 
 enum {
     kImageBytes = 0x2300000,
@@ -66,6 +70,8 @@ typedef struct {
     const void *pixels;
 } image_record;
 
+static char g_event_dir[256];
+
 static void boot(void) {
     g_image = (uint8_t *)mmap(NULL, kImageBytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON,
                               -1, 0);
@@ -93,6 +99,7 @@ static void boot(void) {
         fail("event dir");
     }
     eu4_metal_events_set_dir(dir);
+    snprintf(g_event_dir, sizeof g_event_dir, "%s", dir);
     eu4_gfx_enable_game_window();
     uint8_t handle[0x20];
     memset(handle, 0, sizeof handle);
@@ -290,7 +297,7 @@ static int run_checkpoint_inner(const char *operation, const char *directory,
     if (vertex_header == NULL) {
         fail("vertex buffer");
     }
-    uint8_t red_bgr[4 * 4 * 3];
+    uint8_t red_bgr[4 * 4 * 3] = {};
     for (int i = 0; i < 4 * 4; i++) {
         red_bgr[i * 3 + 0] = 0;
         red_bgr[i * 3 + 1] = 0;
@@ -396,7 +403,7 @@ static int run_prefix_two_frames(void) {
     if (vertex_header == NULL) {
         fail("prefix vertex buffer");
     }
-    uint8_t red_bgr[4 * 4 * 3];
+    uint8_t red_bgr[4 * 4 * 3] = {};
     for (int i = 0; i < 4 * 4; i++) {
         red_bgr[i * 3 + 0] = 0;
         red_bgr[i * 3 + 1] = 0;
@@ -2021,7 +2028,7 @@ static int run_offscreen_viewport(void) {
     if (vertex_header == NULL) {
         fail("offscreen vertex buffer");
     }
-    uint8_t red_bgr[4 * 4 * 3];
+    uint8_t red_bgr[4 * 4 * 3] = {};
     for (int i = 0; i < 4 * 4; i++) {
         red_bgr[i * 3 + 0] = 0;
         red_bgr[i * 3 + 1] = 0;
@@ -2156,7 +2163,1893 @@ static int run_target_clear(void) {
                : 1;
 }
 
+/* ---- deterministic draw-stream benchmark (PR P0) ------------------------- */
+/* Synthetic geometry isolates backend submission/allocation overhead. It is
+ * not a gameplay benchmark and makes no EU4 performance claim. */
+
+static uint64_t bench_now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+
+static void bench_sha256_hex(const char *text, char out[65]) {
+    uint8_t digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(text, (CC_LONG)strlen(text), digest);
+    static const char digits[] = "0123456789abcdef";
+    for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) {
+        out[i * 2] = digits[digest[i] >> 4];
+        out[i * 2 + 1] = digits[digest[i] & 0xf];
+    }
+    out[CC_SHA256_DIGEST_LENGTH * 2] = 0;
+}
+
+static int bench_write_file(const char *path, const char *text) {
+    FILE *file = fopen(path, "wb");
+    if (file == NULL) {
+        return 0;
+    }
+    size_t length = strlen(text);
+    int ok = fwrite(text, 1, length, file) == length;
+    fclose(file);
+    return ok;
+}
+
+static void bench_put_u32(uint8_t *base, size_t offset, uint32_t value) {
+    memcpy(base + offset, &value, 4);
+}
+
+static uint8_t g_bench_elements[2 * 0x28];
+static char g_bench_cache_dir[256];
+
+static uint8_t g_custom_element_tables[4][8 * 0x28];
+static int g_custom_element_table_count;
+
+/* Test-only synthetic cache: lets a host choose the MSL entry names, emitted
+   attribute locations and engine element table. */
+static void *make_generic_custom_shader(
+    const char *vs_msl, const char *ps_msl, const char *vs_entry,
+    const char *ps_entry, const char *locations_json,
+    const char *attributes_json, const uint32_t *element_specs,
+    int element_count) {
+    char dir[] = "/tmp/eu4-gfx-custom-XXXXXX";
+    if (mkdtemp(dir) == NULL) {
+        fail("custom shader cache dir");
+    }
+    char vs_path[320], ps_path[320], cache_path[320];
+    snprintf(vs_path, sizeof vs_path, "%s/custom.vert.metal", dir);
+    snprintf(ps_path, sizeof ps_path, "%s/custom.frag.metal", dir);
+    snprintf(cache_path, sizeof cache_path, "%s/custom-cache.json", dir);
+    if (!bench_write_file(vs_path, vs_msl) || !bench_write_file(ps_path, ps_msl)) {
+        fail("custom shader cache files");
+    }
+    char vs_input[256], ps_input[256];
+    snprintf(vs_input, sizeof vs_input,
+             "// synthetic custom compiler input (vertex) %s\n", vs_entry);
+    snprintf(ps_input, sizeof ps_input,
+             "// synthetic custom compiler input (pixel) %s\n", ps_entry);
+    char vs_sha[65], ps_sha[65];
+    bench_sha256_hex(vs_input, vs_sha);
+    bench_sha256_hex(ps_input, ps_sha);
+    char cache[4096];
+    snprintf(cache, sizeof cache,
+             "{\"schema\":\"gfx-shader-cache/v1\",\"stages\":{"
+             "\"%s\":{\"stage\":\"vertex\",\"msl_file\":\"custom.vert.metal\","
+             "\"msl_entry\":\"%s\",\"msl_uniform_buffer\":0,"
+             "\"attribute_locations\":%s,\"attributes\":%s,"
+             "\"uniforms\":[],\"samplers\":[],\"varyings\":[]},"
+             "\"%s\":{\"stage\":\"pixel\",\"msl_file\":\"custom.frag.metal\","
+             "\"msl_entry\":\"%s\",\"msl_uniform_buffer\":0,"
+             "\"attribute_locations\":{},\"attributes\":[],"
+             "\"uniforms\":[],\"samplers\":[],\"varyings\":[]}}}",
+             vs_sha, vs_entry, locations_json, attributes_json,
+             ps_sha, ps_entry);
+    if (!bench_write_file(cache_path, cache)) {
+        fail("custom shader cache json");
+    }
+    if (eu4_gfx_shader_load_cache(cache_path) <= 0) {
+        fail("custom shader cache load");
+    }
+    void *shader = eu4_gfx_create_shader();
+    if (shader == NULL ||
+        eu4_gfx_add_vertex_shader(NULL, shader, vs_input) != 1 ||
+        eu4_gfx_add_pixel_shader(NULL, shader, ps_input) != 1 ||
+        eu4_gfx_link_shader(NULL, shader) != 1 ||
+        !eu4_gfx_shader_is_generic(shader)) {
+        fail("custom shader admission");
+    }
+    if (g_custom_element_table_count >= 4 || element_count > 8) {
+        fail("custom element table capacity");
+    }
+    uint8_t *table = g_custom_element_tables[g_custom_element_table_count++];
+    memset(table, 0, 8 * 0x28);
+    for (int i = 0; i < element_count; i++) {
+        uint8_t *entry = table + (size_t)i * 0x28;
+        bench_put_u32(entry, 0x0c, element_specs[i * 4 + 0]); /* location */
+        bench_put_u32(entry, 0x10, element_specs[i * 4 + 1]); /* components */
+        bench_put_u32(entry, 0x14, element_specs[i * 4 + 2]); /* GL type */
+        bench_put_u32(entry, 0x18, element_specs[i * 4 + 3]); /* offset */
+        bench_put_u32(entry, 0x1c, 0);                         /* slot 0 */
+    }
+    void *elements = table;
+    int32_t count = element_count;
+    memcpy((uint8_t *)shader + 0x10, &elements, sizeof elements);
+    memcpy((uint8_t *)shader + 0x18, &count, sizeof count);
+    return shader;
+}
+
+static void *make_generic_bench_shader(void) {
+    snprintf(g_bench_cache_dir, sizeof g_bench_cache_dir,
+             "/tmp/eu4-gfx-bench-XXXXXX");
+    if (mkdtemp(g_bench_cache_dir) == NULL) {
+        fail("benchmark cache dir");
+    }
+    const char *vs_msl =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct VIn { float4 position [[attribute(0)]]; float4 color [[attribute(1)]]; };\n"
+        "struct VOut { float4 position [[position]]; float4 color [[user(locn0)]]; };\n"
+        "vertex VOut bench_vs(VIn in [[stage_in]]) {\n"
+        "    VOut o; o.position = in.position; o.color = in.color; return o;\n"
+        "}\n";
+    const char *ps_msl =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct VOut { float4 position [[position]]; float4 color [[user(locn0)]]; };\n"
+        "fragment float4 bench_ps(VOut in [[stage_in]]) { return in.color; }\n";
+    char vs_path[320], ps_path[320], cache_path[320];
+    snprintf(vs_path, sizeof vs_path, "%s/bench.vert.metal", g_bench_cache_dir);
+    snprintf(ps_path, sizeof ps_path, "%s/bench.frag.metal", g_bench_cache_dir);
+    snprintf(cache_path, sizeof cache_path, "%s/bench-cache.json", g_bench_cache_dir);
+    if (!bench_write_file(vs_path, vs_msl) || !bench_write_file(ps_path, ps_msl)) {
+        fail("benchmark shader cache files");
+    }
+    const char *vs_input =
+        "// synthetic benchmark compiler input (vertex)\n"
+        "attribute vec4 a_position; attribute vec4 a_color;\n";
+    const char *ps_input =
+        "// synthetic benchmark compiler input (pixel)\n"
+        "varying vec4 v_color;\n";
+    char vs_sha[65], ps_sha[65];
+    bench_sha256_hex(vs_input, vs_sha);
+    bench_sha256_hex(ps_input, ps_sha);
+    char cache[4096];
+    snprintf(cache, sizeof cache,
+             "{\"schema\":\"gfx-shader-cache/v1\",\"stages\":{"
+             "\"%s\":{\"stage\":\"vertex\",\"msl_file\":\"bench.vert.metal\","
+             "\"msl_entry\":\"bench_vs\",\"msl_uniform_buffer\":0,"
+             "\"attribute_locations\":{\"a_position\":0,\"a_color\":1},"
+             "\"attributes\":[{\"name\":\"a_position\",\"type\":\"float4\"},"
+             "{\"name\":\"a_color\",\"type\":\"float4\"}],"
+             "\"uniforms\":[],\"samplers\":[],\"varyings\":[]},"
+             "\"%s\":{\"stage\":\"pixel\",\"msl_file\":\"bench.frag.metal\","
+             "\"msl_entry\":\"bench_ps\",\"msl_uniform_buffer\":0,"
+             "\"attribute_locations\":{},\"attributes\":[],"
+             "\"uniforms\":[],\"samplers\":[],\"varyings\":[]}}}",
+             vs_sha, ps_sha);
+    if (!bench_write_file(cache_path, cache)) {
+        fail("benchmark shader cache json");
+    }
+    if (eu4_gfx_shader_load_cache(cache_path) <= 0) {
+        fail("benchmark shader cache load");
+    }
+    void *shader = eu4_gfx_create_shader();
+    if (shader == NULL ||
+        eu4_gfx_add_vertex_shader(NULL, shader, vs_input) != 1 ||
+        eu4_gfx_add_pixel_shader(NULL, shader, ps_input) != 1 ||
+        eu4_gfx_link_shader(NULL, shader) != 1 ||
+        !eu4_gfx_shader_is_generic(shader)) {
+        fail("generic benchmark shader admission");
+    }
+    memset(g_bench_elements, 0, sizeof g_bench_elements);
+    bench_put_u32(g_bench_elements, 0x0c, 0);       /* location a_position */
+    bench_put_u32(g_bench_elements, 0x10, 4);       /* components */
+    bench_put_u32(g_bench_elements, 0x14, 0x1406);  /* GL_FLOAT */
+    bench_put_u32(g_bench_elements, 0x18, 0);       /* offset */
+    bench_put_u32(g_bench_elements, 0x1c, 0);       /* slot 0 */
+    bench_put_u32(g_bench_elements + 0x28, 0x0c, 1);      /* location a_color */
+    bench_put_u32(g_bench_elements + 0x28, 0x10, 4);
+    bench_put_u32(g_bench_elements + 0x28, 0x14, 0x1406);
+    bench_put_u32(g_bench_elements + 0x28, 0x18, 16);     /* offset */
+    bench_put_u32(g_bench_elements + 0x28, 0x1c, 0);
+    void *elements = g_bench_elements;
+    int32_t element_count = 2;
+    memcpy((uint8_t *)shader + 0x10, &elements, sizeof elements);
+    memcpy((uint8_t *)shader + 0x18, &element_count, sizeof element_count);
+    return shader;
+}
+
+static void bench_vertices(uint8_t out[8 * 32]) {
+    memset(out, 0, 8 * 32);
+    const float positions[3][2] = {{-1.f, -1.f}, {3.f, -1.f}, {-1.f, 3.f}};
+    for (int i = 0; i < 8; i++) {
+        float *v = (float *)(out + i * 32);
+        v[0] = positions[i % 3][0];
+        v[1] = positions[i % 3][1];
+        v[2] = 0.5f;
+        v[3] = 1.f;
+        if (i < 4) {
+            v[4] = 1.f; /* red */
+        } else {
+            v[5] = 1.f; /* green */
+        }
+        v[7] = 1.f;
+    }
+}
+
+static void bench_vertices_blend(uint8_t out[8 * 32]) {
+    memset(out, 0, 8 * 32);
+    const float positions[3][2] = {{-1.f, -1.f}, {3.f, -1.f}, {-1.f, 3.f}};
+    for (int i = 0; i < 8; i++) {
+        float *v = (float *)(out + i * 32);
+        v[0] = positions[i % 3][0];
+        v[1] = positions[i % 3][1];
+        v[2] = 0.5f;
+        v[3] = 1.f;
+        if (i < 4) {
+            v[4] = 1.f; /* opaque red */
+            v[7] = 1.f;
+        } else {
+            v[5] = 1.f; /* half-transparent green */
+            v[7] = 0.5f;
+        }
+    }
+}
+
+static void bench_install_generic(void *shader, void *vertex_header,
+                                  void *index_header) {
+    uint8_t *master = (uint8_t *)g_master;
+    struct {
+        void *master;
+    } ctx = {g_master};
+    uint32_t mode = 4, count = 3;
+    memcpy(master + EU4_GFX_MASTER_MODE, &mode, 4);
+    memcpy(master + EU4_GFX_MASTER_COUNT, &count, 4);
+    void *headers[1] = {vertex_header};
+    eu4_gfx_set_vertex_buffers(&ctx, 1, headers, 0, NULL, NULL);
+    eu4_gfx_set_shader(&ctx, shader);
+    eu4_gfx_set_index_buffer(&ctx, index_header);
+    uint32_t rect[6] = {kSize, kSize, 0x3f800000u, 0, 0, 0};
+    eu4_gfx_set_viewport(master, rect);
+    uint32_t mask = 0x01010101u;
+    memcpy(master + 0x2c, &mask, sizeof mask);
+    uint32_t fill = 0x1b02;
+    memcpy(master + 0x58, &fill, sizeof fill);
+    master[0x38] = 0;
+    master[0x60] = 0;
+    /* Synthetic geometry is wound for the measuring stream; keep the engine's
+       default raster orientation out of the backend-overhead measurement. */
+    master[0x61] = 0;
+}
+
+static int run_benchmark(const char *kind, int draws, int frames) {
+    if (draws < 1 || frames < 1 || draws > 100000 || frames > 1000) {
+        fail("benchmark bounds");
+    }
+    eu4_gfx_perf_set_enabled(1);
+    boot();
+    id<MTLDevice> device = (__bridge id<MTLDevice>)eu4_gfx_metal_device();
+    if (device == nil) {
+        fail("benchmark device");
+    }
+
+    int generic = strcmp(kind, "simple") != 0;
+    /* The engine's constant-slot header points at this storage for the whole
+       run; keep it at function scope rather than in a setup branch. */
+    float bench_matrix[16];
+    uint8_t bench_constant[0x10];
+    void *shader = NULL;
+    void *vertex_header = NULL;
+    void *index_header = NULL;
+    uint8_t red_header[0x44], green_header[0x44];
+    uint8_t red_bgr[4 * 4 * 3] = {}, green_bgr[4 * 4 * 3] = {};
+    for (int i = 0; i < 4 * 4; i++) {
+        red_bgr[i * 3 + 0] = 0;
+        red_bgr[i * 3 + 1] = 0;
+        red_bgr[i * 3 + 2] = 0xff;
+        green_bgr[i * 3 + 0] = 0;
+        green_bgr[i * 3 + 1] = 0xff;
+        green_bgr[i * 3 + 2] = 0;
+    }
+    make_texture(4, 4, red_bgr, red_header);
+    make_texture(4, 4, green_bgr, green_header);
+
+    if (generic) {
+        shader = make_generic_bench_shader();
+        uint8_t vertices[8 * 32];
+        bench_vertices(vertices);
+        vertex_header = eu4_gfx_create_vertex_buffer(NULL, vertices, 8, 32, 0);
+        const uint16_t indices[3] = {0, 1, 2};
+        index_header = eu4_gfx_create_index_buffer(NULL, indices, 3);
+        if (vertex_header == NULL || index_header == NULL) {
+            fail("benchmark generic geometry");
+        }
+        bench_install_generic(shader, vertex_header, index_header);
+    } else {
+        shader = make_simple_shader();
+        uint8_t quad[96];
+        make_quad(quad);
+        vertex_header = eu4_gfx_create_vertex_buffer(NULL, quad, 4, 24, 0);
+        fill_matrix(bench_matrix);
+        memset(bench_constant, 0, sizeof bench_constant);
+        uint32_t words = 16;
+        memcpy(bench_constant, &words, 4);
+        void *constant_data = bench_matrix;
+        memcpy(bench_constant + 8, &constant_data, sizeof constant_data);
+        install_geometry(shader, vertex_header, bench_constant, red_header);
+    }
+
+    /* Present into an injected drawable so the frame boundary is observable
+       without a window server. */
+    MTLTextureDescriptor *desc =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                           width:kSize
+                                                          height:kSize
+                                                       mipmapped:NO];
+    desc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead |
+                 MTLTextureUsageShaderWrite;
+    desc.storageMode = MTLStorageModeShared;
+    id<MTLTexture> destination = [device newTextureWithDescriptor:desc];
+    if (destination == nil) {
+        fail("benchmark present drawable");
+    }
+    eu4_gfx_test_set_present_drawable((__bridge void *)destination);
+
+    struct {
+        void *master;
+    } ctx = {g_master};
+    uint8_t *master = (uint8_t *)g_master;
+    const float black[4] = {0.f, 0.f, 0.f, 1.f};
+    uint8_t default_blend[0x24];
+    memcpy(default_blend, master + 0xc, sizeof default_blend);
+    g_stopped = 0;
+    const int warmup = 3;
+    for (int frame = 0; frame < warmup + frames; frame++) {
+        eu4_gfx_perf_reset();
+        uint64_t wall_start = bench_now_ns();
+        if (generic) {
+            uint32_t full_view[6] = {kSize, kSize, 0x3f800000u, 0, 0, 0};
+            eu4_gfx_set_viewport(master, full_view);
+        }
+        eu4_gfx_clear(&ctx, 7, black);
+        if (g_stopped) {
+            fail("benchmark clear stopped");
+        }
+        for (int i = 0; i < draws; i++) {
+            eu4_gfx_draw_raw raw;
+            memset(&raw, 0, sizeof raw);
+            raw.rdi = (uint64_t)(uintptr_t)&ctx;
+            raw.retaddr = (uint64_t)(uintptr_t)(g_image + kCallerRva);
+            if (generic) {
+                raw.which = 2;
+                raw.rsi = 3;
+                /* Signed base vertices: alternate red (0) and green (4). */
+                raw.rcx = (i % 2 == 0) ? 0 : 4;
+                if (strcmp(kind, "mixed") == 0) {
+                    if (i % 3 == 0) {
+                        uint32_t enabled = 1;
+                        memcpy(master + 0xc, &enabled, 4);
+                    } else {
+                        memcpy(master + 0xc, default_blend, 0x24);
+                    }
+                    master[0x61] = (uint8_t)((i / 2) % 3 == 0 ? 1 : 0);
+                    uint32_t mask = (i % 2 == 0) ? 0x01010101u : 0x00ff00ffu;
+                    memcpy(master + 0x2c, &mask, 4);
+                    /* Viewport changes are Metal encoder state, not a pass
+                       boundary. Alternate between full and inset viewports. */
+                    uint32_t view[6] = {(i % 2 == 0) ? (uint32_t)kSize : 32,
+                                        (i % 2 == 0) ? (uint32_t)kSize : 32,
+                                        0x3f800000u, 0, 0, 0};
+                    eu4_gfx_set_viewport(master, view);
+                }
+            } else {
+                raw.which = 1;
+                raw.rsi = 4;
+                void *texture = (i % 2 == 0) ? red_header : green_header;
+                eu4_gfx_set_textures(&ctx, 1, &texture, 1, 0, NULL);
+            }
+            if (eu4_gfx_draw_capture(&raw) != 1) {
+                fail("benchmark draw was not handled");
+            }
+        }
+        if (!generic) {
+            void *texture = red_header;
+            eu4_gfx_set_textures(&ctx, 1, &texture, 1, 0, NULL);
+        } else {
+            memcpy(master + 0xc, default_blend, 0x24);
+            uint32_t mask = 0x01010101u;
+            memcpy(master + 0x2c, &mask, 4);
+        }
+        if (eu4_gfx_present(g_master) != 1 || g_stopped) {
+            fail("benchmark present failed");
+        }
+        uint64_t wall_ns = bench_now_ns() - wall_start;
+        if (!eu4_gfx_perf_wait_gpu_timing(3000)) {
+            fail("benchmark GPU timing completion");
+        }
+        if (frame < warmup) {
+            continue;
+        }
+        char perf[4096];
+        if (eu4_gfx_perf_snapshot_json(perf, sizeof perf) == 0) {
+            fail("benchmark snapshot");
+        }
+        printf("BENCH {\"schema\":\"gfx-bench-frame/v1\",\"kind\":\"%s\","
+               "\"draws\":%d,\"frame\":%d,\"wall_ns\":%llu,\"perf\":%s}\n",
+               kind, draws, frame - warmup, (unsigned long long)wall_ns, perf);
+        fflush(stdout);
+    }
+    return 0;
+}
+
+static int run_indexed_resource(void) {
+    /* The indexed draw must consume the engine's own Metal buffer: no CPU copy
+       and no temporary Metal allocation. An update must change the resource the
+       next draw sees, and a recycled header must not resolve to the old one. */
+    eu4_gfx_perf_set_enabled(1);
+    eu4_gfx_perf_reset();
+    boot();
+    void *shader = make_generic_bench_shader();
+    uint8_t vertices[8 * 32];
+    bench_vertices(vertices);
+    void *vertex_header = eu4_gfx_create_vertex_buffer(NULL, vertices, 8, 32, 0);
+    const uint16_t red_indices[3] = {0, 1, 2};
+    void *index_header = eu4_gfx_create_index_buffer(NULL, red_indices, 3);
+    if (vertex_header == NULL || index_header == NULL) {
+        fail("indexed-resource geometry");
+    }
+    bench_install_generic(shader, vertex_header, index_header);
+    struct {
+        void *master;
+    } ctx = {g_master};
+    const float black[4] = {0.f, 0.f, 0.f, 1.f};
+    eu4_gfx_clear(&ctx, 7, black);
+
+    void *first_buffer = eu4_gfx_index_buffer_for_header(index_header);
+    if (first_buffer == NULL || !eu4_gfx_index_buffer_shared(index_header)) {
+        fail("indexed-resource accessor");
+    }
+
+    eu4_gfx_draw_raw raw;
+    memset(&raw, 0, sizeof raw);
+    raw.which = 2;
+    raw.rdi = (uint64_t)(uintptr_t)&ctx;
+    raw.rsi = 3;
+    raw.rcx = 0;
+    raw.retaddr = (uint64_t)(uintptr_t)(g_image + kCallerRva);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("first indexed draw");
+    }
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("second indexed draw");
+    }
+    int reuse = eu4_gfx_index_buffer_for_header(index_header) == first_buffer;
+    size_t length = 0;
+    uint8_t *pixels = read_target(&length);
+    expect_colour(pixels, 0, 0, 0xff, "indexed base 0");
+    free(pixels);
+
+    const uint16_t green_indices[3] = {4, 5, 6};
+    eu4_gfx_update_index_buffer(NULL, index_header, green_indices, 3);
+    void *updated_buffer = eu4_gfx_index_buffer_for_header(index_header);
+    int update_replaced = updated_buffer != NULL && updated_buffer != first_buffer;
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("draw after index update");
+    }
+    pixels = read_target(&length);
+    expect_colour(pixels, 0, 0xff, 0, "indexed update");
+    free(pixels);
+
+    eu4_gfx_perf_snapshot perf;
+    eu4_gfx_perf_read(&perf);
+    int zero_temp = perf.index_temp_allocs == 0 && perf.index_temp_bytes == 0 &&
+                    perf.draws_encoded == 3;
+
+    eu4_gfx_destroy_index_buffer(index_header);
+    int stale_null = eu4_gfx_index_buffer_for_header(index_header) == NULL;
+    void *recycled_header = eu4_gfx_create_index_buffer(NULL, red_indices, 3);
+    void *recycled_buffer = eu4_gfx_index_buffer_for_header(recycled_header);
+    int recycled_fresh = recycled_header != NULL && recycled_buffer != NULL &&
+                         recycled_buffer != updated_buffer;
+    if (recycled_header == NULL) {
+        fail("indexed-resource recycle");
+    }
+    eu4_gfx_set_index_buffer(&ctx, recycled_header);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("draw after index recycle");
+    }
+    pixels = read_target(&length);
+    expect_colour(pixels, 0, 0, 0xff, "indexed recycle");
+    free(pixels);
+
+    raw.rcx = -1;
+    char diagnostic[256];
+    eu4_gfx_simple_draw_state state;
+    int negative_refused =
+        eu4_gfx_draw_route_live(&raw, &state, diagnostic, sizeof diagnostic) ==
+            EU4_GFX_DRAW_ROUTE_UNSUPPORTED &&
+        strstr(diagnostic, "negative effective vertex") != NULL;
+    raw.rcx = 0;
+    const uint16_t outside_indices[3] = {100, 101, 102};
+    eu4_gfx_update_index_buffer(NULL, recycled_header, outside_indices, 3);
+    int bounds_refused =
+        eu4_gfx_draw_route_live(&raw, &state, diagnostic, sizeof diagnostic) ==
+            EU4_GFX_DRAW_ROUTE_UNSUPPORTED &&
+        strstr(diagnostic, "past the bound vertex attributes") != NULL;
+
+    int ok = reuse && update_replaced && zero_temp && stale_null && recycled_fresh &&
+             negative_refused && bounds_refused;
+    printf("indexed_resource=%d reuse=%d update=%d recycle=%d negative_refused=%d "
+           "bounds_refused=%d zero_alloc=%d\n",
+           ok, reuse, update_replaced, recycled_fresh, negative_refused,
+           bounds_refused, zero_temp);
+    return ok ? 0 : 1;
+}
+
+typedef struct {
+    uint32_t width;
+    uint32_t height;
+} geometry_publish_args;
+
+static void *publish_transition_thread(void *argument) {
+    geometry_publish_args *args = (geometry_publish_args *)argument;
+    eu4_gfx_publish_geometry_transition(args->width, args->height);
+    return NULL;
+}
+
+static void *publish_physical_thread(void *argument) {
+    geometry_publish_args *args = (geometry_publish_args *)argument;
+    eu4_gfx_publish_physical_geometry(args->width, args->height);
+    return NULL;
+}
+
+static int run_scissor_handoff(void) {
+    /* A partial generic scissor must not survive into the admitted Simple or
+       Sprite pass when they share the encoder. */
+    eu4_gfx_perf_set_enabled(1);
+    boot();
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    uint8_t *master = (uint8_t *)g_master;
+    struct {
+        void *master;
+    } ctx = {g_master};
+
+    void *simple_shader = make_simple_shader();
+    void *sprite_shader = eu4_gfx_create_shader();
+    if (sprite_shader == NULL ||
+        !eu4_gfx_shader_test_compile_identity(sprite_shader,
+                                              EU4_GFX_SHADER_SPRITE_IDENTITY)) {
+        fail("scissor sprite shader");
+    }
+    void *generic_shader = make_generic_bench_shader();
+
+    uint8_t generic_vertices[8 * 32];
+    bench_vertices(generic_vertices);
+    void *generic_vb =
+        eu4_gfx_create_vertex_buffer(NULL, generic_vertices, 8, 32, 0);
+    const uint16_t indices[3] = {0, 1, 2};
+    void *index_header = eu4_gfx_create_index_buffer(NULL, indices, 3);
+    if (generic_vb == NULL || index_header == NULL) {
+        fail("scissor generic geometry");
+    }
+    bench_install_generic(generic_shader, generic_vb, index_header);
+
+    uint8_t quad[96];
+    make_quad(quad);
+    void *simple_vb = eu4_gfx_create_vertex_buffer(NULL, quad, 4, 24, 0);
+    static float sprite_matrix[24];
+    memset(sprite_matrix, 0, sizeof sprite_matrix);
+    sprite_matrix[0] = sprite_matrix[5] = sprite_matrix[10] = sprite_matrix[15] = 1.0f;
+    sprite_matrix[16] = sprite_matrix[17] = sprite_matrix[18] = sprite_matrix[19] = 1.0f;
+    static uint8_t sprite_quad[4 * 20];
+    memset(sprite_quad, 0, sizeof sprite_quad);
+    const float sprite_positions[4][2] = {
+        {-0.5f, -0.5f}, {0.5f, -0.5f}, {-0.5f, 0.5f}, {0.5f, 0.5f}};
+    for (int i = 0; i < 4; i++) {
+        float *v = (float *)(sprite_quad + i * 20);
+        v[0] = sprite_positions[i][0];
+        v[1] = sprite_positions[i][1];
+        v[2] = 0.5f;
+        v[3] = (i == 1 || i == 3) ? 1.0f : 0.0f;
+        v[4] = (i >= 2) ? 1.0f : 0.0f;
+    }
+    void *sprite_vb = eu4_gfx_create_vertex_buffer(NULL, sprite_quad, 4, 20, 0);
+    if (simple_vb == NULL || sprite_vb == NULL) {
+        fail("scissor legacy vertex buffers");
+    }
+
+    uint8_t green_bgr[4 * 4 * 3] = {};
+    uint8_t blue_bgr[4 * 4 * 3] = {};
+    for (int i = 0; i < 4 * 4; i++) {
+        green_bgr[i * 3 + 1] = 0xff;
+        blue_bgr[i * 3 + 0] = 0xff;
+    }
+    uint8_t green_header[0x44], blue_header[0x44];
+    make_texture(4, 4, green_bgr, green_header);
+    make_texture(4, 4, blue_bgr, blue_header);
+
+    const float black[4] = {0.f, 0.f, 0.f, 1.f};
+    eu4_gfx_clear(&ctx, 7, black);
+    eu4_gfx_perf_reset();
+
+    int16_t partial[4] = {0, 0, 32, 32};
+    eu4_gfx_set_scissor_rectangle(&ctx, partial);
+    eu4_gfx_draw_raw raw;
+    memset(&raw, 0, sizeof raw);
+    raw.rdi = (uint64_t)(uintptr_t)&ctx;
+    raw.retaddr = (uint64_t)(uintptr_t)(g_image + kCallerRva);
+    raw.which = 2;
+    raw.rsi = 3;
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("scissor generic draw");
+    }
+
+    int16_t full[4] = {0, 0, 64, 64};
+    eu4_gfx_set_scissor_rectangle(&ctx, full);
+    /* Generic setup disabled culling for synthetic geometry; the legacy passes
+       admit only the engine default raster snapshot. Restore it. */
+    uint32_t raster_back = 0x405, raster_fill = 0x1b02, raster_winding = 0x900;
+    memcpy(master + 0x54, &raster_back, 4);
+    memcpy(master + 0x58, &raster_fill, 4);
+    memcpy(master + 0x5c, &raster_winding, 4);
+    master[0x60] = 0;
+    master[0x61] = 1;
+
+    /* Simple draw: full-target green. */
+    uint8_t simple_constant[0x10];
+    memset(simple_constant, 0, sizeof simple_constant);
+    uint32_t words = 16;
+    memcpy(simple_constant, &words, 4);
+    float simple_matrix[16];
+    fill_matrix(simple_matrix);
+    void *simple_data = simple_matrix;
+    memcpy(simple_constant + 8, &simple_data, sizeof simple_data);
+    install_geometry(simple_shader, simple_vb, simple_constant, green_header);
+    raw.which = 1;
+    raw.rsi = 4;
+    raw.rdx = 0;
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("scissor simple draw");
+    }
+
+    /* Sprite draw: centered blue quad, distinct raster/blend contract. */
+    uint8_t sprite_constant[0x10];
+    memset(sprite_constant, 0, sizeof sprite_constant);
+    uint32_t sprite_words = 24;
+    memcpy(sprite_constant, &sprite_words, 4);
+    void *sprite_data = sprite_matrix;
+    memcpy(sprite_constant + 8, &sprite_data, sizeof sprite_data);
+    install_geometry(sprite_shader, sprite_vb, sprite_constant, blue_header);
+    uint32_t enabled = 1, src = 0x0302, dst = 0x0303, add = 0x8006;
+    uint32_t one = 1, zero = 0, compare = 0x206, mask = 0x01010101;
+    memcpy(master + 0xc, &enabled, 4);
+    memcpy(master + 0x10, &src, 4);
+    memcpy(master + 0x14, &dst, 4);
+    memcpy(master + 0x18, &add, 4);
+    memcpy(master + 0x1c, &one, 4);
+    memcpy(master + 0x20, &zero, 4);
+    memcpy(master + 0x24, &add, 4);
+    memcpy(master + 0x28, &compare, 4);
+    memcpy(master + 0x2c, &mask, 4);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("scissor sprite draw");
+    }
+
+    eu4_gfx_perf_snapshot perf;
+    eu4_gfx_perf_read(&perf);
+    int one_encoder = perf.draws_encoded == 3 &&
+                      perf.render_encoders_created == 1 &&
+                      perf.render_encoders_reused >= 2;
+    size_t length = 0;
+    uint8_t *pixels = read_target(&length);
+    const uint8_t *corner = pixels + ((size_t)63 * kSize + 63) * 4;
+    /* Sprite quad spans 16..48; this pixel is inside it but outside the old
+       partial scissor. */
+    const uint8_t *center = pixels + ((size_t)44 * kSize + 44) * 4;
+    /* Outside the old partial scissor: the Simple pass must have drawn (the
+       stale-scissor failure leaves this pixel at the generic/clear colour). */
+    int corner_green = corner[1] > 200;
+    int center_blue = center[0] > 200 && center[0] > center[2];
+    free(pixels);
+    int ok = one_encoder && corner_green && center_blue;
+    printf("scissor_handoff=%d one_encoder=%d corner_green=%d center_blue=%d "
+           "corner=(%u,%u,%u,%u) center=(%u,%u,%u,%u)\n",
+           ok, one_encoder, corner_green, center_blue,
+           corner[0], corner[1], corner[2], corner[3],
+           center[0], center[1], center[2], center[3]);
+    return ok ? 0 : 1;
+}
+
+static int run_encoder_cleanup(void) {
+    /* A failed generic draw must close the pass it opened and leave earlier
+       encodes in the batch valid for later draws and presentation. */
+    eu4_gfx_perf_set_enabled(1);
+    boot();
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    uint8_t *master = (uint8_t *)g_master;
+    struct {
+        void *master;
+    } ctx = {g_master};
+    void *simple_shader = make_simple_shader();
+    uint8_t quad[96];
+    make_quad(quad);
+    void *simple_vb = eu4_gfx_create_vertex_buffer(NULL, quad, 4, 24, 0);
+    uint8_t green_bgr[4 * 4 * 3] = {}, blue_bgr[4 * 4 * 3] = {};
+    for (int i = 0; i < 4 * 4; i++) {
+        green_bgr[i * 3 + 1] = 0xff;
+        blue_bgr[i * 3 + 0] = 0xff;
+    }
+    uint8_t green_header[0x44], blue_header[0x44];
+    make_texture(4, 4, green_bgr, green_header);
+    make_texture(4, 4, blue_bgr, blue_header);
+    float matrix[16];
+    fill_matrix(matrix);
+    uint8_t constant[0x10];
+    memset(constant, 0, sizeof constant);
+    uint32_t words = 16;
+    memcpy(constant, &words, 4);
+    void *constant_data = matrix;
+    memcpy(constant + 8, &constant_data, sizeof constant_data);
+    install_geometry(simple_shader, simple_vb, constant, green_header);
+    const float black[4] = {0.f, 0.f, 0.f, 1.f};
+    eu4_gfx_clear(&ctx, 7, black);
+    eu4_gfx_draw_raw raw = draw_frame(&ctx);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("cleanup first draw");
+    }
+
+    /* A generic shader whose Metal entry is sprite_vs, but with the synthetic
+       two-attribute layout, reaches the sprite-uniform fallback after the pass
+       has opened. The 16-dword constant slot is insufficient for sprite's 24. */
+    const char *vs_msl =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct VIn { float4 position [[attribute(0)]]; float4 color [[attribute(1)]]; };\n"
+        "struct VOut { float4 position [[position]]; float4 color [[user(locn0)]]; };\n"
+        "vertex VOut sprite_vs(VIn in [[stage_in]]) {\n"
+        "    VOut o; o.position = in.position; o.color = in.color; return o;\n"
+        "}\n";
+    const char *ps_msl =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct VOut { float4 position [[position]]; float4 color [[user(locn0)]]; };\n"
+        "fragment float4 sprite_fs(VOut in [[stage_in]]) { return in.color; }\n";
+    const char *locations = "{\"a_position\":0,\"a_color\":1}";
+    const char *attributes =
+        "[{\"name\":\"a_position\",\"type\":\"float4\"},"
+        "{\"name\":\"a_color\",\"type\":\"float4\"}]";
+    uint32_t elements[8] = {0, 4, 0x1406, 0, 1, 4, 0x1406, 16};
+    void *cleanup_shader = make_generic_custom_shader(
+        vs_msl, ps_msl, "sprite_vs", "sprite_fs", locations, attributes,
+        elements, 2);
+    uint8_t vertices[8 * 32];
+    bench_vertices(vertices);
+    void *bench_vb = eu4_gfx_create_vertex_buffer(NULL, vertices, 8, 32, 0);
+    uint32_t mode = 4, count = 3;
+    memcpy(master + EU4_GFX_MASTER_MODE, &mode, 4);
+    memcpy(master + EU4_GFX_MASTER_COUNT, &count, 4);
+    void *headers[1] = {bench_vb};
+    eu4_gfx_set_vertex_buffers(&ctx, 1, headers, 0, NULL, NULL);
+    eu4_gfx_set_shader(&ctx, cleanup_shader);
+    raw.which = 1;
+    raw.rsi = 3;
+    raw.rdx = 0;
+    char diagnostic[256];
+    eu4_gfx_simple_draw_state state;
+    int refused =
+        eu4_gfx_draw_route_live(&raw, &state, diagnostic, sizeof diagnostic) !=
+        EU4_GFX_DRAW_ROUTE_HANDLED;
+    int diagnostic_ok =
+        strstr(diagnostic, "synthetic stage has no engine uniform block") != NULL;
+    int no_active_encoder = eu4_gfx_batch_render_pass_active() == 0;
+    eu4_gfx_perf_snapshot after_failure;
+    eu4_gfx_perf_read(&after_failure);
+    int preserved_before = after_failure.draws_encoded == 1;
+    int failed = refused && diagnostic_ok && no_active_encoder && preserved_before;
+
+    /* Subsequent successful draw: blue full-target Simple. */
+    install_geometry(simple_shader, simple_vb, constant, blue_header);
+    raw.which = 1;
+    raw.rsi = 4;
+    raw.rdx = 0;
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("cleanup subsequent draw");
+    }
+    eu4_gfx_perf_snapshot perf;
+    eu4_gfx_perf_read(&perf);
+    int preserved = perf.draws_encoded == 2;
+
+    MTLTextureDescriptor *desc =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                           width:kSize height:kSize mipmapped:NO];
+    desc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead |
+                 MTLTextureUsageShaderWrite;
+    desc.storageMode = MTLStorageModeShared;
+    id<MTLTexture> destination = [backend.device newTextureWithDescriptor:desc];
+    if (destination == nil) {
+        fail("cleanup present target");
+    }
+    eu4_gfx_test_set_present_drawable((__bridge void *)destination);
+    int presented = eu4_gfx_present(g_master) == 1 && !g_stopped;
+    uint8_t pixel[4] = {0, 0, 0, 0};
+    [destination getBytes:pixel bytesPerRow:4
+               fromRegion:MTLRegionMake2D(kSize / 2, kSize / 2, 1, 1)
+              mipmapLevel:0];
+    eu4_gfx_test_set_present_drawable(NULL);
+    /* The second Simple draw must dominate; texture alpha leaves a small
+       green contribution because the clear/first draw shared the attachment. */
+    int pixels_ok = pixel[0] > 200 && pixel[0] > pixel[1];
+    int ok = failed && preserved && presented && pixels_ok;
+    printf("encoder_cleanup=%d failed=%d refused=%d diagnostic=%d "
+           "no_encoder=%d preserved_before=%d preserved=%d presented=%d "
+           "pixels=%d rgba=(%u,%u,%u,%u)\n",
+           ok, failed, refused, diagnostic_ok, no_active_encoder,
+           preserved_before, preserved, presented, pixels_ok,
+           pixel[0], pixel[1], pixel[2], pixel[3]);
+    return ok ? 0 : 1;
+}
+
+static int file_contains(const char *dir, const char *needle) {
+    DIR *handle = opendir(dir);
+    if (handle == NULL) {
+        return 0;
+    }
+    int found = 0;
+    struct dirent *entry = NULL;
+    while (!found && (entry = readdir(handle)) != NULL) {
+        if (strncmp(entry->d_name, "elements-", 9) != 0) {
+            continue;
+        }
+        char path[512];
+        snprintf(path, sizeof path, "%s/%s", dir, entry->d_name);
+        FILE *file = fopen(path, "rb");
+        if (file == NULL) {
+            continue;
+        }
+        char text[4096];
+        size_t length = fread(text, 1, sizeof text - 1, file);
+        fclose(file);
+        text[length] = 0;
+        found = strstr(text, needle) != NULL;
+    }
+    closedir(handle);
+    return found;
+}
+
+static int run_element_locations(void) {
+    /* Cached and fallback layouts must preserve nonzero engine attribute
+       locations in the element trace. */
+    eu4_gfx_perf_set_enabled(1);
+    boot();
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    uint8_t *master = (uint8_t *)g_master;
+    struct {
+        void *master;
+    } ctx = {g_master};
+    const char *vs_msl =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct VIn { float4 a [[attribute(0)]]; float4 c [[attribute(2)]];"
+        " float4 d [[attribute(5)]]; };\n"
+        "struct VOut { float4 position [[position]]; float4 color [[user(locn0)]]; };\n"
+        "vertex VOut multi_vs(VIn in [[stage_in]]) {\n"
+        "    VOut o; o.position = in.a; o.color = in.c + in.d; return o;\n"
+        "}\n";
+    const char *ps_msl =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct VOut { float4 position [[position]]; float4 color [[user(locn0)]]; };\n"
+        "fragment float4 multi_fs(VOut in [[stage_in]]) { return in.color; }\n";
+    const char *locations = "{\"a_pos\":0,\"a_col\":2,\"a_aux\":5}";
+    const char *attributes =
+        "[{\"name\":\"a_pos\",\"type\":\"float4\"},"
+        "{\"name\":\"a_col\",\"type\":\"float4\"},"
+        "{\"name\":\"a_aux\",\"type\":\"float4\"}]";
+    uint32_t float_elements[12] = {0, 4, 0x1406, 0, 2, 4, 0x1406, 16,
+                                   5, 4, 0x1406, 32};
+    void *cached_shader = make_generic_custom_shader(
+        vs_msl, ps_msl, "multi_vs", "multi_fs", locations, attributes,
+        float_elements, 3);
+    uint8_t vertices[4 * 48];
+    memset(vertices, 0, sizeof vertices);
+    const float positions[3][2] = {{-1.f, -1.f}, {3.f, -1.f}, {-1.f, 3.f}};
+    for (int i = 0; i < 3; i++) {
+        float *v = (float *)(vertices + i * 48);
+        v[0] = positions[i][0];
+        v[1] = positions[i][1];
+        v[2] = 0.5f;
+        v[3] = 1.f;
+        v[4] = 0.25f;
+        v[5] = 0.25f;
+        v[8] = 0.25f;
+        v[9] = 0.25f;
+    }
+    void *vb = eu4_gfx_create_vertex_buffer(NULL, vertices, 4, 48, 0);
+    uint32_t mode = 4, count = 3;
+    memcpy(master + EU4_GFX_MASTER_MODE, &mode, 4);
+    memcpy(master + EU4_GFX_MASTER_COUNT, &count, 4);
+    void *headers[1] = {vb};
+    eu4_gfx_set_vertex_buffers(&ctx, 1, headers, 0, NULL, NULL);
+    eu4_gfx_set_shader(&ctx, cached_shader);
+    uint8_t *master_ptr = (uint8_t *)g_master;
+    uint32_t element_rect[6] = {kSize, kSize, 0x3f800000u, 0, 0, 0};
+    eu4_gfx_set_viewport(master_ptr, element_rect);
+    uint32_t element_mask = 0x01010101u;
+    memcpy(master_ptr + 0x2c, &element_mask, 4);
+    float color[4] = {0.f, 0.f, 0.f, 1.f};
+    eu4_gfx_clear(&ctx, 7, color);
+    eu4_gfx_perf_reset();
+    setenv("EU4_GFX_ELEMENT_TRACE", "1", 1);
+    eu4_gfx_draw_raw raw = draw_frame(&ctx);
+    raw.which = 1;
+    raw.rsi = 3;
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("element cached draw");
+    }
+    uint32_t cached[8] = {0};
+    int cached_count = eu4_gfx_generic_last_element_count();
+    for (int i = 0; i < cached_count && i < 8; i++) {
+        eu4_gfx_generic_last_element_location(i, &cached[i]);
+    }
+    int cached_ok = cached_count == 3 && cached[0] == 0 && cached[1] == 2 &&
+                    cached[2] == 5;
+    int trace_ok = file_contains(g_event_dir, "\"location\":0") &&
+                   file_contains(g_event_dir, "\"location\":2") &&
+                   file_contains(g_event_dir, "\"location\":5");
+
+    /* Fallback path: integer attribute conversion builds the descriptor in the
+       uncached path; locations must still match. */
+    uint32_t mixed_elements[12] = {0, 4, 0x1402, 0, 2, 4, 0x1406, 16,
+                                   5, 4, 0x1406, 32};
+    void *fallback_shader = make_generic_custom_shader(
+        vs_msl, ps_msl, "multi_vs", "multi_fs", locations, attributes,
+        mixed_elements, 3);
+    eu4_gfx_set_shader(&ctx, fallback_shader);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("element fallback draw");
+    }
+    uint32_t fallback[8] = {0};
+    int fallback_count = eu4_gfx_generic_last_element_count();
+    for (int i = 0; i < fallback_count && i < 8; i++) {
+        eu4_gfx_generic_last_element_location(i, &fallback[i]);
+    }
+    int fallback_ok = fallback_count == 3 && fallback[0] == 0 &&
+                      fallback[1] == 2 && fallback[2] == 5;
+
+    /* Dynamic slot offsets must not create pipeline variants. Warm the
+       cached shader/pipeline, then reset and draw at two offsets. */
+    eu4_gfx_set_shader(&ctx, cached_shader);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("element cached warm draw");
+    }
+    eu4_gfx_perf_reset();
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("element cached offset-0 draw");
+    }
+    uint32_t slot_offset = 16;
+    memcpy(master_ptr + 0x150, &slot_offset, 4);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("element cached offset-16 draw");
+    }
+    slot_offset = 0;
+    memcpy(master_ptr + 0x150, &slot_offset, 4);
+    eu4_gfx_perf_snapshot perf;
+    eu4_gfx_perf_read(&perf);
+    int stable = perf.pipeline_misses == 0 && perf.pipeline_hits >= 2 &&
+                 perf.render_encoders_created == 0;
+    unsetenv("EU4_GFX_ELEMENT_TRACE");
+    int ok = cached_ok && trace_ok && fallback_ok && stable;
+    printf("element_locations=%d cached=%d trace=%d fallback=%d stable=%d "
+           "misses=%llu hits=%llu enc_new=%llu enc_reuse=%llu draws=%llu\n",
+           ok, cached_ok, trace_ok, fallback_ok, stable,
+           (unsigned long long)perf.pipeline_misses,
+           (unsigned long long)perf.pipeline_hits,
+           (unsigned long long)perf.render_encoders_created,
+           (unsigned long long)perf.render_encoders_reused,
+           (unsigned long long)perf.draws_encoded);
+    (void)backend;
+    return ok ? 0 : 1;
+}
+
+static int run_update_drain_failure(const char *kind) {
+    /* The update must stop before mutating storage when the drain fails. */
+    boot();
+    void *simple_shader = make_simple_shader();
+    uint8_t quad[96];
+    make_quad(quad);
+    void *vertex_header = eu4_gfx_create_vertex_buffer(NULL, quad, 4, 24, 0);
+    uint8_t green_bgr[4 * 4 * 3] = {};
+    for (int i = 0; i < 4 * 4; i++) {
+        green_bgr[i * 3 + 1] = 0xff;
+    }
+    uint8_t texture_header[0x44];
+    make_texture(4, 4, green_bgr, texture_header);
+    float matrix[16];
+    fill_matrix(matrix);
+    uint8_t constant[0x10];
+    memset(constant, 0, sizeof constant);
+    uint32_t words = 16;
+    memcpy(constant, &words, 4);
+    void *constant_data = matrix;
+    memcpy(constant + 8, &constant_data, sizeof constant_data);
+    install_geometry(simple_shader, vertex_header, constant, texture_header);
+    struct {
+        void *master;
+    } ctx = {g_master};
+    float black[4] = {0.f, 0.f, 0.f, 1.f};
+    eu4_gfx_clear(&ctx, 7, black);
+    eu4_gfx_draw_raw raw = draw_frame(&ctx);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("update failure draw");
+    }
+    fprintf(stderr, "EVENT_DIR=%s\n", g_event_dir);
+    fflush(stderr);
+    eu4_gfx_test_fail_next_game_drain(1);
+    if (strcmp(kind, "vertex") == 0) {
+        eu4_gfx_update_vertex_buffer(&ctx, vertex_header, quad, 4, 0, 0);
+    } else if (strcmp(kind, "multiple") == 0) {
+        const void *data[1] = {quad};
+        int32_t counts[1] = {4};
+        eu4_gfx_update_vertex_buffer_multiple(&ctx, vertex_header, data, counts, 1);
+    } else {
+        eu4_gfx_update_texture(NULL, green_bgr, 4, 4, 0, texture_header);
+    }
+    printf("update_unexpected_return=1\n");
+    return 1;
+}
+
+static int run_update_success(void) {
+    boot();
+    void *simple_shader = make_simple_shader();
+    uint8_t quad[96];
+    make_quad(quad);
+    void *vertex_header = eu4_gfx_create_vertex_buffer(NULL, quad, 4, 24, 0);
+    uint8_t green_bgr[4 * 4 * 3] = {}, blue_bgr[4 * 4 * 3] = {};
+    for (int i = 0; i < 4 * 4; i++) {
+        green_bgr[i * 3 + 1] = 0xff;
+        blue_bgr[i * 3 + 0] = 0xff;
+    }
+    uint8_t texture_header[0x44];
+    make_texture(4, 4, green_bgr, texture_header);
+    float matrix[16];
+    fill_matrix(matrix);
+    uint8_t constant[0x10];
+    memset(constant, 0, sizeof constant);
+    uint32_t words = 16;
+    memcpy(constant, &words, 4);
+    void *constant_data = matrix;
+    memcpy(constant + 8, &constant_data, sizeof constant_data);
+    install_geometry(simple_shader, vertex_header, constant, texture_header);
+    struct {
+        void *master;
+    } ctx = {g_master};
+    float black[4] = {0.f, 0.f, 0.f, 1.f};
+    eu4_gfx_clear(&ctx, 7, black);
+    eu4_gfx_draw_raw raw = draw_frame(&ctx);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("update success draw 1");
+    }
+    eu4_gfx_update_vertex_buffer(&ctx, vertex_header, quad, 4, 0, 0);
+    install_geometry(simple_shader, vertex_header, constant, texture_header);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("update success draw 2");
+    }
+    size_t length = 0;
+    uint8_t *pixels = read_target(&length);
+    const uint8_t *center = pixels + ((size_t)32 * kSize + 32) * 4;
+    int pixels_ok = center[1] > 200;
+    free(pixels);
+    printf("update_success=%d\n", pixels_ok);
+    (void)blue_bgr;
+    return pixels_ok ? 0 : 1;
+}
+
+static int run_gpu_timing(void) {
+    /* One completion record per committed command buffer, independent of the
+       number of draws sharing it; a reset frame must not inherit late records. */
+    eu4_gfx_perf_set_enabled(1);
+    boot();
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    void *shader = make_simple_shader();
+    uint8_t quad[96];
+    make_quad(quad);
+    void *vertex_header = eu4_gfx_create_vertex_buffer(NULL, quad, 4, 24, 0);
+    uint8_t green_bgr[4 * 4 * 3] = {};
+    for (int i = 0; i < 4 * 4; i++) {
+        green_bgr[i * 3 + 1] = 0xff;
+    }
+    uint8_t texture_header[0x44];
+    make_texture(4, 4, green_bgr, texture_header);
+    float matrix[16];
+    fill_matrix(matrix);
+    uint8_t constant[0x10];
+    memset(constant, 0, sizeof constant);
+    uint32_t words = 16;
+    memcpy(constant, &words, 4);
+    void *constant_data = matrix;
+    memcpy(constant + 8, &constant_data, sizeof constant_data);
+    install_geometry(shader, vertex_header, constant, texture_header);
+    struct {
+        void *master;
+    } ctx = {g_master};
+    const float black[4] = {0.f, 0.f, 0.f, 1.f};
+    MTLTextureDescriptor *desc =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                           width:kSize height:kSize mipmapped:NO];
+    desc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead |
+                 MTLTextureUsageShaderWrite;
+    desc.storageMode = MTLStorageModeShared;
+    id<MTLTexture> destination = [backend.device newTextureWithDescriptor:desc];
+    if (destination == nil) {
+        fail("gpu timing drawable");
+    }
+    eu4_gfx_test_set_present_drawable((__bridge void *)destination);
+
+    int records_ok = 1;
+    uint64_t durations[2] = {0, 0};
+    int counts[2] = {1, 1000};
+    for (int phase = 0; phase < 2; phase++) {
+        eu4_gfx_perf_reset();
+        uint64_t wall_start = bench_now_ns();
+        eu4_gfx_clear(&ctx, 7, black);
+        eu4_gfx_draw_raw timing_draw = draw_frame(&ctx);
+        for (int i = 0; i < counts[phase]; i++) {
+            if (eu4_gfx_draw_capture(&timing_draw) != 1) {
+                fail("gpu timing draw");
+            }
+        }
+        if (eu4_gfx_present(g_master) != 1 || g_stopped) {
+            fail("gpu timing present");
+        }
+        uint64_t wall_ns = bench_now_ns() - wall_start;
+        if (!eu4_gfx_perf_wait_gpu_timing(3000)) {
+            fail("gpu timing completion");
+        }
+        eu4_gfx_perf_snapshot perf;
+        eu4_gfx_perf_read(&perf);
+        durations[phase] = perf.gpu_execution_ns;
+        /* clear + draw batch + present */
+        records_ok = records_ok && perf.gpu_timing_records == 3 &&
+                     perf.gpu_timing_pending == 0 &&
+                     perf.draws_encoded == (uint64_t)counts[phase] &&
+                     perf.gpu_execution_ns < wall_ns;
+    }
+    eu4_gfx_test_set_present_drawable(NULL);
+
+    /* A completion registered before a reset must not contaminate the reset
+       frame. */
+    id<MTLCommandBuffer> stale = [backend.queue commandBuffer];
+    eu4_gfx_perf_reset();
+    eu4_gfx_perf_track_command_buffer((__bridge void *)stale);
+    eu4_gfx_perf_reset();
+    id<MTLBlitCommandEncoder> blit = [stale blitCommandEncoder];
+    [blit endEncoding];
+    [stale commit];
+    [stale waitUntilCompleted];
+    (void)eu4_gfx_perf_wait_gpu_timing(1000);
+    eu4_gfx_perf_snapshot after_stale;
+    eu4_gfx_perf_read(&after_stale);
+    int epoch_isolated = after_stale.gpu_timing_records == 0 &&
+                         after_stale.gpu_execution_ns == 0;
+
+
+    int ok = records_ok && epoch_isolated;
+    printf("gpu_timing=%d records=%d epoch_isolated=%d "
+           "one_draw_ns=%llu thousand_draw_ns=%llu\n",
+           ok, records_ok, epoch_isolated,
+           (unsigned long long)durations[0], (unsigned long long)durations[1]);
+    return ok ? 0 : 1;
+}
+
+static int run_geometry_thread(void) {
+    /* Cocoa publishes geometry from the view thread while the renderer owns an
+       open batch. Publication must only update the snapshot. */
+    eu4_gfx_perf_set_enabled(1);
+    boot();
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    void *shader = make_simple_shader();
+    uint8_t quad[96];
+    make_quad(quad);
+    void *vertex_header = eu4_gfx_create_vertex_buffer(NULL, quad, 4, 24, 0);
+    uint8_t red_bgr[4 * 4 * 3] = {};
+    for (int i = 0; i < 4 * 4; i++) {
+        red_bgr[i * 3 + 2] = 0xff;
+    }
+    uint8_t texture_header[0x44];
+    make_texture(4, 4, red_bgr, texture_header);
+    float matrix[16];
+    fill_matrix(matrix);
+    uint8_t constant[0x10];
+    memset(constant, 0, sizeof constant);
+    uint32_t words = 16;
+    memcpy(constant, &words, 4);
+    void *constant_data = matrix;
+    memcpy(constant + 8, &constant_data, sizeof constant_data);
+    install_geometry(shader, vertex_header, constant, texture_header);
+    struct {
+        void *master;
+    } ctx = {g_master};
+    const float black[4] = {0.f, 0.f, 0.f, 1.f};
+    eu4_gfx_clear(&ctx, 7, black);
+    eu4_gfx_draw_raw raw = draw_frame(&ctx);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("geometry thread draw");
+    }
+    id pending_before = backend.pendingGameCommand;
+    id active_before = backend.activeCommandBuffer;
+    if (active_before == nil || !eu4_gfx_batch_render_pass_active()) {
+        fail("geometry thread batch");
+    }
+    eu4_gfx_perf_snapshot before;
+    eu4_gfx_perf_read(&before);
+    eu4_gfx_physical_geometry_state snapshot_before;
+    if (!eu4_gfx_physical_geometry_snapshot(&snapshot_before)) {
+        fail("geometry snapshot before");
+    }
+
+    geometry_publish_args next = {32, 32};
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, publish_transition_thread, &next) != 0) {
+        fail("geometry publisher thread");
+    }
+    pthread_join(thread, NULL);
+
+    eu4_gfx_perf_snapshot after;
+    eu4_gfx_perf_read(&after);
+    int no_encoder_end = eu4_gfx_batch_render_pass_active() == 1;
+    int no_submit = before.command_buffers_created == after.command_buffers_created &&
+                    before.command_buffers_committed == after.command_buffers_committed &&
+                    before.batch_flushes == after.batch_flushes &&
+                    backend.pendingGameCommand == pending_before &&
+                    backend.activeCommandBuffer == active_before;
+    eu4_gfx_physical_geometry_state transition;
+    int observed_transition = eu4_gfx_physical_geometry_snapshot(&transition) &&
+                              transition.transition_in_progress == 1 &&
+                              transition.width == snapshot_before.width;
+    char diagnostic[256];
+    eu4_gfx_simple_draw_state state;
+    int draw_refused =
+        eu4_gfx_draw_route_live(&raw, &state, diagnostic, sizeof diagnostic) ==
+            EU4_GFX_DRAW_ROUTE_UNSUPPORTED &&
+        strstr(diagnostic, "transition") != NULL;
+
+    geometry_publish_args committed = {32, 32};
+    if (pthread_create(&thread, NULL, publish_physical_thread, &committed) != 0) {
+        fail("geometry physical thread");
+    }
+    pthread_join(thread, NULL);
+    eu4_gfx_physical_geometry_state observed;
+    int observed_epoch = eu4_gfx_physical_geometry_snapshot(&observed) &&
+                         observed.epoch > snapshot_before.epoch &&
+                         observed.transition_in_progress == 0 &&
+                         observed.width == 32 && observed.height == 32;
+    int older_refused =
+        eu4_gfx_draw_route_live(&raw, &state, diagnostic, sizeof diagnostic) ==
+            EU4_GFX_DRAW_ROUTE_UNSUPPORTED &&
+        strstr(diagnostic, "older physical generation") != NULL;
+
+    /* New-generation presentation must not accept the old batch. */
+    MTLTextureDescriptor *desc =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                           width:32 height:32 mipmapped:NO];
+    desc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead |
+                 MTLTextureUsageShaderWrite;
+    desc.storageMode = MTLStorageModeShared;
+    id<MTLTexture> destination = [backend.device newTextureWithDescriptor:desc];
+    if (destination == nil) {
+        fail("geometry present target");
+    }
+    uint32_t sentinel[32 * 32];
+    for (int i = 0; i < 32 * 32; i++) {
+        sentinel[i] = 0x00112233u;
+    }
+    [destination replaceRegion:MTLRegionMake2D(0, 0, 32, 32) mipmapLevel:0
+                    withBytes:sentinel bytesPerRow:32 * 4];
+    eu4_gfx_test_set_present_drawable((__bridge void *)destination);
+    int presented = eu4_gfx_present(g_master);
+    uint32_t first = 0;
+    [destination getBytes:&first bytesPerRow:4
+               fromRegion:MTLRegionMake2D(0, 0, 1, 1) mipmapLevel:0];
+    int stale_present = presented == 1 && first == 0x00112233u &&
+                        !backend.readyForPresent;
+    eu4_gfx_test_set_present_drawable(NULL);
+
+    /* Same-size re-observation: epoch still advances, batch untouched. */
+    eu4_gfx_clear(&ctx, 7, black);
+    uint64_t epoch_before_same = observed.epoch;
+    eu4_gfx_perf_read(&before);
+    void *same_command = eu4_gfx_batch_acquire(
+        g_master, eu4_gfx_geometry_generation(g_master));
+    int created = 0;
+    void *same_encoder = eu4_gfx_batch_encoder(
+        (__bridge void *)backend.gameColorTarget, NULL, NULL, &created);
+    (void)same_encoder;
+    int same_encoder_active = eu4_gfx_batch_render_pass_active() == 1;
+    geometry_publish_args same = {32, 32};
+    pthread_create(&thread, NULL, publish_transition_thread, &same);
+    pthread_join(thread, NULL);
+    pthread_create(&thread, NULL, publish_physical_thread, &same);
+    pthread_join(thread, NULL);
+    eu4_gfx_perf_read(&after);
+    eu4_gfx_physical_geometry_state same_state;
+    int same_size = eu4_gfx_physical_geometry_snapshot(&same_state) &&
+                    same_state.width == 32 && same_state.height == 32 &&
+                    same_state.epoch > epoch_before_same &&
+                    same_encoder_active &&
+                    eu4_gfx_batch_render_pass_active() == 1 &&
+                    before.command_buffers_committed ==
+                        after.command_buffers_committed;
+    (void)same_command;
+
+    eu4_gfx_batch_end_pass();
+    eu4_gfx_batch_draw_failed(0);
+    int ok = no_encoder_end && no_submit && observed_transition && draw_refused &&
+             observed_epoch && older_refused && stale_present && same_size;
+    printf("geometry_thread=%d no_encoder_end=%d no_submit=%d transition=%d "
+           "draw_refused=%d epoch=%d older_refused=%d stale_present=%d "
+           "same_size=%d\n",
+           ok, no_encoder_end, no_submit, observed_transition, draw_refused,
+           observed_epoch, older_refused, stale_present, same_size);
+    return ok ? 0 : 1;
+}
+
+static int run_layout_stability(void) {
+    /* A dynamic slot offset moves to setVertexBuffer:offset:, so it must not
+       create a new vertex layout or pipeline variant. */
+    eu4_gfx_perf_set_enabled(1);
+    boot();
+    void *shader = make_generic_bench_shader();
+    uint8_t vertices[8 * 32];
+    bench_vertices(vertices);
+    void *vertex_header = eu4_gfx_create_vertex_buffer(NULL, vertices, 8, 32, 0);
+    const uint16_t indices[3] = {0, 1, 2};
+    void *index_header = eu4_gfx_create_index_buffer(NULL, indices, 3);
+    if (vertex_header == NULL || index_header == NULL) {
+        fail("layout stability geometry");
+    }
+    bench_install_generic(shader, vertex_header, index_header);
+    uint8_t *master = (uint8_t *)g_master;
+    struct {
+        void *master;
+    } ctx = {g_master};
+    const float black[4] = {0.f, 0.f, 0.f, 1.f};
+    eu4_gfx_clear(&ctx, 7, black);
+    eu4_gfx_draw_raw raw;
+    memset(&raw, 0, sizeof raw);
+    raw.which = 2;
+    raw.rdi = (uint64_t)(uintptr_t)&ctx;
+    raw.rsi = 3;
+    raw.retaddr = (uint64_t)(uintptr_t)(g_image + kCallerRva);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("layout stability warm draw");
+    }
+    eu4_gfx_perf_reset();
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("layout stability first draw");
+    }
+    uint32_t slot_offset = 32;
+    memcpy(master + 0x150, &slot_offset, 4);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("layout stability offset draw");
+    }
+    slot_offset = 0;
+    memcpy(master + 0x150, &slot_offset, 4);
+    eu4_gfx_perf_snapshot perf;
+    eu4_gfx_perf_read(&perf);
+    int stable = perf.draws_encoded == 2 && perf.pipeline_misses == 0 &&
+                 perf.pipeline_hits == 2 && perf.render_encoders_created == 0 &&
+                 perf.render_encoders_reused >= 2;
+    printf("layout_stability=%d misses=%llu hits=%llu encoders=%llu reused=%llu\n",
+           stable, (unsigned long long)perf.pipeline_misses,
+           (unsigned long long)perf.pipeline_hits,
+           (unsigned long long)perf.render_encoders_created,
+           (unsigned long long)perf.render_encoders_reused);
+    return stable ? 0 : 1;
+}
+
+static int run_sampled_multi(void) {
+    /* Two render targets converted in one externally owned command must both
+       resolve to their prepared shadows, and completion identity must survive a
+       superseding conversion and abandonment. */
+    boot();
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil || backend.queue == nil) {
+        fail("sampled multi backend");
+    }
+    uint32_t pattern_a[16], pattern_b[16];
+    for (int i = 0; i < 16; i++) {
+        pattern_a[i] = 0x00000000u | (uint32_t)(i * 0x00010101u);
+        pattern_b[i] = 0x00ffffffu ^ (uint32_t)(i * 0x00030303u);
+    }
+    void *header_a = eu4_gfx_create_render_target_texture(NULL, 4, 4, 11, 0, 0);
+    void *header_b = eu4_gfx_create_render_target_texture(NULL, 4, 4, 11, 0, 0);
+    if (header_a == NULL || header_b == NULL) {
+        fail("sampled multi headers");
+    }
+    id<MTLTexture> source_a =
+        (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(header_a);
+    id<MTLTexture> source_b =
+        (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(header_b);
+    [source_a replaceRegion:MTLRegionMake2D(0, 0, 4, 4) mipmapLevel:0
+                 withBytes:pattern_a bytesPerRow:4 * 4];
+    [source_b replaceRegion:MTLRegionMake2D(0, 0, 4, 4) mipmapLevel:0
+                 withBytes:pattern_b bytesPerRow:4 * 4];
+    if (backend.boundTextures == nil) {
+        backend.boundTextures = [NSMutableArray array];
+    }
+    [backend.boundTextures removeAllObjects];
+    [backend.boundTextures addObject:[NSValue valueWithPointer:header_a]];
+    [backend.boundTextures addObject:[NSValue valueWithPointer:header_b]];
+
+    char reason[256] = "";
+    uint64_t before = eu4_gfx_sampling_conversion_count();
+    id<MTLCommandBuffer> external = [backend.queue commandBuffer];
+    uint64_t token = 0;
+    if (!eu4_gfx_prepare_sampled_textures((__bridge void *)external, &token,
+                                          reason, sizeof reason)) {
+        fail("sampled multi external prepare");
+    }
+    int external_conversions = (int)(eu4_gfx_sampling_conversion_count() - before) == 2;
+    void *shadow_a = eu4_gfx_texture_for_sampling(header_a, token);
+    void *shadow_b = eu4_gfx_texture_for_sampling(header_b, token);
+    int external_bindings = shadow_a != NULL && shadow_b != NULL &&
+                            shadow_a != (__bridge void *)source_a &&
+                            shadow_b != (__bridge void *)source_b &&
+                            shadow_a != shadow_b;
+    [external commit];
+    [external waitUntilCompleted];
+    int external_pixels =
+        shadow_matches((__bridge id<MTLTexture>)shadow_a, backend.queue, pattern_a) &&
+        shadow_matches((__bridge id<MTLTexture>)shadow_b, backend.queue, pattern_b);
+
+    /* Second preparation after one source update: only that target reconverts,
+       and both bindings remain valid. */
+    uint32_t modified_a[16];
+    for (int i = 0; i < 16; i++) {
+        modified_a[i] = pattern_a[(i + 5) % 16];
+    }
+    [source_a replaceRegion:MTLRegionMake2D(0, 0, 4, 4) mipmapLevel:0
+                 withBytes:modified_a bytesPerRow:4 * 4];
+    eu4_gfx_note_render_target_write(header_a);
+    uint64_t before_second = eu4_gfx_sampling_conversion_count();
+    id<MTLCommandBuffer> second = [backend.queue commandBuffer];
+    uint64_t token2 = 0;
+    if (!eu4_gfx_prepare_sampled_textures((__bridge void *)second, &token2,
+                                          reason, sizeof reason)) {
+        fail("sampled multi second prepare");
+    }
+    int second_one = (int)(eu4_gfx_sampling_conversion_count() - before_second) == 1;
+    void *second_a = eu4_gfx_texture_for_sampling(header_a, token2);
+    void *second_b = eu4_gfx_texture_for_sampling(header_b, token2);
+    [second commit];
+    [second waitUntilCompleted];
+    int second_pixels = second_a != NULL && second_b != NULL &&
+                        shadow_matches((__bridge id<MTLTexture>)second_a,
+                                       backend.queue, modified_a) &&
+                        shadow_matches((__bridge id<MTLTexture>)second_b,
+                                       backend.queue, pattern_b);
+
+    /* Superseded conversion: two preparations in one external command. The
+       older completion must not clear the newer pending record. */
+    uint32_t newest_a[16];
+    for (int i = 0; i < 16; i++) {
+        newest_a[i] = pattern_a[(i + 11) % 16];
+    }
+    [source_a replaceRegion:MTLRegionMake2D(0, 0, 4, 4) mipmapLevel:0
+                 withBytes:pattern_b bytesPerRow:4 * 4];
+    eu4_gfx_note_render_target_write(header_a);
+    id<MTLCommandBuffer> superseded = [backend.queue commandBuffer];
+    uint64_t first_token = 0, last_token = 0;
+    if (!eu4_gfx_prepare_sampled_textures((__bridge void *)superseded,
+                                          &first_token, reason, sizeof reason)) {
+        fail("sampled multi supersede 1");
+    }
+    [source_a replaceRegion:MTLRegionMake2D(0, 0, 4, 4) mipmapLevel:0
+                 withBytes:newest_a bytesPerRow:4 * 4];
+    eu4_gfx_note_render_target_write(header_a);
+    if (!eu4_gfx_prepare_sampled_textures((__bridge void *)superseded,
+                                          &last_token, reason, sizeof reason)) {
+        fail("sampled multi supersede 2");
+    }
+    [superseded commit];
+    [superseded waitUntilCompleted];
+    void *newest = eu4_gfx_texture_for_sampling(header_a, last_token);
+    int superseded_ok = newest != NULL &&
+                        shadow_matches((__bridge id<MTLTexture>)newest,
+                                       backend.queue, newest_a);
+
+    /* Abandoned external command: the next preparation must reconvert. */
+    [source_a replaceRegion:MTLRegionMake2D(0, 0, 4, 4) mipmapLevel:0
+                 withBytes:pattern_a bytesPerRow:4 * 4];
+    eu4_gfx_note_render_target_write(header_a);
+    uint64_t before_abandon = eu4_gfx_sampling_conversion_count();
+    id<MTLCommandBuffer> abandoned = [backend.queue commandBuffer];
+    uint64_t abandoned_token = 0;
+    if (!eu4_gfx_prepare_sampled_textures((__bridge void *)abandoned,
+                                          &abandoned_token, reason,
+                                          sizeof reason)) {
+        fail("sampled multi abandoned prepare");
+    }
+    eu4_gfx_sampling_abandon_command((__bridge void *)abandoned);
+    id<MTLCommandBuffer> recovery = [backend.queue commandBuffer];
+    uint64_t recovery_token = 0;
+    if (!eu4_gfx_prepare_sampled_textures((__bridge void *)recovery,
+                                          &recovery_token, reason,
+                                          sizeof reason)) {
+        fail("sampled multi recovery prepare");
+    }
+    int abandoned_ok =
+        (int)(eu4_gfx_sampling_conversion_count() - before_abandon) == 2 &&
+        recovery_token != abandoned_token;
+    [recovery commit];
+    [recovery waitUntilCompleted];
+    void *recovered = eu4_gfx_texture_for_sampling(header_a, recovery_token);
+    abandoned_ok = abandoned_ok && recovered != NULL &&
+                   shadow_matches((__bridge id<MTLTexture>)recovered,
+                                  backend.queue, pattern_a);
+
+    /* Repeated sampling in the active batch reuses both conversions. */
+    eu4_gfx_note_render_target_write(header_a);
+    eu4_gfx_note_render_target_write(header_b);
+    uint64_t before_active = eu4_gfx_sampling_conversion_count();
+    void *active = eu4_gfx_batch_acquire(
+        g_master, eu4_gfx_geometry_generation(g_master));
+    uint64_t active_token1 = 0, active_token2 = 0;
+    if (active == NULL ||
+        !eu4_gfx_prepare_sampled_textures(active, &active_token1, reason,
+                                          sizeof reason) ||
+        !eu4_gfx_prepare_sampled_textures(active, &active_token2, reason,
+                                          sizeof reason)) {
+        fail("sampled multi active prepare");
+    }
+    int active_ok =
+        (int)(eu4_gfx_sampling_conversion_count() - before_active) == 2 &&
+        active_token1 == active_token2 &&
+        eu4_gfx_texture_for_sampling(header_a, active_token1) != NULL &&
+        eu4_gfx_texture_for_sampling(header_b, active_token1) != NULL;
+    eu4_gfx_batch_draw_failed(0);
+
+    int ok = external_conversions && external_bindings && external_pixels &&
+             second_one && second_pixels && superseded_ok && abandoned_ok &&
+             active_ok;
+    printf("sampled_multi=%d external=%d bindings=%d pixels=%d second=%d "
+           "superseded=%d abandoned=%d active=%d\n",
+           ok, external_conversions, external_bindings, external_pixels,
+           second_one && second_pixels, superseded_ok, abandoned_ok, active_ok);
+    return ok ? 0 : 1;
+}
+
+static int run_sampled_batch(void) {
+    /* Same command buffer samples one unchanged render target twice; the
+       conversion is encoded once and both draws can bind the shadow. Dropping
+       the command must invalidate it so the next batch reconverts. */
+    boot();
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil || backend.queue == nil) {
+        fail("sampled batch backend");
+    }
+    uint32_t pattern[16];
+    for (int i = 0; i < 16; i++) {
+        pattern[i] = 0x00000000u | (uint32_t)(i * 0x00110000u);
+    }
+    void *header = eu4_gfx_create_render_target_texture(NULL, 4, 4, 11, 0, 0);
+    if (header == NULL) {
+        fail("sampled batch header");
+    }
+    id<MTLTexture> target =
+        (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(header);
+    [target replaceRegion:MTLRegionMake2D(0, 0, 4, 4) mipmapLevel:0
+                withBytes:pattern bytesPerRow:4 * 4];
+    if (backend.boundTextures == nil) {
+        backend.boundTextures = [NSMutableArray array];
+    }
+    [backend.boundTextures removeAllObjects];
+    [backend.boundTextures addObject:[NSValue valueWithPointer:header]];
+
+    uint64_t before = eu4_gfx_sampling_conversion_count();
+    uint64_t generation = eu4_gfx_geometry_generation(g_master);
+    void *command = eu4_gfx_batch_acquire(g_master, generation);
+    if (command == NULL) {
+        fail("sampled batch command");
+    }
+    char reason[256] = "";
+    uint64_t token1 = 0, token2 = 0;
+    if (!eu4_gfx_prepare_sampled_textures(command, &token1, reason, sizeof reason) ||
+        !eu4_gfx_prepare_sampled_textures(command, &token2, reason, sizeof reason)) {
+        fail("sampled batch prepare");
+    }
+    uint64_t reused = eu4_gfx_sampling_conversion_count() - before;
+    void *shadow1 = eu4_gfx_texture_for_sampling(header, token1);
+    void *shadow2 = eu4_gfx_texture_for_sampling(header, token2);
+    int shadow_ok = shadow1 != NULL && shadow1 != (__bridge void *)target &&
+                    shadow1 == shadow2;
+
+    eu4_gfx_batch_draw_failed(0); /* drop the unsubmitted command */
+    void *next_command = eu4_gfx_batch_acquire(g_master, generation);
+    uint64_t token3 = 0;
+    if (next_command == NULL ||
+        !eu4_gfx_prepare_sampled_textures(next_command, &token3, reason,
+                                          sizeof reason)) {
+        fail("sampled batch reconvert");
+    }
+    uint64_t total = eu4_gfx_sampling_conversion_count() - before;
+    int reconverted = total == 2 && token3 != token1;
+
+    int ok = reused == 1 && shadow_ok && reconverted;
+    printf("sampled_batch=%d reused=%llu shadow=%d reconverted=%d\n", ok,
+           (unsigned long long)reused, shadow_ok, reconverted);
+    return ok ? 0 : 1;
+}
+
+static int run_blend_order(void) {
+    /* Two overlapping transparent primitives with distinct blend states in one
+       render pass. The exact pixel proves draw order and accumulation, and the
+       encoder counters prove they shared a pass. */
+    eu4_gfx_perf_set_enabled(1);
+    boot();
+    void *shader = make_generic_bench_shader();
+    uint8_t vertices[8 * 32];
+    bench_vertices_blend(vertices);
+    void *vertex_header = eu4_gfx_create_vertex_buffer(NULL, vertices, 8, 32, 0);
+    const uint16_t indices[3] = {0, 1, 2};
+    void *index_header = eu4_gfx_create_index_buffer(NULL, indices, 3);
+    if (vertex_header == NULL || index_header == NULL) {
+        fail("blend geometry");
+    }
+    bench_install_generic(shader, vertex_header, index_header);
+    uint8_t *master = (uint8_t *)g_master;
+    struct {
+        void *master;
+    } ctx = {g_master};
+    const float black[4] = {0.f, 0.f, 0.f, 1.f};
+
+    eu4_gfx_perf_reset();
+    eu4_gfx_clear(&ctx, 7, black);
+    eu4_gfx_draw_raw raw;
+    memset(&raw, 0, sizeof raw);
+    raw.which = 2;
+    raw.rdi = (uint64_t)(uintptr_t)&ctx;
+    raw.rsi = 3;
+    raw.retaddr = (uint64_t)(uintptr_t)(g_image + kCallerRva);
+
+    /* Opaque red first. */
+    raw.rcx = 0;
+    memcpy(master + 0xc, (uint32_t[]){0}, 4);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("blend draw 1");
+    }
+    /* Alpha green second: SRC_ALPHA / ONE_MINUS_SRC_ALPHA. */
+    raw.rcx = 4;
+    uint32_t enabled = 1, src = 0x302, dst = 0x303, add = 0x8006;
+    memcpy(master + 0xc, &enabled, 4);
+    memcpy(master + 0x10, &src, 4);
+    memcpy(master + 0x14, &dst, 4);
+    memcpy(master + 0x18, &add, 4);
+    memcpy(master + 0x1c, &src, 4);
+    memcpy(master + 0x20, &dst, 4);
+    memcpy(master + 0x24, &add, 4);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("blend draw 2");
+    }
+    eu4_gfx_perf_snapshot perf;
+    eu4_gfx_perf_read(&perf);
+    int one_pass = perf.render_encoders_created == 1 &&
+                   perf.render_encoders_reused >= 1 &&
+                   perf.draws_encoded == 2;
+
+    size_t length = 0;
+    uint8_t *pixels = read_target(&length);
+    const uint8_t *pixel = pixels + ((size_t)32 * kSize + 32) * 4;
+    int accumulation = abs((int)pixel[2] - 128) <= 8 &&
+                       abs((int)pixel[1] - 128) <= 8 && pixel[0] <= 8;
+    free(pixels);
+    /* Reversing the order would leave opaque red; a missing second draw would
+       leave opaque red as well. */
+    int order = accumulation;
+
+    /* Clear between draws must split the pass and discard the first draw. */
+    eu4_gfx_perf_reset();
+    eu4_gfx_clear(&ctx, 7, black);
+    raw.rcx = 0;
+    memcpy(master + 0xc, (uint32_t[]){0}, 4);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("blend clear draw 1");
+    }
+    eu4_gfx_clear(&ctx, 7, black);
+    raw.rcx = 4;
+    memcpy(master + 0xc, &enabled, 4);
+    memcpy(master + 0x10, &src, 4);
+    memcpy(master + 0x14, &dst, 4);
+    memcpy(master + 0x18, &add, 4);
+    memcpy(master + 0x1c, &src, 4);
+    memcpy(master + 0x20, &dst, 4);
+    memcpy(master + 0x24, &add, 4);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("blend clear draw 2");
+    }
+    pixels = read_target(&length);
+    pixel = pixels + ((size_t)32 * kSize + 32) * 4;
+    int clear_split = pixel[2] <= 8 && abs((int)pixel[1] - 128) <= 8;
+    free(pixels);
+
+    int ok = one_pass && order && clear_split;
+    printf("blend_order=%d one_pass=%d order=%d clear_split=%d\n",
+           ok, one_pass, order, clear_split);
+    return ok ? 0 : 1;
+}
+
+static int run_batch_sequences(void) {
+    /* Ordering/ownership sequences required by the shared-command-buffer
+       design: a refused draw must not discard earlier encodes, an independent
+       target change must flush, and a homogeneous stream must submit once. */
+    eu4_gfx_perf_set_enabled(1);
+    boot();
+    void *shader = make_generic_bench_shader();
+    uint8_t vertices[8 * 32];
+    bench_vertices(vertices);
+    void *vertex_header = eu4_gfx_create_vertex_buffer(NULL, vertices, 8, 32, 0);
+    const uint16_t indices[3] = {0, 1, 2};
+    void *index_header = eu4_gfx_create_index_buffer(NULL, indices, 3);
+    if (vertex_header == NULL || index_header == NULL) {
+        fail("batch geometry");
+    }
+    bench_install_generic(shader, vertex_header, index_header);
+    struct {
+        void *master;
+    } ctx = {g_master};
+    const float black[4] = {0.f, 0.f, 0.f, 1.f};
+    eu4_gfx_draw_raw raw;
+    memset(&raw, 0, sizeof raw);
+    raw.which = 2;
+    raw.rdi = (uint64_t)(uintptr_t)&ctx;
+    raw.rsi = 3;
+    raw.retaddr = (uint64_t)(uintptr_t)(g_image + kCallerRva);
+
+    eu4_gfx_perf_reset();
+    eu4_gfx_clear(&ctx, 7, black);
+    if (eu4_gfx_draw_capture(&raw) != 1 || eu4_gfx_draw_capture(&raw) != 1) {
+        fail("batch preserved draws");
+    }
+    /* Refusal after two successful encodes: the out-of-range index fails after
+       the batch was acquired. Earlier work must still be presented. */
+    const uint16_t outside[3] = {100, 101, 102};
+    eu4_gfx_update_index_buffer(NULL, index_header, outside, 3);
+    char diagnostic[256];
+    eu4_gfx_simple_draw_state state;
+    int refused =
+        eu4_gfx_draw_route_live(&raw, &state, diagnostic, sizeof diagnostic) ==
+        EU4_GFX_DRAW_ROUTE_UNSUPPORTED;
+    eu4_gfx_perf_snapshot perf;
+    eu4_gfx_perf_read(&perf);
+    int preserved_draws = perf.draws_encoded == 2;
+    size_t length = 0;
+    uint8_t *pixels = read_target(&length);
+    int preserved_pixels = pixels[((size_t)32 * kSize + 32) * 4 + 2] > 200;
+    free(pixels);
+
+    /* Independent target selection between draws flushes the active batch. */
+    eu4_gfx_update_index_buffer(NULL, index_header, indices, 3);
+    eu4_gfx_clear(&ctx, 7, black);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("batch target draw 1");
+    }
+    eu4_gfx_set_render_target(&ctx, NULL);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("batch target draw 2");
+    }
+    pixels = read_target(&length);
+    int target_switch = pixels[((size_t)32 * kSize + 32) * 4 + 2] > 200;
+    free(pixels);
+
+    /* In-place vertex-buffer update between draws: the batch flushes and
+       waits before the shared storage is overwritten. */
+    eu4_gfx_perf_reset();
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("batch update draw 1");
+    }
+    eu4_gfx_update_vertex_buffer(&ctx, vertex_header, vertices, 8, 0, 0);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("batch update draw 2");
+    }
+    pixels = read_target(&length);
+    int resource_update = pixels[((size_t)32 * kSize + 32) * 4 + 2] > 200;
+    free(pixels);
+    eu4_gfx_perf_read(&perf);
+    resource_update = resource_update && perf.draws_encoded == 2 &&
+                      perf.batch_flushes >= 1;
+
+    /* Homogeneous stream: one draw-stream command buffer, plus clear/present. */
+    eu4_gfx_perf_reset();
+    eu4_gfx_clear(&ctx, 7, black);
+    for (int i = 0; i < 1000; i++) {
+        if (eu4_gfx_draw_capture(&raw) != 1) {
+            fail("batch homogeneous draw");
+        }
+    }
+    MTLTextureDescriptor *desc =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                           width:kSize
+                                                          height:kSize
+                                                       mipmapped:NO];
+    desc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead |
+                 MTLTextureUsageShaderWrite;
+    desc.storageMode = MTLStorageModeShared;
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    id<MTLTexture> present_target = [backend.device newTextureWithDescriptor:desc];
+    if (present_target == nil) {
+        fail("batch present target");
+    }
+    eu4_gfx_test_set_present_drawable((__bridge void *)present_target);
+    if (eu4_gfx_present(g_master) != 1 || g_stopped) {
+        fail("batch present");
+    }
+    eu4_gfx_perf_read(&perf);
+    int one_submission = perf.command_buffers_created <= 4 &&
+                         perf.draws_encoded == 1000;
+    int flushes = perf.batch_flushes >= 1;
+
+    /* Shutdown with an encoded but unsubmitted draw. */
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("batch shutdown draw");
+    }
+    eu4_gfx_shutdown(g_master);
+    int shutdown_ok = !g_stopped;
+    g_master = NULL;
+
+    int ok = refused && preserved_draws && preserved_pixels && target_switch &&
+             resource_update && one_submission && flushes && shutdown_ok;
+    printf("batch_sequences=%d refused=%d preserved_draws=%d preserved_pixels=%d "
+           "target_switch=%d resource_update=%d one_submission=%d flushes=%d "
+           "shutdown=%d command_buffers=%llu\n",
+           ok, refused, preserved_draws, preserved_pixels, target_switch,
+           resource_update, one_submission, flushes, shutdown_ok,
+           (unsigned long long)perf.command_buffers_created);
+    return ok ? 0 : 1;
+}
+
 int main(int argc, char **argv) {
+    if (argc >= 2 && strcmp(argv[1], "--batch-sequences") == 0) {
+        return run_batch_sequences();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--blend-order") == 0) {
+        return run_blend_order();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--sampled-batch") == 0) {
+        return run_sampled_batch();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--sampled-multi") == 0) {
+        return run_sampled_multi();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--layout-stability") == 0) {
+        return run_layout_stability();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--geometry-thread") == 0) {
+        return run_geometry_thread();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--gpu-timing") == 0) {
+        return run_gpu_timing();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--encoder-cleanup") == 0) {
+        return run_encoder_cleanup();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--element-locations") == 0) {
+        return run_element_locations();
+    }
+    if (argc >= 3 && strcmp(argv[1], "--update-drain-failure") == 0) {
+        return run_update_drain_failure(argv[2]);
+    }
+    if (argc >= 2 && strcmp(argv[1], "--update-success") == 0) {
+        return run_update_success();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--scissor-handoff") == 0) {
+        return run_scissor_handoff();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--indexed-resource") == 0) {
+        return run_indexed_resource();
+    }
+    if (argc >= 5 && strcmp(argv[1], "--bench") == 0) {
+        return run_benchmark(argv[2], atoi(argv[3]), atoi(argv[4]));
+    }
     if (argc >= 2 && strcmp(argv[1], "--target-clear") == 0) {
         return run_target_clear();
     }
@@ -2254,8 +4147,8 @@ int main(int argc, char **argv) {
     if (vertex_header == NULL) {
         fail("vertex buffer");
     }
-    uint8_t red_bgr[4 * 4 * 3];
-    uint8_t green_bgr[4 * 4 * 3];
+    uint8_t red_bgr[4 * 4 * 3] = {};
+    uint8_t green_bgr[4 * 4 * 3] = {};
     for (int i = 0; i < 4 * 4; i++) {
         red_bgr[i * 3 + 0] = 0;
         red_bgr[i * 3 + 1] = 0;

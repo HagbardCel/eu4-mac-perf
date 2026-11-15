@@ -46,7 +46,18 @@
    valid dictionary, while abandonment leaves it invalid for the next one. */
 @property (nonatomic, strong) NSMutableDictionary *sampledRenderTargetPendingTokens;
 @property (nonatomic, strong) NSMutableDictionary *sampledRenderTargetPendingGenerations;
+/* Command buffer that carries each pending conversion. Conversions already
+   encoded into the active command buffer are reused by later draws sampling
+   the same unchanged target. */
+@property (nonatomic, strong) NSMutableDictionary *sampledRenderTargetPendingCommands;
+/* Preparation identity authorizing every shadow encoded for one command. */
+@property (nonatomic, strong) NSMutableDictionary *sampledRenderTargetPendingPreparations;
+@property (nonatomic, strong) NSMutableDictionary *sampledRenderTargetPendingSerials;
 @property (nonatomic) uint64_t samplingPreparationToken;
+/* Per-conversion identity used only by completion handlers. A newer conversion
+   for the same header can supersede an older handler without being cleared by
+   it. */
+@property (nonatomic) uint64_t samplingConversionToken;
 @property (nonatomic, strong) NSMutableDictionary *renderTargetGenerations;
 @property (nonatomic) uint64_t renderTargetEpoch;
 @property (nonatomic, strong) id gameDepthTarget;
@@ -115,6 +126,23 @@ extern uint64_t eu4_gfx_live_clear_sequence;
 @property (nonatomic) BOOL gameContentsKnown;
 @property (nonatomic) BOOL readyForPresent;
 @property (nonatomic, strong) id pendingGameCommand;
+/* 1 when pendingGameCommand is a clear. A draw batch committed after a clear
+   leaves this false, so a following clear is ordered after the draws instead of
+   being rejected as an ordinary second clear. */
+@property (nonatomic) BOOL pendingGameIsClear;
+/* Active draw batch: work encoded into a shared command buffer but not yet
+   submitted. pendingGameCommand remains the last *submitted* command. */
+@property (nonatomic, strong) id activeCommandBuffer;
+@property (nonatomic) uint64_t activeCommandGeneration;
+@property (nonatomic) uint32_t activeCommandOps;
+/* Monotonic identity of the active command buffer. Pointer identity alone is
+   unsafe: an abandoned command can release its address to a later submission. */
+@property (nonatomic) uint64_t activeCommandSerial;
+/* Active render pass, shared by compatible consecutive draws. */
+@property (nonatomic, strong) id activeRenderEncoder;
+@property (nonatomic, strong) id activeRenderColor;
+@property (nonatomic, strong) id activeRenderDepth;
+@property (nonatomic) uint32_t activeRenderSamples;
 @property (nonatomic) BOOL poisoned;
 /* Pending GL scissor box, fixed at the call. Signed. Not a Metal rectangle. */
 @property (nonatomic) BOOL scissorValid;
@@ -386,6 +414,32 @@ eu4_gfx_clear_status eu4_gfx_read_game_target(void *master, void *dest, size_t c
 /* Wait for the pending game clear. On OK sets gameContentsKnown and
    readyForPresent only when the pending generation is still current. */
 eu4_gfx_clear_status eu4_gfx_complete_game(void *master, int *command_status);
+
+/* Draw batching. The active batch owns one command buffer for a contiguous run
+   of compatible draws. Callers must flush it before submitting independent
+   queue work, mutating in-flight resources, switching generations or waiting.
+   EU4_GFX_BATCH_DRAWS=0 restores the one-command-buffer-per-draw A/B mode. */
+void *eu4_gfx_batch_acquire(const void *master, uint64_t generation);
+void eu4_gfx_batch_draw_encoded(const void *master, uint64_t generation);
+/* Keep earlier valid encodes for an ordinary refusal; for an unrecoverable
+   encoding failure, drop the uncommitted work and poison the backend. */
+void eu4_gfx_batch_draw_failed(int fatal);
+int eu4_gfx_batch_active(void);
+/* Commit the active batch. drain also waits for the last submitted command. */
+eu4_gfx_clear_status eu4_gfx_batch_flush(void *master, int reason, int drain);
+
+/* Returns a render encoder compatible with (color, depth, clear) or opens a new
+   pass after closing the previous one. created is 1 for a new encoder and 0
+   for a shared one. clear_color non-null always starts a new pass. */
+void *eu4_gfx_batch_encoder(void *color, void *depth, const float *clear_color,
+                            int *created);
+/* Ends the active render pass, if any. Safe to call between passes. */
+void eu4_gfx_batch_end_pass(void);
+int eu4_gfx_batch_render_pass_active(void);
+/* 1 when command is the backend's active (unsubmitted) command buffer. */
+int eu4_gfx_batch_owns_command(void *command);
+/* Identity of the active command buffer; 0 when none is active. */
+uint64_t eu4_gfx_batch_command_serial(void);
 
 /* Drains the pending game submission (diagnostic readbacks only). */
 void eu4_gfx_drain_pending(void);

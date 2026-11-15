@@ -96,6 +96,11 @@ int eu4_gfx_prepare_sampled_textures(void *command_buffer,
                                      uint64_t *preparation_token, char *reason,
                                      size_t capacity);
 
+/* Drops pending conversion records belonging to an abandoned command buffer so
+   a later draw reconverts instead of reusing a shadow whose GPU work will never
+   complete. */
+void eu4_gfx_sampling_abandon_command(void *command_buffer);
+
 /* Borrowed MTLTexture for the engine header bound to unit 0 by the replacement
    _GfxSetTextures. A header substituted for a null entry (master+0x98) resolves
    to backend.fallback; unknown headers return NULL. */
@@ -142,6 +147,19 @@ void eu4_gfx_set_textures(void *handle, unsigned count, void *textures, unsigned
 
 #ifdef __cplusplus
 }
+#endif
+
+#ifndef EU4_GFX_TEXTURE_IMPLEMENTATION
+/* Lifecycle hosts that link eu4_gfx_init.mm without the texture module still
+   need these two hooks. The real implementation overrides them when linked. */
+#if defined(__GNUC__)
+__attribute__((weak)) void eu4_gfx_note_render_target_write(void *header) {
+    (void)header;
+}
+__attribute__((weak)) void eu4_gfx_sampling_abandon_command(void *command_buffer) {
+    (void)command_buffer;
+}
+#endif
 #endif
 
 #endif

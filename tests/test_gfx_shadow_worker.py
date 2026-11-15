@@ -84,7 +84,9 @@ class ShadowWorkerTests(unittest.TestCase):
         self.assertEqual(state["height"], 600)
         self.assertEqual(state["source"], 9)
         self.assertEqual(state["primitive"], 4)
-        self.assertEqual(state["texture_lod"], 0)
+        # The authentic GL context advertises GL_ARB_shader_texture_lod;
+        # the M6 backend reports it (analysis/m6/campaign-record.md).
+        self.assertEqual(state["texture_lod"], 1)
         self.assertEqual(state["dirty"], 0)
         self.assertEqual(state["viewport"], [0, 0, 0, 0, 0, 0])
         self.assertIn(state["max_texture"], (8192, 16384))

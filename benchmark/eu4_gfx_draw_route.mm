@@ -8,6 +8,7 @@
 #import "eu4_gfx_checkpoint.h"
 #import "eu4_gfx_init.h"
 #import "eu4_gfx_logical_capture.h"
+#import "eu4_gfx_perf.h"
 #import "eu4_metal_events.h"
 
 #import <Metal/Metal.h>
@@ -96,6 +97,10 @@ static eu4_gfx_draw_route_result refuse(eu4_gfx_draw_route_result result, char *
     if (diagnostic != NULL && capacity > 0) {
         snprintf(diagnostic, capacity, "%s", text);
     }
+    /* Keep earlier valid encodes for an ordinary refusal. An exception may
+       have left an encoder open, so drop the uncommitted batch and fail closed
+       rather than submitting invalid work. */
+    eu4_gfx_batch_draw_failed(text != NULL && strstr(text, "exception") != NULL);
     record_refusal(result, text);
     return result;
 }
@@ -203,8 +208,11 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
            sampling shadow for it is stale after this submission. */
         eu4_gfx_note_render_target_write(backend.currentTargetHeader);
     }
-    id<MTLCommandBuffer> command = [backend.queue commandBuffer];
+    uint64_t encode_start = eu4_gfx_perf_encode_begin();
+    id<MTLCommandBuffer> command = (__bridge id<MTLCommandBuffer>)
+        eu4_gfx_batch_acquire(master, generation);
     if (command == nil) {
+        eu4_gfx_perf_encode_end(encode_start);
         return refuse(EU4_GFX_DRAW_ROUTE_FAILED, diagnostic, capacity,
                       "backend queue refused a command buffer");
     }
@@ -308,13 +316,16 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
                           text[0] != 0 ? text : "draw encoder refused the draw");
         }
     }
-    [command commit];
-    /* pendingGameCommand now owns the last game submission. It is still one
-       in-order queue: clear, every draw and the present blit are serialized by
-       Metal. Present drains this last command; completion of the last command
-       implies completion of every earlier one on the queue. */
-    backend.pendingGameCommand = command;
-    backend.pendingGameGeneration = generation;
+    eu4_gfx_perf_encode_end(encode_start);
+    eu4_gfx_perf_draw_encoded(
+        generic_ready && !legacy_preferred
+            ? 0
+            : (identity != NULL && strstr(identity, "sprite") != NULL ? 2 : 1));
+    /* The draw joins the backend's active batch. Submission happens on the
+       next flush (present, clear, resolve, readback, resource mutation or
+       generation change), so the last *submitted* command stays distinct from
+       work that is only encoded. */
+    eu4_gfx_batch_draw_encoded(master, generation);
     backend.gameContentsKnown = NO;
     backend.readyForPresent = NO;
     /* The diagnostic post-draw readback runs only after the normal post-submit

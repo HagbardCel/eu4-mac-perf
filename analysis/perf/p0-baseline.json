@@ -1,0 +1,140 @@
+{
+  "kinds": {
+    "indexed": {
+      "summary": {
+        "counters": {
+          "batch_flushes": {
+            "median": 0.0
+          },
+          "command_buffers_created": {
+            "median": 1002.0
+          },
+          "draws_encoded": {
+            "median": 1000.0
+          },
+          "index_temp_allocs": {
+            "median": 1000.0
+          },
+          "index_temp_bytes": {
+            "median": 6000.0
+          },
+          "render_encoders_created": {
+            "median": 1000.0
+          }
+        },
+        "cpu_encode_ns": {
+          "median": 17625180.5,
+          "p95": 19531228,
+          "per_draw_median": 17625.1805
+        },
+        "draws": 1000,
+        "frames": 30,
+        "gpu_execution_ns": {
+          "median": null,
+          "p95": null,
+          "unavailable": true
+        },
+        "kind": "indexed",
+        "samples": 30,
+        "wall_ns": {
+          "median": 30854229.0,
+          "p95": 33278459
+        }
+      }
+    },
+    "mixed": {
+      "summary": {
+        "counters": {
+          "batch_flushes": {
+            "median": 0.0
+          },
+          "command_buffers_created": {
+            "median": 1002.0
+          },
+          "draws_encoded": {
+            "median": 1000.0
+          },
+          "index_temp_allocs": {
+            "median": 1000.0
+          },
+          "index_temp_bytes": {
+            "median": 6000.0
+          },
+          "render_encoders_created": {
+            "median": 1000.0
+          }
+        },
+        "cpu_encode_ns": {
+          "median": 17360422.0,
+          "p95": 19701015,
+          "per_draw_median": 17360.422
+        },
+        "draws": 1000,
+        "frames": 30,
+        "gpu_execution_ns": {
+          "median": null,
+          "p95": null,
+          "unavailable": true
+        },
+        "kind": "mixed",
+        "samples": 30,
+        "wall_ns": {
+          "median": 30684541.5,
+          "p95": 33775833
+        }
+      }
+    },
+    "simple": {
+      "summary": {
+        "counters": {
+          "batch_flushes": {
+            "median": 0.0
+          },
+          "command_buffers_created": {
+            "median": 1002.0
+          },
+          "draws_encoded": {
+            "median": 1000.0
+          },
+          "index_temp_allocs": {
+            "median": 0.0
+          },
+          "index_temp_bytes": {
+            "median": 0.0
+          },
+          "render_encoders_created": {
+            "median": 1000.0
+          }
+        },
+        "cpu_encode_ns": {
+          "median": 7829972.5,
+          "p95": 8389426,
+          "per_draw_median": 7829.9725
+        },
+        "draws": 1000,
+        "frames": 30,
+        "gpu_execution_ns": {
+          "median": null,
+          "p95": null,
+          "unavailable": true
+        },
+        "kind": "simple",
+        "samples": 30,
+        "wall_ns": {
+          "median": 21926937.5,
+          "p95": 23168750
+        }
+      }
+    }
+  },
+  "provenance": {
+    "commit": "db69a62",
+    "note": "P0 code rebuilt in a temporary worktree; measured without the Metal debug layer. GPU timing unavailable under the old per-draw instrumentation."
+  },
+  "schema": "gfx-bench/v1",
+  "workload": {
+    "draws_per_frame": 1000,
+    "measured_frames": 30,
+    "warmup_frames": 3
+  }
+}

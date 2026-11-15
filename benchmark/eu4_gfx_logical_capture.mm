@@ -2,6 +2,7 @@
 
 #import "eu4_gfx_draw_encode.h"
 #import "eu4_gfx_init.h"
+#import "eu4_gfx_perf.h"
 
 #import <CommonCrypto/CommonDigest.h>
 #import <Metal/Metal.h>
@@ -410,6 +411,11 @@ int eu4_gfx_logical_capture_from_env(
     const eu4_gfx_simple_draw_state *state, uint64_t caller_rva) {
     const char *enabled = getenv("EU4_GFX_LOGICAL_CAPTURE");
     const char *dir = getenv("EU4_GFX_CHECKPOINT_DIR");
+    if (enabled != NULL && enabled[0] != 0) {
+        /* Diagnostic capture submits and waits on its own command buffers, so
+           the active draw batch must be submitted first. */
+        (void)eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_DIAGNOSTIC, 0);
+    }
     if (enabled == NULL || enabled[0] == 0 ||
         (strcmp(enabled, "1") != 0 && strcmp(enabled, "prefix") != 0)) {
         return 0;

@@ -1,5 +1,6 @@
 #import "eu4_gfx_buffers.h"
 #import "eu4_gfx_init.h"
+#import "eu4_gfx_perf.h"
 #import "eu4_metal_events.h"
 
 #import <Metal/Metal.h>
@@ -58,6 +59,10 @@ static int on_gfx_thread(void) {
 void eu4_gfx_buffers_bind_thread(void) {
     g_thread = pthread_self();
     g_thread_set = 1;
+}
+
+int eu4_gfx_buffers_thread_bound(void) {
+    return g_thread_set;
 }
 
 int eu4_gfx_buffers_on_thread(void) {
@@ -262,6 +267,12 @@ void eu4_gfx_update_vertex_buffer(void *handle, void *header, const void *data, 
                                   uint32_t offset, int32_t partial) {
     const void *caller = __builtin_return_address(0);
     require_thread("_GfxUpdateVertexBuffer", caller);
+    /* In-place shared-storage writes must not race draws still in flight. A
+       failed drain means the storage may still be GPU-owned; do not write. */
+    if (eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_RESOURCE_UPDATE, 1) !=
+        EU4_GFX_CLEAR_OK) {
+        eu4_gfx_stop("_GfxUpdateVertexBuffer", "gpu_failed", caller);
+    }
     EU4VertexBuffer *entry = find_entry(header);
     if (entry == nil) {
         eu4_gfx_stop("_GfxUpdateVertexBuffer", "missing", caller);
@@ -331,6 +342,11 @@ void eu4_gfx_update_vertex_buffer_multiple(void *handle, void *header,
     const void *caller = __builtin_return_address(0);
     const char *symbol = "_GfxUpdateVertexBufferMultiple";
     require_thread(symbol, caller);
+    /* In-place shared-storage writes must not race draws still in flight. */
+    if (eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_RESOURCE_UPDATE, 1) !=
+        EU4_GFX_CLEAR_OK) {
+        eu4_gfx_stop(symbol, "gpu_failed", caller);
+    }
     if (header == NULL) {
         eu4_gfx_stop(symbol, "missing", caller);
     }
@@ -719,6 +735,18 @@ int eu4_gfx_index_buffer_read(void *header, void *dest, size_t n) {
 int eu4_gfx_index_buffer_shared(void *header) {
     EU4IndexBuffer *entry = find_index_entry(header);
     return entry != nil && entry.buffer != nil && entry.buffer.storageMode == MTLStorageModeShared;
+}
+
+void *eu4_gfx_index_buffer_for_header(void *header) {
+    EU4IndexBuffer *entry = find_index_entry(header);
+    if (entry == nil || entry.buffer == nil) {
+        return NULL;
+    }
+    return (__bridge void *)entry.buffer;
+}
+
+void *eu4_gfx_current_index_buffer(void) {
+    return eu4_gfx_index_buffer_for_header(g_index_current_header);
 }
 
 void *eu4_gfx_current_index_header(void) { return g_index_current_header; }
