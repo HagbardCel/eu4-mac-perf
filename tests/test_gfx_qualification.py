@@ -187,6 +187,16 @@ class StaticityPredicateTests(unittest.TestCase):
             self.assertIn("not marked valid",
                           " ".join(value["roles"][role]["problems"]))
 
+    def test_non_frame_dump_schema_is_not_static(self):
+        bad = frame(4, REFERENCE_DIGEST)
+        bad["meta"]["schema"] = "something-else/v1"
+        value = self.staticity(
+            stream(bad, frame(5, REFERENCE_DIGEST)),
+            stream(frame(4, CANDIDATE_DIGEST), frame(5, CANDIDATE_DIGEST)),
+        )
+        self.assertFalse(value["verified"])
+        self.assertIn("schema", " ".join(value["roles"]["reference"]["problems"]))
+
     def test_missing_metadata_is_not_static(self):
         value = self.staticity(
             stream(frame(4, REFERENCE_DIGEST, meta=False),
@@ -312,6 +322,14 @@ class RendererDifferenceGateTests(unittest.TestCase):
             self.assertEqual(value["status"], "incomplete", health)
             self.assertIn("GPU health", " ".join(value["reasons"]))
             self.assertFalse(value["renderer_difference"]["supported"])
+
+    def test_missing_campaign_session_cannot_qualify(self):
+        result = run([frame(4, REFERENCE_DIGEST), frame(5, REFERENCE_DIGEST)],
+                     [frame(4, CANDIDATE_DIGEST), frame(5, CANDIDATE_DIGEST)])
+        result.pop("session_id")
+        value = classify(result)
+        self.assertEqual(value["status"], "incomplete")
+        self.assertIn("session identity is absent", " ".join(value["reasons"]))
 
     def test_missing_health_evidence_is_not_healthy(self):
         result = run([frame(4, REFERENCE_DIGEST), frame(5, REFERENCE_DIGEST)],

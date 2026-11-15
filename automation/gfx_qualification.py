@@ -105,6 +105,9 @@ def renderer_difference_evidence(result: dict, *, scenario: dict | None = None,
     if health.get("instrumentation_failures"):
         problems.append("instrumentation failure is present")
 
+    if not session:
+        problems.append("campaign session identity is absent")
+
     correspondence = _correspondence(pair, comparison)
     if not correspondence["agrees"]:
         problems.append(

@@ -290,6 +290,8 @@ def _static_frame(item, *, expected_session: str | None) -> tuple[tuple[int, str
     if not isinstance(meta, dict):
         problems.append("frame metadata is absent")
     else:
+        if meta.get("schema") != "gfx-frame-dump/v1":
+            problems.append("frame metadata schema is not a frame dump")
         if meta.get("frame_index") != index:
             problems.append("frame index disagrees with its metadata")
         meta_digest = meta.get("sha256")
