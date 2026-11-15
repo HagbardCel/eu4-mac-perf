@@ -2602,6 +2602,60 @@ static int run_indexed_resource(void) {
     return ok ? 0 : 1;
 }
 
+static int run_layout_stability(void) {
+    /* A dynamic slot offset moves to setVertexBuffer:offset:, so it must not
+       create a new vertex layout or pipeline variant. */
+    eu4_gfx_perf_set_enabled(1);
+    boot();
+    void *shader = make_generic_bench_shader();
+    uint8_t vertices[8 * 32];
+    bench_vertices(vertices);
+    void *vertex_header = eu4_gfx_create_vertex_buffer(NULL, vertices, 8, 32, 0);
+    const uint16_t indices[3] = {0, 1, 2};
+    void *index_header = eu4_gfx_create_index_buffer(NULL, indices, 3);
+    if (vertex_header == NULL || index_header == NULL) {
+        fail("layout stability geometry");
+    }
+    bench_install_generic(shader, vertex_header, index_header);
+    uint8_t *master = (uint8_t *)g_master;
+    struct {
+        void *master;
+    } ctx = {g_master};
+    const float black[4] = {0.f, 0.f, 0.f, 1.f};
+    eu4_gfx_clear(&ctx, 7, black);
+    eu4_gfx_draw_raw raw;
+    memset(&raw, 0, sizeof raw);
+    raw.which = 2;
+    raw.rdi = (uint64_t)(uintptr_t)&ctx;
+    raw.rsi = 3;
+    raw.retaddr = (uint64_t)(uintptr_t)(g_image + kCallerRva);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("layout stability warm draw");
+    }
+    eu4_gfx_perf_reset();
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("layout stability first draw");
+    }
+    uint32_t slot_offset = 32;
+    memcpy(master + 0x150, &slot_offset, 4);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("layout stability offset draw");
+    }
+    slot_offset = 0;
+    memcpy(master + 0x150, &slot_offset, 4);
+    eu4_gfx_perf_snapshot perf;
+    eu4_gfx_perf_read(&perf);
+    int stable = perf.draws_encoded == 2 && perf.pipeline_misses == 0 &&
+                 perf.pipeline_hits == 2 && perf.render_encoders_created == 0 &&
+                 perf.render_encoders_reused >= 2;
+    printf("layout_stability=%d misses=%llu hits=%llu encoders=%llu reused=%llu\n",
+           stable, (unsigned long long)perf.pipeline_misses,
+           (unsigned long long)perf.pipeline_hits,
+           (unsigned long long)perf.render_encoders_created,
+           (unsigned long long)perf.render_encoders_reused);
+    return stable ? 0 : 1;
+}
+
 static int run_sampled_batch(void) {
     /* Same command buffer samples one unchanged render target twice; the
        conversion is encoded once and both draws can bind the shadow. Dropping
@@ -2899,6 +2953,9 @@ int main(int argc, char **argv) {
     }
     if (argc >= 2 && strcmp(argv[1], "--sampled-batch") == 0) {
         return run_sampled_batch();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--layout-stability") == 0) {
+        return run_layout_stability();
     }
     if (argc >= 2 && strcmp(argv[1], "--indexed-resource") == 0) {
         return run_indexed_resource();

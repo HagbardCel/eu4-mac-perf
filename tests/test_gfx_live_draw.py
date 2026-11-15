@@ -155,6 +155,13 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertIn("base4_green=1", ran.stdout)
         self.assertIn("base0_red=1", ran.stdout)
 
+    def test_dynamic_slot_offset_does_not_create_layout_variant(self) -> None:
+        ran = self._run("--layout-stability")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("layout_stability=1", ran.stdout)
+        self.assertIn("misses=0", ran.stdout)
+        self.assertIn("encoders=0", ran.stdout)
+
     def test_render_pass_coalescing_preserves_blend_order(self) -> None:
         """Two blend states share one pass; the exact pixel proves order."""
         ran = self._run("--blend-order")
