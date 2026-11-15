@@ -155,6 +155,37 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertIn("base4_green=1", ran.stdout)
         self.assertIn("base0_red=1", ran.stdout)
 
+    def test_geometry_publication_is_thread_safe(self) -> None:
+        ran = self._run("--geometry-thread")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("geometry_thread=1", ran.stdout)
+        for token in ("no_encoder_end=1", "no_submit=1", "transition=1",
+                      "draw_refused=1", "epoch=1", "older_refused=1",
+                      "stale_present=1", "same_size=1"):
+            self.assertIn(token, ran.stdout)
+
+    def test_scissor_does_not_leak_into_simple_or_sprite(self) -> None:
+        ran = self._run("--scissor-handoff")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("scissor_handoff=1", ran.stdout)
+        self.assertIn("one_encoder=1", ran.stdout)
+        self.assertIn("corner_green=1", ran.stdout)
+        self.assertIn("center_blue=1", ran.stdout)
+
+    def test_multiple_render_target_conversions_in_external_command(self) -> None:
+        ran = self._run("--sampled-multi")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("sampled_multi=1", ran.stdout)
+        for token in ("external=1", "bindings=1", "pixels=1", "second=1",
+                      "superseded=1", "abandoned=1", "active=1"):
+            self.assertIn(token, ran.stdout)
+
+    def test_gpu_timing_is_counted_once_per_command_buffer(self) -> None:
+        ran = self._run("--gpu-timing")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("gpu_timing=1", ran.stdout)
+        self.assertIn("epoch_isolated=1", ran.stdout)
+
     def test_dynamic_slot_offset_does_not_create_layout_variant(self) -> None:
         ran = self._run("--layout-stability")
         self.assertEqual(ran.returncode, 0, ran.stderr)

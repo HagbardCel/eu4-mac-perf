@@ -307,6 +307,10 @@ eu4_gfx_sprite_draw_status eu4_gfx_sprite_draw_encode_into(
         return refuse(EU4_GFX_SPRITE_DRAW_ENCODE, reason, "command encoding failed");
     }
     [encoder setRenderPipelineState:pipeline];
+    /* This admitted pass always draws the full target. Establish it explicitly:
+       a shared encoder may still carry a partial scissor from a preceding
+       generic draw even after the engine restored a full-target box. */
+    [encoder setScissorRect:(MTLScissorRect){0, 0, target.width, target.height}];
     /* The admitted raster snapshot is the backend default; the reconstructed
        pass has no depth attachment. The quad's two strip triangles carry the
        same winding, so disabling culling matches the original pass. */

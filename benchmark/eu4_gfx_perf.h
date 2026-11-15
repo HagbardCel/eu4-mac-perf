@@ -45,7 +45,12 @@ typedef struct {
     uint64_t completion_waits;
     uint64_t batch_flushes;
     uint64_t cpu_encode_ns;
+    /* GPU duration of every tracked command buffer, counted once per commit.
+       Records are only attributed to the frame epoch in which they were
+       registered; late completion handlers cannot contaminate a reset frame. */
     uint64_t gpu_execution_ns;
+    uint64_t gpu_timing_records;
+    uint64_t gpu_timing_pending;
     uint64_t flushes[EU4_GFX_PERF_FLUSH_REASONS];
 } eu4_gfx_perf_snapshot;
 
@@ -71,7 +76,13 @@ void eu4_gfx_perf_pipeline(int hit);
 void eu4_gfx_perf_sampling_conversion(void);
 void eu4_gfx_perf_completion_wait(void);
 void eu4_gfx_perf_batch_flush(int reason);
-/* GPU execution time reported by a completed command buffer. */
+/* Registers GPU timing once for a command buffer before commit. The completed
+   handler adds its duration to the registering frame only. */
+void eu4_gfx_perf_track_command_buffer(void *command_buffer);
+/* Waits until every registered completion handler has run. Returns 1 when the
+   timing records are complete, 0 on timeout. Benchmark/diagnostic only. */
+int eu4_gfx_perf_wait_gpu_timing(uint32_t timeout_ms);
+/* Legacy direct hook retained for hosts that report an external interval. */
 void eu4_gfx_perf_gpu_execution(uint64_t nanoseconds);
 
 /* CPU encoding timer. begin returns an opaque timestamp; end adds the elapsed
@@ -117,6 +128,13 @@ EU4_GFX_PERF_WEAK void eu4_gfx_perf_completion_wait(void) {}
 EU4_GFX_PERF_WEAK void eu4_gfx_perf_batch_flush(int reason) { (void)reason; }
 EU4_GFX_PERF_WEAK void eu4_gfx_perf_gpu_execution(uint64_t nanoseconds) {
     (void)nanoseconds;
+}
+EU4_GFX_PERF_WEAK void eu4_gfx_perf_track_command_buffer(void *command_buffer) {
+    (void)command_buffer;
+}
+EU4_GFX_PERF_WEAK int eu4_gfx_perf_wait_gpu_timing(uint32_t timeout_ms) {
+    (void)timeout_ms;
+    return 1;
 }
 EU4_GFX_PERF_WEAK uint64_t eu4_gfx_perf_encode_begin(void) { return 0; }
 EU4_GFX_PERF_WEAK void eu4_gfx_perf_encode_end(uint64_t start) { (void)start; }

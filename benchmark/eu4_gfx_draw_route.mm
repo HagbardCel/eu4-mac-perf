@@ -317,15 +317,6 @@ eu4_gfx_draw_route_result eu4_gfx_draw_route_live(
         }
     }
     eu4_gfx_perf_encode_end(encode_start);
-    if (eu4_gfx_perf_enabled()) {
-        [command addCompletedHandler:^(id<MTLCommandBuffer> completed) {
-            double start = completed.GPUStartTime;
-            double end = completed.GPUEndTime;
-            if (start > 0.0 && end > start) {
-                eu4_gfx_perf_gpu_execution((uint64_t)((end - start) * 1e9));
-            }
-        }];
-    }
     eu4_gfx_perf_draw_encoded(
         generic_ready && !legacy_preferred
             ? 0

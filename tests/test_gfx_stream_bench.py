@@ -50,6 +50,10 @@ class GfxStreamBenchTests(unittest.TestCase):
         self.assertEqual(perf["render_encoders_created"]["median"], 1)
         self.assertEqual(perf["render_encoders_reused"]["median"], 39)
         self.assertEqual(perf["index_temp_allocs"]["median"], 0)
+        # clear + draw batch + present are the only tracked submissions.
+        self.assertEqual(perf["gpu_timing_records"]["median"], 3)
+        self.assertLess(perf["gpu_execution_ns"]["median"],
+                        summary["wall_ns"]["median"])
         # Fully warmed frames do not compile pipelines.
         self.assertEqual(perf["pipeline_misses"]["median"], 0)
         self.assertGreater(summary["cpu_encode_ns"]["median"], 0)

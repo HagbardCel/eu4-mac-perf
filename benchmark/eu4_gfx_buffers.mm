@@ -61,6 +61,10 @@ void eu4_gfx_buffers_bind_thread(void) {
     g_thread_set = 1;
 }
 
+int eu4_gfx_buffers_thread_bound(void) {
+    return g_thread_set;
+}
+
 int eu4_gfx_buffers_on_thread(void) {
     return on_gfx_thread();
 }

@@ -67,11 +67,15 @@ def percentile(values: list[float], fraction: float) -> float:
 
 
 def run_kind(kind: str, draws: int, frames: int, *, force_build: bool = False,
-             extra_env: dict | None = None) -> dict:
+             extra_env: dict | None = None, debug_layer: bool = True) -> dict:
     host = build_host(force_build)
     env = os.environ.copy()
-    env["MTL_DEBUG_LAYER"] = "1"
-    env["MTL_DEBUG_LAYER_ERROR_MODE"] = "assert"
+    if debug_layer:
+        env["MTL_DEBUG_LAYER"] = "1"
+        env["MTL_DEBUG_LAYER_ERROR_MODE"] = "assert"
+    else:
+        env.pop("MTL_DEBUG_LAYER", None)
+        env.pop("MTL_DEBUG_LAYER_ERROR_MODE", None)
     if extra_env:
         env.update(extra_env)
     ran = subprocess.run(
@@ -136,7 +140,9 @@ def run_kind(kind: str, draws: int, frames: int, *, force_build: bool = False,
     return {"summary": summary, "records": records}
 
 
-def measure(kinds: list[str], draws: int, frames: int, *, force_build: bool = False) -> dict:
+def measure(kinds: list[str], draws: int, frames: int, *,
+            force_build: bool = False, include_records: bool = False,
+            debug_layer: bool = True) -> dict:
     report = {
         "schema": "gfx-bench/v1",
         "note": (
@@ -147,7 +153,12 @@ def measure(kinds: list[str], draws: int, frames: int, *, force_build: bool = Fa
         "kinds": {},
     }
     for kind in kinds:
-        measured = run_kind(kind, draws, frames, force_build=force_build)
+        measured = run_kind(kind, draws, frames, force_build=force_build,
+                            debug_layer=debug_layer)
+        if not include_records:
+            # Complete per-frame samples are reproducible from the command; the
+            # committed evidence keeps the compact summary only.
+            measured = {"summary": measured["summary"]}
         report["kinds"][kind] = measured
     return report
 
@@ -159,10 +170,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--kinds", default="simple,indexed,mixed")
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--force-build", action="store_true")
+    parser.add_argument("--records", action="store_true",
+                        help="include every per-frame sample (large)")
+    parser.add_argument("--no-debug-layer", action="store_true",
+                        help="performance runs: do not enable Metal validation")
     parser.add_argument("--summary", action="store_true")
     args = parser.parse_args(argv)
     kinds = [kind.strip() for kind in args.kinds.split(",") if kind.strip()]
-    report = measure(kinds, args.draws, args.frames, force_build=args.force_build)
+    report = measure(kinds, args.draws, args.frames,
+                     force_build=args.force_build,
+                     include_records=args.records,
+                     debug_layer=not args.no_debug_layer)
     payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)

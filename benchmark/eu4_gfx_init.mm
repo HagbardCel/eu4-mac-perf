@@ -36,6 +36,7 @@ static id<MTLCommandBuffer> perf_command(id<MTLCommandQueue> queue) {
 static void perf_commit(id<MTLCommandBuffer> command) {
     if (command != nil) {
         eu4_gfx_perf_command_buffer_committed();
+        eu4_gfx_perf_track_command_buffer((__bridge void *)command);
         [command commit];
     }
 }
@@ -200,7 +201,9 @@ static eu4_physical_geometry g_physical_geometry;
 static pthread_mutex_t g_physical_geometry_lock = PTHREAD_MUTEX_INITIALIZER;
 
 void eu4_gfx_publish_geometry_transition(uint32_t width, uint32_t height) {
-    (void)eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_GEOMETRY, 0);
+    /* Cocoa view lifecycle: update only the mutex-protected snapshot. Metal
+       batch state belongs to the graphics thread and is retired at its next
+       clear/present/set-target boundary. */
     if (width == 0 || height == 0) {
         return;
     }
@@ -212,7 +215,7 @@ void eu4_gfx_publish_geometry_transition(uint32_t width, uint32_t height) {
 }
 
 void eu4_gfx_publish_physical_geometry(uint32_t width, uint32_t height) {
-    (void)eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_GEOMETRY, 0);
+    /* See publish_geometry_transition: snapshot only, never batch mutation. */
     if (width == 0 || height == 0) {
         return;
     }
@@ -1687,6 +1690,13 @@ static EU4GfxBackend *batch_backend(void) {
     return (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
 }
 
+/* Batch state is graphics-thread-owned once _GfxInit has bound the thread.
+   Reject mutations from Cocoa/monitor threads rather than ending or committing
+   an encoder they do not own. */
+static int batch_on_thread(void) {
+    return !eu4_gfx_buffers_thread_bound() || eu4_gfx_buffers_on_thread();
+}
+
 static uint64_t g_batch_serial;
 
 static void batch_new_serial(__unsafe_unretained EU4GfxBackend *backend) {
@@ -1702,6 +1712,9 @@ uint64_t eu4_gfx_batch_command_serial(void) {
 }
 
 void eu4_gfx_batch_end_pass(void) {
+    if (!batch_on_thread()) {
+        return;
+    }
     __unsafe_unretained EU4GfxBackend *backend = batch_backend();
     if (backend == nil || backend.activeRenderEncoder == nil) {
         return;
@@ -1729,6 +1742,9 @@ int eu4_gfx_batch_owns_command(void *command) {
 
 void *eu4_gfx_batch_encoder(void *color, void *depth, const float *clear_color,
                             int *created) {
+    if (!batch_on_thread()) {
+        return NULL;
+    }
     __unsafe_unretained EU4GfxBackend *backend = batch_backend();
     if (backend == nil || backend.poisoned || backend.activeCommandBuffer == nil) {
         return NULL;
@@ -1785,6 +1801,9 @@ void *eu4_gfx_batch_encoder(void *color, void *depth, const float *clear_color,
    from the standalone A/B path where every draw commits immediately. */
 static void batch_commit(__unsafe_unretained EU4GfxBackend *backend, int reason,
                          int record) {
+    if (!batch_on_thread()) {
+        return;
+    }
     if (backend.activeRenderEncoder != nil) {
         eu4_gfx_batch_end_pass();
     }
@@ -1795,6 +1814,7 @@ static void batch_commit(__unsafe_unretained EU4GfxBackend *backend, int reason,
     if (command == nil || ops == 0) {
         return;
     }
+    eu4_gfx_perf_track_command_buffer((__bridge void *)command);
     [command commit];
     eu4_gfx_perf_command_buffer_committed();
     backend.pendingGameCommand = command;
@@ -1809,6 +1829,9 @@ static void batch_commit(__unsafe_unretained EU4GfxBackend *backend, int reason,
 
 void *eu4_gfx_batch_acquire(const void *master, uint64_t generation) {
     (void)master;
+    if (!batch_on_thread()) {
+        return NULL;
+    }
     __unsafe_unretained EU4GfxBackend *backend = batch_backend();
     if (backend == nil || backend.poisoned || backend.queue == nil) {
         return NULL;
@@ -1855,6 +1878,9 @@ void *eu4_gfx_batch_acquire(const void *master, uint64_t generation) {
 
 void eu4_gfx_batch_draw_encoded(const void *master, uint64_t generation) {
     (void)master;
+    if (!batch_on_thread()) {
+        return;
+    }
     __unsafe_unretained EU4GfxBackend *backend = batch_backend();
     if (backend == nil || backend.activeCommandBuffer == nil) {
         return;
@@ -1872,6 +1898,9 @@ void eu4_gfx_batch_draw_encoded(const void *master, uint64_t generation) {
 }
 
 void eu4_gfx_batch_draw_failed(int fatal) {
+    if (!batch_on_thread()) {
+        return;
+    }
     __unsafe_unretained EU4GfxBackend *backend = batch_backend();
     if (backend == nil || backend.activeCommandBuffer == nil) {
         return;
@@ -1907,6 +1936,9 @@ int eu4_gfx_batch_active(void) {
 }
 
 eu4_gfx_clear_status eu4_gfx_batch_flush(void *master, int reason, int drain) {
+    if (!batch_on_thread()) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
     __unsafe_unretained EU4GfxBackend *backend =
         master != NULL ? (__bridge EU4GfxBackend *)backend_raw_for_master(master)
                        : batch_backend();

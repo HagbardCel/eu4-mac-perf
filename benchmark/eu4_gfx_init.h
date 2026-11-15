@@ -50,8 +50,14 @@
    encoded into the active command buffer are reused by later draws sampling
    the same unchanged target. */
 @property (nonatomic, strong) NSMutableDictionary *sampledRenderTargetPendingCommands;
+/* Preparation identity authorizing every shadow encoded for one command. */
+@property (nonatomic, strong) NSMutableDictionary *sampledRenderTargetPendingPreparations;
 @property (nonatomic, strong) NSMutableDictionary *sampledRenderTargetPendingSerials;
 @property (nonatomic) uint64_t samplingPreparationToken;
+/* Per-conversion identity used only by completion handlers. A newer conversion
+   for the same header can supersede an older handler without being cleared by
+   it. */
+@property (nonatomic) uint64_t samplingConversionToken;
 @property (nonatomic, strong) NSMutableDictionary *renderTargetGenerations;
 @property (nonatomic) uint64_t renderTargetEpoch;
 @property (nonatomic, strong) id gameDepthTarget;

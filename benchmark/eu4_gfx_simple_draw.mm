@@ -253,7 +253,7 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw_encode_into(
     /* The blend/depth/raster snapshots are original master state written by the
        replacement state entry points. The Simple pass admits only the backend's
        known default snapshots and a full-attachment (or unset) scissor. */
-    char state_reason[128];
+    static _Thread_local char state_reason[160];
     if (!eu4_gfx_simple_state_supported((void *)master, state_reason,
                                         sizeof state_reason)) {
         return refuse(EU4_GFX_SIMPLE_DRAW_STATE, reason, state_reason);
@@ -309,6 +309,10 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw_encode_into(
         return refuse(EU4_GFX_SIMPLE_DRAW_ENCODE, reason, "command encoding failed");
     }
     [encoder setRenderPipelineState:pipeline];
+    /* This admitted pass always draws the full target. Establish it explicitly:
+       a shared encoder may still carry a partial scissor from a preceding
+       generic draw even after the engine restored a full-target box. */
+    [encoder setScissorRect:(MTLScissorRect){0, 0, target.width, target.height}];
     /* The admitted default raster snapshot does not cull in the reconstructed
        pass (the full-screen strip has one triangle of each winding). State is
        still validated above; a non-default snapshot is refused. */

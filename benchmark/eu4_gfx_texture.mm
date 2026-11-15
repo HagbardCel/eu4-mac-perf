@@ -820,6 +820,9 @@ void eu4_gfx_clear_texture(void *header) {
         if (backend.sampledRenderTargetPendingSerials != nil) {
             [backend.sampledRenderTargetPendingSerials removeObjectForKey:key];
         }
+        if (backend.sampledRenderTargetPendingPreparations != nil) {
+            [backend.sampledRenderTargetPendingPreparations removeObjectForKey:key];
+        }
         [backend.renderTargetGenerations removeObjectForKey:key];
         pthread_mutex_unlock(&g_sampling_lock);
     }
@@ -929,6 +932,8 @@ static void *sampling_render_target(void *header, id<MTLTexture> source,
     NSNumber *pending_token = backend.sampledRenderTargetPendingTokens[key];
     NSNumber *pending_generation = backend.sampledRenderTargetPendingGenerations[key];
     NSNumber *pending_serial = backend.sampledRenderTargetPendingSerials[key];
+    NSNumber *pending_preparation =
+        backend.sampledRenderTargetPendingPreparations[key];
     BOOL committed = shadow != nil && shadow_generation != nil &&
                      [shadow_generation isEqual:generation];
     /* A conversion encoded earlier into the same active command buffer is safe
@@ -939,7 +944,8 @@ static void *sampling_render_target(void *header, id<MTLTexture> source,
                                [pending_serial unsignedLongLongValue] ==
                                    backend.activeCommandSerial;
     BOOL current = shadow != nil && pending_token != nil &&
-                   (([pending_token unsignedLongLongValue] == preparation_token) ||
+                   pending_preparation != nil &&
+                   (([pending_preparation unsignedLongLongValue] == preparation_token) ||
                     same_active_command) &&
                    pending_generation != nil &&
                    [pending_generation isEqual:generation];
@@ -995,26 +1001,31 @@ int eu4_gfx_prepare_sampled_textures(void *command_buffer,
     if (backend.sampledRenderTargetPendingSerials == nil) {
         backend.sampledRenderTargetPendingSerials = [NSMutableDictionary dictionary];
     }
+    if (backend.sampledRenderTargetPendingPreparations == nil) {
+        backend.sampledRenderTargetPendingPreparations = [NSMutableDictionary dictionary];
+    }
     /* Only the active batch has a stable serial. An external diagnostic command
        buffer is never reused by pointer: pointer addresses are recyclable. */
     uint64_t command_serial = eu4_gfx_batch_owns_command(command_buffer)
                                   ? eu4_gfx_batch_command_serial() : 0;
-    /* Reuse the preparation token already associated with this command buffer.
-       Every draw in one submitted command buffer observes the conversions
-       encoded by the first draw that needed them; a new token would invalidate
-       those pending shadows for later draws in the same buffer. */
-    uint64_t token = 0;
+    /* Reuse the preparation identity already associated with this active
+       command buffer. Every shadow encoded for this command shares it, so a
+       consuming draw can bind all of that command's conversions with one value.
+       External command buffers get a fresh preparation per call, and every
+       conversion in that call shares it. */
+    uint64_t preparation = 0;
     if (command_serial != 0) {
         for (NSValue *prepared in [backend.sampledRenderTargetPendingCommands allKeys]) {
             NSValue *command_ref = backend.sampledRenderTargetPendingCommands[prepared];
             NSNumber *prepared_serial =
                 backend.sampledRenderTargetPendingSerials[prepared];
-            NSNumber *prepared_token = backend.sampledRenderTargetPendingTokens[prepared];
+            NSNumber *prepared_preparation =
+                backend.sampledRenderTargetPendingPreparations[prepared];
             if (command_ref != nil && prepared_serial != nil &&
+                prepared_preparation != nil &&
                 command_ref.pointerValue == command_buffer &&
-                [prepared_serial unsignedLongLongValue] == command_serial &&
-                prepared_token != nil) {
-                token = [prepared_token unsignedLongLongValue];
+                [prepared_serial unsignedLongLongValue] == command_serial) {
+                preparation = [prepared_preparation unsignedLongLongValue];
                 break;
             }
         }
@@ -1044,18 +1055,19 @@ int eu4_gfx_prepare_sampled_textures(void *command_buffer,
         if (shadow_generation != nil && [shadow_generation isEqual:generation]) {
             continue;
         }
-        NSNumber *pending_token = backend.sampledRenderTargetPendingTokens[key];
+        NSNumber *pending_preparation =
+            backend.sampledRenderTargetPendingPreparations[key];
         NSNumber *pending_generation = backend.sampledRenderTargetPendingGenerations[key];
         NSValue *pending_command = backend.sampledRenderTargetPendingCommands[key];
         NSNumber *pending_serial = backend.sampledRenderTargetPendingSerials[key];
-        BOOL pending_here = command_serial != 0 && pending_token != nil &&
+        BOOL pending_here = command_serial != 0 && pending_preparation != nil &&
                             pending_command != nil && pending_serial != nil &&
                             pending_command.pointerValue == command_buffer &&
                             [pending_serial unsignedLongLongValue] == command_serial &&
                             pending_generation != nil &&
                             [pending_generation isEqual:generation];
         if (pending_here) {
-            token = [pending_token unsignedLongLongValue];
+            preparation = [pending_preparation unsignedLongLongValue];
             continue;
         }
         id<MTLTexture> shadow = ensure_sampling_shadow(header, source, backend);
@@ -1083,23 +1095,30 @@ int eu4_gfx_prepare_sampled_textures(void *command_buffer,
             pthread_mutex_unlock(&g_sampling_lock);
             return 0;
         }
-        /* Each conversion gets its own token so a completion handler can never
-           clear a newer conversion's record for the same header. */
-        token = ++backend.samplingPreparationToken;
-        if (token == 0) {
-            token = ++backend.samplingPreparationToken;
+        if (preparation == 0) {
+            preparation = ++backend.samplingPreparationToken;
+            if (preparation == 0) {
+                preparation = ++backend.samplingPreparationToken;
+            }
+        }
+        /* Each conversion gets its own identity so a completion handler can
+           never clear a newer conversion's record for the same header. */
+        uint64_t conversion = ++backend.samplingConversionToken;
+        if (conversion == 0) {
+            conversion = ++backend.samplingConversionToken;
         }
         __atomic_add_fetch(&g_sampling_conversion_count, 1, __ATOMIC_RELAXED);
         eu4_gfx_perf_sampling_conversion();
-        backend.sampledRenderTargetPendingTokens[key] = @(token);
+        backend.sampledRenderTargetPendingTokens[key] = @(conversion);
         backend.sampledRenderTargetPendingGenerations[key] = generation;
         backend.sampledRenderTargetPendingCommands[key] =
             [NSValue valueWithPointer:command_buffer];
         backend.sampledRenderTargetPendingSerials[key] = @(command_serial);
+        backend.sampledRenderTargetPendingPreparations[key] = @(preparation);
         __weak EU4GfxBackend *prepared_backend = backend;
         NSValue *prepared_key = key;
         NSNumber *prepared_generation = generation;
-        uint64_t prepared_token = token;
+        uint64_t prepared_token = conversion;
         id<MTLCommandBuffer> prepared_command =
             (__bridge id<MTLCommandBuffer>)command_buffer;
         [prepared_command addCompletedHandler:^(id<MTLCommandBuffer> completed) {
@@ -1133,12 +1152,14 @@ int eu4_gfx_prepare_sampled_textures(void *command_buffer,
                     removeObjectForKey:prepared_key];
                 [backend_ref.sampledRenderTargetPendingSerials
                     removeObjectForKey:prepared_key];
+                [backend_ref.sampledRenderTargetPendingPreparations
+                    removeObjectForKey:prepared_key];
             }
             pthread_mutex_unlock(&g_sampling_lock);
         }];
     }
     if (preparation_token != NULL) {
-        *preparation_token = token;
+        *preparation_token = preparation;
     }
     pthread_mutex_unlock(&g_sampling_lock);
     return 1;
@@ -1164,6 +1185,7 @@ void eu4_gfx_sampling_abandon_command(void *command_buffer) {
         [backend.sampledRenderTargetPendingGenerations removeObjectForKey:key];
         [backend.sampledRenderTargetPendingCommands removeObjectForKey:key];
         [backend.sampledRenderTargetPendingSerials removeObjectForKey:key];
+        [backend.sampledRenderTargetPendingPreparations removeObjectForKey:key];
     }
     pthread_mutex_unlock(&g_sampling_lock);
 }

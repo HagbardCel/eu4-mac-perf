@@ -5,12 +5,23 @@
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
+
+#import <Metal/Metal.h>
 
 /* Plain ints, not atomics: the engine mutates these on the single GFX thread,
  * and the benchmark host reads them after a drain. The enabled flag is only
  * written before any workload starts. */
 static int g_enabled;
 static eu4_gfx_perf_snapshot g_counters;
+
+/* GPU completion handlers run off the graphics thread. A frame epoch makes a
+   late handler from a previous benchmark frame harmless. */
+static pthread_mutex_t g_gpu_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t g_gpu_epoch;
+static uint64_t g_gpu_ns;
+static uint64_t g_gpu_records;
+static uint64_t g_gpu_pending;
 
 static void reset_counters(void) {
     memset(&g_counters, 0, sizeof g_counters);
@@ -25,12 +36,79 @@ int eu4_gfx_perf_enabled(void) {
 }
 
 void eu4_gfx_perf_reset(void) {
+    pthread_mutex_lock(&g_gpu_lock);
+    g_gpu_epoch++;
+    g_gpu_ns = 0;
+    g_gpu_records = 0;
+    g_gpu_pending = 0;
+    pthread_mutex_unlock(&g_gpu_lock);
     reset_counters();
 }
 
 void eu4_gfx_perf_read(eu4_gfx_perf_snapshot *out) {
-    if (out != NULL) {
-        *out = g_counters;
+    if (out == NULL) {
+        return;
+    }
+    *out = g_counters;
+    pthread_mutex_lock(&g_gpu_lock);
+    out->gpu_execution_ns = g_gpu_ns;
+    out->gpu_timing_records = g_gpu_records;
+    out->gpu_timing_pending = g_gpu_pending;
+    pthread_mutex_unlock(&g_gpu_lock);
+}
+
+void eu4_gfx_perf_track_command_buffer(void *command_buffer) {
+    if (!g_enabled || command_buffer == NULL) {
+        return;
+    }
+    id<MTLCommandBuffer> command = (__bridge id<MTLCommandBuffer>)command_buffer;
+    if (command == nil) {
+        return;
+    }
+    pthread_mutex_lock(&g_gpu_lock);
+    uint64_t epoch = g_gpu_epoch;
+    g_gpu_pending++;
+    pthread_mutex_unlock(&g_gpu_lock);
+    [command addCompletedHandler:^(id<MTLCommandBuffer> completed) {
+        double start = completed.GPUStartTime;
+        double end = completed.GPUEndTime;
+        pthread_mutex_lock(&g_gpu_lock);
+        if (epoch == g_gpu_epoch) {
+            if (g_gpu_pending > 0) {
+                g_gpu_pending--;
+            }
+            if (start > 0.0 && end > start) {
+                g_gpu_ns += (uint64_t)((end - start) * 1e9);
+                g_gpu_records++;
+            }
+        }
+        pthread_mutex_unlock(&g_gpu_lock);
+    }];
+}
+
+int eu4_gfx_perf_wait_gpu_timing(uint32_t timeout_ms) {
+    if (!g_enabled) {
+        return 1;
+    }
+    struct timespec start;
+    clock_gettime(CLOCK_MONOTONIC_RAW, &start);
+    uint64_t deadline = (uint64_t)start.tv_sec * 1000000000ull +
+                        (uint64_t)start.tv_nsec +
+                        (uint64_t)timeout_ms * 1000000ull;
+    for (;;) {
+        pthread_mutex_lock(&g_gpu_lock);
+        uint64_t pending = g_gpu_pending;
+        pthread_mutex_unlock(&g_gpu_lock);
+        if (pending == 0) {
+            return 1;
+        }
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC_RAW, &now);
+        uint64_t at = (uint64_t)now.tv_sec * 1000000000ull + (uint64_t)now.tv_nsec;
+        if (at >= deadline) {
+            return 0;
+        }
+        usleep(200);
     }
 }
 
@@ -113,9 +191,13 @@ void eu4_gfx_perf_batch_flush(int reason) {    if (!g_enabled) {
 }
 
 void eu4_gfx_perf_gpu_execution(uint64_t nanoseconds) {
-    if (g_enabled) {
-        g_counters.gpu_execution_ns += nanoseconds;
+    if (!g_enabled) {
+        return;
     }
+    pthread_mutex_lock(&g_gpu_lock);
+    g_gpu_ns += nanoseconds;
+    g_gpu_records++;
+    pthread_mutex_unlock(&g_gpu_lock);
 }
 
 uint64_t eu4_gfx_perf_encode_begin(void) {
@@ -164,7 +246,9 @@ size_t eu4_gfx_perf_snapshot_json(char *out, size_t capacity) {
     if (out == NULL || capacity == 0) {
         return 0;
     }
-    const eu4_gfx_perf_snapshot *c = &g_counters;
+    eu4_gfx_perf_snapshot snapshot;
+    eu4_gfx_perf_read(&snapshot);
+    const eu4_gfx_perf_snapshot *c = &snapshot;
     char reasons[512];
     reasons[0] = 0;
     size_t used = 0;
@@ -188,6 +272,7 @@ size_t eu4_gfx_perf_snapshot_json(char *out, size_t capacity) {
         "\"pipeline_hits\":%llu,\"pipeline_misses\":%llu,"
         "\"sampling_conversions\":%llu,\"completion_waits\":%llu,"
         "\"batch_flushes\":%llu,\"cpu_encode_ns\":%llu,\"gpu_execution_ns\":%llu,"
+        "\"gpu_timing_records\":%llu,\"gpu_timing_pending\":%llu,"
         "\"flush_reasons\":{%s}}",
         (unsigned long long)c->draws_encoded,
         (unsigned long long)c->draws_generic,
@@ -206,6 +291,8 @@ size_t eu4_gfx_perf_snapshot_json(char *out, size_t capacity) {
         (unsigned long long)c->batch_flushes,
         (unsigned long long)c->cpu_encode_ns,
         (unsigned long long)c->gpu_execution_ns,
+        (unsigned long long)c->gpu_timing_records,
+        (unsigned long long)c->gpu_timing_pending,
         reasons);
     if (n < 0 || (size_t)n >= capacity) {
         out[0] = 0;

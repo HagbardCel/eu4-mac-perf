@@ -1267,34 +1267,6 @@ static id<MTLRenderPipelineState> pipeline_for(EU4GfxPipelineKey *unused,
         cache = [NSMutableDictionary dictionary];
         cached_device = device;
     }
-    /* The descriptor is immutable for a cached layout. Build its pipeline
-       signature once instead of walking 31 attributes per draw. */
-    static NSMapTable *signature_cache;
-    if (signature_cache == nil) {
-        signature_cache = [NSMapTable strongToStrongObjectsMapTable];
-    }
-    NSString *vertex_signature = [signature_cache objectForKey:descriptor];
-    if (vertex_signature == nil) {
-        NSMutableString *signature = [NSMutableString string];
-        /* Metal exposes attribute indices 0..30 (31 in total). */
-        for (NSUInteger i = 0; i < 31; i++) {
-            MTLVertexAttributeDescriptor *attribute = descriptor.attributes[i];
-            if (attribute.format != 0) {
-                [signature appendFormat:@"a%lu:%lu:%lu;", (unsigned long)i,
-                                        (unsigned long)attribute.format,
-                                        (unsigned long)attribute.bufferIndex];
-            }
-            MTLVertexBufferLayoutDescriptor *layout = descriptor.layouts[i];
-            if (layout.stride != 0) {
-                [signature appendFormat:@"l%lu:%lu:%lu:%lu;", (unsigned long)i,
-                                        (unsigned long)layout.stride,
-                                        (unsigned long)layout.stepFunction,
-                                        (unsigned long)layout.stepRate];
-            }
-        }
-        vertex_signature = signature;
-        [signature_cache setObject:signature forKey:descriptor];
-    }
     uint32_t enabled = load_u32(blend_snapshot, 0);
     uint32_t src = load_u32(blend_snapshot, 4);
     uint32_t dst = load_u32(blend_snapshot, 8);
