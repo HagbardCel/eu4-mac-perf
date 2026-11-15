@@ -11,12 +11,12 @@ failure counts were not directly comparable.
 - **Base:** `origin/main` `5a0ac03` in a clean detached worktree
   (`/tmp/m7-base-full`), empty `.local`, gitignored `benchmark/.build` created
   during the run.
-- **Candidate:** `m7/starter-canary` `1f0041b` in a clean detached worktree
+- **Candidate:** `m7/starter-canary` `5a78c95` in a clean detached worktree
   (`/tmp/m7-cand-full`), same empty `.local` and `benchmark/.build` handling.
 - Command (identical): `python3.14 -m unittest discover -s tests`.
 
-The validated code commit is `1f0041b`; the commits after it change only
-documentation (this file and the canary report).
+The validated code commit is `5a78c95`; later commits are documentation
+(this file and the canary report).
 
 The base worktree's first run used a `.local` **symlink** to the main worktree;
 the DSH bridge tests resolve campaign roots through that symlink and refused
@@ -31,7 +31,8 @@ python3.14 -m unittest tests.test_gfx_qualification tests.test_gfx_dual_run \
   tests.test_gfx_metrics tests.test_gfx_replay_case -q
 ```
 
-Result: **152 tests, OK** (the qualification module contributes 37).
+Result: **164 tests, OK** (the qualification module contributes 48; re-run
+after the offline campaign-floor correction).
 
 ## Full-suite results
 
@@ -57,9 +58,11 @@ Machine-readable comparison:
 
 ## Classification
 
-### Already present on base — 20 (identical on both)
+### Already present on base — earlier run (20)
 
-`test_dsh_bridge` (9) and `test_trace_tr3` (11).
+`test_dsh_bridge` (9) and `test_trace_tr3` (11). In the final run above the
+common set is the 11 `test_trace_tr3` ids; the nine `test_dsh_bridge` ids moved to
+the base-only environmental group.
 
 - `test_trace_tr3.*`: the QBDI x86-64 release is not installed
   (`/Users/fabian/.cache/eu4-mac-perf/qbdi/0.12.1`), so the native harness cannot
@@ -175,6 +178,6 @@ only base-only failure is an unrelated flaky process-identity assertion. No
 module touched by this PR appears in either failure set.
 
 The acceptance criteria for the review are covered by
-`tests/test_gfx_qualification.py` (28 tests) plus the updated campaign and case
+`tests/test_gfx_qualification.py` (48 tests) plus the updated campaign and case
 fixtures; the full evidence is in
 [the canary report](starter-canary.md#8-correction-and-regression).

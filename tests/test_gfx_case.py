@@ -147,6 +147,10 @@ class CaseBuilderTests(unittest.TestCase):
             # A confirmed renderer difference needs pair-local pixel staticity:
             # valid preserved frames whose identical digests include frame 4.
             "dumps": _static_dumps(4, "session-test"),
+            "classification": "rendering_difference",
+            "qualification": {"schema": "gfx-campaign-qualification/v1",
+                              "status": "rendering_difference",
+                              "qualified": False},
             "artifacts": {"bytes": 100, "max_bytes": 1000, "dropped": 0},
             "ledger": {"tokens": ["a", "b"]},
             "preflight": {"writable": True},
@@ -228,6 +232,24 @@ class CaseBuilderTests(unittest.TestCase):
         analysis = (case_dir / "analysis.md").read_text()
         self.assertIn("samplers.tex7.unit", analysis)
         self.assertNotIn("Per-draw semantic operation prefix (caller/shader", analysis)
+
+    def test_incomplete_campaign_keeps_the_measured_difference(self):
+        self.result["classification"] = "incomplete"
+        self.result["qualification"] = {"schema": "gfx-campaign-qualification/v1",
+                                        "status": "incomplete",
+                                        "qualified": False}
+        (self.run / "result.json").write_text(json.dumps(self.result))
+        packaged = gfx_case.build_case(self.run)
+        self.assertEqual(packaged["classification"], gfx_case.INCOMPLETE)
+        preserved = json.loads(
+            (Path(packaged["case_dir"]) / "difference" / "statistics.json"
+             ).read_text())
+        statistics = preserved["comparison"]["statistics"]
+        self.assertEqual(statistics.get("pixels"), 48)
+        self.assertEqual(statistics.get("max_channel_error"), 9)
+        self.assertEqual(statistics.get("mean_abs_error"), 1.0)
+        analysis = (Path(packaged["case_dir"]) / "analysis.md").read_text()
+        self.assertIn("renderer attribution is withheld", analysis)
 
     def test_cleanup_sigkill_does_not_override_a_rendering_difference(self):
         self.result["processes"]["candidate"]["exit_code"] = -9

@@ -103,35 +103,97 @@ _CAMPAIGN_FLOOR = {
     "process_failure": PROCESS_FAILURE,
 }
 
+# Campaign vocabulary (`classify_campaign`), which differs from the case
+# vocabulary for incomplete/instrumentation statuses.
+_CAMPAIGN_STATUSES = frozenset({
+    "match", "rendering_difference", "gpu_execution_failure",
+    "alignment_failure", "incomplete", "infrastructure_failure",
+    "process_failure",
+})
+
+
+def _text(value) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def campaign_status(result: dict) -> dict:
+    """Resolve the source campaign's authoritative qualification.
+
+    A packaged case may only report what its campaign established.  Both the
+    recorded ``classification`` and the ``qualification`` record must exist and
+    agree, and the ``qualified`` flag must agree with the status.  An absent,
+    unknown or contradictory campaign status is missing evidence, never an
+    unqualified pass.
+    """
+    classification = _text(result.get("classification"))
+    qualification = result.get("qualification")
+    qualification = qualification if isinstance(qualification, dict) else None
+    status = _text(qualification.get("status")) if qualification else None
+    qualified = qualification.get("qualified") if qualification else None
+    if not isinstance(qualified, bool):
+        qualified = None
+    problems: list[str] = []
+    if qualification is None:
+        problems.append("the source campaign has no qualification record")
+    if classification is None and status is None:
+        problems.append("the source campaign has no qualification status")
+    elif (classification is not None and status is not None
+          and classification != status):
+        problems.append(
+            "campaign status is contradictory: "
+            f"classification {classification!r}, qualification {status!r}")
+    resolved = classification if classification is not None else status
+    if resolved is not None and resolved not in _CAMPAIGN_STATUSES:
+        problems.append(f"campaign status {resolved!r} is unknown")
+    if qualification is not None and qualified is None:
+        problems.append("the campaign qualification flag is absent")
+    if resolved is not None and qualified is not None:
+        if resolved == MATCH and qualified is not True:
+            problems.append("the campaign match is not marked qualified")
+        elif resolved != MATCH and qualified is not False:
+            problems.append(f"the campaign {resolved} is marked qualified")
+    consistent = not problems
+    return {
+        "status": resolved if consistent else None,
+        "recorded_status": resolved,
+        "qualified": qualified,
+        "problems": problems,
+        "consistent": consistent,
+    }
+
 
 def campaign_classification(result: dict) -> str | None:
-    """The source campaign's recorded qualification, if it has one."""
-    value = result.get("classification")
-    if isinstance(value, str) and value:
-        return value
-    qualification = result.get("qualification")
-    if isinstance(qualification, dict):
-        value = qualification.get("status")
-        if isinstance(value, str) and value:
-            return value
-    return None
+    """The source campaign's resolved qualification status, if consistent."""
+    value = campaign_status(result)
+    return value["status"] if value["consistent"] else value["recorded_status"]
+
+
+def _campaign_floor(result: dict) -> str:
+    """The campaign status a case may not exceed, or INCOMPLETE when unresolved."""
+    campaign = campaign_status(result)
+    if not campaign["consistent"]:
+        return INCOMPLETE
+    if campaign["status"] == MATCH or campaign["status"] == CONFIRMED_RENDERING:
+        return campaign["status"]
+    return _CAMPAIGN_FLOOR.get(campaign["status"] or "", INCOMPLETE)
 
 
 def _pass_classification(result: dict, pair: dict | None,
                          comparison: dict | None) -> str:
     """Local pixel equality is not campaign qualification.
 
-    The case may report ``match`` only when its source campaign is a qualified
-    ``match``; a passing pair from an incomplete/alignment-failed/unqualified
-    campaign keeps the campaign floor.  Missing campaign evidence is
-    conservatively incomplete.
+    The case may report ``match`` only when its source campaign is a consistent,
+    qualified ``match``; a passing pair from an incomplete/alignment-failed/
+    unqualified campaign keeps the campaign floor.  Missing or contradictory
+    campaign evidence is conservatively incomplete.
     """
-    campaign = campaign_classification(result)
-    if campaign != MATCH:
-        return _CAMPAIGN_FLOOR.get(campaign or "", INCOMPLETE)
-    qualification = result.get("qualification")
-    if isinstance(qualification, dict) and qualification.get("qualified") is False:
+    floor = _campaign_floor(result)
+    if floor == CONFIRMED_RENDERING:
+        # The campaign confirmed a difference; a locally equal pair cannot
+        # reproduce it, so the package stays inconclusive.
         return INCOMPLETE
+    if floor != MATCH:
+        return floor
     pair_status = (pair or {}).get("status")
     alignment = (comparison or {}).get("alignment")
     alignment_status = (alignment or {}).get("status") if isinstance(
@@ -151,12 +213,14 @@ def difference_evidence(result: dict, pair: dict | None,
 def _difference_classification(result: dict, pair: dict | None,
                                comparison: dict | None) -> str:
     """Never claim more than the campaign evidence supports."""
+    floor = _campaign_floor(result)
+    if floor == MATCH:
+        # A campaign qualified as a match cannot contain a differing pair.
+        return INCOMPLETE
+    if floor != CONFIRMED_RENDERING:
+        return floor
     evidence = difference_evidence(result, pair, comparison)
-    campaign = result.get("classification")
-    if evidence["supported"] and campaign in (None, CONFIRMED_RENDERING):
-        return CONFIRMED_RENDERING
-    floor = _CAMPAIGN_FLOOR.get(campaign)
-    return floor or INCOMPLETE
+    return CONFIRMED_RENDERING if evidence["supported"] else INCOMPLETE
 
 
 def _choose_pair(result: dict, pair_index: int | None = None) -> dict | None:
@@ -235,6 +299,16 @@ def _analysis(result: dict, pair: dict | None, comparison: dict | None,
             f"the campaign: the campaign verdict is `{campaign_classification(result)}`. "
             "A packaged case cannot claim stronger equivalence than its source "
             "campaign."
+        )
+    if (comparison or {}).get("status") == gfx_frame_compare.FAIL \
+            and classification != CONFIRMED_RENDERING:
+        campaign = campaign_status(result)
+        detail = "; ".join(campaign["problems"]) or (
+            f"the campaign verdict is `{campaign['recorded_status']}`")
+        lines.append(
+            "- The local pixel difference is recorded here, but renderer "
+            f"attribution is withheld: {detail}. A packaged case cannot claim "
+            "stronger attribution than its source campaign."
         )
     if semantic:
         first = (semantic.get("first") or {})

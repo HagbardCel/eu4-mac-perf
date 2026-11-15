@@ -82,8 +82,8 @@ def _found(frames, index):
 def run(reference_frames, candidate_frames, *, required=2, health="healthy",
         pair_status="aligned", comparison_status="aligned",
         difference_status="fail", reference_index=4, candidate_index=4,
-        session=SESSION, classification=None, identity="0xd09cad25b3166452",
-        statistics=None):
+        session=SESSION, classification=None, qualification=None,
+        identity="0xd09cad25b3166452", statistics=None):
     pair = {
         "frame_index": reference_index,
         "candidate_frame_index": candidate_index,
@@ -134,6 +134,14 @@ def run(reference_frames, candidate_frames, *, required=2, health="healthy",
     }
     if classification is not None:
         result["classification"] = classification
+    if qualification is not None:
+        result["qualification"] = qualification
+    elif classification is not None:
+        result["qualification"] = {
+            "schema": "gfx-campaign-qualification/v1",
+            "status": classification,
+            "qualified": classification == "match",
+        }
     return result
 
 
@@ -428,7 +436,8 @@ class RendererDifferenceGateTests(unittest.TestCase):
 class CaseAgreementTests(unittest.TestCase):
     def test_case_and_campaign_agree_on_static_scene(self):
         result = run([frame(4, REFERENCE_DIGEST), frame(5, REFERENCE_DIGEST)],
-                     [frame(4, CANDIDATE_DIGEST), frame(5, CANDIDATE_DIGEST)])
+                     [frame(4, CANDIDATE_DIGEST), frame(5, CANDIDATE_DIGEST)],
+                     classification="rendering_difference")
         pair = result["frames"]["comparison"]["first_failure"]
         self.assertEqual(classify(result)["status"], "rendering_difference")
         self.assertEqual(
@@ -507,6 +516,102 @@ class CaseAgreementTests(unittest.TestCase):
         self.assertEqual(
             gfx_case._classify(result, pair, pair["comparison"]),
             gfx_case.UNALIGNED)
+
+    # --- campaign floor: both offline verdict paths -------------------------
+
+    def _different_pair(self, **kwargs):
+        result = run([frame(4, REFERENCE_DIGEST), frame(5, REFERENCE_DIGEST)],
+                     [frame(4, CANDIDATE_DIGEST), frame(5, CANDIDATE_DIGEST)],
+                     **kwargs)
+        pair = result["frames"]["comparison"]["first_failure"]
+        return result, pair, pair["comparison"]
+
+    def test_qualification_incomplete_without_classification_is_incomplete(self):
+        result, pair, comparison = self._different_pair()
+        result.pop("classification", None)
+        result["qualification"] = {"status": "incomplete", "qualified": False}
+        status = gfx_case.campaign_status(result)
+        self.assertTrue(status["consistent"], status)
+        self.assertEqual(status["status"], "incomplete")
+        self.assertEqual(gfx_case._classify(result, pair, comparison),
+                         gfx_case.INCOMPLETE)
+
+    def test_missing_campaign_evidence_is_incomplete(self):
+        result, pair, comparison = self._different_pair()
+        result.pop("classification", None)
+        result.pop("qualification", None)
+        self.assertEqual(gfx_case._classify(result, pair, comparison),
+                         gfx_case.INCOMPLETE)
+
+    def test_contradictory_campaign_status_is_incomplete(self):
+        result, pair, comparison = self._different_pair(
+            classification="rendering_difference")
+        result["qualification"]["status"] = "incomplete"
+        self.assertEqual(gfx_case._classify(result, pair, comparison),
+                         gfx_case.INCOMPLETE)
+
+    def test_unqualified_match_flag_is_incomplete(self):
+        result, pair, comparison = self._different_pair(
+            classification="rendering_difference")
+        result["qualification"]["qualified"] = True
+        self.assertEqual(gfx_case._classify(result, pair, comparison),
+                         gfx_case.INCOMPLETE)
+        result, pair, comparison = self._different_pair(classification="match")
+        result["qualification"]["qualified"] = False
+        self.assertEqual(gfx_case._classify(result, pair, comparison),
+                         gfx_case.INCOMPLETE)
+
+    def test_qualified_rendering_difference_is_reproduced(self):
+        result, pair, comparison = self._different_pair(
+            classification="rendering_difference")
+        self.assertEqual(result["qualification"],
+                         {"schema": "gfx-campaign-qualification/v1",
+                          "status": "rendering_difference", "qualified": False})
+        self.assertEqual(gfx_case._classify(result, pair, comparison),
+                         gfx_case.CONFIRMED_RENDERING)
+
+    def test_missing_qualification_record_cannot_confirm_a_difference(self):
+        result, pair, comparison = self._different_pair(
+            classification="rendering_difference")
+        result.pop("qualification")
+        self.assertEqual(gfx_case._classify(result, pair, comparison),
+                         gfx_case.INCOMPLETE)
+
+    def test_passing_pair_from_a_consistent_match_is_a_match(self):
+        result, pair, comparison = self._different_pair(
+            difference_status="pass", classification="match")
+        self.assertEqual(gfx_case._classify(result, pair, comparison),
+                         gfx_case.MATCH)
+
+    def test_passing_pair_from_a_contradictory_match_is_incomplete(self):
+        result, pair, comparison = self._different_pair(
+            difference_status="pass", classification="match")
+        result["qualification"]["qualified"] = False
+        self.assertEqual(gfx_case._classify(result, pair, comparison),
+                         gfx_case.INCOMPLETE)
+
+    def test_passing_pair_in_a_differing_campaign_is_incomplete(self):
+        result, pair, comparison = self._different_pair(
+            difference_status="pass", classification="rendering_difference")
+        self.assertEqual(gfx_case._classify(result, pair, comparison),
+                         gfx_case.INCOMPLETE)
+
+    def test_failing_pair_in_a_matching_campaign_is_incomplete(self):
+        result, pair, comparison = self._different_pair(
+            classification="match")
+        self.assertEqual(gfx_case._classify(result, pair, comparison),
+                         gfx_case.INCOMPLETE)
+
+    def test_case_keeps_the_pixel_statistics_when_attribution_is_withheld(self):
+        result, pair, comparison = self._different_pair()
+        result.pop("classification", None)
+        result.pop("qualification", None)
+        analysis = gfx_case._analysis(
+            result, pair, comparison, gfx_case.INCOMPLETE,
+            {"bytes": 1, "max_bytes": 10, "dropped": 0})
+        self.assertIn("Differing pixels: 120 / 1000", analysis)
+        self.assertIn("Max channel error: 200", analysis)
+        self.assertIn("renderer attribution is withheld", analysis)
 
 
 class CorrespondenceAgreementTests(unittest.TestCase):
