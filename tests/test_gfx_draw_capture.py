@@ -10,6 +10,7 @@ EVENTS = ROOT / "benchmark" / "eu4_metal_events.c"
 INIT = ROOT / "benchmark" / "eu4_gfx_init.mm"
 FRAME_OBSERVE = ROOT / "benchmark" / "eu4_gfx_frame_observe.c"
 BUFFERS = ROOT / "benchmark" / "eu4_gfx_buffers.mm"
+TEXTURE = ROOT / "benchmark" / "eu4_gfx_texture.mm"
 HOST = ROOT / "benchmark" / ".build" / "gfx_draw_capture_host"
 SHIM_HOST = ROOT / "benchmark" / ".build" / "gfx_draw_shim_host"
 SHIM_ASM = ROOT / "tests" / "gfx_draw_shim_host.S"
@@ -25,7 +26,8 @@ class GfxDrawCaptureTests(unittest.TestCase):
             "clang", "-arch", "x86_64", "-O2", "-Wall", "-Wextra", "-fobjc-arc", "-lc++",
             "-I", str(ROOT / "benchmark"),
             "-framework", "Foundation", "-framework", "Metal", "-framework", "QuartzCore",
-            "-o", str(HOST), str(HOST_SOURCE), str(CAPTURE), str(EVENTS), str(INIT), str(FRAME_OBSERVE), str(BUFFERS),
+            "-o", str(HOST), str(HOST_SOURCE), str(CAPTURE), str(EVENTS), str(INIT), str(FRAME_OBSERVE),
+            str(BUFFERS), str(TEXTURE),
         ]
         built = subprocess.run(command, capture_output=True, text=True, check=False)
         if built.returncode:

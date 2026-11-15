@@ -699,12 +699,16 @@ static void test_backend(void) {
     }
     /* The authentic OpenGL caps word on this machine is 0040000001010101:
        byte 4 (0x18c) is 1, which drives the engine's POW2 decision and the
-       live loading-quad UVs. 0x18e stays 0 because the Metal backend does not
-       implement ARB_shader_texture_lod. */
-    if (((uint8_t *)master)[0x18c] != 1) {
-        fail("capability POW2 byte");
+       live loading-quad UVs. Byte 6 (0x18e) is 1 because the authentic context
+       advertises GL_ARB_shader_texture_lod; reporting it as 0 compiles the
+       NO_SHADER_TEXTURE_LOD fallback (flat normals and washed-out map). */
+    if (((uint8_t *)master)[0x18c] != 1 || ((uint8_t *)master)[0x18e] != 1) {
+        fail("capability POW2 or shader-texture-LOD byte");
     }
     for (int i = 5; i < 11; i++) {
+        if (i == 6) {
+            continue; /* 0x18e is the shader-texture-LOD capability. */
+        }
         if (((uint8_t *)master)[0x188 + i] != 0) {
             fail("capability span was not otherwise zero");
         }

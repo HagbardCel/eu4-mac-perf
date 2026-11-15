@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "benchmark" / "eu4_gfx_init.mm"
 FRAME_OBSERVE = ROOT / "benchmark" / "eu4_gfx_frame_observe.c"
 BUFFERS = ROOT / "benchmark" / "eu4_gfx_buffers.mm"
+TEXTURE = ROOT / "benchmark" / "eu4_gfx_texture.mm"
 HOST_SOURCE = ROOT / "tests" / "gfx_hidpi_host.mm"
 GEOMETRY_VIEW = ROOT / "benchmark" / "eu4_metal_geometry_view.m"
 EVENTS = ROOT / "benchmark" / "eu4_metal_events.c"
@@ -18,7 +19,7 @@ BUILD = [
     "-framework", "AppKit", "-framework", "Foundation", "-framework", "Metal",
     "-framework", "QuartzCore",
     "-o", str(HOST), str(HOST_SOURCE), str(SOURCE), str(FRAME_OBSERVE), str(BUFFERS), str(GEOMETRY_VIEW),
-    str(EVENTS),
+    str(TEXTURE), str(EVENTS),
 ]
 
 

@@ -85,7 +85,7 @@ else
   echo "provision: goal plugin already installed"
 fi
 
-TOOLS_PLUGIN=${EU4_DSH_TOOLS_PLUGIN:-$(cd "$(dirname "$0")/.." && pwd)/eu4-tools-plugin}
+TOOLS_PLUGIN=$INFRA/dsh/eu4-tools-plugin
 if [ ! -e "$PROFILE_DIR/node_modules/@eu4/dsh-tools" ]; then
   echo "provision: installing tools plugin via link:$TOOLS_PLUGIN"
   dsh plugin --profile "$PROFILE" add "link:$TOOLS_PLUGIN"
