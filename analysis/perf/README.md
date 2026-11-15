@@ -2,7 +2,7 @@
 
 Final qualification and PR/commit list: [FINAL_REPORT.md](FINAL_REPORT.md).
 
-## Final result (1000-draw synthetic frame)
+## Final result (1000-draw synthetic frame, no Metal validation layer)
 
 | Metric | P0 baseline | Optimized |
 |---|---:|---:|
@@ -10,13 +10,20 @@ Final qualification and PR/commit list: [FINAL_REPORT.md](FINAL_REPORT.md).
 | Command buffers | 1002 | 3 |
 | Render encoders | 1000 | 1 |
 | Temporary index buffers | 1000 | 0 |
-| CPU encoding, simple / indexed / mixed | 33.0 / 44.4 / 44.3 ms | 9.3 / 12.7 / 10.3 ms |
-| Wall time, simple / indexed / mixed | 49.9 / 59.7 / 59.5 ms | 23.0 / 24.0 / 21.6 ms |
+| CPU encoding, simple / indexed / mixed | 7.83 / 17.63 / 17.36 ms | 2.00 / 3.63 / 3.69 ms |
+| Wall time, simple / indexed / mixed | 21.93 / 30.85 / 30.68 ms | 14.27 / 14.37 / 14.41 ms |
+| GPU time (3 command buffers/frame) | unavailable | 1.20 / 0.95 / 0.84 ms |
 
-These are synthetic backend-overhead measurements, not gameplay or FPS claims.
-Saved runs: [p0-baseline.json](p0-baseline.json), [p1.json](p1.json),
-[p2.json](p2.json), [p3.json](p3.json), [p4.json](p4.json),
-[final.json](final.json).
+Baseline and every stage were rebuilt in temporary worktrees and measured
+without `MTL_DEBUG_LAYER`; see [FINAL_REPORT.md](FINAL_REPORT.md). GPU timing is
+only reported for the reviewed head because the earlier per-draw accounting was
+invalid. These are synthetic backend-overhead measurements, not gameplay or FPS
+claims.
+
+Saved compact summaries: [p0-baseline.json](p0-baseline.json),
+[p1.json](p1.json), [p2.json](p2.json), [p3.json](p3.json),
+[p4.json](p4.json), [final.json](final.json). Raw per-frame samples are
+reproducible with `--records`.
 
 ## PR P0 baseline
 
