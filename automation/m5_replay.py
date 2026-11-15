@@ -28,6 +28,7 @@ SOURCES = [
     BENCH / "eu4_gfx_buffers.mm",
     BENCH / "eu4_gfx_texture.mm",
     BENCH / "eu4_gfx_init.mm",
+    BENCH / "eu4_gfx_frame_observe.c",
     BENCH / "eu4_gfx_simple_draw.mm",
     BENCH / "eu4_gfx_sprite_draw.mm",
     BENCH / "eu4_gfx_draw_encode.mm",
