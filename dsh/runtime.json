@@ -6,7 +6,7 @@
     "package_json_sha256": "3e14837ceb3bbc0ba419ed08e9b5ba164338369b1268b93c3c25d89f7b1c9953"
   },
   "node": {
-    "version": "v26.13.0"
+    "version": "v26.13.1"
   },
   "pnpm": {
     "version": "12.18.0"
@@ -49,5 +49,5 @@
     "package_json_sha256 values pin the identity of the DSH release this profile was",
     "verified against; a mismatch is a preflight failure, not a warning."
   ],
-  "note": "Requalified on 0.2.2-rc.1: the environment upgraded the installed CLI, and downgrading a global install the running Web GUI depends on is not this PR's call. Verified against the installed package: goal service (get/create/complete), ctx.tools.guard with the same denial-only ToolGuard contract, headless --json events (session/final/text/status/thinking/tool_call/tool_result), skill-filesystem customSkillDirs/includeDefaultRoots, and the session header cwd. The live profile checks pass: 2 tools, 1 guard, 1 skill."
+  "note": "Requalified on 0.2.2-rc.1: the environment upgraded the installed CLI, and downgrading a global install the running Web GUI depends on is not this PR's call. Verified against the installed package: goal service (get/create/complete), ctx.tools.guard with the same denial-only ToolGuard contract, headless --json events (session/final/text/status/thinking/tool_call/tool_result), skill-filesystem customSkillDirs/includeDefaultRoots, and the session header cwd. The live profile checks pass: 2 tools, 1 guard, 1 skill. Node pin reconciled to the installed v26.13.1 patch; the profile was re-preflighted against it."
 }

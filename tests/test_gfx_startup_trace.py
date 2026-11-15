@@ -187,3 +187,103 @@ class GfxStartupTraceTests(unittest.TestCase):
     def test_authorize_live_required(self):
         with self.assertRaises(startup.StartupError):
             startup.run(authorize_live=False)
+
+    def test_authorized_launch_preserves_configured_args_and_environment(self):
+        """Regression: run() must reach Popen without NameError.
+
+        The integration change that appended ``game_args`` to the launch
+        command also referenced ``env_extra`` without declaring either in the
+        signature.  The launch path is exercised here with preflight, the
+        lease, process creation and sleep mocked; no game is started.
+        """
+        from unittest import mock
+
+        observed: dict = {}
+
+        class FakeProcess:
+            pid = 4242
+
+            def poll(self):
+                return None
+
+            def terminate(self):
+                observed["terminated"] = True
+
+            def wait(self, timeout=None):
+                return 0
+
+            def kill(self):
+                observed["killed"] = True
+
+        class FakeLease:
+            def child_fds(self):
+                return []
+
+            def release(self):
+                observed["released"] = True
+
+        def fake_popen(command, **kwargs):
+            observed["command"] = command
+            observed["env"] = dict(kwargs["env"])
+            observed["cwd"] = kwargs["cwd"]
+            run_dir = Path(kwargs["env"]["EU4_GFX_STARTUP_DIR"])
+            (run_dir / "startup.status").write_text(
+                "state=installed\npid=4242\nerror=\n"
+            )
+            (run_dir / "summary.json").write_text(
+                json.dumps({"complete": True, "events": 1})
+            )
+            return FakeProcess()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            launcher = root / "launcher.json"
+            launcher.write_text(
+                json.dumps(
+                    {
+                        "exePath": "./eu4.app/Contents/MacOS/eu4",
+                        "exeArgs": ["-fixed", "value"],
+                    }
+                )
+            )
+            executable = root / "eu4.app" / "Contents" / "MacOS" / "eu4"
+            executable.parent.mkdir(parents=True)
+            executable.write_text("")
+            evidence = {
+                "executable_sha256": "a" * 64,
+                "settings_patch": startup.PATCH_BYTES.hex(),
+                "init_patch": startup.PATCH_BYTES.hex(),
+                "library_sha256": "b" * 64,
+            }
+            with (
+                mock.patch.object(startup, "ROOT", root),
+                mock.patch.object(startup, "preflight", return_value=evidence),
+                mock.patch.object(startup.base, "GOG_LAUNCHER", launcher),
+                mock.patch.object(startup.base, "GOG_EXE", executable),
+                mock.patch.object(
+                    startup.launch_lease, "acquire", return_value=FakeLease()
+                ),
+                mock.patch.object(startup.subprocess, "Popen", side_effect=fake_popen),
+                mock.patch.object(startup.time, "sleep", return_value=None),
+            ):
+                report = startup.run(
+                    authorize_live=True,
+                    env_extra={"EU4_GFX_FRAME_TRACE_BOUNDARY": "scene"},
+                    game_args=["--continuelastsave", "-debug"],
+                )
+
+        self.assertEqual(
+            observed["command"],
+            ["./eu4", "-fixed", "value", "--continuelastsave", "-debug"],
+        )
+        self.assertEqual(
+            observed["env"]["EU4_GFX_FRAME_TRACE_BOUNDARY"], "scene"
+        )
+        self.assertEqual(
+            observed["env"]["DYLD_INSERT_LIBRARIES"], str(startup.LIBRARY)
+        )
+        self.assertNotIn("EU4_METAL_BOOT_MODE", observed["env"])
+        self.assertEqual(observed["cwd"], executable.parent)
+        self.assertTrue(observed["released"])
+        self.assertTrue(report["accepted"])
+        self.assertEqual(report["pid"], 4242)

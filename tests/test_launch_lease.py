@@ -373,3 +373,29 @@ class TimeoutValidationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LeaseInspectionTests(unittest.TestCase):
+    def test_free_lease_is_reported_without_taking_it(self) -> None:
+        env = LeaseEnvironment(self)
+        value = launch_lease.inspect(env.exe)
+        self.assertEqual(value["state"], "free")
+        self.assertIsNone(value["holder"])
+        # Inspection must not leave a lock behind.
+        lease = env.acquire()
+        self.addCleanup(lease.release)
+
+    def test_busy_lease_reports_the_holder(self) -> None:
+        env = LeaseEnvironment(self)
+        lease = env.acquire()
+        self.addCleanup(lease.release)
+        value = launch_lease.inspect(env.exe)
+        self.assertEqual(value["state"], "busy")
+        self.assertEqual(value["holder"]["pid"], os.getpid())
+
+    def test_released_lease_becomes_free_again(self) -> None:
+        env = LeaseEnvironment(self)
+        lease = env.acquire()
+        self.assertEqual(launch_lease.inspect(env.exe)["state"], "busy")
+        lease.release()
+        self.assertEqual(launch_lease.inspect(env.exe)["state"], "free")

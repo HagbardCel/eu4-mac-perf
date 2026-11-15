@@ -2,6 +2,239 @@
 
 Authoritative summary of what is established, qualified, and in flight. Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
 
+## Strategy B — independent replay (2026-11-14)
+
+Capture once, replay independently. A canonical authentic OpenGL title frame
+(326 events, 317 draws) is replayed through the existing M6 Metal host. The
+replay now distinguishes external captured inputs from renderer-generated
+resources: 274 bindings use Metal render targets and 2,485 use captured
+assets/inputs; no captured OpenGL intermediate is seeded. The final output is
+pixel-identical (0 / 1,930,176, SHA-256 `ff2f4e2b…`) and two consecutive replays
+are deterministic (4.12 s each). Checkpoints for textures 431, 432, 443 and 447
+match exactly; the GL-RGB8/Metal-BGRA8 checkpoint 433 is diagnostic.
+
+The capture is **partial**, not complete: sampled full-extent texture 442 has no
+captured producer because resolve/copy operations are not recorded by the frame
+trace. Resolve/copy events are now rejected by the replay host rather than
+counted as successful no-ops; executing them remains open. A controlled V-flip fault localizes the earliest divergence to event 291
+(producer 289, program 349). The historical `tex7` defect is injected offline
+and the binding audit identifies the exact wrong engine unit at event 14 (842
+state mismatches) even though the title frame's terrain is overdrawn and its
+pixels do not change. Replay outcome is reported as separate `execution`,
+`coverage`, `pixels`, `semantic` and `qualified` fields; PR #190's corrected
+draw semantics are merged into the infrastructure branch.
+
+BetterDisplay `EU4 Test` (1920x1200, 1x, non-main) is created once and reused.
+The shared-settings lifecycle is lease-ordered, with durable backup, rollback,
+monitor coverage and field-level restore. Deterministic SDL call-site placement
+(clearing the engine's requested fullscreen flags) fixed the window geometry:
+**five consecutive OpenGL background launches passed** placement, focus,
+frame progress and settings restoration. Metal background is likewise **5/5 qualified**: background
+flags are propagated after clearing fullscreen and `ensure_visible_on_main()`
+no longer activates or raises the window. Background remains opt-in.
+
+Evidence: [Strategy B report](../analysis/infra/strategy-b.md). Tools:
+`eu4_capture graph`, `eu4_replay independent`, `eu4_case_inspect` for Strategy B
+cases, and `python3.14 -m automation.gfx_replay_case`.
+
+### Final correctness closure (2026-11-15)
+
+The infrastructure branch was synchronized with `origin/main` (`61e7795`) as
+merge `cb35385`; the consolidated integration PR is
+[#191](https://github.com/HagbardCel/eu4-mac-perf/pull/191). The closure fixes the startup launcher interface, makes the
+trace writer fail closed, applies one scene-occurrence semantic to both
+boundaries, bounds the Metal copy kernel to the requested rectangle, validates
+every clear flag combination against actual pixels, and rejects missing,
+duplicate or zero-index-shifted consumer provenance.
+
+The closure also makes the final reference readback passive and deterministic
+(one `read_drawable_bgra` path, explicit default framebuffer/`GL_BACK`, restored
+bindings/read buffer/pack state/PBO, no error drain), makes interposer
+resolution failure terminal instead of silently dropping the copy, shares one
+copy contract between graph and replay, recognizes transfers in coverage, and
+requires the Python JSON/blob/hash loader before a capture is accepted.
+
+Texture 442 is now resolved **in-frame**, not left as an unexplained input. A
+bounded copy trace and source capture produced a complete authentic menu frame
+(scene 75, 283 events / 273 draws / 1 resolve). `_GfxResolve` copies the default
+framebuffer (`GL_BACK`, 1728x1117) into texture 442 at event 271; events 273 and
+277 sample it. The graph is complete with 0 unproven resources.
+
+The replay executes the copy faithfully: GL source BGRA→RGBA equals the
+captured GL 442 exactly, and Metal 442 equals the channel-swapped Metal default
+source exactly. The first divergence is the **copy source** (target `0`, event
+271, producer draw 270, program 346). The captured draws record `dither=true`
+and `multisample=true`, which the Metal host does not implement; the source
+difference is dominated by 1–2 LSB but includes 169,367 pixels differing by
+more than 2 (max 105), so dithering is a hypothesis, not an established
+exclusive cause. The copy-bearing
+frame therefore reports `coverage=complete`, `semantic=match` (binding-audit
+scope), `state_coverage=partial` (`gl_dither`, `multisample` unsupported),
+`pixels=divergent`, `qualified=false` (1,792,005 / 1,930,176 final pixels
+differ, max channel error 23). The canonical no-copy frame remains pixel-exact
+(0 differences); scene 79 remains the four-alpha-LSB case.
+
+One longer background OpenGL capture now reaches the title scene and completes
+283 events with the window placed on `EU4 Test`, physical display unchanged,
+clean termination and restored settings. A single sampled frontmost process was
+`eu4`, so unfocused rendering was not independently re-proven in that long run;
+the existing 5/5 OpenGL and 5/5 Metal short-run placement/focus qualification
+remains the supported evidence. `strategy-b-metrics.json` records these
+categories separately and is reconstructed from the session records.
+
+Checkpoint evidence is now reconciled against the request: missing, duplicate,
+unexpected, failed or identity-mismatched checkpoints are instrumentation
+failures (CLI exit 1), never a qualified match. Copy-only resources are
+validated from ordered transfer records rather than invented sampler bindings.
+The semantic verdict is explicitly `semantic_scope=binding_audit`; unsupported
+captured state (`gl_dither`, `multisample`) makes `state_coverage=partial` and
+prevents full qualification. Non-default framebuffer source metadata is read
+from the selected attachment under saved/restored binding state, with
+unsupported attachment types failing closed.
+
+Invalid execution, coverage, pixel, state or checkpoint evidence is now
+classified `invalid` with exit 1; valid deliberate fault experiments remain exit
+3, and `status=qualified` is emitted only with `qualified=true`. Binding
+diagnostics preserve engine unit 0 instead of converting it to -1.
+
+Transfer provenance now enforces the captured source category for every copy
+(`metal_default` for the in-frame default framebuffer, `metal_render_target`
+for generated textures, declared boundary categories otherwise). Captured
+checkpoint formats are authoritative, so a reported RGB8 format cannot downgrade
+an RGBA8 checkpoint to diagnostic. Replay/case output directories are
+ownership-checked and overlap-checked before replacement, and evaluation
+severity keeps `invalid` from being overwritten by `partial`.
+
+The portable Linux workflow's unit-test dependencies were made deterministic
+(mocked placement libraries, pinned identity fixtures, test-only `/proc`
+identity on Linux) without changing production platform restrictions. The
+exact GitHub command was run in an amd64 Ubuntu 24.04 VM with Python 3.14 and
+Node 26; the previously failing modules pass. Scene-75's difference is
+characterized quantitatively in `scene75-difference.json`: the first observed
+difference is the default framebuffer before the copy, with dithering a
+hypothesis rather than an exclusive established cause.
+
+## Differential debugging infrastructure (2026-11-14, stacked PRs 1-5)
+
+Five stacked branches implement the autonomous OpenGL-vs-Metal differential
+harness on top of PR #189:
+
+| PR | Branch | Delivered |
+| --- | --- | --- |
+| 1 | `infra/pr1-diagnostics` | capture validity (`valid`/`invalid`/`unverified`), aggregated GPU health gate, event-driven waits/profiles, owned-session isolation, atomic dual ledger claims, bounded content-addressed artifacts, GL pack-state/PBO restoration, window-capture qualification |
+| 2 | `infra/pr2-dual-runner` | shared native per-frame observation module, bounded ring/dump protocol, scenario schema, concurrent dual runner with streaming and strict-lockstep modes, owned termination and evidence preservation |
+| 3 | `infra/pr3-differential-compare` | semantic alignment and content veto, settle draw threshold, normalized pixel/region metrics, exact/tolerant/diagnostic policies, mirror detection, same-backend consistency experiments |
+| 4 | `infra/pr4-first-divergence` | cross-API semantic/local resource comparison, ten synthetic historical regressions, bounded flight recorder, self-contained offline case package with analysis and replay |
+| 5 | `infra/pr5-agent-tools` | `eu4_re_query` over existing extracts, one JSON tool core for the seven agent tools, native DSH plugin, efficiency metrics, operational defaults |
+
+Evidence: [dual-process feasibility](../analysis/infra/dual-process-feasibility.md),
+[dual-process campaigns](../analysis/infra/dual-process-campaigns.md),
+[alignment and comparison](../analysis/infra/frame-alignment-and-comparison.md),
+[first divergence and offline cases](../analysis/infra/first-divergence-and-offline-cases.md),
+[agent integration and efficiency](../analysis/infra/agent-integration-and-efficiency.md),
+[diagnostic integrity audit](../analysis/infra/diagnostic-integrity-audit.md).
+
+**Established.** Two genuine pinned EU4 processes (authentic OpenGL and
+reconstructed Metal) ran concurrently twice for 20 s with on-screen windows and
+clean termination. A later campaign ran 60 and 80 paired lockstep frames with
+bounded evidence and no false rendering verdicts after the loading-stage gate
+was added. A recorded loading-stage comparison exposed a real correspondence
+bug (identical caller composition at different loading progress); it is now a
+regression and comparison is gated on `settle.min_draws` and target-phase
+pairing. An **offline 100-frame campaign with a controlled mirrored-text defect
+at frame 57** detects exactly that frame, builds a replayable case, and
+reproduces it without an EU4 launch (`tests/test_offline_campaign.py`).
+
+The real 100-frame **title-scene** demonstration is still open. Two live
+attempts failed for different, now-understood reasons:
+
+1. The host lease was held by the M6 agent's real EU4 process; the harness
+   refused instead of interfering (intended coexistence).
+2. With the lease free, the passive OpenGL observer sealed at its 1024-event
+   quota after ~12 s and stopped emitting frame observations. A **frame-only
+   observer mode** (`EU4_GFX_FRAME_ONLY=1`) now installs only the present/draw/
+   clear hooks and bypasses the event-record quota; it streamed 20,000
+   metadata frames at ~112 fps. A later long run streamed **35,234 frames over
+   302 s** (draws 17-81, still loading) before the reference process was killed
+   externally with SIGKILL; the historical M6 title evidence took about 5m40s
+   from launch, so the 302 s run had not yet reached the title. The live title
+   campaign is therefore not claimed; the remaining unknowns are the long
+   reference loading time and the external kill. The frame cap is raised to
+   120,000 observations, and phase readiness now also requires similar draw
+   counts.
+
+Metadata-only observation, phase-gated pairing, staggered launch and pre-requested
+full-resolution windows are implemented and tested. A later real run did reach
+110 paired observations, but every pair was correctly reported `ambiguous`
+because the reference had 46 draws while the candidate had 273; no rendering
+verdict was issued. Phase readiness now also requires the two draw counts to be
+within `settle.draw_tolerance` (default 25%), and the frame limit is enforced
+while pairing rather than after a whole batch.
+
+**Qualification corrections (P0/P1).** Campaign execution and rendering
+qualification are now separate. A `match` requires the requested number of
+valid, passing pixel comparisons, clean GPU health and verified static-scene
+correspondence; frame-limit completion alone is `incomplete`. Image correlation
+is diagnostic only. Scenario controls that are not implemented fail closed.
+Incremental health polling stops a campaign on the first rejected draw.
+Lockstep timeouts invalidate synchronization. GL readback no longer consumes
+pending engine errors. Ring dumps retain the selected frame's immutable
+metadata, and capture requests use request IDs with explicit acknowledgements.
+Region-specific policies (including text) now affect acceptance. See
+[qualification contract](../analysis/infra/qualification-contract.md). The first GL/GL
+consistency experiment (same Venice save, two processes) produced 20 pairs but
+zero aligned comparisons: draw counts were 373 vs 361 and the caller signatures
+differed. The save keeps running, so the processes are not at the same update;
+this fails Experiment A and blocks GL/Metal qualification until an
+engine-level update identity or a paused/static scenario is available. The observer now emits that identity from `CCurrentGameState::_pInstance` (date
+block at `+0x1d18`, read with `vm_read_overwrite`), and alignment rejects unequal
+identities; the day counter was observed live in a `--continuelastsave`
+reference (`game_day=43808760` at frame 5). A repeat showed that hashing the full
+date block is not deterministic across processes, so identity now derives only
+from the day counter. An identity-gated GL/GL run aligned 20 pairs but produced
+zero comparisons because per-pair requests overwrote the phase-entry capture
+window; streaming now issues a single pre-requested window. A later Experiment A
+run had equal day/update identities but only 13/20 pairs aligned because the
+pair records omitted both identity fields; they are now carried and unit-tested.
+Neither fix has been re-run live. Replaying the recorded 20-frame
+observation window offline through the fixed alignment yields 20/20 aligned
+pairs; the real window is a committed regression fixture. A new Experiment A run
+then paired 20 frames but the same-day processes carried 241 vs 370 draws (34.9%
+apart), so comparison was correctly refused. The day identity is too coarse for
+a running save; a paused save or a finer tick identity is required. Replay tool
+envelopes now distinguish successful replay execution from the reproduced
+comparison outcome, and metrics count executable renderer reproductions
+separately from image-comparison cases.
+
+**Lease preflight.** The agent surface now exposes `eu4_session lease`; on the
+current host it reports `busy`, holder worktree
+`/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf`, and the running
+game PID, so a general agent does not attempt a futile launch while the M6
+worktree is active.
+
+**DSH tools mount.** A temporary dedicated DSH home
+(`EU4_DSH_HOME=/tmp/eu4-dsh-tools-test`) provisioned both `@eu4/dsh-goal` and
+`@eu4/dsh-tools`; `dsh plugin add link:` succeeded for both and the profile row
+is present. `preflight.sh` reaches the plugin/runtime checks; its only failure
+is the pre-existing Node pin (`v26.13.0` vs installed `v26.13.1`), an
+environment drift, not a tools-plugin failure. The effective `--dump-config`
+contains the `eu4-tools` row and `name: '@eu4/dsh-tools'`. The live profile was
+deliberately not mutated while the Web session and the M6 agent were active.
+
+**Safety properties.** A rejected draw is detected on its first diagnostic
+execution in about 4 s; command-buffer completion is never reported as pixel
+correctness; owned cleanup signals only re-verified session identities; an
+unrelated EU4 worktree cannot be terminated by a harness session; inconclusive
+alignment is counted separately from a rendering difference.
+
+**Open limits.** A per-frame update-state/scene fingerprint is still missing;
+without it loading progress cannot be aligned generally. The live campaign
+records frame payloads and health, not a per-draw operation prefix. The real
+GL/GL and Metal/Metal consistency campaigns remain to be run. Headless DSH
+tool discovery in the live Web GUI was not re-provisioned in this session; the
+plugin and profile row are tested independently. These stacks are local
+branches, not pushed PRs.
+
 ## M6 — authentic title scene through Metal (accepted 2026-11-14)
 
 The authentic title scene renders through Metal and passes the three-start

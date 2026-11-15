@@ -380,6 +380,16 @@ static void ensure_visible_on_main(void) {
         probe.zPosition = 100.0f;
         [content.layer addSublayer:probe];
     }
+    const char *display_mode = getenv("EU4_DISPLAY_MODE");
+    if (display_mode != NULL && strcmp(display_mode, "background") == 0) {
+        /* Background sessions attach the layer but must not activate, make the
+           window key, or repeatedly raise it.  The window is already on the
+           selected virtual display from the SDL creation call. */
+        if (!window.isVisible) {
+            [window orderFront:nil];
+        }
+        return;
+    }
     [NSApp activateIgnoringOtherApps:YES];
     [window makeKeyAndOrderFront:nil];
     [window orderFrontRegardless];
@@ -557,13 +567,48 @@ static void eu4_metal_boot_on_glew(void) {
            g_window_flags, g_layer != nil, g_layer != nil, 0, 0, NULL, -1);
 }
 
+static void background_window_geometry(int *x, int *y, uint32_t *flags,
+                                        int w, int h) {
+    const char *mode = getenv("EU4_DISPLAY_MODE");
+    const char *display = getenv("EU4_DISPLAY_ID");
+    if (mode == NULL || strcmp(mode, "background") != 0 ||
+        display == NULL || display[0] == 0) {
+        return;
+    }
+    CGDirectDisplayID display_id =
+        (CGDirectDisplayID)strtoul(display, NULL, 0);
+    CGRect bounds = CGDisplayBounds(display_id);
+    int margin = 24;
+    const char *margin_env = getenv("EU4_DISPLAY_MARGIN");
+    if (margin_env != NULL && margin_env[0] != 0) {
+        margin = (int)strtol(margin_env, NULL, 0);
+    }
+    *x = (int)bounds.origin.x + margin;
+    *y = (int)bounds.origin.y + margin;
+    /* Keep the drawable at the requested windowed extent. */
+    *flags &= ~(uint32_t)(0x1u | 0x1000u);
+    const char *trace_path = getenv("EU4_DISPLAY_WINDOW_TRACE");
+    if (trace_path != NULL && trace_path[0] != 0) {
+        FILE *trace = fopen(trace_path, "a");
+        if (trace != NULL) {
+            fprintf(trace, "{\"metal_placed\":true,\"x\":%d,\"y\":%d,"
+                           "\"w\":%d,\"h\":%d,\"flags\":%u}\n",
+                    *x, *y, w, h, *flags);
+            fclose(trace);
+        }
+    }
+}
+
 void *eu4_metal_boot_on_create(const char *title, int x, int y, int w, int h, uint32_t flags) {
     uint32_t incoming = flags;
+    background_window_geometry(&x, &y, &flags, w, h);
     if ((incoming & kOpenGL) == 0) {
         finish("metal_window_boot_failed", "incoming_flags_lack_opengl", incoming, incoming, 0, 0,
                0, 0, 0, 0, NULL, -1);
     }
-    uint32_t passed = incoming & ~(uint32_t)kOpenGL;
+    /* background_window_geometry may have cleared fullscreen flags; propagate
+       the modified set.  Keep ``incoming`` unchanged for diagnostics. */
+    uint32_t passed = flags & ~(uint32_t)kOpenGL;
     if (g_clear_error != NULL) {
         g_clear_error();
     }

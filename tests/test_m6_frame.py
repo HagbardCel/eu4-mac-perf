@@ -272,6 +272,18 @@ class FrameTraceTests(unittest.TestCase):
             self.assertEqual(coverage["texture_count"], 1)
             self.assertEqual(coverage["seed"]["width"], WIDTH)
 
+    def test_balanced_but_malformed_json_is_refused_by_python_loader(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            frame = Path(tmp) / "frame"
+            build_synthetic_trace(frame)
+            lines = (frame / "frame-events.jsonl").read_text().splitlines()
+            # This line satisfies the native framing checks (leading '{',
+            # trailing '}', containing "kind") but is not valid JSON.
+            lines[0] = '{"kind":"draw",}'
+            (frame / "frame-events.jsonl").write_text("\n".join(lines) + "\n")
+            with self.assertRaises(m6_frame.FrameError):
+                m6_frame.load_trace(frame)
+
     def test_tampered_blob_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             frame = Path(tmp) / "frame"
@@ -299,6 +311,71 @@ class FrameTraceTests(unittest.TestCase):
             (frame / "frame-trace.json").write_text(json.dumps(manifest))
             with self.assertRaises(m6_frame.FrameError):
                 m6_frame.load_trace(frame)
+
+    def test_coverage_understands_supported_transfers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            frame = Path(tmp) / "frame"
+            build_synthetic_trace(frame)
+            events = [
+                json.loads(line)
+                for line in (frame / "frame-events.jsonl").read_text().splitlines()
+            ]
+            events.append({
+                "kind": "resolve", "operation": "glCopyTexSubImage2D",
+                "is_blit": False, "source_framebuffer": 0,
+                "read_buffer": 0x0405, "source": "0",
+                "destination": "10", "source_level": 0,
+                "destination_level": 0, "source_resolved": True,
+                "destination_resolved": True,
+                "source_rect": [0, 0, WIDTH, HEIGHT],
+                "destination_offset": [0, 0], "width": WIDTH,
+                "height": HEIGHT, "source_width": WIDTH,
+                "source_height": HEIGHT, "source_internal_format": 0,
+                "destination_width": WIDTH, "destination_height": HEIGHT,
+                "internal_format": 0x8058,
+            })
+            sampled = json.loads(json.dumps(events[1]))
+            sampled["target"] = {
+                "framebuffer": 1, "width": WIDTH, "height": HEIGHT,
+                "color_attachment": {
+                    "type": "texture", "name": "10", "level": 0,
+                    "internal_format": "RGBA8", "width": WIDTH,
+                    "height": HEIGHT,
+                },
+            }
+            sampled["textures"][0]["name"] = 10
+            events.append(sampled)
+            (frame / "frame-events.jsonl").write_text(
+                "\n".join(json.dumps(event) for event in events) + "\n")
+            manifest = json.loads((frame / "frame-trace.json").read_text())
+            manifest["events"] = len(events)
+            (frame / "frame-trace.json").write_text(json.dumps(manifest))
+            coverage = m6_frame.coverage_report(m6_frame.load_trace(frame))
+            self.assertEqual(coverage["resolve_count"], 1)
+            self.assertEqual(coverage["copy_count"], 0)
+            self.assertEqual(coverage["transfer_count"], 1)
+            self.assertFalse(any(item["issue"] == "unknown_event_kind"
+                                 for item in coverage["missing"]))
+            self.assertTrue(coverage["ok"], coverage["missing"])
+
+    def test_invalid_transfer_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            frame = Path(tmp) / "frame"
+            build_synthetic_trace(frame)
+            events = [
+                json.loads(line)
+                for line in (frame / "frame-events.jsonl").read_text().splitlines()
+            ]
+            events.append({"kind": "resolve", "operation": "glBlitFramebuffer"})
+            (frame / "frame-events.jsonl").write_text(
+                "\n".join(json.dumps(event) for event in events) + "\n")
+            manifest = json.loads((frame / "frame-trace.json").read_text())
+            manifest["events"] = len(events)
+            (frame / "frame-trace.json").write_text(json.dumps(manifest))
+            coverage = m6_frame.coverage_report(m6_frame.load_trace(frame))
+            self.assertEqual(coverage["resolve_count"], 1)
+            self.assertTrue(any(item["issue"] == "invalid_transfer"
+                                for item in coverage["missing"]))
 
     def test_missing_seed_is_reported_as_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -770,15 +847,22 @@ class TraceStateHostTests(unittest.TestCase):
                     "clang", "-arch", "x86_64", "-O1", "-Wall", "-Wextra",
                     "-fobjc-arc", "-I", str(ROOT / "benchmark"),
                     "-o", str(binary), str(source), str(trace_source),
+                    str(ROOT / "benchmark" / "eu4_gfx_frame_observe.c"),
                     "-framework", "OpenGL", "-framework", "AppKit",
                 ],
                 capture_output=True, text=True, check=False,
             )
             self.assertEqual(built.returncode, 0, built.stderr)
-            ran = subprocess.run([str(binary)], capture_output=True, text=True,
-                                 check=False)
+            capture_dir = Path(tmp) / "capture"
+            capture_dir.mkdir()
+            ran = subprocess.run([str(binary), str(capture_dir)],
+                                 capture_output=True, text=True, check=False)
+            reference = capture_dir / "frame-reference.bgra"
+            self.assertTrue(reference.is_file())
+            self.assertEqual(reference.stat().st_size, 4 * 4 * 4)
         self.assertEqual(ran.returncode, 0, ran.stderr)
         self.assertIn("trace_state=1", ran.stdout)
+        self.assertIn("reference=1", ran.stdout)
 
 
 @unittest.skipUnless(sys.platform == "darwin", "the trace host needs Apple OpenGL")
@@ -800,6 +884,7 @@ class ManifestWriterTests(unittest.TestCase):
                     str(binary),
                     str(source),
                     str(trace_source),
+                    str(ROOT / "benchmark" / "eu4_gfx_frame_observe.c"),
                     "-framework",
                     "OpenGL",
                 ],
