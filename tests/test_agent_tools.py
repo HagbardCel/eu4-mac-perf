@@ -748,6 +748,120 @@ class DiagnosticSurfaceTests(ToolTests):
         self.assertFalse(comparison.exists(),
                          "agent replay must not write into historical evidence")
 
+    def temporal_session(self, root: Path, *, reference=(10, 11),
+                         candidate=(10, 11), total=30) -> Path:
+        import hashlib
+        try:
+            import numpy as np
+        except Exception:  # noqa: BLE001
+            self.skipTest("numpy is required")
+        run = self.session_result(root / "temporal-session",
+                                  session_id="temporal-session")
+        result = json.loads((run / "result.json").read_text())
+        result["scenario"]["comparison"]["policy"] = "tolerant"
+        result["scenario"]["comparison"]["max_channel_error"] = 8
+        result["scenario"]["comparison"]["allow_scale_normalization"] = True
+        (run / "result.json").write_text(json.dumps(result))
+        for role, selected in (("reference", reference), ("candidate", candidate)):
+            directory = run / role / "observe" / "captured"
+            directory.mkdir(parents=True, exist_ok=True)
+            for index in range(1, total + 1):
+                image = np.full((6, 8, 4), 20 + index, dtype=np.uint8)
+                image[:, :, 3] = 255
+                if index in selected:
+                    image[0, 0, 0] = 200
+                payload = image.tobytes()
+                path = directory / f"frame-{index}.bgra"
+                path.write_bytes(payload)
+                meta = {
+                    "schema": "gfx-frame-dump/v1",
+                    "frame_index": index,
+                    "session": "temporal-session",
+                    "backend": role,
+                    "width": 8,
+                    "height": 6,
+                    "origin": "top_left",
+                    "pixel_format": "RGBA8",
+                    "raw_file": str(path),
+                    "raw_bytes": len(payload),
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "capture_valid": True,
+                    "gpu_completed": True,
+                    "draws": 20,
+                    "caller_signature": "0xabc",
+                    "game_day": 1,
+                    "update_identity": "0x10",
+                }
+                (directory / f"frame-{index}.json").write_text(json.dumps(meta))
+        return run
+
+    def test_temporal_loading_decodes_only_the_selected_window(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = self.temporal_session(Path(temporary))
+            real = agent_tools._decode_frame_meta
+            seen = []
+
+            def recording(inner_run, role, index, meta):
+                seen.append((role, index))
+                return real(inner_run, role, index, meta)
+
+            with mock.patch.object(agent_tools, "_decode_frame_meta",
+                                   side_effect=recording):
+                code, value = self.call([
+                    "eu4_diff_inspect", "--run", str(run), "--temporal",
+                    "--reference-frame", "10", "--candidate-frame", "10",
+                    "--temporal-window", "1"])
+        self.assertEqual(code, 0)
+        temporal = value["result"]["temporal"]
+        self.assertEqual(temporal["status"], "completed")
+        self.assertEqual(temporal["completion"]["requested"], 3)
+        self.assertEqual({role for role, _ in seen}, {"reference", "candidate"})
+        self.assertEqual({index for role, index in seen if role == "reference"},
+                         {10, 11})
+        self.assertEqual({index for role, index in seen if role == "candidate"},
+                         {10, 11})
+        self.assertLess(len(seen), 30)
+
+    def test_explicit_missing_temporal_index_is_not_replaced(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = self.temporal_session(Path(temporary))
+            code, value = self.call([
+                "eu4_diff_inspect", "--run", str(run), "--temporal",
+                "--reference-frame", "99", "--candidate-frame", "10"])
+        self.assertEqual(code, 2)
+        temporal = value["result"]["temporal"]
+        self.assertEqual(temporal["status"], "incomplete")
+        self.assertEqual(temporal["selected"]["reference"], 99)
+        self.assertIn(99, temporal["missing"]["requested_reference"])
+        self.assertEqual(value["outcome"]["diagnostic"], "incomplete")
+
+    def test_temporal_window_over_the_documented_bound_is_refused(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = self.temporal_session(Path(temporary))
+            code, value = self.call([
+                "eu4_diff_inspect", "--run", str(run), "--temporal",
+                "--reference-frame", "10", "--candidate-frame", "10",
+                "--temporal-window", "5"])
+        self.assertEqual(code, 2)
+        self.assertEqual(value["status"], "refused")
+        self.assertFalse(value["ok"])
+        self.assertIn("exceeds the documented bound", value["reason"])
+        self.assertEqual(value["result"]["temporal"]["status"], "error")
+
+    def test_automatic_temporal_selection_uses_a_full_window(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = self.temporal_session(Path(temporary))
+            code, value = self.call([
+                "eu4_diff_inspect", "--run", str(run), "--temporal"])
+        self.assertEqual(code, 0)
+        temporal = value["result"]["temporal"]
+        self.assertEqual(temporal["status"], "completed")
+        self.assertEqual(temporal["selected"]["reference"], 1)
+        self.assertEqual(temporal["selected"]["candidate"], 1)
+        self.assertEqual(len(temporal["pairs"]), 3)
+        self.assertTrue(all(isinstance(pair.get("statistics"), dict)
+                            for pair in temporal["pairs"]))
+
     def test_session_discover_uses_configured_evidence_root(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

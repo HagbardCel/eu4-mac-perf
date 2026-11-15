@@ -173,6 +173,13 @@ class ScenarioTests(unittest.TestCase):
             start={"kind": "save", "save": "continuelastsave"}))
         self.assertEqual(value["start"]["kind"], "save")
 
+    def test_scale_normalization_policy_roundtrips(self):
+        default = gfx_scenario.normalize(scenario())
+        self.assertTrue(default["comparison"]["allow_scale_normalization"])
+        disabled = gfx_scenario.normalize(scenario(comparison={
+            "policy": "tolerant", "allow_scale_normalization": False}))
+        self.assertFalse(disabled["comparison"]["allow_scale_normalization"])
+
     def test_region_outside_extent_is_refused(self):
         with self.assertRaises(gfx_scenario.ScenarioError):
             gfx_scenario.normalize(scenario(comparison={

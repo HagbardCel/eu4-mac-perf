@@ -355,6 +355,10 @@ def run_suite(
         parsed = _parse_log(text)
         if timed_out:
             status = "timeout"
+        elif parsed["counts"]["ran"] == 0:
+            # A process can exit 0 while executing nothing (for example a
+            # custom loader or a filtered suite).  That is not a passing run.
+            status = "incomplete"
         elif exit_code == 0:
             status = "passed"
         elif parsed["failures"]:
@@ -372,6 +376,10 @@ def run_suite(
             "counts": parsed["counts"],
             "unittest_duration_seconds": parsed["duration_seconds"],
             "failures": parsed["failures"],
+            "reason": ("" if status in ("passed", "failed")
+                       else ("unittest executed zero tests"
+                             if parsed["counts"]["ran"] == 0
+                             else f"test run ended as {status}")),
             "timed_out": timed_out,
             "log_bytes": log_path.stat().st_size if log_path.is_file() else 0,
         })
@@ -627,7 +635,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(value, indent=2, sort_keys=True))
         if value.get("pending") is True or value.get("status") == "pending":
             return 2
-        if value.get("status") in ("busy", "error"):
+        if value.get("status") in ("busy", "error", "incomplete", "invalid"):
             return 2
         return int(value.get("exit_code") or 0)
     if args.operation == "status":

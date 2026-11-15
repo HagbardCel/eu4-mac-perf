@@ -549,7 +549,8 @@ def compare_case(case_dir: Path, *, write: bool = True) -> dict:
             "pixel_tolerance": policy.get("max_channel_error", 0),
             "max_mismatched_fraction": policy.get("max_mismatched_fraction", 0.0),
             "max_mean_abs_error": policy.get("max_mean_abs_error", 0.0),
-            "allow_scale_normalization": True,
+            "allow_scale_normalization": policy.get(
+                "allow_scale_normalization", True),
         }
         reference_meta = {
             "width": reference["width"], "height": reference["height"],
