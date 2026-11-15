@@ -2571,7 +2571,139 @@ static int run_indexed_resource(void) {
     return ok ? 0 : 1;
 }
 
+static int run_batch_sequences(void) {
+    /* Ordering/ownership sequences required by the shared-command-buffer
+       design: a refused draw must not discard earlier encodes, an independent
+       target change must flush, and a homogeneous stream must submit once. */
+    eu4_gfx_perf_set_enabled(1);
+    boot();
+    void *shader = make_generic_bench_shader();
+    uint8_t vertices[8 * 32];
+    bench_vertices(vertices);
+    void *vertex_header = eu4_gfx_create_vertex_buffer(NULL, vertices, 8, 32, 0);
+    const uint16_t indices[3] = {0, 1, 2};
+    void *index_header = eu4_gfx_create_index_buffer(NULL, indices, 3);
+    if (vertex_header == NULL || index_header == NULL) {
+        fail("batch geometry");
+    }
+    bench_install_generic(shader, vertex_header, index_header);
+    struct {
+        void *master;
+    } ctx = {g_master};
+    const float black[4] = {0.f, 0.f, 0.f, 1.f};
+    eu4_gfx_draw_raw raw;
+    memset(&raw, 0, sizeof raw);
+    raw.which = 2;
+    raw.rdi = (uint64_t)(uintptr_t)&ctx;
+    raw.rsi = 3;
+    raw.retaddr = (uint64_t)(uintptr_t)(g_image + kCallerRva);
+
+    eu4_gfx_perf_reset();
+    eu4_gfx_clear(&ctx, 7, black);
+    if (eu4_gfx_draw_capture(&raw) != 1 || eu4_gfx_draw_capture(&raw) != 1) {
+        fail("batch preserved draws");
+    }
+    /* Refusal after two successful encodes: the out-of-range index fails after
+       the batch was acquired. Earlier work must still be presented. */
+    const uint16_t outside[3] = {100, 101, 102};
+    eu4_gfx_update_index_buffer(NULL, index_header, outside, 3);
+    char diagnostic[256];
+    eu4_gfx_simple_draw_state state;
+    int refused =
+        eu4_gfx_draw_route_live(&raw, &state, diagnostic, sizeof diagnostic) ==
+        EU4_GFX_DRAW_ROUTE_UNSUPPORTED;
+    eu4_gfx_perf_snapshot perf;
+    eu4_gfx_perf_read(&perf);
+    int preserved_draws = perf.draws_encoded == 2;
+    size_t length = 0;
+    uint8_t *pixels = read_target(&length);
+    int preserved_pixels = pixels[((size_t)32 * kSize + 32) * 4 + 2] > 200;
+    free(pixels);
+
+    /* Independent target selection between draws flushes the active batch. */
+    eu4_gfx_update_index_buffer(NULL, index_header, indices, 3);
+    eu4_gfx_clear(&ctx, 7, black);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("batch target draw 1");
+    }
+    eu4_gfx_set_render_target(&ctx, NULL);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("batch target draw 2");
+    }
+    pixels = read_target(&length);
+    int target_switch = pixels[((size_t)32 * kSize + 32) * 4 + 2] > 200;
+    free(pixels);
+
+    /* In-place vertex-buffer update between draws: the batch flushes and
+       waits before the shared storage is overwritten. */
+    eu4_gfx_perf_reset();
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("batch update draw 1");
+    }
+    eu4_gfx_update_vertex_buffer(&ctx, vertex_header, vertices, 8, 0, 0);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("batch update draw 2");
+    }
+    pixels = read_target(&length);
+    int resource_update = pixels[((size_t)32 * kSize + 32) * 4 + 2] > 200;
+    free(pixels);
+    eu4_gfx_perf_read(&perf);
+    resource_update = resource_update && perf.draws_encoded == 2 &&
+                      perf.batch_flushes >= 1;
+
+    /* Homogeneous stream: one draw-stream command buffer, plus clear/present. */
+    eu4_gfx_perf_reset();
+    eu4_gfx_clear(&ctx, 7, black);
+    for (int i = 0; i < 1000; i++) {
+        if (eu4_gfx_draw_capture(&raw) != 1) {
+            fail("batch homogeneous draw");
+        }
+    }
+    MTLTextureDescriptor *desc =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                           width:kSize
+                                                          height:kSize
+                                                       mipmapped:NO];
+    desc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead |
+                 MTLTextureUsageShaderWrite;
+    desc.storageMode = MTLStorageModeShared;
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    id<MTLTexture> present_target = [backend.device newTextureWithDescriptor:desc];
+    if (present_target == nil) {
+        fail("batch present target");
+    }
+    eu4_gfx_test_set_present_drawable((__bridge void *)present_target);
+    if (eu4_gfx_present(g_master) != 1 || g_stopped) {
+        fail("batch present");
+    }
+    eu4_gfx_perf_read(&perf);
+    int one_submission = perf.command_buffers_created <= 4 &&
+                         perf.draws_encoded == 1000;
+    int flushes = perf.batch_flushes >= 1;
+
+    /* Shutdown with an encoded but unsubmitted draw. */
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("batch shutdown draw");
+    }
+    eu4_gfx_shutdown(g_master);
+    int shutdown_ok = !g_stopped;
+    g_master = NULL;
+
+    int ok = refused && preserved_draws && preserved_pixels && target_switch &&
+             resource_update && one_submission && flushes && shutdown_ok;
+    printf("batch_sequences=%d refused=%d preserved_draws=%d preserved_pixels=%d "
+           "target_switch=%d resource_update=%d one_submission=%d flushes=%d "
+           "shutdown=%d command_buffers=%llu\n",
+           ok, refused, preserved_draws, preserved_pixels, target_switch,
+           resource_update, one_submission, flushes, shutdown_ok,
+           (unsigned long long)perf.command_buffers_created);
+    return ok ? 0 : 1;
+}
+
 int main(int argc, char **argv) {
+    if (argc >= 2 && strcmp(argv[1], "--batch-sequences") == 0) {
+        return run_batch_sequences();
+    }
     if (argc >= 2 && strcmp(argv[1], "--indexed-resource") == 0) {
         return run_indexed_resource();
     }

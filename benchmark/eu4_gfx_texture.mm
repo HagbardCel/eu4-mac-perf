@@ -499,6 +499,8 @@ static uint8_t *expand_bgr(const uint8_t *bgr, uint32_t width, uint32_t height);
 
 void eu4_gfx_update_texture(void *ignored, const void *pixels, uint32_t width,
                             uint32_t height, uint32_t flags, void *header) {
+    /* replaceRegion mutates storage a queued draw may still sample. */
+    (void)eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_RESOURCE_UPDATE, 1);
     (void)ignored;
     (void)flags;
     if (header == NULL) {

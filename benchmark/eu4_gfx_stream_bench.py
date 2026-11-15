@@ -66,11 +66,14 @@ def percentile(values: list[float], fraction: float) -> float:
     return ordered[min(rank, len(ordered)) - 1]
 
 
-def run_kind(kind: str, draws: int, frames: int, *, force_build: bool = False) -> dict:
+def run_kind(kind: str, draws: int, frames: int, *, force_build: bool = False,
+             extra_env: dict | None = None) -> dict:
     host = build_host(force_build)
     env = os.environ.copy()
     env["MTL_DEBUG_LAYER"] = "1"
     env["MTL_DEBUG_LAYER_ERROR_MODE"] = "assert"
+    if extra_env:
+        env.update(extra_env)
     ran = subprocess.run(
         [str(host), "--bench", kind, str(draws), str(frames)],
         capture_output=True,

@@ -155,6 +155,16 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertIn("base4_green=1", ran.stdout)
         self.assertIn("base0_red=1", ran.stdout)
 
+    def test_shared_command_batch_sequences(self) -> None:
+        """Refusal, target change, in-place update, 1000 draws and shutdown."""
+        ran = self._run("--batch-sequences")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("batch_sequences=1", ran.stdout)
+        for token in ("refused=1", "preserved_draws=1", "preserved_pixels=1",
+                      "target_switch=1", "resource_update=1", "one_submission=1",
+                      "flushes=1", "shutdown=1"):
+            self.assertIn(token, ran.stdout)
+
     def test_indexed_draw_reuses_engine_index_buffer(self) -> None:
         """The draw path binds the registry's Metal buffer directly."""
         ran = self._run("--indexed-resource")

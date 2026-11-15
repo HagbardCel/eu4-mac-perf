@@ -42,9 +42,11 @@ class GfxStreamBenchTests(unittest.TestCase):
         # Every draw is encoded, in draw order.
         self.assertEqual(perf["draws_encoded"]["median"], 40)
         self.assertEqual(perf["draws_simple"]["median"], 40)
-        # Baseline submission model: one draw-stream command buffer per draw,
-        # plus the clear and present submissions.
-        self.assertGreaterEqual(perf["command_buffers_created"]["median"], 40)
+        # Draws share one active command buffer; the frame still needs the
+        # clear and present submissions.
+        self.assertLessEqual(perf["command_buffers_created"]["median"], 5)
+        self.assertGreaterEqual(perf["batch_flushes"]["median"], 1)
+        # PR P2 does not coalesce render passes yet.
         self.assertEqual(perf["render_encoders_created"]["median"], 40)
         self.assertEqual(perf["index_temp_allocs"]["median"], 0)
         # Fully warmed frames do not compile pipelines.
@@ -62,6 +64,14 @@ class GfxStreamBenchTests(unittest.TestCase):
         # no temporary allocation and no CPU copy per draw.
         self.assertEqual(perf["index_temp_allocs"]["median"], 0)
         self.assertEqual(perf["index_temp_bytes"]["median"], 0)
+
+    def test_ab_switch_restores_per_draw_submission(self) -> None:
+        measured = self.bench.run_kind(
+            "simple", 40, 2, extra_env={"EU4_GFX_BATCH_DRAWS": "0"}
+        )
+        perf = measured["summary"]["counters"]
+        self.assertGreaterEqual(perf["command_buffers_created"]["median"], 40)
+        self.assertEqual(perf["render_encoders_created"]["median"], 40)
 
     def test_mixed_state_changes_within_stream(self) -> None:
         measured = self.bench.run_kind("mixed", 60, 2)
