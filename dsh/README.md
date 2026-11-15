@@ -44,12 +44,13 @@ Two deliberate deviations from the shipped web profile:
 The scripts set `DSH_HOME` themselves from `EU4_DSH_HOME` (default
 `~/.local/share/eu4-dsh`) and **deliberately ignore an inherited `DSH_HOME`**, so
 this profile can never reuse or mutate the interactive `~/.dsh` install.
-`run.sh` also exports `EU4_DSH_WORKSPACE` as this trusted infrastructure
+`run.sh` also exports `EU4_DSH_INFRA_ROOT` as this trusted infrastructure
 checkout, which is what the tools plugin uses for its Python core; `--workspace`
 changes only the session workspace and skill root, not that infrastructure
-root. Seven tokens are opt-in: `EU4_DSH_SANDBOX_MODE` and
-`EU4_DSH_WORKSPACE` are recorded by the bridge when set, and
-`EU4_DSH_BOOT_PROOF` makes the plugin write its mount receipt.
+root. Do not reuse `EU4_DSH_WORKSPACE` for this: the campaign bridge interprets
+it as the declared candidate workspace. Seven tokens are opt-in:
+`EU4_DSH_SANDBOX_MODE` and `EU4_DSH_WORKSPACE` are recorded by the bridge when
+set, and `EU4_DSH_BOOT_PROOF` makes the plugin write its mount receipt.
 
 `provision.sh` is idempotent. Only `--init` (or a missing profile directory)
 passes `--from-default-profile`, because doing so later would replace the

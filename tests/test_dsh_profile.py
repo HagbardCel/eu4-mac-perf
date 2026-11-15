@@ -14,8 +14,12 @@ a live preflight or a session where a tool is silently missing.
 import hashlib
 import json
 import os
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 from automation import dsh_profile
@@ -164,8 +168,20 @@ class ProvisionAndRegistrationTests(unittest.TestCase):
 
     def test_run_passes_the_infrastructure_root_to_the_tools_plugin(self) -> None:
         text = RUN.read_text(encoding="utf-8")
-        self.assertIn(': "${EU4_DSH_WORKSPACE:=$INFRA}"', text)
-        self.assertIn("export EU4_DSH_WORKSPACE", text)
+        self.assertIn(': "${EU4_DSH_INFRA_ROOT:=$INFRA}"', text)
+        self.assertIn("export EU4_DSH_INFRA_ROOT", text)
+        # EU4_DSH_WORKSPACE belongs to the bridge's candidate assertion.
+        self.assertNotIn("export EU4_DSH_WORKSPACE", text)
+
+    def test_overlay_uses_the_infra_root_not_the_workspace_assertion(self) -> None:
+        text = OVERLAY.read_text(encoding="utf-8")
+        self.assertIn("process.env.EU4_DSH_INFRA_ROOT", text)
+        self.assertNotIn("process.env.EU4_DSH_WORKSPACE", text)
+
+    def test_preflight_emits_one_json_object_on_success(self) -> None:
+        text = PREFLIGHT.read_text(encoding="utf-8")
+        self.assertNotIn('print(json.dumps({"ok": True}))', text)
+        self.assertIn('printf \'{"ok":true', text)
 
     def test_campaign_overlay_mounts_the_tools_plugin(self) -> None:
         text = RUN_CAMPAIGN.read_text(encoding="utf-8")
@@ -177,6 +193,140 @@ class ProvisionAndRegistrationTests(unittest.TestCase):
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("npm test --prefix dsh/eu4-goal-plugin", text)
         self.assertIn("npm test --prefix dsh/eu4-tools-plugin", text)
+
+
+class LauncherEnvironmentTests(unittest.TestCase):
+    """The launchers must not reuse the bridge's candidate-workspace variable.
+
+    These use a fake ``dsh`` so no Web server, model request or EU4 launch is
+    made. The campaign case still runs the real bridge prepare, including its
+    candidate-workspace guard.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.home = self.root / "dsh-home"
+        (self.home / "profiles" / "eu4-web").mkdir(parents=True)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.out = self.root / "fake-dsh.json"
+        fake = self.bin / "dsh"
+        fake.write_text(
+            "#!/bin/sh\n"
+            "python3 - \"$@\" <<'PY'\n"
+            "import json, os, sys\n"
+            "json.dump({\n"
+            "    'cwd': os.getcwd(),\n"
+            "    'infra': os.environ.get('EU4_DSH_INFRA_ROOT'),\n"
+            "    'workspace': os.environ.get('EU4_DSH_WORKSPACE'),\n"
+            "    'skill': os.environ.get('EU4_DSH_SKILL_ROOT'),\n"
+            "    'args': sys.argv[1:],\n"
+            "}, open(os.environ['FAKE_DSH_OUT'], 'w'))\n"
+            "PY\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+
+    def _env(self, extra: dict | None = None) -> dict:
+        env = os.environ.copy()
+        for key in ("EU4_DSH_WORKSPACE", "EU4_DSH_INFRA_ROOT", "EU4_DSH_SKILL_ROOT"):
+            env.pop(key, None)
+        env.update({
+            "EU4_DSH_HOME": str(self.home),
+            "EU4_DSH_PYTHON": sys.executable,
+            "PATH": f"{self.bin}{os.pathsep}{env['PATH']}",
+            "FAKE_DSH_OUT": str(self.out),
+        })
+        env.update(extra or {})
+        return env
+
+    def _run(self, args: list[str], cwd: Path, extra_env: dict | None = None):
+        return subprocess.run(
+            [str(RUN), *args], cwd=cwd, env=self._env(extra_env),
+            capture_output=True, text=True, check=False, timeout=180,
+        )
+
+    def _editable_worktree(self) -> Path:
+        workspace = self.root / "editable-worktree"
+        skill = workspace / ".opencode" / "skills" / "opengl-metal-reconstruction"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text("# skill\n", encoding="utf-8")
+        subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+        return workspace
+
+    def _campaign_sidecar(self) -> tuple[Path, Path]:
+        token = uuid.uuid4().hex[:10]
+        root = REPO / ".local" / "pre-m7" / f"launcher-{token}"
+        workspace = root / "workspace"
+        run_root = root / "run"
+        sidecar = json.loads(
+            (REPO / "dsh" / "campaigns" / "offline-smoke.json").read_text(
+                encoding="utf-8"))
+        sidecar["candidate"]["workspace"] = str(workspace.relative_to(REPO))
+        sidecar["run_root"] = str(run_root.relative_to(REPO))
+        path = self.root / "campaign-sidecar.json"
+        path.write_text(json.dumps(sidecar), encoding="utf-8")
+        self.addCleanup(shutil.rmtree, root, True)
+        return path, workspace
+
+    def test_workspace_from_unrelated_cwd_pins_trusted_infra(self) -> None:
+        workspace = self._editable_worktree()
+        unrelated = self.root / "unrelated"
+        unrelated.mkdir()
+        ran = self._run(["--workspace", str(workspace)], unrelated)
+        self.assertEqual(ran.returncode, 0, ran.stderr + ran.stdout)
+        recorded = json.loads(self.out.read_text(encoding="utf-8"))
+        self.assertEqual(Path(recorded["cwd"]).resolve(), unrelated.resolve())
+        self.assertEqual(Path(recorded["infra"]).resolve(), REPO.resolve())
+        self.assertIsNone(recorded["workspace"])
+        self.assertEqual(Path(recorded["skill"]).resolve(),
+                         (workspace / ".opencode" / "skills").resolve())
+
+    def test_campaign_prepare_rejects_a_declared_wrong_workspace(self) -> None:
+        sidecar, _ = self._campaign_sidecar()
+        ran = self._run(
+            ["--campaign", str(sidecar)], self.root,
+            {"EU4_DSH_WORKSPACE": str(REPO)},
+        )
+        self.assertNotEqual(ran.returncode, 0, ran.stdout)
+        self.assertIn("declared DSH workspace", ran.stderr + ran.stdout)
+        self.assertFalse(self.out.exists(), "prepare refusal must precede dsh")
+
+    def test_campaign_prepare_passes_without_the_workspace_variable(self) -> None:
+        sidecar, workspace = self._campaign_sidecar()
+        ran = self._run(["--campaign", str(sidecar)], self.root)
+        self.assertEqual(ran.returncode, 0, ran.stderr + ran.stdout)
+        self.assertTrue(workspace.is_dir(), "prepare did not seed the candidate")
+        recorded = json.loads(self.out.read_text(encoding="utf-8"))
+        self.assertEqual(Path(recorded["infra"]).resolve(), REPO.resolve())
+        self.assertIsNone(recorded["workspace"])
+
+    @unittest.skipUnless(shutil.which("node"), "the tools bridge needs Node")
+    def test_tools_plugin_python_core_resolves_from_the_infra_cwd(self) -> None:
+        unrelated = self.root / "unrelated-node"
+        unrelated.mkdir()
+        bridge = (REPO / "dsh" / "eu4-tools-plugin" / "lib" / "bridge.js").as_uri()
+        script = unrelated / "bridge-smoke.mjs"
+        script.write_text(
+            "import { runTool } from " + json.dumps(bridge) + ";\n"
+            "const value = await runTool('eu4_re_query', "
+            "{ op: 'resolve', target: '_GfxDraw' }, "
+            "{ python: " + json.dumps(sys.executable) +
+            ", cwd: " + json.dumps(str(REPO)) + " });\n"
+            "console.log(JSON.stringify({ ok: value.ok, "
+            "matches: value.result?.matches?.length ?? 0 }));\n",
+            encoding="utf-8",
+        )
+        ran = subprocess.run(
+            ["node", str(script)], cwd=unrelated,
+            capture_output=True, text=True, check=False, timeout=120,
+        )
+        self.assertEqual(ran.returncode, 0, ran.stderr + ran.stdout)
+        recorded = json.loads(ran.stdout.strip().splitlines()[-1])
+        self.assertTrue(recorded["ok"], ran.stdout)
+        self.assertGreater(recorded["matches"], 0)
 
 
 if __name__ == "__main__":

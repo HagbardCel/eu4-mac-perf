@@ -131,8 +131,6 @@ if "EU4_DSH_SKILL_ROOT" not in host[0]["body"]:
 # Provenance: our tracked overlay must be the layer that patched that row.
 if patch_path not in text:
     bail("patch-provenance", "profile overlay %s is not in the composed tree" % patch_path)
-
-print(json.dumps({"ok": True}))
 PY
 
 # Version pins recorded in runtime.json.

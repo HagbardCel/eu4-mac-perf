@@ -27,9 +27,10 @@ INFRA=$(CDPATH= cd -- "$HERE/../.." && pwd)
 
 # The tools plugin's Python core must run from this trusted infrastructure
 # checkout, not from the launcher's shell cwd and not from the editable
-# --workspace worktree. The tracked profile reads this variable explicitly.
-: "${EU4_DSH_WORKSPACE:=$INFRA}"
-export EU4_DSH_WORKSPACE
+# --workspace worktree. Keep this separate from EU4_DSH_WORKSPACE: the bridge
+# interprets that variable as an assertion about the campaign candidate.
+: "${EU4_DSH_INFRA_ROOT:=$INFRA}"
+export EU4_DSH_INFRA_ROOT
 
 # The dedicated home is deliberate. An inherited DSH_HOME (the interactive
 # session's ~/.dsh) must never be reused: this profile owns its own sessions,
@@ -268,7 +269,9 @@ export EU4_DSH_SIDECAR=$(CDPATH= cd -- "$(dirname -- "$CAMPAIGN")" && pwd)/$(bas
 PLUGIN=$INFRA/dsh/eu4-goal-plugin/lib/index.js
 [ -f "$PLUGIN" ] || { echo "run: plugin missing at $PLUGIN" >&2; exit 1; }
 
-PREPARE=$("$EU4_DSH_PYTHON" -m automation.dsh_bridge prepare --create-anchor --sidecar "$EU4_DSH_SIDECAR" 2>&1) || {
+# Prepare runs from the trusted checkout, not the launcher's cwd and not the
+# editable candidate workspace.
+PREPARE=$(cd "$INFRA" && "$EU4_DSH_PYTHON" -m automation.dsh_bridge prepare --create-anchor --sidecar "$EU4_DSH_SIDECAR" 2>&1) || {
   echo "run: prepare failed: $PREPARE" >&2
   exit 1
 }
