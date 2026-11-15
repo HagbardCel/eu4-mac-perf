@@ -807,13 +807,25 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
                     "kind": "wrong_destination",
                     "expected": destination,
                     "actual": transfer.get("destination")})
-            if key.startswith("tex:") and resource.get("origin") == GENERATED:
-                source_kind = str(transfer.get("source_kind") or "")
-                if source_kind not in ("metal_render_target",):
-                    transfer_problems.append({
-                        "event": event, "resource": key,
-                        "kind": "captured_source_substitution",
-                        "source_kind": source_kind})
+            # Every transfer must carry the source category implied by the
+            # captured resource.  A name of "0" alone does not prove the
+            # independently rendered Metal default target was used.
+            source_kind = str(transfer.get("source_kind") or "")
+            if key == "fb:0":
+                if resource.get("origin") == GENERATED:
+                    allowed_kinds = {"metal_default"}
+                else:
+                    allowed_kinds = {"boundary_capture"}
+            elif key.startswith("tex:") and resource.get("origin") == GENERATED:
+                allowed_kinds = {"metal_render_target"}
+            else:
+                allowed_kinds = {"boundary_capture"}
+            if source_kind not in allowed_kinds:
+                transfer_problems.append({
+                    "event": event, "resource": key,
+                    "kind": "source_category",
+                    "expected": sorted(allowed_kinds),
+                    "source_kind": source_kind})
             if key.startswith("tex:"):
                 required = next(
                     (int(row["required_generation"])
@@ -906,7 +918,11 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
         reasons.append(
             "a renderer-generated resource was bound from captured content or "
             "before Metal produced it")
-        status = "invalid" if any(item.get("external_bindings") for item in seeded) else "partial"
+        if status == "invalid" or any(
+                item.get("external_bindings") for item in seeded):
+            status = "invalid"
+        else:
+            status = "partial"
     if graph.get("status") == "invalid":
         status = "invalid"
         reasons.extend(graph.get("reasons") or [])

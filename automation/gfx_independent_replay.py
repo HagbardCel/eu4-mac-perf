@@ -14,9 +14,11 @@ development branch.
 
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -24,6 +26,8 @@ from automation import gfx_frame_graph, m6_compare, m6_frame
 
 SCHEMA = "gfx-independent-replay/v1"
 DEFAULT_POLICY = Path(__file__).resolve().parents[1] / "analysis" / "m6" / "comparison-policy.json"
+ROOT = Path(__file__).resolve().parents[1]
+OUTPUT_MARKER = ".gfx-replay-output.json"
 
 
 class ReplayError(RuntimeError):
@@ -31,6 +35,73 @@ class ReplayError(RuntimeError):
         super().__init__(kind if not detail else f"{kind}: {detail}")
         self.kind = kind
         self.detail = detail
+
+
+def _path_overlap(left: Path, right: Path) -> bool:
+    left = left.resolve()
+    right = right.resolve()
+    return left == right or left in right.parents or right in left.parents
+
+
+def _protected_output(path: Path) -> bool:
+    """Reject output paths whose replacement could delete a workspace root."""
+    path = path.resolve()
+    for protected in (ROOT.resolve(), Path.cwd().resolve(),
+                      Path.home().resolve()):
+        if path == protected or path in protected.parents:
+            return True
+    return path.parent == path
+
+
+def _known_replay_output(path: Path) -> bool:
+    marker = path / OUTPUT_MARKER
+    try:
+        value = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        value = None
+    if isinstance(value, dict) and value.get("schema") == "gfx-replay-output-marker/v1":
+        return True
+    for name, schema in (("replay-report.json", SCHEMA),
+                         ("replay.json", "gfx-metal-frame-replay/v1")):
+        try:
+            value = json.loads((path / name).read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        if isinstance(value, dict) and value.get("schema") == schema:
+            return True
+    return False
+
+
+def prepare_replay_output(out_dir: Path, inputs: list[Path]) -> Path:
+    """Validate and prepare one replay output directory without data loss."""
+    out_dir = out_dir.expanduser().resolve()
+    if _protected_output(out_dir):
+        raise ReplayError("output_protected",
+                          f"refusing to replace protected output {out_dir}")
+    for source in inputs:
+        if _path_overlap(out_dir, source.expanduser().resolve()):
+            raise ReplayError(
+                "output_overlap",
+                f"replay output {out_dir} overlaps input {source}")
+    if out_dir.exists():
+        if not out_dir.is_dir():
+            raise ReplayError("output_conflict", f"{out_dir} is not a directory")
+        entries = list(out_dir.iterdir())
+        if entries and not _known_replay_output(out_dir):
+            raise ReplayError(
+                "output_not_owned",
+                f"{out_dir} is nonempty and is not a prior replay output")
+        if entries:
+            shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / OUTPUT_MARKER).write_text(
+        json.dumps({
+            "schema": "gfx-replay-output-marker/v1",
+            "tool": "gfx_independent_replay",
+            "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+        }, indent=2) + "\n",
+        encoding="utf-8")
+    return out_dir
 
 
 def _sha(path: Path) -> str:
@@ -83,6 +154,18 @@ def _load_pixels(path: Path, width: int, height: int) -> bytes:
             f"{path} is {len(payload)} bytes, expected {width * height * 4}",
         )
     return payload
+
+
+def _normalize_format(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, int):
+        return {
+            0x8058: "RGBA8", 0x8051: "RGB8", 0x8814: "RGBA32F",
+            0x8815: "RGB32F", 0x881A: "RGBA16F", 0x881B: "RGB16F",
+            0x805B: "RGBA16", 0x8C43: "SRGB8_ALPHA8",
+        }.get(value, str(value))
+    return str(value).upper()
 
 
 def _checkpoint_key(item: dict) -> tuple[int, str]:
@@ -211,6 +294,13 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
                 item.get("reference_sha256")) != expected_reference_sha:
             fail("checkpoint reference sha256 disagrees with the request")
             continue
+        returned_reference = item.get("reference_file")
+        requested_reference = wanted.get("reference_file")
+        if returned_reference and requested_reference and Path(
+                str(returned_reference)).name != Path(
+                    str(requested_reference)).name:
+            fail("checkpoint reference file disagrees with the request")
+            continue
         if not metal_path.is_file():
             fail("checkpoint output file is absent")
             continue
@@ -234,8 +324,34 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
             continue
         resource_id = "fb:0" if target == "0" else f"tex:{target}"
         resource = (graph.get("resources") or {}).get(resource_id) or {}
-        internal = str(item.get("format") or resource.get("format") or "")
-        channel_swap = internal in ("RGB8", "SRGB8_ALPHA8")
+        captured_format = _normalize_format(resource.get("format"))
+        reported_format = _normalize_format(item.get("format"))
+        if captured_format:
+            if not reported_format:
+                fail("checkpoint is missing its reported format")
+                continue
+            if captured_format in ("RGB8", "SRGB8_ALPHA8"):
+                allowed_formats = {captured_format, "BGRA8"}
+                channel_swap = True
+            else:
+                allowed_formats = {captured_format}
+                channel_swap = False
+            if reported_format not in allowed_formats:
+                fail(
+                    f"checkpoint format {reported_format} disagrees with "
+                    f"captured format {captured_format}")
+                continue
+            internal = captured_format
+        else:
+            # Default-framebuffer conventions are the only formats without a
+            # captured resource format; an RGB8 downgrade is not accepted.
+            if reported_format not in ("RGBA8", "BGRA8"):
+                fail(
+                    f"checkpoint format {reported_format or '<missing>'} has "
+                    "no authoritative captured format")
+                continue
+            channel_swap = False
+            internal = reported_format
         candidate = _swap_red_blue(metal) if channel_swap else metal
         statistics = m6_compare.compare_images(
             reference, candidate, width, height)
@@ -698,17 +814,11 @@ def replay(
     """Execute one captured workload through the production Metal replay host."""
     frame_dir = Path(frame_dir).expanduser().resolve()
     out_dir = Path(out_dir).expanduser().resolve()
-    if out_dir == frame_dir or frame_dir in out_dir.parents or out_dir in frame_dir.parents:
-        raise ReplayError("output_overlap", "replay output must not overlap the capture")
-    if out_dir.exists():
-        import shutil
-
-        shutil.rmtree(out_dir)
-    out_dir.mkdir(parents=True)
+    shader_dir = _shader_dir(frame_dir, shaders)
+    out_dir = prepare_replay_output(out_dir, [frame_dir, shader_dir])
     graph = gfx_frame_graph.build(frame_dir)
     request = gfx_frame_graph.write_checkpoint_request(
         graph, out_dir / "checkpoint-request.json")
-    shader_dir = _shader_dir(frame_dir, shaders)
     host = m6_frame.build_replay_host()
     command = [
         str(host), "--frame", str(frame_dir), "--shaders", str(shader_dir),

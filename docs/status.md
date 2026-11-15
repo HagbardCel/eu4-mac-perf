@@ -92,6 +92,14 @@ prevents full qualification. Non-default framebuffer source metadata is read
 from the selected attachment under saved/restored binding state, with
 unsupported attachment types failing closed.
 
+Transfer provenance now enforces the captured source category for every copy
+(`metal_default` for the in-frame default framebuffer, `metal_render_target`
+for generated textures, declared boundary categories otherwise). Captured
+checkpoint formats are authoritative, so a reported RGB8 format cannot downgrade
+an RGBA8 checkpoint to diagnostic. Replay/case output directories are
+ownership-checked and overlap-checked before replacement, and evaluation
+severity keeps `invalid` from being overwritten by `partial`.
+
 The portable Linux workflow's unit-test dependencies were made deterministic
 (mocked placement libraries, pinned identity fixtures, test-only `/proc`
 identity on Linux) without changing production platform restrictions. The

@@ -687,13 +687,53 @@ class CopyProvenanceTests(unittest.TestCase):
                        value["transfer_validation"]["problems"]])
 
     def test_default_framebuffer_copy_is_valid(self):
-        graph = copy_provenance_graph(source="fb:0", source_origin="generated")
+        graph = copy_provenance_graph(source="fb:0", source_origin="renderer_generated")
         graph["resources"]["fb:0"]["consumer_generations"] = [
             {"event": 2, "required_generation": 0}]
         value = gfx_frame_graph.evaluate_replay(
             graph, copy_provenance_replay(graph=graph, source="fb:0",
                                           source_generation=-1))
         self.assertEqual(value["status"], "complete", value["reasons"])
+
+    def test_default_framebuffer_source_kind_is_required(self):
+        graph = copy_provenance_graph(source="fb:0", source_origin="renderer_generated")
+        graph["resources"]["fb:0"]["consumer_generations"] = [
+            {"event": 2, "required_generation": 0}]
+        replay = copy_provenance_replay(
+            graph=graph, source="fb:0", source_generation=-1)
+        replay["transfers"][0]["source_kind"] = "external_capture"
+        value = gfx_frame_graph.evaluate_replay(graph, replay)
+        self.assertEqual(value["status"], "invalid")
+        self.assertIn("source_category",
+                      [row["kind"] for row in
+                       value["transfer_validation"]["problems"]])
+
+    def test_default_framebuffer_wrong_source_category_is_invalid(self):
+        graph = copy_provenance_graph(source="fb:0", source_origin="renderer_generated")
+        graph["resources"]["fb:0"]["consumer_generations"] = [
+            {"event": 2, "required_generation": 0}]
+        replay = copy_provenance_replay(
+            graph=graph, source="fb:0", source_generation=-1)
+        replay["transfers"][0]["source_kind"] = "metal_render_target"
+        value = gfx_frame_graph.evaluate_replay(graph, replay)
+        self.assertEqual(value["status"], "invalid")
+        self.assertIn("source_category",
+                      [row["kind"] for row in
+                       value["transfer_validation"]["problems"]])
+
+    def test_invalid_transfer_is_not_downgraded_by_seeded_resource(self):
+        graph = copy_provenance_graph()
+        replay = copy_provenance_replay(graph=graph, transfer=False)
+        replay["_provenance_samples"].append({
+            "event": 1, "texture": "A", "sampler": "tex0", "unit": 0,
+            "source": "external_capture", "generation": -1,
+            "expected_texture": "A", "selected_texture": "A",
+        })
+        value = gfx_frame_graph.evaluate_replay(graph, replay)
+        self.assertEqual(value["status"], "invalid", value["reasons"])
+        self.assertIn("missing_transfer",
+                      [row["kind"] for row in
+                       value["transfer_validation"]["problems"]])
 
     def test_captured_source_substitution_is_invalid(self):
         graph = copy_provenance_graph()

@@ -142,6 +142,34 @@ class ReconcileTests(unittest.TestCase):
         self.assertFalse(results[0]["authoritative"])
         self.assertEqual(validation["diagnostic"], 1)
 
+    def test_capture_format_cannot_be_downgraded_by_replay(self):
+        self.fixture.replay["checkpoints"][0]["format"] = "RGB8"
+        results, validation = self.fixture.reconcile()
+        self.assertEqual(validation["status"], "invalid")
+        self.assertEqual(results[0]["status"], "invalid")
+        self.assertIn("format", results[0]["reason"])
+
+    def test_rgb8_capture_keeps_the_documented_diagnostic_case(self):
+        self.fixture.graph["resources"]["tex:10"]["format"] = "RGB8"
+        self.fixture.replay["checkpoints"][0]["format"] = "RGB8"
+        swapped = bytearray(self.fixture.reference)
+        for offset in range(0, len(swapped), 4):
+            swapped[offset], swapped[offset + 2] = (
+                swapped[offset + 2], swapped[offset])
+        (self.fixture.out / self.fixture.metal_name).write_bytes(
+            bytes(swapped))
+        results, validation = self.fixture.reconcile()
+        self.assertEqual(validation["status"], "ok", validation)
+        self.assertEqual(results[0]["status"], "match")
+        self.assertFalse(results[0]["authoritative"])
+
+    def test_conflicting_returned_reference_file_is_invalid(self):
+        self.fixture.replay["checkpoints"][0]["reference_file"] = "other.bin"
+        results, validation = self.fixture.reconcile()
+        self.assertEqual(validation["status"], "invalid")
+        self.assertEqual(results[0]["status"], "invalid")
+        self.assertIn("reference file", results[0]["reason"])
+
     def test_authoritative_divergence_is_divergent(self):
         metal = bytearray(self.fixture.reference)
         metal[0] = (metal[0] + 7) % 256

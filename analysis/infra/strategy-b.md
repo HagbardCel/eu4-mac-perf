@@ -736,3 +736,64 @@ and the unsupported renderbuffer path.
 The two PR review threads are addressed by the code and regressions above. The
 historical five branches remain unchanged; this remains one consolidated
 integration PR.
+
+## 15. Final provenance, checkpoint-authority and output-safety pass
+
+### Copy-source category is enforced for every transfer
+
+The evaluator now derives the required replay source category from the captured
+resource, rather than treating source name `"0"` as proof:
+
+| Captured source | Required transfer category |
+| --- | --- |
+| In-frame default framebuffer (`fb:0`, generated) | `metal_default` |
+| In-frame renderer-generated texture | `metal_render_target` |
+| Explicitly supported frame-boundary input | its declared boundary category |
+| Anything else | invalid |
+
+A transfer that reports an external capture, the wrong Metal category, or no
+category is `invalid`. The existing source/destination identity, generation and
+ordering checks remain. Seven provenance regressions plus a combined
+invalid-transfer/stale-resource regression cover the categories.
+
+### Captured checkpoint format is authoritative
+
+`reconcile_checkpoints()` no longer lets a replay-reported format override the
+captured resource format. When the captured format is known, the reported
+format must match it; only the documented RGB8/BGRA8 (or SRGB8) diagnostic
+convention is accepted. An authoritative RGBA8 checkpoint reported as RGB8 is an
+invalid checkpoint, not a diagnostic downgrade. A returned `reference_file` that
+disagrees with the request is also invalid. This closes the path where a real
+difference could be reclassified as non-authoritative.
+
+### Output directories are ownership-checked
+
+`gfx_independent_replay.replay()` and `gfx_replay_case.package()` no longer
+delete arbitrary existing directories. They:
+
+- reject protected workspace/repository/home roots;
+- reject output paths overlapping capture, translated shaders or replay inputs;
+- refuse nonempty directories that lack a prior replay marker or validated
+  replay/case manifest;
+- permit safe replacement of a prior tool-owned output;
+- leave all rejection targets untouched.
+
+The replay marker is `.gfx-replay-output.json`; a validated `replay.json`,
+`replay-report.json` or portable `case.json` is also accepted for compatibility.
+
+### Evaluation severity is monotonic
+
+`evaluate_replay()` now keeps `invalid` once a consumer or transfer check has
+failed. A subsequent seeded/stale-resource condition can no longer downgrade it
+to `partial`. A combined invalid-transfer plus external/zero-generation resource
+regression asserts this.
+
+### Verification
+
+- 83 focused provenance/checkpoint/output/case/native tests pass.
+- Authentic cases: canonical `menu-occ300` remains pixel-exact with partial
+  dependency coverage; scene 79 remains four alpha LSB with partial coverage;
+  copy-bearing scene 75 remains complete coverage with a known rendering
+  divergence and `qualified=false`.
+- Portable cases verify and replay; safe reruns over owned output directories
+  work.

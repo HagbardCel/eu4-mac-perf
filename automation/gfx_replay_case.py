@@ -55,6 +55,40 @@ def _write_json(path: Path, value: dict) -> None:
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
 
 
+def _owned_case(path: Path) -> bool:
+    try:
+        value = json.loads((path / "case.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    return isinstance(value, dict) and value.get("schema") == SCHEMA
+
+
+def prepare_case_output(case_dir: Path, inputs: list[Path]) -> Path:
+    """Validate and prepare a case directory without deleting unrelated data."""
+    case_dir = case_dir.expanduser().resolve()
+    if gfx_independent_replay._protected_output(case_dir):
+        raise CaseError("output_protected",
+                        f"refusing to replace protected output {case_dir}")
+    for source in inputs:
+        if gfx_independent_replay._path_overlap(
+                case_dir, source.expanduser().resolve()):
+            raise CaseError(
+                "output_overlap",
+                f"case directory {case_dir} overlaps input {source}")
+    if case_dir.exists():
+        if not case_dir.is_dir():
+            raise CaseError("output_conflict", f"{case_dir} is not a directory")
+        entries = list(case_dir.iterdir())
+        if entries and not _owned_case(case_dir):
+            raise CaseError(
+                "output_not_owned",
+                f"{case_dir} is nonempty and is not a prior portable case")
+        if entries:
+            shutil.rmtree(case_dir)
+    case_dir.mkdir(parents=True, exist_ok=True)
+    return case_dir
+
+
 def package(
     frame_dir: Path | str,
     replay_dir: Path | str,
@@ -72,13 +106,9 @@ def package(
     if not report_path.is_file():
         raise CaseError("missing_replay", f"no replay report in {replay_dir}")
     report = json.loads(report_path.read_text())
-    if case_dir == frame_dir or case_dir in frame_dir.parents:
-        raise CaseError("output_overlap", "case directory must be outside the capture")
-    if case_dir.exists():
-        shutil.rmtree(case_dir)
-    (case_dir / "capture").parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(frame_dir, case_dir / "capture")
     shader_source = gfx_independent_replay._shader_dir(frame_dir, shaders)
+    prepare_case_output(case_dir, [frame_dir, replay_dir, shader_source])
+    shutil.copytree(frame_dir, case_dir / "capture")
     shutil.copytree(shader_source, case_dir / "shaders")
     (case_dir / "replay").mkdir(parents=True)
     for name in ("replay.json", "replay-provenance.jsonl", "metal-frame.bgra",

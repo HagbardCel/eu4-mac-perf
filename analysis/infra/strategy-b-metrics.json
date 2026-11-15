@@ -787,5 +787,13 @@
     "conclusion": "success",
     "head": "0e620f53604e6d0207eda84d6882e27db88aeb8b",
     "steps": 19
-  }
+  },
+  "source_category_validation": "fb:0 requires metal_default; renderer-generated textures require metal_render_target; boundary inputs require their declared category; unexpected categories invalid",
+  "source_category_regressions": 3,
+  "checkpoint_format_authority": "captured resource format is authoritative; only documented RGB8/BGRA8 diagnostic conversion is allowed",
+  "checkpoint_format_regressions": 3,
+  "output_safety": "replay/case outputs reject protected roots, input overlaps and unowned nonempty directories; owned prior outputs may be replaced",
+  "output_safety_regressions": 12,
+  "severity_monotonic": "invalid is never downgraded to partial/complete",
+  "final_focused_tests": 83
 }
