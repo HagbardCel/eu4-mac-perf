@@ -2,6 +2,7 @@
 #include "eu4_gfx_frame_trace.h"
 #include "eu4_gfx_observe.h"
 
+#include <CommonCrypto/CommonDigest.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -16,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #define STARTUP_PATH 1024u
@@ -32,6 +34,129 @@ static char g_sha[80];
 static uintptr_t g_image_base;
 static int g_pid;
 static pthread_t g_finalizer;
+static uint32_t g_seal_notifications;
+
+static bool sha256_file(const char *path, char out[65]) {
+    out[0] = 0;
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) {
+        return false;
+    }
+    CC_SHA256_CTX context;
+    CC_SHA256_Init(&context);
+    uint8_t buffer[64 * 1024];
+    size_t read_bytes = 0;
+    while ((read_bytes = fread(buffer, 1, sizeof(buffer), file)) > 0) {
+        CC_SHA256_Update(&context, buffer, (CC_LONG)read_bytes);
+    }
+    bool failed = ferror(file) != 0;
+    fclose(file);
+    if (failed) {
+        return false;
+    }
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256_Final(digest, &context);
+    static const char hex[] = "0123456789abcdef";
+    for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) {
+        out[i * 2] = hex[digest[i] >> 4];
+        out[i * 2 + 1] = hex[digest[i] & 0xf];
+    }
+    out[64] = 0;
+    return true;
+}
+
+/* Minimal in-process consumer used by the PR 1 evidence run.  It receives the
+ * sealed descriptor outside the trace writer's mutex, verifies the immutable
+ * manifest and reference digests, and records exactly one notification.  PR 2
+ * replaces this sink with the Metal bridge; the tracer API is unchanged. */
+static int seal_logging_sink(const eu4_frame_capture_descriptor *descriptor,
+                             void *context) {
+    (void)context;
+    uint64_t started = 0;
+    struct timespec spec;
+    if (clock_gettime(CLOCK_MONOTONIC, &spec) == 0) {
+        started = (uint64_t)spec.tv_sec * 1000000000ull +
+                  (uint64_t)spec.tv_nsec;
+    }
+    char manifest_path[PATH_MAX];
+    char reference_path[PATH_MAX];
+    char manifest_sha[65] = {0};
+    char reference_sha[65] = {0};
+    int manifest_length = snprintf(
+        manifest_path, sizeof(manifest_path), "%s/%s", descriptor->capture_dir,
+        descriptor->manifest_file);
+    int reference_length = snprintf(
+        reference_path, sizeof(reference_path), "%s/%s", descriptor->capture_dir,
+        descriptor->reference_file);
+    bool manifest_ok =
+        manifest_length > 0 &&
+        (size_t)manifest_length < sizeof(manifest_path) &&
+        sha256_file(manifest_path, manifest_sha) &&
+        strcmp(manifest_sha, descriptor->manifest_sha256) == 0;
+    bool reference_ok =
+        reference_length > 0 &&
+        (size_t)reference_length < sizeof(reference_path) &&
+        sha256_file(reference_path, reference_sha) &&
+        strcmp(reference_sha, descriptor->reference_sha256) == 0;
+    uint32_t index = ++g_seal_notifications;
+    char final_path[STARTUP_PATH];
+    char partial_path[STARTUP_PATH];
+    snprintf(final_path, sizeof(final_path), "%s/frame-seal-notification.json",
+             g_run_dir);
+    snprintf(partial_path, sizeof(partial_path),
+             "%s/frame-seal-notification.json.partial", g_run_dir);
+    FILE *file = fopen(partial_path, "w");
+    if (file == NULL) {
+        return 1;
+    }
+    fprintf(file, "{\"schema\":\"gfx-frame-seal-notification/v1\",");
+    fprintf(file, "\"notification_index\":%u,", index);
+    fprintf(file, "\"pid\":%d,", (int)getpid());
+    fprintf(file, "\"capture_frame_id\":%llu,",
+            (unsigned long long)descriptor->capture_frame_id);
+    fprintf(file, "\"session_id\":\"%s\",", descriptor->session_id);
+    fprintf(file, "\"boundary\":\"%s\",", descriptor->boundary);
+    fprintf(file, "\"capture_dir\":\"%s\",", descriptor->capture_dir);
+    fprintf(file, "\"manifest_file\":\"%s\",", descriptor->manifest_file);
+    fprintf(file, "\"manifest_sha256\":\"%s\",", descriptor->manifest_sha256);
+    fprintf(file, "\"observed_manifest_sha256\":\"%s\",", manifest_sha);
+    fprintf(file, "\"reference_file\":\"%s\",", descriptor->reference_file);
+    fprintf(file, "\"reference_sha256\":\"%s\",", descriptor->reference_sha256);
+    fprintf(file, "\"observed_reference_sha256\":\"%s\",", reference_sha);
+    fprintf(file, "\"operation_count\":%llu,",
+            (unsigned long long)descriptor->operation_count);
+    fprintf(file, "\"draw_count\":%llu,",
+            (unsigned long long)descriptor->draw_count);
+    fprintf(file, "\"clear_count\":%llu,",
+            (unsigned long long)descriptor->clear_count);
+    fprintf(file, "\"copy_count\":%llu,",
+            (unsigned long long)descriptor->copy_count);
+    fprintf(file, "\"complete\":%s,", descriptor->complete ? "true" : "false");
+    fprintf(file, "\"verified_manifest\":%s,", manifest_ok ? "true" : "false");
+    fprintf(file, "\"verified_reference\":%s,", reference_ok ? "true" : "false");
+    fprintf(file, "\"notified_since_process_start_ns\":%llu,",
+            (unsigned long long)(started - descriptor->process_start_ns));
+    if (clock_gettime(CLOCK_MONOTONIC, &spec) == 0) {
+        uint64_t finished = (uint64_t)spec.tv_sec * 1000000000ull +
+                            (uint64_t)spec.tv_nsec;
+        fprintf(file, "\"notification_duration_ns\":%llu,",
+                (unsigned long long)(finished - started));
+    } else {
+        fprintf(file, "\"notification_duration_ns\":0,");
+    }
+    fprintf(file, "\"notified_monotonic_ns\":%llu}\n",
+            (unsigned long long)started);
+    bool ok = ferror(file) == 0 && fflush(file) == 0 &&
+              fsync(fileno(file)) == 0;
+    if (fclose(file) != 0) {
+        ok = false;
+    }
+    if (!ok || rename(partial_path, final_path) != 0) {
+        unlink(partial_path);
+        return 2;
+    }
+    return manifest_ok && reference_ok ? 0 : 3;
+}
 
 static bool write_status(const char *run_dir, const char *state,
                          const char *session, const char *executable,
@@ -262,6 +387,14 @@ __attribute__((constructor)) static void initialize_startup_trace(void) {
         (void)write_status(run_dir, "error", session, actual, image_base,
                            settings_site, init_site, "frame-config");
         return;
+    }
+    const char *seal_log = getenv("EU4_GFX_FRAME_SEAL_LOG");
+    if (seal_log != NULL && strcmp(seal_log, "1") == 0) {
+        if (eu4_gfx_frame_sealed_subscribe(seal_logging_sink, NULL) != 0) {
+            (void)write_status(run_dir, "error", session, actual, image_base,
+                               settings_site, init_site, "seal-subscribe");
+            return;
+        }
     }
     if (!eu4_gfx_observe_configure_from_env()) {
         (void)write_status(run_dir, "error", session, actual, image_base,

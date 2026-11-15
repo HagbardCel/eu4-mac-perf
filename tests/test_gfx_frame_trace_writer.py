@@ -6,6 +6,7 @@ involved.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -152,6 +153,198 @@ class FrameTraceWriterTests(unittest.TestCase):
             directory = Path(temporary) / "capture"
             result = self._run("scene-at-frame", directory)
             self.assertIn("configure_rejected=-1", result.stdout)
+
+    # --- authoritative frame seal -------------------------------------------
+
+    def _seal(self, directory: Path) -> dict:
+        return json.loads((directory / "frame-seal.json").read_text())
+
+    def test_seal_notifies_once_with_ordered_operation_accounting(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            result = self._run("seal-ok", directory)
+            fields = dict(
+                item.split("=", 1) for item in result.stdout.split() if "=" in item
+            )
+            self.assertEqual(fields["callback_calls"], "1")
+            self.assertEqual(fields["notifications"], "1")
+            self.assertEqual(fields["lock_free"], "1")
+            self.assertEqual(fields["files_ready"], "1")
+            self.assertEqual(fields["abi_ok"], "1")
+            self.assertEqual(fields["ops"], "4")
+            self.assertEqual(fields["draws"], "2")
+            self.assertEqual(fields["clears"], "1")
+            self.assertEqual(fields["copies"], "1")
+            self.assertEqual(fields["frame_id"], "1")
+            seal = self._seal(directory)
+            self.assertTrue(seal["sealed"])
+            self.assertEqual(seal["boundary"], "present")
+            self.assertEqual(
+                [event["kind"] for event in self._events(directory)],
+                ["draw", "clear", "draw", "resolve"],
+            )
+            # The consumer sees the same immutable manifest the trace wrote.
+            self.assertEqual(
+                seal["manifest_sha256"],
+                hashlib.sha256(
+                    (directory / "frame-trace.json").read_bytes()
+                ).hexdigest(),
+            )
+
+    def test_one_shot_mode_never_notifies_a_second_frame(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            result = self._run("seal-second-frame", directory)
+            self.assertIn("callback_calls=1", result.stdout)
+            self.assertIn("notifications=1", result.stdout)
+            self.assertIn("frame_id=1", result.stdout)
+            self.assertEqual(len(self._events(directory)), 4)
+            self.assertTrue(self._seal(directory)["sealed"])
+
+    def test_indexed_draw_path_shares_the_ordered_stream(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            result = self._run("seal-indexed", directory)
+            fields = dict(
+                item.split("=", 1) for item in result.stdout.split() if "=" in item
+            )
+            self.assertEqual(fields["callback_calls"], "1")
+            self.assertEqual(fields["ops"], "5")
+            self.assertEqual(fields["draws"], "3")
+            self.assertEqual(
+                [event["kind"] for event in self._events(directory)],
+                ["draw", "draw", "clear", "draw", "resolve"],
+            )
+
+    def test_incomplete_frame_publishes_failure_without_notification(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            result = self._run("seal-incomplete", directory)
+            self.assertIn("callback_calls=0", result.stdout)
+            self.assertIn("notifications=0", result.stdout)
+            seal = self._seal(directory)
+            self.assertFalse(seal["sealed"])
+            self.assertEqual(seal["failure_reason"], "draw_cap")
+            self.assertFalse(json.loads(
+                (directory / "frame-trace.json").read_text()
+            )["complete"])
+
+    def test_missing_reference_publishes_failure_without_notification(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            result = self._run("seal-no-reference", directory)
+            self.assertIn("callback_calls=0", result.stdout)
+            seal = self._seal(directory)
+            self.assertFalse(seal["sealed"])
+            self.assertFalse(seal["readback_ok"])
+            self.assertEqual(seal["failure_reason"], "reference_read")
+
+    def test_manifest_digest_failure_is_explicit_and_not_notified(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            result = self._run("seal-manifest-hash", directory)
+            self.assertIn("callback_calls=0", result.stdout)
+            seal = self._seal(directory)
+            self.assertFalse(seal["sealed"])
+            self.assertEqual(seal["failure_reason"], "manifest_hash_failed")
+            manifest = json.loads(
+                (directory / "frame-trace.json").read_text()
+            )
+            self.assertFalse(manifest["complete"])
+
+    def test_invalid_manifest_publishes_failure_without_notification(self):
+        for scenario, reason in (
+            ("seal-malformed", "malformed_event"),
+            ("seal-count-mismatch", "event_count_mismatch"),
+        ):
+            with self.subTest(scenario=scenario):
+                with tempfile.TemporaryDirectory() as temporary:
+                    directory = Path(temporary) / "capture"
+                    result = self._run(scenario, directory)
+                    self.assertIn("callback_calls=0", result.stdout)
+                    seal = self._seal(directory)
+                    self.assertFalse(seal["sealed"])
+                    self.assertFalse(seal["trace_integrity"])
+                    self.assertEqual(seal["failure_reason"], reason)
+
+    def test_scene_boundary_seals_without_gfxpresent(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            result = self._run("seal-scene", directory)
+            self.assertIn("callback_calls=1", result.stdout)
+            seal = self._seal(directory)
+            self.assertTrue(seal["sealed"])
+            self.assertEqual(seal["boundary"], "scene")
+            self.assertEqual(seal["scene_index"], 2)
+            timeline = [
+                json.loads(line)
+                for line in (directory / "timeline.jsonl").read_text().splitlines()
+                if line
+            ]
+            self.assertTrue(timeline)
+            self.assertFalse(
+                any(item["kind"] == "present" for item in timeline)
+            )
+
+    def test_missed_scene_entry_is_incomplete_and_never_reads_back(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            result = self._run("seal-scene-missed", directory)
+            self.assertIn("callback_calls=0", result.stdout)
+            seal = self._seal(directory)
+            self.assertFalse(seal["sealed"])
+            self.assertFalse(seal["readback_ok"])
+            self.assertEqual(seal["failure_reason"], "scene_entry_missed")
+
+    def test_reentrant_notification_is_rejected_and_serialized(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            result = self._run("seal-reentrant", directory)
+            self.assertIn("callback_calls=1", result.stdout)
+            self.assertIn("notifications=1", result.stdout)
+            self.assertIn("reentrant=1", result.stdout)
+
+    def test_reconfigure_keeps_process_identity_and_one_shot_gate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            result = self._run("seal-reconfigure", directory)
+            self.assertIn("callback_calls=1", result.stdout)
+            self.assertIn("notifications=1", result.stdout)
+            self.assertIn("frame_id=1", result.stdout)
+            self.assertEqual(len(self._events(directory)), 4)
+
+    def test_a_late_consumer_receives_the_pending_sealed_frame(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            result = self._run("seal-late-consumer", directory)
+            self.assertIn("callback_calls=1", result.stdout)
+            self.assertIn("notifications=1", result.stdout)
+            self.assertTrue(self._seal(directory)["sealed"])
+
+    def test_callback_failure_is_recorded_without_renotification(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            result = self._run("seal-callback-fail", directory)
+            self.assertIn("callback_calls=1", result.stdout)
+            self.assertIn("notifications=1", result.stdout)
+            self.assertIn("callback_status=3", result.stdout)
+            self.assertTrue(self._seal(directory)["sealed"])
+
+    def test_timeout_is_an_explicit_incomplete_result(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            result = self._run("seal-timeout", directory)
+            self.assertIn("callback_calls=0", result.stdout)
+            self.assertIn("notifications=0", result.stdout)
+            self.assertEqual(
+                [event["kind"] for event in self._events(directory)], []
+            )
+            seal = self._seal(directory)
+            self.assertEqual(seal["width"], 4)
+            self.assertFalse(seal["sealed"])
+            self.assertEqual(seal["failure_reason"], "capture_timeout")
+            self.assertEqual(seal["gpu_status"], "readback_not_attempted")
+
 
 
 if __name__ == "__main__":

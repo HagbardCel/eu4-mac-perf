@@ -111,6 +111,10 @@ static void reset_env(void) {
     unsetenv("EU4_GFX_FRAME_TRACE_MAX_DRAWS");
     unsetenv("EU4_GFX_FRAME_TRACE_TIMELINE");
     unsetenv("EU4_GFX_FRAME_TRACE_TEST_ONLY");
+    unsetenv("EU4_GFX_FRAME_TRACE_TEST_FAIL_REFERENCE");
+    unsetenv("EU4_GFX_FRAME_TRACE_TEST_FAIL_MANIFEST_HASH");
+    unsetenv("EU4_GFX_FRAME_TRACE_TIMEOUT_MS");
+    unsetenv("EU4_GFX_FRAME_SEAL");
     unsetenv("EU4_GFX_FRAME_OBSERVE_DIR");
     unsetenv("EU4_GFX_FRAME_TRACE_TEST_FAIL_FLUSH");
 }
@@ -253,8 +257,7 @@ static int scenario_stream_corruption(const char *directory, const char *line) {
     return 0;
 }
 
-static int scenario_scene(const char *directory, int at_frame_reject) {
-    reset_env();
+static int scenario_scene(const char *directory, int at_frame_reject) {    reset_env();
     setenv("EU4_GFX_FRAME_TRACE_DIR", directory, 1);
     setenv("EU4_GFX_FRAME_TRACE_TEST_ONLY", "1", 1);
     setenv("EU4_GFX_FRAME_TRACE_BOUNDARY", "scene", 1);
@@ -283,14 +286,221 @@ static int scenario_scene(const char *directory, int at_frame_reject) {
     make_call(&call, 0x1000);
     for (size_t scene = 0; scene < sizeof(draws_per_scene) / sizeof(int);
          scene++) {
-        eu4_gfx_frame_trace_boundary_entry(&frame, &call);
+        /* PresentScene brackets the end of a rendered frame: draws first, then
+           entry, then exit (which may call _GfxPresent). */
         for (int draw_index = 0; draw_index < draws_per_scene[scene];
              draw_index++) {
             draw(true, callers[scene]);
             draw(false, callers[scene]);
         }
+        eu4_gfx_frame_trace_boundary_entry(&frame, &call);
         eu4_gfx_frame_trace_boundary_exit(&frame, &call, NULL);
     }
+    return 0;
+}
+
+typedef struct {
+    int calls;
+    int lock_free;
+    int files_ready;
+    int abi_ok;
+    int reenter;
+    int fail;
+    eu4_frame_capture_descriptor descriptor;
+} seal_state;
+
+static int seal_test_callback(const eu4_frame_capture_descriptor *descriptor,
+                              void *context) {
+    seal_state *state = context;
+    state->calls++;
+    state->lock_free = eu4_gfx_frame_trace_lock_probe();
+    state->abi_ok = descriptor->struct_size == sizeof(*descriptor) &&
+                    descriptor->abi_version == EU4_FRAME_CAPTURE_ABI_VERSION;
+    state->descriptor = *descriptor;
+    char manifest[2048];
+    char reference[2048];
+    snprintf(manifest, sizeof(manifest), "%s/%s", descriptor->capture_dir,
+             descriptor->manifest_file);
+    snprintf(reference, sizeof(reference), "%s/%s", descriptor->capture_dir,
+             descriptor->reference_file);
+    state->files_ready = access(manifest, R_OK) == 0 &&
+                         access(reference, R_OK) == 0;
+    if (state->reenter) {
+        eu4_gfx_frame_sealed_dispatch();
+    }
+    return state->fail ? 3 : 0;
+}
+
+static void draw_indexed(bool entry) {
+    eu4_gfx_capture_frame frame;
+    eu4_gfx_observe_call call;
+    memset(&frame, 0, sizeof(frame));
+    make_call(&call, 0x2000);
+    if (entry) {
+        eu4_gfx_frame_trace_draw_indexed_entry(&frame, &call);
+    } else {
+        eu4_gfx_frame_trace_draw_indexed_exit(&frame, &call, NULL);
+    }
+}
+
+static void clear_one(void) {
+    eu4_gfx_capture_frame frame;
+    eu4_gfx_observe_call call;
+    memset(&frame, 0, sizeof(frame));
+    memset(&call, 0, sizeof(call));
+    call.caller_rva = 0x1000;
+    call.caller_known = 1;
+    call.call_id = 1;
+    frame.rsi = 1;
+    eu4_gfx_frame_trace_clear_entry(&frame, &call);
+    eu4_gfx_frame_trace_clear_exit(&frame, &call, NULL);
+}
+
+static void report_seal(const char *scenario, const seal_state *state) {
+    printf("scenario=%s callback_calls=%d lock_free=%d files_ready=%d abi_ok=%d reentrant=%u "
+           "notifications=%u callback_status=%d seal_written=%d complete=%u "
+           "ops=%llu draws=%llu clears=%llu copies=%llu frame_id=%llu "
+           "width=%u height=%u boundary=%s reason=%s\n",
+           scenario, state->calls, state->lock_free, state->files_ready,
+           state->abi_ok, eu4_gfx_frame_sealed_reentrant_rejections(),
+           eu4_gfx_frame_sealed_notifications(),
+           eu4_gfx_frame_sealed_last_callback_status(),
+           eu4_gfx_frame_sealed_last_seal_written(),
+           state->descriptor.complete,
+           (unsigned long long)state->descriptor.operation_count,
+           (unsigned long long)state->descriptor.draw_count,
+           (unsigned long long)state->descriptor.clear_count,
+           (unsigned long long)state->descriptor.copy_count,
+           (unsigned long long)state->descriptor.capture_frame_id,
+           state->descriptor.width, state->descriptor.height,
+           state->descriptor.boundary, state->descriptor.failure_reason);
+}
+
+static int scenario_seal(const char *directory, const char *mode) {
+    seal_state state;
+    memset(&state, 0, sizeof(state));
+    if (strcmp(mode, "reentrant") == 0) {
+        state.reenter = 1;
+    }
+    if (strcmp(mode, "callback-fail") == 0) {
+        state.fail = 1;
+    }
+    reset_env();
+    setenv("EU4_GFX_FRAME_TRACE_DIR", directory, 1);
+    setenv("EU4_GFX_FRAME_TRACE_TEST_ONLY", "1", 1);
+    setenv("EU4_GFX_FRAME_SEAL", "1", 1);
+    setenv("EU4_GFX_FRAME_TRACE_MIN_DRAWS", "1", 1);
+    if (strcmp(mode, "incomplete") == 0) {
+        setenv("EU4_GFX_FRAME_TRACE_MAX_DRAWS", "1", 1);
+    }
+    if (strcmp(mode, "no-reference") == 0) {
+        setenv("EU4_GFX_FRAME_TRACE_TEST_FAIL_REFERENCE", "1", 1);
+    }
+    if (strcmp(mode, "manifest-hash") == 0) {
+        setenv("EU4_GFX_FRAME_TRACE_TEST_FAIL_MANIFEST_HASH", "1", 1);
+    }
+    if (strcmp(mode, "timeout") == 0) {
+        setenv("EU4_GFX_FRAME_TRACE_TIMEOUT_MS", "1", 1);
+    }
+    if (strcmp(mode, "scene") == 0 || strcmp(mode, "scene-missed") == 0) {
+        setenv("EU4_GFX_FRAME_TRACE_BOUNDARY", "scene", 1);
+        setenv("EU4_GFX_FRAME_TRACE_TIMELINE", "1", 1);
+    }
+    eu4_gfx_frame_trace_test_reset_seal();
+    if (strcmp(mode, "late-consumer") != 0 &&
+        eu4_gfx_frame_sealed_subscribe(seal_test_callback, &state) != 0) {
+        return 3;
+    }
+    if (eu4_gfx_frame_trace_configure_from_env() <= 0) {
+        return 2;
+    }
+    if (strcmp(mode, "scene") == 0) {
+        eu4_gfx_capture_frame frame;
+        eu4_gfx_observe_call call;
+        memset(&frame, 0, sizeof(frame));
+        make_call(&call, 0x1000);
+        /* Frame 1: draws then the end-of-frame PresentScene entry/exit. */
+        draw(true, 0x1000);
+        draw(false, 0x1000);
+        eu4_gfx_frame_trace_boundary_entry(&frame, &call);
+        eu4_gfx_frame_trace_boundary_exit(&frame, &call, NULL);
+        /* Frame 2 is selected at the previous exit and finalized at this
+           PresentScene entry, before the exit that may swap. */
+        draw(true, 0x1000);
+        draw(false, 0x1000);
+        clear_one();
+        draw(true, 0x1000);
+        draw(false, 0x1000);
+        valid_copy(442);
+        eu4_gfx_frame_trace_boundary_entry(&frame, &call);
+        /* PresentScene's body may call _GfxPresent; with the entry boundary the
+           frame is already sealed and these hooks must not alter it. */
+        eu4_gfx_frame_trace_present_entry(&frame, &call);
+        eu4_gfx_frame_trace_present_exit(&frame, &call, NULL);
+        eu4_gfx_frame_trace_boundary_exit(&frame, &call, NULL);
+    } else if (strcmp(mode, "scene-missed") == 0) {
+        eu4_gfx_capture_frame frame;
+        eu4_gfx_observe_call call;
+        memset(&frame, 0, sizeof(frame));
+        make_call(&call, 0x1000);
+        draw(true, 0x1000);
+        draw(false, 0x1000);
+        eu4_gfx_frame_trace_boundary_entry(&frame, &call);
+        eu4_gfx_frame_trace_boundary_exit(&frame, &call, NULL);
+        draw(true, 0x1000);
+        draw(false, 0x1000);
+        /* No boundary_entry: finalizing at exit would read after a possible
+           swap, so this must be an explicit incomplete frame. */
+        eu4_gfx_frame_trace_boundary_exit(&frame, &call, NULL);
+    } else if (strcmp(mode, "timeout") == 0) {
+        arm_via_present();
+        usleep(5000);
+        draw(true, 0x1000);
+        draw(false, 0x1000);
+    } else {
+        arm_via_present();
+        draw(true, 0x1000);
+        draw(false, 0x1000);
+        if (strcmp(mode, "indexed") == 0) {
+            draw_indexed(true);
+            draw_indexed(false);
+        }
+        clear_one();
+        draw(true, 0x1000);
+        draw(false, 0x1000);
+        valid_copy(442);
+        if (strcmp(mode, "malformed") == 0) {
+            append_line(directory, "not-json\n");
+        } else if (strcmp(mode, "count-mismatch") == 0) {
+            append_line(directory, "{\"kind\":\"draw\"}\n");
+        }
+        finish_via_present();
+        if (strcmp(mode, "late-consumer") == 0) {
+            if (eu4_gfx_frame_sealed_subscribe(seal_test_callback, &state) != 0) {
+                return 3;
+            }
+            eu4_gfx_frame_sealed_dispatch();
+        }
+        if (strcmp(mode, "second-frame") == 0) {
+            /* The one-shot gate must not notify or capture a second frame. */
+            arm_via_present();
+            draw(true, 0x1000);
+            draw(false, 0x1000);
+            finish_via_present();
+        }
+        if (strcmp(mode, "reconfigure") == 0) {
+            /* A reconfigure must not restart the process identity or the
+               one-shot gate. */
+            if (eu4_gfx_frame_trace_configure_from_env() <= 0) {
+                return 2;
+            }
+            arm_via_present();
+            draw(true, 0x1000);
+            draw(false, 0x1000);
+            finish_via_present();
+        }
+    }
+    report_seal(mode, &state);
     return 0;
 }
 
@@ -324,6 +534,9 @@ int main(int argc, char **argv) {
     }
     if (strcmp(scenario, "scene-at-frame") == 0) {
         return scenario_scene(directory, 1);
+    }
+    if (strncmp(scenario, "seal-", 5) == 0) {
+        return scenario_seal(directory, scenario + 5);
     }
     fprintf(stderr, "unknown scenario %s\n", scenario);
     return 2;
