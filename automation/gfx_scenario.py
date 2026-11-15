@@ -194,6 +194,15 @@ def normalize(value: dict) -> dict:
                      minimum=0, maximum=32)
     capture_every = _optional(observation.get("capture_every_frame"), bool,
                               "observation.capture_every_frame", False)
+    if capture_every:
+        # The setting is parsed but no observer consumes it. Accepting it would
+        # let a scenario claim per-frame full-resolution observation that never
+        # happened, so an unsupported control fails closed (M7 canary finding).
+        raise ScenarioError(
+            "unsupported_scenario_feature",
+            "observation.capture_every_frame is not implemented; remove it "
+            "(M7 follow-up: bounded full-resolution digest observation)",
+        )
     preview = _optional(observation.get("preview"), bool, "observation.preview", True)
     dump_on_stop = _optional(observation.get("dump_on_stop"), int,
                              "observation.dump_on_stop", 4, minimum=0, maximum=32)

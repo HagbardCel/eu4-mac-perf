@@ -3,7 +3,7 @@
 // The plugin is deliberately thin: every tool spawns the stable Python core
 // (`automation.agent_tools`) with a typed argument object and returns its JSON
 // envelope.  No rendering, comparison or launch logic lives here.
-import { runTool, TOOL_NAMES } from './bridge.js'
+import { resolvePython, runTool, TOOL_NAMES } from './bridge.js'
 
 export const name = 'eu4-tools'
 export const inject = ['tools']
@@ -40,12 +40,20 @@ export function definitions(run) {
       return await run(toolName, args || {})
     } catch (error) {
       return {
-        schema: 'eu4-agent-tool/v1',
+        schema: 'eu4-agent-tool/v2',
         tool: toolName,
         ok: false,
         status: 'error',
         reason: `${error.name || 'Error'}: ${error.message || String(error)}`,
         result: {},
+        outcome: {
+          execution: 'error',
+          diagnostic: 'failed',
+          diagnostic_complete: false,
+          verdict: null,
+          evidence: null,
+          qualified: null,
+        },
       }
     }
   }
@@ -68,9 +76,17 @@ export function definitions(run) {
       'eu4_session',
       'Inspect or safely terminate a session owned by this harness. Never lists or kills unrelated EU4 processes.',
       {
-        op: { type: 'string', enum: ['list', 'inspect', 'terminate', 'lease'], description: 'session operation' },
+        op: { type: 'string', enum: ['list', 'inspect', 'terminate', 'lease', 'discover'], description: 'session operation' },
         run: string('session run directory'),
         executable: string('executable path for a lease query'),
+        include_history: boolean('include closed and stale session records'),
+        status: { type: 'string', enum: ['active', 'closed', 'stale', 'all'], description: 'session class filter' },
+        limit: integer('bounded result count'),
+        offset: integer('pagination offset'),
+        evidence_root: string('pathsep-separated evidence roots (default EU4_EVIDENCE_ROOT or .local)'),
+        query: string('discovery text filter'),
+        classification: string('discovery classification filter'),
+        since: string('discovery ISO-8601 lower bound on finish time'),
       },
       ['op'],
       safe('eu4_session'),
@@ -83,7 +99,11 @@ export function definitions(run) {
         run: string('run or session directory'),
         frame_dir: string('frame trace directory for the graph operation'),
         role: { type: 'string', enum: ['reference', 'candidate'], description: 'backend role' },
-        frames: { type: 'array', items: { type: 'integer' }, description: 'frame indices to request' },
+        frames: { type: 'array', items: { type: 'integer' }, description: 'exact frame indices to select or request' },
+        around: integer('include at most N neighbouring frames'),
+        offset: integer('pagination offset'),
+        limit: integer('bounded result count'),
+        full: boolean('return raw observation records instead of the compact view'),
         require_pixels: boolean('require an aligned pixel comparison'),
         checkpoint: string('probe checkpoint'),
         occurrence: integer('probe occurrence'),
@@ -118,10 +138,19 @@ export function definitions(run) {
     ),
     tool(
       'eu4_diff_inspect',
-      'Inspect a campaign result: stop reason, health, alignment, first differing frame, and optionally build the offline case package.',
+      'Inspect a session or campaign root: compact stop/health/correspondence/classification summary, first discrepancy, missing evidence, next step, and optional temporal frame diagnostics.',
       {
-        run: string('session/run directory'),
+        run: string('session directory or campaign root'),
         build_case: boolean('build the self-contained diagnostic case'),
+        full: boolean('include the raw recorded comparison and first pair'),
+        limit: integer('bounded session count for a campaign root'),
+        offset: integer('pagination offset for a campaign root'),
+        temporal: boolean('compare preserved consecutive and cross-process frames'),
+        reference_frame: integer('reference frame index for temporal analysis'),
+        candidate_frame: integer('candidate frame index for temporal analysis'),
+        temporal_window: integer('consecutive frames to include from each index'),
+        temporal_artifacts: boolean('write bounded difference PNGs'),
+        temporal_artifact_dir: string('artifact directory for temporal PNGs'),
       },
       ['run'],
       safe('eu4_diff_inspect'),
@@ -156,14 +185,31 @@ export function definitions(run) {
 }
 
 export function apply(ctx, config = {}) {
-  const python = config.python || 'python3.14'
+  // Resolve the interpreter once, at mount, to an absolute path. A launcher
+  // that did not set EU4_DSH_PYTHON leaves every tool with an actionable
+  // failure instead of silently spawning whichever Python is first on PATH.
   const cwd = config.infra || process.cwd()
-  const run = config.runner || ((toolName, args) => runTool(toolName, args, {
-    python,
-    cwd,
-    env: config.env,
-    timeoutMs: config.timeoutMs,
-  }))
+  let python = ''
+  let pythonError = ''
+  try {
+    python = resolvePython(config.python)
+  } catch (error) {
+    pythonError = error.message || String(error)
+  }
+  if (pythonError) {
+    ctx.logger?.warn?.(`[eu4-tools] ${pythonError}`)
+  } else {
+    ctx.logger?.info?.(`[eu4-tools] Python core: ${python}`)
+  }
+  const run = config.runner || ((toolName, args) => {
+    if (pythonError) return Promise.reject(new Error(pythonError))
+    return runTool(toolName, args, {
+      python,
+      cwd,
+      env: config.env,
+      timeoutMs: config.timeoutMs,
+    })
+  })
   let registered = 0
   for (const definition of definitions(run)) {
     ctx.effect(() => {

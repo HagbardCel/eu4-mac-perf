@@ -1,9 +1,11 @@
 // Unit tests use a fake cordis context and an injected runner: no Python, no EU4.
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
 import { test } from 'node:test'
 
 import { apply, definitions, name, inject, TOOL_NAMES } from '../lib/index.js'
-import { buildArgs, sanitizedEnv } from '../lib/bridge.js'
+import { buildArgs, resolvePython, runTool, sanitizedEnv } from '../lib/bridge.js'
 
 function fakeContext() {
   const registered = []
@@ -63,8 +65,19 @@ test('argument mapping covers each tool', () => {
     ['eu4_session', 'inspect', '--run', '/r'])
   assert.deepEqual(buildArgs('eu4_session', { op: 'lease', executable: '/bin/true' }),
     ['eu4_session', 'lease', '--executable', '/bin/true'])
+  assert.deepEqual(buildArgs('eu4_session', {
+    op: 'list', include_history: true, limit: 5, offset: 2,
+  }), ['eu4_session', 'list', '--include-history', '--limit', '5', '--offset', '2'])
+  assert.deepEqual(buildArgs('eu4_session', {
+    op: 'discover', evidence_root: '/e', query: 'a6', classification: 'incomplete',
+  }), ['eu4_session', 'discover', '--evidence-root', '/e', '--query', 'a6',
+    '--classification', 'incomplete'])
   assert.deepEqual(buildArgs('eu4_capture', { op: 'request', run: '/r', role: 'candidate', frames: [4, 5] }),
     ['eu4_capture', 'request', '--run', '/r', '--role', 'candidate', '--frame', '4', '--frame', '5'])
+  assert.deepEqual(buildArgs('eu4_capture', {
+    op: 'frames', run: '/r', frames: [74], around: 1, limit: 2, full: true,
+  }), ['eu4_capture', 'frames', '--run', '/r', '--frame', '74',
+    '--around', '1', '--limit', '2', '--full'])
   const diff = buildArgs('eu4_diff_run', { scenario: 's.json', run_root: '/r', ledger: '/l', mode: 'lockstep' })
   assert.deepEqual(diff, ['eu4_diff_run', '--scenario', 's.json', '--run-root', '/r', '--ledger', '/l', '--mode', 'lockstep'])
   const staggered = buildArgs('eu4_diff_run', { scenario: 's.json', run_root: '/r', ledger: '/l', staggered: true, stagger_wait: 120 })
@@ -72,6 +85,12 @@ test('argument mapping covers each tool', () => {
   assert.deepEqual(staggered.slice(-2), ['--stagger-wait', '120'])
   assert.deepEqual(buildArgs('eu4_diff_inspect', { run: '/r', build_case: true }),
     ['eu4_diff_inspect', '--run', '/r', '--build-case'])
+  assert.deepEqual(buildArgs('eu4_diff_inspect', {
+    run: '/r', temporal: true, reference_frame: 74, candidate_frame: 75,
+    temporal_window: 2, full: true,
+  }), ['eu4_diff_inspect', '--run', '/r', '--full', '--temporal',
+    '--reference-frame', '74', '--candidate-frame', '75',
+    '--temporal-window', '2'])
   assert.deepEqual(buildArgs('eu4_replay', { op: 'case', case: '/c' }),
     ['eu4_replay', 'case', '--case', '/c'])
   assert.deepEqual(buildArgs('eu4_capture', { op: 'graph', frame_dir: '/f' }),
@@ -87,14 +106,52 @@ test('argument mapping covers each tool', () => {
 })
 
 test('environment is allowlisted', () => {
-  const env = sanitizedEnv({ PATH: '/bin', SECRET: 'x', EU4_RE_INDEX: '/i' }, { EXTRA: '1' })
+  const env = sanitizedEnv({
+    PATH: '/bin', SECRET: 'x', EU4_RE_INDEX: '/i',
+    EU4_EVIDENCE_ROOT: '/evidence', UNRELATED: 'drop',
+  }, { EXTRA: '1' })
   assert.equal(env.PATH, '/bin')
   assert.equal(env.EU4_RE_INDEX, '/i')
+  assert.equal(env.EU4_EVIDENCE_ROOT, '/evidence')
   assert.equal(env.EXTRA, '1')
   assert.equal(env.SECRET, undefined)
+  assert.equal(env.UNRELATED, undefined)
 })
 
 test('definitions are buildable with a no-op runner', () => {
   const tools = definitions(async () => ({ ok: true }))
   assert.equal(tools.length, 7)
+})
+
+test('the interpreter is resolved to an absolute path and fails closed', () => {
+  assert.throws(() => resolvePython(''), /EU4_DSH_PYTHON is not configured/)
+  assert.throws(() => resolvePython('/no/such/python'), /not executable/)
+  const absolute = resolvePython(process.execPath)
+  assert.equal(absolute, process.execPath)
+  const bare = resolvePython('node')
+  assert.ok(path.isAbsolute(bare), bare)
+  assert.ok(fs.existsSync(bare), bare)
+})
+
+test('an unusable interpreter becomes a structured tool error', async () => {
+  const previous = process.env.EU4_DSH_PYTHON
+  delete process.env.EU4_DSH_PYTHON
+  try {
+    const ctx = fakeContext()
+    apply(ctx, {})
+    const value = await ctx.registered[0].execute({ op: 'provenance' })
+    assert.equal(value.ok, false)
+    assert.equal(value.status, 'error')
+    assert.match(value.reason, /EU4_DSH_PYTHON/)
+  } finally {
+    if (previous === undefined) delete process.env.EU4_DSH_PYTHON
+    else process.env.EU4_DSH_PYTHON = previous
+  }
+})
+
+test('a missing interpreter rejects the bridge call', async () => {
+  await assert.rejects(
+    runTool('eu4_session', { op: 'list' }, { python: '/no/such/python', cwd: process.cwd() }),
+    /not executable/,
+  )
 })

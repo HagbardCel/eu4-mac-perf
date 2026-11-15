@@ -20,6 +20,38 @@ export DSH_HOME
 export EU4_DSH_SKILL_ROOT=${EU4_DSH_SKILL_ROOT:-$INFRA/.opencode/skills}
 PROFILE_DIR=$DSH_HOME/profiles/$PROFILE
 PATCH=$PROFILE_DIR/cordis.patch.yml
+
+# Resolve the interpreter the tools plugin will spawn before dumping the
+# profile, so the composed tree and this check use the same absolute path. The
+# M7 canary failed because the native tool used a different interpreter than
+# the documented CLI; a mismatch must fail here, never at tool-call time.
+PYTHON_REQUEST=${EU4_DSH_PYTHON:-}
+if [ -z "$PYTHON_REQUEST" ]; then
+  if [ -x "$INFRA/.venv/bin/python3" ]; then
+    PYTHON_REQUEST=$INFRA/.venv/bin/python3
+  elif command -v python3.14 >/dev/null 2>&1; then
+    PYTHON_REQUEST=$(command -v python3.14)
+  else
+    PYTHON_REQUEST=$(command -v python3 || true)
+  fi
+fi
+[ -n "$PYTHON_REQUEST" ] || {
+  echo "$(basename "$0"): no Python 3 interpreter is available on PATH" >&2
+  exit 1
+}
+EU4_DSH_PYTHON=$(
+  cd "$INFRA" && "$PYTHON_REQUEST" -m automation.python_runtime \
+    resolve --requested "$PYTHON_REQUEST" --print-path
+) || {
+  printf '{"ok":false,"stage":"python","detail":"no Python 3 interpreter with NumPy; install NumPy or set EU4_DSH_PYTHON to an absolute interpreter that has it"}\n'
+  (
+    cd "$INFRA" && "$PYTHON_REQUEST" -m automation.python_runtime \
+      resolve --requested "$PYTHON_REQUEST" --json >&2
+  ) || true
+  exit 1
+}
+export EU4_DSH_PYTHON
+
 DSH_ENTRY=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$(command -v dsh)")
 DSH_PACKAGE=$(CDPATH= cd -- "$(dirname -- "$(dirname -- "$DSH_ENTRY")")" && pwd)
 DUMP=$(mktemp -t eu4-dsh-dump.XXXXXX)
@@ -36,10 +68,11 @@ fail() {
 dsh --profile "$PROFILE" --dump-config >"$DUMP" 2>&1 ||
   fail dump-config "dsh --dump-config failed"
 
-python3 - "$DUMP" "$RUNTIME" "$PATCH" "$EU4_DSH_SKILL_ROOT" "$INFRA" "$DSH_PACKAGE" "$PROFILE_DIR" <<'PY' || exit 1
+"$EU4_DSH_PYTHON" - "$DUMP" "$RUNTIME" "$PATCH" "$EU4_DSH_SKILL_ROOT" "$INFRA" "$DSH_PACKAGE" "$PROFILE_DIR" "$EU4_DSH_PYTHON" <<'PY' || exit 1
 import hashlib, json, os, re, sys
 
-dump_path, runtime_path, patch_path, skill_root, infra, dsh_package, profile_dir = sys.argv[1:8]
+(dump_path, runtime_path, patch_path, skill_root, infra, dsh_package,
+ profile_dir, python_path) = sys.argv[1:9]
 text = open(dump_path, encoding="utf-8").read()
 runtime = json.load(open(runtime_path, encoding="utf-8"))
 sys.path.insert(0, infra)
@@ -131,10 +164,19 @@ if "EU4_DSH_SKILL_ROOT" not in host[0]["body"]:
 # Provenance: our tracked overlay must be the layer that patched that row.
 if patch_path not in text:
     bail("patch-provenance", "profile overlay %s is not in the composed tree" % patch_path)
+
+# The tools plugin must spawn the interpreter this preflight resolved. The
+# composed row may carry the evaluated absolute path or reference the
+# EU4_DSH_PYTHON variable the launcher exported; a bare default is a mismatch.
+tools_rows = [e for e in entries if e["id"] == "eu4-tools"]
+if not tools_rows:
+    bail("python", "eu4-tools row is absent from the effective profile")
+if python_path not in tools_rows[0]["body"] and "EU4_DSH_PYTHON" not in tools_rows[0]["body"]:
+    bail("python", "eu4-tools python does not resolve to %s" % python_path)
 PY
 
 # Version pins recorded in runtime.json.
-python3 - "$RUNTIME" "$(dsh --version 2>/dev/null | tail -1)" "$(node --version)" "$(pnpm --version 2>/dev/null || echo unknown)" <<'PY' || exit 1
+"$EU4_DSH_PYTHON" - "$RUNTIME" "$(dsh --version 2>/dev/null | tail -1)" "$(node --version)" "$(pnpm --version 2>/dev/null || echo unknown)" <<'PY' || exit 1
 import json, sys
 runtime = json.load(open(sys.argv[1], encoding="utf-8"))
 dsh_v, node_v, pnpm_v = sys.argv[2:5]
@@ -172,5 +214,7 @@ for (const name of ["@eu4/dsh-goal", "@eu4/dsh-tools"]) {
 ' ) || fail plugin-resolve "a local EU4 plugin does not resolve to a cordis plugin from $PROFILE_DIR"
 
 SKILL_SHA=$(shasum -a 256 "$SKILL" | cut -d' ' -f1)
-printf '{"ok":true,"profile":"%s","dsh_home":"%s","dsh_version":"%s","node":"%s","skill_root":"%s","skill_sha256":"%s"}\n' \
-  "$PROFILE" "$DSH_HOME" "$(dsh --version 2>/dev/null | tail -1)" "$(node --version)" "$EU4_DSH_SKILL_ROOT" "$SKILL_SHA"
+PYTHON_VERSION=$("$EU4_DSH_PYTHON" -c 'import platform; print(platform.python_version())')
+printf '{"ok":true,"profile":"%s","dsh_home":"%s","dsh_version":"%s","node":"%s","python":"%s","python_version":"%s","skill_root":"%s","skill_sha256":"%s"}\n' \
+  "$PROFILE" "$DSH_HOME" "$(dsh --version 2>/dev/null | tail -1)" "$(node --version)" \
+  "$EU4_DSH_PYTHON" "$PYTHON_VERSION" "$EU4_DSH_SKILL_ROOT" "$SKILL_SHA"

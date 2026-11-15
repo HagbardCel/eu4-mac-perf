@@ -455,3 +455,291 @@ def compare_payloads(
         "sha256": candidate_meta.get("sha256"),
     }
     return result
+
+
+# ---------------------------------------------------------------------------
+# Temporal frame diagnostics
+#
+# The M7.0 canary had to write a private NumPy script to discover that a
+# process's own consecutive frames differ more than the cross-process pair, and
+# that most cross-process differing pixels also move within one process.  These
+# helpers expose that measurement once, on top of the same decoder, origin
+# normalization, scale handling and comparison metrics used everywhere else.
+
+TEMPORAL_SCHEMA = "gfx-temporal-frame-diff/v1"
+TEMPORAL_MAX_PAIRS = 12
+
+
+def difference_mask(reference: "np.ndarray", candidate: "np.ndarray",
+                    tolerance: int) -> "np.ndarray":
+    """Boolean mask of pixels whose maximum channel error exceeds tolerance."""
+    _require_numpy()
+    if reference.shape != candidate.shape:
+        raise CompareError("extent", "difference masks require a shared extent")
+    if not (0 <= int(tolerance) <= 255):
+        raise CompareError("policy", "pixel tolerance must be 0..255")
+    delta = np.abs(reference.astype(np.int16) - candidate.astype(np.int16))
+    return delta.max(axis=2) > int(tolerance)
+
+
+def _temporal_pair(left: dict, right: dict, relation: str, *,
+                   policy: dict, regions: dict | None) -> dict:
+    result = compare_frames(
+        left["image"], right["image"], policy=policy, regions=regions)
+    statistics = result.get("statistics") or {}
+    return {
+        "relation": relation,
+        "reference": {
+            "frame_index": left.get("frame_index"),
+            "sha256": left.get("sha256"),
+            "identity": left.get("identity") or {},
+        },
+        "candidate": {
+            "frame_index": right.get("frame_index"),
+            "sha256": right.get("sha256"),
+            "identity": right.get("identity") or {},
+        },
+        "status": result.get("status"),
+        "pixel_verdict": result.get("pixel_verdict"),
+        "would_fail": result.get("would_fail"),
+        "reasons": result.get("reasons") or [],
+        "statistics": {
+            key: statistics.get(key) for key in (
+                "pixels", "mismatched_pixels", "mismatched_fraction",
+                "max_channel_error", "mean_abs_error", "difference_bbox",
+                "tolerance", "per_channel")
+        },
+        "regions": result.get("regions") or {},
+        "normalization": result.get("normalization"),
+    }
+
+
+def _mask_overlap(cross: "np.ndarray", temporal: "np.ndarray") -> dict:
+    intersection = int(np.logical_and(cross, temporal).sum())
+    union = int(np.logical_or(cross, temporal).sum())
+    cross_pixels = int(cross.sum())
+    temporal_pixels = int(temporal.sum())
+    return {
+        "cross_pixels": cross_pixels,
+        "temporal_pixels": temporal_pixels,
+        "intersection_pixels": intersection,
+        "cross_also_temporal_fraction": (
+            round(intersection / cross_pixels, 6) if cross_pixels else None),
+        "temporal_also_cross_fraction": (
+            round(intersection / temporal_pixels, 6) if temporal_pixels else None),
+        "jaccard": round(intersection / union, 6) if union else None,
+    }
+
+
+def compare_temporal(
+    reference_frames: list[dict],
+    candidate_frames: list[dict],
+    *,
+    policy: dict,
+    regions: dict | None = None,
+    cross_pairs: list[tuple[int, int]] | None = None,
+    include_overlap: bool = True,
+    max_pairs: int = TEMPORAL_MAX_PAIRS,
+    artifacts: dict | None = None,
+) -> dict:
+    """Compare consecutive within-process frames and the cross-process pair.
+
+    ``reference_frames``/``candidate_frames`` are decoded top-left RGBA frames
+    with ``frame_index``, ``sha256`` and ``identity``.  Exactly the comparisons
+    the canary needed are produced:
+
+    * reference N vs reference N+1 (consecutive, same process);
+    * candidate M vs candidate M+1 (consecutive, same process);
+    * reference N vs candidate M (cross-process).
+
+    The cross-process difference mask is optionally intersected with each
+    within-process mask, so ``cross_also_temporal_fraction`` answers "how much
+    of the cross-process difference is also temporal variability?" without a
+    private script.  Artifacts are written only when ``artifacts`` names a
+    directory; raw full-resolution images are never emitted by default.
+    """
+    _require_numpy()
+    if not reference_frames or not candidate_frames:
+        return {
+            "schema": TEMPORAL_SCHEMA,
+            "status": "incomplete",
+            "reason": "both roles need at least one preserved frame",
+            "pairs": [],
+            "overlap": None,
+        }
+    if max_pairs < 1:
+        raise CompareError("bound", "max_pairs must be >= 1")
+
+    def ordered(rows: list[dict]) -> list[dict]:
+        return sorted(
+            (row for row in rows if isinstance(row, dict)
+             and isinstance(row.get("image"), np.ndarray)),
+            key=lambda row: int(row.get("frame_index") or 0))
+
+    def by_index(rows: list[dict]) -> dict[int, dict]:
+        return {int(row["frame_index"]): row for row in rows}
+
+    reference = ordered(reference_frames)
+    candidate = ordered(candidate_frames)
+    reference_index = by_index(reference)
+    candidate_index = by_index(candidate)
+    tolerance = int(policy.get("pixel_tolerance", policy.get("max_channel_error", 0)))
+    pairs: list[dict] = []
+    skipped: list[dict] = []
+
+    def add_pair(left: dict, right: dict, relation: str) -> None:
+        if len(pairs) >= max_pairs:
+            skipped.append({"relation": relation,
+                            "reason": "max_pairs bound reached"})
+            return
+        try:
+            pairs.append(_temporal_pair(
+                left, right, relation, policy=policy, regions=regions))
+        except CompareError as exc:
+            skipped.append({
+                "relation": relation,
+                "reference_frame": left.get("frame_index"),
+                "candidate_frame": right.get("frame_index"),
+                "reason": f"{exc.kind}: {exc.detail or exc}",
+            })
+
+    for rows, role in ((reference, "reference"), (candidate, "candidate")):
+        for left, right in zip(rows, rows[1:]):
+            if int(right["frame_index"]) == int(left["frame_index"]) + 1:
+                add_pair(left, right, f"{role}_temporal")
+
+    cross: list[dict] = []
+    requested = cross_pairs
+    if requested is None:
+        shared = sorted(set(reference_index) & set(candidate_index))
+        requested = [(index, index) for index in shared[:1]]
+    for ref_index, cand_index in requested or []:
+        left = reference_index.get(int(ref_index))
+        right = candidate_index.get(int(cand_index))
+        if left is None or right is None:
+            skipped.append({
+                "relation": "cross_process",
+                "reference_frame": int(ref_index),
+                "candidate_frame": int(cand_index),
+                "reason": "preserved full-resolution frame is missing",
+            })
+            continue
+        normalized = right
+        scale = 1
+        try:
+            if left["image"].shape != right["image"].shape:
+                image, normalization = normalize_candidate(
+                    left["image"], right["image"],
+                    policy={"allow_scale_normalization": True},
+                    candidate_meta={})
+                normalized = dict(right)
+                normalized["image"] = image
+                scale = int(normalization.get("scale") or 1)
+        except CompareError as exc:
+            skipped.append({
+                "relation": "cross_process",
+                "reference_frame": int(ref_index),
+                "candidate_frame": int(cand_index),
+                "reason": f"{exc.kind}: {exc.detail or exc}",
+            })
+            continue
+        normalized["identity"] = dict(right.get("identity") or {})
+        normalized["identity"]["normalization_scale"] = scale
+        add_pair(left, normalized, "cross_process")
+        cross.append({"reference": left, "candidate": normalized})
+
+    overlap = None
+    if include_overlap and cross:
+        cross_pair = cross[0]
+        cross_mask = difference_mask(
+            cross_pair["reference"]["image"], cross_pair["candidate"]["image"],
+            tolerance)
+        temporal_overlaps = []
+        for rows, role in ((reference, "reference"), (candidate, "candidate")):
+            for left, right in zip(rows, rows[1:]):
+                if int(right["frame_index"]) != int(left["frame_index"]) + 1:
+                    continue
+                mask = difference_mask(left["image"], right["image"], tolerance)
+                if mask.shape != cross_mask.shape:
+                    temporal_overlaps.append({
+                        "relation": f"{role}_temporal",
+                        "reference_frame": left.get("frame_index"),
+                        "candidate_frame": right.get("frame_index"),
+                        "skipped": "extent differs from the cross-process pair",
+                    })
+                    continue
+                entry = _mask_overlap(cross_mask, mask)
+                entry.update({
+                    "relation": f"{role}_temporal",
+                    "reference_frame": left.get("frame_index"),
+                    "candidate_frame": right.get("frame_index"),
+                })
+                temporal_overlaps.append(entry)
+        overlap = {
+            "cross": {
+                "reference_frame": cross_pair["reference"].get("frame_index"),
+                "candidate_frame": cross_pair["candidate"].get("frame_index"),
+                "mask_pixels": int(cross_mask.sum()),
+            },
+            "temporal": temporal_overlaps,
+            "interpretation": (
+                "cross_also_temporal_fraction is the share of cross-process "
+                "differing pixels that also change between consecutive frames "
+                "of that process; high values mean the cross-process "
+                "difference is not separable from temporal variability"),
+        }
+
+    artifact_paths = []
+    if artifacts:
+        directory = Path(artifacts["dir"])
+        amplification = int(artifacts.get("amplification", 4))
+        directory.mkdir(parents=True, exist_ok=True)
+        for pair in pairs:
+            relation = pair["relation"]
+            reference_frame = int(pair["reference"]["frame_index"])
+            candidate_frame = int(pair["candidate"]["frame_index"])
+            if relation == "reference_temporal":
+                left = reference_index.get(reference_frame)
+                right = reference_index.get(candidate_frame)
+            elif relation == "candidate_temporal":
+                left = candidate_index.get(reference_frame)
+                right = candidate_index.get(candidate_frame)
+            elif relation == "cross_process":
+                left = reference_index.get(reference_frame)
+                right = next(
+                    (entry["candidate"] for entry in cross
+                     if int(entry["candidate"].get("frame_index", -1))
+                     == candidate_frame), None)
+            else:
+                left = right = None
+            if left is None or right is None:
+                continue
+            name = (f"{pair['relation']}-{pair['reference']['frame_index']}"
+                    f"-{pair['candidate']['frame_index']}.png")
+            image = difference_image(left["image"], right["image"],
+                                     amplification=amplification)
+            write_png(directory / name, image)
+            artifact_paths.append(str(directory / name))
+
+    complete = bool(pairs) and not any(
+        entry.get("reason") == "preserved full-resolution frame is missing"
+        for entry in skipped)
+    return {
+        "schema": TEMPORAL_SCHEMA,
+        "status": "completed" if complete else "incomplete",
+        "policy": {
+            "pixel_tolerance": tolerance,
+            "max_mismatched_fraction": float(policy.get("max_mismatched_fraction", 0.0)),
+            "max_mean_abs_error": float(policy.get("max_mean_abs_error", 0.0)),
+        },
+        "pairs": pairs,
+        "skipped": skipped,
+        "overlap": overlap,
+        "frames": {
+            "reference": [int(row["frame_index"]) for row in reference],
+            "candidate": [int(row["frame_index"]) for row in candidate],
+        },
+        "bounded": {"max_pairs": max_pairs, "returned_pairs": len(pairs),
+                    "skipped": len(skipped)},
+        "artifacts": artifact_paths,
+    }
