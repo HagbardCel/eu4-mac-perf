@@ -184,7 +184,9 @@ class GfxLiveDrawTests(unittest.TestCase):
         ran = self._run("--encoder-cleanup")
         self.assertEqual(ran.returncode, 0, ran.stderr)
         self.assertIn("encoder_cleanup=1", ran.stdout)
-        for token in ("failed=1", "preserved=1", "presented=1", "pixels=1"):
+        for token in ("failed=1", "refused=1", "diagnostic=1", "no_encoder=1",
+                      "preserved_before=1", "preserved=1", "presented=1",
+                      "pixels=1"):
             self.assertIn(token, ran.stdout)
 
     def test_cached_layout_preserves_attribute_locations(self) -> None:

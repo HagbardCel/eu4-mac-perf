@@ -297,7 +297,7 @@ static int run_checkpoint_inner(const char *operation, const char *directory,
     if (vertex_header == NULL) {
         fail("vertex buffer");
     }
-    uint8_t red_bgr[4 * 4 * 3];
+    uint8_t red_bgr[4 * 4 * 3] = {};
     for (int i = 0; i < 4 * 4; i++) {
         red_bgr[i * 3 + 0] = 0;
         red_bgr[i * 3 + 1] = 0;
@@ -403,7 +403,7 @@ static int run_prefix_two_frames(void) {
     if (vertex_header == NULL) {
         fail("prefix vertex buffer");
     }
-    uint8_t red_bgr[4 * 4 * 3];
+    uint8_t red_bgr[4 * 4 * 3] = {};
     for (int i = 0; i < 4 * 4; i++) {
         red_bgr[i * 3 + 0] = 0;
         red_bgr[i * 3 + 1] = 0;
@@ -2028,7 +2028,7 @@ static int run_offscreen_viewport(void) {
     if (vertex_header == NULL) {
         fail("offscreen vertex buffer");
     }
-    uint8_t red_bgr[4 * 4 * 3];
+    uint8_t red_bgr[4 * 4 * 3] = {};
     for (int i = 0; i < 4 * 4; i++) {
         red_bgr[i * 3 + 0] = 0;
         red_bgr[i * 3 + 1] = 0;
@@ -2442,7 +2442,7 @@ static int run_benchmark(const char *kind, int draws, int frames) {
     void *vertex_header = NULL;
     void *index_header = NULL;
     uint8_t red_header[0x44], green_header[0x44];
-    uint8_t red_bgr[4 * 4 * 3], green_bgr[4 * 4 * 3];
+    uint8_t red_bgr[4 * 4 * 3] = {}, green_bgr[4 * 4 * 3] = {};
     for (int i = 0; i < 4 * 4; i++) {
         red_bgr[i * 3 + 0] = 0;
         red_bgr[i * 3 + 1] = 0;
@@ -2758,8 +2758,8 @@ static int run_scissor_handoff(void) {
         fail("scissor legacy vertex buffers");
     }
 
-    uint8_t green_bgr[4 * 4 * 3];
-    uint8_t blue_bgr[4 * 4 * 3];
+    uint8_t green_bgr[4 * 4 * 3] = {};
+    uint8_t blue_bgr[4 * 4 * 3] = {};
     for (int i = 0; i < 4 * 4; i++) {
         green_bgr[i * 3 + 1] = 0xff;
         blue_bgr[i * 3 + 0] = 0xff;
@@ -2874,7 +2874,7 @@ static int run_encoder_cleanup(void) {
     uint8_t quad[96];
     make_quad(quad);
     void *simple_vb = eu4_gfx_create_vertex_buffer(NULL, quad, 4, 24, 0);
-    uint8_t green_bgr[4 * 4 * 3], blue_bgr[4 * 4 * 3];
+    uint8_t green_bgr[4 * 4 * 3] = {}, blue_bgr[4 * 4 * 3] = {};
     for (int i = 0; i < 4 * 4; i++) {
         green_bgr[i * 3 + 1] = 0xff;
         blue_bgr[i * 3 + 0] = 0xff;
@@ -2936,9 +2936,16 @@ static int run_encoder_cleanup(void) {
     raw.rdx = 0;
     char diagnostic[256];
     eu4_gfx_simple_draw_state state;
-    int failed =
+    int refused =
         eu4_gfx_draw_route_live(&raw, &state, diagnostic, sizeof diagnostic) !=
         EU4_GFX_DRAW_ROUTE_HANDLED;
+    int diagnostic_ok =
+        strstr(diagnostic, "synthetic stage has no engine uniform block") != NULL;
+    int no_active_encoder = eu4_gfx_batch_render_pass_active() == 0;
+    eu4_gfx_perf_snapshot after_failure;
+    eu4_gfx_perf_read(&after_failure);
+    int preserved_before = after_failure.draws_encoded == 1;
+    int failed = refused && diagnostic_ok && no_active_encoder && preserved_before;
 
     /* Subsequent successful draw: blue full-target Simple. */
     install_geometry(simple_shader, simple_vb, constant, blue_header);
@@ -2973,9 +2980,11 @@ static int run_encoder_cleanup(void) {
        green contribution because the clear/first draw shared the attachment. */
     int pixels_ok = pixel[0] > 200 && pixel[0] > pixel[1];
     int ok = failed && preserved && presented && pixels_ok;
-    printf("encoder_cleanup=%d failed=%d preserved=%d presented=%d pixels=%d "
-           "rgba=(%u,%u,%u,%u)\n",
-           ok, failed, preserved, presented, pixels_ok,
+    printf("encoder_cleanup=%d failed=%d refused=%d diagnostic=%d "
+           "no_encoder=%d preserved_before=%d preserved=%d presented=%d "
+           "pixels=%d rgba=(%u,%u,%u,%u)\n",
+           ok, failed, refused, diagnostic_ok, no_active_encoder,
+           preserved_before, preserved, presented, pixels_ok,
            pixel[0], pixel[1], pixel[2], pixel[3]);
     return ok ? 0 : 1;
 }
@@ -3149,7 +3158,7 @@ static int run_update_drain_failure(const char *kind) {
     uint8_t quad[96];
     make_quad(quad);
     void *vertex_header = eu4_gfx_create_vertex_buffer(NULL, quad, 4, 24, 0);
-    uint8_t green_bgr[4 * 4 * 3];
+    uint8_t green_bgr[4 * 4 * 3] = {};
     for (int i = 0; i < 4 * 4; i++) {
         green_bgr[i * 3 + 1] = 0xff;
     }
@@ -3195,7 +3204,7 @@ static int run_update_success(void) {
     uint8_t quad[96];
     make_quad(quad);
     void *vertex_header = eu4_gfx_create_vertex_buffer(NULL, quad, 4, 24, 0);
-    uint8_t green_bgr[4 * 4 * 3], blue_bgr[4 * 4 * 3];
+    uint8_t green_bgr[4 * 4 * 3] = {}, blue_bgr[4 * 4 * 3] = {};
     for (int i = 0; i < 4 * 4; i++) {
         green_bgr[i * 3 + 1] = 0xff;
         blue_bgr[i * 3 + 0] = 0xff;
@@ -3245,7 +3254,7 @@ static int run_gpu_timing(void) {
     uint8_t quad[96];
     make_quad(quad);
     void *vertex_header = eu4_gfx_create_vertex_buffer(NULL, quad, 4, 24, 0);
-    uint8_t green_bgr[4 * 4 * 3];
+    uint8_t green_bgr[4 * 4 * 3] = {};
     for (int i = 0; i < 4 * 4; i++) {
         green_bgr[i * 3 + 1] = 0xff;
     }
@@ -3342,7 +3351,7 @@ static int run_geometry_thread(void) {
     uint8_t quad[96];
     make_quad(quad);
     void *vertex_header = eu4_gfx_create_vertex_buffer(NULL, quad, 4, 24, 0);
-    uint8_t red_bgr[4 * 4 * 3];
+    uint8_t red_bgr[4 * 4 * 3] = {};
     for (int i = 0; i < 4 * 4; i++) {
         red_bgr[i * 3 + 2] = 0xff;
     }
@@ -4138,8 +4147,8 @@ int main(int argc, char **argv) {
     if (vertex_header == NULL) {
         fail("vertex buffer");
     }
-    uint8_t red_bgr[4 * 4 * 3];
-    uint8_t green_bgr[4 * 4 * 3];
+    uint8_t red_bgr[4 * 4 * 3] = {};
+    uint8_t green_bgr[4 * 4 * 3] = {};
     for (int i = 0; i < 4 * 4; i++) {
         red_bgr[i * 3 + 0] = 0;
         red_bgr[i * 3 + 1] = 0;
