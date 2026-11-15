@@ -1,7 +1,8 @@
 # EU4 Metal backend — submission and draw-overhead optimization
 
-Final report for the P0–P4 sequence, updated after the PR #192 review. Work is
-local; no branch was merged. PR #190 is present in `origin/main` (merge
+Final report for the P0–P4 sequence, updated after the PR #192 review. Reviewed
+head: `29c5b51` (implementation through `614a0da`, corrected evidence through
+`29c5b51`). Work is local; no branch was merged. PR #190 is present in `origin/main` (merge
 `61e7795`), and every stage below is stacked on that merge plus the review-fix
 commit.
 
@@ -15,6 +16,7 @@ commit.
 | P3 | `perf/p3-render-pass-coalescing` | `8bde44a` | One render pass per compatible draw run |
 | P4 | `perf/p4-cpu-hot-path` | `1ac02fa`, `37e9284` | Layout/depth/uniform caches; ordering remediations |
 | Review | `perf/p4-cpu-hot-path` | `614a0da` | Geometry-thread, scissor, multi-RT conversion, GPU timing, cache hygiene |
+| Evidence | `perf/p4-cpu-hot-path` | `c6171ba`, `29c5b51` | Corrected measurements, live acceptance, compact stage summaries |
 
 The review commit addresses all four automated code-review findings plus the
 additional geometry-publication thread finding. The staged commits preserve the
