@@ -28,6 +28,42 @@ HEIGHT = 48
 DEFECT_FRAME = 57
 
 
+def _static_dump(index, digest, session, *, width=8, height=6):
+    """A valid preserved frame record used to prove pair-local staticity."""
+    return {
+        "frame_index": index,
+        "sha256": digest,
+        "valid": True,
+        "preserved": True,
+        "reasons": [],
+        "meta": {
+            "schema": "gfx-frame-dump/v1",
+            "frame_index": index,
+            "session": session,
+            "width": width,
+            "height": height,
+            "origin": "lower_left",
+            "pixel_format": "BGRA8",
+            "raw_file": f"captured/frame-{index}.bgra",
+            "raw_bytes": width * height * 4,
+            "sha256": digest,
+            "capture_valid": True,
+            "gpu_completed": True,
+        },
+    }
+
+
+def _static_dumps(frame, session, *, width=8, height=6):
+    return {
+        role: {"captured": [
+            _static_dump(frame - 1 + offset, digest, session,
+                         width=width, height=height)
+            for offset in range(3)
+        ], "missing": []}
+        for role, digest in (("reference", "a" * 64), ("candidate", "b" * 64))
+    }
+
+
 @unittest.skipUnless(np is not None, "numpy is required")
 class OfflineCampaignTests(unittest.TestCase):
     def setUp(self):
@@ -132,6 +168,7 @@ class OfflineCampaignTests(unittest.TestCase):
                     "allow_scale_normalization": True},
             regions={"text": {"rect": [0, 16, 0, 24], "policy": "structural"}},
         )
+        comparison["alignment"] = {"status": "aligned"}
         pair = {
             "frame_index": DEFECT_FRAME,
             "candidate_frame_index": DEFECT_FRAME,
@@ -151,11 +188,14 @@ class OfflineCampaignTests(unittest.TestCase):
                                         "max_mismatched_fraction": 0.005,
                                         "max_mean_abs_error": 1.0,
                                         "regions": {"text": {"rect": [0, 16, 0, 24]}}}},
-            "health": {"verdict": "unknown", "first_failure": None,
+            "health": {"verdict": "healthy", "first_failure": None,
                        "instrumentation_failures": []},
             "frames": {"comparison": {"status": "fail", "first_failure": pair},
                        "last_pair": pair, "aligned": 100, "paired": 100},
             "stop": {"reason": "frame_difference"},
+            # The 100-frame campaign shows a static scene up to the injected
+            # defect; the comparison still needs pair-local staticity evidence.
+            "dumps": _static_dumps(DEFECT_FRAME, "offline-100"),
             "artifacts": {"bytes": 100, "max_bytes": 1000, "dropped": 0},
             "processes": {}, "ledger": {}, "preflight": {}, "terminal": {},
         }

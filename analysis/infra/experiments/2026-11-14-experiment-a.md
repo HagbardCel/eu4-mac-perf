@@ -119,3 +119,15 @@ was comparable.
 
 This confirms that game-day identity and simulation freeze are not sufficient.
 A deterministic **render-stage** selector or a genuinely paused save is required.
+
+## Addendum: post-M7 reclassification (2026-11-15)
+
+The M7.0 starter canary re-read this session's preserved full-resolution frames
+and found that the aligned pair was not pixel-static: consecutive reference
+frames differed by 3.7 % and 79.7 %, the candidate by 6.3 %, while the
+cross-process pair differed by 1.35 % — 92 % of those pixels also change between
+two consecutive reference frames. The corrected staticity gate therefore
+reclassifies this session from `rendering_difference` to `incomplete`
+("pixel difference on an unverified static scene"). The measured pixel
+difference is unchanged; only its attribution is. See
+[M7.0 canary](../../m7/starter-canary.md).
