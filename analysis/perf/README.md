@@ -1,5 +1,23 @@
 # Metal backend performance measurements
 
+Final qualification and PR/commit list: [FINAL_REPORT.md](FINAL_REPORT.md).
+
+## Final result (1000-draw synthetic frame)
+
+| Metric | P0 baseline | Optimized |
+|---|---:|---:|
+| Draw calls | 1000 | 1000 |
+| Command buffers | 1002 | 3 |
+| Render encoders | 1000 | 1 |
+| Temporary index buffers | 1000 | 0 |
+| CPU encoding, simple / indexed / mixed | 33.0 / 44.4 / 44.3 ms | 9.3 / 12.7 / 10.3 ms |
+| Wall time, simple / indexed / mixed | 49.9 / 59.7 / 59.5 ms | 23.0 / 24.0 / 21.6 ms |
+
+These are synthetic backend-overhead measurements, not gameplay or FPS claims.
+Saved runs: [p0-baseline.json](p0-baseline.json), [p1.json](p1.json),
+[p2.json](p2.json), [p3.json](p3.json), [p4.json](p4.json),
+[final.json](final.json).
+
 ## PR P0 baseline
 
 `benchmark/eu4_gfx_stream_bench.py` builds the native live-draw host
