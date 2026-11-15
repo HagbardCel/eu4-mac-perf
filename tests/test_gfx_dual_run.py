@@ -151,6 +151,7 @@ class ScenarioTests(unittest.TestCase):
             {"input_events": [{"at_frame": 1, "event": "click"}]},
             {"game_config": {"language": "l_english"}},
             {"start": {"kind": "save", "save": "other.eu4"}},
+            {"observation": {"capture_every_frame": True}},
         ):
             with self.assertRaises(gfx_scenario.ScenarioError) as caught:
                 gfx_scenario.normalize(scenario(**overrides))

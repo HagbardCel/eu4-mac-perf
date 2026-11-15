@@ -4,6 +4,41 @@ Current capabilities, evidence status and open limits are recorded in
 [docs/status.md](docs/status.md). Consult it before planning graphics work or
 claiming that a capability exists.
 
+## Verification workflow
+
+Use [automation/test_runner.py](automation/test_runner.py) instead of starting
+long `unittest` commands repeatedly. It preserves the child exit code, writes
+the complete log under `.local/test-runs/`, returns a compact summary, and
+returns an already-running identical suite instead of launching a duplicate.
+
+1. **After a code change**, run the focused modules that exercise it:
+   ```sh
+   python3 -m automation.test_runner run \
+     --module tests.test_agent_tools --module tests.test_gfx_case
+   ```
+2. **Once focused tests pass**, run the dependent modules they touch (the
+   neighbouring suites named in the change or its plan).
+3. **Run the full suite once at the end**:
+   `python3 -m automation.test_runner run --label full`.
+4. **Compare failures against base** before claiming a regression:
+   run the same focused modules in a base worktree (`--cwd`) and use
+   `python3 -m automation.test_runner compare --base <id|record> --candidate <id|record>`.
+   A pre-existing failure is reported as pre-existing, not fixed or introduced.
+5. Inspect a running or finished invocation with
+   `python3 -m automation.test_runner status --id <id>`; do not poll a log file.
+
+`python3 -m automation.python_runtime resolve` is the checked interpreter for
+the diagnostic core. If a native tool reports an interpreter or NumPy mismatch,
+fix `EU4_DSH_PYTHON` rather than running the tool again with another Python.
+
+## Evidence discovery
+
+Historical campaigns are indexed, read-only, through
+`python3 -m automation.agent_tools eu4_session discover`. Set
+`EU4_EVIDENCE_ROOT` (OS-path-separated) to the worktrees whose `.local` evidence
+should be visible. Discovery never searches the filesystem, copies artifacts or
+mutates historical evidence; select a session with `eu4_diff_inspect --run`.
+
 ## DSH permission discipline
 
 - Use normal tool execution without sandbox escalation by default.

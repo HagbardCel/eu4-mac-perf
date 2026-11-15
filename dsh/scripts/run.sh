@@ -100,18 +100,40 @@ if [ -n "$WORKSPACE" ]; then
   }
 fi
 
-# A worktree of this repository usually has no .venv (it is ignored), so the
-# launcher falls back to the PATH interpreter instead of exporting a path that
-# does not exist. Campaign preparation still runs from the checkout that owns
-# the trusted automation modules.
-if [ -z "${EU4_DSH_PYTHON:-}" ]; then
+# One interpreter, resolved once, absolute, with NumPy. The tools plugin and
+# this launcher must never disagree: an explicitly configured EU4_DSH_PYTHON is
+# authoritative and is not replaced when it is unusable. Without one, prefer the
+# checkout venv and otherwise resolve python3.14/python3 through the same
+# dependency probe preflight uses. A relative or bare name is resolved to its
+# absolute PATH target now, so the profile receives a stable path.
+PYTHON_REQUEST=${EU4_DSH_PYTHON:-}
+if [ -z "$PYTHON_REQUEST" ]; then
   if [ -x "$INFRA/.venv/bin/python3" ]; then
-    EU4_DSH_PYTHON=$INFRA/.venv/bin/python3
+    PYTHON_REQUEST=$INFRA/.venv/bin/python3
+  elif command -v python3.14 >/dev/null 2>&1; then
+    PYTHON_REQUEST=$(command -v python3.14)
   else
-    EU4_DSH_PYTHON=python3
+    PYTHON_REQUEST=$(command -v python3 || true)
   fi
 fi
+[ -n "$PYTHON_REQUEST" ] || {
+  echo "$(basename "$0"): no Python 3 interpreter is available on PATH" >&2
+  exit 1
+}
+EU4_DSH_PYTHON=$(
+  cd "$INFRA" && "$PYTHON_REQUEST" -m automation.python_runtime \
+    resolve --requested "$PYTHON_REQUEST" --print-path
+) || {
+  echo "run: no Python 3 interpreter with NumPy is available" >&2
+  echo "run: install NumPy, or set EU4_DSH_PYTHON to an absolute interpreter that has it" >&2
+  (
+    cd "$INFRA" && "$PYTHON_REQUEST" -m automation.python_runtime \
+      resolve --requested "$PYTHON_REQUEST" --json >&2
+  ) || true
+  exit 1
+}
 export EU4_DSH_PYTHON
+echo "run: Python interpreter: $EU4_DSH_PYTHON" >&2
 
 if [ -n "$WORKSPACE" ]; then
   : "${EU4_DSH_SKILL_ROOT:=$WORKSPACE/.opencode/skills}"

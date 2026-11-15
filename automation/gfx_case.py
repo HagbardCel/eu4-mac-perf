@@ -454,8 +454,13 @@ def build_case(run_dir: Path, *, out_dir: Path | None = None,
     return packaged
 
 
-def compare_case(case_dir: Path) -> dict:
-    """Re-run the offline comparator from the packaged repro description."""
+def compare_case(case_dir: Path, *, write: bool = True) -> dict:
+    """Re-run the offline comparator from the packaged repro description.
+
+    ``write`` defaults to the historical behaviour (a ``repro/comparison.json``
+    inside the case). Agent surfaces pass ``write=False`` so replaying evidence
+    discovered in another worktree never mutates it.
+    """
     case_dir = Path(case_dir)
     repro = _read_json(case_dir / "repro" / "repro.json")
     if repro is None:
@@ -507,7 +512,8 @@ def compare_case(case_dir: Path) -> dict:
                 gfx_frame_compare.CompareError) as exc:
             result = {"schema": "gfx-case-repro/v1", "status": INCOMPLETE,
                       "reason": f"{type(exc).__name__}: {exc}"}
-    _write_json(case_dir / "repro" / "comparison.json", result)
+    if write:
+        _write_json(case_dir / "repro" / "comparison.json", result)
     return result
 
 

@@ -316,3 +316,511 @@ class ToolTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DiagnosticSurfaceTests(ToolTests):
+    """Phases 1.2-2.4 and 5: unambiguous, compact, provenance-aware tools."""
+
+    def observation(self, index: int, *, backend: str = "opengl") -> dict:
+        return {
+            "schema": "gfx-frame-observe/v1", "backend": backend,
+            "frame_index": index, "game_day": 56456976 + index,
+            "update_identity": f"0x{index:016x}", "caller_signature": "0xabc",
+            "draws": 370, "distinct_callers": 17, "width": 8, "height": 6,
+            "origin": "top_left", "pixel_format": "RGBA8",
+            "sha256": f"{index:064x}", "preview_sha256": f"{index + 500:064x}",
+            "preview_file": f"previews/{index}.bgra", "capture_valid": True,
+            "gpu_completed": True, "skipped_before": 0, "ts_ms": 1000 + index,
+            "error": "",
+        }
+
+    def frames_run(self, root: Path) -> Path:
+        run = root / "frames-run"
+        for role, indices in (("reference", range(10, 16)),
+                              ("candidate", range(10, 13))):
+            observe = run / role / "observe"
+            observe.mkdir(parents=True)
+            (observe / "frame-observe.jsonl").write_text("\n".join(
+                json.dumps(self.observation(index, backend=role))
+                for index in indices) + "\n")
+        return run
+
+    def session_result(self, directory: Path, *, session_id: str,
+                       classification: str = "incomplete",
+                       health_verdict: str = "healthy",
+                       comparison_status: str = "fail") -> Path:
+        directory.mkdir(parents=True, exist_ok=True)
+        result = {
+            "schema": "gfx-dual-run/v1",
+            "session_id": session_id,
+            "classification": classification,
+            "scenario": {
+                "comparison": {"policy": "tolerant", "max_channel_error": 8,
+                               "max_mismatched_fraction": 0.01,
+                               "max_mean_abs_error": 1.5, "regions": {}},
+                "settle": {"stable_frames": 2},
+                "observation": {"max_frames": 1},
+            },
+            "health": {"verdict": health_verdict, "first_failure": None,
+                       "instrumentation_failures": []},
+            "frames": {"comparison": {"status": comparison_status,
+                                      "compared": 1, "failed": 1}},
+            "qualification": {"status": classification, "qualified": False,
+                              "requested_frames": 1},
+            "stop": {"reason": "frame_difference"},
+            "processes": {},
+            "dumps": {},
+            "stability": {"status": "weak"},
+        }
+        (directory / "result.json").write_text(json.dumps(result))
+        (directory / "session.json").write_text(
+            json.dumps({"session_id": session_id}))
+        return directory
+
+    def test_session_list_is_active_only_by_default_with_history_opt_in(self):
+        with tempfile.TemporaryDirectory() as registry:
+            root = Path(registry)
+            with mock.patch.dict(os.environ, {"EU4_GFX_SESSION_ROOT": registry}):
+                active = gfx_session.Session.create(
+                    root / "runs", workflow_id="active", profile="early",
+                    session_root_path=root)
+                closed = gfx_session.Session.create(
+                    root / "runs", workflow_id="closed", profile="early",
+                    session_root_path=root)
+                closed.close()
+                stale = root / "session-20260101T000000Z-stale.json"
+                stale.write_text(json.dumps({
+                    "schema": "gfx-session-marker/v1",
+                    "session_id": "20260101T000000Z-stale",
+                    "run_dir": str(root / "missing-run"),
+                    "workflow_id": "stale", "profile": "early",
+                    "created_utc": "2026-01-01T00:00:00Z",
+                    "status": "active",
+                }))
+                try:
+                    code, value = self.call(["eu4_session", "list"])
+                    self.assertEqual(code, 0)
+                    listing = value["result"]
+                    self.assertEqual(listing["filter"], "active")
+                    self.assertEqual([row["session_id"] for row in listing["sessions"]],
+                                     [active.session_id])
+                    self.assertEqual(listing["counts"],
+                                     {"active": 1, "closed": 1, "stale": 1,
+                                      "total": 3})
+                    row = listing["sessions"][0]
+                    self.assertEqual(row["classification"], "active")
+                    self.assertNotIn("processes", row)
+                    self.assertNotIn("coordinator", row)
+                    self.assertNotIn("ledger_tokens", row)
+                    code, value = self.call([
+                        "eu4_session", "list", "--include-history", "--limit", "2"])
+                    history = value["result"]
+                    self.assertEqual(history["filter"], "all")
+                    self.assertEqual(history["returned"], 2)
+                    self.assertTrue(history["truncated"])
+                    self.assertEqual(history["next_offset"], 2)
+                    code, value = self.call([
+                        "eu4_session", "list", "--status", "stale"])
+                    self.assertEqual(value["result"]["sessions"][0]["session_id"],
+                                     "20260101T000000Z-stale")
+                    self.assertEqual(
+                        value["result"]["sessions"][0]["classification"], "stale")
+                finally:
+                    active.close()
+                    closed.close()
+
+    def test_capture_frames_exact_role_neighbour_and_pagination(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = self.frames_run(Path(temporary))
+            code, value = self.call([
+                "eu4_capture", "frames", "--run", str(run), "--frame", "12"])
+            self.assertEqual(code, 0)
+            frames = value["result"]
+            self.assertEqual(frames["count"], 2)
+            self.assertEqual({row["frame_index"] for row in frames["frames"]}, {12})
+            self.assertEqual(frames["matched"], 2)
+            self.assertEqual(frames["missing_frames"], [])
+            self.assertEqual(frames["available_by_role"],
+                             {"reference": 6, "candidate": 3})
+            self.assertIn("preview_sha256", frames["frames"][0])
+            self.assertNotIn("preview_file", frames["frames"][0])
+            self.assertNotIn("content", frames["frames"][0])
+
+            code, value = self.call([
+                "eu4_capture", "frames", "--run", str(run), "--frame", "12",
+                "--role", "reference"])
+            self.assertEqual(len(value["result"]["frames"]), 1)
+            self.assertEqual(value["result"]["frames"][0]["role"], "reference")
+
+            code, value = self.call([
+                "eu4_capture", "frames", "--run", str(run), "--frame", "12",
+                "--around", "1"])
+            self.assertEqual(
+                sorted((row["role"], row["frame_index"])
+                       for row in value["result"]["frames"]),
+                [("candidate", 11), ("candidate", 12),
+                 ("reference", 11), ("reference", 12), ("reference", 13)])
+
+            code, value = self.call([
+                "eu4_capture", "frames", "--run", str(run), "--frame", "12",
+                "--around", "2", "--limit", "2"])
+            self.assertEqual(code, 0)
+            page = value["result"]
+            self.assertEqual(page["returned"], 2)
+            self.assertGreater(page["matched"], 2)
+            self.assertTrue(page["truncated"])
+            self.assertEqual(page["next_offset"], 2)
+            self.assertGreater(page["omitted"], 0)
+
+            code, value = self.call([
+                "eu4_capture", "frames", "--run", str(run), "--frame", "99"])
+            self.assertEqual(code, 2)
+            self.assertFalse(value["ok"])
+            self.assertEqual(value["status"], "incomplete")
+            self.assertEqual(value["result"]["missing_frames"], [99])
+            self.assertEqual(value["outcome"]["diagnostic"], "incomplete")
+
+            code, value = self.call([
+                "eu4_capture", "frames", "--run", str(run),
+                "--frame", "10", "--full"])
+            self.assertEqual(code, 0)
+            self.assertIn("preview_file", value["result"]["frames"][0])
+            self.assertTrue(value["result"]["raw"])
+
+    def test_capture_health_reconciles_persisted_and_fresh_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            healthy = self.session_result(root / "healthy", session_id="healthy",
+                                          health_verdict="healthy")
+            code, value = self.call(["eu4_capture", "health", "--run", str(healthy)])
+            self.assertEqual(code, 0)
+            health = value["result"]["health"]
+            self.assertEqual(health["verdict"], "healthy")
+            self.assertEqual(health["agreement"], "persisted_only")
+            self.assertTrue(health["sources"]["persisted"]["available"])
+            self.assertEqual(health["sources"]["scanned"]["summary"]["verdict"],
+                             "unknown")
+            self.assertIn("persisted", health["note"])
+            self.assertEqual(value["outcome"]["evidence"], "valid")
+
+            scanned = self.session_result(root / "scanned", session_id="scanned")
+            result = json.loads((scanned / "result.json").read_text())
+            result["health"] = {"verdict": "unknown", "first_failure": None,
+                                "instrumentation_failures": []}
+            (scanned / "result.json").write_text(json.dumps(result))
+            (scanned / "draw-refused-1.json").write_text(json.dumps({
+                "reason": "pipeline creation failed", "variant": "_GfxDraw",
+                "caller_rva": "0x1234"}))
+            code, value = self.call(["eu4_capture", "health", "--run", str(scanned)])
+            health = value["result"]["health"]
+            self.assertEqual(health["verdict"], "failed")
+            self.assertEqual(health["agreement"], "scan_only")
+            self.assertFalse(value["result"]["gate"]["allow"])
+            self.assertEqual(value["outcome"]["evidence"], "invalid")
+
+            unknown = root / "unknown"
+            unknown.mkdir()
+            code, value = self.call(["eu4_capture", "health", "--run", str(unknown)])
+            health = value["result"]["health"]
+            self.assertEqual(health["verdict"], "unknown")
+            self.assertIn("unknown, not healthy", health["note"])
+            self.assertEqual(value["outcome"]["verdict"], "unknown")
+
+    def test_diff_inspect_campaign_root_lists_sessions_without_selecting(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "campaign"
+            self.session_result(root / "session-a", session_id="a",
+                                classification="rendering_difference")
+            self.session_result(root / "session-b", session_id="b",
+                                classification="alignment_failure",
+                                comparison_status="not_compared")
+            code, value = self.call(["eu4_diff_inspect", "--run", str(root)])
+            self.assertEqual(code, 0)
+            listing = value["result"]
+            self.assertGreaterEqual(listing["counts"]["sessions"], 2)
+            identifiers = {row["session_id"] for row in listing["sessions"]}
+            self.assertEqual(identifiers, {"a", "b"})
+            self.assertIsNone(listing.get("selected_session"))
+            self.assertIn("never auto-selected", listing["next"])
+            self.assertTrue(all(len(row["result_sha256"]) == 64
+                                for row in listing["sessions"]))
+            code, value = self.call([
+                "eu4_diff_inspect", "--run", str(root / "session-a")])
+            self.assertEqual(code, 0)
+            self.assertEqual(value["result"]["classification"], "incomplete")
+            self.assertEqual(value["result"]["recorded_classification"],
+                             "rendering_difference")
+            self.assertTrue(value["result"]["classification_change"])
+            code, value = self.call([
+                "eu4_diff_inspect", "--run", str(Path(temporary) / "missing")])
+            self.assertEqual(code, 2)
+            self.assertFalse(value["ok"])
+            self.assertEqual(value["status"], "not_found")
+
+    def test_diff_inspect_temporal_recovers_canary_findings(self):
+        try:
+            import numpy as np
+        except Exception:  # noqa: BLE001
+            self.skipTest("numpy is required")
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary) / "session-temporal"
+            run.mkdir()
+            base = np.full((6, 8, 4), 20, dtype=np.uint8)
+            base[:, :, 3] = 255
+            ref75 = base.copy()
+            for column in range(4):
+                ref75[0, column, 0] = 200
+            for column in range(4):
+                ref75[5, column, 0] = 200
+            for column in range(4):
+                ref75[2, column, 1] = 200
+            cand74 = base.copy()
+            for column in range(4):
+                cand74[0, column, 0] = 160
+            cand75 = cand74.copy()
+            for column in range(4):
+                cand75[1, column, 1] = 200
+            captured = {}
+            for role, indices in (("reference", (74, 75)),
+                                  ("candidate", (74, 75))):
+                directory = run / role / "observe" / "captured"
+                directory.mkdir(parents=True)
+                images = {("reference", 74): base, ("reference", 75): ref75,
+                          ("candidate", 74): cand74, ("candidate", 75): cand75}
+                metas = []
+                found = {}
+                for index in indices:
+                    path = directory / f"frame-{index}.bgra"
+                    path.write_bytes(images[(role, index)].tobytes())
+                    meta = {
+                        "schema": "gfx-frame-dump/v1", "frame_index": index,
+                        "raw_file": str(path), "width": 8, "height": 6,
+                        "origin": "top_left", "pixel_format": "RGBA8",
+                        "sha256": f"{role}{index}" + "0" * 60,
+                        "caller_signature": "0xabc", "draws": 2,
+                        "game_day": 56456976,
+                        "update_identity": "0xd09cad25b3166452",
+                    }
+                    metas.append({"frame_index": index, "meta": meta,
+                                  "sha256": meta["sha256"]})
+                    found[str(index)] = meta
+                captured[role] = {"captured": metas, "found": found}
+            pair = {
+                "frame_index": 74, "candidate_frame_index": 74,
+                "status": "aligned",
+                "reference": {"game_day": 56456976, "draws": 2,
+                              "caller_signature": "0xabc",
+                              "update_identity": "0xd09cad25b3166452"},
+                "candidate": {"game_day": 56456976, "draws": 2,
+                              "caller_signature": "0xabc",
+                              "update_identity": "0xd09cad25b3166452"},
+                "dumps": {
+                    "reference": {"found": {"74": found["74"]}},
+                    "candidate": {"found": {"74": found["74"]}},
+                },
+                "comparison": {
+                    "status": "fail", "reasons": ["max_channel_error 200 > 8"],
+                    "alignment": {"status": "aligned",
+                                  "evidence": ["game_update",
+                                               "caller_signature"]},
+                    "statistics": {"pixels": 48, "mismatched_pixels": 4,
+                                   "mismatched_fraction": 0.083333,
+                                   "max_channel_error": 140,
+                                   "mean_abs_error": 2.0,
+                                   "difference_bbox": [0, 1, 0, 4]},
+                    "regions": {}, "mirrored_regions": [],
+                },
+            }
+            result = {
+                "schema": "gfx-dual-run/v1", "session_id": "temporal",
+                "classification": "rendering_difference",
+                "scenario": {
+                    "comparison": {"policy": "tolerant", "max_channel_error": 8,
+                                   "max_mismatched_fraction": 0.01,
+                                   "max_mean_abs_error": 1.5, "regions": {}},
+                    "settle": {"stable_frames": 2},
+                    "observation": {"max_frames": 1},
+                },
+                "health": {"verdict": "healthy", "first_failure": None,
+                           "instrumentation_failures": []},
+                "frames": {"comparison": {"status": "fail", "compared": 1,
+                                          "failed": 1, "first_failure": pair},
+                           "last_pair": pair},
+                "qualification": {"status": "rendering_difference",
+                                  "qualified": False, "requested_frames": 1},
+                "stop": {"reason": "frame_difference"},
+                "processes": {}, "dumps": captured,
+                "stability": {"status": "weak"},
+            }
+            (run / "result.json").write_text(json.dumps(result))
+            (run / "session.json").write_text(json.dumps({"session_id": "temporal"}))
+            code, value = self.call([
+                "eu4_diff_inspect", "--run", str(run), "--temporal",
+                "--reference-frame", "74", "--candidate-frame", "74"])
+            self.assertEqual(code, 0)
+            payload = value["result"]
+            self.assertEqual(payload["classification"], "incomplete")
+            self.assertFalse(payload["staticity"]["verified"])
+            temporal = payload["temporal"]
+            self.assertEqual(temporal["status"], "completed")
+            relations = [row["relation"] for row in temporal["pairs"]]
+            self.assertEqual(relations, ["reference_temporal",
+                                         "candidate_temporal", "cross_process"])
+            by_relation = {row["relation"]: row for row in temporal["pairs"]}
+            self.assertGreater(
+                by_relation["reference_temporal"]["statistics"][
+                    "mismatched_fraction"],
+                by_relation["cross_process"]["statistics"][
+                    "mismatched_fraction"])
+            reference_overlap = next(
+                row for row in temporal["overlap"]["temporal"]
+                if row["relation"] == "reference_temporal")
+            self.assertEqual(reference_overlap["cross_also_temporal_fraction"],
+                             1.0)
+            self.assertTrue(any("staticity" in reason
+                                for reason in payload["missing_evidence"]))
+            self.assertIn("temporal", payload["next_steps"][0])
+            self.assertEqual(value["outcome"]["diagnostic"], "complete")
+            self.assertEqual(value["outcome"]["verdict"], "different")
+            self.assertFalse(value["outcome"]["qualified"])
+
+    def test_replay_missing_numpy_is_unavailable_and_not_a_success(self):
+        run = self.run_fixture()
+        with mock.patch.object(agent_tools.gfx_frame_compare, "np", None):
+            code, value = self.call(["eu4_replay", "case", "--case", str(run)])
+        self.assertEqual(code, 2)
+        self.assertFalse(value["ok"])
+        self.assertEqual(value["status"], "unavailable")
+        self.assertEqual(value["outcome"]["diagnostic"], "unavailable")
+        self.assertFalse(value["outcome"]["diagnostic_complete"])
+        self.assertIn("numpy", value["reason"])
+        self.assertIn("interpreter", value["reason"])
+        self.assertFalse(value["runtime"]["numpy"]["available"])
+
+    def test_replay_case_with_a_verdict_is_a_completed_diagnostic(self):
+        run = self.run_fixture()
+        case = agent_tools.gfx_case.build_case(run)["case_dir"]
+        code, value = self.call(["eu4_replay", "case", "--case", case])
+        self.assertEqual(code, 0)
+        self.assertTrue(value["ok"])
+        self.assertEqual(value["outcome"]["diagnostic"], "complete")
+        self.assertIn(value["outcome"]["verdict"],
+                      ("equal", "different", "unverified"))
+        self.assertEqual(value["runtime"]["executable"],
+                         str(Path(sys.executable).resolve()))
+        self.assertTrue(value["runtime"]["numpy"]["available"])
+
+    def test_replay_does_not_mutate_the_case_directory(self):
+        run = self.run_fixture()
+        case = Path(agent_tools.gfx_case.build_case(run)["case_dir"])
+        comparison = case / "repro" / "comparison.json"
+        if comparison.is_file():
+            comparison.unlink()
+        code, value = self.call(["eu4_replay", "case", "--case", str(case)])
+        self.assertEqual(code, 0)
+        self.assertTrue(value["ok"])
+        self.assertFalse(comparison.exists(),
+                         "agent replay must not write into historical evidence")
+
+    def test_session_discover_uses_configured_evidence_root(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.session_result(root / "live-a6" / "session-a6", session_id="a6",
+                                classification="rendering_difference")
+            self.session_result(root / "live-a21" / "session-a21", session_id="a21",
+                                classification="alignment_failure")
+            code, value = self.call([
+                "eu4_session", "discover", "--evidence-root", str(root),
+                "--classification", "alignment_failure"])
+            self.assertEqual(code, 0)
+            result = value["result"]
+            self.assertEqual([row["session_id"] for row in result["sessions"]],
+                             ["a21"])
+            self.assertTrue(result["read_only"])
+            self.assertEqual(result["roots"], [str(root.resolve())])
+            self.assertEqual(
+                result["discovered"]["by_classification"]["rendering_difference"],
+                1)
+            self.assertTrue(result["sessions"][0]["provenance"]["result_sha256"])
+
+    def test_health_interface_agrees_between_capture_and_diff_inspect(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = self.session_result(Path(temporary) / "consistent",
+                                      session_id="consistent")
+            _, capture = self.call(["eu4_capture", "health", "--run", str(run)])
+            _, inspect = self.call(["eu4_diff_inspect", "--run", str(run)])
+            self.assertEqual(capture["result"]["health"]["verdict"],
+                             inspect["result"]["health"]["verdict"])
+            self.assertEqual(capture["result"]["health"]["agreement"],
+                             inspect["result"]["health"]["agreement"])
+            self.assertEqual(capture["outcome"]["verdict"],
+                             inspect["result"]["health"]["verdict"])
+
+    def test_capture_health_on_a_campaign_root_lists_each_session(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "campaign"
+            self.session_result(root / "session-a", session_id="a")
+            self.session_result(root / "session-b", session_id="b")
+            code, value = self.call(["eu4_capture", "health", "--run", str(root)])
+            self.assertEqual(code, 0)
+            result = value["result"]
+            self.assertEqual(result["counts"]["sessions"], 2)
+            self.assertEqual({row["session_id"] for row in result["sessions"]},
+                             {"a", "b"})
+            self.assertTrue(all(row["health"]["verdict"] == "healthy"
+                                for row in result["sessions"]))
+
+
+class RecordedExperimentATests(unittest.TestCase):
+    """Phase 3: the recorded Experiment A session, when it is available locally.
+
+    The evidence lives under the gitignored ``.local`` tree, so this test is
+    skipped on a clean checkout; the synthetic temporal tests cover the same
+    qualitative findings portably.
+    """
+
+    SESSION = (ROOT / ".local" / "infra" / "live-a6"
+               / "session-20261114T181230Z-d28f6fee")
+
+    def setUp(self):
+        if not (self.SESSION / "result.json").is_file():
+            self.skipTest("recorded Experiment A evidence is not present")
+        try:
+            import numpy  # noqa: F401
+        except Exception:  # noqa: BLE001
+            self.skipTest("numpy is required")
+
+    def test_temporal_mode_recovers_the_recorded_findings(self):
+        from types import SimpleNamespace
+        args = SimpleNamespace(
+            run=str(self.SESSION), build_case=False, full=False, limit=20,
+            offset=0, temporal=True, reference_frame=74, candidate_frame=74,
+            temporal_window=1, temporal_artifacts=False,
+            temporal_artifact_dir=None,
+        )
+        value = agent_tools.eu4_diff_inspect(args)
+        self.assertTrue(value["ok"], value.get("reason"))
+        payload = value["result"]
+        temporal = payload["temporal"]
+        self.assertEqual(temporal["status"], "completed")
+        pairs = {(row["relation"], row["reference"]["frame_index"],
+                  row["candidate"]["frame_index"]): row
+                 for row in temporal["pairs"]}
+        reference = pairs[("reference_temporal", 74, 75)]["statistics"]
+        candidate = pairs[("candidate_temporal", 74, 75)]["statistics"]
+        cross = pairs[("cross_process", 74, 74)]["statistics"]
+        self.assertGreater(reference["mismatched_fraction"],
+                           cross["mismatched_fraction"])
+        self.assertGreater(candidate["mismatched_fraction"],
+                           cross["mismatched_fraction"])
+        self.assertAlmostEqual(cross["mismatched_fraction"], 0.013492, places=6)
+        overlap = next(
+            row for row in temporal["overlap"]["temporal"]
+            if row["relation"] == "reference_temporal"
+            and row["reference_frame"] == 74
+            and row["candidate_frame"] == 75)
+        self.assertGreater(overlap["cross_also_temporal_fraction"], 0.9)
+        self.assertFalse(payload["staticity"]["verified"])
+        self.assertEqual(payload["classification"], "incomplete")
+        self.assertEqual(payload["recorded_classification"],
+                         "rendering_difference")

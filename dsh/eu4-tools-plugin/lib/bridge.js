@@ -1,5 +1,7 @@
 // Thin bridge from a DSH tool call to the stable Python tool core.
 import { spawn } from 'node:child_process'
+import { accessSync, constants } from 'node:fs'
+import { delimiter, isAbsolute, join } from 'node:path'
 
 export const TOOL_NAMES = [
   'eu4_re_query',
@@ -10,6 +12,41 @@ export const TOOL_NAMES = [
   'eu4_replay',
   'eu4_case_inspect',
 ]
+
+// The adapter must spawn exactly the interpreter the launcher resolved and
+// preflight verified. A relative name is resolved once, to an absolute PATH
+// target; it is never passed through as a name the DSH server could resolve
+// differently. An empty value fails closed: no silent interpreter default.
+export function resolvePython(requested) {
+  const value = requested || process.env.EU4_DSH_PYTHON || ''
+  if (!value) {
+    throw new Error(
+      'EU4_DSH_PYTHON is not configured; start the profile through ' +
+        'dsh/scripts/run.sh or set it to an absolute Python with NumPy')
+  }
+  const executable = (candidate) => {
+    try {
+      accessSync(candidate, constants.X_OK)
+      return true
+    } catch {
+      return false
+    }
+  }
+  if (isAbsolute(value)) {
+    if (!executable(value)) {
+      throw new Error(`configured Python interpreter is not executable: ${value}`)
+    }
+    return value
+  }
+  for (const directory of (process.env.PATH || '').split(delimiter)) {
+    if (!directory) continue
+    const candidate = join(directory, value)
+    if (executable(candidate)) return candidate
+  }
+  throw new Error(
+    `cannot resolve Python interpreter ${JSON.stringify(value)} on PATH; ` +
+      'set EU4_DSH_PYTHON to an absolute path')
+}
 
 const ENV_ALLOW = new Set([
   'PATH', 'HOME', 'TMPDIR', 'LANG', 'LC_ALL', 'TERM',
@@ -36,6 +73,14 @@ export function buildArgs(tool, args = {}) {
     output.push(String(args.op || 'list'))
     add('--run', 'run')
     add('--executable', 'executable')
+    if (args.include_history) output.push('--include-history')
+    add('--status', 'status')
+    add('--limit', 'limit')
+    add('--offset', 'offset')
+    add('--evidence-root', 'evidence_root')
+    add('--query', 'query')
+    add('--classification', 'classification')
+    add('--since', 'since')
   } else if (tool === 'eu4_capture') {
     if (!args.op) throw new Error('eu4_capture requires op')
     output.push(String(args.op))
@@ -43,6 +88,10 @@ export function buildArgs(tool, args = {}) {
     add('--role', 'role')
     add('--frame-dir', 'frame_dir')
     for (const frame of args.frames || []) output.push('--frame', String(frame))
+    add('--around', 'around')
+    add('--offset', 'offset')
+    add('--limit', 'limit')
+    if (args.full) output.push('--full')
     if (args.require_pixels) output.push('--require-pixels')
     add('--checkpoint', 'checkpoint')
     add('--occurrence', 'occurrence')
@@ -67,6 +116,15 @@ export function buildArgs(tool, args = {}) {
   } else if (tool === 'eu4_diff_inspect') {
     add('--run', 'run')
     if (args.build_case) output.push('--build-case')
+    if (args.full) output.push('--full')
+    add('--limit', 'limit')
+    add('--offset', 'offset')
+    if (args.temporal) output.push('--temporal')
+    add('--reference-frame', 'reference_frame')
+    add('--candidate-frame', 'candidate_frame')
+    add('--temporal-window', 'temporal_window')
+    if (args.temporal_artifacts) output.push('--temporal-artifacts')
+    add('--temporal-artifact-dir', 'temporal_artifact_dir')
   } else if (tool === 'eu4_replay') {
     output.push(String(args.op || 'case'))
     add('--case', 'case')
@@ -104,7 +162,13 @@ export function parseEnvelope(stdout) {
 
 export function runTool(tool, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const python = options.python || 'python3.14'
+    let python
+    try {
+      python = resolvePython(options.python)
+    } catch (error) {
+      reject(error)
+      return
+    }
     const cwd = options.cwd || process.cwd()
     const argv = ['-m', 'automation.agent_tools', ...buildArgs(tool, args)]
     const child = spawn(python, argv, {

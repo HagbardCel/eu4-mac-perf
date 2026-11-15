@@ -12,6 +12,7 @@ a live preflight or a session where a tool is silently missing.
 """
 
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -185,6 +186,8 @@ class ProvisionAndRegistrationTests(unittest.TestCase):
 
     def test_campaign_overlay_mounts_the_tools_plugin(self) -> None:
         text = RUN_CAMPAIGN.read_text(encoding="utf-8")
+        self.assertIn("automation.python_runtime", text)
+        self.assertIn("--print-path", text)
         self.assertIn("TOOLS_PLUGIN=$INFRA/dsh/eu4-tools-plugin/lib/index.js", text)
         self.assertIn("- id: eu4-tools", text)
         self.assertIn("infra: '$INFRA'", text)
@@ -222,6 +225,7 @@ class LauncherEnvironmentTests(unittest.TestCase):
             "    'infra': os.environ.get('EU4_DSH_INFRA_ROOT'),\n"
             "    'workspace': os.environ.get('EU4_DSH_WORKSPACE'),\n"
             "    'skill': os.environ.get('EU4_DSH_SKILL_ROOT'),\n"
+            "    'python': os.environ.get('EU4_DSH_PYTHON'),\n"
             "    'args': sys.argv[1:],\n"
             "}, open(os.environ['FAKE_DSH_OUT'], 'w'))\n"
             "PY\n",
@@ -314,9 +318,12 @@ class LauncherEnvironmentTests(unittest.TestCase):
             "const value = await runTool('eu4_session', "
             "{ op: 'list' }, "
             "{ python: " + json.dumps(sys.executable) +
-            ", cwd: " + json.dumps(str(REPO)) + " });\n"
+            ", cwd: " + json.dumps(str(REPO)) +
+            ", env: { EU4_DSH_PYTHON: " + json.dumps(sys.executable) + " } });\n"
             "console.log(JSON.stringify({ ok: value.ok, "
-            "sessions: value.result?.sessions?.length ?? 0 }));\n",
+            "sessions: value.result?.sessions?.length ?? 0, "
+            "runtime: value.runtime, outcome: value.outcome, "
+            "schema: value.schema }));\n",
             encoding="utf-8",
         )
         ran = subprocess.run(
@@ -327,6 +334,104 @@ class LauncherEnvironmentTests(unittest.TestCase):
         recorded = json.loads(ran.stdout.strip().splitlines()[-1])
         self.assertTrue(recorded["ok"], ran.stdout)
         self.assertIsInstance(recorded["sessions"], int)
+        # The actual bridge spawned the configured absolute interpreter, and
+        # the dependency state it reports matches that interpreter.
+        self.assertEqual(recorded["schema"], "eu4-agent-tool/v2")
+        self.assertEqual(recorded["runtime"]["executable"],
+                         str(Path(sys.executable).resolve()))
+        numpy_expected = importlib.util.find_spec("numpy") is not None
+        self.assertEqual(recorded["runtime"]["numpy"]["available"], numpy_expected)
+        self.assertEqual(recorded["runtime"]["configured"],
+                         sys.executable)
+        self.assertFalse(recorded["runtime"]["mismatch"])
+        self.assertEqual(recorded["outcome"]["execution"], "ok")
+        self.assertEqual(recorded["outcome"]["diagnostic"], "complete")
+
+
+class InterpreterConsistencyTests(unittest.TestCase):
+    """Phase 1.1: launcher, preflight and adapter agree on one interpreter."""
+
+    def test_profile_has_no_bare_python_default(self) -> None:
+        text = OVERLAY.read_text(encoding="utf-8")
+        self.assertIn("python: !!js process.env.EU4_DSH_PYTHON ?? ''", text)
+        self.assertNotIn("python3.14", text)
+
+    def test_preflight_resolves_and_checks_the_same_interpreter(self) -> None:
+        text = PREFLIGHT.read_text(encoding="utf-8")
+        self.assertIn("automation.python_runtime", text)
+        self.assertIn("--print-path", text)
+        self.assertIn("EU4_DSH_PYTHON", text)
+        self.assertIn("eu4-tools python does not resolve", text)
+        self.assertIn('"python":"%s"', text)
+
+    def test_run_resolves_the_interpreter_before_invoking_the_launcher(self) -> None:
+        text = RUN.read_text(encoding="utf-8")
+        self.assertIn("automation.python_runtime", text)
+        self.assertIn("--print-path", text)
+        self.assertIn('echo "run: Python interpreter:', text)
+
+
+@unittest.skipUnless(shutil.which("node"), "the tools bridge needs Node")
+class LauncherInterpreterTests(unittest.TestCase):
+    """run.sh must export an absolute interpreter that the profile receives."""
+
+    def setUp(self) -> None:
+        if importlib.util.find_spec("numpy") is None:
+            self.skipTest("numpy is required to resolve the diagnostic interpreter")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.home = self.root / "dsh-home"
+        (self.home / "profiles" / "eu4-web").mkdir(parents=True)
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        self.out = self.root / "fake-dsh.json"
+        fake = self.bin / "dsh"
+        fake.write_text(
+            "#!/bin/sh\n"
+            "python3 - \"$@\" <<'PY'\n"
+            "import json, os, sys\n"
+            "json.dump({\n"
+            "    'python': os.environ.get('EU4_DSH_PYTHON'),\n"
+            "    'args': sys.argv[1:],\n"
+            "}, open(os.environ['FAKE_DSH_OUT'], 'w'))\n"
+            "PY\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        self.python_link = self.bin / "python-eu4"
+        os.symlink(sys.executable, self.python_link)
+
+    def _env(self, extra: dict | None = None) -> dict:
+        env = os.environ.copy()
+        for key in ("EU4_DSH_WORKSPACE", "EU4_DSH_INFRA_ROOT", "EU4_DSH_SKILL_ROOT"):
+            env.pop(key, None)
+        env.update({
+            "EU4_DSH_HOME": str(self.home),
+            "PATH": f"{self.bin}{os.pathsep}{env['PATH']}",
+            "FAKE_DSH_OUT": str(self.out),
+        })
+        env.update(extra or {})
+        return env
+
+    def _run(self, extra_env: dict | None = None) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [str(RUN)], cwd=self.root, env=self._env(extra_env),
+            capture_output=True, text=True, check=False, timeout=180,
+        )
+
+    def test_a_bare_name_is_exported_as_the_resolved_absolute_path(self) -> None:
+        ran = self._run({"EU4_DSH_PYTHON": "python-eu4"})
+        self.assertEqual(ran.returncode, 0, ran.stderr + ran.stdout)
+        recorded = json.loads(self.out.read_text(encoding="utf-8"))
+        self.assertEqual(recorded["python"], str(Path(sys.executable).resolve()))
+        self.assertTrue(os.path.isabs(recorded["python"]))
+
+    def test_an_unusable_interpreter_fails_before_the_launcher(self) -> None:
+        ran = self._run({"EU4_DSH_PYTHON": "/no/such/python"})
+        self.assertNotEqual(ran.returncode, 0)
+        self.assertIn("NumPy", ran.stderr + ran.stdout)
+        self.assertFalse(self.out.exists(), "dsh must not boot with a bad interpreter")
 
 
 if __name__ == "__main__":

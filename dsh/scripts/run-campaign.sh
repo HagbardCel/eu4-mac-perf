@@ -22,7 +22,38 @@ DSH_HOME=$EU4_DSH_HOME
 export DSH_HOME
 export EU4_DSH_SKILL_ROOT=${EU4_DSH_SKILL_ROOT:-$INFRA/.opencode/skills}
 export EU4_DSH_SIDECAR=$(CDPATH= cd -- "$(dirname -- "$SIDECAR")" && pwd)/$(basename -- "$SIDECAR")
-export EU4_DSH_PYTHON=${EU4_DSH_PYTHON:-$INFRA/.venv/bin/python3}
+
+# Resolve the same absolute, NumPy-capable interpreter run.sh/preflight use. An
+# explicitly configured EU4_DSH_PYTHON is authoritative; a missing dependency
+# fails before the campaign starts.
+PYTHON_REQUEST=${EU4_DSH_PYTHON:-}
+if [ -z "$PYTHON_REQUEST" ]; then
+  if [ -x "$INFRA/.venv/bin/python3" ]; then
+    PYTHON_REQUEST=$INFRA/.venv/bin/python3
+  elif command -v python3.14 >/dev/null 2>&1; then
+    PYTHON_REQUEST=$(command -v python3.14)
+  else
+    PYTHON_REQUEST=$(command -v python3 || true)
+  fi
+fi
+[ -n "$PYTHON_REQUEST" ] || {
+  echo "run-campaign: no Python 3 interpreter is available on PATH" >&2
+  exit 1
+}
+EU4_DSH_PYTHON=$(
+  cd "$INFRA" && "$PYTHON_REQUEST" -m automation.python_runtime \
+    resolve --requested "$PYTHON_REQUEST" --print-path
+) || {
+  echo "run-campaign: no Python 3 interpreter with NumPy is available" >&2
+  echo "run-campaign: install NumPy, or set EU4_DSH_PYTHON to an absolute interpreter that has it" >&2
+  (
+    cd "$INFRA" && "$PYTHON_REQUEST" -m automation.python_runtime \
+      resolve --requested "$PYTHON_REQUEST" --json >&2
+  ) || true
+  exit 1
+}
+export EU4_DSH_PYTHON
+echo "run-campaign: python=$EU4_DSH_PYTHON" >&2
 PLUGIN=$INFRA/dsh/eu4-goal-plugin/lib/index.js
 TOOLS_PLUGIN=$INFRA/dsh/eu4-tools-plugin/lib/index.js
 

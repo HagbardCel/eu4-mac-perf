@@ -54,5 +54,8 @@
     - id: eu4-tools
       name: '@eu4/dsh-tools'
       config:
-        python: !!js process.env.EU4_DSH_PYTHON ?? 'python3.14'
+        # Absolute path resolved and verified by run.sh/preflight. No bare
+        # interpreter default: a launcher that forgets it must fail closed in
+        # the adapter rather than spawn a different installation.
+        python: !!js process.env.EU4_DSH_PYTHON ?? ''
         infra: !!js process.env.EU4_DSH_INFRA_ROOT ?? process.cwd()

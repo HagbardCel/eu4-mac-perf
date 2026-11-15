@@ -298,3 +298,159 @@ class AlignmentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(np is not None, "numpy is required")
+class TemporalDiagnosticsTests(unittest.TestCase):
+    """Phase 3: reusable consecutive-frame and cross-process diagnostics."""
+
+    def frame(self, index: int, image, *, role: str = "reference") -> dict:
+        return {
+            "frame_index": index,
+            "image": image,
+            "sha256": f"{role}{index:060d}",
+            "identity": {"role": role, "game_day": 56456976,
+                         "update_identity": "0xd09cad25b3166452"},
+        }
+
+    def images(self):
+        base = np.full((6, 8, 4), 20, dtype=np.uint8)
+        base[:, :, 3] = 255
+        # Reference 74 -> 75 changes 12 of 48 pixels.
+        ref75 = base.copy()
+        for column in range(4):
+            ref75[0, column, 0] = 200
+        for column in range(4):
+            ref75[5, column, 0] = 200
+        for column in range(4):
+            ref75[2, column, 1] = 200
+        # Reference 75 -> 76 changes a further 30 pixels.
+        ref76 = ref75.copy()
+        for row in range(3):
+            for column in range(8):
+                ref76[row + 3, column, 2] = 180
+        # Candidate 74 differs from reference 74 on 4 pixels, all of which are
+        # part of the reference's own 74 -> 75 variation.
+        cand74 = base.copy()
+        for column in range(4):
+            cand74[0, column, 0] = 160
+        # Candidate 74 -> 75 changes 8 more pixels.
+        cand75 = cand74.copy()
+        for column in range(4):
+            cand75[1, column, 1] = 200
+        return base, ref75, ref76, cand74, cand75
+
+    def test_consecutive_reference_frames_can_differ_more_than_cross_process(self):
+        base, ref75, ref76, cand74, cand75 = self.images()
+        policy = {"policy": "tolerant", "pixel_tolerance": 8,
+                  "max_mismatched_fraction": 1.0, "max_mean_abs_error": 255.0}
+        value = gfx_frame_compare.compare_temporal(
+            [self.frame(74, base), self.frame(75, ref75), self.frame(76, ref76)],
+            [self.frame(74, cand74, role="candidate"),
+             self.frame(75, cand75, role="candidate")],
+            policy=policy, cross_pairs=[(74, 74)],
+        )
+        self.assertEqual(value["schema"], gfx_frame_compare.TEMPORAL_SCHEMA)
+        self.assertEqual(value["status"], "completed")
+        relations = [pair["relation"] for pair in value["pairs"]]
+        self.assertEqual(relations, ["reference_temporal", "reference_temporal",
+                                     "candidate_temporal", "cross_process"])
+        by_relation = {(pair["relation"],
+                        pair["reference"]["frame_index"],
+                        pair["candidate"]["frame_index"]): pair
+                       for pair in value["pairs"]}
+        reference_74_75 = by_relation[("reference_temporal", 74, 75)]
+        cross = by_relation[("cross_process", 74, 74)]
+        self.assertEqual(reference_74_75["statistics"]["mismatched_pixels"], 12)
+        self.assertEqual(cross["statistics"]["mismatched_pixels"], 4)
+        self.assertGreater(reference_74_75["statistics"]["mismatched_fraction"],
+                           cross["statistics"]["mismatched_fraction"])
+        self.assertEqual(cross["statistics"]["difference_bbox"], [0, 1, 0, 4])
+        # 74 -> 76 is not a required comparison; only consecutive pairs are.
+        self.assertNotIn(("reference_temporal", 74, 76), by_relation)
+
+    def test_cross_process_difference_overlaps_temporal_variability(self):
+        base, ref75, _ref76, cand74, cand75 = self.images()
+        policy = {"policy": "tolerant", "pixel_tolerance": 8,
+                  "max_mismatched_fraction": 1.0, "max_mean_abs_error": 255.0}
+        value = gfx_frame_compare.compare_temporal(
+            [self.frame(74, base), self.frame(75, ref75)],
+            [self.frame(74, cand74, role="candidate"),
+             self.frame(75, cand75, role="candidate")],
+            policy=policy, cross_pairs=[(74, 74)],
+        )
+        overlap = value["overlap"]
+        self.assertEqual(overlap["cross"]["mask_pixels"], 4)
+        reference_overlap = next(
+            row for row in overlap["temporal"]
+            if row["relation"] == "reference_temporal")
+        self.assertEqual(reference_overlap["intersection_pixels"], 4)
+        self.assertEqual(reference_overlap["cross_also_temporal_fraction"], 1.0)
+        self.assertEqual(reference_overlap["jaccard"], 0.333333)
+
+    def test_artifacts_are_optional_and_bounded(self):
+        base, ref75, _ref76, cand74, cand75 = self.images()
+        policy = {"policy": "diagnostic", "pixel_tolerance": 8}
+        value = gfx_frame_compare.compare_temporal(
+            [self.frame(74, base), self.frame(75, ref75)],
+            [self.frame(74, cand74, role="candidate")],
+            policy=policy, cross_pairs=[(74, 74)],
+        )
+        self.assertEqual(value["artifacts"], [])
+        with tempfile.TemporaryDirectory() as temporary:
+            value = gfx_frame_compare.compare_temporal(
+                [self.frame(74, base), self.frame(75, ref75)],
+                [self.frame(74, cand74, role="candidate")],
+                policy=policy, cross_pairs=[(74, 74)],
+                artifacts={"dir": Path(temporary) / "diff", "amplification": 4},
+            )
+            written = sorted((Path(temporary) / "diff").glob("*.png"))
+            self.assertEqual(len(written), len(value["pairs"]))
+            self.assertTrue(all(path.stat().st_size > 0 for path in written))
+
+    def test_missing_cross_frame_is_explicit_not_invented(self):
+        base, ref75, _ref76, cand74, _cand75 = self.images()
+        value = gfx_frame_compare.compare_temporal(
+            [self.frame(74, base), self.frame(75, ref75)],
+            [self.frame(74, cand74, role="candidate")],
+            policy={"policy": "tolerant", "pixel_tolerance": 8},
+            cross_pairs=[(74, 999)],
+        )
+        self.assertEqual(value["status"], "incomplete")
+        self.assertFalse(any(pair["relation"] == "cross_process"
+                             for pair in value["pairs"]))
+        self.assertTrue(any("missing" in entry["reason"]
+                            for entry in value["skipped"]))
+        self.assertIsNone(value["overlap"])
+
+    def test_pair_bound_is_reported(self):
+        base, ref75, ref76, cand74, cand75 = self.images()
+        value = gfx_frame_compare.compare_temporal(
+            [self.frame(74, base), self.frame(75, ref75), self.frame(76, ref76)],
+            [self.frame(74, cand74, role="candidate"),
+             self.frame(75, cand75, role="candidate")],
+            policy={"policy": "diagnostic"}, max_pairs=2)
+        self.assertEqual(len(value["pairs"]), 2)
+        self.assertEqual(value["bounded"]["max_pairs"], 2)
+        self.assertTrue(value["skipped"])
+
+    def test_preview_hashes_cannot_establish_staticity(self):
+        base = np.zeros((16, 16, 4), dtype=np.uint8)
+        changed = base.copy()
+        # One sub-threshold pixel per 8x8 preview block: the area average
+        # rounds to the same 8-bit value, so the downscaled preview is
+        # identical while the full-resolution frame is not.
+        changed[0, 0, 0] = 4
+        changed[8, 8, 0] = 4
+        preview_base = gfx_frame_compare.downscale_area(base, 8)
+        preview_changed = gfx_frame_compare.downscale_area(changed, 8)
+        self.assertTrue(np.array_equal(preview_base, preview_changed))
+        mask = gfx_frame_compare.difference_mask(base, changed, 0)
+        self.assertEqual(int(mask.sum()), 2)
+        # The staticity predicate reads full-frame digests, never previews.
+        self.assertNotIn("preview_sha256", gfx_align.staticity_evidence({
+            "reference": {"captured": [{"frame_index": 1, "sha256": "a"},
+                                       {"frame_index": 2, "sha256": "a"}]},
+            "candidate": {"captured": [{"frame_index": 1, "sha256": "b"},
+                                       {"frame_index": 2, "sha256": "b"}]},
+        }))

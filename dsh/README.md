@@ -58,6 +58,38 @@ profile and its local configuration. It also checks that both local plugin
 links resolve to this checkout; a link from another checkout is relinked with
 the supported DSH commands, and the script fails if that repair does not take.
 
+### One interpreter, resolved before boot
+
+`run.sh` and `preflight.sh` resolve the diagnostic core's Python once, to an
+absolute path with NumPy, and export it as `EU4_DSH_PYTHON`; the profile passes
+that value to the tools plugin. An explicitly configured `EU4_DSH_PYTHON` is
+authoritative and is never replaced when it is unusable. Without one, the
+launcher prefers `.venv/bin/python3`, then `python3.14`, then `python3`, and
+fails closed with the resolver's JSON diagnosis when none has NumPy. The
+adapter no longer defaults to a bare interpreter name, so a profile booted
+without the launcher reports an actionable tool error instead of silently
+spawning a different installation.
+
+```sh
+./dsh/scripts/preflight.sh              # prints the checked interpreter
+python3 -m automation.python_runtime resolve   # same check, any checkout
+```
+
+Every tool envelope also carries `runtime` (actual interpreter, configured
+value, `mismatch`, NumPy) so a native/CLI discrepancy is visible where it
+failed. The M7.0 canary's `incomplete_evidence: numpy is required` is covered
+by an end-to-end Node-to-Python bridge test.
+
+### Evidence discovery and test execution
+
+Historical campaigns are read-only indexed across worktrees with
+`EU4_EVIDENCE_ROOT` (OS-path-separated) and
+`python3 -m automation.agent_tools eu4_session discover`; no filesystem-wide
+search or copying is performed. Focused test runs use
+`python3 -m automation.test_runner run --module <module>`; see
+[AGENTS.md](../AGENTS.md) for the default workflow and
+[docs/agent-tools.md](../docs/agent-tools.md) for the full tool surface.
+
 ## Offline reconstruction experiments
 
 Campaign mode and ordinary reconstruction experiments are different modes. For

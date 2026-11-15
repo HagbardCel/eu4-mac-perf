@@ -487,7 +487,6 @@ class Session:
             handle.close()
             active.append(body)
         return active
-
     def other_active_sessions(self) -> list[dict]:
         return [
             row for row in self.active_sessions(exclude=self.session_id)
@@ -639,3 +638,122 @@ class Session:
         terminal = _read_json(Path(run_dir) / "terminal-status.json")
         state["terminal"] = terminal
         return state
+
+
+SESSION_CLASSES = (ACTIVE, CLOSED, "stale")
+
+
+def _liveness(marker: Path) -> str:
+    """Return ``active`` when the marker's lock is held, else ``stale``."""
+    lock_path = marker.with_suffix(".lock")
+    try:
+        handle = lock_path.open("a+")
+    except OSError:
+        return "stale"
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return "active"
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
+    return "stale"
+
+
+def compact_session_record(body: dict, *, liveness: str) -> dict:
+    """One bounded session row: identity, ownership and outcome only.
+
+    Raw coordinator/process/ledger fields are deliberately omitted; a listing
+    is not an inspection.  ``classification`` separates a held lock
+    (``active``), a recorded terminal state (``closed``) and a marker whose
+    owner is gone without one (``stale``).
+    """
+    session_id = str(body.get("session_id") or "")
+    run_dir = body.get("run_dir")
+    terminal = {}
+    if isinstance(run_dir, str) and run_dir:
+        terminal = _read_json(Path(run_dir) / "terminal-status.json") or {}
+    marker_status = str(body.get("status") or "")
+    closed = (
+        marker_status in (CLOSED, FAILED)
+        or str(terminal.get("status") or "") in (CLOSED, FAILED)
+    )
+    classification = liveness if liveness == "active" else (CLOSED if closed else "stale")
+    return {
+        "session_id": session_id,
+        "classification": classification,
+        "liveness": liveness,
+        "run_dir": run_dir,
+        "workflow_id": body.get("workflow_id"),
+        "profile": body.get("profile"),
+        "created_utc": body.get("created_utc"),
+        "closed_utc": body.get("closed_utc") or terminal.get("updated_utc"),
+        "marker_status": marker_status or None,
+        "terminal_status": terminal.get("status"),
+        "terminal_reason": terminal.get("reason") or None,
+        "coordinator_pid": body.get("coordinator_pid"),
+    }
+
+
+def session_records(*, session_root_path: Path | None = None) -> list[dict]:
+    """Every session marker under the bounded session root, classified."""
+    root = Path(session_root_path) if session_root_path is not None else session_root()
+    rows: list[dict] = []
+    if not root.is_dir():
+        return rows
+    for marker in sorted(root.glob("session-*.json")):
+        body = _read_json(marker)
+        if body is None:
+            continue
+        rows.append(compact_session_record(body, liveness=_liveness(marker)))
+    return rows
+
+
+def list_sessions(
+    *,
+    session_root_path: Path | None = None,
+    include_history: bool = False,
+    status: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> dict:
+    """Bounded, filtered session listing with explicit counts.
+
+    Active sessions are returned by default; ``include_history`` or an explicit
+    ``status`` opt into closed and stale records.  ``total`` is the unfiltered
+    marker count, ``filtered`` the matching count, and ``omitted`` says how
+    many matching rows the bound hid.
+    """
+    if status is not None and status not in (*SESSION_CLASSES, "all"):
+        raise ValueError(f"unknown session status: {status}")
+    if limit < 1:
+        raise ValueError("limit must be >= 1")
+    if offset < 0:
+        raise ValueError("offset must be >= 0")
+    rows = session_records(session_root_path=session_root_path)
+    counts = {name: sum(1 for row in rows if row["classification"] == name)
+              for name in SESSION_CLASSES}
+    counts["total"] = len(rows)
+    wanted = status or ("all" if include_history else ACTIVE)
+    selected = rows if wanted == "all" else [
+        row for row in rows if row["classification"] == wanted
+    ]
+    order = {ACTIVE: 0, CLOSED: 1, "stale": 2}
+    # Newest first inside each class: a bounded page should show recent work.
+    selected.sort(key=lambda row: str(row.get("created_utc") or ""), reverse=True)
+    selected.sort(key=lambda row: order.get(row["classification"], 3))
+    page = selected[offset:offset + limit]
+    return {
+        "schema": "gfx-session-list/v1",
+        "filter": wanted,
+        "sessions": page,
+        "counts": counts,
+        "filtered": len(selected),
+        "returned": len(page),
+        "offset": offset,
+        "limit": limit,
+        "truncated": offset + len(page) < len(selected),
+        "next_offset": offset + len(page) if offset + len(page) < len(selected) else None,
+    }
