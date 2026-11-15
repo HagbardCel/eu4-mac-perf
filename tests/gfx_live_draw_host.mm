@@ -2296,6 +2296,25 @@ static void bench_vertices(uint8_t out[8 * 32]) {
     }
 }
 
+static void bench_vertices_blend(uint8_t out[8 * 32]) {
+    memset(out, 0, 8 * 32);
+    const float positions[3][2] = {{-1.f, -1.f}, {3.f, -1.f}, {-1.f, 3.f}};
+    for (int i = 0; i < 8; i++) {
+        float *v = (float *)(out + i * 32);
+        v[0] = positions[i % 3][0];
+        v[1] = positions[i % 3][1];
+        v[2] = 0.5f;
+        v[3] = 1.f;
+        if (i < 4) {
+            v[4] = 1.f; /* opaque red */
+            v[7] = 1.f;
+        } else {
+            v[5] = 1.f; /* half-transparent green */
+            v[7] = 0.5f;
+        }
+    }
+}
+
 static void bench_install_generic(void *shader, void *vertex_header,
                                   void *index_header) {
     uint8_t *master = (uint8_t *)g_master;
@@ -2334,6 +2353,10 @@ static int run_benchmark(const char *kind, int draws, int frames) {
     }
 
     int generic = strcmp(kind, "simple") != 0;
+    /* The engine's constant-slot header points at this storage for the whole
+       run; keep it at function scope rather than in a setup branch. */
+    float bench_matrix[16];
+    uint8_t bench_constant[0x10];
     void *shader = NULL;
     void *vertex_header = NULL;
     void *index_header = NULL;
@@ -2366,15 +2389,13 @@ static int run_benchmark(const char *kind, int draws, int frames) {
         uint8_t quad[96];
         make_quad(quad);
         vertex_header = eu4_gfx_create_vertex_buffer(NULL, quad, 4, 24, 0);
-        float matrix[16];
-        fill_matrix(matrix);
-        uint8_t constant[0x10];
-        memset(constant, 0, sizeof constant);
+        fill_matrix(bench_matrix);
+        memset(bench_constant, 0, sizeof bench_constant);
         uint32_t words = 16;
-        memcpy(constant, &words, 4);
-        void *constant_data = matrix;
-        memcpy(constant + 8, &constant_data, sizeof constant_data);
-        install_geometry(shader, vertex_header, constant, red_header);
+        memcpy(bench_constant, &words, 4);
+        void *constant_data = bench_matrix;
+        memcpy(bench_constant + 8, &constant_data, sizeof constant_data);
+        install_geometry(shader, vertex_header, bench_constant, red_header);
     }
 
     /* Present into an injected drawable so the frame boundary is observable
@@ -2405,6 +2426,10 @@ static int run_benchmark(const char *kind, int draws, int frames) {
     for (int frame = 0; frame < warmup + frames; frame++) {
         eu4_gfx_perf_reset();
         uint64_t wall_start = bench_now_ns();
+        if (generic) {
+            uint32_t full_view[6] = {kSize, kSize, 0x3f800000u, 0, 0, 0};
+            eu4_gfx_set_viewport(master, full_view);
+        }
         eu4_gfx_clear(&ctx, 7, black);
         if (g_stopped) {
             fail("benchmark clear stopped");
@@ -2429,6 +2454,12 @@ static int run_benchmark(const char *kind, int draws, int frames) {
                     master[0x61] = (uint8_t)((i / 2) % 3 == 0 ? 1 : 0);
                     uint32_t mask = (i % 2 == 0) ? 0x01010101u : 0x00ff00ffu;
                     memcpy(master + 0x2c, &mask, 4);
+                    /* Viewport changes are Metal encoder state, not a pass
+                       boundary. Alternate between full and inset viewports. */
+                    uint32_t view[6] = {(i % 2 == 0) ? (uint32_t)kSize : 32,
+                                        (i % 2 == 0) ? (uint32_t)kSize : 32,
+                                        0x3f800000u, 0, 0, 0};
+                    eu4_gfx_set_viewport(master, view);
                 }
             } else {
                 raw.which = 1;
@@ -2571,6 +2602,165 @@ static int run_indexed_resource(void) {
     return ok ? 0 : 1;
 }
 
+static int run_sampled_batch(void) {
+    /* Same command buffer samples one unchanged render target twice; the
+       conversion is encoded once and both draws can bind the shadow. Dropping
+       the command must invalidate it so the next batch reconverts. */
+    boot();
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil || backend.queue == nil) {
+        fail("sampled batch backend");
+    }
+    uint32_t pattern[16];
+    for (int i = 0; i < 16; i++) {
+        pattern[i] = 0x00000000u | (uint32_t)(i * 0x00110000u);
+    }
+    void *header = eu4_gfx_create_render_target_texture(NULL, 4, 4, 11, 0, 0);
+    if (header == NULL) {
+        fail("sampled batch header");
+    }
+    id<MTLTexture> target =
+        (__bridge id<MTLTexture>)eu4_gfx_texture_for_header(header);
+    [target replaceRegion:MTLRegionMake2D(0, 0, 4, 4) mipmapLevel:0
+                withBytes:pattern bytesPerRow:4 * 4];
+    if (backend.boundTextures == nil) {
+        backend.boundTextures = [NSMutableArray array];
+    }
+    [backend.boundTextures removeAllObjects];
+    [backend.boundTextures addObject:[NSValue valueWithPointer:header]];
+
+    uint64_t before = eu4_gfx_sampling_conversion_count();
+    uint64_t generation = eu4_gfx_geometry_generation(g_master);
+    void *command = eu4_gfx_batch_acquire(g_master, generation);
+    if (command == NULL) {
+        fail("sampled batch command");
+    }
+    char reason[256] = "";
+    uint64_t token1 = 0, token2 = 0;
+    if (!eu4_gfx_prepare_sampled_textures(command, &token1, reason, sizeof reason) ||
+        !eu4_gfx_prepare_sampled_textures(command, &token2, reason, sizeof reason)) {
+        fail("sampled batch prepare");
+    }
+    uint64_t reused = eu4_gfx_sampling_conversion_count() - before;
+    void *shadow1 = eu4_gfx_texture_for_sampling(header, token1);
+    void *shadow2 = eu4_gfx_texture_for_sampling(header, token2);
+    int shadow_ok = shadow1 != NULL && shadow1 != (__bridge void *)target &&
+                    shadow1 == shadow2;
+
+    eu4_gfx_batch_draw_failed(0); /* drop the unsubmitted command */
+    void *next_command = eu4_gfx_batch_acquire(g_master, generation);
+    uint64_t token3 = 0;
+    if (next_command == NULL ||
+        !eu4_gfx_prepare_sampled_textures(next_command, &token3, reason,
+                                          sizeof reason)) {
+        fail("sampled batch reconvert");
+    }
+    uint64_t total = eu4_gfx_sampling_conversion_count() - before;
+    int reconverted = total == 2 && token3 != token1;
+
+    int ok = reused == 1 && shadow_ok && reconverted;
+    printf("sampled_batch=%d reused=%llu shadow=%d reconverted=%d\n", ok,
+           (unsigned long long)reused, shadow_ok, reconverted);
+    return ok ? 0 : 1;
+}
+
+static int run_blend_order(void) {
+    /* Two overlapping transparent primitives with distinct blend states in one
+       render pass. The exact pixel proves draw order and accumulation, and the
+       encoder counters prove they shared a pass. */
+    eu4_gfx_perf_set_enabled(1);
+    boot();
+    void *shader = make_generic_bench_shader();
+    uint8_t vertices[8 * 32];
+    bench_vertices_blend(vertices);
+    void *vertex_header = eu4_gfx_create_vertex_buffer(NULL, vertices, 8, 32, 0);
+    const uint16_t indices[3] = {0, 1, 2};
+    void *index_header = eu4_gfx_create_index_buffer(NULL, indices, 3);
+    if (vertex_header == NULL || index_header == NULL) {
+        fail("blend geometry");
+    }
+    bench_install_generic(shader, vertex_header, index_header);
+    uint8_t *master = (uint8_t *)g_master;
+    struct {
+        void *master;
+    } ctx = {g_master};
+    const float black[4] = {0.f, 0.f, 0.f, 1.f};
+
+    eu4_gfx_perf_reset();
+    eu4_gfx_clear(&ctx, 7, black);
+    eu4_gfx_draw_raw raw;
+    memset(&raw, 0, sizeof raw);
+    raw.which = 2;
+    raw.rdi = (uint64_t)(uintptr_t)&ctx;
+    raw.rsi = 3;
+    raw.retaddr = (uint64_t)(uintptr_t)(g_image + kCallerRva);
+
+    /* Opaque red first. */
+    raw.rcx = 0;
+    memcpy(master + 0xc, (uint32_t[]){0}, 4);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("blend draw 1");
+    }
+    /* Alpha green second: SRC_ALPHA / ONE_MINUS_SRC_ALPHA. */
+    raw.rcx = 4;
+    uint32_t enabled = 1, src = 0x302, dst = 0x303, add = 0x8006;
+    memcpy(master + 0xc, &enabled, 4);
+    memcpy(master + 0x10, &src, 4);
+    memcpy(master + 0x14, &dst, 4);
+    memcpy(master + 0x18, &add, 4);
+    memcpy(master + 0x1c, &src, 4);
+    memcpy(master + 0x20, &dst, 4);
+    memcpy(master + 0x24, &add, 4);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("blend draw 2");
+    }
+    eu4_gfx_perf_snapshot perf;
+    eu4_gfx_perf_read(&perf);
+    int one_pass = perf.render_encoders_created == 1 &&
+                   perf.render_encoders_reused >= 1 &&
+                   perf.draws_encoded == 2;
+
+    size_t length = 0;
+    uint8_t *pixels = read_target(&length);
+    const uint8_t *pixel = pixels + ((size_t)32 * kSize + 32) * 4;
+    int accumulation = abs((int)pixel[2] - 128) <= 8 &&
+                       abs((int)pixel[1] - 128) <= 8 && pixel[0] <= 8;
+    free(pixels);
+    /* Reversing the order would leave opaque red; a missing second draw would
+       leave opaque red as well. */
+    int order = accumulation;
+
+    /* Clear between draws must split the pass and discard the first draw. */
+    eu4_gfx_perf_reset();
+    eu4_gfx_clear(&ctx, 7, black);
+    raw.rcx = 0;
+    memcpy(master + 0xc, (uint32_t[]){0}, 4);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("blend clear draw 1");
+    }
+    eu4_gfx_clear(&ctx, 7, black);
+    raw.rcx = 4;
+    memcpy(master + 0xc, &enabled, 4);
+    memcpy(master + 0x10, &src, 4);
+    memcpy(master + 0x14, &dst, 4);
+    memcpy(master + 0x18, &add, 4);
+    memcpy(master + 0x1c, &src, 4);
+    memcpy(master + 0x20, &dst, 4);
+    memcpy(master + 0x24, &add, 4);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("blend clear draw 2");
+    }
+    pixels = read_target(&length);
+    pixel = pixels + ((size_t)32 * kSize + 32) * 4;
+    int clear_split = pixel[2] <= 8 && abs((int)pixel[1] - 128) <= 8;
+    free(pixels);
+
+    int ok = one_pass && order && clear_split;
+    printf("blend_order=%d one_pass=%d order=%d clear_split=%d\n",
+           ok, one_pass, order, clear_split);
+    return ok ? 0 : 1;
+}
+
 static int run_batch_sequences(void) {
     /* Ordering/ownership sequences required by the shared-command-buffer
        design: a refused draw must not discard earlier encodes, an independent
@@ -2703,6 +2893,12 @@ static int run_batch_sequences(void) {
 int main(int argc, char **argv) {
     if (argc >= 2 && strcmp(argv[1], "--batch-sequences") == 0) {
         return run_batch_sequences();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--blend-order") == 0) {
+        return run_blend_order();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--sampled-batch") == 0) {
+        return run_sampled_batch();
     }
     if (argc >= 2 && strcmp(argv[1], "--indexed-resource") == 0) {
         return run_indexed_resource();

@@ -1504,6 +1504,14 @@ static int dump_texture_file(id<MTLTexture> texture, const char *path) {
     return result;
 }
 
+static void end_encoder(id<MTLRenderCommandEncoder> encoder, int batch_owned) {
+    if (batch_owned) {
+        eu4_gfx_batch_end_pass();
+    } else if (encoder != nil) {
+        [encoder endEncoding];
+    }
+}
+
 static int generic_draw_encode_impl(const void *immediate_context,
                                     const eu4_gfx_generic_call *call,
                                     const eu4_gfx_simple_draw_inputs *inputs,
@@ -1649,30 +1657,41 @@ static int generic_draw_encode_impl(const void *immediate_context,
             }
         }
     }
-    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
-    pass.colorAttachments[0].texture = target;
-    pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
-    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-    if (depth_texture != nil) {
-        pass.depthAttachment.texture = depth_texture;
-        pass.depthAttachment.loadAction = MTLLoadActionLoad;
-        pass.depthAttachment.storeAction = MTLStoreActionStore;
-    }
-    /* Render-target textures are converted to GL row order into this command
-       buffer before the draw encoder opens, so the flip pass precedes the draw
-       pass and no separate command buffer is committed. */
+    /* Draws routed through the backend share one active command buffer and,
+       when the attachment set is compatible, one render pass. A standalone
+       caller-owned command buffer keeps the single-draw pass behaviour. */
+    int batch_owned = eu4_gfx_batch_owns_command((__bridge void *)command);
+    /* Render-target textures are converted to GL row order before the draw
+       encoder opens; a conversion closes the shared pass first. */
     uint64_t sampling_token = 0;
     if (!eu4_gfx_prepare_sampled_textures((__bridge void *)command,
                                           &sampling_token, reason,
                                           reason_capacity)) {
         return 0;
     }
-    id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
+    id<MTLRenderCommandEncoder> encoder = nil;
+    if (batch_owned) {
+        encoder = (__bridge id<MTLRenderCommandEncoder>)eu4_gfx_batch_encoder(
+            (__bridge void *)target, (__bridge void *)depth_texture, NULL, NULL);
+    } else {
+        MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+        pass.colorAttachments[0].texture = target;
+        pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
+        pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        if (depth_texture != nil) {
+            pass.depthAttachment.texture = depth_texture;
+            pass.depthAttachment.loadAction = MTLLoadActionLoad;
+            pass.depthAttachment.storeAction = MTLStoreActionStore;
+        }
+        encoder = [command renderCommandEncoderWithDescriptor:pass];
+        if (encoder != nil) {
+            eu4_gfx_perf_render_encoder_created();
+        }
+    }
     if (encoder == nil) {
         fail(reason, reason_capacity, "generic render encoder failed");
         return 0;
     }
-    eu4_gfx_perf_render_encoder_created();
     [encoder setRenderPipelineState:pipeline];
     /* The engine viewport is in logical pixels; the backbuffer can be the
        physical drawable (HiDPI). Scale exactly like the shared encoders. */
@@ -1704,7 +1723,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
             1, backend.scissorGlX, backend.scissorGlY, backend.scissorWidth,
             backend.scissorHeight, logical_w, logical_h, &box);
         if (status == EU4_GFX_SCISSOR_EMPTY) {
-            [encoder endEncoding];
+            end_encoder(encoder, batch_owned);
             fail(reason, reason_capacity, "empty scissor rectangle");
             return 0;
         }
@@ -1722,7 +1741,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
                 scissor.height = target.height - scissor.y;
             }
             if (scissor.width == 0 || scissor.height == 0) {
-                [encoder endEncoding];
+                end_encoder(encoder, batch_owned);
                 fail(reason, reason_capacity, "empty scissor rectangle");
                 return 0;
             }
@@ -1846,7 +1865,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
                 texture = backend.fallback;
             }
             if (texture == nil) {
-                [encoder endEncoding];
+                end_encoder(encoder, batch_owned);
                 fail(reason, reason_capacity, "sampled texture is absent");
                 return 0;
             }
@@ -1868,7 +1887,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
                     if (!eu4_gfx_texture_binding_decision(
                             expects_cube ? 1 : 0, (int)texture.textureType,
                             allow ? 1 : 0, &substitute)) {
-                        [encoder endEncoding];
+                        end_encoder(encoder, batch_owned);
                         fail(reason, reason_capacity,
                              "sampled texture type does not match the shader declaration");
                         return 0;
@@ -2001,7 +2020,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
                 sampler_for_unit(device, backend != nil ? backend.boundSamplers : nil,
                                  unit, texture.mipmapLevelCount > 1);
             if (sampler == nil) {
-                [encoder endEncoding];
+                end_encoder(encoder, batch_owned);
                 fail(reason, reason_capacity, "no sampler state available");
                 return 0;
             }
@@ -2037,7 +2056,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
     uint32_t primitive_mode = load_u32(master, 0x08);
     int topology = eu4_gfx_metal_topology(primitive_mode);
     if (topology < 0) {
-        [encoder endEncoding];
+        end_encoder(encoder, batch_owned);
         fail(reason, reason_capacity,
              primitive_mode == 2 ? "line-loop primitive is unsupported"
                                  : "unsupported primitive mode");
@@ -2048,14 +2067,14 @@ static int generic_draw_encode_impl(const void *immediate_context,
     if (call->indexed) {
         void *index_header = eu4_gfx_current_index_header();
         if (index_header == NULL) {
-            [encoder endEncoding];
+            end_encoder(encoder, batch_owned);
             fail(reason, reason_capacity, "indexed draw has no bound index buffer");
             return 0;
         }
         size_t bytes = eu4_gfx_index_buffer_length(index_header);
         size_t needed = (size_t)call->count * 2;
         if (bytes == (size_t)-1 || bytes < needed || bytes == 0) {
-            [encoder endEncoding];
+            end_encoder(encoder, batch_owned);
             fail(reason, reason_capacity, "index buffer is too short");
             return 0;
         }
@@ -2067,13 +2086,13 @@ static int generic_draw_encode_impl(const void *immediate_context,
         id<MTLBuffer> index_buffer = (__bridge id<MTLBuffer>)
             eu4_gfx_index_buffer_for_header(index_header);
         if (index_buffer == nil || index_buffer.length < needed) {
-            [encoder endEncoding];
+            end_encoder(encoder, batch_owned);
             fail(reason, reason_capacity, "index buffer has no Metal storage");
             return 0;
         }
         const uint16_t *indices = (const uint16_t *)index_buffer.contents;
         if (indices == NULL) {
-            [encoder endEncoding];
+            end_encoder(encoder, batch_owned);
             fail(reason, reason_capacity, "index buffer is not CPU-visible");
             return 0;
         }
@@ -2085,19 +2104,19 @@ static int generic_draw_encode_impl(const void *immediate_context,
                                                  &first_effective,
                                                  &last_effective);
         if (range_status == -1) {
-            [encoder endEncoding];
+            end_encoder(encoder, batch_owned);
             fail(reason, reason_capacity, "indexed draw has a negative effective vertex");
             return 0;
         }
         if (range_status != 0) {
-            [encoder endEncoding];
+            end_encoder(encoder, batch_owned);
             fail(reason, reason_capacity, "indexed draw has no readable indices");
             return 0;
         }
         if (!validate_attribute_ranges((uint32_t)last_effective,
                                        (uint32_t)instance_count, reason,
                                        reason_capacity)) {
-            [encoder endEncoding];
+            end_encoder(encoder, batch_owned);
             return 0;
         }
         /* Preserve the engine's 16-bit indices and let Metal apply the signed
@@ -2117,7 +2136,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
         if (!validate_attribute_ranges(last_vertex,
                                        (uint32_t)instance_count, reason,
                                        reason_capacity)) {
-            [encoder endEncoding];
+            end_encoder(encoder, batch_owned);
             return 0;
         }
         [encoder drawPrimitives:primitive
@@ -2207,7 +2226,9 @@ static int generic_draw_encode_impl(const void *immediate_context,
             (void)eu4_metal_events_write(name.UTF8String, json.UTF8String);
         }
     }
-    [encoder endEncoding];
+    if (!batch_owned) {
+        [encoder endEncoding];
+    }
     g_generic_draws++;
     if (state != NULL) {
         memset(state, 0, sizeof *state);

@@ -46,6 +46,11 @@
    valid dictionary, while abandonment leaves it invalid for the next one. */
 @property (nonatomic, strong) NSMutableDictionary *sampledRenderTargetPendingTokens;
 @property (nonatomic, strong) NSMutableDictionary *sampledRenderTargetPendingGenerations;
+/* Command buffer that carries each pending conversion. Conversions already
+   encoded into the active command buffer are reused by later draws sampling
+   the same unchanged target. */
+@property (nonatomic, strong) NSMutableDictionary *sampledRenderTargetPendingCommands;
+@property (nonatomic, strong) NSMutableDictionary *sampledRenderTargetPendingSerials;
 @property (nonatomic) uint64_t samplingPreparationToken;
 @property (nonatomic, strong) NSMutableDictionary *renderTargetGenerations;
 @property (nonatomic) uint64_t renderTargetEpoch;
@@ -120,6 +125,14 @@ extern uint64_t eu4_gfx_live_clear_sequence;
 @property (nonatomic, strong) id activeCommandBuffer;
 @property (nonatomic) uint64_t activeCommandGeneration;
 @property (nonatomic) uint32_t activeCommandOps;
+/* Monotonic identity of the active command buffer. Pointer identity alone is
+   unsafe: an abandoned command can release its address to a later submission. */
+@property (nonatomic) uint64_t activeCommandSerial;
+/* Active render pass, shared by compatible consecutive draws. */
+@property (nonatomic, strong) id activeRenderEncoder;
+@property (nonatomic, strong) id activeRenderColor;
+@property (nonatomic, strong) id activeRenderDepth;
+@property (nonatomic) uint32_t activeRenderSamples;
 @property (nonatomic) BOOL poisoned;
 /* Pending GL scissor box, fixed at the call. Signed. Not a Metal rectangle. */
 @property (nonatomic) BOOL scissorValid;
@@ -404,6 +417,19 @@ void eu4_gfx_batch_draw_failed(int fatal);
 int eu4_gfx_batch_active(void);
 /* Commit the active batch. drain also waits for the last submitted command. */
 eu4_gfx_clear_status eu4_gfx_batch_flush(void *master, int reason, int drain);
+
+/* Returns a render encoder compatible with (color, depth, clear) or opens a new
+   pass after closing the previous one. created is 1 for a new encoder and 0
+   for a shared one. clear_color non-null always starts a new pass. */
+void *eu4_gfx_batch_encoder(void *color, void *depth, const float *clear_color,
+                            int *created);
+/* Ends the active render pass, if any. Safe to call between passes. */
+void eu4_gfx_batch_end_pass(void);
+int eu4_gfx_batch_render_pass_active(void);
+/* 1 when command is the backend's active (unsubmitted) command buffer. */
+int eu4_gfx_batch_owns_command(void *command);
+/* Identity of the active command buffer; 0 when none is active. */
+uint64_t eu4_gfx_batch_command_serial(void);
 
 /* Drains the pending game submission (diagnostic readbacks only). */
 void eu4_gfx_drain_pending(void);

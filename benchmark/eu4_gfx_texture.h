@@ -96,6 +96,11 @@ int eu4_gfx_prepare_sampled_textures(void *command_buffer,
                                      uint64_t *preparation_token, char *reason,
                                      size_t capacity);
 
+/* Drops pending conversion records belonging to an abandoned command buffer so
+   a later draw reconverts instead of reusing a shadow whose GPU work will never
+   complete. */
+void eu4_gfx_sampling_abandon_command(void *command_buffer);
+
 /* Borrowed MTLTexture for the engine header bound to unit 0 by the replacement
    _GfxSetTextures. A header substituted for a null entry (master+0x98) resolves
    to backend.fallback; unknown headers return NULL. */

@@ -155,6 +155,24 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertIn("base4_green=1", ran.stdout)
         self.assertIn("base0_red=1", ran.stdout)
 
+    def test_render_pass_coalescing_preserves_blend_order(self) -> None:
+        """Two blend states share one pass; the exact pixel proves order."""
+        ran = self._run("--blend-order")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("blend_order=1", ran.stdout)
+        self.assertIn("one_pass=1", ran.stdout)
+        self.assertIn("order=1", ran.stdout)
+        self.assertIn("clear_split=1", ran.stdout)
+
+    def test_sampled_render_target_reuse_within_command(self) -> None:
+        """One conversion serves every draw in the shared command buffer."""
+        ran = self._run("--sampled-batch")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("sampled_batch=1", ran.stdout)
+        self.assertIn("reused=1", ran.stdout)
+        self.assertIn("shadow=1", ran.stdout)
+        self.assertIn("reconverted=1", ran.stdout)
+
     def test_shared_command_batch_sequences(self) -> None:
         """Refusal, target change, in-place update, 1000 draws and shutdown."""
         ran = self._run("--batch-sequences")

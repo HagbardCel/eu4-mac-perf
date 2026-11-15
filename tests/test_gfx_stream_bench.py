@@ -46,8 +46,9 @@ class GfxStreamBenchTests(unittest.TestCase):
         # clear and present submissions.
         self.assertLessEqual(perf["command_buffers_created"]["median"], 5)
         self.assertGreaterEqual(perf["batch_flushes"]["median"], 1)
-        # PR P2 does not coalesce render passes yet.
-        self.assertEqual(perf["render_encoders_created"]["median"], 40)
+        # Compatible draws share one render pass/encoder.
+        self.assertEqual(perf["render_encoders_created"]["median"], 1)
+        self.assertEqual(perf["render_encoders_reused"]["median"], 39)
         self.assertEqual(perf["index_temp_allocs"]["median"], 0)
         # Fully warmed frames do not compile pipelines.
         self.assertEqual(perf["pipeline_misses"]["median"], 0)

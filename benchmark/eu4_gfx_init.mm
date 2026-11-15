@@ -1684,10 +1684,107 @@ static EU4GfxBackend *batch_backend(void) {
     return (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
 }
 
+static uint64_t g_batch_serial;
+
+static void batch_new_serial(__unsafe_unretained EU4GfxBackend *backend) {
+    backend.activeCommandSerial = ++g_batch_serial;
+    if (backend.activeCommandSerial == 0) {
+        backend.activeCommandSerial = ++g_batch_serial;
+    }
+}
+
+uint64_t eu4_gfx_batch_command_serial(void) {
+    __unsafe_unretained EU4GfxBackend *backend = batch_backend();
+    return backend != nil ? backend.activeCommandSerial : 0;
+}
+
+void eu4_gfx_batch_end_pass(void) {
+    __unsafe_unretained EU4GfxBackend *backend = batch_backend();
+    if (backend == nil || backend.activeRenderEncoder == nil) {
+        return;
+    }
+    id<MTLRenderCommandEncoder> encoder = backend.activeRenderEncoder;
+    backend.activeRenderEncoder = nil;
+    backend.activeRenderColor = nil;
+    backend.activeRenderDepth = nil;
+    backend.activeRenderSamples = 0;
+    [encoder endEncoding];
+}
+
+int eu4_gfx_batch_render_pass_active(void) {
+    __unsafe_unretained EU4GfxBackend *backend = batch_backend();
+    return backend != nil && backend.activeRenderEncoder != nil ? 1 : 0;
+}
+
+int eu4_gfx_batch_owns_command(void *command) {
+    __unsafe_unretained EU4GfxBackend *backend = batch_backend();
+    if (backend == nil || command == NULL) {
+        return 0;
+    }
+    return (__bridge void *)backend.activeCommandBuffer == command ? 1 : 0;
+}
+
+void *eu4_gfx_batch_encoder(void *color, void *depth, const float *clear_color,
+                            int *created) {
+    __unsafe_unretained EU4GfxBackend *backend = batch_backend();
+    if (backend == nil || backend.poisoned || backend.activeCommandBuffer == nil) {
+        return NULL;
+    }
+    id<MTLTexture> target = (__bridge id<MTLTexture>)color;
+    id<MTLTexture> depth_texture = (__bridge id<MTLTexture>)depth;
+    if (target == nil) {
+        return NULL;
+    }
+    if (created != NULL) {
+        *created = 0;
+    }
+    if (clear_color == NULL && backend.activeRenderEncoder != nil &&
+        backend.activeRenderColor == target &&
+        backend.activeRenderDepth == depth_texture &&
+        backend.activeRenderSamples == target.sampleCount) {
+        eu4_gfx_perf_render_encoder_reused();
+        return (__bridge void *)backend.activeRenderEncoder;
+    }
+    /* A different attachment set, sample count or a clear boundary makes the
+       active pass incompatible. Store the old contents before switching. */
+    eu4_gfx_batch_end_pass();
+    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.colorAttachments[0].texture = target;
+    pass.colorAttachments[0].loadAction =
+        clear_color != NULL ? MTLLoadActionClear : MTLLoadActionLoad;
+    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    if (clear_color != NULL) {
+        pass.colorAttachments[0].clearColor = MTLClearColorMake(
+            clear_color[0], clear_color[1], clear_color[2], clear_color[3]);
+    }
+    if (depth_texture != nil) {
+        pass.depthAttachment.texture = depth_texture;
+        pass.depthAttachment.loadAction = MTLLoadActionLoad;
+        pass.depthAttachment.storeAction = MTLStoreActionStore;
+    }
+    id<MTLRenderCommandEncoder> encoder =
+        [backend.activeCommandBuffer renderCommandEncoderWithDescriptor:pass];
+    if (encoder == nil) {
+        return NULL;
+    }
+    backend.activeRenderEncoder = encoder;
+    backend.activeRenderColor = target;
+    backend.activeRenderDepth = depth_texture;
+    backend.activeRenderSamples = target.sampleCount;
+    eu4_gfx_perf_render_encoder_created();
+    if (created != NULL) {
+        *created = 1;
+    }
+    return (__bridge void *)encoder;
+}
+
 /* Submits the active command buffer. `record` distinguishes a real batch flush
    from the standalone A/B path where every draw commits immediately. */
 static void batch_commit(__unsafe_unretained EU4GfxBackend *backend, int reason,
                          int record) {
+    if (backend.activeRenderEncoder != nil) {
+        eu4_gfx_batch_end_pass();
+    }
     id command = backend.activeCommandBuffer;
     uint32_t ops = backend.activeCommandOps;
     backend.activeCommandBuffer = nil;
@@ -1725,6 +1822,7 @@ void *eu4_gfx_batch_acquire(const void *master, uint64_t generation) {
         backend.activeCommandBuffer = command;
         backend.activeCommandGeneration = generation;
         backend.activeCommandOps = 0;
+        batch_new_serial(backend);
         return (__bridge void *)command;
     }
     if (backend.activeCommandBuffer != nil &&
@@ -1746,6 +1844,7 @@ void *eu4_gfx_batch_acquire(const void *master, uint64_t generation) {
         backend.activeCommandBuffer = command;
         backend.activeCommandGeneration = generation;
         backend.activeCommandOps = 0;
+        batch_new_serial(backend);
     }
     return (__bridge void *)backend.activeCommandBuffer;
 }
@@ -1762,7 +1861,7 @@ void eu4_gfx_batch_draw_encoded(const void *master, uint64_t generation) {
     backend.readyForPresent = NO;
     if (!batching_enabled()) {
         batch_commit(backend, 0, 0);
-    } else if (backend.activeCommandOps >= 512) {
+    } else if (backend.activeCommandOps >= 4096) {
         /* Bound command-buffer size without waiting; queue order is preserved. */
         batch_commit(backend, EU4_GFX_PERF_FLUSH_CAPACITY, 1);
     }
@@ -1776,6 +1875,10 @@ void eu4_gfx_batch_draw_failed(int fatal) {
     if (fatal) {
         /* An unrecoverable encoder failure may have left an open encoder. Do
            not submit partially invalid work or report a successful frame. */
+        if (backend.activeRenderEncoder != nil) {
+            eu4_gfx_batch_end_pass();
+        }
+        eu4_gfx_sampling_abandon_command((__bridge void *)backend.activeCommandBuffer);
         backend.activeCommandBuffer = nil;
         backend.activeCommandOps = 0;
         backend.poisoned = YES;
@@ -1786,6 +1889,10 @@ void eu4_gfx_batch_draw_failed(int fatal) {
     if (backend.activeCommandOps == 0) {
         /* Nothing valid was encoded into this buffer; dropping it keeps later
            work from committing an empty submission. */
+        if (backend.activeRenderEncoder != nil) {
+            eu4_gfx_batch_end_pass();
+        }
+        eu4_gfx_sampling_abandon_command((__bridge void *)backend.activeCommandBuffer);
         backend.activeCommandBuffer = nil;
     }
 }

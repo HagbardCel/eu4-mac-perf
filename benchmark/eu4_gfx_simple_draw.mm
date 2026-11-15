@@ -284,22 +284,30 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw_encode_into(
     uint8_t matrix[64];
     memcpy(matrix, constant_data, sizeof matrix);
 
-    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
-    pass.colorAttachments[0].texture = target;
-    pass.colorAttachments[0].loadAction =
-        inputs->clear_color != NULL ? MTLLoadActionClear : MTLLoadActionLoad;
-    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-    if (inputs->clear_color != NULL) {
-        pass.colorAttachments[0].clearColor =
-            MTLClearColorMake(inputs->clear_color[0], inputs->clear_color[1],
-                              inputs->clear_color[2], inputs->clear_color[3]);
+    int batch_owned = eu4_gfx_batch_owns_command((__bridge void *)command);
+    id<MTLRenderCommandEncoder> encoder = nil;
+    if (batch_owned) {
+        encoder = (__bridge id<MTLRenderCommandEncoder>)eu4_gfx_batch_encoder(
+            (__bridge void *)target, NULL, inputs->clear_color, NULL);
+    } else {
+        MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+        pass.colorAttachments[0].texture = target;
+        pass.colorAttachments[0].loadAction =
+            inputs->clear_color != NULL ? MTLLoadActionClear : MTLLoadActionLoad;
+        pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        if (inputs->clear_color != NULL) {
+            pass.colorAttachments[0].clearColor =
+                MTLClearColorMake(inputs->clear_color[0], inputs->clear_color[1],
+                                  inputs->clear_color[2], inputs->clear_color[3]);
+        }
+        encoder = [command renderCommandEncoderWithDescriptor:pass];
+        if (encoder != nil) {
+            eu4_gfx_perf_render_encoder_created();
+        }
     }
-
-    id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
     if (encoder == nil) {
         return refuse(EU4_GFX_SIMPLE_DRAW_ENCODE, reason, "command encoding failed");
     }
-    eu4_gfx_perf_render_encoder_created();
     [encoder setRenderPipelineState:pipeline];
     /* The admitted default raster snapshot does not cull in the reconstructed
        pass (the full-screen strip has one triangle of each winding). State is
@@ -329,7 +337,9 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw_encode_into(
     [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
                 vertexStart:(NSUInteger)first
                 vertexCount:(NSUInteger)count];
-    [encoder endEncoding];
+    if (!batch_owned) {
+        [encoder endEncoding];
+    }
 
     if (state != NULL) {
         copy_identity(state->shader_identity, sizeof state->shader_identity, identity);
