@@ -114,7 +114,7 @@
     ]
   },
   "reviewed_head": "b8fdd0b",
-  "implementation_head": "dabca9f",
+  "implementation_head": "0e620f5",
   "notes": [
     "The integration branch was synchronized with origin/main 61e7795 before these corrections; the merge commit is cb35385.",
     "Texture 442 remains the single unresolved dependency in both the historical canonical menu frame and the new menu scene 79.",
@@ -781,5 +781,11 @@
   "portable_linux_vm": "Ubuntu 24.04 amd64, Python 3.14.10, Node 26.13.1; previously failing modules pass, full workflow verified on the PR head",
   "scene75_difference_artifact": "analysis/infra/scene75-difference.json",
   "review_threads": 2,
-  "review_threads_resolved": true
+  "review_threads_resolved": true,
+  "portable_ci": {
+    "url": "https://github.com/HagbardCel/eu4-mac-perf/actions/runs/43705707227",
+    "conclusion": "success",
+    "head": "0e620f53604e6d0207eda84d6882e27db88aeb8b",
+    "steps": 19
+  }
 }
