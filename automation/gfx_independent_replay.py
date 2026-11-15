@@ -454,7 +454,8 @@ def binding_audit(replay: dict) -> dict:
                     "actual_texture_at_shader_unit": actual,
                     "shift": row.get("fault_sampler_shift") or 0,
                 })
-            missing_unit = int(row.get("fault_missing_engine_unit") or -1)
+            missing_raw = row.get("fault_missing_engine_unit")
+            missing_unit = -1 if missing_raw is None else int(missing_raw)
             if missing_unit >= 0:
                 mismatches.append({
                     "event": event,
@@ -476,7 +477,8 @@ def binding_audit(replay: dict) -> dict:
                     "kind": "wrong_texture_selected",
                     "sampler": row.get("sampler"),
                     "shader_unit": shader_unit,
-                    "engine_unit": int(row.get("selected_engine_unit") or -1),
+                    "engine_unit": (-1 if row.get("selected_engine_unit") is None
+                                    else int(row.get("selected_engine_unit"))),
                     "expected_texture": declared,
                     "selected_texture": selected,
                     "shift": row.get("fault_sampler_shift") or 0,
@@ -686,26 +688,45 @@ def classify_replay(*, execution_ok: bool, coverage: str, semantic: str,
                     checkpoint_validation: dict, faults: dict | None,
                     state_cov: str = "complete"
                     ) -> tuple[str, dict]:
-    """Pure qualification classification used by replay() and its tests."""
+    """Pure qualification classification used by replay() and its tests.
+
+    Invalid or unknown required evidence is always an instrumentation failure.
+    It can never fall through to a merely nonqualifying or qualified result.
+    """
     intermediate_divergent = any(
         item.get("status") == "divergent" and item.get("authoritative")
         for item in checkpoints)
-    checkpoint_invalid = checkpoint_validation.get("status") != "ok"
+    checkpoint_invalid = (
+        (checkpoint_validation or {}).get("status") != "ok"
+        or any(item.get("status") == "invalid" for item in checkpoints))
     fault_injection = bool(faults)
+    invalid_verdict = (
+        not execution_ok
+        or coverage not in ("complete", "partial")
+        or pixels not in ("match", "divergent")
+        or semantic not in ("match", "divergent")
+        or state_cov not in ("complete", "partial")
+        or checkpoint_invalid
+    )
     qualified = bool(
-        execution_ok and coverage == "complete" and state_cov == "complete"
+        not invalid_verdict
+        and coverage == "complete" and state_cov == "complete"
         and semantic == "match" and pixels == "match"
-        and not intermediate_divergent and not checkpoint_invalid
+        and not intermediate_divergent
         and not fault_injection
     )
-    if not execution_ok or coverage == "invalid" or checkpoint_invalid:
+    if invalid_verdict:
         status = "invalid"
     elif semantic == "divergent":
         status = "semantic_divergence"
     elif pixels == "divergent" or intermediate_divergent:
         status = ("confirmed_rendering_difference" if coverage == "complete"
                   else "partial_rendering_difference")
-    elif coverage == "partial" or state_cov != "complete":
+    elif coverage == "partial" or state_cov == "partial":
+        status = "partial"
+    elif not qualified:
+        # A deliberate fault experiment, for example, is a valid nonqualifying
+        # outcome.  It must never be labelled qualified while qualified=false.
         status = "partial"
     else:
         status = "qualified"
@@ -735,7 +756,15 @@ def qualification_exit_code(report: dict) -> int:
     execution = outcome.get("execution")
     if execution != "ok":
         return 1
+    if report.get("status") == "invalid":
+        return 1
     if outcome.get("checkpoints") == "invalid":
+        return 1
+    if outcome.get("coverage") not in ("complete", "partial"):
+        return 1
+    if outcome.get("pixels") not in ("match", "divergent"):
+        return 1
+    if outcome.get("state_coverage") not in ("complete", "partial"):
         return 1
     if outcome.get("qualified"):
         return 0

@@ -543,6 +543,20 @@ class ReplayContractTests(unittest.TestCase):
         self.assertEqual(audit["earliest_event"], 14)
         self.assertEqual(audit["mismatches"][0]["kind"], "wrong_texture_selected")
 
+    def test_binding_audit_reports_missing_engine_unit_zero(self):
+        rows = [
+            {"event": 14, "texture": "429", "sampler": "tex7", "unit": 0,
+             "fault_shader_unit": 0, "expected_texture": "429",
+             "selected_texture": "", "fault_sampler_shift": 1,
+             "fault_missing_engine_unit": 0},
+        ]
+        audit = gfx_independent_replay.binding_audit(
+            fake_replay(_provenance_samples=rows))
+        missing = [item for item in audit["mismatches"]
+                   if item["kind"] == "missing_texture_unit"]
+        self.assertTrue(missing)
+        self.assertEqual(missing[0]["engine_unit"], 0)
+
     def test_binding_audit_detects_missing_tex6_unit(self):
         rows = [
             {"event": 14, "texture": "429", "sampler": "tex7", "unit": 1,
@@ -747,6 +761,7 @@ class ExitCodePolicyTests(unittest.TestCase):
     def outcome(self, **overrides):
         value = {"execution": "ok", "coverage": "complete",
                  "pixels": "match", "semantic": "match",
+                 "state_coverage": "complete",
                  "qualified": True, "fault_injection": False}
         value.update(overrides)
         return value

@@ -795,5 +795,9 @@
   "output_safety": "replay/case outputs reject protected roots, input overlaps and unowned nonempty directories; owned prior outputs may be replaced",
   "output_safety_regressions": 12,
   "severity_monotonic": "invalid is never downgraded to partial/complete",
-  "final_focused_tests": 83
+  "final_focused_tests": 83,
+  "classification_invalid_evidence": "invalid/unknown execution, coverage, pixels, state or checkpoints are status invalid and exit 1; valid faults exit 3; status qualified only with qualified=true",
+  "checkpoint_classification_regressions": 26,
+  "unit_zero_handling": "fault_missing_engine_unit and selected_engine_unit use explicit None handling; unit 0 preserved",
+  "unit_zero_regressions": 1
 }

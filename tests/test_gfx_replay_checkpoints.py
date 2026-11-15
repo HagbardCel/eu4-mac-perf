@@ -229,6 +229,67 @@ class QualificationClassificationTests(unittest.TestCase):
         self.assertEqual(outcome["checkpoints"], "invalid")
         self.assertEqual(code, 1)
 
+    def test_complete_exact_match_is_qualified(self):
+        status, outcome, code = self.outcome()
+        self.assertEqual(status, "qualified")
+        self.assertTrue(outcome["qualified"])
+        self.assertEqual(code, 0)
+
+    def test_invalid_coverage_is_invalid(self):
+        status, outcome, code = self.outcome(coverage="invalid")
+        self.assertEqual(status, "invalid")
+        self.assertFalse(outcome["qualified"])
+        self.assertEqual(code, 1)
+
+    def test_invalid_pixel_evidence_is_invalid(self):
+        status, outcome, code = self.outcome(pixels="invalid")
+        self.assertEqual(status, "invalid")
+        self.assertFalse(outcome["qualified"])
+        self.assertEqual(code, 1)
+
+    def test_invalid_state_coverage_is_invalid(self):
+        status, outcome, code = self.outcome(state_cov="invalid")
+        self.assertEqual(status, "invalid")
+        self.assertFalse(outcome["qualified"])
+        self.assertEqual(code, 1)
+
+    def test_partial_state_coverage_is_nonqualifying(self):
+        status, outcome, code = self.outcome(state_cov="partial")
+        self.assertEqual(status, "partial")
+        self.assertFalse(outcome["qualified"])
+        self.assertEqual(code, 2)
+
+    def test_unknown_verdict_is_invalid(self):
+        status, outcome, code = self.outcome(coverage="unknown")
+        self.assertEqual(status, "invalid")
+        self.assertFalse(outcome["qualified"])
+        self.assertEqual(code, 1)
+        status, outcome, code = self.outcome(pixels="unknown")
+        self.assertEqual(status, "invalid")
+        self.assertEqual(code, 1)
+
+    def test_successful_fault_experiment_keeps_exit_three(self):
+        status, outcome, code = self.outcome(
+            pixels="divergent", faults={"disable_render_target_vflip": True})
+        self.assertEqual(status, "confirmed_rendering_difference")
+        self.assertFalse(outcome["qualified"])
+        self.assertEqual(code, 3)
+
+    def test_fault_with_invalid_evidence_is_invalid(self):
+        status, outcome, code = self.outcome(
+            pixels="divergent", checkpoints=[{"status": "invalid"}],
+            faults={"disable_render_target_vflip": True})
+        self.assertEqual(status, "invalid")
+        self.assertFalse(outcome["qualified"])
+        self.assertEqual(code, 1)
+
+    def test_fault_without_divergence_is_never_qualified(self):
+        status, outcome, code = self.outcome(
+            faults={"disable_render_target_vflip": True})
+        self.assertEqual(status, "partial")
+        self.assertFalse(outcome["qualified"])
+        self.assertEqual(code, 3)
+
     def test_authoritative_divergence_is_not_qualified(self):
         status, outcome, code = self.outcome(checkpoints=[{
             "status": "divergent", "authoritative": True,

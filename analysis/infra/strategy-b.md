@@ -797,3 +797,26 @@ regression asserts this.
   divergence and `qualified=false`.
 - Portable cases verify and replay; safe reruns over owned output directories
   work.
+
+## 16. Final invalid-evidence and zero-unit corrections
+
+`classify_replay()` now treats invalid or unknown required verdicts as
+instrumentation failures:
+
+- invalid/unknown coverage, pixel evidence, state coverage, execution or
+  checkpoint evidence → `status="invalid"`, `qualified=false`, exit **1**;
+- partial coverage/state → `partial`, exit **2**;
+- genuine rendering differences → confirmed/partial rendering difference,
+  exit **2**;
+- valid deliberate fault experiments → divergence verdict, exit **3**, but a
+  fault experiment with invalid evidence → `invalid`, exit **1**;
+- `status="qualified"` is emitted only when `outcome.qualified=true`.
+
+`binding_audit()` no longer converts valid engine unit `0` to `-1`:
+`fault_missing_engine_unit` and `selected_engine_unit` use explicit `None`
+handling. A missing engine texture at unit 0 reports `missing_texture_unit`
+with `engine_unit=0`.
+
+Regressions: 26 checkpoint/classification/CLI tests, including the full
+expected status/exit table; the existing missing-unit and sampler-shift tests
+remain green; a new unit-0 missing-texture regression is included.

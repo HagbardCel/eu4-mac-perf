@@ -92,6 +92,11 @@ prevents full qualification. Non-default framebuffer source metadata is read
 from the selected attachment under saved/restored binding state, with
 unsupported attachment types failing closed.
 
+Invalid execution, coverage, pixel, state or checkpoint evidence is now
+classified `invalid` with exit 1; valid deliberate fault experiments remain exit
+3, and `status=qualified` is emitted only with `qualified=true`. Binding
+diagnostics preserve engine unit 0 instead of converting it to -1.
+
 Transfer provenance now enforces the captured source category for every copy
 (`metal_default` for the in-frame default framebuffer, `metal_render_target`
 for generated textures, declared boundary categories otherwise). Captured
