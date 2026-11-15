@@ -156,14 +156,18 @@ The follow-up closes four correctness gaps found after PR #196 merged:
 Verification at the follow-up head:
 
 - Required focused selection (`test_gfx_frame_compare`, `test_agent_tools`,
-  `test_test_runner`): **97 tests, OK**.
+  `test_test_runner`): **104 tests, OK**.
 - Dependent suites (dual-run, qualification, case, offline, evidence, DSH
-  bridge/profile/efficiency): **183 tests, OK**.
+  bridge/profile/efficiency): **196 tests, OK**.
 - Node plugin: **9/9 pass**.
-- Full suite at the follow-up head: **3109 tests, 11 failures, 0 errors,
+- Full suite at the follow-up head: **3132 tests, 11 failures, 0 errors,
   26 skipped**. All 11 are the pre-existing `test_trace_tr3` environmental
   failures; the same module has the identical 11 failures at base `a655fc1`.
-  No candidate-only regression. (`test_gfx_session` passes standalone; an
-  earlier run saw its known timing flake once.)
+  No candidate-only regression.
+
+The final correction also records unavailable comparisons even when a role has
+zero decodable frames, selects automatic windows by payload availability and
+incremental probing (explicit indices are never substituted), and verifies a
+selected payload's declared digest without hashing unselected `.bgra` files.
 - Portable PNG content test uses a standard-library reader; Pillow is not
   required.
