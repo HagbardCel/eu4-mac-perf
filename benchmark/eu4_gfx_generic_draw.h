@@ -87,6 +87,10 @@ void *eu4_gfx_generic_pipeline_test(void *device, void *vertex, void *fragment,
 
 /* Number of draws encoded by this module (diagnostics). */
 uint64_t eu4_gfx_generic_draw_count(void);
+/* Last draw's admitted attribute diagnostics, as written to the element trace.
+   Test-only: the encoder is single-threaded. */
+int eu4_gfx_generic_last_element_count(void);
+int eu4_gfx_generic_last_element_location(int index, uint32_t *location);
 
 #ifdef __cplusplus
 }

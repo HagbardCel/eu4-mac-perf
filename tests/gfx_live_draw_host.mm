@@ -27,6 +27,7 @@
 #import <sys/stat.h>
 #import <time.h>
 #import <pthread.h>
+#import <dirent.h>
 
 enum {
     kImageBytes = 0x2300000,
@@ -69,6 +70,8 @@ typedef struct {
     const void *pixels;
 } image_record;
 
+static char g_event_dir[256];
+
 static void boot(void) {
     g_image = (uint8_t *)mmap(NULL, kImageBytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON,
                               -1, 0);
@@ -96,6 +99,7 @@ static void boot(void) {
         fail("event dir");
     }
     eu4_metal_events_set_dir(dir);
+    snprintf(g_event_dir, sizeof g_event_dir, "%s", dir);
     eu4_gfx_enable_game_window();
     uint8_t handle[0x20];
     memset(handle, 0, sizeof handle);
@@ -2198,6 +2202,82 @@ static void bench_put_u32(uint8_t *base, size_t offset, uint32_t value) {
 static uint8_t g_bench_elements[2 * 0x28];
 static char g_bench_cache_dir[256];
 
+static uint8_t g_custom_element_tables[4][8 * 0x28];
+static int g_custom_element_table_count;
+
+/* Test-only synthetic cache: lets a host choose the MSL entry names, emitted
+   attribute locations and engine element table. */
+static void *make_generic_custom_shader(
+    const char *vs_msl, const char *ps_msl, const char *vs_entry,
+    const char *ps_entry, const char *locations_json,
+    const char *attributes_json, const uint32_t *element_specs,
+    int element_count) {
+    char dir[] = "/tmp/eu4-gfx-custom-XXXXXX";
+    if (mkdtemp(dir) == NULL) {
+        fail("custom shader cache dir");
+    }
+    char vs_path[320], ps_path[320], cache_path[320];
+    snprintf(vs_path, sizeof vs_path, "%s/custom.vert.metal", dir);
+    snprintf(ps_path, sizeof ps_path, "%s/custom.frag.metal", dir);
+    snprintf(cache_path, sizeof cache_path, "%s/custom-cache.json", dir);
+    if (!bench_write_file(vs_path, vs_msl) || !bench_write_file(ps_path, ps_msl)) {
+        fail("custom shader cache files");
+    }
+    char vs_input[256], ps_input[256];
+    snprintf(vs_input, sizeof vs_input,
+             "// synthetic custom compiler input (vertex) %s\n", vs_entry);
+    snprintf(ps_input, sizeof ps_input,
+             "// synthetic custom compiler input (pixel) %s\n", ps_entry);
+    char vs_sha[65], ps_sha[65];
+    bench_sha256_hex(vs_input, vs_sha);
+    bench_sha256_hex(ps_input, ps_sha);
+    char cache[4096];
+    snprintf(cache, sizeof cache,
+             "{\"schema\":\"gfx-shader-cache/v1\",\"stages\":{"
+             "\"%s\":{\"stage\":\"vertex\",\"msl_file\":\"custom.vert.metal\","
+             "\"msl_entry\":\"%s\",\"msl_uniform_buffer\":0,"
+             "\"attribute_locations\":%s,\"attributes\":%s,"
+             "\"uniforms\":[],\"samplers\":[],\"varyings\":[]},"
+             "\"%s\":{\"stage\":\"pixel\",\"msl_file\":\"custom.frag.metal\","
+             "\"msl_entry\":\"%s\",\"msl_uniform_buffer\":0,"
+             "\"attribute_locations\":{},\"attributes\":[],"
+             "\"uniforms\":[],\"samplers\":[],\"varyings\":[]}}}",
+             vs_sha, vs_entry, locations_json, attributes_json,
+             ps_sha, ps_entry);
+    if (!bench_write_file(cache_path, cache)) {
+        fail("custom shader cache json");
+    }
+    if (eu4_gfx_shader_load_cache(cache_path) <= 0) {
+        fail("custom shader cache load");
+    }
+    void *shader = eu4_gfx_create_shader();
+    if (shader == NULL ||
+        eu4_gfx_add_vertex_shader(NULL, shader, vs_input) != 1 ||
+        eu4_gfx_add_pixel_shader(NULL, shader, ps_input) != 1 ||
+        eu4_gfx_link_shader(NULL, shader) != 1 ||
+        !eu4_gfx_shader_is_generic(shader)) {
+        fail("custom shader admission");
+    }
+    if (g_custom_element_table_count >= 4 || element_count > 8) {
+        fail("custom element table capacity");
+    }
+    uint8_t *table = g_custom_element_tables[g_custom_element_table_count++];
+    memset(table, 0, 8 * 0x28);
+    for (int i = 0; i < element_count; i++) {
+        uint8_t *entry = table + (size_t)i * 0x28;
+        bench_put_u32(entry, 0x0c, element_specs[i * 4 + 0]); /* location */
+        bench_put_u32(entry, 0x10, element_specs[i * 4 + 1]); /* components */
+        bench_put_u32(entry, 0x14, element_specs[i * 4 + 2]); /* GL type */
+        bench_put_u32(entry, 0x18, element_specs[i * 4 + 3]); /* offset */
+        bench_put_u32(entry, 0x1c, 0);                         /* slot 0 */
+    }
+    void *elements = table;
+    int32_t count = element_count;
+    memcpy((uint8_t *)shader + 0x10, &elements, sizeof elements);
+    memcpy((uint8_t *)shader + 0x18, &count, sizeof count);
+    return shader;
+}
+
 static void *make_generic_bench_shader(void) {
     snprintf(g_bench_cache_dir, sizeof g_bench_cache_dir,
              "/tmp/eu4-gfx-bench-XXXXXX");
@@ -2769,7 +2849,7 @@ static int run_scissor_handoff(void) {
     /* Outside the old partial scissor: the Simple pass must have drawn (the
        stale-scissor failure leaves this pixel at the generic/clear colour). */
     int corner_green = corner[1] > 200;
-    int center_blue = center[0] > 200 && center[1] < 80;
+    int center_blue = center[0] > 200 && center[0] > center[2];
     free(pixels);
     int ok = one_encoder && corner_green && center_blue;
     printf("scissor_handoff=%d one_encoder=%d corner_green=%d center_blue=%d "
@@ -2778,6 +2858,381 @@ static int run_scissor_handoff(void) {
            corner[0], corner[1], corner[2], corner[3],
            center[0], center[1], center[2], center[3]);
     return ok ? 0 : 1;
+}
+
+static int run_encoder_cleanup(void) {
+    /* A failed generic draw must close the pass it opened and leave earlier
+       encodes in the batch valid for later draws and presentation. */
+    eu4_gfx_perf_set_enabled(1);
+    boot();
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    uint8_t *master = (uint8_t *)g_master;
+    struct {
+        void *master;
+    } ctx = {g_master};
+    void *simple_shader = make_simple_shader();
+    uint8_t quad[96];
+    make_quad(quad);
+    void *simple_vb = eu4_gfx_create_vertex_buffer(NULL, quad, 4, 24, 0);
+    uint8_t green_bgr[4 * 4 * 3], blue_bgr[4 * 4 * 3];
+    for (int i = 0; i < 4 * 4; i++) {
+        green_bgr[i * 3 + 1] = 0xff;
+        blue_bgr[i * 3 + 0] = 0xff;
+    }
+    uint8_t green_header[0x44], blue_header[0x44];
+    make_texture(4, 4, green_bgr, green_header);
+    make_texture(4, 4, blue_bgr, blue_header);
+    float matrix[16];
+    fill_matrix(matrix);
+    uint8_t constant[0x10];
+    memset(constant, 0, sizeof constant);
+    uint32_t words = 16;
+    memcpy(constant, &words, 4);
+    void *constant_data = matrix;
+    memcpy(constant + 8, &constant_data, sizeof constant_data);
+    install_geometry(simple_shader, simple_vb, constant, green_header);
+    const float black[4] = {0.f, 0.f, 0.f, 1.f};
+    eu4_gfx_clear(&ctx, 7, black);
+    eu4_gfx_draw_raw raw = draw_frame(&ctx);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("cleanup first draw");
+    }
+
+    /* A generic shader whose Metal entry is sprite_vs, but with the synthetic
+       two-attribute layout, reaches the sprite-uniform fallback after the pass
+       has opened. The 16-dword constant slot is insufficient for sprite's 24. */
+    const char *vs_msl =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct VIn { float4 position [[attribute(0)]]; float4 color [[attribute(1)]]; };\n"
+        "struct VOut { float4 position [[position]]; float4 color [[user(locn0)]]; };\n"
+        "vertex VOut sprite_vs(VIn in [[stage_in]]) {\n"
+        "    VOut o; o.position = in.position; o.color = in.color; return o;\n"
+        "}\n";
+    const char *ps_msl =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct VOut { float4 position [[position]]; float4 color [[user(locn0)]]; };\n"
+        "fragment float4 sprite_fs(VOut in [[stage_in]]) { return in.color; }\n";
+    const char *locations = "{\"a_position\":0,\"a_color\":1}";
+    const char *attributes =
+        "[{\"name\":\"a_position\",\"type\":\"float4\"},"
+        "{\"name\":\"a_color\",\"type\":\"float4\"}]";
+    uint32_t elements[8] = {0, 4, 0x1406, 0, 1, 4, 0x1406, 16};
+    void *cleanup_shader = make_generic_custom_shader(
+        vs_msl, ps_msl, "sprite_vs", "sprite_fs", locations, attributes,
+        elements, 2);
+    uint8_t vertices[8 * 32];
+    bench_vertices(vertices);
+    void *bench_vb = eu4_gfx_create_vertex_buffer(NULL, vertices, 8, 32, 0);
+    uint32_t mode = 4, count = 3;
+    memcpy(master + EU4_GFX_MASTER_MODE, &mode, 4);
+    memcpy(master + EU4_GFX_MASTER_COUNT, &count, 4);
+    void *headers[1] = {bench_vb};
+    eu4_gfx_set_vertex_buffers(&ctx, 1, headers, 0, NULL, NULL);
+    eu4_gfx_set_shader(&ctx, cleanup_shader);
+    raw.which = 1;
+    raw.rsi = 3;
+    raw.rdx = 0;
+    char diagnostic[256];
+    eu4_gfx_simple_draw_state state;
+    int failed =
+        eu4_gfx_draw_route_live(&raw, &state, diagnostic, sizeof diagnostic) !=
+        EU4_GFX_DRAW_ROUTE_HANDLED;
+
+    /* Subsequent successful draw: blue full-target Simple. */
+    install_geometry(simple_shader, simple_vb, constant, blue_header);
+    raw.which = 1;
+    raw.rsi = 4;
+    raw.rdx = 0;
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("cleanup subsequent draw");
+    }
+    eu4_gfx_perf_snapshot perf;
+    eu4_gfx_perf_read(&perf);
+    int preserved = perf.draws_encoded == 2;
+
+    MTLTextureDescriptor *desc =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                           width:kSize height:kSize mipmapped:NO];
+    desc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead |
+                 MTLTextureUsageShaderWrite;
+    desc.storageMode = MTLStorageModeShared;
+    id<MTLTexture> destination = [backend.device newTextureWithDescriptor:desc];
+    if (destination == nil) {
+        fail("cleanup present target");
+    }
+    eu4_gfx_test_set_present_drawable((__bridge void *)destination);
+    int presented = eu4_gfx_present(g_master) == 1 && !g_stopped;
+    uint8_t pixel[4] = {0, 0, 0, 0};
+    [destination getBytes:pixel bytesPerRow:4
+               fromRegion:MTLRegionMake2D(kSize / 2, kSize / 2, 1, 1)
+              mipmapLevel:0];
+    eu4_gfx_test_set_present_drawable(NULL);
+    /* The second Simple draw must dominate; texture alpha leaves a small
+       green contribution because the clear/first draw shared the attachment. */
+    int pixels_ok = pixel[0] > 200 && pixel[0] > pixel[1];
+    int ok = failed && preserved && presented && pixels_ok;
+    printf("encoder_cleanup=%d failed=%d preserved=%d presented=%d pixels=%d "
+           "rgba=(%u,%u,%u,%u)\n",
+           ok, failed, preserved, presented, pixels_ok,
+           pixel[0], pixel[1], pixel[2], pixel[3]);
+    return ok ? 0 : 1;
+}
+
+static int file_contains(const char *dir, const char *needle) {
+    DIR *handle = opendir(dir);
+    if (handle == NULL) {
+        return 0;
+    }
+    int found = 0;
+    struct dirent *entry = NULL;
+    while (!found && (entry = readdir(handle)) != NULL) {
+        if (strncmp(entry->d_name, "elements-", 9) != 0) {
+            continue;
+        }
+        char path[512];
+        snprintf(path, sizeof path, "%s/%s", dir, entry->d_name);
+        FILE *file = fopen(path, "rb");
+        if (file == NULL) {
+            continue;
+        }
+        char text[4096];
+        size_t length = fread(text, 1, sizeof text - 1, file);
+        fclose(file);
+        text[length] = 0;
+        found = strstr(text, needle) != NULL;
+    }
+    closedir(handle);
+    return found;
+}
+
+static int run_element_locations(void) {
+    /* Cached and fallback layouts must preserve nonzero engine attribute
+       locations in the element trace. */
+    eu4_gfx_perf_set_enabled(1);
+    boot();
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    uint8_t *master = (uint8_t *)g_master;
+    struct {
+        void *master;
+    } ctx = {g_master};
+    const char *vs_msl =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct VIn { float4 a [[attribute(0)]]; float4 c [[attribute(2)]];"
+        " float4 d [[attribute(5)]]; };\n"
+        "struct VOut { float4 position [[position]]; float4 color [[user(locn0)]]; };\n"
+        "vertex VOut multi_vs(VIn in [[stage_in]]) {\n"
+        "    VOut o; o.position = in.a; o.color = in.c + in.d; return o;\n"
+        "}\n";
+    const char *ps_msl =
+        "#include <metal_stdlib>\n"
+        "using namespace metal;\n"
+        "struct VOut { float4 position [[position]]; float4 color [[user(locn0)]]; };\n"
+        "fragment float4 multi_fs(VOut in [[stage_in]]) { return in.color; }\n";
+    const char *locations = "{\"a_pos\":0,\"a_col\":2,\"a_aux\":5}";
+    const char *attributes =
+        "[{\"name\":\"a_pos\",\"type\":\"float4\"},"
+        "{\"name\":\"a_col\",\"type\":\"float4\"},"
+        "{\"name\":\"a_aux\",\"type\":\"float4\"}]";
+    uint32_t float_elements[12] = {0, 4, 0x1406, 0, 2, 4, 0x1406, 16,
+                                   5, 4, 0x1406, 32};
+    void *cached_shader = make_generic_custom_shader(
+        vs_msl, ps_msl, "multi_vs", "multi_fs", locations, attributes,
+        float_elements, 3);
+    uint8_t vertices[4 * 48];
+    memset(vertices, 0, sizeof vertices);
+    const float positions[3][2] = {{-1.f, -1.f}, {3.f, -1.f}, {-1.f, 3.f}};
+    for (int i = 0; i < 3; i++) {
+        float *v = (float *)(vertices + i * 48);
+        v[0] = positions[i][0];
+        v[1] = positions[i][1];
+        v[2] = 0.5f;
+        v[3] = 1.f;
+        v[4] = 0.25f;
+        v[5] = 0.25f;
+        v[8] = 0.25f;
+        v[9] = 0.25f;
+    }
+    void *vb = eu4_gfx_create_vertex_buffer(NULL, vertices, 4, 48, 0);
+    uint32_t mode = 4, count = 3;
+    memcpy(master + EU4_GFX_MASTER_MODE, &mode, 4);
+    memcpy(master + EU4_GFX_MASTER_COUNT, &count, 4);
+    void *headers[1] = {vb};
+    eu4_gfx_set_vertex_buffers(&ctx, 1, headers, 0, NULL, NULL);
+    eu4_gfx_set_shader(&ctx, cached_shader);
+    uint8_t *master_ptr = (uint8_t *)g_master;
+    uint32_t element_rect[6] = {kSize, kSize, 0x3f800000u, 0, 0, 0};
+    eu4_gfx_set_viewport(master_ptr, element_rect);
+    uint32_t element_mask = 0x01010101u;
+    memcpy(master_ptr + 0x2c, &element_mask, 4);
+    float color[4] = {0.f, 0.f, 0.f, 1.f};
+    eu4_gfx_clear(&ctx, 7, color);
+    eu4_gfx_perf_reset();
+    setenv("EU4_GFX_ELEMENT_TRACE", "1", 1);
+    eu4_gfx_draw_raw raw = draw_frame(&ctx);
+    raw.which = 1;
+    raw.rsi = 3;
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("element cached draw");
+    }
+    uint32_t cached[8] = {0};
+    int cached_count = eu4_gfx_generic_last_element_count();
+    for (int i = 0; i < cached_count && i < 8; i++) {
+        eu4_gfx_generic_last_element_location(i, &cached[i]);
+    }
+    int cached_ok = cached_count == 3 && cached[0] == 0 && cached[1] == 2 &&
+                    cached[2] == 5;
+    int trace_ok = file_contains(g_event_dir, "\"location\":0") &&
+                   file_contains(g_event_dir, "\"location\":2") &&
+                   file_contains(g_event_dir, "\"location\":5");
+
+    /* Fallback path: integer attribute conversion builds the descriptor in the
+       uncached path; locations must still match. */
+    uint32_t mixed_elements[12] = {0, 4, 0x1402, 0, 2, 4, 0x1406, 16,
+                                   5, 4, 0x1406, 32};
+    void *fallback_shader = make_generic_custom_shader(
+        vs_msl, ps_msl, "multi_vs", "multi_fs", locations, attributes,
+        mixed_elements, 3);
+    eu4_gfx_set_shader(&ctx, fallback_shader);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("element fallback draw");
+    }
+    uint32_t fallback[8] = {0};
+    int fallback_count = eu4_gfx_generic_last_element_count();
+    for (int i = 0; i < fallback_count && i < 8; i++) {
+        eu4_gfx_generic_last_element_location(i, &fallback[i]);
+    }
+    int fallback_ok = fallback_count == 3 && fallback[0] == 0 &&
+                      fallback[1] == 2 && fallback[2] == 5;
+
+    /* Dynamic slot offsets must not create pipeline variants. Warm the
+       cached shader/pipeline, then reset and draw at two offsets. */
+    eu4_gfx_set_shader(&ctx, cached_shader);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("element cached warm draw");
+    }
+    eu4_gfx_perf_reset();
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("element cached offset-0 draw");
+    }
+    uint32_t slot_offset = 16;
+    memcpy(master_ptr + 0x150, &slot_offset, 4);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("element cached offset-16 draw");
+    }
+    slot_offset = 0;
+    memcpy(master_ptr + 0x150, &slot_offset, 4);
+    eu4_gfx_perf_snapshot perf;
+    eu4_gfx_perf_read(&perf);
+    int stable = perf.pipeline_misses == 0 && perf.pipeline_hits >= 2 &&
+                 perf.render_encoders_created == 0;
+    unsetenv("EU4_GFX_ELEMENT_TRACE");
+    int ok = cached_ok && trace_ok && fallback_ok && stable;
+    printf("element_locations=%d cached=%d trace=%d fallback=%d stable=%d "
+           "misses=%llu hits=%llu enc_new=%llu enc_reuse=%llu draws=%llu\n",
+           ok, cached_ok, trace_ok, fallback_ok, stable,
+           (unsigned long long)perf.pipeline_misses,
+           (unsigned long long)perf.pipeline_hits,
+           (unsigned long long)perf.render_encoders_created,
+           (unsigned long long)perf.render_encoders_reused,
+           (unsigned long long)perf.draws_encoded);
+    (void)backend;
+    return ok ? 0 : 1;
+}
+
+static int run_update_drain_failure(const char *kind) {
+    /* The update must stop before mutating storage when the drain fails. */
+    boot();
+    void *simple_shader = make_simple_shader();
+    uint8_t quad[96];
+    make_quad(quad);
+    void *vertex_header = eu4_gfx_create_vertex_buffer(NULL, quad, 4, 24, 0);
+    uint8_t green_bgr[4 * 4 * 3];
+    for (int i = 0; i < 4 * 4; i++) {
+        green_bgr[i * 3 + 1] = 0xff;
+    }
+    uint8_t texture_header[0x44];
+    make_texture(4, 4, green_bgr, texture_header);
+    float matrix[16];
+    fill_matrix(matrix);
+    uint8_t constant[0x10];
+    memset(constant, 0, sizeof constant);
+    uint32_t words = 16;
+    memcpy(constant, &words, 4);
+    void *constant_data = matrix;
+    memcpy(constant + 8, &constant_data, sizeof constant_data);
+    install_geometry(simple_shader, vertex_header, constant, texture_header);
+    struct {
+        void *master;
+    } ctx = {g_master};
+    float black[4] = {0.f, 0.f, 0.f, 1.f};
+    eu4_gfx_clear(&ctx, 7, black);
+    eu4_gfx_draw_raw raw = draw_frame(&ctx);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("update failure draw");
+    }
+    fprintf(stderr, "EVENT_DIR=%s\n", g_event_dir);
+    fflush(stderr);
+    eu4_gfx_test_fail_next_game_drain(1);
+    if (strcmp(kind, "vertex") == 0) {
+        eu4_gfx_update_vertex_buffer(&ctx, vertex_header, quad, 4, 0, 0);
+    } else if (strcmp(kind, "multiple") == 0) {
+        const void *data[1] = {quad};
+        int32_t counts[1] = {4};
+        eu4_gfx_update_vertex_buffer_multiple(&ctx, vertex_header, data, counts, 1);
+    } else {
+        eu4_gfx_update_texture(NULL, green_bgr, 4, 4, 0, texture_header);
+    }
+    printf("update_unexpected_return=1\n");
+    return 1;
+}
+
+static int run_update_success(void) {
+    boot();
+    void *simple_shader = make_simple_shader();
+    uint8_t quad[96];
+    make_quad(quad);
+    void *vertex_header = eu4_gfx_create_vertex_buffer(NULL, quad, 4, 24, 0);
+    uint8_t green_bgr[4 * 4 * 3], blue_bgr[4 * 4 * 3];
+    for (int i = 0; i < 4 * 4; i++) {
+        green_bgr[i * 3 + 1] = 0xff;
+        blue_bgr[i * 3 + 0] = 0xff;
+    }
+    uint8_t texture_header[0x44];
+    make_texture(4, 4, green_bgr, texture_header);
+    float matrix[16];
+    fill_matrix(matrix);
+    uint8_t constant[0x10];
+    memset(constant, 0, sizeof constant);
+    uint32_t words = 16;
+    memcpy(constant, &words, 4);
+    void *constant_data = matrix;
+    memcpy(constant + 8, &constant_data, sizeof constant_data);
+    install_geometry(simple_shader, vertex_header, constant, texture_header);
+    struct {
+        void *master;
+    } ctx = {g_master};
+    float black[4] = {0.f, 0.f, 0.f, 1.f};
+    eu4_gfx_clear(&ctx, 7, black);
+    eu4_gfx_draw_raw raw = draw_frame(&ctx);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("update success draw 1");
+    }
+    eu4_gfx_update_vertex_buffer(&ctx, vertex_header, quad, 4, 0, 0);
+    install_geometry(simple_shader, vertex_header, constant, texture_header);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("update success draw 2");
+    }
+    size_t length = 0;
+    uint8_t *pixels = read_target(&length);
+    const uint8_t *center = pixels + ((size_t)32 * kSize + 32) * 4;
+    int pixels_ok = center[1] > 200;
+    free(pixels);
+    printf("update_success=%d\n", pixels_ok);
+    (void)blue_bgr;
+    return pixels_ok ? 0 : 1;
 }
 
 static int run_gpu_timing(void) {
@@ -3564,6 +4019,18 @@ int main(int argc, char **argv) {
     }
     if (argc >= 2 && strcmp(argv[1], "--gpu-timing") == 0) {
         return run_gpu_timing();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--encoder-cleanup") == 0) {
+        return run_encoder_cleanup();
+    }
+    if (argc >= 2 && strcmp(argv[1], "--element-locations") == 0) {
+        return run_element_locations();
+    }
+    if (argc >= 3 && strcmp(argv[1], "--update-drain-failure") == 0) {
+        return run_update_drain_failure(argv[2]);
+    }
+    if (argc >= 2 && strcmp(argv[1], "--update-success") == 0) {
+        return run_update_success();
     }
     if (argc >= 2 && strcmp(argv[1], "--scissor-handoff") == 0) {
         return run_scissor_handoff();

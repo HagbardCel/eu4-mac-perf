@@ -500,8 +500,13 @@ static uint8_t *expand_bgr(const uint8_t *bgr, uint32_t width, uint32_t height);
 
 void eu4_gfx_update_texture(void *ignored, const void *pixels, uint32_t width,
                             uint32_t height, uint32_t flags, void *header) {
+    const void *caller = __builtin_return_address(0);
+    eu4_gfx_require_thread("_GfxUpdateTexture", caller);
     /* replaceRegion mutates storage a queued draw may still sample. */
-    (void)eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_RESOURCE_UPDATE, 1);
+    if (eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_RESOURCE_UPDATE, 1) !=
+        EU4_GFX_CLEAR_OK) {
+        eu4_gfx_stop("_GfxUpdateTexture", "gpu_failed", caller);
+    }
     (void)ignored;
     (void)flags;
     if (header == NULL) {

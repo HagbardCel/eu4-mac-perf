@@ -180,6 +180,50 @@ class GfxLiveDrawTests(unittest.TestCase):
                       "superseded=1", "abandoned=1", "active=1"):
             self.assertIn(token, ran.stdout)
 
+    def test_failed_generic_draw_closes_only_its_pass(self) -> None:
+        ran = self._run("--encoder-cleanup")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("encoder_cleanup=1", ran.stdout)
+        for token in ("failed=1", "preserved=1", "presented=1", "pixels=1"):
+            self.assertIn(token, ran.stdout)
+
+    def test_cached_layout_preserves_attribute_locations(self) -> None:
+        ran = self._run("--element-locations")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("element_locations=1", ran.stdout)
+        for token in ("cached=1", "trace=1", "fallback=1", "stable=1"):
+            self.assertIn(token, ran.stdout)
+
+    def test_resource_update_drain_success(self) -> None:
+        ran = self._run("--update-success")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("update_success=1", ran.stdout)
+
+    def _assert_update_drain_failure(self, kind: str, symbol: str) -> None:
+        ran = self._run("--update-drain-failure", kind)
+        self.assertEqual(ran.returncode, 2, ran.stderr)
+        self.assertNotIn("update_unexpected_return=1", ran.stdout)
+        marker = "EVENT_DIR="
+        line = next(
+            (part for part in ran.stderr.splitlines() if marker in part), ""
+        )
+        self.assertIn(marker, line)
+        directory = Path(line.split(marker, 1)[1].strip())
+        stop = json.loads((directory / "stop.json").read_text())
+        self.assertEqual(stop["symbol"], symbol)
+        self.assertEqual(stop["reason"], "gpu_failed")
+
+    def test_vertex_update_fails_closed_on_drain_error(self) -> None:
+        self._assert_update_drain_failure("vertex", "_GfxUpdateVertexBuffer")
+
+    def test_multi_update_fails_closed_on_drain_error(self) -> None:
+        self._assert_update_drain_failure(
+            "multiple", "_GfxUpdateVertexBufferMultiple"
+        )
+
+    def test_texture_update_fails_closed_on_drain_error(self) -> None:
+        self._assert_update_drain_failure("texture", "_GfxUpdateTexture")
+
     def test_gpu_timing_is_counted_once_per_command_buffer(self) -> None:
         ran = self._run("--gpu-timing")
         self.assertEqual(ran.returncode, 0, ran.stderr)

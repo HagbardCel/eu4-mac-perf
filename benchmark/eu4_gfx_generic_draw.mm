@@ -67,7 +67,21 @@ typedef struct {
     int converted;
 } eu4_logged_element;
 static eu4_logged_element g_logged_elements[EU4_GFX_MAX_TRACKED_ATTRIBUTES];
+
 static int g_logged_element_count;
+
+int eu4_gfx_generic_last_element_count(void) {
+    return g_logged_element_count;
+}
+
+int eu4_gfx_generic_last_element_location(int index, uint32_t *location) {
+    if (index < 0 || index >= g_logged_element_count || location == NULL) {
+        return -1;
+    }
+    *location = g_logged_elements[index].location;
+    return 0;
+}
+
 
 /* Storage width of the Metal vertex format used by the descriptor. Converted
    integer attributes use the FloatN format, so their effective width differs
@@ -607,6 +621,7 @@ typedef struct {
     uint32_t divisor;
     uint32_t gl_type;
     uint32_t size;
+    uint32_t location;
     uint8_t normalized;
     uint8_t constant;
 } eu4_layout_binding;
@@ -614,6 +629,7 @@ typedef struct {
 @interface EU4VertexLayout : NSObject {
 @public
     MTLVertexDescriptor *descriptor;
+    uint64_t stable_id;
     eu4_layout_binding bindings[EU4_GFX_MAX_TRACKED_ATTRIBUTES];
     int binding_count;
 }
@@ -765,6 +781,7 @@ static EU4VertexLayout *cached_vertex_layout(void *shader, const uint8_t *master
         binding->divisor = divisor;
         binding->gl_type = type;
         binding->size = size;
+        binding->location = location;
         binding->normalized = normalized;
         binding->constant = 0;
         [covered addObject:@(location)];
@@ -791,8 +808,10 @@ static EU4VertexLayout *cached_vertex_layout(void *shader, const uint8_t *master
         eu4_layout_binding *binding = &layout->bindings[layout->binding_count++];
         memset(binding, 0, sizeof *binding);
         binding->buffer_index = buffer_index;
+        binding->location = (uint32_t)location.unsignedIntegerValue;
         binding->constant = 1;
     }
+    layout->stable_id = hash;
     if (cache.count >= 256) {
         [cache removeAllObjects];
     }
@@ -832,6 +851,7 @@ static BOOL prepare_cached_bindings(EU4VertexLayout *layout, const uint8_t *mast
         if (g_logged_element_count < EU4_GFX_MAX_TRACKED_ATTRIBUTES) {
             eu4_logged_element *logged =
                 &g_logged_elements[g_logged_element_count++];
+            logged->location = binding->location;
             logged->format = binding->format;
             logged->divisor = binding->divisor;
             logged->slot = binding->slot;
@@ -1250,6 +1270,31 @@ static id<MTLDepthStencilState> depth_state_for(id<MTLDevice> device,
     return state;
 }
 
+/* MTLVertexDescriptor.hash is not stable across lookups of the same object.
+   Pipeline identity therefore uses this explicit, immutable field hash. */
+static uint64_t stable_descriptor_id(MTLVertexDescriptor *descriptor) {
+    uint64_t hash = 14695981039346656037ULL;
+    for (NSUInteger i = 0; i < 31; i++) {
+        MTLVertexAttributeDescriptor *attribute = descriptor.attributes[i];
+        MTLVertexBufferLayoutDescriptor *layout = descriptor.layouts[i];
+        uint64_t values[6] = {
+            (uint64_t)i,
+            (uint64_t)attribute.format,
+            (uint64_t)attribute.offset,
+            (uint64_t)attribute.bufferIndex,
+            ((uint64_t)layout.stride << 16) |
+                ((uint64_t)layout.stepFunction << 8) | (uint64_t)layout.stepRate,
+            0};
+        for (int v = 0; v < 5; v++) {
+            for (int b = 0; b < 8; b++) {
+                hash ^= (uint8_t)(values[v] >> (b * 8));
+                hash *= 1099511628211ULL;
+            }
+        }
+    }
+    return hash;
+}
+
 static id<MTLRenderPipelineState> pipeline_for(EU4GfxPipelineKey *unused,
                                                id<MTLDevice> device,
                                                id<MTLFunction> vertex,
@@ -1259,7 +1304,8 @@ static id<MTLRenderPipelineState> pipeline_for(EU4GfxPipelineKey *unused,
                                                MTLPixelFormat depth_format,
                                                const uint8_t *blend_snapshot,
                                                BOOL depth_test, BOOL depth_write,
-                                               uint32_t depth_compare) {
+                                               uint32_t depth_compare,
+                                               uint64_t descriptor_id) {
     (void)unused;
     static NSMutableDictionary *cache;
     static id<MTLDevice> cached_device;
@@ -1275,12 +1321,12 @@ static id<MTLRenderPipelineState> pipeline_for(EU4GfxPipelineKey *unused,
     uint32_t dst_a = load_u32(blend_snapshot, 0x14);
     uint32_t equation_a = load_u32(blend_snapshot, 0x18);
     uint32_t color_mask = load_u32(blend_snapshot, 0x20);
-    NSString *key = [NSString stringWithFormat:@"%p-%p-%lu-%lu-%u-%u-%u-%u-%u-%u-%u-%u-%d-%d-%u-%u",
+    NSString *key = [NSString stringWithFormat:@"%p-%p-%lu-%lu-%u-%u-%u-%u-%u-%u-%u-%u-%d-%d-%llu-%u",
                      (__bridge void *)vertex, (__bridge void *)fragment,
                      (unsigned long)color_format, (unsigned long)depth_format, enabled, src, dst, equation,
                      src_a, dst_a, equation_a, depth_test ? 1u : 0u,
                      depth_write ? 1 : 0, (unsigned)depth_compare,
-                     (unsigned)descriptor.hash, color_mask];
+                     (unsigned long long)descriptor_id, color_mask];
     static uint64_t pipeline_hits;
     static uint64_t pipeline_misses;
     id<MTLRenderPipelineState> pipeline = cache[key];
@@ -1448,7 +1494,8 @@ void *eu4_gfx_generic_pipeline_test(void *device, void *vertex, void *fragment,
         (__bridge id<MTLFunction>)fragment,
         (__bridge MTLVertexDescriptor *)vertex_descriptor,
         (MTLPixelFormat)color_format, MTLPixelFormatInvalid, blend_snapshot,
-        NO, NO, 0x0203);
+        NO, NO, 0x0203,
+        stable_descriptor_id((__bridge MTLVertexDescriptor *)vertex_descriptor));
 }
 
 int eu4_gfx_generic_draw_supported(const void *immediate_context,
@@ -1934,7 +1981,9 @@ static int generic_draw_encode_impl(const void *immediate_context,
                      target.pixelFormat,
                      depth_texture != nil ? MTLPixelFormatDepth32Float
                                           : MTLPixelFormatInvalid,
-                     blend_snapshot, depth_test, depth_write, depth_compare);
+                     blend_snapshot, depth_test, depth_write, depth_compare,
+                     layout != nil ? layout->stable_id
+                                   : stable_descriptor_id(descriptor));
     if (pipeline == nil) {
         fail(reason, reason_capacity, "generic pipeline creation failed");
         return 0;
@@ -2096,6 +2145,7 @@ static int generic_draw_encode_impl(const void *immediate_context,
         uint8_t sprite_uniform[EU4_GFX_SPRITE_CONSTANT_BYTES];
         if (eu4_gfx_sprite_uniform_data(master, sprite_uniform,
                                         sizeof sprite_uniform) != 0) {
+            end_encoder(encoder, batch_owned);
             fail(reason, reason_capacity,
                  "synthetic stage has no engine uniform block");
             return 0;

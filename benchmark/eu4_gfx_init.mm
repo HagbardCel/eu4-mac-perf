@@ -1943,7 +1943,9 @@ eu4_gfx_clear_status eu4_gfx_batch_flush(void *master, int reason, int drain) {
         master != NULL ? (__bridge EU4GfxBackend *)backend_raw_for_master(master)
                        : batch_backend();
     if (backend == nil) {
-        return EU4_GFX_CLEAR_UNSUPPORTED;
+        /* No live backend means there is no queued GPU work to synchronize;
+           resource lookup still fails closed in the caller. */
+        return EU4_GFX_CLEAR_OK;
     }
     batch_commit(backend, reason, 1);
     if (drain && backend.pendingGameCommand != nil) {

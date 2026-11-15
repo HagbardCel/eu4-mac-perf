@@ -265,10 +265,14 @@ void *eu4_gfx_create_vertex_buffer(void *ignored, const void *data, int32_t coun
 /* Offset is r8d. The sealed body copies r8d, then zero-extends it as the subdata offset. */
 void eu4_gfx_update_vertex_buffer(void *handle, void *header, const void *data, int32_t count,
                                   uint32_t offset, int32_t partial) {
-    /* In-place shared-storage writes must not race draws still in flight. */
-    (void)eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_RESOURCE_UPDATE, 1);
     const void *caller = __builtin_return_address(0);
     require_thread("_GfxUpdateVertexBuffer", caller);
+    /* In-place shared-storage writes must not race draws still in flight. A
+       failed drain means the storage may still be GPU-owned; do not write. */
+    if (eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_RESOURCE_UPDATE, 1) !=
+        EU4_GFX_CLEAR_OK) {
+        eu4_gfx_stop("_GfxUpdateVertexBuffer", "gpu_failed", caller);
+    }
     EU4VertexBuffer *entry = find_entry(header);
     if (entry == nil) {
         eu4_gfx_stop("_GfxUpdateVertexBuffer", "missing", caller);
@@ -335,11 +339,14 @@ static void record_disabled_attribs(void *master, const char *symbol, const void
 void eu4_gfx_update_vertex_buffer_multiple(void *handle, void *header,
                                            const void *const *data, const int32_t *counts,
                                            int32_t ranges) {
-    /* In-place shared-storage writes must not race draws still in flight. */
-    (void)eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_RESOURCE_UPDATE, 1);
     const void *caller = __builtin_return_address(0);
     const char *symbol = "_GfxUpdateVertexBufferMultiple";
     require_thread(symbol, caller);
+    /* In-place shared-storage writes must not race draws still in flight. */
+    if (eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_RESOURCE_UPDATE, 1) !=
+        EU4_GFX_CLEAR_OK) {
+        eu4_gfx_stop(symbol, "gpu_failed", caller);
+    }
     if (header == NULL) {
         eu4_gfx_stop(symbol, "missing", caller);
     }
