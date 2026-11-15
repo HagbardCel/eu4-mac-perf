@@ -160,9 +160,10 @@ Verification at the follow-up head:
 - Dependent suites (dual-run, qualification, case, offline, evidence, DSH
   bridge/profile/efficiency): **183 tests, OK**.
 - Node plugin: **9/9 pass**.
-- Full suite: **3109 tests, 12 failures, 0 errors, 26 skipped**; 11 are the
-  pre-existing `test_trace_tr3` environmental failures and one is the known
-  timing-flaky `test_gfx_session.test_only_owned_process_is_terminated`, which
-  passes standalone. No genuine candidate-only regression.
+- Full suite at the follow-up head: **3109 tests, 11 failures, 0 errors,
+  26 skipped**. All 11 are the pre-existing `test_trace_tr3` environmental
+  failures; the same module has the identical 11 failures at base `a655fc1`.
+  No candidate-only regression. (`test_gfx_session` passes standalone; an
+  earlier run saw its known timing flake once.)
 - Portable PNG content test uses a standard-library reader; Pillow is not
   required.
