@@ -114,12 +114,12 @@ harness on top of PR #189:
 | 4 | `infra/pr4-first-divergence` | cross-API semantic/local resource comparison, ten synthetic historical regressions, bounded flight recorder, self-contained offline case package with analysis and replay |
 | 5 | `infra/pr5-agent-tools` | `eu4_re_query` over existing extracts, one JSON tool core for the seven agent tools, native DSH plugin, efficiency metrics, operational defaults |
 
-Evidence: [dual-process feasibility](infra/dual-process-feasibility.md),
-[dual-process campaigns](infra/dual-process-campaigns.md),
-[alignment and comparison](infra/frame-alignment-and-comparison.md),
-[first divergence and offline cases](infra/first-divergence-and-offline-cases.md),
-[agent integration and efficiency](infra/agent-integration-and-efficiency.md),
-[diagnostic integrity audit](infra/diagnostic-integrity-audit.md).
+Evidence: [dual-process feasibility](../analysis/infra/dual-process-feasibility.md),
+[dual-process campaigns](../analysis/infra/dual-process-campaigns.md),
+[alignment and comparison](../analysis/infra/frame-alignment-and-comparison.md),
+[first divergence and offline cases](../analysis/infra/first-divergence-and-offline-cases.md),
+[agent integration and efficiency](../analysis/infra/agent-integration-and-efficiency.md),
+[diagnostic integrity audit](../analysis/infra/diagnostic-integrity-audit.md).
 
 **Established.** Two genuine pinned EU4 processes (authentic OpenGL and
 reconstructed Metal) ran concurrently twice for 20 s with on-screen windows and
@@ -168,7 +168,7 @@ Lockstep timeouts invalidate synchronization. GL readback no longer consumes
 pending engine errors. Ring dumps retain the selected frame's immutable
 metadata, and capture requests use request IDs with explicit acknowledgements.
 Region-specific policies (including text) now affect acceptance. See
-[qualification contract](infra/qualification-contract.md). The first GL/GL
+[qualification contract](../analysis/infra/qualification-contract.md). The first GL/GL
 consistency experiment (same Venice save, two processes) produced 20 pairs but
 zero aligned comparisons: draw counts were 373 vs 361 and the caller signatures
 differed. The save keeps running, so the processes are not at the same update;
