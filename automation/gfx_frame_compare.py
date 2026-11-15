@@ -587,22 +587,6 @@ def compare_temporal(
     _require_numpy()
     if max_pairs < 1:
         raise CompareError("bound", "max_pairs must be >= 1")
-    if not reference_frames or not candidate_frames:
-        return {
-            "schema": TEMPORAL_SCHEMA,
-            "status": "incomplete",
-            "reason": "both roles need at least one preserved frame",
-            "pairs": [],
-            "comparisons": [],
-            "completion": {
-                "requested": 0, "completed": 0, "skipped": 0,
-                "unavailable": 0, "cross_process_complete": False,
-                "temporal_variability_complete": False,
-            },
-            "truncated": {"pairs": 0, "max_pairs": max_pairs},
-            "overlap": None,
-        }
-
     def ordered(rows: list[dict]) -> list[dict]:
         return sorted(
             (row for row in rows if isinstance(row, dict)

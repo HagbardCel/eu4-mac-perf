@@ -1049,10 +1049,11 @@ def _frame_meta_entries(run: Path, role: str) -> tuple[dict[int, dict], list[str
             index = int(path.stem.rsplit("-", 1)[-1])
         except ValueError:
             continue
+        # Do not read or hash every payload while merely enumerating
+        # candidates; the selected window is verified during decoding.
         metas.setdefault(index, {
             "frame_index": index,
             "raw_file": str(path),
-            "sha256": _sha256_file(path),
         })
     return metas, notes
 
@@ -1073,31 +1074,41 @@ def _frame_candidates(run: Path, role: str, meta: dict) -> list[Path]:
 
 TEMPORAL_MAX_WINDOW = 4
 TEMPORAL_MAX_COMPARISONS = 12
+TEMPORAL_MAX_SELECTION_PROBES = 16
 
 
 def _decode_frame_meta(run: Path, role: str, index: int,
-                       meta: dict) -> dict | None:
+                       meta: dict) -> tuple[dict | None, str]:
     path = next((item for item in _frame_candidates(run, role, meta)
                  if item.is_file()), None)
     if path is None:
-        return None
+        return None, "payload file is absent"
     try:
         payload = path.read_bytes()
+    except OSError as exc:
+        return None, f"payload is unreadable: {exc}"
+    declared = meta.get("sha256")
+    if declared is not None:
+        if not isinstance(declared, str) or len(declared) != 64:
+            return None, "declared payload digest is malformed"
+        if hashlib.sha256(payload).hexdigest() != declared.lower():
+            return None, "payload digest does not match its declaration"
+    try:
         width = int(meta.get("width") or 0)
         height = int(meta.get("height") or 0)
         if width <= 0 or height <= 0:
-            return None
+            return None, "frame extent is absent or invalid"
         image = gfx_frame_compare.decode_frame(
             payload, width, height,
             origin=str(meta.get("origin") or "top_left"),
             pixel_format=str(meta.get("pixel_format") or "BGRA8"),
         )
-    except (OSError, ValueError, TypeError, gfx_frame_compare.CompareError):
-        return None
+    except (OSError, ValueError, TypeError, gfx_frame_compare.CompareError) as exc:
+        return None, f"payload cannot be decoded: {exc}"
     return {
         "frame_index": index,
         "image": image,
-        "sha256": meta.get("sha256"),
+        "sha256": declared,
         "identity": {
             key: meta.get(key) for key in (
                 "backend", "game_day", "update_identity", "caller_signature",
@@ -1105,11 +1116,12 @@ def _decode_frame_meta(run: Path, role: str, index: int,
             if meta.get(key) is not None
         },
         "path": str(path),
-    }
+    }, ""
 
 
-def _load_preserved_frames(run: Path, role: str,
-                           indices: list[int] | None = None) -> tuple[list[dict], list[int]]:
+def _load_preserved_frames(
+    run: Path, role: str, indices: list[int] | None = None,
+) -> tuple[list[dict], list[int], list[dict]]:
     """Index metadata cheaply and decode only the requested frame indices."""
     metas, _notes = _frame_meta_entries(run, role)
     if indices is None:
@@ -1118,25 +1130,49 @@ def _load_preserved_frames(run: Path, role: str,
         selected = sorted({int(index) for index in indices})
     frames: list[dict] = []
     missing: list[int] = []
+    problems: list[dict] = []
     for index in selected:
         meta = metas.get(index)
         if meta is None:
             missing.append(index)
+            problems.append({"role": role, "frame_index": index,
+                             "reason": "no preserved metadata"})
             continue
-        frame = _decode_frame_meta(run, role, index, meta)
+        frame, problem = _decode_frame_meta(run, role, index, meta)
         if frame is None:
             missing.append(index)
+            problems.append({"role": role, "frame_index": index,
+                             "reason": problem})
             continue
         frames.append(frame)
-    return frames, sorted(set(missing))
+    return frames, sorted(set(missing)), problems
 
 
-def _first_preserved_pair(frames: list[dict], window: int) -> list[dict]:
-    ordered = {int(row["frame_index"]): row for row in frames}
-    for index in sorted(ordered):
-        if all(number in ordered for number in range(index, index + window + 1)):
-            return [ordered[number] for number in range(index, index + window + 1)]
-    return []
+def _payload_available(run: Path, role: str, index: int, meta: dict) -> bool:
+    """Cheap availability probe: the selected payload exists and fits metadata.
+
+    This deliberately does not decode or hash the payload; decoding the chosen
+    window is the authoritative check.  It prevents an automatic selection from
+    preferring a metadata record whose payload is absent.
+    """
+    path = next((item for item in _frame_candidates(run, role, meta)
+                 if item.is_file()), None)
+    if path is None:
+        return False
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return False
+    if size <= 0:
+        return False
+    raw_bytes = meta.get("raw_bytes")
+    if type(raw_bytes) is int and raw_bytes > 0:
+        return size == raw_bytes
+    width = meta.get("width")
+    height = meta.get("height")
+    if type(width) is int and width > 0 and type(height) is int and height > 0:
+        return size == width * height * 4
+    return True
 
 
 def _temporal_report(run: Path, pair: dict | None,
@@ -1166,38 +1202,99 @@ def _temporal_report(run: Path, pair: dict | None,
         }
     explicit_reference = getattr(args, "reference_frame", None) is not None
     explicit_candidate = getattr(args, "candidate_frame", None) is not None
-    selected_reference = getattr(args, "reference_frame", None)
-    selected_candidate = getattr(args, "candidate_frame", None)
-    if selected_reference is None:
-        selected_reference = (pair or {}).get("frame_index")
-    if selected_candidate is None:
-        selected_candidate = (pair or {}).get("candidate_frame_index")
+    requested_reference = getattr(args, "reference_frame", None)
+    requested_candidate = getattr(args, "candidate_frame", None)
+    if requested_reference is None:
+        requested_reference = (pair or {}).get("frame_index")
+    if requested_candidate is None:
+        requested_candidate = (pair or {}).get("candidate_frame_index")
 
-    def full_window(index, available: list[int]) -> bool:
-        return type(index) is int and all(
-            index + offset in available for offset in range(window + 1))
+    def window_indices(start) -> list[int]:
+        return ([start + offset for offset in range(window + 1)]
+                if type(start) is int else [])
 
-    # Without an explicit index, prefer the pair's own frame (or the first
-    # available frame) and only fall back to a complete window when that frame
-    # is absent.  A partial window around the recorded pair is more useful than
-    # silently moving the analysis elsewhere, and is reported as incomplete.
-    if not explicit_reference and selected_reference not in reference_available:
-        selected_reference = next(
-            (index for index in reference_available
-             if full_window(index, reference_available)),
-            reference_available[0] if reference_available else None)
-    if not explicit_candidate and selected_candidate not in candidate_available:
-        selected_candidate = next(
-            (index for index in candidate_available
-             if full_window(index, candidate_available)),
-            candidate_available[0] if candidate_available else None)
+    def select(role: str, metas: dict[int, dict], preferred,
+               explicit: bool) -> dict:
+        available = sorted(metas)
+        if explicit:
+            indices = window_indices(preferred)
+            frames, missing, problems = _load_preserved_frames(
+                run, role, indices)
+            return {
+                "start": preferred,
+                "indices": indices,
+                "frames": frames,
+                "missing": missing,
+                "problems": problems,
+                "source": "explicit",
+                "fallback": False,
+                "probes": 0,
+                "probe_problems": [],
+            }
+        starts: list[int] = []
+        if type(preferred) is int and preferred in metas:
+            starts.append(preferred)
+        starts.extend(index for index in available if index not in starts)
+        probes = 0
+        probe_problems: list[dict] = []
+        for start in starts[:TEMPORAL_MAX_SELECTION_PROBES]:
+            indices = window_indices(start)
+            if not all(index in metas for index in indices):
+                continue
+            if not all(_payload_available(run, role, index, metas[index])
+                       for index in indices):
+                continue
+            probes += 1
+            frames, missing, problems = _load_preserved_frames(
+                run, role, indices)
+            probe_problems.extend(problems)
+            if not missing and not problems:
+                fallback = type(preferred) is int and start != preferred
+                return {
+                    "start": start,
+                    "indices": indices,
+                    "frames": frames,
+                    "missing": missing,
+                    "problems": problems,
+                    "source": ("recorded_pair" if start == preferred
+                               else "fallback_window" if type(preferred) is int
+                               else "first_usable"),
+                    "fallback": fallback,
+                    "probes": probes,
+                    "probe_problems": probe_problems,
+                }
+        # No complete usable window.  Keep the recorded pair (or the first
+        # available index) and report exactly why it is incomplete.
+        start = (preferred if type(preferred) is int and preferred in metas
+                 else available[0] if available else None)
+        indices = window_indices(start)
+        frames, missing, problems = _load_preserved_frames(run, role, indices)
+        return {
+            "start": start,
+            "indices": indices,
+            "frames": frames,
+            "missing": missing,
+            "problems": problems,
+            "source": "first_available",
+            "fallback": type(preferred) is int and start != preferred,
+            "probes": probes,
+            "probe_problems": probe_problems,
+        }
 
-    reference_indices = ([selected_reference + offset
-                          for offset in range(window + 1)]
-                         if type(selected_reference) is int else [])
-    candidate_indices = ([selected_candidate + offset
-                          for offset in range(window + 1)]
-                         if type(selected_candidate) is int else [])
+    reference_selection = select("reference", ref_metas, requested_reference,
+                                explicit_reference)
+    candidate_selection = select("candidate", cand_metas, requested_candidate,
+                                 explicit_candidate)
+    selected_reference = reference_selection["start"]
+    selected_candidate = candidate_selection["start"]
+    reference_indices = reference_selection["indices"]
+    candidate_indices = candidate_selection["indices"]
+    reference_frames = reference_selection["frames"]
+    candidate_frames = candidate_selection["frames"]
+    reference_missing = reference_selection["missing"]
+    candidate_missing = candidate_selection["missing"]
+    reference_problems = reference_selection["problems"]
+    candidate_problems = candidate_selection["problems"]
     reference_pairs = ([(index, index + 1)
                         for index in range(selected_reference,
                                            selected_reference + window)]
@@ -1225,10 +1322,6 @@ def _temporal_report(run: Path, pair: dict | None,
             },
         }
 
-    reference_frames, reference_missing = _load_preserved_frames(
-        run, "reference", reference_indices)
-    candidate_frames, candidate_missing = _load_preserved_frames(
-        run, "candidate", candidate_indices)
     artifacts = None
     if getattr(args, "temporal_artifacts", False):
         directory = getattr(args, "temporal_artifact_dir", None)
@@ -1246,33 +1339,6 @@ def _temporal_report(run: Path, pair: dict | None,
                       max(1, requested_comparisons)),
         artifacts=artifacts,
     )
-    if "comparisons" not in report:
-        # compare_temporal's empty-input guard still reports every requested
-        # comparison as unavailable so completion is explicit.
-        entries = [
-            {"relation": relation, "reference_frame": left,
-             "candidate_frame": right, "status": "unavailable",
-             "reason": "preserved full-resolution frames are unavailable"}
-            for relation, pairs in (
-                ("reference_temporal", reference_pairs),
-                ("candidate_temporal", candidate_pairs),
-                ("cross_process", cross_pairs),
-            )
-            for left, right in pairs
-        ]
-        report["comparisons"] = entries
-        report["unavailable"] = entries
-        report["skipped"] = []
-        report["completion"] = {
-            "requested": len(entries), "completed": 0,
-            "skipped": 0, "unavailable": len(entries),
-            "cross_process_complete": False,
-            "temporal_variability_complete": False,
-            "cross_process_requested": bool(cross_pairs),
-        }
-        report["truncated"] = {"pairs": 0,
-                               "max_pairs": TEMPORAL_MAX_COMPARISONS,
-                               "cross_process": False}
     report["selected"] = {
         "reference": selected_reference,
         "candidate": selected_candidate,
@@ -1281,7 +1347,29 @@ def _temporal_report(run: Path, pair: dict | None,
             "reference": explicit_reference,
             "candidate": explicit_candidate,
         },
+        "requested_pair": {
+            "reference": requested_reference,
+            "candidate": requested_candidate,
+        },
+        "source": {
+            "reference": reference_selection["source"],
+            "candidate": candidate_selection["source"],
+        },
+        "fallback": {
+            "reference": reference_selection["fallback"],
+            "candidate": candidate_selection["fallback"],
+        },
+        "probes": {
+            "reference": reference_selection["probes"],
+            "candidate": candidate_selection["probes"],
+        },
+        "indices": {
+            "reference": reference_indices,
+            "candidate": candidate_indices,
+        },
     }
+    report["fallback_used"] = bool(
+        reference_selection["fallback"] or candidate_selection["fallback"])
     report["preserved"] = {
         "reference": reference_available,
         "candidate": candidate_available,
@@ -1294,6 +1382,10 @@ def _temporal_report(run: Path, pair: dict | None,
         "requested_candidate": [index for index in candidate_indices
                                 if index not in cand_metas],
     }
+    report["invalid"] = (
+        reference_problems + candidate_problems
+        + reference_selection.get("probe_problems", [])
+        + candidate_selection.get("probe_problems", []))
     report["bounds"] = {
         "max_window": TEMPORAL_MAX_WINDOW,
         "max_comparisons": TEMPORAL_MAX_COMPARISONS,

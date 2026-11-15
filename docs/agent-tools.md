@@ -277,6 +277,14 @@ in the response; an explicitly requested missing index is reported as missing,
 never silently replaced by a different pair. Only the selected frames and their
 required neighbours are decoded.
 
+Without explicit indices, the selector prefers the recorded pair only when its
+payload files are present and plausibly sized; otherwise it probes candidate
+windows incrementally (bounded) and reports `selected.source`,
+`selected.fallback` and `fallback_used`. A payload is decoded and, when its
+metadata declares a digest, verified before comparison; a digest mismatch or
+undecodable payload is reported in `invalid` and cannot produce completed
+statistics. Metadata enumeration never hashes unselected payloads.
+
 This recovers the recorded Experiment A findings without a private script:
 
 | Pair | Mismatched fraction |

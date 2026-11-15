@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -196,7 +197,7 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertTrue(value["ok"])
         self.assertEqual(value["result"]["classification"], "incomplete")
-        self.assertFalse(value["result"]["qualified"])
+        self.assertFalse(value["result"]["qualification"]["qualified"])
 
     def test_independent_replay_invalid_checkpoint_is_not_ok(self):
         from types import SimpleNamespace
@@ -617,12 +618,14 @@ class DiagnosticSurfaceTests(ToolTests):
                 found = {}
                 for index in indices:
                     path = directory / f"frame-{index}.bgra"
-                    path.write_bytes(images[(role, index)].tobytes())
+                    payload = images[(role, index)].tobytes()
+                    path.write_bytes(payload)
+                    digest = hashlib.sha256(payload).hexdigest()
                     meta = {
                         "schema": "gfx-frame-dump/v1", "frame_index": index,
                         "raw_file": str(path), "width": 8, "height": 6,
                         "origin": "top_left", "pixel_format": "RGBA8",
-                        "sha256": f"{role}{index}" + "0" * 60,
+                        "sha256": digest,
                         "caller_signature": "0xabc", "draws": 2,
                         "game_day": 56456976,
                         "update_identity": "0xd09cad25b3166452",
@@ -795,6 +798,181 @@ class DiagnosticSurfaceTests(ToolTests):
                 }
                 (directory / f"frame-{index}.json").write_text(json.dumps(meta))
         return run
+
+    def temporal_fixture(self, root: Path, *, preferred=(1, 1),
+                         payload_indices=(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11),
+                         broken_indices=(), digest_mismatch_indices=()) -> Path:
+        import hashlib
+        try:
+            import numpy as np
+        except Exception:  # noqa: BLE001
+            self.skipTest("numpy is required")
+        run = self.session_result(root / "fixture-session",
+                                  session_id="fixture-session")
+        result = json.loads((run / "result.json").read_text())
+        result["scenario"]["comparison"]["policy"] = "tolerant"
+        result["scenario"]["comparison"]["max_channel_error"] = 8
+        pair = {
+            "frame_index": preferred[0],
+            "candidate_frame_index": preferred[1],
+            "status": "aligned",
+            "reference": {"draws": 20, "caller_signature": "0xabc",
+                          "game_day": 1, "update_identity": "0x10"},
+            "candidate": {"draws": 20, "caller_signature": "0xabc",
+                          "game_day": 1, "update_identity": "0x10"},
+            "dumps": {"reference": {"found": {}}, "candidate": {"found": {}}},
+            "comparison": {"status": "fail", "reasons": ["pixel"],
+                           "alignment": {"status": "aligned"},
+                           "statistics": {}, "regions": {},
+                           "mirrored_regions": []},
+        }
+        result["frames"]["comparison"]["first_failure"] = pair
+        result["frames"]["last_pair"] = pair
+        (run / "result.json").write_text(json.dumps(result))
+        for role in ("reference", "candidate"):
+            directory = run / role / "observe" / "captured"
+            directory.mkdir(parents=True, exist_ok=True)
+            for index in range(1, 13):
+                image = np.full((6, 8, 4), 20, dtype=np.uint8)
+                image[:, :, 3] = 255
+                payload = image.tobytes()
+                path = directory / f"frame-{index}.bgra"
+                if index in payload_indices:
+                    path.write_bytes(payload)
+                digest = hashlib.sha256(payload).hexdigest()
+                if index in digest_mismatch_indices:
+                    digest = "0" * 64
+                meta = {
+                    "schema": "gfx-frame-dump/v1", "frame_index": index,
+                    "session": "fixture-session", "backend": role,
+                    "width": 8, "height": 6,
+                    "origin": ("sideways" if index in broken_indices
+                               else "top_left"),
+                    "pixel_format": "RGBA8", "raw_file": str(path),
+                    "raw_bytes": len(payload), "sha256": digest,
+                    "capture_valid": True, "gpu_completed": True,
+                }
+                (directory / f"frame-{index}.json").write_text(json.dumps(meta))
+        return run
+
+    def test_empty_roles_account_for_every_requested_comparison(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = self.session_result(Path(temporary) / "empty",
+                                      session_id="empty")
+            code, value = self.call([
+                "eu4_diff_inspect", "--run", str(run), "--temporal",
+                "--reference-frame", "10", "--candidate-frame", "10"])
+        self.assertEqual(code, 2)
+        self.assertFalse(value["ok"])
+        temporal = value["result"]["temporal"]
+        self.assertEqual(temporal["status"], "incomplete")
+        self.assertEqual(temporal["completion"]["requested"], 3)
+        self.assertEqual(temporal["completion"]["completed"], 0)
+        self.assertEqual(temporal["completion"]["unavailable"], 3)
+        self.assertFalse(temporal["completion"]["cross_process_complete"])
+        self.assertFalse(temporal["completion"]["temporal_variability_complete"])
+        self.assertEqual({item["relation"] for item in temporal["comparisons"]},
+                         {"reference_temporal", "candidate_temporal",
+                          "cross_process"})
+
+    def test_explicit_missing_index_accounts_for_all_three_comparisons(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = self.temporal_fixture(Path(temporary))
+            code, value = self.call([
+                "eu4_diff_inspect", "--run", str(run), "--temporal",
+                "--reference-frame", "99", "--candidate-frame", "10"])
+        self.assertEqual(code, 2)
+        temporal = value["result"]["temporal"]
+        self.assertEqual(temporal["selected"]["reference"], 99)
+        self.assertEqual(temporal["completion"]["requested"], 3)
+        self.assertEqual(temporal["completion"]["completed"], 1)
+        self.assertEqual(temporal["completion"]["unavailable"], 2)
+        self.assertIn(99, temporal["missing"]["requested_reference"])
+        by_relation = {item["relation"]: item for item in temporal["comparisons"]}
+        self.assertEqual(by_relation["candidate_temporal"]["status"],
+                         "completed")
+        self.assertEqual(by_relation["reference_temporal"]["status"],
+                         "unavailable")
+        self.assertEqual(by_relation["cross_process"]["status"], "unavailable")
+
+    def test_auto_selection_falls_back_to_usable_payloads(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = self.temporal_fixture(
+                Path(temporary), preferred=(1, 1),
+                payload_indices=(10, 11))
+            code, value = self.call([
+                "eu4_diff_inspect", "--run", str(run), "--temporal"])
+        self.assertEqual(code, 0)
+        temporal = value["result"]["temporal"]
+        self.assertEqual(temporal["status"], "completed")
+        self.assertEqual(temporal["selected"]["reference"], 10)
+        self.assertEqual(temporal["selected"]["candidate"], 10)
+        self.assertTrue(temporal["fallback_used"])
+        self.assertTrue(temporal["selected"]["fallback"]["reference"])
+        self.assertEqual(temporal["completion"]["completed"], 3)
+        self.assertFalse(value["result"]["qualification"]["qualified"])
+
+    def test_explicit_metadata_without_payload_is_not_substituted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = self.temporal_fixture(
+                Path(temporary), preferred=(1, 1),
+                payload_indices=(10, 11))
+            code, value = self.call([
+                "eu4_diff_inspect", "--run", str(run), "--temporal",
+                "--reference-frame", "1", "--candidate-frame", "1"])
+        self.assertEqual(code, 2)
+        temporal = value["result"]["temporal"]
+        self.assertEqual(temporal["selected"]["reference"], 1)
+        self.assertFalse(temporal["selected"]["fallback"]["reference"])
+        self.assertEqual(temporal["status"], "incomplete")
+        self.assertIn(1, temporal["missing"]["reference"])
+
+    def test_auto_selection_skips_an_undecodable_payload(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = self.temporal_fixture(
+                Path(temporary), preferred=(10, 10),
+                payload_indices=(10, 11, 12),
+                broken_indices=(10,))
+            code, value = self.call([
+                "eu4_diff_inspect", "--run", str(run), "--temporal"])
+        self.assertEqual(code, 0)
+        temporal = value["result"]["temporal"]
+        self.assertEqual(temporal["status"], "completed")
+        self.assertEqual(temporal["selected"]["reference"], 11)
+        self.assertTrue(temporal["fallback_used"])
+        self.assertTrue(temporal["invalid"])
+        self.assertIn("cannot be decoded",
+                      " ".join(item["reason"] for item in temporal["invalid"]))
+
+    def test_digest_mismatch_is_unavailable_not_completed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = self.temporal_fixture(
+                Path(temporary), preferred=(10, 10),
+                payload_indices=(10, 11),
+                digest_mismatch_indices=(10,))
+            code, value = self.call([
+                "eu4_diff_inspect", "--run", str(run), "--temporal",
+                "--reference-frame", "10", "--candidate-frame", "10"])
+        self.assertEqual(code, 2)
+        temporal = value["result"]["temporal"]
+        self.assertEqual(temporal["status"], "incomplete")
+        self.assertEqual(temporal["pairs"], [])
+        self.assertIn("digest does not match",
+                      " ".join(item["reason"] for item in temporal["invalid"]))
+
+    def test_enumeration_does_not_hash_unselected_payloads(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary) / "run"
+            frames = run / "frames"
+            frames.mkdir(parents=True)
+            for index in range(1, 13):
+                (frames / f"reference-frame-{index}.bgra").write_bytes(
+                    bytes([index]) * (8 * 6 * 4))
+            with mock.patch.object(
+                    agent_tools, "_sha256_file",
+                    side_effect=AssertionError("enumeration must not hash")):
+                metas, _notes = agent_tools._frame_meta_entries(run, "reference")
+        self.assertEqual(sorted(metas), list(range(1, 13)))
 
     def test_temporal_loading_decodes_only_the_selected_window(self):
         with tempfile.TemporaryDirectory() as temporary:
