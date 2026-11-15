@@ -66,6 +66,8 @@ def build_library() -> Path:
         str(BENCH / "eu4_gfx_observe_framebuffer_drawable.mm"),
         str(BENCH / "eu4_gfx_observe_viewport.c"),
         str(BENCH / "eu4_gfx_frame_trace.c"),
+        str(BENCH / "eu4_gfx_frame_observe.c"),
+        str(BENCH / "eu4_gfx_gl_interpose.c"),
         str(BENCH / "eu4_gfx_observe_gateway.S"),
         str(BENCH / "eu4_gfx_startup_trace.c"),
         str(BENCH / "eu4_gfx_startup_trace_detour.c"),
@@ -99,6 +101,8 @@ def build_host() -> Path:
         str(BENCH / "eu4_gfx_observe_framebuffer.c"),
         str(BENCH / "eu4_gfx_observe_viewport.c"),
         str(BENCH / "eu4_gfx_frame_trace.c"),
+        str(BENCH / "eu4_gfx_frame_observe.c"),
+        str(BENCH / "eu4_gfx_gl_interpose.c"),
         str(BENCH / "eu4_gfx_observe_gateway.S"),
         str(BENCH / "eu4_gfx_startup_trace.c"),
         str(BENCH / "eu4_gfx_startup_trace_detour.c"),
@@ -162,7 +166,20 @@ def _parse_status(path: Path) -> dict:
     return values
 
 
-def run(*, authorize_live: bool, wait_seconds: float = 180.0) -> dict:
+def run(
+    *,
+    authorize_live: bool,
+    wait_seconds: float = 180.0,
+    env_extra: dict | None = None,
+    game_args: list[str] | None = None,
+    background_plan: object | None = None,
+) -> dict:
+    """Launch one startup-trace session.
+
+    ``env_extra`` and ``game_args`` mirror :func:`run_ops`: integration callers
+    may pin additional observer environment or launcher arguments without
+    changing the CLI contract.  Both are optional and omitted by default.
+    """
     if not authorize_live:
         raise StartupError("Live launch requires the explicit --authorize-live flag")
     evidence = preflight()
@@ -172,7 +189,15 @@ def run(*, authorize_live: bool, wait_seconds: float = 180.0) -> dict:
     session = str(uuid.uuid4())
     launcher = json.loads(base.GOG_LAUNCHER.read_text())
     env = os.environ.copy()
-    env["DYLD_INSERT_LIBRARIES"] = str(LIBRARY)
+    inserted = []
+    if env.get("EU4_DISPLAY_MODE") == "background":
+        for key in ("EU4_DISPLAY_PLACEMENT_LIBRARY",
+                    "EU4_DISPLAY_ISOLATE_LIBRARY"):
+            value = env.get(key)
+            if value:
+                inserted.append(value)
+    inserted.append(str(LIBRARY))
+    env["DYLD_INSERT_LIBRARIES"] = ":".join(inserted)
     env["EU4_GFX_STARTUP_DIR"] = str(run_dir)
     env["EU4_GFX_STARTUP_ID"] = session
     env["EU4_GFX_EXPECTED_EXE"] = str(base.GOG_EXE)
@@ -186,9 +211,27 @@ def run(*, authorize_live: bool, wait_seconds: float = 180.0) -> dict:
     stdout = (run_dir / "game.stdout").open("wb")
     stderr = (run_dir / "game.stderr").open("wb")
     lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
+    display_session = None
+    display_record = None
     try:
+        if background_plan is not None:
+            from automation import gfx_display
+
+            # The lease is already held: shared display/settings changes are
+            # ordered behind launch ownership and restored before release.
+            display_session = gfx_display.activate_background(
+                background_plan, run_dir
+            )
+            env.update(display_session.env)
+            insertion = [str(display_session.placement_library)]
+            if display_session.isolation_library is not None:
+                insertion.append(str(display_session.isolation_library))
+            existing = env.get("DYLD_INSERT_LIBRARIES") or ""
+            if existing:
+                insertion.append(existing)
+            env["DYLD_INSERT_LIBRARIES"] = ":".join(insertion)
         game = subprocess.Popen(
-            ["./eu4", *launcher["exeArgs"]],
+            ["./eu4", *launcher["exeArgs"], *(game_args or [])],
             cwd=base.GOG_EXE.parent,
             env=env,
             stdout=stdout,
@@ -197,6 +240,8 @@ def run(*, authorize_live: bool, wait_seconds: float = 180.0) -> dict:
             pass_fds=lease.child_fds(),
         )
     except BaseException:
+        if display_session is not None:
+            display_session.restore()
         lease.release()
         stdout.close()
         stderr.close()
@@ -241,6 +286,11 @@ def run(*, authorize_live: bool, wait_seconds: float = 180.0) -> dict:
         if game.poll() is None:
             game.kill()
             game.wait(timeout=10)
+        if display_session is not None:
+            display_record = {
+                "session": display_session.as_dict(),
+                "restore": display_session.restore(),
+            }
         lease.release()
 
     summary = {}
@@ -253,6 +303,7 @@ def run(*, authorize_live: bool, wait_seconds: float = 180.0) -> dict:
         "evidence": evidence,
         "status": status,
         "summary": summary,
+        "display": display_record,
         "accepted": bool(summary.get("complete")),
     }
     (run_dir / "launcher-report.json").write_text(json.dumps(report, indent=2) + "\n")
@@ -394,8 +445,15 @@ def run_ops(
     gl_reference: bool = False,
     env_extra: dict | None = None,
     retention: str | None = None,
+    game_args: list[str] | None = None,
+    background_plan: object | None = None,
 ) -> dict:
-    """Launch one bounded original-process observation session."""
+    """Launch one bounded original-process observation session.
+
+    ``background_plan`` is a validated ``gfx_display.BackgroundPlan``.  Display
+    activation and settings mutation happen only after the host-wide launch
+    lease is held, and the display settings are restored before it is released.
+    """
     if not authorize_live:
         raise StartupError("Live capture requires --authorize-live or a campaign")
     if not 1 <= timeout_s <= 600:
@@ -419,7 +477,15 @@ def run_ops(
     session = str(uuid.uuid4())
     launcher = json.loads(base.GOG_LAUNCHER.read_text())
     env = os.environ.copy()
-    env["DYLD_INSERT_LIBRARIES"] = str(LIBRARY)
+    inserted = []
+    if env.get("EU4_DISPLAY_MODE") == "background":
+        for key in ("EU4_DISPLAY_PLACEMENT_LIBRARY",
+                    "EU4_DISPLAY_ISOLATE_LIBRARY"):
+            value = env.get(key)
+            if value:
+                inserted.append(value)
+    inserted.append(str(LIBRARY))
+    env["DYLD_INSERT_LIBRARIES"] = ":".join(inserted)
     env["EU4_GFX_STARTUP_DIR"] = str(run_dir)
     env["EU4_GFX_STARTUP_ID"] = session
     env["EU4_GFX_EXPECTED_EXE"] = str(base.GOG_EXE)
@@ -467,9 +533,27 @@ def run_ops(
     stdout = (run_dir / "game.stdout").open("wb")
     stderr = (run_dir / "game.stderr").open("wb")
     lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
+    display_session = None
+    display_record = None
     try:
+        if background_plan is not None:
+            from automation import gfx_display
+
+            # The lease is already held: shared display/settings changes are
+            # ordered behind launch ownership and restored before release.
+            display_session = gfx_display.activate_background(
+                background_plan, run_dir
+            )
+            env.update(display_session.env)
+            insertion = [str(display_session.placement_library)]
+            if display_session.isolation_library is not None:
+                insertion.append(str(display_session.isolation_library))
+            existing = env.get("DYLD_INSERT_LIBRARIES") or ""
+            if existing:
+                insertion.append(existing)
+            env["DYLD_INSERT_LIBRARIES"] = ":".join(insertion)
         game = subprocess.Popen(
-            ["./eu4", *launcher["exeArgs"]],
+            ["./eu4", *launcher["exeArgs"], *(game_args or [])],
             cwd=base.GOG_EXE.parent,
             env=env,
             stdout=stdout,
@@ -478,6 +562,8 @@ def run_ops(
             pass_fds=lease.child_fds(),
         )
     except BaseException:
+        if display_session is not None:
+            display_session.restore()
         lease.release()
         stdout.close()
         stderr.close()
@@ -504,6 +590,11 @@ def run_ops(
         termination = _terminate_owned_process(game)
         stdout.close()
         stderr.close()
+        if display_session is not None:
+            display_record = {
+                "session": display_session.as_dict(),
+                "restore": display_session.restore(),
+            }
         lease.release()
     summary = {}
     if (run_dir / "summary.json").is_file():
@@ -533,6 +624,7 @@ def run_ops(
         "summary": summary,
         "operations": operations,
         "termination": termination,
+        "display": display_record,
         "accepted": accepted,
     }
     (run_dir / "launcher-report.json").write_text(json.dumps(report, indent=2) + "\n")
@@ -547,6 +639,19 @@ def main() -> int:
     run_parser = sub.add_parser("run")
     run_parser.add_argument("--authorize-live", action="store_true")
     run_parser.add_argument("--wait-seconds", type=float, default=180.0)
+    run_parser.add_argument(
+        "--env",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="additional observer environment (repeatable)",
+    )
+    run_parser.add_argument(
+        "--game-arg",
+        action="append",
+        default=[],
+        help="additional launcher argument (repeatable)",
+    )
     args = parser.parse_args()
     if args.command == "build":
         print(build_library())
@@ -555,7 +660,20 @@ def main() -> int:
     if args.command == "preflight":
         print(json.dumps(preflight(), indent=2))
         return 0
-    report = run(authorize_live=args.authorize_live, wait_seconds=args.wait_seconds)
+    env_extra = {}
+    for item in args.env:
+        if "=" not in item:
+            parser.error(f"--env requires KEY=VALUE, got {item!r}")
+        key, value = item.split("=", 1)
+        if not key:
+            parser.error("--env requires a non-empty key")
+        env_extra[key] = value
+    report = run(
+        authorize_live=args.authorize_live,
+        wait_seconds=args.wait_seconds,
+        env_extra=env_extra or None,
+        game_args=list(args.game_arg) or None,
+    )
     print(json.dumps(report, indent=2))
     return 0
 

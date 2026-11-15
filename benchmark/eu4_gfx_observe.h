@@ -34,6 +34,9 @@ enum {
 enum {
     EU4_GFX_OBSERVE_STOP_QUOTA = 0,
     EU4_GFX_OBSERVE_STOP_TARGET_DRAW = 1,
+    /* Frame streaming owns its own stop policy; observation must not drain the
+       process after a fixed record quota. */
+    EU4_GFX_OBSERVE_STOP_NEVER = 2,
 };
 
 enum {

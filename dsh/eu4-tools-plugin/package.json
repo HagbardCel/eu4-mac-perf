@@ -1,0 +1,17 @@
+{
+  "name": "@eu4/dsh-tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Structured EU4 reconstruction tools for DeepSeek Harness",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./bridge": "./lib/bridge.js",
+    "./package.json": "./package.json"
+  },
+  "files": ["lib/*.js"],
+  "scripts": { "test": "node --test tests/" },
+  "engines": { "node": ">=22" },
+  "license": "MIT"
+}

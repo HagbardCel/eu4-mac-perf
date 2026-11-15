@@ -1,0 +1,275 @@
+{
+  "schema": "dual-process-campaigns/v1",
+  "runs": [
+    {
+      "session_id": "20261114T133000Z-61c7376d",
+      "mode": "streaming",
+      "profile": "targeted",
+      "result": "completed",
+      "stop": {
+        "observed_utc": "2026-11-14T13:30:23Z",
+        "reason": "frame_limit",
+        "trigger": "12 aligned frames"
+      },
+      "paired": 12,
+      "aligned": 12,
+      "not_aligned": 0,
+      "observed_reference": 37,
+      "observed_candidate": 12,
+      "first_pair": {
+        "ref_index": 1,
+        "cand_index": null,
+        "extent": null,
+        "preview": {
+          "different_pixels": 2624,
+          "max_channel_error": 212,
+          "mean_abs_error": 22.249619,
+          "mismatched_fraction": 1.0,
+          "pixels": 2624,
+          "status": "compared"
+        }
+      },
+      "last_pair": {
+        "ref_index": 12,
+        "cand_index": null
+      },
+      "health": "unknown",
+      "dumps": {
+        "candidate": [
+          11,
+          12
+        ],
+        "reference": []
+      },
+      "artifacts": {
+        "bytes": 61765632,
+        "deduplicated_bytes_saved": 0,
+        "dropped": 0,
+        "max_bytes": 134217728,
+        "objects": 2,
+        "over_limit": false,
+        "preserved_bytes": 61765632,
+        "preserved_objects": 2
+      },
+      "duration_seconds": 33.058,
+      "terminations": [
+        {
+          "outcome": "exited",
+          "pid": 95489,
+          "reason": "",
+          "returncode": 0,
+          "role": "reference",
+          "signal": "SIGTERM"
+        },
+        {
+          "outcome": "exited",
+          "pid": 95490,
+          "reason": "",
+          "returncode": 0,
+          "role": "candidate",
+          "signal": "SIGTERM"
+        }
+      ]
+    },
+    {
+      "session_id": "20261114T133201Z-67a62071",
+      "mode": "streaming",
+      "profile": "targeted",
+      "result": "completed",
+      "stop": {
+        "observed_utc": "2026-11-14T13:32:24Z",
+        "reason": "frame_limit",
+        "trigger": "8 aligned frames"
+      },
+      "paired": 8,
+      "aligned": 8,
+      "not_aligned": 0,
+      "observed_reference": 39,
+      "observed_candidate": 13,
+      "first_pair": {
+        "ref_index": 6,
+        "cand_index": 6,
+        "extent": null,
+        "preview": {
+          "different_pixels": 2567,
+          "max_channel_error": 218,
+          "mean_abs_error": 26.41095,
+          "mismatched_fraction": 0.978277,
+          "pixels": 2624,
+          "status": "compared"
+        }
+      },
+      "last_pair": {
+        "ref_index": 13,
+        "cand_index": 13
+      },
+      "health": "unknown",
+      "dumps": {
+        "candidate": [
+          12,
+          13
+        ],
+        "reference": []
+      },
+      "artifacts": {
+        "bytes": 61765632,
+        "deduplicated_bytes_saved": 0,
+        "dropped": 0,
+        "max_bytes": 134217728,
+        "objects": 2,
+        "over_limit": false,
+        "preserved_bytes": 61765632,
+        "preserved_objects": 2
+      },
+      "duration_seconds": 32.813,
+      "terminations": [
+        {
+          "outcome": "exited",
+          "pid": 95682,
+          "reason": "",
+          "returncode": 0,
+          "role": "reference",
+          "signal": "SIGTERM"
+        },
+        {
+          "outcome": "exited",
+          "pid": 95683,
+          "reason": "",
+          "returncode": 0,
+          "role": "candidate",
+          "signal": "SIGTERM"
+        }
+      ]
+    },
+    {
+      "session_id": "20261114T133407Z-27afd1a0",
+      "mode": "lockstep",
+      "profile": "targeted",
+      "result": "stopped",
+      "stop": {
+        "observed_utc": "2026-11-14T13:35:12Z",
+        "reason": "deadline",
+        "trigger": "60.0s"
+      },
+      "paired": 0,
+      "aligned": 0,
+      "not_aligned": 0,
+      "observed_reference": 7,
+      "observed_candidate": 184,
+      "first_pair": {
+        "ref_index": null,
+        "cand_index": null,
+        "extent": null,
+        "preview": null
+      },
+      "last_pair": {
+        "ref_index": null,
+        "cand_index": null
+      },
+      "health": "unknown",
+      "dumps": {},
+      "artifacts": {
+        "bytes": 0,
+        "deduplicated_bytes_saved": 0,
+        "dropped": 0,
+        "max_bytes": 134217728,
+        "objects": 0,
+        "over_limit": false,
+        "preserved_bytes": 0,
+        "preserved_objects": 0
+      },
+      "duration_seconds": 72.61,
+      "terminations": [
+        {
+          "outcome": "killed",
+          "pid": 95841,
+          "reason": "",
+          "returncode": -9,
+          "role": "reference",
+          "signal": "SIGKILL"
+        },
+        {
+          "outcome": "exited",
+          "pid": 95842,
+          "reason": "",
+          "returncode": 0,
+          "role": "candidate",
+          "signal": "SIGTERM"
+        }
+      ]
+    },
+    {
+      "session_id": "20261114T133608Z-122c4985",
+      "mode": "lockstep",
+      "profile": "targeted",
+      "result": "completed",
+      "stop": {
+        "observed_utc": "2026-11-14T13:37:08Z",
+        "reason": "frame_limit",
+        "trigger": "5 aligned frames"
+      },
+      "paired": 5,
+      "aligned": 5,
+      "not_aligned": 0,
+      "observed_reference": 5,
+      "observed_candidate": 5,
+      "first_pair": {
+        "ref_index": 1,
+        "cand_index": 1,
+        "extent": null,
+        "preview": {
+          "different_pixels": 2624,
+          "max_channel_error": 212,
+          "mean_abs_error": 22.249619,
+          "mismatched_fraction": 1.0,
+          "pixels": 2624,
+          "status": "compared"
+        }
+      },
+      "last_pair": {
+        "ref_index": 5,
+        "cand_index": 5
+      },
+      "health": "unknown",
+      "dumps": {
+        "candidate": [
+          4,
+          5
+        ],
+        "reference": [
+          4,
+          5
+        ]
+      },
+      "artifacts": {
+        "bytes": 77207040,
+        "deduplicated_bytes_saved": 0,
+        "dropped": 0,
+        "max_bytes": 134217728,
+        "objects": 4,
+        "over_limit": false,
+        "preserved_bytes": 77207040,
+        "preserved_objects": 4
+      },
+      "duration_seconds": 72.248,
+      "terminations": [
+        {
+          "outcome": "killed",
+          "pid": 96005,
+          "reason": "",
+          "returncode": -9,
+          "role": "reference",
+          "signal": "SIGKILL"
+        },
+        {
+          "outcome": "killed",
+          "pid": 96006,
+          "reason": "",
+          "returncode": -9,
+          "role": "candidate",
+          "signal": "SIGKILL"
+        }
+      ]
+    }
+  ]
+}

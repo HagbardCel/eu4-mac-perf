@@ -58,3 +58,27 @@ qualification is a separate campaign with an independent reviewer; a
 `automation/gfx_draw_accept.py` is frozen by the completed L3.2b-I manifest; new
 campaigns use `automation/gfx_draw_accept_v2.py`. Original shader and texture
 bytes stay under `.local`; only hashes, lengths and provenance are tracked.
+
+## Differential debugging defaults
+
+Before starting another live EU4 run:
+
+1. query existing Ghidra/engine-contract knowledge (`eu4_re_query`);
+2. run the focused native/static tests;
+3. replay known local cases (`eu4_replay`);
+4. inspect the recorded differential observations (`eu4_diff_inspect`,
+   `eu4_capture health/frames`);
+5. use one targeted live diagnostic if the evidence is insufficient;
+6. run a dual-process campaign only when no adequate offline case exists;
+7. run the full qualification after corrections.
+
+Use `python3 -m automation.agent_tools <tool> ...` (or the native DSH tools) for
+these steps; do not compose new launch/capture scripts. A new EU4 launch needs a
+specific diagnostic objective, but no separate approval process. If two
+launches for the same defect are inconclusive, redesign the instrumentation or
+experiment before a third. Use normal permissions first; request sandbox
+escalation only after a genuine denial.
+
+`eu4_capture health` is the stop signal: a rejected draw, pipeline/validation
+failure, failed resolve/readback or failed command buffer ends the current
+diagnostic result. Command-buffer completion is not pixel correctness.

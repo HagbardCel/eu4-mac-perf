@@ -1,0 +1,150 @@
+{
+  "schema": "dual-process-feasibility/v1",
+  "captured_utc": "2026-11-14T14:06:00Z",
+  "host": {
+    "os": "macOS 27.0.1",
+    "build": "26A434",
+    "arch": "arm64"
+  },
+  "executable": {
+    "path": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4",
+    "sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "version": "EU4 v1.37.5.0 Inca (491d)",
+    "gog_build": "59158198792514056"
+  },
+  "launch": {
+    "args": [
+      "-enabletelemetry",
+      "-gdpr-compliant"
+    ],
+    "reference_backend": "opengl",
+    "candidate_backend": "metal"
+  },
+  "controls": {
+    "ledger": "two bounded claims",
+    "lease": "one host-wide lease shared by both children",
+    "process_groups": "separate (start_new_session)",
+    "termination": "SIGTERM the owned groups only"
+  },
+  "runs": [
+    {
+      "run": "run-7",
+      "reference_pid": 91700,
+      "candidate_pid": 91701,
+      "overlap_seconds": 20.07,
+      "both_alive_at_end_of_observation": true,
+      "both_onscreen_windows": true,
+      "window_observations": 19,
+      "concurrent_window_observations": 19,
+      "reference_window": {
+        "width": 1728,
+        "height": 1117,
+        "layer": 2147483628,
+        "onscreen": true
+      },
+      "candidate_window": {
+        "outer_width": 1728,
+        "outer_height": 1145,
+        "onscreen": true
+      },
+      "metal": {
+        "init_success": true,
+        "present_symbol": "_GfxPresent",
+        "swap": {
+          "schema": "gfx-swap/v1",
+          "game": [
+            3456,
+            2234
+          ],
+          "drawable": [
+            3456,
+            2234
+          ],
+          "destination": true,
+          "pid": 91701
+        },
+        "accepted_draw_records": 23,
+        "refused_draw_records": 0,
+        "artifact_sha256": {
+          "init.json": "37ea62454b8e2a441d25a2932f15985af000fc6b8e9132f6fe1d20f60c0711e4",
+          "present.json": "7a81728a46b54f0446c7d0d2ccf0aa8b9a76647d9578468d47741a5e230becac",
+          "swap.json": "6d287f9cba9ea2a8837246b4bdc12fbb499b38cea63d6070f270694cb0dcd8be"
+        }
+      },
+      "termination": [
+        {
+          "label": "reference",
+          "sigterm": true,
+          "stopped_within_8s": true,
+          "returncode": 0
+        },
+        {
+          "label": "candidate",
+          "sigterm": true,
+          "stopped_within_8s": true,
+          "returncode": 0
+        }
+      ]
+    },
+    {
+      "run": "run-8",
+      "reference_pid": 92040,
+      "candidate_pid": 92041,
+      "overlap_seconds": 20.06,
+      "both_alive_at_end_of_observation": true,
+      "both_onscreen_windows": true,
+      "window_observations": 19,
+      "concurrent_window_observations": 19,
+      "reference_window": {
+        "width": 1728,
+        "height": 1117,
+        "layer": 2147483628,
+        "onscreen": true
+      },
+      "candidate_window": {
+        "outer_width": 1728,
+        "outer_height": 1145,
+        "onscreen": true
+      },
+      "metal": {
+        "init_success": true,
+        "present_symbol": "_GfxPresent",
+        "swap": {
+          "schema": "gfx-swap/v1",
+          "game": [
+            3456,
+            2234
+          ],
+          "drawable": [
+            3456,
+            2234
+          ],
+          "destination": true,
+          "pid": 92041
+        },
+        "accepted_draw_records": 23,
+        "refused_draw_records": 0,
+        "artifact_sha256": {
+          "init.json": "af30b4505fa8f3a3535051d5ddb0ae405181e14afdaf534467d0e6cb521b72aa",
+          "present.json": "66ca792238d85ae62dbcf5e8058fc46e54d57e5e541657cbe873fa3bee40badd",
+          "swap.json": "a11a7f5889941747e0cad216c990098a89f6d69f37d8bea2ab4beb3922e05da3"
+        }
+      },
+      "termination": [
+        {
+          "label": "reference",
+          "sigterm": true,
+          "stopped_within_8s": true,
+          "returncode": 0
+        },
+        {
+          "label": "candidate",
+          "sigterm": true,
+          "stopped_within_8s": true,
+          "returncode": 0
+        }
+      ]
+    }
+  ],
+  "verdict": "two genuine concurrent EU4 processes, one authentic OpenGL and one reconstructed Metal, both presented, cleanly terminated"
+}

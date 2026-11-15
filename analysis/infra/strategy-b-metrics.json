@@ -1,0 +1,803 @@
+{
+  "schema": "gfx-strategy-b-metrics/v2",
+  "updated": "2026-11-15",
+  "canonical_frame": "menu-occ300 (historical) and menu scene 79 (2026-11-15 capture)",
+  "reviewed_head_before_closure": "b8fdd0b95567567aa4cf63203fe5cd3da278fe57",
+  "baseline_merge": "origin/main 61e7795 merged as cb35385",
+  "authentic_eu4_launches": 30,
+  "authentic_eu4_launches_note": "12 previously recorded launches plus 18 closure-session launch reports under .local/infra/strategy-b/*/launcher-report.json",
+  "new_launch_reports_this_session": 18,
+  "capture_attempts": 21,
+  "capture_attempts_note": "3 historically recorded pre-300 attempts plus 18 closure-session capture reports",
+  "live_captures": 1,
+  "captured_frames": 5,
+  "captured_frames_complete_manifest": 5,
+  "captured_frames_with_unresolved_dependency": 2,
+  "captured_frames_partial_graph": 2,
+  "background_opengl_launches_qualified": 5,
+  "background_metal_launches_qualified": 5,
+  "background_launches_qualified": 10,
+  "background_launches_qualified_note": "5/5 OpenGL and 5/5 Metal placement/focus/window qualification from the separate recorded acceptance runs",
+  "background_isolation_qualified": true,
+  "background_title_rendering_qualified": true,
+  "background_title_capture_attempts": 3,
+  "background_title_capture_result": "reached_menu_scene75_complete_283_events",
+  "background_title_capture_note": "The post-fix background launch reached the menu, placed the window at (1755,27) on EU4 Test, completed a 283-event scene and restored settings. One sampled frontmost application was eu4, so unfocused rendering was not independently re-proven; the existing 5/5 short-run isolation evidence remains.",
+  "foreground_fallback_used_for_capture": false,
+  "texture_442_copy_events_observed": 1,
+  "texture_442_source": "default_framebuffer_gl_back",
+  "texture_442_lifecycle_claim": "resolved_in_frame",
+  "texture_442_lifecycle_note": "The corrected interposer and bounded destination-filtered copy trace found the authentic _GfxResolve copy at event 271: default framebuffer GL_BACK to texture 442, full 1728x1117, followed by sampling at events 273 and 277. The retracted 5,618 recursion record is not used.",
+  "resolve_replay_synthetic": "pass",
+  "resolve_replay_pixels": "asymmetric_4x4_partial_copy_clear_generation_tests_pass",
+  "resolve_replay_authentic": true,
+  "resolve_replay_authentic_note": "The authentic copy event executed through Metal. Metal 442 equals the channel-swapped Metal default source exactly; GL 442 equals the channel-swapped GL source exactly.",
+  "new_capture_scene": 79,
+  "new_capture_events": 282,
+  "new_capture_draws": 273,
+  "new_capture_reference_sha256": "3b832401b4d4acc8d3e01d87a1650f8964a07d517b0a4663bc6fa50f7e96961b",
+  "new_replay_final_pixels": 1930176,
+  "new_replay_final_mismatched_pixels": 4,
+  "new_replay_final_max_channel_error": 1,
+  "new_replay_final_difference_kind": "four_edge_alpha_lsb",
+  "new_replay_deterministic": true,
+  "new_replay_deterministic_repeats": 2,
+  "new_replay_binding_audit_checked": 2573,
+  "new_replay_binding_audit_mismatches": 0,
+  "new_replay_intermediates_exact": [
+    "431",
+    "432",
+    "443",
+    "447"
+  ],
+  "new_replay_intermediate_433": "diagnostic_only_rgb8_vs_bgra8",
+  "new_replay_coverage": "partial",
+  "new_replay_qualified": false,
+  "canonical_replay_final_mismatched_pixels": 0,
+  "canonical_replay_intermediates_exact": [
+    "431",
+    "432",
+    "443",
+    "447"
+  ],
+  "canonical_replay_qualified": false,
+  "canonical_replay_note": "Final pixels are exact but coverage is partial because texture 442 has no captured producer.",
+  "offline_replay_attempts": 40,
+  "offline_replay_reports_seen": 40,
+  "deterministic_replays": 8,
+  "first_divergence_localized": true,
+  "first_divergence_kind": "intermediate",
+  "first_divergence_event": 291,
+  "first_divergence_target": "443",
+  "first_divergence_producer_event": 289,
+  "first_divergence_statistics": {
+    "mismatched_pixels": 481860,
+    "pixels": 482112,
+    "max_channel_error": 155
+  },
+  "sampler_defect_detected": true,
+  "sampler_defect_state_mismatches": 806,
+  "sampler_defect_earliest_event": 17,
+  "sampler_defect_note": "The new menu case reports a semantic mismatch at event 17 even though later overdraw masks most pixel effects.",
+  "copy_kernel_partial_rectangle_fixed": true,
+  "clear_semantics_pixel_tests": "pass",
+  "frame_graph_event_zero_and_duplicate_consumer_tests": "pass",
+  "interposer_self_recursion_fixed": true,
+  "trace_writer_fail_closed_tests": "pass",
+  "scene_selector_occurrence_tests": "pass",
+  "portable_case_files": 1084,
+  "portable_case_bytes": 441000000,
+  "portable_case_replay": "pass_scene79_four_alpha_lsb",
+  "portable_case_verification": "pass",
+  "case_files": 1084,
+  "case_bytes": 441000000,
+  "tests_touched": 259,
+  "tests_touched_result": "259 relevant capture/replay/graph/display/session/tool tests pass; 140 additional graphics tests and 40 DSH tests pass",
+  "dsh_tests": 40,
+  "dsh_tests_result": "pass",
+  "full_python_discovery": {
+    "tests": 2872,
+    "failures": 9,
+    "errors": 2,
+    "skipped": 24,
+    "seconds": 515.4,
+    "result": "11 pre-existing native host build/environment failures; none in touched capture/replay/graph suites",
+    "baseline_reproduction": "Representative test_gfx_shadow_worker.test_persistent_sequence and test_gfx_buffers.test_vertex_buffer_lifecycle reproduce at origin/main 61e7795 in a clean detached worktree (same missing _eu4_gfx_note_render_target_write link and texture_lod expectation).",
+    "failing_modules": [
+      "test_gfx_hidpi",
+      "test_gfx_hidpi_appkit",
+      "test_gfx_buffers",
+      "test_gfx_default_target",
+      "test_gfx_draw_capture",
+      "test_gfx_init",
+      "test_gfx_shadow_worker"
+    ]
+  },
+  "reviewed_head": "b8fdd0b",
+  "implementation_head": "41b4c85",
+  "notes": [
+    "The integration branch was synchronized with origin/main 61e7795 before these corrections; the merge commit is cb35385.",
+    "Texture 442 remains the single unresolved dependency in both the historical canonical menu frame and the new menu scene 79.",
+    "Background placement/focus is qualified 5/5 for both backends. The pre-fix background title attempts stalled at loading and are inconclusive; background title rendering remains unverified. The foreground fallback produced the authentic capture.",
+    "The copy interposer now resolves the OpenGL framework implementation explicitly and refuses self-recursion; the old 5,618-event lifecycle record is not valid evidence.",
+    "The copy kernel now bounds work to the requested rectangle, and native tests assert actual pixels for partial copies, orientation and clear preservation."
+  ],
+  "captured_frames_complete_graph": 3,
+  "texture_442_origin": "in_frame",
+  "texture_442_producer_event": 271,
+  "texture_442_consumers": [
+    273,
+    277
+  ],
+  "copy_bearing_frame": {
+    "scene": 75,
+    "events": 283,
+    "draws": 273,
+    "clears": 9,
+    "resolves": 1,
+    "graph_status": "complete",
+    "unproven": 0,
+    "source_checkpoint": {
+      "event": 271,
+      "target": "0",
+      "mismatched_pixels": 1205235,
+      "max_channel_error": 106
+    },
+    "destination_442": {
+      "event": 273,
+      "mismatched_pixels": 1205235
+    },
+    "downstream": {
+      "447": 291686,
+      "443": 307421
+    },
+    "final": {
+      "mismatched_pixels": 1792005,
+      "pixels": 1930176,
+      "max_channel_error": 23,
+      "alpha_different_pixels": 1785844,
+      "rgb_different_pixels": 976504
+    },
+    "first_divergence": {
+      "event": 271,
+      "target": "0",
+      "producer_event": 270,
+      "caller_rva": "0x10d25c3",
+      "program": 346
+    },
+    "copy_kernel_exact_against_metal_source": true,
+    "gl_copy_is_pure_channel_conversion": true,
+    "cause": "unresolved_default_framebuffer_conversion_before_copy",
+    "qualified": false,
+    "cause_note": "The first observed difference is the default-framebuffer source at event 271. Dominant 1-2 LSB differences are consistent with dithering/conversion, but 169,367 source pixels differ by more than 2 (max 105), so dithering alone is not established as the exclusive cause."
+  },
+  "portable_copy_case_files": 1088,
+  "portable_copy_case_replay": "pass_same_candidate_sha256",
+  "integration_pr": "https://github.com/HagbardCel/eu4-mac-perf/pull/191",
+  "semantic_scope": "binding_audit",
+  "state_coverage": "partial",
+  "unsupported_state": [
+    "gl_dither",
+    "multisample"
+  ],
+  "scene75_difference": {
+    "schema": "gfx-scene75-difference/v1",
+    "results": [
+      {
+        "name": "source",
+        "pixels": 1930176,
+        "mismatched": 1204600,
+        "max_channel_error": 105,
+        "histogram": {
+          "1": 910637,
+          "2": 124596,
+          "0": 725576,
+          "3": 58124,
+          "5": 23785,
+          "7": 11081,
+          "4": 37965,
+          "8": 7640,
+          "6": 16175,
+          "10": 3193,
+          "9": 4837,
+          "11": 2111,
+          "13": 948,
+          "12": 1467,
+          "14": 616,
+          "16": 255,
+          "57": 5,
+          "63": 5,
+          "29": 14,
+          "40": 3,
+          "15": 433,
+          "68": 4,
+          "65": 4,
+          "17": 146,
+          "21": 24,
+          "18": 117,
+          "19": 64,
+          "23": 14,
+          "34": 5,
+          "30": 9,
+          "75": 1,
+          "74": 1,
+          "20": 47,
+          "28": 10,
+          "73": 3,
+          "24": 10,
+          "27": 7,
+          "25": 12,
+          "47": 11,
+          "55": 7,
+          "61": 4,
+          "71": 3,
+          "67": 5,
+          "42": 6,
+          "59": 9,
+          "32": 6,
+          "56": 6,
+          "45": 10,
+          "43": 5,
+          "38": 12,
+          "54": 3,
+          "37": 6,
+          "84": 1,
+          "39": 7,
+          "41": 6,
+          "49": 4,
+          "53": 8,
+          "48": 6,
+          "52": 5,
+          "66": 2,
+          "50": 4,
+          "70": 1,
+          "36": 6,
+          "80": 2,
+          "82": 1,
+          "69": 3,
+          "44": 7,
+          "72": 2,
+          "26": 12,
+          "35": 2,
+          "22": 18,
+          "105": 1,
+          "31": 3,
+          "86": 2,
+          "58": 4,
+          "87": 2,
+          "76": 2,
+          "46": 7,
+          "90": 1,
+          "94": 1,
+          "88": 1,
+          "85": 1,
+          "83": 1,
+          "91": 1,
+          "77": 1,
+          "33": 7,
+          "60": 2,
+          "51": 4,
+          "62": 1
+        },
+        "abs1": 910637,
+        "abs2": 124596,
+        "gt2": 169367,
+        "alpha_pixels": 7,
+        "rgb_pixels": 1204600,
+        "channel_max": [
+          105,
+          66,
+          71,
+          4
+        ],
+        "channel_mismatches": [
+          608210,
+          735977,
+          794494,
+          7
+        ],
+        "large_count": 169367,
+        "large_sample": [
+          {
+            "x": 13,
+            "y": 0,
+            "deltas": [
+              2,
+              2,
+              3,
+              0
+            ]
+          },
+          {
+            "x": 16,
+            "y": 0,
+            "deltas": [
+              2,
+              5,
+              4,
+              0
+            ]
+          },
+          {
+            "x": 17,
+            "y": 0,
+            "deltas": [
+              4,
+              7,
+              7,
+              0
+            ]
+          },
+          {
+            "x": 19,
+            "y": 0,
+            "deltas": [
+              4,
+              7,
+              7,
+              0
+            ]
+          },
+          {
+            "x": 20,
+            "y": 0,
+            "deltas": [
+              1,
+              2,
+              3,
+              0
+            ]
+          },
+          {
+            "x": 21,
+            "y": 0,
+            "deltas": [
+              1,
+              2,
+              4,
+              0
+            ]
+          },
+          {
+            "x": 37,
+            "y": 0,
+            "deltas": [
+              2,
+              2,
+              3,
+              0
+            ]
+          },
+          {
+            "x": 39,
+            "y": 0,
+            "deltas": [
+              1,
+              3,
+              4,
+              0
+            ]
+          },
+          {
+            "x": 44,
+            "y": 0,
+            "deltas": [
+              6,
+              7,
+              8,
+              0
+            ]
+          },
+          {
+            "x": 46,
+            "y": 0,
+            "deltas": [
+              4,
+              5,
+              6,
+              0
+            ]
+          }
+        ]
+      },
+      {
+        "name": "texture442",
+        "pixels": 1930176,
+        "mismatched": 1204600,
+        "max_channel_error": 105,
+        "histogram": {
+          "1": 910637,
+          "2": 124596,
+          "0": 725576,
+          "3": 58124,
+          "5": 23785,
+          "7": 11081,
+          "4": 37965,
+          "8": 7640,
+          "6": 16175,
+          "10": 3193,
+          "9": 4837,
+          "11": 2111,
+          "13": 948,
+          "12": 1467,
+          "14": 616,
+          "16": 255,
+          "57": 5,
+          "63": 5,
+          "29": 14,
+          "40": 3,
+          "15": 433,
+          "68": 4,
+          "65": 4,
+          "17": 146,
+          "21": 24,
+          "18": 117,
+          "19": 64,
+          "23": 14,
+          "34": 5,
+          "30": 9,
+          "75": 1,
+          "74": 1,
+          "20": 47,
+          "28": 10,
+          "73": 3,
+          "24": 10,
+          "27": 7,
+          "25": 12,
+          "47": 11,
+          "55": 7,
+          "61": 4,
+          "71": 3,
+          "67": 5,
+          "42": 6,
+          "59": 9,
+          "32": 6,
+          "56": 6,
+          "45": 10,
+          "43": 5,
+          "38": 12,
+          "54": 3,
+          "37": 6,
+          "84": 1,
+          "39": 7,
+          "41": 6,
+          "49": 4,
+          "53": 8,
+          "48": 6,
+          "52": 5,
+          "66": 2,
+          "50": 4,
+          "70": 1,
+          "36": 6,
+          "80": 2,
+          "82": 1,
+          "69": 3,
+          "44": 7,
+          "72": 2,
+          "26": 12,
+          "35": 2,
+          "22": 18,
+          "105": 1,
+          "31": 3,
+          "86": 2,
+          "58": 4,
+          "87": 2,
+          "76": 2,
+          "46": 7,
+          "90": 1,
+          "94": 1,
+          "88": 1,
+          "85": 1,
+          "83": 1,
+          "91": 1,
+          "77": 1,
+          "33": 7,
+          "60": 2,
+          "51": 4,
+          "62": 1
+        },
+        "abs1": 910637,
+        "abs2": 124596,
+        "gt2": 169367,
+        "alpha_pixels": 7,
+        "rgb_pixels": 1204600,
+        "channel_max": [
+          71,
+          66,
+          105,
+          4
+        ],
+        "channel_mismatches": [
+          794494,
+          735977,
+          608210,
+          7
+        ],
+        "large_count": 169367,
+        "large_sample": [
+          {
+            "x": 13,
+            "y": 0,
+            "deltas": [
+              3,
+              2,
+              2,
+              0
+            ]
+          },
+          {
+            "x": 16,
+            "y": 0,
+            "deltas": [
+              4,
+              5,
+              2,
+              0
+            ]
+          },
+          {
+            "x": 17,
+            "y": 0,
+            "deltas": [
+              7,
+              7,
+              4,
+              0
+            ]
+          },
+          {
+            "x": 19,
+            "y": 0,
+            "deltas": [
+              7,
+              7,
+              4,
+              0
+            ]
+          },
+          {
+            "x": 20,
+            "y": 0,
+            "deltas": [
+              3,
+              2,
+              1,
+              0
+            ]
+          },
+          {
+            "x": 21,
+            "y": 0,
+            "deltas": [
+              4,
+              2,
+              1,
+              0
+            ]
+          },
+          {
+            "x": 37,
+            "y": 0,
+            "deltas": [
+              3,
+              2,
+              2,
+              0
+            ]
+          },
+          {
+            "x": 39,
+            "y": 0,
+            "deltas": [
+              4,
+              3,
+              1,
+              0
+            ]
+          },
+          {
+            "x": 44,
+            "y": 0,
+            "deltas": [
+              8,
+              7,
+              6,
+              0
+            ]
+          },
+          {
+            "x": 46,
+            "y": 0,
+            "deltas": [
+              6,
+              5,
+              4,
+              0
+            ]
+          }
+        ]
+      },
+      {
+        "name": "final",
+        "pixels": 1930176,
+        "mismatched": 1792005,
+        "max_channel_error": 23,
+        "histogram": {
+          "11": 25,
+          "9": 45,
+          "7": 71,
+          "10": 33,
+          "14": 10,
+          "3": 2668,
+          "2": 31364,
+          "1": 1757148,
+          "6": 93,
+          "12": 24,
+          "20": 2,
+          "4": 320,
+          "13": 15,
+          "8": 56,
+          "15": 8,
+          "22": 1,
+          "21": 3,
+          "5": 103,
+          "23": 1,
+          "18": 2,
+          "0": 138171,
+          "16": 10,
+          "19": 1,
+          "17": 2
+        },
+        "abs1": 1757148,
+        "abs2": 31364,
+        "gt2": 3493,
+        "alpha_pixels": 1785844,
+        "rgb_pixels": 976504,
+        "channel_max": [
+          14,
+          20,
+          23,
+          1
+        ],
+        "channel_mismatches": [
+          424218,
+          497492,
+          549506,
+          1785844
+        ],
+        "large_count": 3493,
+        "large_sample": [
+          {
+            "x": 0,
+            "y": 0,
+            "deltas": [
+              7,
+              9,
+              11,
+              0
+            ]
+          },
+          {
+            "x": 1,
+            "y": 0,
+            "deltas": [
+              6,
+              7,
+              9,
+              0
+            ]
+          },
+          {
+            "x": 2,
+            "y": 0,
+            "deltas": [
+              6,
+              5,
+              7,
+              0
+            ]
+          },
+          {
+            "x": 3,
+            "y": 0,
+            "deltas": [
+              6,
+              8,
+              10,
+              0
+            ]
+          },
+          {
+            "x": 4,
+            "y": 0,
+            "deltas": [
+              8,
+              11,
+              14,
+              0
+            ]
+          },
+          {
+            "x": 5,
+            "y": 0,
+            "deltas": [
+              7,
+              10,
+              14,
+              0
+            ]
+          },
+          {
+            "x": 6,
+            "y": 0,
+            "deltas": [
+              4,
+              6,
+              7,
+              0
+            ]
+          },
+          {
+            "x": 7,
+            "y": 0,
+            "deltas": [
+              2,
+              2,
+              3,
+              0
+            ]
+          },
+          {
+            "x": 10,
+            "y": 0,
+            "deltas": [
+              8,
+              10,
+              11,
+              0
+            ]
+          },
+          {
+            "x": 11,
+            "y": 0,
+            "deltas": [
+              4,
+              6,
+              6,
+              0
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "canonical_replay_pixels": "match",
+  "canonical_replay_state_coverage": "partial",
+  "checkpoint_reconciliation": "every requested checkpoint must have exactly one valid result; missing/duplicate/unexpected/failed checkpoints are invalid and exit 1",
+  "checkpoint_regressions": 14,
+  "copy_only_provenance": "validated from ordered transfer records; sampler bindings required only for draw consumers",
+  "copy_provenance_regressions": 7,
+  "non_default_source_metadata": "queried from the selected attachment under saved/restored texture binding; unsupported attachments fail closed",
+  "portable_linux_vm": "Ubuntu 24.04 amd64, Python 3.14.10, Node 26.13.1; previously failing modules pass, full workflow verified on the PR head",
+  "scene75_difference_artifact": "analysis/infra/scene75-difference.json",
+  "review_threads": 2,
+  "review_threads_resolved": true,
+  "portable_ci": {
+    "url": "https://github.com/HagbardCel/eu4-mac-perf/actions/runs/43710576956",
+    "conclusion": "success",
+    "head": "41b4c85cf0a1e5eb336a215452b70c41a7503fa9",
+    "steps": 19
+  },
+  "source_category_validation": "fb:0 requires metal_default; renderer-generated textures require metal_render_target; boundary inputs require their declared category; unexpected categories invalid",
+  "source_category_regressions": 3,
+  "checkpoint_format_authority": "captured resource format is authoritative; only documented RGB8/BGRA8 diagnostic conversion is allowed",
+  "checkpoint_format_regressions": 3,
+  "output_safety": "replay/case outputs reject protected roots, input overlaps and unowned nonempty directories; owned prior outputs may be replaced",
+  "output_safety_regressions": 12,
+  "severity_monotonic": "invalid is never downgraded to partial/complete",
+  "final_focused_tests": 83,
+  "classification_invalid_evidence": "invalid/unknown execution, coverage, pixels, state or checkpoints are status invalid and exit 1; valid faults exit 3; status qualified only with qualified=true",
+  "checkpoint_classification_regressions": 26,
+  "unit_zero_handling": "fault_missing_engine_unit and selected_engine_unit use explicit None handling; unit 0 preserved",
+  "unit_zero_regressions": 1
+}

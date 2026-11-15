@@ -57,6 +57,51 @@ void eu4_gfx_frame_trace_draw_exit(eu4_gfx_capture_frame *frame,
    the active unit for `target` and restores the previous binding and pack
    state. Returns 0 when the bind took effect. */
 int eu4_gfx_frame_trace_texture_probe(unsigned target, unsigned name);
+int eu4_gfx_frame_trace_readback_probe(void);
+/* Host-test only: run the production final-reference readback/validation.
+   Returns 0 only when the reference was written and its digest/size checks
+   passed. */
+int eu4_gfx_frame_trace_test_reference(const char *directory);
+
+/* Effective state of one glCopyTexSubImage2D/glBlitFramebuffer call.  The
+   source attachment and the default framebuffer's read buffer are part of the
+   copied pixels' identity; read_fbo == 0 alone is not enough. */
+typedef struct {
+    int is_blit;
+    int source_framebuffer;
+    int read_buffer;
+    int draw_buffer;
+    int double_buffered;
+    int source_color_type;
+    int source_color_name;
+    int source_color_level;
+    int source_attachment;
+    int source_texture;
+    int source_level;
+    int source_width;
+    int source_height;
+    int source_internal_format;
+    int source_resolved;
+    int destination_resolved;
+    int destination_texture;
+    int destination_level;
+    int destination_width;
+    int destination_height;
+    int destination_internal_format;
+    int x;
+    int y;
+    int width;
+    int height;
+    int dx;
+    int dy;
+} eu4_gfx_copy_event;
+
+int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event);
+
+/* Cheap per-call probe for the GL interposer.  Returns 1 when the caller must
+   collect the full effective state (an armed capture or the first copy of a
+   scene).  Returns 0 after counting the copy without any GL queries. */
+int eu4_gfx_frame_trace_copy_mode(void);
 
 void eu4_gfx_frame_trace_resolve_entry(eu4_gfx_capture_frame *frame,
                                        eu4_gfx_observe_call *call);
