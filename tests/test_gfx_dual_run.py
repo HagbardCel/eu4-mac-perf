@@ -677,6 +677,7 @@ def _frame_dump(index, digest, session, *, valid=True, width=8, height=6,
             "raw_file": f"captured/frame-{index}.bgra",
             "raw_bytes": width * height * 4,
             "sha256": digest,
+            "capture_valid": True,
             "gpu_completed": gpu_completed,
         },
     }

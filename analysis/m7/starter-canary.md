@@ -243,66 +243,124 @@ coarse.
 
 This canary makes **no claim about Metal**, correctness or otherwise.
 
-## 8. Code change and regression
+## 8. Correction and regression
 
-The one concrete, localized defect is the third root cause: a pixel difference
-was reported as `rendering_difference` without the static-scene correspondence
-the contract requires.
+### 8.1 Corrected staticity contract
 
-Change (no new framework, no new tool, no tolerance change):
+The first revision of this change was too permissive; the review of PR #195
+found that it could accept identity evidence, unverified dumps and stable runs
+that did not contain the compared frame. The merged correction is a fails-closed
+contract:
+
+| Requirement | Rule |
+| --- | --- |
+| Staticity evidence | Only `settle.stable_frames` consecutive **identical full-resolution digests** count. Engine day, `update_identity`, caller composition and draw count are correspondence evidence and never staticity (`stability_summary` no longer ORs `identity_max_streak`). |
+| Valid dump | The record must be marked `valid`, and its metadata must agree on frame index, digest, extent, origin, pixel format, payload size and GPU completion. A bare SHA-256 proves nothing. |
+| Provenance | The dump must belong to the campaign session; a missing or foreign session is rejected. Missing metadata/payload declarations are rejected. |
+| Pair-local | The identical-digest run must **contain the compared frame**. A stable run elsewhere in the capture window does not qualify a difference elsewhere. |
+| Continuity | Gaps and conflicting duplicate indices never form a run. |
+| Required length | `settle.stable_frames` is read from the campaign scenario in every path (minimum two); a two-frame streak cannot satisfy a three-frame campaign. |
+| Renderer attribution | A confirmed difference additionally needs authoritative pair correspondence, healthy GPU/API execution and no instrumentation failure. An absent or `unknown` health verdict is not healthy. |
+| Case agreement | The offline case and the campaign call the same predicate; the case can never claim a stronger verdict than its campaign evidence. |
+
+Numerical difference statistics remain in the comparison record whenever
+attribution is withheld; withholding a verdict never discards a measurement.
+This contract is scoped to the paused, pixel-static experiment — it does not
+redefine comparison policy for animated gameplay.
+
+### 8.2 Code change
+
+No new framework, no new tool, no tolerance change.
 
 - [`automation/gfx_align.py`](../../automation/gfx_align.py) —
-  `staticity_evidence()` reads the bounded full-frame digests preserved per role
-  and reports whether each process rendered `stable_frames` consecutive
-  identical frames. Gaps or differing digests are not static; both roles must be
-  static.
-- [`automation/gfx_dual_run.py`](../../automation/gfx_dual_run.py) — at stop, the
-  failing frame's immediate neighbours are requested from the observer's
-  bounded ring (previously only the single compared frame was preserved), so
-  staticity is observable without another campaign. `classify_campaign` now
-  emits `rendering_difference` only when the campaign stability is verified
-  **or** the preserved digests verify staticity; otherwise it emits
-  `incomplete`, keeps the measured pixel reasons, and prepends “pixel difference
-  on an unverified static scene; correspondence is weak”. The qualification
-  record gains a `staticity` object.
+  `scene_staticity()` validates every preserved frame and requires the stable
+  run containing the compared frame; `pair_correspondence()` is the single
+  correspondence decision (shared engine update plus comparable render workload,
+  which preserves GL/Metal draw-batching differences; identical draw counts are
+  not required).
+- [`automation/gfx_qualification.py`](../../automation/gfx_qualification.py) —
+  new small module with the single renderer-difference predicate
+  (`renderer_difference_evidence`) and `required_stable_frames`. It combines
+  capture validity, correspondence, pair-local staticity, GPU health and
+  instrumentation state, and returns every blocking reason.
+- [`automation/gfx_dual_run.py`](../../automation/gfx_dual_run.py) — the
+  sequence aligner and `_compare_pair` now use `pair_correspondence`;
+  `_compare_pair` refuses any pair whose authoritative status is not `aligned`
+  and cannot re-derive a weaker rule; `stability_summary` ignores identity;
+  `classify_campaign` uses the shared predicate and reports the evidence object.
+  At stop, the failing frame's immediate neighbours are requested from the
+  observer's bounded ring so staticity is observable without another campaign.
 - [`automation/gfx_case.py`](../../automation/gfx_case.py) — the offline case
-  classifier uses the same predicate, so a preserved case cannot contradict the
-  campaign verdict; its analysis names the weak-correspondence case.
+  uses the same predicate, is floored by the campaign classification and its
+  analysis lists the qualification blockers instead of claiming a renderer
+  difference.
 
-Regression tests:
+### 8.3 Regressions
 
-- `tests/test_gfx_dual_run.py` — `test_pixel_difference_on_unverified_static_scene_is_incomplete`
-  (the recorded Experiment A shape: aligned pair, `stability=weak`, pixel
-  reasons retained), `test_missing_stability_evidence_is_not_a_rendering_difference`,
-  `test_preserved_static_frames_restore_a_rendering_difference`, and
-  `test_gapped_or_changing_digests_are_not_static`.
-- `tests/test_gfx_case.py`, `tests/test_offline_campaign.py`,
-  `tests/test_agent_tools.py` — fixtures that represent a confirmed difference
-  now declare the verified static scene such a difference requires.
+New `tests/test_gfx_qualification.py` (25 tests) covers every review item:
 
-Reclassification of the recorded evidence with the corrected contract (offline,
-no launch):
+- repeated game-day identities with changing frame pixels → not static;
+- invalid captures with repeated hashes → not static;
+- missing metadata, wrong session, inconsistent metadata, unfinished GPU frame →
+  not static;
+- a stable streak that does not contain the compared frame → not static;
+- gapped indices and conflicting duplicate indices → no run;
+- two stable frames when three are required → not static;
+- contradictory aligner/pixel decisions: `_compare_pair` refuses a pair the
+  aligner rejected, and a missing pair status is refused;
+- different GL/Metal draw batching with a shared identity is still compared;
+- missing/unknown/instrumented GPU health → not a renderer difference;
+- a valid static aligned pair with an injected difference → `rendering_difference`
+  with the statistics retained;
+- campaign/case agreement and “case never stronger than campaign”;
+- historical `live-a6` and `live-a10` reclassification.
 
-| Session | Recorded | Corrected |
-| --- | --- | --- |
-| `live-a6` | `rendering_difference` | `incomplete` — “pixel difference on an unverified static scene; correspondence is weak” |
-| `live-a10` | `rendering_difference` | `incomplete` — same reason |
-| `live-a8` | `alignment_failure` | unchanged |
-| `live-a11` (20 pairs, verified stability, 0 comparisons) | `alignment_failure` | unchanged |
+The campaign/case fixtures in `tests/test_gfx_dual_run.py`,
+`tests/test_gfx_case.py`, `tests/test_offline_campaign.py` and
+`tests/test_agent_tools.py` now **construct** consecutive valid digest evidence
+instead of declaring `stability.status=verified`.
 
-`python3.14 -m unittest tests.test_gfx_dual_run tests.test_gfx_case tests.test_agent_tools tests.test_offline_campaign tests.test_gfx_metrics tests.test_gfx_replay_case` → 122 tests, OK.
+Each regression was checked against the previous implementation (`24a2d14`),
+where the identity/dump/streak/correspondence cases returned
+`rendering_difference` or a compared verdict.
 
-Full `python3.14 -m unittest discover -s tests` → 2951 tests, 20 failures / 3
-errors, all in pre-existing modules this change does not touch
-(`test_dsh_bridge`, `test_trace_tr3`, `test_gfx_init`, `test_gfx_session`,
-`test_pre_ready_forensic`). The same five modules fail with the identical test
-set on the base commit `b94b9e2` (19 failures / 2 errors), so the correction
-introduces no new failure.
+### 8.4 Historical reclassification
 
-This is deliberately conservative: a first-pair difference in a run with no
-staticity evidence now reports `incomplete` instead of blaming the renderer. The
-thresholds (`max_channel_error 8`, 1 %, 1.5 MAE) are unchanged; nothing was
-weakened to manufacture a pass.
+Re-running `classify_campaign` offline on the recorded sessions with the
+corrected predicate:
+
+| Session | Recorded | Corrected | Blocking evidence |
+| --- | --- | --- | --- |
+| `live-a6` | `rendering_difference` | `incomplete` | one preserved frame per role; pair-local static run 1 < 2 |
+| `live-a10` | `rendering_difference` | `incomplete` | one preserved frame per role; pair-local static run 1 < 2 |
+| `live-a8` | `alignment_failure` | `alignment_failure` | unchanged |
+| `live-a11` (20 pairs, verified digests, 0 comparisons) | `alignment_failure` | `alignment_failure` | unchanged |
+
+The recorded `live-a6`/`live-a10` dumps predate the explicit `valid` marker, so
+the current predicate rejects them as unverified as well; the outcome is the
+same. The numerical difference statistics are unchanged.
+
+### 8.5 Known limitations
+
+- Staticity is observable only inside the bounded stop-time dump window; the
+  campaign ring decides how many neighbours exist. A run with a single preserved
+  frame stays inconclusive by construction.
+- The sandbox has no per-frame full-resolution digest stream, so staticity
+  cannot be established for frames that were never dumped (see §9).
+- Animated gameplay is out of scope. The contract refuses attribution rather
+  than requiring bit-identical consecutive frames outside the paused scenario.
+- The campaign-level `match` path still uses digest stability over compared
+  pairs (now identity-free); it does not yet require pair-local staticity for
+  every passed pair.
+
+### 8.6 Validation against the current base
+
+The PR was rebased onto `origin/main` `5a0ac03` before validation. Focused
+modules (`test_gfx_dual_run`, `test_gfx_case`, `test_agent_tools`,
+`test_offline_campaign`, `test_gfx_metrics`, `test_gfx_replay_case`,
+`test_gfx_qualification`) pass. Full-suite results and the base/candidate
+failure reconciliation are recorded in
+[`m7-validation.md`](m7-validation.md).
 
 ## 9. Tooling limitations encountered
 

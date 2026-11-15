@@ -38,6 +38,7 @@ def _static_dump(index, digest, session, *, width=8, height=6):
             "raw_file": f"captured/frame-{index}.bgra",
             "raw_bytes": width * height * 4,
             "sha256": digest,
+            "capture_valid": True,
             "gpu_completed": True,
         },
     }

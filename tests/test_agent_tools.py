@@ -302,6 +302,7 @@ class ToolTests(unittest.TestCase):
                               "origin": "lower_left", "pixel_format": "BGRA8",
                               "raw_file": "captured/frame-2.bgra",
                               "raw_bytes": 8 * 6 * 4, "sha256": digest,
+                              "capture_valid": True,
                               "gpu_completed": True}},
                     {"frame_index": 3, "sha256": digest, "valid": True,
                      "preserved": True, "reasons": [],
@@ -310,6 +311,7 @@ class ToolTests(unittest.TestCase):
                               "origin": "lower_left", "pixel_format": "BGRA8",
                               "raw_file": "captured/frame-3.bgra",
                               "raw_bytes": 8 * 6 * 4, "sha256": digest,
+                              "capture_valid": True,
                               "gpu_completed": True}},
                 ], "missing": []}
                 for role, digest in (("reference", "a" * 64),

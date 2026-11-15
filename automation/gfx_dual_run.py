@@ -809,11 +809,15 @@ def _compare_pair(pair: dict, reference_meta: dict | None,
     # engine identity, draw workload and scene stability; a coarse image
     # correlation is not allowed to veto (or authorize) a rendering verdict.
     alignment["correspondence"] = {
-        "basis": "engine_day+draw_workload+scene_stability",
-        "render_stage_proven": bool(
+        "basis": "engine_day+draw_workload",
+        "render_stage_configured": bool(
             (scenario.get("start") or {}).get("pause")
             and (scenario.get("settle") or {}).get("stable_frames", 1) > 1
         ),
+        # A configured pause is not proof.  Pixel-staticity is decided at
+        # qualification time from preserved digests, never from scenario flags.
+        "render_stage_proven": False,
+        "staticity_decided_at_qualification": True,
         "image_correlation_is_diagnostic": True,
     }
     compare_policy = {

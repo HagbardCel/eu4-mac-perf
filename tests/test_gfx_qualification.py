@@ -36,6 +36,7 @@ CANDIDATE_DIGEST = "b" * 64
 
 
 def frame(index, digest, *, session=SESSION, valid=True, gpu_completed=True,
+          capture_valid=True,
           origin="lower_left", meta_index=None, meta_digest=None,
           meta_session=None, raw_file=None, raw_bytes=None, width=8, height=6,
           meta=True):
@@ -60,6 +61,7 @@ def frame(index, digest, *, session=SESSION, valid=True, gpu_completed=True,
             "raw_file": raw_file or f"captured/frame-{index}.bgra",
             "raw_bytes": width * height * 4 if raw_bytes is None else raw_bytes,
             "sha256": digest if meta_digest is None else meta_digest,
+            "capture_valid": capture_valid,
             "gpu_completed": gpu_completed,
         },
     }
@@ -161,6 +163,17 @@ class StaticityPredicateTests(unittest.TestCase):
             [frame(4, CANDIDATE_DIGEST), frame(5, "d" * 64)],
         )
         self.assertEqual(classify(result)["status"], "incomplete")
+
+    def test_capture_invalid_dump_is_not_static(self):
+        value = self.staticity(
+            stream(frame(4, REFERENCE_DIGEST, capture_valid=False),
+                   frame(5, REFERENCE_DIGEST, capture_valid=False)),
+            stream(frame(4, CANDIDATE_DIGEST, capture_valid=False),
+                   frame(5, CANDIDATE_DIGEST, capture_valid=False)),
+        )
+        self.assertFalse(value["verified"])
+        self.assertIn("capture-valid",
+                      " ".join(value["roles"]["reference"]["problems"]))
 
     def test_invalid_dump_with_repeated_digest_is_not_static(self):
         value = self.staticity(

@@ -301,6 +301,8 @@ def _static_frame(item, *, expected_session: str | None) -> tuple[tuple[int, str
         if (type(width) is not int or width <= 0
                 or type(height) is not int or height <= 0):
             problems.append("frame extent is absent or invalid")
+        if meta.get("capture_valid") is not True:
+            problems.append("frame dump is not marked capture-valid")
         if meta.get("gpu_completed") is not True:
             problems.append("frame did not report GPU completion")
         for key in ("origin", "pixel_format", "raw_file"):

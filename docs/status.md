@@ -281,12 +281,21 @@ yet differed on 1.35 % of pixels, while the same process's consecutive frames
 differed by 3.7 % and 79.7 %; 92 % of the cross-process differing pixels also
 change between two consecutive reference frames, and the candidate pause
 released ~2 s after the request. Both recorded `rendering_difference` verdicts
-were emitted with `stability=weak` and `render_stage_proven=false`. The
-correction requires verified static-scene evidence before a pixel difference is
-attributed to a renderer (otherwise `incomplete`), extracts staticity from
-preserved consecutive digests (stop-time neighbour frames), and applies the same
-predicate to offline cases. No EU4 launch was made and no Metal claim is
-involved. Report: [M7.0 starter canary](../analysis/m7/starter-canary.md).
+were emitted with `stability=weak` and `render_stage_proven=false`.
+
+The correction requires verified static-scene evidence before a pixel difference
+is attributed to a renderer (otherwise `incomplete`): `settle.stable_frames`
+consecutive identical full-resolution digests whose run contains the compared
+frame, from valid dumps that belong to the campaign session. Engine day, update
+identity, caller composition and draw count are correspondence evidence and
+never establish staticity. The same predicate
+(`automation/gfx_qualification.py`) gates campaign and offline case
+classification, requires healthy (not `unknown`) GPU execution, and the pixel
+path may not promote a pair the sequence aligner rejected. Stop-time neighbour
+frames make staticity observable without another campaign. No EU4 launch was
+made and no Metal claim is involved. Report and validation:
+[M7.0 starter canary](../analysis/m7/starter-canary.md),
+[validation](../analysis/m7/m7-validation.md).
 
 `live-a6` and `live-a10` are therefore reclassified `incomplete`; the measured
 differences are unchanged. The remaining unknown is the mechanism of the
