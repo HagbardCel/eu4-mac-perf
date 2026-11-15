@@ -1,8 +1,8 @@
 # EU4 Metal backend — submission and draw-overhead optimization
 
 Final report for the P0–P4 sequence, updated after the PR #192 review. Reviewed
-head: `29c5b51` (implementation through `614a0da`, corrected evidence through
-`29c5b51`). Work is local; no branch was merged. PR #190 is present in `origin/main` (merge
+head: `704c0db` (implementation through `614a0da`, final correctness patch
+`704c0db`). Work is local; no branch was merged. PR #190 is present in `origin/main` (merge
 `61e7795`), and every stage below is stacked on that merge plus the review-fix
 commit.
 
@@ -17,6 +17,7 @@ commit.
 | P4 | `perf/p4-cpu-hot-path` | `1ac02fa`, `37e9284` | Layout/depth/uniform caches; ordering remediations |
 | Review | `perf/p4-cpu-hot-path` | `614a0da` | Geometry-thread, scissor, multi-RT conversion, GPU timing, cache hygiene |
 | Evidence | `perf/p4-cpu-hot-path` | `c6171ba`, `29c5b51` | Corrected measurements, live acceptance, compact stage summaries |
+| Final patch | `perf/p4-cpu-hot-path` | `704c0db` | Encoder cleanup, element locations, update-drain fail-closed, stable pipeline identity |
 
 The review commit addresses all four automated code-review findings plus the
 additional geometry-publication thread finding. The staged commits preserve the
@@ -99,14 +100,14 @@ a valid baseline.
 | P2 | 5.74 ms | 12.52 ms | 12.53 ms | 23.63 ms | 30.38 ms | 30.21 ms |
 | P3 | 2.11 ms | 8.75 ms | 8.88 ms | 15.38 ms | 20.04 ms | 20.53 ms |
 | P4 | 2.11 ms | 4.21 ms | 4.27 ms | 16.10 ms | 15.53 ms | 15.46 ms |
-| **Final** | **2.00 ms** | **3.63 ms** | **3.69 ms** | **14.27 ms** | **14.37 ms** | **14.41 ms** |
+| **Final** | **2.02 ms** | **3.31 ms** | **3.37 ms** | **13.81 ms** | **13.90 ms** | **13.79 ms** |
 
-P0 → final: CPU encoding −74.4% / −79.4% / −78.7% and wall time −34.9% /
-−53.4% / −53.0% (simple / indexed / mixed). Per-draw CPU encoding is now
+P0 → final: CPU encoding −74.2% / −81.2% / −80.6% and wall time −37.0% /
+−54.9% / −55.1% (simple / indexed / mixed). Per-draw CPU encoding is now
 ~2.0–3.7 µs.
 
 Corrected GPU time per 1000-draw frame (sum over exactly three committed
-command buffers): simple 1.20 ms, indexed 0.95 ms, mixed 0.84 ms. Every measured
+command buffers): simple 1.36 ms, indexed 0.95 ms, mixed 0.85 ms. Every measured
 frame reported exactly three timing records and zero pending records. Wall time
 (~14 ms) is dominated by presentation and the two explicit completion waits, not
 by CPU encoding or draw-stream GPU work.
@@ -159,6 +160,12 @@ All checks true: draw reached/encoded, GPU completed, pixels captured,
 presented, non-blank frame, no refused draws, no failed resolves, resolve trace
 present, upright text, UI and map regions. `clean_starts=3`, distinct runs and
 identities. Evidence: `analysis/m6/review-live-acceptance.json`.
+
+One additional smoke launch on the final patch head (`704c0db`) passed every
+acceptance check (UI 0.882/0.946/0.835, map mean 72.25, similarity 0.966,
+upright text, no refused draws or failed resolves). The full three-run
+qualification was not repeated because this patch only changes failure cleanup,
+diagnostic metadata and an equivalent pipeline identity.
 
 One earlier launch (`review-live/run-1`) is excluded: it used the wrong cached
 shader set (`shader-cache-lod`), producing a beige map. With the accepted

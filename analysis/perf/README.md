@@ -10,9 +10,9 @@ Final qualification and PR/commit list: [FINAL_REPORT.md](FINAL_REPORT.md).
 | Command buffers | 1002 | 3 |
 | Render encoders | 1000 | 1 |
 | Temporary index buffers | 1000 | 0 |
-| CPU encoding, simple / indexed / mixed | 7.83 / 17.63 / 17.36 ms | 2.00 / 3.63 / 3.69 ms |
-| Wall time, simple / indexed / mixed | 21.93 / 30.85 / 30.68 ms | 14.27 / 14.37 / 14.41 ms |
-| GPU time (3 command buffers/frame) | unavailable | 1.20 / 0.95 / 0.84 ms |
+| CPU encoding, simple / indexed / mixed | 7.83 / 17.63 / 17.36 ms | 2.02 / 3.31 / 3.37 ms |
+| Wall time, simple / indexed / mixed | 21.93 / 30.85 / 30.68 ms | 13.81 / 13.90 / 13.79 ms |
+| GPU time (3 command buffers/frame) | unavailable | 1.36 / 0.95 / 0.85 ms |
 
 Baseline and every stage were rebuilt in temporary worktrees and measured
 without `MTL_DEBUG_LAYER`; see [FINAL_REPORT.md](FINAL_REPORT.md). GPU timing is
