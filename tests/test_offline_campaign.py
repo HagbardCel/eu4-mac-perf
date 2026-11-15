@@ -28,7 +28,6 @@ HEIGHT = 48
 DEFECT_FRAME = 57
 
 
-@unittest.skipUnless(np is not None, "numpy is required")
 def _static_dump(index, digest, session, *, width=8, height=6):
     """A valid preserved frame record used to prove pair-local staticity."""
     return {
@@ -65,6 +64,7 @@ def _static_dumps(frame, session, *, width=8, height=6):
     }
 
 
+@unittest.skipUnless(np is not None, "numpy is required")
 class OfflineCampaignTests(unittest.TestCase):
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()

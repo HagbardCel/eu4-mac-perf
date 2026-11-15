@@ -683,11 +683,41 @@ def _frame_dump(index, digest, session, *, valid=True, width=8, height=6,
     }
 
 
+def _pair_record(index, reference_digest, candidate_digest, session, *,
+                 status="aligned", comparison="pass"):
+    return {
+        "frame_index": index,
+        "candidate_frame_index": index,
+        "status": status,
+        "reference": {"update_identity": "0x10", "game_day": 1,
+                      "draws": 20, "caller_signature": "0xabc"},
+        "candidate": {"update_identity": "0x10", "game_day": 1,
+                      "draws": 20, "caller_signature": "0xabc"},
+        "dumps": {
+            "reference": {
+                "found": {
+                    str(index): _frame_dump(index, reference_digest, session)["meta"]},
+                "valid": True,
+            },
+            "candidate": {
+                "found": {
+                    str(index): _frame_dump(index, candidate_digest, session)["meta"]},
+                "valid": True,
+            },
+        },
+        "comparison": {
+            "status": comparison,
+            "alignment": {"status": status},
+            "reasons": [],
+        },
+    }
+
+
 class QualificationTests(unittest.TestCase):
     def result(self, *, paired=100, aligned=100, not_aligned=0, passed=100,
                failed=0, unverified=0, not_compared=0, health=None,
                processes=None, stop=None, stability=None, dumps=None,
-               pair_status="aligned", session="session-test"):
+               pairs=None, pair_status="aligned", session="session-test"):
         first_failure = None
         if failed:
             first_failure = {
@@ -716,6 +746,10 @@ class QualificationTests(unittest.TestCase):
                     "not_compared": not_compared,
                     "first_failure": first_failure,
                 },
+                "pairs": (pairs if pairs is not None else [
+                    _pair_record(4, "a" * 64, "b" * 64, session),
+                    _pair_record(5, "a" * 64, "b" * 64, session),
+                ]),
             },
             "health": health or {"verdict": "healthy", "first_failure": None,
                                   "instrumentation_failures": []},
@@ -727,8 +761,8 @@ class QualificationTests(unittest.TestCase):
                          else {"status": "verified"},
             "dumps": dumps if dumps is not None else {
                 role: {"captured": [
-                    _frame_dump(4, digest, session),
-                    _frame_dump(5, digest, session),
+                    _frame_dump(index, digest, session)
+                    for index in (4, 5, 6)
                 ], "missing": []}
                 for role, digest in (("reference", "a" * 64),
                                      ("candidate", "b" * 64))
@@ -753,10 +787,59 @@ class QualificationTests(unittest.TestCase):
         self.assertFalse(value["qualified"])
 
     def test_full_passing_coverage_is_match(self):
-        value = self.classify(self.result())
+        # Two requested comparisons, each with authoritative correspondence
+        # and a pair-local two-frame static run (4-5 and 5-6).
+        value = self.classify(
+            self.result(paired=2, aligned=2, passed=2), max_frames=2)
         self.assertEqual(value["status"], "match")
         self.assertTrue(value["qualified"])
         self.assertTrue(value["coverage_complete"])
+        self.assertTrue(value["match_evidence"]["supported"])
+
+    def test_verified_stability_streak_without_pair_local_evidence_is_not_match(self):
+        # A verified digest streak elsewhere in the window must not qualify
+        # two passing comparisons whose own frames are not consecutive-equal.
+        result = self.result(
+            paired=2, aligned=2, passed=2,
+            stability={"status": "verified"},
+            dumps={role: {"captured": [
+                _frame_dump(index, digest, "session-test")
+                for index in (10, 11, 12)
+            ], "missing": []}
+                for role, digest in (("reference", "c" * 64),
+                                     ("candidate", "d" * 64))},
+            pairs=[
+                _pair_record(4, "a" * 64, "b" * 64, "session-test"),
+                _pair_record(5, "e" * 64, "f" * 64, "session-test"),
+            ],
+        )
+        value = self.classify(result, max_frames=2)
+        self.assertNotEqual(value["status"], "match")
+        self.assertEqual(value["status"], "incomplete")
+        self.assertFalse(value["qualified"])
+        self.assertIn("pair-local static scene is unverified",
+                      " ".join(value["reasons"]))
+
+    def test_validated_pair_dumps_can_prove_pair_local_staticity(self):
+        # The stop dump is empty; the compared pairs' own collector-validated
+        # metadata provides the consecutive digest series.
+        result = self.result(
+            paired=2, aligned=2, passed=2,
+            dumps={role: {"captured": [], "missing": []}
+                   for role in ("reference", "candidate")},
+        )
+        value = self.classify(result, max_frames=2)
+        self.assertEqual(value["status"], "match")
+        self.assertTrue(value["match_evidence"]["supported"])
+
+    def test_missing_per_pair_evidence_is_not_a_match(self):
+        result = self.result(paired=2, aligned=2, passed=2)
+        result["frames"].pop("pairs", None)
+        value = self.classify(result, max_frames=2)
+        self.assertNotEqual(value["status"], "match")
+        self.assertEqual(value["status"], "incomplete")
+        self.assertIn("per-pair qualification evidence",
+                      " ".join(value["reasons"]))
 
     def test_one_hundred_pairs_without_comparisons_is_incomplete(self):
         value = self.classify(self.result(passed=0, not_compared=100))
@@ -1376,11 +1459,14 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(value["status"], "gpu_execution_failure")
         self.assertFalse(value["qualified"])
 
-    def test_complete_clean_coverage_is_qualified(self):
+    def test_complete_clean_counts_without_pair_evidence_are_incomplete(self):
+        # Counts and a legacy stability flag are not qualification evidence.
         value = gfx_dual_run.classify_campaign(
             self.base(), self.scenario(), max_frames=4)
-        self.assertEqual(value["status"], "match")
-        self.assertTrue(value["qualified"])
+        self.assertEqual(value["status"], "incomplete")
+        self.assertFalse(value["qualified"])
+        self.assertIn("per-pair qualification evidence",
+                      " ".join(value["reasons"]))
 
 
 class RealIdentityAlignmentTests(unittest.TestCase):

@@ -19,13 +19,19 @@ A `match` requires all of:
 3. no unverified/not-compared/not-aligned required pair;
 4. clean GPU health and no instrumentation/process failure;
 5. the configured policy is exact or tolerant (never diagnostic);
-6. **verified static-scene correspondence** (`settle.stable_frames`
-   consecutive identical full-frame digests on both sides). Engine day, update
-   identity and caller composition are correspondence evidence and never
-   establish staticity. See [static-scene contract](#static-scene-contract-m70).
+6. **pair-local static-scene correspondence for every requested comparison**:
+   for each requested pair, a `settle.stable_frames` consecutive identical
+   full-resolution digest run that contains that pair's frame on both sides,
+   plus authoritative pair correspondence. A digest streak elsewhere in the
+   campaign, a global `stability.status` flag, or only some qualified pairs does
+   not qualify a `match`. Engine day, update identity and caller composition are
+   correspondence evidence and never establish staticity. See
+   [static-scene contract](#static-scene-contract-m70).
 
 Frame-limit alone never qualifies: 100 paired observations with zero valid
-comparisons classify as `incomplete` and report the exact coverage gap.
+comparisons classify as `incomplete` and report the exact coverage gap. Missing
+per-pair qualification evidence is also `incomplete`; it is never inferred from
+aggregate counts.
 
 ## Scenario controls
 
@@ -42,6 +48,15 @@ veto. A catastrophically wrong candidate frame is compared when scene/caller/
 draw/extent correspondence is otherwise established. Conversely, a `match`
 requires a verified static scene; animated or weakly identified scenes remain
 `incomplete` with an explicit weak-correspondence reason.
+
+The sequence aligner and the pixel path share one final decision,
+`gfx_align.pair_correspondence()`. `align_sequences()` still uses its bounded
+monotonic DP to propose pairings, but the pair's authoritative status is the
+shared predicate. A pair with equal engine identity but an incompatible draw
+workload (for example 120 vs 200 draws at a 0.30 tolerance) is `ambiguous` in
+both paths, not aligned in one and ambiguous in the other. Shared identity plus
+a comparable workload remains valid across GL/Metal draw batching; identical
+draw counts are not required.
 
 An engine-level update identity is now emitted per observation. The observer reads the exported `CCurrentGameState::_pInstance` singleton at
 RVA `0x2244620` with `vm_read_overwrite` (so a stale pointer cannot fault the

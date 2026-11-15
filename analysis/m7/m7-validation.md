@@ -31,23 +31,29 @@ python3.14 -m unittest tests.test_gfx_qualification tests.test_gfx_dual_run \
   tests.test_gfx_metrics tests.test_gfx_replay_case -q
 ```
 
-Result: **138 tests, OK** (the qualification module contributes 28).
+Result: **152 tests, OK** (the qualification module contributes 37).
 
 ## Full-suite results
 
+Final qualification-review run (NumPy installed, same command; logs in
+`.local/m7/final-base-full-suite.log` and
+`.local/m7/final-full-suite.log`):
+
 | Run | Commit | Tests | Failures | Errors | Skipped | Exit |
 | --- | --- | --- | --- | --- | --- | --- |
-| Base | `5a0ac03` | 2967 | 19 | 2 | 30 | 1 |
-| Candidate (clean worktree) | `1f0041b` | 2989 | 18 | 2 | 30 | 1 |
+| Base | `5a0ac03` | 2967 | 21 | 4 | 30 | 1 |
+| Candidate (final review head) | see PR head | 3001 | 11 | 0 | 26 | 1 |
 
 Machine-readable comparison:
 `.local/m7/validation-summary.json` (local). Raw logs:
 `.local/m7/full-suite-base-5a0ac03.log`,
 `.local/m7/full-suite-candidate-clean.log`.
 
-- Common failing ids: **20**
+- Common failing ids: **11** (all `test_trace_tr3`; QBDI release not installed)
 - Candidate-only failing ids: **0**
-- Base-only failing ids: **1**
+- Base-only failing ids: **14** (environment-only: clean checkout/build layout,
+  oracle-pinned evidence and signed-division cases that pass in the populated
+  worktree)
 
 ## Classification
 
@@ -107,6 +113,59 @@ refuses:
 | Pair status `ambiguous`, shared identity, 14 % draw difference (`24a2d14`) | `_compare_pair` returned `pass` with `alignment = aligned` | `not_compared`; the aligner is authoritative |
 | Static digests with `health = unknown` (`24a2d14`) | `rendering_difference` | `incomplete` |
 | Recorded `live-a6` / `live-a10` (`b94b9e2`) | `rendering_difference` | `incomplete` |
+| Passing pairs + `stability=verified`, no pair-local evidence (`b11d877`) | `match` | `incomplete`; per-pair evidence is required |
+| Passing pair from an `incomplete` campaign (`b11d877`) | case `match` | `incomplete_evidence` (campaign floor) |
+| 120 vs 200 draws, equal identity (`b11d877`) | aligner `aligned`, pixel path `ambiguous` | `ambiguous` in both |
+| Repeated digests with `raw_bytes` absent (`b11d877`) | staticity accepted in the qualification re-check | rejected: payload declaration is required |
+
+## Final correctness review
+
+The last review found three remaining qualification inconsistencies. They are
+now closed:
+
+1. **No `match` from an unvalidated digest streak.** `classify_campaign()` no
+   longer reads `result.stability.status` for the `match` decision. Every
+   requested comparison must now have its own pair record with authoritative
+   correspondence and a pair-local static run. The runner persists those records
+   in `frames.pairs`; `gfx_qualification.match_evidence()` returns every
+   blocking reason, and missing per-pair evidence is `incomplete`, never a
+   match.
+2. **No stronger offline verdict than the campaign.** `gfx_case._classify()`
+   applies the campaign floor to passing comparisons too. A PASS pair is
+   preserved in the statistics and analysis, but the case reports `match` only
+   when its source campaign is a qualified `match` with authoritative pair
+   correspondence. Missing campaign qualification is `incomplete_evidence`.
+3. **One correspondence decision.** `gfx_align.align_sequences()` still uses
+   the monotonic DP to propose pairings, but each pair's final status now comes
+   from `pair_correspondence()`. Equal identity with 120 vs 200 draws at 0.30
+   tolerance is `ambiguous` in both paths; 120 vs 150 remains aligned.
+
+The small metadata correction now requires the complete payload declaration in
+`_static_frame()` (`raw_bytes` absent is rejected). Origin, pixel format and
+row-stride remain enforced by the authoritative `_verify_dump_payload()` /
+`_collect_dumps()` layer; a collector integration test proves a valid record
+supports staticity and malformed stride/origin/format records are rejected.
+Per-pair evidence carries the collector's validity flag rather than synthesizing
+`valid=True`.
+
+CI now installs `numpy==2.5.4` from `benchmark/requirements-test.txt`, so the
+offline qualification tests execute in the portable workflow. The
+NumPy-dependent test class is skipped explicitly when the dependency is absent;
+the helper function no longer carries a misleading skip decorator.
+
+### New regression additions
+
+- campaign with two passing pairs, complete counts, healthy GPU and
+  `stability.status=verified` but no pair-local evidence → `incomplete`;
+- campaign where the only stable digest run is at frames 10–12 while the
+  compared pairs are 4/5 → `incomplete`;
+- campaign with collector-validated per-pair dumps → `match`;
+- passing case from `incomplete`, `alignment_failure`, `match`, and missing
+  campaign evidence;
+- 120/200-draw same-identity pair agrees as `ambiguous` in
+  `align_sequences()` and `pair_correspondence()`, while 120/150 aligns;
+- real `_collect_dumps()` validity drives staticity; missing `raw_bytes`,
+  missing row stride, `RGBA8` format and an invalid origin are rejected.
 
 ## Conclusion
 

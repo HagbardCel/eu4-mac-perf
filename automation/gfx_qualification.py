@@ -141,3 +141,190 @@ def renderer_difference_evidence(result: dict, *, scenario: dict | None = None,
                 health.get("instrumentation_failures") or []),
         },
     }
+
+
+MATCH_SCHEMA = "gfx-campaign-match/v1"
+_COMPARED = ("pass", "fail", "unverified")
+
+
+def _campaign_pairs(result: dict) -> list[dict]:
+    """Pairs recorded for qualification, newest schema first."""
+    frames = result.get("frames") or {}
+    pairs = frames.get("pairs")
+    if isinstance(pairs, list):
+        return [pair for pair in pairs if isinstance(pair, dict)]
+    last = frames.get("last_pair")
+    return [last] if isinstance(last, dict) else []
+
+
+def _pair_dumps(result: dict) -> dict:
+    """Build the full digest series from every compared pair's own dump.
+
+    ``result.dumps`` preserves the stop pair and its neighbours; the per-pair
+    records preserve the compared frame's validated metadata for the whole
+    campaign.  Combining both gives a consecutive series without re-reading
+    payloads or inventing digests.  A pair is only admitted when its comparison
+    ran (so ``_compare_pair`` already validated the dump payload).
+    """
+    merged = {
+        role: {"captured": [], "missing": []}
+        for role in ("reference", "candidate")
+    }
+    for role in merged:
+        for item in ((result.get("dumps") or {}).get(role) or {}).get(
+                "captured") or []:
+            if isinstance(item, dict):
+                merged[role]["captured"].append(item)
+    seen: dict[str, set[tuple[int, str]]] = {
+        role: set() for role in merged}
+    for pair in _campaign_pairs(result):
+        comparison = pair.get("comparison") or {}
+        if comparison.get("status") not in _COMPARED:
+            continue
+        for role in merged:
+            payload = (pair.get("dumps") or {}).get(role) or {}
+            if payload.get("valid") is not True:
+                # No collector validity, no contribution.  This prevents a
+                # synthetic valid=True record from manufacturing staticity.
+                continue
+            found = payload.get("found") or {}
+            if not isinstance(found, dict):
+                continue
+            for key, meta in found.items():
+                if not isinstance(meta, dict):
+                    continue
+                index = meta.get("frame_index", key)
+                if type(index) is str and index.isdigit():
+                    index = int(index)
+                if type(index) is not int:
+                    continue
+                digest = meta.get("sha256")
+                marker = (index, str(digest))
+                if marker in seen[role]:
+                    continue
+                seen[role].add(marker)
+                merged[role]["captured"].append({
+                    "frame_index": index,
+                    "sha256": digest,
+                    "valid": True,
+                    "preserved": True,
+                    "reasons": [],
+                    "meta": meta,
+                })
+    return merged
+
+
+def pair_match_evidence(result: dict, pair: dict, *, required: int,
+                        session: str | None = None) -> dict:
+    """Whether one passing pair carries trustworthy qualification evidence."""
+    comparison = pair.get("comparison") or {}
+    correspondence = _correspondence(pair, comparison)
+    frames = _pair_frames(pair)
+    problems: list[str] = []
+    if comparison.get("status") != "pass":
+        problems.append(
+            f"comparison is {comparison.get('status') or 'absent'}, not pass")
+    if not correspondence["agrees"]:
+        problems.append(
+            "pair correspondence is not authoritative "
+            f"(pair {correspondence['pair_status'] or 'absent'}, "
+            f"comparison {correspondence['comparison_status'] or 'absent'})")
+    staticity = gfx_align.scene_staticity(
+        _pair_dumps(result), required=required, frames=frames, session=session)
+    if not staticity["verified"]:
+        problems.append(
+            "pair-local static scene is unverified: " + staticity["reason"])
+    return {
+        "supported": not problems,
+        "problems": problems,
+        "reference_frame": frames["reference"],
+        "candidate_frame": frames["candidate"],
+        "correspondence": correspondence,
+        "staticity": staticity,
+        "comparison_status": comparison.get("status"),
+    }
+
+
+def match_evidence(result: dict, *, scenario: dict | None = None,
+                   required_frames: int | None = None) -> dict:
+    """Decide whether every requested comparison is validly qualified.
+
+    A ``match`` is never derived from a digest streak somewhere in the campaign
+    or from the legacy ``result.stability.status``.  It requires complete
+    requested coverage and, for each requested pair, an authoritative
+    correspondence plus a pair-local static run containing that pair's frame.
+    Missing per-pair evidence is an incomplete result, not a match.
+    """
+    scenario = scenario if scenario is not None else (result.get("scenario") or {})
+    frames = result.get("frames") or {}
+    comparison = frames.get("comparison") or {}
+    required = int(required_frames if required_frames is not None
+                   else frames.get("paired") or 1)
+    required = max(1, required)
+    session = _session_id(result)
+    problems: list[str] = []
+
+    policy = (scenario.get("comparison") or {}).get("policy")
+    if policy == "diagnostic":
+        problems.append("diagnostic policy reports differences without qualifying")
+    if not session:
+        problems.append("campaign session identity is absent")
+    health = result.get("health") or {}
+    if health.get("verdict") != HEALTHY:
+        problems.append(
+            f"GPU health is {health.get('verdict') or 'unknown'}, not healthy")
+    if health.get("instrumentation_failures"):
+        problems.append("instrumentation failure is present")
+    if comparison.get("status") not in (None, "pass"):
+        problems.append(
+            f"campaign comparison status is {comparison.get('status')}")
+    if int(comparison.get("failed") or 0):
+        problems.append("the campaign contains failed comparisons")
+    if int(comparison.get("unverified") or 0):
+        problems.append("the campaign contains unverified comparisons")
+    if int(comparison.get("not_compared") or 0):
+        problems.append("the campaign contains pairs that were not compared")
+    passed = int(comparison.get("passed") or 0)
+    if passed < required:
+        problems.append(
+            f"requested {required} passing comparisons, got {passed}")
+    paired = int(frames.get("paired") or 0)
+    aligned = int(frames.get("aligned") or 0)
+    if paired < required or aligned < required:
+        problems.append(
+            f"paired/aligned coverage is {paired}/{aligned}, required {required}")
+    if int(frames.get("not_aligned") or 0):
+        problems.append("the campaign contains not-aligned pairs")
+
+    pairs = _campaign_pairs(result)
+    if len(pairs) < required:
+        problems.append(
+            f"per-pair qualification evidence covers {len(pairs)} of "
+            f"{required} requested comparisons")
+    pair_results: list[dict] = []
+    for pair in pairs[:required]:
+        evidence = pair_match_evidence(
+            result, pair, required=required_stable_frames(scenario),
+            session=session)
+        pair_results.append(evidence)
+        if not evidence["supported"]:
+            problems.append(
+                f"pair {evidence['reference_frame']}/"
+                f"{evidence['candidate_frame']}: "
+                + "; ".join(evidence["problems"]))
+
+    return {
+        "schema": MATCH_SCHEMA,
+        "supported": not problems,
+        "problems": problems,
+        "required_frames": required,
+        "session": session,
+        "coverage": {
+            "passed": passed,
+            "paired": paired,
+            "aligned": aligned,
+            "not_aligned": int(frames.get("not_aligned") or 0),
+            "per_pair_records": len(pairs),
+        },
+        "pairs": pair_results,
+    }

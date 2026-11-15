@@ -23,7 +23,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from automation import gfx_align, gfx_case, gfx_dual_run, gfx_qualification  # noqa: E402
+from automation import (gfx_align, gfx_artifacts, gfx_case, gfx_dual_run,
+                        gfx_qualification)  # noqa: E402
 
 try:
     import numpy as np
@@ -453,6 +454,50 @@ class CaseAgreementTests(unittest.TestCase):
             gfx_case._classify(result, pair, pair["comparison"]),
             gfx_case.INCOMPLETE)
 
+    def test_passing_pair_from_an_incomplete_campaign_is_not_a_match(self):
+        result = run([frame(4, REFERENCE_DIGEST), frame(5, REFERENCE_DIGEST)],
+                     [frame(4, CANDIDATE_DIGEST), frame(5, CANDIDATE_DIGEST)],
+                     difference_status="pass", classification="incomplete")
+        result["frames"]["comparison"].update(
+            {"passed": 1, "failed": 0, "compared": 1})
+        pair = result["frames"]["comparison"]["first_failure"]
+        self.assertEqual(gfx_case._classify(result, pair, pair["comparison"]),
+                         gfx_case.INCOMPLETE)
+        self.assertNotEqual(gfx_case.MATCH, gfx_case._classify(
+            result, pair, pair["comparison"]))
+
+    def test_passing_pair_from_an_alignment_failure_is_not_a_match(self):
+        result = run([frame(4, REFERENCE_DIGEST), frame(5, REFERENCE_DIGEST)],
+                     [frame(4, CANDIDATE_DIGEST), frame(5, CANDIDATE_DIGEST)],
+                     difference_status="pass",
+                     classification="alignment_failure")
+        result["frames"]["comparison"].update(
+            {"passed": 1, "failed": 0, "compared": 1})
+        pair = result["frames"]["comparison"]["first_failure"]
+        self.assertEqual(gfx_case._classify(result, pair, pair["comparison"]),
+                         gfx_case.UNALIGNED)
+
+    def test_passing_pair_from_a_qualified_match_is_a_match(self):
+        result = run([frame(4, REFERENCE_DIGEST), frame(5, REFERENCE_DIGEST)],
+                     [frame(4, CANDIDATE_DIGEST), frame(5, CANDIDATE_DIGEST)],
+                     difference_status="pass", classification="match")
+        result["frames"]["comparison"].update(
+            {"passed": 1, "failed": 0, "compared": 1})
+        pair = result["frames"]["comparison"]["first_failure"]
+        self.assertEqual(gfx_case._classify(result, pair, pair["comparison"]),
+                         gfx_case.MATCH)
+
+    def test_passing_pair_without_campaign_qualification_is_incomplete(self):
+        result = run([frame(4, REFERENCE_DIGEST), frame(5, REFERENCE_DIGEST)],
+                     [frame(4, CANDIDATE_DIGEST), frame(5, CANDIDATE_DIGEST)],
+                     difference_status="pass")
+        result["frames"]["comparison"].update(
+            {"passed": 1, "failed": 0, "compared": 1})
+        result.pop("classification", None)
+        pair = result["frames"]["comparison"]["first_failure"]
+        self.assertEqual(gfx_case._classify(result, pair, pair["comparison"]),
+                         gfx_case.INCOMPLETE)
+
     def test_case_maps_an_alignment_failure_to_unaligned(self):
         result = run([frame(4, REFERENCE_DIGEST), frame(5, REFERENCE_DIGEST)],
                      [frame(4, CANDIDATE_DIGEST), frame(5, CANDIDATE_DIGEST)],
@@ -462,6 +507,134 @@ class CaseAgreementTests(unittest.TestCase):
         self.assertEqual(
             gfx_case._classify(result, pair, pair["comparison"]),
             gfx_case.UNALIGNED)
+
+
+class CorrespondenceAgreementTests(unittest.TestCase):
+    """The sequence aligner and pixel path share one final decision."""
+
+    def pair(self, draws=120, candidate_draws=200, signature="0xaaa",
+             candidate_signature="0xbbb", identity="0x10"):
+        return ({
+            "frame_index": 1, "width": 8, "height": 6, "draws": draws,
+            "caller_signature": signature, "update_identity": identity,
+        }, {
+            "frame_index": 1, "width": 8, "height": 6,
+            "draws": candidate_draws,
+            "caller_signature": candidate_signature,
+            "update_identity": identity,
+        })
+
+    def test_same_identity_with_incompatible_draw_workload_is_ambiguous_everywhere(self):
+        reference, candidate = self.pair()
+        decision = gfx_align.pair_correspondence(
+            reference, candidate, draw_tolerance=0.30)
+        sequence = gfx_align.align_sequences(
+            [reference], [candidate], draw_tolerance=0.30)
+        self.assertEqual(decision["status"], gfx_align.AMBIGUOUS)
+        self.assertEqual(sequence["pairs"][0]["status"], decision["status"])
+        self.assertTrue(sequence["pairs"][0]["correspondence"]["identity_equal"])
+        self.assertGreater(decision["draw_relation"], 0.30)
+
+    def test_legitimately_different_batching_within_tolerance_stays_aligned(self):
+        reference, candidate = self.pair(draws=120, candidate_draws=150)
+        decision = gfx_align.pair_correspondence(
+            reference, candidate, draw_tolerance=0.30)
+        sequence = gfx_align.align_sequences(
+            [reference], [candidate], draw_tolerance=0.30)
+        self.assertEqual(decision["status"], gfx_align.ALIGNED)
+        self.assertEqual(sequence["pairs"][0]["status"], decision["status"])
+
+
+class DumpCollectorIntegrationTests(unittest.TestCase):
+    """Validity comes from the real collector, never a synthetic valid=True."""
+
+    def make_frame(self, root, index, *, raw_bytes=True, row_stride=True,
+                   origin="lower_left", pixel_format="BGRA8", session=SESSION):
+        import hashlib
+        import json
+        captured = root / "observe" / "captured"
+        captured.mkdir(parents=True, exist_ok=True)
+        payload = bytes([7]) * (8 * 6 * 4)
+        raw = captured / f"frame-{index}.bgra"
+        raw.write_bytes(payload)
+        meta = {
+            "schema": "gfx-frame-dump/v1",
+            "frame_index": index,
+            "session": session,
+            "backend": "opengl",
+            "width": 8,
+            "height": 6,
+            "origin": origin,
+            "pixel_format": pixel_format,
+            "raw_file": str(raw),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "capture_valid": True,
+            "gpu_completed": True,
+        }
+        if raw_bytes:
+            meta["raw_bytes"] = len(payload)
+        if row_stride:
+            meta["row_stride"] = 8 * 4
+        (captured / f"frame-{index}.json").write_text(json.dumps(meta))
+        return raw, meta
+
+    def collect(self, root, indices):
+        store = gfx_artifacts.ArtifactStore(root / "store")
+        return gfx_dual_run._collect_dumps({
+            "role": "reference",
+            "run_dir": root,
+            "observe_dir": root / "observe",
+            "backend": "opengl",
+            "session_id": SESSION,
+        }, indices, store, timeout=0.5)
+
+    def test_collector_valid_frames_support_pair_local_staticity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_frame(root, 4)
+            self.make_frame(root, 5)
+            collected = self.collect(root, [4, 5])
+        self.assertEqual(len(collected["captured"]), 2)
+        self.assertTrue(all(item["valid"] for item in collected["captured"]))
+        staticity = gfx_align.scene_staticity(
+            {"reference": collected, "candidate": collected},
+            required=2, frames={"reference": 4, "candidate": 4},
+            session=SESSION)
+        self.assertTrue(staticity["verified"])
+
+    def test_missing_payload_declaration_is_rejected_by_the_qualification_layer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.make_frame(root, 4, raw_bytes=False)
+            self.make_frame(root, 5, raw_bytes=False)
+            collected = self.collect(root, [4, 5])
+        # The collector checks the actual payload length; the qualification
+        # layer additionally requires the complete declaration.
+        self.assertTrue(all(item["valid"] for item in collected["captured"]))
+        staticity = gfx_align.scene_staticity(
+            {"reference": collected, "candidate": collected},
+            required=2, frames={"reference": 4, "candidate": 4},
+            session=SESSION)
+        self.assertFalse(staticity["verified"])
+        self.assertIn("payload size declaration is absent",
+                      " ".join(staticity["roles"]["reference"]["problems"]))
+
+    def test_missing_or_bad_stride_origin_and_format_are_collector_rejections(self):
+        cases = (
+            {"row_stride": False},
+            {"pixel_format": "RGBA8"},
+            {"origin": "sideways"},
+        )
+        for overrides in cases:
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                _raw, meta = self.make_frame(root, 4, **overrides)
+                problems = gfx_dual_run._verify_dump_payload(
+                    meta, 4, expected_backend="opengl",
+                    expected_session=SESSION)
+                self.assertTrue(problems, overrides)
+                captured = self.collect(root, [4])["captured"]
+            self.assertFalse(captured[0]["valid"], overrides)
 
 
 class HistoricalReclassificationTests(unittest.TestCase):

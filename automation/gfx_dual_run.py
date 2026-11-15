@@ -747,6 +747,10 @@ def _compare_pair(pair: dict, reference_meta: dict | None,
                 "reference": reference_problems,
                 "candidate": candidate_problems,
             },
+            "capture_integrity": {
+                "reference": not reference_problems,
+                "candidate": not candidate_problems,
+            },
         }
     reference_record = {
         "frame_index": pair["frame_index"],
@@ -839,6 +843,7 @@ def _compare_pair(pair: dict, reference_meta: dict | None,
                 "reason": f"{type(exc).__name__}: {exc}",
                 "alignment": alignment}
     result["alignment"] = alignment
+    result["capture_integrity"] = {"reference": True, "candidate": True}
     return result
 
 
@@ -921,6 +926,44 @@ def _preserve_pair(store: gfx_artifacts.ArtifactStore, launched: dict,
                 store.put_file(raw, kind="frame", preserved=True,
                                logical_name=f"{role}-frame-{index}")
 
+
+
+def _qualification_pairs(pairs: list[dict]) -> list[dict]:
+    """Bounded per-pair evidence for match qualification.
+
+    The stop dump preserves the last pairs and their neighbours; every compared
+    pair also keeps its own validated dump metadata.  Persisting this compact
+    record lets classification prove pair-local staticity for the requested
+    comparisons without re-reading payloads or trusting a global digest streak.
+    """
+    compact: list[dict] = []
+    for pair in pairs:
+        comparison = pair.get("comparison") or {}
+        dumps = pair.get("dumps") or {}
+        compact.append({
+            "frame_index": pair.get("frame_index"),
+            "candidate_frame_index": pair.get("candidate_frame_index"),
+            "status": pair.get("status"),
+            "reference": pair.get("reference"),
+            "candidate": pair.get("candidate"),
+            "dumps": {
+                role: {
+                    "found": dict(((dumps.get(role) or {}).get("found") or {})),
+                    "valid": bool((dumps.get(role) or {}).get("valid", False)),
+                }
+                for role in ("reference", "candidate")
+            },
+            "comparison": {
+                "status": comparison.get("status"),
+                "alignment": {
+                    "status": (comparison.get("alignment") or {}).get("status"),
+                    "evidence": (comparison.get("alignment") or {}).get("evidence"),
+                    "reason": (comparison.get("alignment") or {}).get("reason"),
+                },
+                "reasons": (comparison.get("reasons") or [])[:6],
+            },
+        })
+    return compact
 
 
 def _comparison_summary(pairs: list[dict], scenario: dict) -> dict:
@@ -1032,6 +1075,7 @@ def classify_campaign(result: dict, scenario: dict, *, max_frames: int) -> dict:
     )
     reasons = []
     renderer_evidence = None
+    match_evidence = None
     if result.get("error") and "exception" in str(stop.get("reason") or ""):
         classification = "infrastructure_failure"
         reasons.append("campaign raised an internal error")
@@ -1087,15 +1131,19 @@ def classify_campaign(result: dict, scenario: dict, *, max_frames: int) -> dict:
     elif policy == "diagnostic":
         classification = "incomplete"
         reasons.append("diagnostic policy reports differences but does not qualify")
-    elif (result.get("stability") or {}).get("status") != "verified":
-        classification = "incomplete"
-        reasons.append("no verified static scene; correspondence is weak")
-    elif health.get("verdict") != "healthy":
-        classification = "incomplete"
-        reasons.append(
-            f"GPU health is {health.get('verdict', 'unknown')}, not healthy")
     else:
-        classification = "match"
+        # A match needs pair-local qualification for every requested
+        # comparison.  The legacy stability streak is reported for diagnosis
+        # but cannot qualify a campaign on its own.
+        match_evidence = gfx_qualification.match_evidence(
+            result, scenario=scenario, required_frames=required)
+        if match_evidence["supported"]:
+            classification = "match"
+        else:
+            classification = "incomplete"
+            reasons.append(
+                "pixel equality is not qualified: "
+                + "; ".join(match_evidence["problems"]))
     return {
         "schema": "gfx-campaign-qualification/v1",
         "status": classification,
@@ -1116,6 +1164,7 @@ def classify_campaign(result: dict, scenario: dict, *, max_frames: int) -> dict:
         },
         "coverage_complete": coverage_complete,
         "renderer_difference": renderer_evidence,
+        "match_evidence": match_evidence,
         "reasons": [reason for reason in reasons if reason],
     }
 
@@ -1797,6 +1846,11 @@ def run_campaign(
                         },
                     )
                     pair["comparison"] = comparison
+                    integrity = comparison.get("capture_integrity") or {}
+                    for role in ("reference", "candidate"):
+                        if role in integrity:
+                            pair["dumps"][role]["valid"] = bool(
+                                integrity[role])
                     if len(state.samples) < 256:
                         stats = comparison.get("statistics") or {}
                         state.samples.append({
@@ -1890,6 +1944,7 @@ def run_campaign(
             "last_pair": state.last_pair,
             "policy": scenario["comparison"]["policy"],
             "comparison": _comparison_summary(state.pairs, scenario),
+            "pairs": _qualification_pairs(state.pairs),
             "samples": state.samples,
         }
         stop = {

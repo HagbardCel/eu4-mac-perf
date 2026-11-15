@@ -1,1 +1,3 @@
 -r requirements.txt
+# The offline diagnostic qualification tests compare real frames.
+numpy==2.5.4

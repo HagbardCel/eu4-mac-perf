@@ -141,7 +141,8 @@ def match_score(reference: dict, candidate: dict) -> tuple[int, list[str]]:
 
 
 def align_sequences(reference: list[dict], candidate: list[dict], *,
-                    max_offset: int = 16, gap_penalty: int = 3) -> dict:
+                    max_offset: int = 16, gap_penalty: int = 3,
+                    draw_tolerance: float = 0.30) -> dict:
     """Monotonic sequence alignment with a bounded ordinal prior.
 
     Returns pairs in order.  A pair is ``aligned`` only when the semantic score
@@ -203,27 +204,22 @@ def align_sequences(reference: list[dict], candidate: list[dict], *,
             reference_row = ref[i - 1]
             candidate_row = cand[j - 1]
             value, evidence = match_score(reference_row, candidate_row)
-            relation = extent_relation(reference_row, candidate_row)
-            if "scene_mismatch" in evidence or "game_update_mismatch" in evidence:
-                status = NOT_ALIGNED
-            elif not relation["normalized"]:
-                status = NOT_ALIGNED
-            elif value >= 6 and (
-                "caller_signature" in evidence or "scene" in evidence
-                or "game_update" in evidence
-            ):
-                status = ALIGNED
-            elif value >= 3:
-                status = AMBIGUOUS
-            else:
-                status = AMBIGUOUS
+            # The DP score orders candidates; the authoritative pair decision
+            # is the same predicate the pixel path uses.  A score threshold
+            # must not promote a pair the pixel path would reject (or vice
+            # versa) on identity/draw-workload grounds.
+            correspondence = pair_correspondence(
+                reference_row, candidate_row,
+                draw_tolerance=draw_tolerance)
             pairs.append({
                 "reference_index": reference_row.get("frame_index"),
                 "candidate_index": candidate_row.get("frame_index"),
-                "status": status,
+                "status": correspondence["status"],
+                "reason": correspondence["reason"],
                 "score": value,
                 "evidence": evidence,
-                "extent": relation,
+                "extent": correspondence["extent"],
+                "correspondence": correspondence,
             })
             i -= 1
             j -= 1
@@ -256,7 +252,9 @@ def align_sequences(reference: list[dict], candidate: list[dict], *,
         "policy": {
             "max_offset": max_offset,
             "gap_penalty": gap_penalty,
+            "draw_tolerance": draw_tolerance,
             "keys": ["scene", "caller_signature", "draw_count", "extent", "ordinal_prior"],
+            "final_status": "gfx_align.pair_correspondence",
         },
     }
 
@@ -312,8 +310,11 @@ def _static_frame(item, *, expected_session: str | None) -> tuple[tuple[int, str
             if not isinstance(value, str) or not value:
                 problems.append(f"frame {key} is absent")
         raw_bytes = meta.get("raw_bytes")
-        if (type(width) is int and width > 0 and type(height) is int and height > 0
-                and raw_bytes is not None and raw_bytes != width * height * 4):
+        if type(raw_bytes) is not int:
+            problems.append("payload size declaration is absent")
+        elif (type(width) is int and width > 0
+              and type(height) is int and height > 0
+              and raw_bytes != width * height * 4):
             problems.append("declared payload size disagrees with the extent")
         if expected_session:
             session = meta.get("session")
