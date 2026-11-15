@@ -120,6 +120,10 @@ extern uint64_t eu4_gfx_live_clear_sequence;
 @property (nonatomic) BOOL gameContentsKnown;
 @property (nonatomic) BOOL readyForPresent;
 @property (nonatomic, strong) id pendingGameCommand;
+/* 1 when pendingGameCommand is a clear. A draw batch committed after a clear
+   leaves this false, so a following clear is ordered after the draws instead of
+   being rejected as an ordinary second clear. */
+@property (nonatomic) BOOL pendingGameIsClear;
 /* Active draw batch: work encoded into a shared command buffer but not yet
    submitted. pendingGameCommand remains the last *submitted* command. */
 @property (nonatomic, strong) id activeCommandBuffer;

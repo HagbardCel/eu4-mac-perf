@@ -1,3 +1,4 @@
+#define EU4_GFX_TEXTURE_IMPLEMENTATION 1
 #import "eu4_gfx_texture.h"
 
 #import "eu4_gfx_buffers.h"

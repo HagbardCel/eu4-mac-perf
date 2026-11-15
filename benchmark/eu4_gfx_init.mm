@@ -200,7 +200,7 @@ static eu4_physical_geometry g_physical_geometry;
 static pthread_mutex_t g_physical_geometry_lock = PTHREAD_MUTEX_INITIALIZER;
 
 void eu4_gfx_publish_geometry_transition(uint32_t width, uint32_t height) {
-    (void)eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_GEOMETRY, 1);
+    (void)eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_GEOMETRY, 0);
     if (width == 0 || height == 0) {
         return;
     }
@@ -212,7 +212,7 @@ void eu4_gfx_publish_geometry_transition(uint32_t width, uint32_t height) {
 }
 
 void eu4_gfx_publish_physical_geometry(uint32_t width, uint32_t height) {
-    (void)eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_GEOMETRY, 1);
+    (void)eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_GEOMETRY, 0);
     if (width == 0 || height == 0) {
         return;
     }
@@ -887,9 +887,6 @@ static eu4_gfx_clear_status allocate_game_backbuffer(__unsafe_unretained EU4GfxB
     if (backend == nil || backend.device == nil || backend.poisoned) {
         return EU4_GFX_CLEAR_UNSUPPORTED;
     }
-    if (backend.pendingGameCommand != nil) {
-        return EU4_GFX_CLEAR_UNSUPPORTED;
-    }
     if (width == 0 || height == 0) {
         return EU4_GFX_CLEAR_UNSUPPORTED;
     }
@@ -901,9 +898,14 @@ static eu4_gfx_clear_status allocate_game_backbuffer(__unsafe_unretained EU4GfxB
     if (width > texture_limit || height > texture_limit) {
         return EU4_GFX_CLEAR_UNSUPPORTED;
     }
+    /* Reusing the committed attachment does not touch GPU-owned storage, even
+       when a submitted command still references it. Only replacement waits. */
     if (backend.gameColorTarget != nil && backend.gameWidth == width &&
         backend.gameHeight == height) {
         return EU4_GFX_CLEAR_OK;
+    }
+    if (backend.pendingGameCommand != nil) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
     }
     MTLTextureDescriptor *desc =
         [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
@@ -1651,6 +1653,7 @@ static eu4_gfx_clear_status drain_pending_game(__unsafe_unretained EU4GfxBackend
         *command_status = (int)status;
     }
     backend.pendingGameCommand = nil;
+    backend.pendingGameIsClear = NO;
     if (status != MTLCommandBufferStatusCompleted || command.error != nil) {
         backend.gameContentsKnown = NO;
         backend.readyForPresent = NO;
@@ -1795,6 +1798,7 @@ static void batch_commit(__unsafe_unretained EU4GfxBackend *backend, int reason,
     [command commit];
     eu4_gfx_perf_command_buffer_committed();
     backend.pendingGameCommand = command;
+    backend.pendingGameIsClear = NO;
     backend.pendingGameGeneration = backend.activeCommandGeneration;
     backend.gameContentsKnown = NO;
     backend.readyForPresent = NO;
@@ -1830,7 +1834,7 @@ void *eu4_gfx_batch_acquire(const void *master, uint64_t generation) {
         /* Work belonging to an older geometry generation cannot share a
            command buffer with the new one. Submit it in order and wait so the
            transition is not overtaken. */
-        (void)eu4_gfx_batch_flush((void *)master, EU4_GFX_PERF_FLUSH_GEOMETRY, 1);
+        (void)eu4_gfx_batch_flush((void *)master, EU4_GFX_PERF_FLUSH_GEOMETRY, 0);
         if (backend.poisoned) {
             return NULL;
         }
@@ -1960,7 +1964,7 @@ static int clear_gates(__unsafe_unretained EU4GfxBackend *backend, void *master,
 }
 
 eu4_gfx_clear_status eu4_gfx_configure_offscreen(void *master, uint32_t width, uint32_t height) {
-    (void)eu4_gfx_batch_flush(master, EU4_GFX_PERF_FLUSH_RENDER_TARGET, 1);
+    (void)eu4_gfx_batch_flush(master, EU4_GFX_PERF_FLUSH_RENDER_TARGET, 0);
     void *raw = backend_raw_for_master(master);
     __unsafe_unretained EU4GfxBackend *backend = (__bridge EU4GfxBackend *)raw;
     if (backend == nil || backend.device == nil || backend.poisoned) {
@@ -2010,7 +2014,7 @@ int eu4_gfx_offscreen_contents_known(void *master) {
 }
 
 eu4_gfx_clear_status eu4_gfx_clear_checked(void *handle, unsigned flags, const float *color) {
-    (void)eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_CLEAR, 1);
+    (void)eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_CLEAR, 0);
     void *master = master_from_handle(handle);
     __unsafe_unretained EU4GfxBackend *backend =
         (__bridge EU4GfxBackend *)backend_raw_for_master(master);
@@ -2065,7 +2069,7 @@ static eu4_gfx_clear_status apply_deferred_default_target(
 }
 
 static eu4_gfx_clear_status clear_game_checked(void *handle, unsigned flags, const float *color) {
-    (void)eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_CLEAR, 1);
+    (void)eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_CLEAR, 0);
     void *master = master_from_handle(handle);
     __unsafe_unretained EU4GfxBackend *backend =
         (__bridge EU4GfxBackend *)backend_raw_for_master(master);
@@ -2092,9 +2096,15 @@ static eu4_gfx_clear_status clear_game_checked(void *handle, unsigned flags, con
         return EU4_GFX_CLEAR_GEOMETRY_STALE;
     }
     if (backend.pendingGameCommand != nil) {
-        /* Same generation: the P5.1 ordinary second-clear rejection. */
-        g_clear_reason = "a same-generation game command is already pending";
-        return EU4_GFX_CLEAR_UNSUPPORTED;
+        if (backend.pendingGameIsClear) {
+            /* Same generation and the pending command is another clear: the
+               P5.1 ordinary second-clear rejection. */
+            g_clear_reason = "a same-generation game command is already pending";
+            return EU4_GFX_CLEAR_UNSUPPORTED;
+        }
+        /* Pending draws are already submitted in queue order. This clear is
+           encoded after them; waiting on the later clear implies they finished,
+           so no CPU wait is needed here and the reference may be replaced. */
     }
     eu4_gfx_clear_status deferred = apply_deferred_default_target(backend, master);
     if (deferred != EU4_GFX_CLEAR_OK) {
@@ -2159,6 +2169,7 @@ static eu4_gfx_clear_status clear_game_checked(void *handle, unsigned flags, con
     backend.awaitingFreshClear = YES;
     backend.pendingGameGeneration = backend.geometryGeneration;
     backend.pendingGameCommand = command;
+    backend.pendingGameIsClear = YES;
     backend.gameClearGeneration = backend.geometryGeneration;
     perf_commit(command);
     return EU4_GFX_CLEAR_OK;
@@ -2938,7 +2949,7 @@ static void decode_engine_clear_flags(unsigned flags, bool *color, bool *depth,
 void eu4_gfx_clear(void *handle, unsigned flags, const float *color) {
     /* A clear overwrites attachment contents, so pending draws must complete
        before it and independent clear work must not overtake encoded draws. */
-    (void)eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_CLEAR, 1);
+    (void)eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_CLEAR, 0);
     eu4_gfx_live_clear_sequence++;
     void *master = master_from_handle(handle);
     __unsafe_unretained EU4GfxBackend *backend =
@@ -3013,6 +3024,7 @@ void eu4_gfx_clear(void *handle, unsigned flags, const float *color) {
                 }
                 perf_commit(command);
                 backend.pendingGameCommand = command;
+                backend.pendingGameIsClear = YES;
                 backend.pendingGameGeneration = backend.geometryGeneration;
                 backend.gameContentsKnown = NO;
                 backend.readyForPresent = NO;
@@ -3106,7 +3118,7 @@ static void write_default_viewport(void *master) {
 }
 
 eu4_gfx_clear_status eu4_gfx_set_render_target_checked(void *handle, void *target) {
-    (void)eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_RENDER_TARGET, 1);
+    (void)eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_RENDER_TARGET, 0);
     void *master = master_from_handle(handle);
     __unsafe_unretained EU4GfxBackend *backend =
         (__bridge EU4GfxBackend *)backend_raw_for_master(master);
@@ -3183,7 +3195,7 @@ static void dump_render_target(void *master, void *target) {
 }
 
 void eu4_gfx_set_render_target(void *handle, void *target) {
-    (void)eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_RENDER_TARGET, 1);
+    (void)eu4_gfx_batch_flush(NULL, EU4_GFX_PERF_FLUSH_RENDER_TARGET, 0);
     void *master = NULL;
     if (handle != NULL) {
         memcpy(&master, handle, sizeof master);

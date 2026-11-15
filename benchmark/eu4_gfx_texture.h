@@ -149,4 +149,17 @@ void eu4_gfx_set_textures(void *handle, unsigned count, void *textures, unsigned
 }
 #endif
 
+#ifndef EU4_GFX_TEXTURE_IMPLEMENTATION
+/* Lifecycle hosts that link eu4_gfx_init.mm without the texture module still
+   need these two hooks. The real implementation overrides them when linked. */
+#if defined(__GNUC__)
+__attribute__((weak)) void eu4_gfx_note_render_target_write(void *header) {
+    (void)header;
+}
+__attribute__((weak)) void eu4_gfx_sampling_abandon_command(void *command_buffer) {
+    (void)command_buffer;
+}
+#endif
+#endif
+
 #endif
