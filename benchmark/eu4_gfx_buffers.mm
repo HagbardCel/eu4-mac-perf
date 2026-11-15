@@ -721,6 +721,18 @@ int eu4_gfx_index_buffer_shared(void *header) {
     return entry != nil && entry.buffer != nil && entry.buffer.storageMode == MTLStorageModeShared;
 }
 
+void *eu4_gfx_index_buffer_for_header(void *header) {
+    EU4IndexBuffer *entry = find_index_entry(header);
+    if (entry == nil || entry.buffer == nil) {
+        return NULL;
+    }
+    return (__bridge void *)entry.buffer;
+}
+
+void *eu4_gfx_current_index_buffer(void) {
+    return eu4_gfx_index_buffer_for_header(g_index_current_header);
+}
+
 void *eu4_gfx_current_index_header(void) { return g_index_current_header; }
 
 static void record_disabled_attribs(void *master, const char *symbol, const void *caller) {

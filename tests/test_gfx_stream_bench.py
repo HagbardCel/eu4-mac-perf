@@ -52,15 +52,16 @@ class GfxStreamBenchTests(unittest.TestCase):
         self.assertGreater(summary["cpu_encode_ns"]["median"], 0)
         self.assertGreaterEqual(summary["wall_ns"]["median"], summary["cpu_encode_ns"]["median"])
 
-    def test_indexed_stream_reports_temporary_buffers(self) -> None:
+    def test_indexed_stream_reuses_engine_buffer(self) -> None:
         measured = self.bench.run_kind("indexed", 40, 2)
         summary = measured["summary"]
         perf = summary["counters"]
         self.assertEqual(perf["draws_encoded"]["median"], 40)
         self.assertEqual(perf["draws_generic"]["median"], 40)
-        # The pre-P1 indexed path allocates one temporary index buffer per draw.
-        self.assertEqual(perf["index_temp_allocs"]["median"], 40)
-        self.assertEqual(perf["index_temp_bytes"]["median"], 40 * 3 * 2)
+        # The optimized path binds the engine's Metal index buffer directly:
+        # no temporary allocation and no CPU copy per draw.
+        self.assertEqual(perf["index_temp_allocs"]["median"], 0)
+        self.assertEqual(perf["index_temp_bytes"]["median"], 0)
 
     def test_mixed_state_changes_within_stream(self) -> None:
         measured = self.bench.run_kind("mixed", 60, 2)

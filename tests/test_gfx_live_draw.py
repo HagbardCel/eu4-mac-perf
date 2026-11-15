@@ -155,6 +155,18 @@ class GfxLiveDrawTests(unittest.TestCase):
         self.assertIn("base4_green=1", ran.stdout)
         self.assertIn("base0_red=1", ran.stdout)
 
+    def test_indexed_draw_reuses_engine_index_buffer(self) -> None:
+        """The draw path binds the registry's Metal buffer directly."""
+        ran = self._run("--indexed-resource")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("indexed_resource=1", ran.stdout)
+        self.assertIn("reuse=1", ran.stdout)
+        self.assertIn("update=1", ran.stdout)
+        self.assertIn("recycle=1", ran.stdout)
+        self.assertIn("negative_refused=1", ran.stdout)
+        self.assertIn("bounds_refused=1", ran.stdout)
+        self.assertIn("zero_alloc=1", ran.stdout)
+
     def test_draw_semantics_contracts(self) -> None:
         ran = self._run("--draw-semantics")
         self.assertEqual(ran.returncode, 0, ran.stderr)

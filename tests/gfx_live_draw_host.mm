@@ -2207,14 +2207,14 @@ static void *make_generic_bench_shader(void) {
         "#include <metal_stdlib>\n"
         "using namespace metal;\n"
         "struct VIn { float4 position [[attribute(0)]]; float4 color [[attribute(1)]]; };\n"
-        "struct VOut { float4 position [[position]]; float4 color; };\n"
+        "struct VOut { float4 position [[position]]; float4 color [[user(locn0)]]; };\n"
         "vertex VOut bench_vs(VIn in [[stage_in]]) {\n"
         "    VOut o; o.position = in.position; o.color = in.color; return o;\n"
         "}\n";
     const char *ps_msl =
         "#include <metal_stdlib>\n"
         "using namespace metal;\n"
-        "struct VOut { float4 position [[position]]; float4 color; };\n"
+        "struct VOut { float4 position [[position]]; float4 color [[user(locn0)]]; };\n"
         "fragment float4 bench_ps(VOut in [[stage_in]]) { return in.color; }\n";
     char vs_path[320], ps_path[320], cache_path[320];
     snprintf(vs_path, sizeof vs_path, "%s/bench.vert.metal", g_bench_cache_dir);
@@ -2317,6 +2317,9 @@ static void bench_install_generic(void *shader, void *vertex_header,
     memcpy(master + 0x58, &fill, sizeof fill);
     master[0x38] = 0;
     master[0x60] = 0;
+    /* Synthetic geometry is wound for the measuring stream; keep the engine's
+       default raster orientation out of the backend-overhead measurement. */
+    master[0x61] = 0;
 }
 
 static int run_benchmark(const char *kind, int draws, int frames) {
@@ -2464,7 +2467,114 @@ static int run_benchmark(const char *kind, int draws, int frames) {
     return 0;
 }
 
+static int run_indexed_resource(void) {
+    /* The indexed draw must consume the engine's own Metal buffer: no CPU copy
+       and no temporary Metal allocation. An update must change the resource the
+       next draw sees, and a recycled header must not resolve to the old one. */
+    eu4_gfx_perf_set_enabled(1);
+    eu4_gfx_perf_reset();
+    boot();
+    void *shader = make_generic_bench_shader();
+    uint8_t vertices[8 * 32];
+    bench_vertices(vertices);
+    void *vertex_header = eu4_gfx_create_vertex_buffer(NULL, vertices, 8, 32, 0);
+    const uint16_t red_indices[3] = {0, 1, 2};
+    void *index_header = eu4_gfx_create_index_buffer(NULL, red_indices, 3);
+    if (vertex_header == NULL || index_header == NULL) {
+        fail("indexed-resource geometry");
+    }
+    bench_install_generic(shader, vertex_header, index_header);
+    struct {
+        void *master;
+    } ctx = {g_master};
+    const float black[4] = {0.f, 0.f, 0.f, 1.f};
+    eu4_gfx_clear(&ctx, 7, black);
+
+    void *first_buffer = eu4_gfx_index_buffer_for_header(index_header);
+    if (first_buffer == NULL || !eu4_gfx_index_buffer_shared(index_header)) {
+        fail("indexed-resource accessor");
+    }
+
+    eu4_gfx_draw_raw raw;
+    memset(&raw, 0, sizeof raw);
+    raw.which = 2;
+    raw.rdi = (uint64_t)(uintptr_t)&ctx;
+    raw.rsi = 3;
+    raw.rcx = 0;
+    raw.retaddr = (uint64_t)(uintptr_t)(g_image + kCallerRva);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("first indexed draw");
+    }
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("second indexed draw");
+    }
+    int reuse = eu4_gfx_index_buffer_for_header(index_header) == first_buffer;
+    size_t length = 0;
+    uint8_t *pixels = read_target(&length);
+    expect_colour(pixels, 0, 0, 0xff, "indexed base 0");
+    free(pixels);
+
+    const uint16_t green_indices[3] = {4, 5, 6};
+    eu4_gfx_update_index_buffer(NULL, index_header, green_indices, 3);
+    void *updated_buffer = eu4_gfx_index_buffer_for_header(index_header);
+    int update_replaced = updated_buffer != NULL && updated_buffer != first_buffer;
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("draw after index update");
+    }
+    pixels = read_target(&length);
+    expect_colour(pixels, 0, 0xff, 0, "indexed update");
+    free(pixels);
+
+    eu4_gfx_perf_snapshot perf;
+    eu4_gfx_perf_read(&perf);
+    int zero_temp = perf.index_temp_allocs == 0 && perf.index_temp_bytes == 0 &&
+                    perf.draws_encoded == 3;
+
+    eu4_gfx_destroy_index_buffer(index_header);
+    int stale_null = eu4_gfx_index_buffer_for_header(index_header) == NULL;
+    void *recycled_header = eu4_gfx_create_index_buffer(NULL, red_indices, 3);
+    void *recycled_buffer = eu4_gfx_index_buffer_for_header(recycled_header);
+    int recycled_fresh = recycled_header != NULL && recycled_buffer != NULL &&
+                         recycled_buffer != updated_buffer;
+    if (recycled_header == NULL) {
+        fail("indexed-resource recycle");
+    }
+    eu4_gfx_set_index_buffer(&ctx, recycled_header);
+    if (eu4_gfx_draw_capture(&raw) != 1) {
+        fail("draw after index recycle");
+    }
+    pixels = read_target(&length);
+    expect_colour(pixels, 0, 0, 0xff, "indexed recycle");
+    free(pixels);
+
+    raw.rcx = -1;
+    char diagnostic[256];
+    eu4_gfx_simple_draw_state state;
+    int negative_refused =
+        eu4_gfx_draw_route_live(&raw, &state, diagnostic, sizeof diagnostic) ==
+            EU4_GFX_DRAW_ROUTE_UNSUPPORTED &&
+        strstr(diagnostic, "negative effective vertex") != NULL;
+    raw.rcx = 0;
+    const uint16_t outside_indices[3] = {100, 101, 102};
+    eu4_gfx_update_index_buffer(NULL, recycled_header, outside_indices, 3);
+    int bounds_refused =
+        eu4_gfx_draw_route_live(&raw, &state, diagnostic, sizeof diagnostic) ==
+            EU4_GFX_DRAW_ROUTE_UNSUPPORTED &&
+        strstr(diagnostic, "past the bound vertex attributes") != NULL;
+
+    int ok = reuse && update_replaced && zero_temp && stale_null && recycled_fresh &&
+             negative_refused && bounds_refused;
+    printf("indexed_resource=%d reuse=%d update=%d recycle=%d negative_refused=%d "
+           "bounds_refused=%d zero_alloc=%d\n",
+           ok, reuse, update_replaced, recycled_fresh, negative_refused,
+           bounds_refused, zero_temp);
+    return ok ? 0 : 1;
+}
+
 int main(int argc, char **argv) {
+    if (argc >= 2 && strcmp(argv[1], "--indexed-resource") == 0) {
+        return run_indexed_resource();
+    }
     if (argc >= 5 && strcmp(argv[1], "--bench") == 0) {
         return run_benchmark(argv[2], atoi(argv[3]), atoi(argv[4]));
     }

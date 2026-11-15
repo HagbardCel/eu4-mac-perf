@@ -2059,26 +2059,37 @@ static int generic_draw_encode_impl(const void *immediate_context,
             fail(reason, reason_capacity, "index buffer is too short");
             return 0;
         }
-        uint16_t *indices = (uint16_t *)malloc(bytes);
-        if (indices == NULL || eu4_gfx_index_buffer_read(index_header, indices, bytes) != 0) {
-            free(indices);
+        /* Bind the engine's own Metal index buffer directly. The registry
+           resolves the current resource version on every call, so an update or
+           header recycle cannot leave a stale pointer behind. Metal retains the
+           buffer for the encoded draw, so destroying the engine header after
+           encoding cannot free storage the GPU still reads. */
+        id<MTLBuffer> index_buffer = (__bridge id<MTLBuffer>)
+            eu4_gfx_index_buffer_for_header(index_header);
+        if (index_buffer == nil || index_buffer.length < needed) {
             [encoder endEncoding];
-            fail(reason, reason_capacity, "index buffer read failed");
+            fail(reason, reason_capacity, "index buffer has no Metal storage");
             return 0;
         }
+        const uint16_t *indices = (const uint16_t *)index_buffer.contents;
+        if (indices == NULL) {
+            [encoder endEncoding];
+            fail(reason, reason_capacity, "index buffer is not CPU-visible");
+            return 0;
+        }
+        /* Validate only the prefix this draw consumes, against the actual
+           resource version that is about to be encoded. */
         int32_t first_effective = 0, last_effective = 0;
         int range_status = eu4_gfx_indexed_range(indices, call->count,
                                                  call->base_vertex,
                                                  &first_effective,
                                                  &last_effective);
         if (range_status == -1) {
-            free(indices);
             [encoder endEncoding];
             fail(reason, reason_capacity, "indexed draw has a negative effective vertex");
             return 0;
         }
         if (range_status != 0) {
-            free(indices);
             [encoder endEncoding];
             fail(reason, reason_capacity, "indexed draw has no readable indices");
             return 0;
@@ -2086,18 +2097,12 @@ static int generic_draw_encode_impl(const void *immediate_context,
         if (!validate_attribute_ranges((uint32_t)last_effective,
                                        (uint32_t)instance_count, reason,
                                        reason_capacity)) {
-            free(indices);
             [encoder endEncoding];
             return 0;
         }
         /* Preserve the engine's 16-bit indices and let Metal apply the signed
-           base vertex exactly like glDrawElementsBaseVertex. */
-        eu4_gfx_perf_index_temp_alloc(needed);
-        id<MTLBuffer> index_buffer =
-            [device newBufferWithBytes:indices
-                                length:(NSUInteger)needed
-                               options:MTLResourceStorageModeManaged];
-        free(indices);
+           base vertex exactly like glDrawElementsBaseVertex. The verified
+           _GfxDrawIndexed contract uses offset zero. */
         [encoder drawIndexedPrimitives:primitive
                             indexCount:(NSUInteger)call->count
                              indexType:MTLIndexTypeUInt16

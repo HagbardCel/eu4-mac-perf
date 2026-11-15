@@ -72,6 +72,14 @@ int eu4_gfx_index_gpus(void);
 size_t eu4_gfx_index_buffer_length(void *header);
 int eu4_gfx_index_buffer_read(void *header, void *dest, size_t n);
 int eu4_gfx_index_buffer_shared(void *header);
+/* Borrowed MTLBuffer for an engine index header, resolved through the registry
+   on every call. Returns NULL when the header is unknown, was released, or was
+   recycled. The caller must not outlive the registry entry; an already encoded
+   draw keeps its own Metal retain. */
+void *eu4_gfx_index_buffer_for_header(void *header);
+/* Borrowed MTLBuffer for the currently bound index header, resolved through the
+   registry on every call. */
+void *eu4_gfx_current_index_buffer(void);
 void *eu4_gfx_current_index_header(void);
 int eu4_gfx_current_index_read(void *dest, size_t n);
 
