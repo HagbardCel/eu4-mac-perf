@@ -1,5 +1,6 @@
 #include "eu4_gfx_startup_trace.h"
 #include "eu4_gfx_frame_trace.h"
+#include "eu4_gfx_shadow_bridge.h"
 #include "eu4_gfx_observe.h"
 
 #include <CommonCrypto/CommonDigest.h>
@@ -388,8 +389,14 @@ __attribute__((constructor)) static void initialize_startup_trace(void) {
                            settings_site, init_site, "frame-config");
         return;
     }
+    int shadow = eu4_gfx_shadow_configure_from_env();
+    if (shadow < 0) {
+        (void)write_status(run_dir, "error", session, actual, image_base,
+                           settings_site, init_site, "shadow-config");
+        return;
+    }
     const char *seal_log = getenv("EU4_GFX_FRAME_SEAL_LOG");
-    if (seal_log != NULL && strcmp(seal_log, "1") == 0) {
+    if (shadow == 0 && seal_log != NULL && strcmp(seal_log, "1") == 0) {
         if (eu4_gfx_frame_sealed_subscribe(seal_logging_sink, NULL) != 0) {
             (void)write_status(run_dir, "error", session, actual, image_base,
                                settings_site, init_site, "seal-subscribe");
