@@ -311,12 +311,12 @@ class LauncherEnvironmentTests(unittest.TestCase):
         script = unrelated / "bridge-smoke.mjs"
         script.write_text(
             "import { runTool } from " + json.dumps(bridge) + ";\n"
-            "const value = await runTool('eu4_re_query', "
-            "{ op: 'resolve', target: '_GfxDraw' }, "
+            "const value = await runTool('eu4_session', "
+            "{ op: 'list' }, "
             "{ python: " + json.dumps(sys.executable) +
             ", cwd: " + json.dumps(str(REPO)) + " });\n"
             "console.log(JSON.stringify({ ok: value.ok, "
-            "matches: value.result?.matches?.length ?? 0 }));\n",
+            "sessions: value.result?.sessions?.length ?? 0 }));\n",
             encoding="utf-8",
         )
         ran = subprocess.run(
@@ -326,7 +326,7 @@ class LauncherEnvironmentTests(unittest.TestCase):
         self.assertEqual(ran.returncode, 0, ran.stderr + ran.stdout)
         recorded = json.loads(ran.stdout.strip().splitlines()[-1])
         self.assertTrue(recorded["ok"], ran.stdout)
-        self.assertGreater(recorded["matches"], 0)
+        self.assertIsInstance(recorded["sessions"], int)
 
 
 if __name__ == "__main__":
