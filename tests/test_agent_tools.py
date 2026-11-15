@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -730,8 +731,9 @@ class DiagnosticSurfaceTests(ToolTests):
         self.assertEqual(value["outcome"]["diagnostic"], "complete")
         self.assertIn(value["outcome"]["verdict"],
                       ("equal", "different", "unverified"))
+        from automation import python_runtime
         self.assertEqual(value["runtime"]["executable"],
-                         str(Path(sys.executable).resolve()))
+                         python_runtime.absolute(sys.executable))
         self.assertTrue(value["runtime"]["numpy"]["available"])
 
     def test_replay_does_not_mutate_the_case_directory(self):
@@ -848,3 +850,113 @@ class RecordedExperimentATests(unittest.TestCase):
         self.assertEqual(payload["classification"], "incomplete")
         self.assertEqual(payload["recorded_classification"],
                          "rendering_difference")
+
+
+class SubprocessDiagnosticTests(unittest.TestCase):
+    """Task 3: preserve subprocess outcomes instead of trusting parseable JSON."""
+
+    def setUp(self):
+        self._temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self._temporary.cleanup)
+        self.root = Path(self._temporary.name)
+
+    def call(self, argv):
+        output = self.root / "tool.json"
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = agent_tools.main(["--out", str(output), *argv])
+        return code, json.loads(output.read_text())
+
+    def completed(self, body, *, code=0, stderr="", command=None):
+        stdout = body if isinstance(body, str) else json.dumps(body)
+        return subprocess.CompletedProcess(command or [], code, stdout=stdout,
+                                           stderr=stderr)
+
+    def probe_call(self, body, *, code=0, stderr=""):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with mock.patch.object(
+                    agent_tools.subprocess, "run",
+                    return_value=self.completed(body, code=code, stderr=stderr)) as run:
+                code_value, value = self.call([
+                    "eu4_capture", "probe", "--checkpoint", "after-present",
+                    "--output", str(root), "--campaign-run-root", str(root),
+                    "--timeout", "5",
+                ])
+        return code_value, value, run
+
+    def replay_call(self, body, *, code=0, stderr=""):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with mock.patch.object(
+                    agent_tools.subprocess, "run",
+                    return_value=self.completed(body, code=code, stderr=stderr)) as run:
+                code_value, value = self.call([
+                    "eu4_replay", "frame", "--frame", str(root / "frame"),
+                    "--shaders", str(root / "shaders"),
+                    "--out", str(root / "out"), "--only-event", "3",
+                ])
+        return code_value, value, run
+
+    def test_probe_success_is_a_completed_diagnostic(self):
+        code, value, run = self.probe_call({
+            "overall": "presented",
+            "status": {"pixels_captured": True, "presented": True},
+            "error": None,
+        })
+        self.assertEqual(code, 0)
+        self.assertTrue(value["ok"])
+        self.assertEqual(value["outcome"]["diagnostic"], "complete")
+        self.assertEqual(value["outcome"]["verdict"], "presented")
+        command = run.call_args.args[0]
+        self.assertEqual(command[1:4], ["-m", "automation.live_gfx", "probe"])
+        self.assertIn("--checkpoint", command)
+        self.assertEqual(value["result"]["subprocess"]["exit_code"], 0)
+
+    def test_probe_nonzero_exit_is_not_success(self):
+        code, value, run = self.probe_call(
+            {"overall": "failed", "status": {}, "error": "capture failed"},
+            code=4, stderr="launch failed")
+        self.assertEqual(code, 2)
+        self.assertFalse(value["ok"])
+        self.assertEqual(value["status"], "unavailable")
+        self.assertEqual(value["outcome"]["diagnostic"], "unavailable")
+        self.assertIn("exited 4", value["reason"])
+        self.assertEqual(value["result"]["subprocess"]["exit_code"], 4)
+
+    def test_probe_malformed_output_is_a_failed_execution(self):
+        code, value, run = self.probe_call("not-json", code=0)
+        self.assertEqual(code, 2)
+        self.assertFalse(value["ok"])
+        self.assertEqual(value["status"], "failed")
+        self.assertEqual(value["outcome"]["diagnostic"], "failed")
+        self.assertIn("not JSON", value["reason"])
+
+    def test_frame_replay_difference_is_a_valid_diagnostic_result(self):
+        code, value, run = self.replay_call({
+            "status": "fail", "mismatched_pixels": 4,
+            "pixels": 48, "max_channel_error": 20,
+        }, code=2)
+        self.assertEqual(code, 0)
+        self.assertTrue(value["ok"])
+        self.assertEqual(value["outcome"]["diagnostic"], "complete")
+        self.assertEqual(value["outcome"]["verdict"], "different")
+        command = run.call_args.args[0]
+        self.assertEqual(command[1:4], ["-m", "automation.m6_frame", "replay"])
+        self.assertEqual(value["result"]["subprocess"]["exit_code"], 2)
+
+    def test_frame_replay_invalid_is_a_failed_execution(self):
+        code, value, run = self.replay_call(
+            {"status": "error", "reason": "frame is invalid"}, code=1,
+            stderr="traceback")
+        self.assertEqual(code, 2)
+        self.assertFalse(value["ok"])
+        self.assertEqual(value["status"], "failed")
+        self.assertEqual(value["outcome"]["diagnostic"], "failed")
+        self.assertIn("frame is invalid", value["reason"])
+
+    def test_frame_replay_malformed_output_is_failed_not_complete(self):
+        code, value, run = self.replay_call("", code=0, stderr="no output")
+        self.assertEqual(code, 2)
+        self.assertFalse(value["ok"])
+        self.assertEqual(value["outcome"]["diagnostic"], "failed")
+        self.assertIn("no output", value["reason"])

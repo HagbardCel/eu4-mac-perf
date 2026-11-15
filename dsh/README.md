@@ -62,13 +62,15 @@ the supported DSH commands, and the script fails if that repair does not take.
 
 `run.sh` and `preflight.sh` resolve the diagnostic core's Python once, to an
 absolute path with NumPy, and export it as `EU4_DSH_PYTHON`; the profile passes
-that value to the tools plugin. An explicitly configured `EU4_DSH_PYTHON` is
-authoritative and is never replaced when it is unusable. Without one, the
-launcher prefers `.venv/bin/python3`, then `python3.14`, then `python3`, and
-fails closed with the resolver's JSON diagnosis when none has NumPy. The
-adapter no longer defaults to a bare interpreter name, so a profile booted
-without the launcher reports an actionable tool error instead of silently
-spawning a different installation.
+that value to the tools plugin. A virtualenv entry point such as
+`.venv/bin/python3` keeps its path (the final symlink is not dereferenced), and
+the exact selected interpreter is probed by importing its dependencies. An
+explicitly configured `EU4_DSH_PYTHON` is authoritative and is never replaced
+when it is unusable. Without one, the launcher prefers `.venv/bin/python3`,
+then `python3.14`, then `python3`, and fails closed with the resolver's JSON
+diagnosis when none has NumPy. The adapter no longer defaults to a bare
+interpreter name, so a profile booted without the launcher reports an
+actionable tool error instead of silently spawning a different installation.
 
 ```sh
 ./dsh/scripts/preflight.sh              # prints the checked interpreter

@@ -72,17 +72,25 @@ envelope says so with `mismatch: true`.
 
 `dsh/scripts/run.sh` and `dsh/scripts/preflight.sh` resolve one absolute Python
 with NumPy and export it as `EU4_DSH_PYTHON`; the profile passes that value to
-the tools plugin. The adapter never falls back to a bare `python3`: a missing
-or unusable setting is a structured error. To check a checkout:
+the tools plugin. A virtualenv entry point such as `.venv/bin/python3` keeps its
+path: it is not dereferenced to the base interpreter, and the selected
+interpreter is always the one probed. Dependencies are imported, not merely
+located, so a broken module is unusable even when its specification exists.
+The adapter never falls back to a bare `python3`: a missing or unusable setting
+is a structured error. To check a checkout:
 
 ```sh
 python3 -m automation.python_runtime resolve
-EU4_DSH_PYTHON=/absolute/python3.14 python3 -m automation.python_runtime resolve
+EU4_DSH_PYTHON=/absolute/venv/bin/python3 python3 -m automation.python_runtime resolve
 ```
 
 `resolve` is authoritative: an explicitly requested interpreter is never
 replaced by another installation when NumPy is missing, and the error names
-both the interpreter and the missing dependency.
+both the interpreter and the missing dependency. The runtime block reports the
+executing environment (`environment`, `virtualenv`), the configured path and
+environment, and a `mismatch` that compares environments rather than resolved
+binary paths — two virtualenvs sharing a base binary are still different
+environments.
 
 ## Tools
 
@@ -284,9 +292,12 @@ does that for the session you select.
 
 [`automation/test_runner.py`](../automation/test_runner.py) runs focused
 `unittest` modules, writes the complete log under `.local/test-runs/`, and
-returns a compact machine-readable summary. It preserves the child exit code,
-detects an identical suite already running and returns that invocation instead
-of starting another, and compares failing test IDs against a base invocation.
+returns a compact machine-readable summary. It preserves the child exit code.
+An identical suite already running is returned as **pending** (`ok: false`,
+CLI exit 2) — never as a completed pass. A base/candidate comparison requires
+the same executed selection (different checkout directories are allowed),
+completed runs and a non-zero test count; otherwise the verdict is
+**`incomparable`** with the reasons, not `no_new_failures`.
 
 ```sh
 python3 -m automation.test_runner run --module tests.test_agent_tools

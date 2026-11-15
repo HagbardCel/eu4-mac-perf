@@ -695,18 +695,23 @@ def compare_temporal(
         amplification = int(artifacts.get("amplification", 4))
         directory.mkdir(parents=True, exist_ok=True)
         for pair in pairs:
-            left = reference_index.get(int(pair["reference"]["frame_index"]))
-            right_candidates = (
-                reference_index if pair["relation"].endswith("reference_temporal")
-                else candidate_index if pair["relation"].endswith("candidate_temporal")
-                else None)
-            if pair["relation"] == "cross_process":
+            relation = pair["relation"]
+            reference_frame = int(pair["reference"]["frame_index"])
+            candidate_frame = int(pair["candidate"]["frame_index"])
+            if relation == "reference_temporal":
+                left = reference_index.get(reference_frame)
+                right = reference_index.get(candidate_frame)
+            elif relation == "candidate_temporal":
+                left = candidate_index.get(reference_frame)
+                right = candidate_index.get(candidate_frame)
+            elif relation == "cross_process":
+                left = reference_index.get(reference_frame)
                 right = next(
                     (entry["candidate"] for entry in cross
-                     if entry["candidate"].get("frame_index")
-                     == pair["candidate"]["frame_index"]), None)
+                     if int(entry["candidate"].get("frame_index", -1))
+                     == candidate_frame), None)
             else:
-                right = (right_candidates or {}).get(int(pair["candidate"]["frame_index"]))
+                left = right = None
             if left is None or right is None:
                 continue
             name = (f"{pair['relation']}-{pair['reference']['frame_index']}"

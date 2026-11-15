@@ -12,9 +12,13 @@ This module is the single resolver:
   ``EU4_DSH_PYTHON``) is always used as given -- it is never replaced by a
   different installation when a dependency is missing;
 * without an explicit request the current interpreter's absolute path is used;
-* the selected path is absolute, is checked for executability and is probed
-  for the required dependencies in one subprocess (or in-process when it is
-  this interpreter);
+* the selected path is absolute, is checked for executability and is always
+  probed in a subprocess of that exact executable;
+* a virtualenv entry point (for example ``.venv/bin/python3``) keeps its path;
+  it is never dereferenced to the base interpreter, so a probe cannot silently
+  test the system environment instead of the virtualenv;
+* dependencies are imported, not merely located: an import failure is a
+  missing dependency even when ``find_spec`` would return a module;
 * a missing dependency is a hard failure with an actionable reason.
 
 It deliberately imports only the standard library so it can bootstrap itself
@@ -24,7 +28,6 @@ with an interpreter that lacks NumPy.
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import os
 import shutil
@@ -36,36 +39,56 @@ SCHEMA = "eu4-python-runtime/v1"
 DEFAULT_DEPENDENCY = "numpy"
 
 _PROBE = r"""
-import importlib.util, json, sys
+import importlib, json, sys
 value = {
     "executable": sys.executable,
+    "prefix": sys.prefix,
+    "base_prefix": sys.base_prefix,
+    "virtualenv": sys.prefix != sys.base_prefix,
     "version": list(sys.version_info[:3]),
     "dependencies": {},
 }
 for name in sys.argv[1:]:
-    spec = importlib.util.find_spec(name)
-    value["dependencies"][name] = None if spec is None else (spec.origin or "present")
+    try:
+        module = importlib.import_module(name)
+    except Exception as exc:  # noqa: BLE001 - an import failure is the finding
+        value["dependencies"][name] = {
+            "ok": False,
+            "origin": None,
+            "version": None,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    else:
+        value["dependencies"][name] = {
+            "ok": True,
+            "origin": getattr(module, "__file__", None) or "present",
+            "version": str(getattr(module, "__version__", "")) or None,
+            "error": None,
+        }
 print(json.dumps(value))
 """
 
 
 def absolute(candidate: str | os.PathLike[str], *,
              path: str | None = None) -> str:
-    """Resolve one path spelling to an absolute, normalized executable path.
+    """Expand a path spelling to an absolute executable path.
 
-    ``path`` overrides the process PATH for a bare name; this keeps a caller's
-    explicit environment from being silently replaced by the process one.
+    The final symlink is deliberately preserved: ``.venv/bin/python3`` is a
+    distinct environment from the base interpreter it points at.  ``path``
+    overrides the process PATH for a bare name so a caller's explicit
+    environment is not silently replaced.
     """
     text = os.fspath(candidate)
     if not text:
         raise ValueError("empty interpreter path")
-    if os.sep in text or (os.altsep and os.altsep in text):
-        # A path spelling is resolved from the caller's cwd, never searched.
-        return str(Path(text).expanduser().resolve())
-    found = shutil.which(text, path=path)
-    if not found:
-        raise ValueError(f"cannot resolve {text!r} on PATH")
-    return str(Path(found).resolve())
+    text = os.path.expanduser(text)
+    if os.sep not in text and not (os.altsep and os.altsep in text):
+        found = shutil.which(text, path=path)
+        if not found:
+            raise ValueError(f"cannot resolve {text!r} on PATH")
+        text = found
+    # abspath normalizes the spelling; it does not dereference the final link.
+    return os.path.abspath(text)
 
 
 def _executable(candidate: str, *, path: str | None = None) -> str:
@@ -78,49 +101,57 @@ def _executable(candidate: str, *, path: str | None = None) -> str:
 
 
 def probe(executable: str, dependencies: tuple[str, ...] = (DEFAULT_DEPENDENCY,)) -> dict:
-    """Return interpreter identity and dependency availability.
+    """Return identity and dependency availability of exactly this executable.
 
-    The probe never imports the dependency itself, so a missing NumPy cannot
-    raise during discovery.  When ``executable`` is this process's interpreter
-    the result is computed in-process; otherwise exactly one subprocess runs.
+    The probe always spawns the selected interpreter.  There is no in-process
+    shortcut: two virtualenvs can share a base binary, and an in-process check
+    would test the launcher environment instead of the one that will run the
+    diagnostic core.  Dependencies are imported, so a broken module is reported
+    as unusable even when its specification is present.
     """
-    resolved = _executable(executable)
-    if os.path.samefile(resolved, sys.executable):
-        dependencies_found: dict[str, str | None] = {}
-        for name in dependencies:
-            spec = importlib.util.find_spec(name)
-            dependencies_found[name] = None if spec is None else (spec.origin or "present")
-        value = {
-            "executable": str(Path(sys.executable).resolve()),
-            "version": list(sys.version_info[:3]),
-            "dependencies": dependencies_found,
-        }
-    else:
-        completed = subprocess.run(
-            [resolved, "-c", _PROBE, *dependencies],
-            capture_output=True, text=True, check=False, timeout=60,
-        )
-        if completed.returncode != 0 or not completed.stdout.strip():
-            detail = (completed.stderr or completed.stdout or "").strip()
-            raise ValueError(
-                f"cannot probe interpreter {resolved}: "
-                f"{detail[-800:] or 'no output'}")
-        try:
-            value = json.loads(completed.stdout)
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"interpreter probe returned invalid JSON: {exc}") from exc
-    missing = [name for name, origin in value["dependencies"].items() if origin is None]
+    selected = _executable(executable)
+    completed = subprocess.run(
+        [selected, "-c", _PROBE, *dependencies],
+        capture_output=True, text=True, check=False, timeout=60,
+    )
+    if completed.returncode != 0 or not completed.stdout.strip():
+        detail = (completed.stderr or completed.stdout or "").strip()
+        raise ValueError(
+            f"cannot probe interpreter {selected}: "
+            f"{detail[-800:] or 'no output'}")
+    try:
+        value = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"interpreter probe returned invalid JSON: {exc}") from exc
+    dependencies_found = value.get("dependencies") or {}
+    missing = [
+        name for name in dependencies
+        if (dependencies_found.get(name) or {}).get("ok") is not True
+    ]
+    errors = {
+        name: (dependencies_found.get(name) or {}).get("error")
+        for name in missing
+    }
     value.update({
         "schema": SCHEMA,
         "absolute": True,
+        # The selected path is authoritative and exactly what was probed.
+        "executable": selected,
+        "probe_executable": value.get("executable"),
+        "environment": value.get("prefix") or selected,
+        "prefix": value.get("prefix"),
+        "base_prefix": value.get("base_prefix"),
+        "virtualenv": bool(value.get("virtualenv")),
         "required": list(dependencies),
         "missing": missing,
+        "dependency_errors": errors,
         "ok": not missing,
         "reason": "" if not missing else (
-            f"{resolved} cannot import {', '.join(missing)}; install "
+            f"{selected} cannot import {', '.join(missing)}; install "
             f"{', '.join(missing)} for this interpreter or point "
-            f"EU4_DSH_PYTHON at one that has it"),
+            f"EU4_DSH_PYTHON at one that has it"
+            + (f" ({errors[missing[0]]})" if errors.get(missing[0]) else "")),
     })
     return value
 
@@ -147,25 +178,45 @@ def resolve(requested: str | None = None,
         executable = _executable(explicit if explicit else sys.executable,
                                  path=search_path)
     except (OSError, ValueError) as exc:
+        attempted = str(explicit or "")
+        try:
+            attempted = absolute(explicit or sys.executable, path=search_path)
+        except (OSError, ValueError):
+            pass
         return {
             "schema": SCHEMA,
             "ok": False,
             "absolute": True,
             "source": source,
-            "requested": explicit or "",
-            "executable": str(explicit or ""),
+            "requested": str(explicit or ""),
+            "executable": attempted,
             "required": list(dependencies),
             "missing": list(dependencies),
             "reason": f"cannot resolve the configured interpreter: {exc}",
         }
     value = probe(executable, dependencies)
-    # The launcher will spawn exactly this path; keep the probe's self-report
-    # for diagnosis but make the selected path canonical.
-    value["probe_executable"] = value.get("executable")
-    value["executable"] = executable
     value["source"] = source
     value["requested"] = str(explicit or "")
+    value["configured"] = str(explicit or "")
     return value
+
+
+def environment_root(executable: str | os.PathLike[str]) -> str | None:
+    """Return the virtualenv root containing ``executable``, if any.
+
+    This identifies an environment independently of the binary path: two
+    virtualenvs can share the same base interpreter, and a system interpreter
+    can be reached through several symlinks.  A ``pyvenv.cfg`` above the
+    executable is the only accepted marker.
+    """
+    try:
+        path = Path(absolute(executable))
+    except (OSError, ValueError):
+        return None
+    for candidate in (path.parent, path.parent.parent):
+        if (candidate / "pyvenv.cfg").is_file():
+            return str(candidate)
+    return None
 
 
 def require(dependencies: tuple[str, ...] = (DEFAULT_DEPENDENCY,)) -> dict:

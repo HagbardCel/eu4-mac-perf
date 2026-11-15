@@ -2,6 +2,41 @@
 
 Authoritative summary of what is established, qualified, and in flight. Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
 
+## M7 diagnostic infrastructure (2026-11-15)
+
+The M7.0 canary exposed where the offline diagnostic surface wastes an
+autonomous agent's time. The infrastructure change keeps the Python core as the
+single source of truth and the DSH plugin as a thin adapter:
+
+- **One interpreter environment.** `run.sh`/`preflight.sh` resolve an absolute
+  Python (a virtualenv entry point keeps its path), probe the selected
+  interpreter by importing NumPy, and export it as `EU4_DSH_PYTHON`. Every tool
+  envelope reports the executing environment and any configured mismatch.
+- **Unambiguous outcomes.** `eu4-agent-tool/v2` separates execution, diagnostic
+  completion, verdict, evidence validity and qualification; missing NumPy is
+  `unavailable`, not success.
+- **Focused inspection.** `eu4_session list` is active-only by default;
+  `eu4_diff_inspect` accepts a campaign root and returns health provenance,
+  correspondence, staticity, first discrepancy, missing evidence and
+  category-specific next steps; `eu4_capture frames` honours exact frame/role
+  filters with bounded pagination; health is reconciled across persisted and
+  fresh evidence.
+- **Temporal diagnostics.** `gfx_frame_compare.compare_temporal` compares
+  reference N/N+1, candidate M/M+1 and reference N/candidate M with the existing
+  decoder/metrics and reports mask overlap. Artifacts use exactly the pair and
+  normalization behind their statistics.
+- **Verification and discovery.** `automation.test_runner` runs focused modules,
+  preserves exit codes, treats a running duplicate as pending, and only compares
+  matching completed selections; `EU4_EVIDENCE_ROOT` indexes historical
+  campaigns read-only across worktrees, including through the native bridge.
+- `observation.capture_every_frame` fails closed rather than being ignored.
+
+No EU4 launch was made and no Metal claim is involved. Reports:
+[M7 diagnostic infrastructure efficiency](../analysis/m7/efficiency.md),
+[verification](../analysis/m7/infrastructure-verification.md),
+[native instrumentation follow-up](../analysis/m7/m7-instrumentation-followup.md).
+Tool surface: [structured EU4 reconstruction tools](agent-tools.md).
+
 ## Strategy B — independent replay (2026-11-14)
 
 Capture once, replay independently. A canonical authentic OpenGL title frame

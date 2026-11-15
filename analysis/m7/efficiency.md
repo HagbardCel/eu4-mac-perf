@@ -59,8 +59,8 @@ change any conclusion.
 | Exact frames | `eu4_capture frames --run <a6> --frame 74` | 3,502 B / 2 compact records (was 177 records, ~90 KB) |
 | Session inspection | `eu4_diff_inspect --run <a6>` | 9,862 B; recorded `rendering_difference` re-derived to `incomplete`, health + provenance, staticity, missing evidence, category-specific next step |
 | Temporal diagnostics | `eu4_diff_inspect --run <a6> --temporal --reference-frame 74 --candidate-frame 74` | 25,240 B / 0.4 s; 4 pair comparisons + mask overlap, no custom script |
-| Native replay | `eu4_replay case` through the DSH bridge | completed with the resolved NumPy interpreter (canary: `incomplete_evidence: numpy is required`) |
-| Focused tests | `test_runner run --module tests.test_agent_tools` | 0.57 s for 11 tests, 1,441 B summary, complete log on disk |
+| Native replay | `eu4_replay case` through the DSH bridge | completed with the selected interpreter environment and imported NumPy (canary: `incomplete_evidence: numpy is required`) |
+| Focused tests | `test_runner run --module tests.test_agent_tools` | ≈0.7 s for 40 tests, compact summary, complete log on disk |
 | Focused suite | 11 modules (227 tests) | 6.1 s |
 | Duplicate suite | second identical invocation | returned the running record immediately; no second process |
 | Efficiency analysis | `dsh_efficiency analyze ... --turn 1` | 0.09 s |
@@ -81,7 +81,7 @@ pixels also change in reference 74→75.
 | `eu4_capture frames` ignored the frame filter and capped silently | exact frame/role filtering, bounded neighbours, explicit pagination, compact records, `--full` escape hatch |
 | `eu4_capture health` said unknown while inspection said healthy | one reconciled health view with source paths, agreement and “unknown is not healthy” |
 | No temporal analysis; private NumPy script | reusable `gfx_frame_compare.compare_temporal` + `eu4_diff_inspect --temporal`, bounded, artifacts opt-in |
-| Full suite launched repeatedly | focused `test_runner` with duplicate-suite detection, logs and base comparison |
+| Full suite launched repeatedly | focused `test_runner` with pending-duplicate detection, comparable-only base comparison and logs |
 | Evidence only visible from one worktree | read-only `EU4_EVIDENCE_ROOT` discovery with original paths/hashes |
 | No way to quantify the wasted work | `dsh_efficiency` one-shot analysis (this report) |
 

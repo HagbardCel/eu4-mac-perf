@@ -78,8 +78,31 @@ def _suite(modules: list[str], pattern: str | None, cwd: Path) -> dict:
             argv += ["-p", pattern]
     key = hashlib.sha256(json.dumps(
         {"argv": argv, "cwd": str(cwd)}, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+    # Cwd is deliberately not part of the selection identity: the same modules
+    # may legitimately run in separate worktrees.  The executable selection is
+    # what a base/candidate comparison must match.
+    selection = {"kind": kind, "modules": sorted(modules),
+                 "pattern": pattern or None}
     return {"kind": kind, "modules": modules, "pattern": pattern,
-            "argv": argv, "key": key}
+            "argv": argv, "key": key, "selection": selection}
+
+
+def _pending_envelope(duplicate: dict | None, message: str) -> dict:
+    """A duplicate invocation is pending, not a completed verification."""
+    return {
+        "schema": SCHEMA,
+        "ok": False,
+        "status": "pending",
+        "pending": True,
+        "completed": False,
+        "duplicate_of": (duplicate or {}).get("id"),
+        "exit_code": None,
+        "record": duplicate,
+        "log": (duplicate or {}).get("log"),
+        "message": message,
+        "reason": message,
+        "truncated": False,
+    }
 
 
 def _record_path(state: Path, run_id: str) -> Path:
@@ -213,18 +236,10 @@ def run_suite(
     suite = _suite(list(modules or []), pattern, workdir)
     duplicate = _running(state, suite["key"])
     if duplicate is not None:
-        return {
-            "schema": SCHEMA,
-            "ok": True,
-            "status": "duplicate",
-            "duplicate_of": duplicate["id"],
-            "exit_code": duplicate.get("exit_code"),
-            "record": duplicate,
-            "log": duplicate.get("log"),
-            "message": ("an identical suite is already running; its current "
-                        "status is returned instead of starting another copy"),
-            "truncated": False,
-        }
+        return _pending_envelope(
+            duplicate,
+            "an identical suite is already running; its current status is "
+            "returned instead of starting another copy")
     run_id = (dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
               + "-" + uuid.uuid4().hex[:8])
     record_path = _record_path(state, run_id)
@@ -237,6 +252,7 @@ def run_suite(
         "kind": suite["kind"],
         "modules": suite["modules"],
         "pattern": suite["pattern"],
+        "selection": suite["selection"],
         "argv": suite["argv"],
         "cwd": str(workdir),
         "label": label,
@@ -245,6 +261,8 @@ def run_suite(
         "pid": os.getpid(),
         "started_utc": _now(),
         "status": "running",
+        "pending": True,
+        "completed": False,
         "exit_code": None,
         "log": str(log_path),
         "record_path": str(record_path),
@@ -259,17 +277,9 @@ def run_suite(
             handle.close()
             duplicate = _running(state, suite["key"])
             if duplicate is not None:
-                return {
-                    "schema": SCHEMA,
-                    "ok": True,
-                    "status": "duplicate",
-                    "duplicate_of": duplicate["id"],
-                    "exit_code": duplicate.get("exit_code"),
-                    "record": duplicate,
-                    "log": duplicate.get("log"),
-                    "message": "an identical suite holds the execution lock",
-                    "truncated": False,
-                }
+                return _pending_envelope(
+                    duplicate,
+                    "an identical suite holds the execution lock")
             return {
                 "schema": SCHEMA,
                 "ok": False,
@@ -353,7 +363,10 @@ def run_suite(
             status = "errored"
         record.update({
             "status": status,
+            "pending": False,
+            "completed": True,
             "exit_code": exit_code,
+            "selection": suite["selection"],
             "finished_utc": _now(),
             "duration_seconds": round(time.monotonic() - started, 3),
             "counts": parsed["counts"],
@@ -408,6 +421,8 @@ def status(run_id: str | None = None, *,
     record = dict(record)
     log = record.get("log")
     record["running"] = record.get("status") == "running"
+    record["pending"] = record["running"]
+    record["completed"] = not record["running"] and record.get("exit_code") is not None
     record["log_tail"] = _tail(Path(log)) if log else []
     return record
 
@@ -449,15 +464,81 @@ def _load_record(value: str,
     return record, str(_record_path(state, value))
 
 
+def _selection(record: dict) -> dict | None:
+    """Normalize the executed test selection, ignoring the checkout path."""
+    selection = record.get("selection")
+    if isinstance(selection, dict) and selection.get("kind"):
+        modules = selection.get("modules")
+        if not isinstance(modules, list):
+            return None
+        return {
+            "kind": str(selection["kind"]),
+            "modules": sorted(str(item) for item in modules),
+            "pattern": selection.get("pattern") or None,
+        }
+    kind = record.get("kind")
+    modules = record.get("modules")
+    if not isinstance(kind, str) or not isinstance(modules, list):
+        return None
+    return {
+        "kind": kind,
+        "modules": sorted(str(item) for item in modules),
+        "pattern": record.get("pattern") or None,
+    }
+
+
+def _incomparable_reason(record: dict, label: str) -> str | None:
+    """Return why a record cannot participate in a regression comparison."""
+    if record.get("timed_out") is True:
+        return f"{label} timed out"
+    status = record.get("status")
+    if status not in ("passed", "failed"):
+        return f"{label} is {status or 'unknown'}, not a completed test run"
+    if type(record.get("exit_code")) is not int:
+        return f"{label} has no preserved child exit code"
+    if record.get("completed") is False:
+        return f"{label} is not marked completed"
+    counts = record.get("counts")
+    if not isinstance(counts, dict) or type(counts.get("ran")) is not int:
+        return f"{label} has no test-count summary"
+    if counts.get("ran", 0) <= 0:
+        return f"{label} executed zero tests"
+    if not isinstance(record.get("failures"), list):
+        return f"{label} has no failure list"
+    return None
+
+
 def compare_records(base: str, candidate: str, *,
                     state_dir: str | os.PathLike[str] | None = None) -> dict:
-    """Compare failing test IDs between a base and a candidate invocation."""
+    """Compare failing test IDs only when the two selections are comparable.
+
+    Different checkout directories are allowed; the executed module/pattern
+    selection must match.  Running, timed-out, interrupted, zero-test or
+    summary-less invocations are ``incomparable`` rather than a clean result.
+    """
     state = _state_dir(state_dir)
     base_record, base_path = _load_record(base, state)
     candidate_record, candidate_path = _load_record(candidate, state)
     if not base_record or not candidate_record:
         missing = base if not base_record else candidate
         raise ValueError(f"unknown test run: {missing}")
+    base_selection = _selection(base_record)
+    candidate_selection = _selection(candidate_record)
+    problems = []
+    if base_selection is None:
+        problems.append("base selection is not recorded")
+    if candidate_selection is None:
+        problems.append("candidate selection is not recorded")
+    if (base_selection is not None and candidate_selection is not None
+            and base_selection != candidate_selection):
+        problems.append(
+            "base and candidate test selections differ: "
+            f"{base_selection} != {candidate_selection}")
+    for record, label in ((base_record, "base"),
+                          (candidate_record, "candidate")):
+        reason = _incomparable_reason(record, label)
+        if reason:
+            problems.append(reason)
     base_failures = {row.get("id") or row.get("test")
                      for row in base_record.get("failures") or []}
     candidate_failures = {row.get("id") or row.get("test")
@@ -465,23 +546,32 @@ def compare_records(base: str, candidate: str, *,
     new = sorted(candidate_failures - base_failures)
     fixed = sorted(base_failures - candidate_failures)
     preexisting = sorted(base_failures & candidate_failures)
+    comparable = not problems
     return {
         "schema": COMPARE_SCHEMA,
+        "comparable": comparable,
         "base": {"id": base_record.get("id"), "path": base_path,
                  "status": base_record.get("status"),
+                 "cwd": base_record.get("cwd"),
+                 "selection": base_selection,
                  "failures": sorted(base_failures)},
         "candidate": {"id": candidate_record.get("id"),
                       "path": candidate_path,
                       "status": candidate_record.get("status"),
+                      "cwd": candidate_record.get("cwd"),
+                      "selection": candidate_selection,
                       "failures": sorted(candidate_failures)},
-        "new_failures": new,
-        "fixed_failures": fixed,
-        "preexisting_failures": preexisting,
+        "new_failures": new if comparable else [],
+        "fixed_failures": fixed if comparable else [],
+        "preexisting_failures": preexisting if comparable else [],
         "counts": {"base": len(base_failures),
                    "candidate": len(candidate_failures),
-                   "new": len(new), "fixed": len(fixed),
-                   "preexisting": len(preexisting)},
-        "verdict": "no_new_failures" if not new else "new_failures",
+                   "new": len(new) if comparable else None,
+                   "fixed": len(fixed) if comparable else None,
+                   "preexisting": len(preexisting) if comparable else None},
+        "verdict": ("incomparable" if not comparable
+                    else ("no_new_failures" if not new else "new_failures")),
+        "reasons": problems,
     }
 
 
@@ -535,8 +625,8 @@ def main(argv: list[str] | None = None) -> int:
                               "reason": f"{type(exc).__name__}: {exc}"}))
             return 2
         print(json.dumps(value, indent=2, sort_keys=True))
-        if value.get("status") == "duplicate":
-            return 0
+        if value.get("pending") is True or value.get("status") == "pending":
+            return 2
         if value.get("status") in ("busy", "error"):
             return 2
         return int(value.get("exit_code") or 0)
@@ -561,6 +651,8 @@ def main(argv: list[str] | None = None) -> int:
                           "reason": f"{type(exc).__name__}: {exc}"}))
         return 2
     print(json.dumps(value, indent=2, sort_keys=True))
+    if value["verdict"] == "incomparable":
+        return 2
     return 0 if value["verdict"] == "no_new_failures" else 1
 
 

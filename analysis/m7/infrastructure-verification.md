@@ -14,7 +14,10 @@ python3 -m unittest \
   tests.test_dsh_native_bridge
 ```
 
-**Result: 227 tests, OK** (6.1 s). Node plugin suite:
+**Result: 264 tests, OK** (8.5 s). The required six-module focused selection
+(`test_python_runtime`, `test_agent_tools`, `test_gfx_frame_compare`,
+`test_test_runner`, `test_dsh_native_bridge`, `test_evidence_index`) is
+**107 tests, OK** via `automation.test_runner`. Node plugin suite:
 `npm test --prefix dsh/eu4-tools-plugin` → **9/9 pass**.
 
 Broader dependent modules (`test_gfx_metrics`, `test_gfx_replay_case`,
@@ -36,7 +39,10 @@ real Python core:
 - an incomplete case: `ok=false`, `status=incomplete`,
   `diagnostic=incomplete`, exit 2 — incomplete evidence is not a success.
 - a configured interpreter that differs from the executing one:
-  `runtime.mismatch=true`, with both paths reported.
+  `runtime.mismatch=true`, with both paths reported;
+- a virtualenv-selected interpreter keeps its entry-point path; discovery
+  honors `EU4_EVIDENCE_ROOT`, explicit `evidence_root` wins, and the native and
+  CLI surfaces return the same sessions.
 
 The recorded Experiment A case was also replayed through the bridge directly:
 
@@ -51,33 +57,37 @@ The canary could not do this (`incomplete_evidence: numpy is required`).
 
 ## Full suite and base comparison
 
-One full suite was completed after a first run was intentionally stopped
-mid-flight:
+Candidate full suite (`python3.14 -m automation.test_runner run --label full`):
 
-- `3040` tests, `26` skipped, `14` errors, `15` failures, 473 s.
-- The failing/erroring modules were `test_dsh_bridge`, `test_dsh_review`,
-  `test_eu4_re2_accept`, `test_reconstruction_accept`,
-  `test_automation_handoff`, `test_gfx_session`,
-  `test_index_buffer_campaign`, `test_oracle_shadow_acceptance` and
-  `test_trace_tr3`.
+- **3093 tests, 11 failures, 0 errors, 26 skipped** (531 s, exit 1).
+- All 11 failures are `test_trace_tr3` (QBDI release not installed).
 
-Those modules were extracted from base `5a0ac03` (`git archive`) and run in
-`.local/base-check`; the candidate was run with the same focused selection.
-`test_runner compare` reports:
+Base `cfa62c6` (updated `main` after PR #195) was extracted with `git archive`
+to `.local/base-cfa` and run through the same runner with the same full-suite
+selection (`--cwd .local/base-cfa`):
+
+- **3001 tests, 22 failures, 10 errors, 30 skipped** (479 s, exit 1).
+
+`test_runner compare` (comparable full selection):
 
 ```
 verdict     no_new_failures
+comparable  true
 base        32 failing ids
-candidate   28 failing ids
+candidate   11 failing ids
 new         0
-preexisting 28
-fixed       4 (test_eu4_re2_accept environment-only)
+preexisting 11
+fixed       21 (base-only environment differences; see below)
 ```
 
-`test_gfx_session` failed once inside the full suite but passes standalone
-(14 tests, OK); it is an isolation/flakiness issue, not a regression. The
-sandbox-induced `git worktree add` errors (2 in `test_dsh_bridge`, 10 in
-`test_dsh_review`) are identical at base.
+The 11 common failures are `test_trace_tr3` and are identical on both sides.
+The 21 base-only ids are environment-only: the clean base archive lacks the
+gitignored `benchmark/.build` and recorded `.local` evidence used by
+`test_border_loop_*`, `test_oracle_bundle`, `test_repo_inventory`,
+`test_reconstruction_accept` and `test_eu4_re2_accept`; `test_gfx_session` is a
+known timing-flaky process-identity assertion. They are not candidate
+regressions. The comparison is therefore a genuine matching-selection result,
+not a comparison of unrelated runs.
 
 ## Acceptance checks against recorded evidence
 
@@ -110,11 +120,10 @@ python3 -m automation.agent_tools eu4_session discover --limit 5
 
 ## Limitations
 
-- The base comparison extracts the base commit with `git archive` because this
-  session cannot write the repository's `.git` directory; a sandbox with Git
-  write access can use a real worktree instead.
-- The full suite's `test_dsh_review`/`test_dsh_bridge` worktree tests cannot run
-  under the current file sandbox. They are excluded from the "new failure"
-  claim only by proving the identical failure set at base.
-- The recorded evidence under `.local/` is not committed; the portable tests use
+- The base comparison uses a `git archive` extraction because the authoring
+  sandbox cannot write `.git`; a normal sandbox can use a worktree.
+- The clean base archive lacks gitignored build/evidence directories, which
+  accounts for the 21 base-only environment failures. The 11 `test_trace_tr3`
+  failures are identical and pre-existing on both sides (QBDI release absent).
+- The recorded evidence under `.local/` is not committed; portable tests use
   synthetic frames and the sanitized DSH fixture.

@@ -104,9 +104,20 @@ class RunnerTests(unittest.TestCase):
         path.parent.mkdir(parents=True)
         path.write_text(json.dumps(running))
         value = self.run_module("runner_pass")
-        self.assertEqual(value["status"], "duplicate")
+        self.assertEqual(value["status"], "pending")
+        self.assertTrue(value["pending"])
+        self.assertFalse(value["completed"])
+        self.assertFalse(value["ok"])
         self.assertEqual(value["duplicate_of"], "already-running")
-        self.assertTrue(value["ok"])
+        # CLI success must not imply a completed verification.
+        import contextlib
+        import io
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = test_runner.main([
+                "run", "--module", "runner_pass", "--cwd", str(self.root),
+                "--state-dir", str(self.state)])
+        self.assertEqual(code, 2, buffer.getvalue())
         # No second invocation was launched.
         self.assertEqual(len(list((self.state / "runs").glob("*.log"))), 0)
 
@@ -145,16 +156,100 @@ class RunnerTests(unittest.TestCase):
         passed = self.run_module("runner_pass")
         comparison = test_runner.compare_records(
             base["id"], passed["id"], state_dir=self.state)
-        self.assertEqual(comparison["verdict"], "no_new_failures")
-        self.assertEqual(len(comparison["fixed_failures"]), 1)
+        # Different test selections are not a regression comparison.
+        self.assertEqual(comparison["verdict"], "incomparable")
+        self.assertTrue(comparison["reasons"])
 
     def test_a_new_failure_is_reported_against_a_clean_base(self):
+        base = self.run_module("runner_pass")
+        # Same selection, changed implementation: the candidate genuinely adds
+        # a failure without changing which tests were requested.
+        (self.root / "runner_pass.py").write_text(FAIL)
+        candidate = self.run_module("runner_pass")
+        comparison = test_runner.compare_records(
+            base["id"], candidate["id"], state_dir=self.state)
+        self.assertTrue(comparison["comparable"], comparison)
+        self.assertEqual(comparison["verdict"], "new_failures")
+        self.assertTrue(comparison["new_failures"])
+
+    def test_unrelated_suites_are_incomparable(self):
         base = self.run_module("runner_pass")
         candidate = self.run_module("runner_fail")
         comparison = test_runner.compare_records(
             base["id"], candidate["id"], state_dir=self.state)
-        self.assertEqual(comparison["verdict"], "new_failures")
-        self.assertTrue(comparison["new_failures"])
+        self.assertFalse(comparison["comparable"])
+        self.assertEqual(comparison["verdict"], "incomparable")
+        self.assertEqual(comparison["new_failures"], [])
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = test_runner.main([
+                "compare", "--base", base["id"], "--candidate", candidate["id"],
+                "--state-dir", str(self.state)])
+        self.assertEqual(code, 2)
+
+    def test_matching_suites_in_separate_worktrees_are_comparable(self):
+        other = self.root / "other-worktree"
+        other.mkdir()
+        (other / "runner_pass.py").write_text(PASS)
+        base = self.run_module("runner_pass")
+        candidate = test_runner.run_suite(
+            modules=["runner_pass"], cwd=other, state_dir=self.state)
+        comparison = test_runner.compare_records(
+            base["id"], candidate["id"], state_dir=self.state)
+        self.assertTrue(comparison["comparable"], comparison)
+        self.assertEqual(comparison["verdict"], "no_new_failures")
+        self.assertNotEqual(comparison["base"]["cwd"],
+                            comparison["candidate"]["cwd"])
+
+    def test_interrupted_and_zero_test_runs_are_incomparable(self):
+        base = self.run_module("runner_pass")
+        timeout = self.run_module("runner_slow", timeout=1.0)
+        timeout_record = json.loads(Path(timeout["record_path"]).read_text())
+        timeout_record["selection"] = {
+            "kind": "focused", "modules": ["runner_pass"], "pattern": None}
+        Path(timeout["record_path"]).write_text(json.dumps(timeout_record))
+        comparison = test_runner.compare_records(
+            base["id"], timeout["id"], state_dir=self.state)
+        self.assertEqual(comparison["verdict"], "incomparable")
+        self.assertIn("timed out", " ".join(comparison["reasons"]))
+
+        empty = {
+            "schema": test_runner.SCHEMA,
+            "id": "zero-tests",
+            "status": "passed",
+            "completed": True,
+            "exit_code": 0,
+            "selection": {"kind": "focused", "modules": ["runner_pass"],
+                          "pattern": None},
+            "counts": {"ran": 0, "failures": 0, "errors": 0, "skipped": 0},
+            "failures": [],
+        }
+        path = self.state / "runs" / "zero-tests.json"
+        path.write_text(json.dumps(empty))
+        comparison = test_runner.compare_records(
+            base["id"], "zero-tests", state_dir=self.state)
+        self.assertEqual(comparison["verdict"], "incomparable")
+        self.assertIn("zero tests", " ".join(comparison["reasons"]))
+
+        running = {
+            "schema": test_runner.SCHEMA,
+            "id": "interrupted",
+            "status": "running",
+            "selection": {"kind": "focused", "modules": ["runner_pass"],
+                          "pattern": None},
+            "pid": os.getpid(),
+            "exit_code": None,
+            "counts": {"ran": 0},
+            "failures": [],
+        }
+        path = self.state / "runs" / "interrupted.json"
+        path.write_text(json.dumps(running))
+        comparison = test_runner.compare_records(
+            base["id"], "interrupted", state_dir=self.state)
+        self.assertEqual(comparison["verdict"], "incomparable")
+        self.assertIn("not a completed test run",
+                      " ".join(comparison["reasons"]))
 
     def test_full_suite_is_the_only_implicit_invocation(self):
         suite = test_runner._suite([], None, self.root.resolve())

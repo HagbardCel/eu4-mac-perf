@@ -23,7 +23,7 @@ import unittest
 import uuid
 from pathlib import Path
 
-from automation import dsh_profile
+from automation import dsh_profile, python_runtime
 
 REPO = Path(__file__).resolve().parents[1]
 RUNTIME = REPO / "dsh" / "runtime.json"
@@ -341,7 +341,7 @@ class LauncherEnvironmentTests(unittest.TestCase):
         # the dependency state it reports matches that interpreter.
         self.assertEqual(recorded["schema"], "eu4-agent-tool/v2")
         self.assertEqual(recorded["runtime"]["executable"],
-                         str(Path(sys.executable).resolve()))
+                         python_runtime.absolute(sys.executable))
         numpy_expected = importlib.util.find_spec("numpy") is not None
         self.assertEqual(recorded["runtime"]["numpy"]["available"], numpy_expected)
         self.assertEqual(recorded["runtime"]["configured"],
@@ -427,8 +427,22 @@ class LauncherInterpreterTests(unittest.TestCase):
         ran = self._run({"EU4_DSH_PYTHON": "python-eu4"})
         self.assertEqual(ran.returncode, 0, ran.stderr + ran.stdout)
         recorded = json.loads(self.out.read_text(encoding="utf-8"))
-        self.assertEqual(recorded["python"], str(Path(sys.executable).resolve()))
+        self.assertEqual(recorded["python"], str(self.python_link))
         self.assertTrue(os.path.isabs(recorded["python"]))
+
+    def test_an_explicit_virtualenv_is_exported_unchanged(self) -> None:
+        venv = self.root / "venv"
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--without-pip",
+             "--system-site-packages", str(venv)],
+            check=True, capture_output=True, text=True)
+        python = venv / "bin" / "python3"
+        self.assertTrue(python.exists())
+        ran = self._run({"EU4_DSH_PYTHON": str(python)})
+        self.assertEqual(ran.returncode, 0, ran.stderr + ran.stdout)
+        recorded = json.loads(self.out.read_text(encoding="utf-8"))
+        self.assertEqual(recorded["python"], str(python))
+        self.assertNotEqual(recorded["python"], os.path.realpath(python))
 
     def test_an_unusable_interpreter_fails_before_the_launcher(self) -> None:
         ran = self._run({"EU4_DSH_PYTHON": "/no/such/python"})

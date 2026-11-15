@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -14,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from automation import gfx_case  # noqa: E402
+from automation import gfx_case, python_runtime  # noqa: E402
 
 try:
     import numpy as np
@@ -81,16 +82,18 @@ class NativeBridgeTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
 
-    def run_node(self, tool: str, args: dict, *, env=None) -> dict:
+    def run_node(self, tool: str, args: dict, *, env=None,
+                 python: str | None = None) -> dict:
         bridge = (ROOT / "dsh" / "eu4-tools-plugin" / "lib" / "bridge.js").as_uri()
-        configured = (env or {}).get("EU4_DSH_PYTHON", sys.executable)
+        selected = python or sys.executable
+        environment = {"EU4_DSH_PYTHON": selected, **(env or {})}
         script = self.root / "native.mjs"
         script.write_text(
             "import { runTool } from " + json.dumps(bridge) + ";\n"
             "const value = await runTool(" + json.dumps(tool) + ", "
-            + json.dumps(args) + ", { python: " + json.dumps(sys.executable)
+            + json.dumps(args) + ", { python: " + json.dumps(selected)
             + ", cwd: " + json.dumps(str(ROOT))
-            + ", env: { EU4_DSH_PYTHON: " + json.dumps(configured) + " } });\n"
+            + ", env: " + json.dumps(environment) + " });\n"
             "console.log(JSON.stringify(value));\n",
             encoding="utf-8",
         )
@@ -106,7 +109,7 @@ class NativeBridgeTests(unittest.TestCase):
         self.assertEqual(value["schema"], "eu4-agent-tool/v2")
         self.assertIn(value["status"], ("ok", "incomplete"), value)
         self.assertEqual(value["runtime"]["executable"],
-                         str(Path(sys.executable).resolve()))
+                         python_runtime.absolute(sys.executable))
         self.assertEqual(value["runtime"]["configured"], sys.executable)
         self.assertFalse(value["runtime"]["mismatch"])
         self.assertTrue(value["runtime"]["numpy"]["available"])
@@ -126,7 +129,122 @@ class NativeBridgeTests(unittest.TestCase):
         self.assertTrue(value["runtime"]["mismatch"])
         self.assertEqual(value["runtime"]["configured"], "/no/such/python")
         self.assertEqual(value["runtime"]["executable"],
-                         str(Path(sys.executable).resolve()))
+                         python_runtime.absolute(sys.executable))
+
+    def make_evidence(self, root: Path, campaign: str, session: str) -> Path:
+        directory = root / campaign / f"session-{session}"
+        directory.mkdir(parents=True)
+        (directory / "result.json").write_text(json.dumps({
+            "schema": "gfx-dual-run/v1",
+            "session_id": session,
+            "classification": "incomplete",
+            "health": {"verdict": "healthy"},
+            "scenario": {"name": campaign, "digest": "d" * 64},
+            "qualification": {"status": "incomplete", "qualified": False},
+            "finished_utc": "2026-11-14T18:12:56Z",
+        }))
+        return directory
+
+    def test_native_discovery_honours_the_inherited_evidence_root(self):
+        evidence = self.root / "evidence"
+        self.make_evidence(evidence, "live-a6", "a6-native")
+        value = self.run_node(
+            "eu4_session", {"op": "discover"},
+            env={"EU4_EVIDENCE_ROOT": str(evidence)})
+        self.assertTrue(value["ok"], value)
+        sessions = {row["session_id"] for row in value["result"]["sessions"]}
+        self.assertEqual(sessions, {"a6-native"})
+
+    def test_explicit_evidence_root_keeps_precedence(self):
+        inherited = self.root / "inherited"
+        explicit = self.root / "explicit"
+        self.make_evidence(inherited, "live-a6", "inherited-session")
+        self.make_evidence(explicit, "live-a9", "explicit-session")
+        value = self.run_node(
+            "eu4_session",
+            {"op": "discover", "evidence_root": str(explicit)},
+            env={"EU4_EVIDENCE_ROOT": str(inherited)})
+        sessions = {row["session_id"] for row in value["result"]["sessions"]}
+        self.assertEqual(sessions, {"explicit-session"})
+
+    def test_native_and_cli_discovery_return_the_same_sessions(self):
+        evidence = self.root / "same-evidence"
+        self.make_evidence(evidence, "live-a6", "a6-same")
+        self.make_evidence(evidence, "live-a21", "a21-same")
+        native = self.run_node(
+            "eu4_session", {"op": "discover"},
+            env={"EU4_EVIDENCE_ROOT": str(evidence)})
+        completed = subprocess.run(
+            [sys.executable, "-m", "automation.agent_tools",
+             "eu4_session", "discover"],
+            cwd=ROOT, capture_output=True, text=True, check=False,
+            env={**os.environ, "EU4_EVIDENCE_ROOT": str(evidence)},
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        cli = json.loads(completed.stdout)["result"]["sessions"]
+        self.assertEqual(
+            {row["session_id"] for row in native["result"]["sessions"]},
+            {row["session_id"] for row in cli})
+
+    def test_unrelated_environment_variable_is_not_forwarded(self):
+        evidence = self.root / "evidence"
+        self.make_evidence(evidence, "live-a6", "a6-native")
+        value = self.run_node(
+            "eu4_session", {"op": "discover"},
+            env={"EU4_EVIDENCE_ROOT": str(evidence),
+                 "EU4_UNRELATED_SECRET": "must-not-leak"})
+        # The command output cannot inspect the child env directly; the bridge
+        # allowlist unit test covers exclusion. This confirms the tool still
+        # works while an unrelated variable is present in the parent env.
+        self.assertTrue(value["ok"], value)
+
+    def test_virtualenv_bridge_acceptance(self):
+        venv = self.root / "venv"
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--without-pip",
+             "--system-site-packages", str(venv)],
+            check=True, capture_output=True, text=True)
+        python = venv / "bin" / "python3"
+        case = build_case(self.root)
+        evidence = self.root / "evidence"
+        self.make_evidence(evidence, "live-a6", "venv-a6")
+        environment = {"EU4_DSH_PYTHON": str(python),
+                       "EU4_EVIDENCE_ROOT": str(evidence)}
+        replay = self.run_node(
+            "eu4_replay", {"op": "case", "case": str(case)},
+            env=environment, python=str(python))
+        self.assertTrue(replay["ok"], replay)
+        # macOS may canonicalize /var to /private/var; the virtualenv entry
+        # point itself must still be the selected path, not the base binary.
+        self.assertEqual(
+            os.path.realpath(os.path.dirname(replay["runtime"]["executable"])),
+            os.path.realpath(str(python.parent)))
+        self.assertEqual(os.path.basename(replay["runtime"]["executable"]),
+                         "python3")
+        self.assertNotEqual(replay["runtime"]["executable"],
+                            os.path.realpath(python))
+        self.assertEqual(replay["outcome"]["diagnostic"], "complete")
+
+        discovered = self.run_node(
+            "eu4_session", {"op": "discover"},
+            env=environment, python=str(python))
+        self.assertEqual(
+            {row["session_id"] for row in discovered["result"]["sessions"]},
+            {"venv-a6"})
+
+        broken = self.root / "empty-case"
+        (broken / "repro").mkdir(parents=True)
+        (broken / "repro" / "repro.json").write_text(json.dumps({
+            "schema": "gfx-diagnostic-repro/v1",
+            "frames": {"reference": {}, "candidate": {}},
+            "policy": {"policy": "tolerant"},
+        }))
+        incomplete = self.run_node(
+            "eu4_replay", {"op": "case", "case": str(broken)},
+            env=environment, python=str(python))
+        self.assertFalse(incomplete["ok"])
+        self.assertEqual(incomplete["outcome"]["diagnostic"], "incomplete")
+        self.assertEqual(incomplete["exit_code"], 2)
 
     def test_native_incomplete_replay_is_not_a_silent_success(self):
         case = self.root / "broken-case"

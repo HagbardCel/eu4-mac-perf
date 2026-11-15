@@ -55,7 +55,7 @@ from automation import (gfx_align, gfx_case, gfx_diagnostics, gfx_dual_run,
                         gfx_frame_graph, gfx_independent_replay, gfx_replay_case,
                         gfx_scenario)  # noqa: E402
 from automation import (evidence_index, gfx_frame_compare, gfx_session, launch_lease,
-                        launch_ledger)  # noqa: E402
+                        launch_ledger, python_runtime)  # noqa: E402
 
 SCHEMA = "eu4-agent-tool/v2"
 RUNTIME_SCHEMA = "eu4-tool-runtime/v1"
@@ -92,25 +92,50 @@ _COMPLETE_DIAGNOSTIC = ("complete", "partial", "not_applicable")
 
 
 def _runtime_block() -> dict:
-    """Report the actual interpreter and dependency state of this process.
+    """Report the actual interpreter environment of this process.
 
-    This is deliberately computed from ``sys.executable``/the imported module,
-    not from configuration: when the adapter and the documented CLI disagree,
-    the disagreement must be visible in the envelope that failed.
+    The configured path is compared as an *environment*, not by dereferencing
+    symlinks: a virtualenv entry point (``.venv/bin/python3``) is a different
+    environment from the base interpreter it points at.  Two virtualenvs that
+    share a base binary therefore report a mismatch, while a system interpreter
+    reached through a symlink does not.
     """
-    configured = os.environ.get("EU4_DSH_PYTHON", "")
+    configured_raw = os.environ.get("EU4_DSH_PYTHON", "")
+    executable = python_runtime.absolute(sys.executable)
+    configured_executable = ""
+    configured_environment = None
     mismatch = False
-    if configured:
+    if configured_raw:
         try:
-            mismatch = Path(configured).expanduser().resolve() != Path(sys.executable).resolve()
-        except OSError:
+            configured_executable = python_runtime.absolute(configured_raw)
+            configured_environment = python_runtime.environment_root(
+                configured_executable)
+        except (OSError, ValueError):
+            configured_executable = configured_raw
             mismatch = True
+    current_environment = (sys.prefix
+                           if sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+                           else None)
+    if configured_executable and not mismatch:
+        if configured_environment or current_environment:
+            mismatch = configured_environment != current_environment
+        else:
+            same_binary = False
+            try:
+                same_binary = os.path.samefile(configured_executable, executable)
+            except OSError:
+                same_binary = False
+            mismatch = configured_executable != executable and not same_binary
     available = gfx_frame_compare.np is not None
     return {
         "schema": RUNTIME_SCHEMA,
-        "executable": str(Path(sys.executable).resolve()),
+        "executable": executable,
         "version": list(sys.version_info[:3]),
-        "configured": configured,
+        "environment": current_environment or sys.prefix,
+        "virtualenv": current_environment is not None,
+        "configured": configured_raw,
+        "configured_executable": configured_executable or None,
+        "configured_environment": configured_environment,
         "mismatch": mismatch,
         "numpy": {
             "required": True,
@@ -162,20 +187,48 @@ def _read_json(path: Path) -> dict:
 
 
 def _run_module(module: str, args: list[str], *, timeout: float = 600.0) -> dict:
+    """Run one existing CLI module and preserve its process outcome.
+
+    A parseable JSON body is not evidence that the subprocess succeeded: the
+    return code, missing output and malformed JSON are all reported separately
+    so callers can distinguish execution failure from a valid diagnostic
+    verdict (a differing-pixel replay is a valid result, not a tool error).
+    """
     completed = subprocess.run(
         [sys.executable, "-m", module, *args],
         cwd=ROOT, capture_output=True, text=True, check=False, timeout=timeout,
     )
     text = completed.stdout.strip()
+    parsed = None
+    parse_error = ""
     if not text:
-        raise RuntimeError(completed.stderr.strip() or "tool produced no output")
-    try:
-        value = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"tool output is not JSON: {exc}") from exc
-    if isinstance(value, dict):
-        return value
-    return {"result": value}
+        parse_error = completed.stderr.strip() or "tool produced no output"
+    else:
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as exc:
+            parse_error = f"tool output is not JSON: {exc}"
+    if parsed is not None and not isinstance(parsed, dict):
+        parsed = {"result": parsed}
+    return {
+        "module": module,
+        "args": list(args),
+        "exit_code": completed.returncode,
+        "stdout": text,
+        "stderr": (completed.stderr or "")[-4000:],
+        "value": parsed,
+        "parse_error": parse_error,
+    }
+
+
+def _subprocess_report(run: dict) -> dict:
+    return {
+        "module": run.get("module"),
+        "args": run.get("args"),
+        "exit_code": run.get("exit_code"),
+        "stderr": run.get("stderr"),
+        "parse_error": run.get("parse_error") or "",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -332,36 +385,28 @@ def _recompute_classification(result: dict) -> tuple[dict | None, str]:
 
 
 def _staticity(run: Path, result: dict) -> dict:
-    """Staticity from the recorded dumps, then the preserved captured frames.
+    """Pair-local staticity from the recorded campaign dumps.
 
-    Recorded sessions predate the neighbour-preserving stop path, so the
-    preserved raw frames on disk are the only complete digest series.  Both
-    sources use the same predicate; the provenance is reported.
+    This uses the same predicate as campaign classification.  A recorded
+    session whose dumps predate the collector's ``valid`` marker stays
+    unverified rather than being inferred from its digests.
     """
     required = int(((result.get("scenario") or {}).get("settle") or {}).get(
         "stable_frames", 1) or 1)
-    value = gfx_align.staticity_evidence(result.get("dumps"), required)
-    value["source"] = "result.dumps"
-    if value.get("verified"):
-        return value
-    captured = {}
-    for role in ("reference", "candidate"):
-        metas, _missing = _frame_meta_entries(run, role)
-        captured[role] = {
-            "captured": [
-                {"frame_index": index, "meta": meta,
-                 "sha256": meta.get("sha256")}
-                for index, meta in sorted(metas.items())
-            ]
-        }
-    alternate = gfx_align.staticity_evidence(captured, required)
-    alternate["source"] = "preserved_captured_frames"
-    if alternate.get("verified"):
-        return alternate
-    value["captured_frames"] = {
-        role: [row["frame_index"] for row in payload["captured"]]
-        for role, payload in captured.items()
+    comparison = (result.get("frames") or {}).get("comparison") or {}
+    pair = comparison.get("first_failure") or (
+        result.get("frames") or {}).get("last_pair") or {}
+    frames = {
+        "reference": pair.get("frame_index"),
+        "candidate": pair.get("candidate_frame_index", pair.get("frame_index")),
     }
+    session = result.get("session_id") or (
+        (result.get("session") or {}).get("session_id")
+        if isinstance(result.get("session"), dict) else None)
+    value = gfx_align.scene_staticity(
+        result.get("dumps"), required=required, frames=frames,
+        session=session)
+    value["source"] = "result.dumps"
     return value
 
 
@@ -757,8 +802,11 @@ def eu4_capture(args: argparse.Namespace) -> dict:
             graph["status"], "invalid")
         return _envelope("eu4_capture", status, graph,
                          reason="; ".join(graph.get("reasons") or []))
-    run = Path(args.run).expanduser().resolve()
+    run = Path(args.run).expanduser().resolve() if args.run else None
     if args.capture_op == "health":
+        if run is None:
+            return _envelope("eu4_capture", "error",
+                             reason="health requires --run")
         sessions = _session_dirs(run)
         if len(sessions) > 1:
             limit = int(getattr(args, "limit", 20) or 20)
@@ -805,6 +853,9 @@ def eu4_capture(args: argparse.Namespace) -> dict:
         }, reason=gate.get("reason") or "", verdict=view["verdict"],
             evidence=evidence, diagnostic="complete")
     if args.capture_op == "frames":
+        if run is None:
+            return _envelope("eu4_capture", "error",
+                             reason="frames requires --run")
         frames = _read_frames(
             run,
             role=getattr(args, "role", None),
@@ -830,6 +881,9 @@ def eu4_capture(args: argparse.Namespace) -> dict:
                         "observation lines; raise the bound or use --frame"))
         return _envelope("eu4_capture", "ok", frames)
     if args.capture_op == "request":
+        if run is None:
+            return _envelope("eu4_capture", "error",
+                             reason="request requires --run")
         if not args.role:
             return _envelope("eu4_capture", "error",
                              reason="request requires --role")
@@ -861,8 +915,43 @@ def eu4_capture(args: argparse.Namespace) -> dict:
             argv += ["--shader-cache", args.shader_cache]
         if args.timeout:
             argv += ["--timeout", str(args.timeout)]
-        value = _run_module(*argv, timeout=(args.timeout or 300) + 120)
-        return _envelope("eu4_capture", "ok", value)
+        run = _run_module("automation.live_gfx", argv[1:],
+                          timeout=(args.timeout or 300) + 120)
+        value = run["value"]
+        report = _subprocess_report(run)
+        if not isinstance(value, dict):
+            return _envelope(
+                "eu4_capture", "failed",
+                {"subprocess": report},
+                diagnostic="failed",
+                reason=(f"probe subprocess failed (exit {run['exit_code']}): "
+                        f"{run['parse_error'] or run['stderr'] or 'no output'}"))
+        result = dict(value)
+        result["subprocess"] = report
+        flags = value.get("status") if isinstance(value.get("status"), dict) else {}
+        overall = str(value.get("overall") or "")
+        complete = (
+            run["exit_code"] == 0
+            and overall in ("presented", "captured")
+            and flags.get("pixels_captured") is True
+        )
+        if complete:
+            return _envelope("eu4_capture", "ok", result,
+                             diagnostic="complete", verdict=overall or None,
+                             evidence="valid")
+        if run["exit_code"] in (2, 3):
+            return _envelope("eu4_capture", "incomplete", result,
+                             diagnostic="incomplete", verdict=overall or None,
+                             evidence="unverified",
+                             reason=(f"probe reported {overall or 'incomplete'} "
+                                     f"(exit {run['exit_code']}); no accepted "
+                                     "pixel result"))
+        return _envelope(
+            "eu4_capture", "unavailable", result,
+            diagnostic="unavailable", verdict=overall or None,
+            evidence="unverified",
+            reason=(f"probe subprocess exited {run['exit_code']} without a "
+                    f"complete result: {run['stderr'] or overall or 'no detail'}"))
     raise ValueError(f"unknown capture operation: {args.capture_op}")
 
 
@@ -1431,19 +1520,45 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                          evidence=evidence,
                          qualified=(replay_status == "pass"))
     if args.replay_op == "frame":
+        if not args.frame or not args.replay_out:
+            return _envelope(
+                "eu4_replay", "error",
+                reason="frame replay requires --frame and --replay-out/--out")
         argv = ["automation.m6_frame", "replay", "--frame", args.frame,
-                "--shaders", args.shaders, "--out", args.out]
+                "--shaders", args.shaders, "--out", str(args.replay_out)]
         if args.only_event is not None:
             argv += ["--only-event", str(args.only_event)]
             argv += ["--capture-pre", "--capture-post"]
-        value = _run_module(*argv, timeout=600)
+        run = _run_module("automation.m6_frame", argv[1:], timeout=600)
+        value = run["value"]
+        report = _subprocess_report(run)
+        if not isinstance(value, dict):
+            return _envelope(
+                "eu4_replay", "failed",
+                {"subprocess": report},
+                diagnostic="failed",
+                reason=(f"frame replay subprocess failed (exit {run['exit_code']}): "
+                        f"{run['parse_error'] or run['stderr'] or 'no output'}"))
         result = dict(value)
-        result["replay_status"] = value.get("status", "unknown")
-        return _envelope("eu4_replay", "ok", result,
-                         diagnostic="complete",
-                         verdict=None,
-                         evidence=("valid" if value.get("status") in ("pass", "fail")
-                                   else "unverified"))
+        replay_status = str(value.get("status") or "unknown")
+        result["replay_status"] = replay_status
+        result["subprocess"] = report
+        if replay_status in ("pass", "fail") and run["exit_code"] in (0, 2):
+            return _envelope(
+                "eu4_replay", "ok", result, diagnostic="complete",
+                verdict="equal" if replay_status == "pass" else "different",
+                evidence="valid")
+        if replay_status == "invalid" or run["exit_code"] == 1:
+            return _envelope(
+                "eu4_replay", "failed", result, diagnostic="failed",
+                verdict=replay_status or None, evidence="invalid",
+                reason=(f"frame replay did not execute (exit {run['exit_code']}): "
+                        f"{value.get('reason') or run['stderr'] or replay_status}"))
+        return _envelope(
+            "eu4_replay", "incomplete", result, diagnostic="incomplete",
+            verdict=replay_status or None, evidence="unverified",
+            reason=(f"frame replay returned {replay_status} "
+                    f"(exit {run['exit_code']}); no complete verdict"))
     raise ValueError(f"unknown replay operation: {args.replay_op}")
 
 
@@ -1600,7 +1715,8 @@ def _parser() -> argparse.ArgumentParser:
     replay.add_argument("--case", type=Path, default=None)
     replay.add_argument("--frame", default=None)
     replay.add_argument("--shaders", default=None)
-    replay.add_argument("--replay-out", type=Path, default=None)
+    replay.add_argument("--replay-out", "--out", dest="replay_out",
+                        type=Path, default=None)
     replay.add_argument("--only-event", type=int, default=None)
     replay.add_argument("--disable-render-target-vflip", action="store_true")
     replay.add_argument("--sampler-shift", type=int, default=None)

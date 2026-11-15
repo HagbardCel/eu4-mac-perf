@@ -447,10 +447,68 @@ class TemporalDiagnosticsTests(unittest.TestCase):
         self.assertTrue(np.array_equal(preview_base, preview_changed))
         mask = gfx_frame_compare.difference_mask(base, changed, 0)
         self.assertEqual(int(mask.sum()), 2)
-        # The staticity predicate reads full-frame digests, never previews.
-        self.assertNotIn("preview_sha256", gfx_align.staticity_evidence({
+        # The staticity predicate reads validated full-frame dumps, never
+        # previews or bare digest strings.
+        value = gfx_align.scene_staticity({
             "reference": {"captured": [{"frame_index": 1, "sha256": "a"},
                                        {"frame_index": 2, "sha256": "a"}]},
             "candidate": {"captured": [{"frame_index": 1, "sha256": "b"},
                                        {"frame_index": 2, "sha256": "b"}]},
-        }))
+        }, required=2, frames={"reference": 1, "candidate": 1})
+        self.assertFalse(value["verified"])
+        self.assertIn("not marked valid",
+                      " ".join(value["roles"]["reference"]["problems"]))
+
+
+@unittest.skipUnless(np is not None, "numpy is required")
+class TemporalArtifactTests(unittest.TestCase):
+    """Every PNG must depict the pair and normalization behind its statistics."""
+
+    def frame(self, index, image, role):
+        return {"frame_index": index, "image": image,
+                "sha256": f"{role}{index:060d}", "identity": {"role": role}}
+
+    def test_artifacts_use_the_same_images_and_normalization_as_metrics(self):
+        try:
+            from PIL import Image
+        except Exception:  # noqa: BLE001
+            self.skipTest("Pillow is required to inspect PNG artifacts")
+        reference = np.full((6, 8, 4), 20, dtype=np.uint8)
+        reference[:, :, 3] = 255
+        reference[0:2, 0:2, :3] = 200
+        reference_11 = reference.copy()
+        reference_11[1:3, 4:6, 0] = 180
+        candidate = np.full((12, 16, 4), 40, dtype=np.uint8)
+        candidate[:, :, 3] = 255
+        candidate[0:4, 0:4, :3] = 120
+        candidate_21 = candidate.copy()
+        candidate_21[2:6, 8:12, 1] = 220
+        policy = {"policy": "tolerant", "pixel_tolerance": 8,
+                  "max_mismatched_fraction": 1.0, "max_mean_abs_error": 255.0}
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "artifacts"
+            value = gfx_frame_compare.compare_temporal(
+                [self.frame(10, reference, "reference"),
+                 self.frame(11, reference_11, "reference")],
+                [self.frame(20, candidate, "candidate"),
+                 self.frame(21, candidate_21, "candidate")],
+                policy=policy, cross_pairs=[(10, 20)],
+                artifacts={"dir": directory, "amplification": 4},
+            )
+            paths = {Path(path).name: Path(path) for path in value["artifacts"]}
+            normalized, _ = gfx_frame_compare.normalize_candidate(
+                reference, candidate, policy={"allow_scale_normalization": True},
+                candidate_meta={})
+            expected = {
+                "reference_temporal-10-11.png": gfx_frame_compare.difference_image(
+                    reference, reference_11, amplification=4),
+                "candidate_temporal-20-21.png": gfx_frame_compare.difference_image(
+                    candidate, candidate_21, amplification=4),
+                "cross_process-10-20.png": gfx_frame_compare.difference_image(
+                    reference, normalized, amplification=4),
+            }
+            self.assertEqual(set(paths), set(expected))
+            for name, image in expected.items():
+                actual = np.asarray(Image.open(paths[name]).convert("RGBA"))
+                self.assertEqual(actual.shape, image.shape, name)
+                self.assertTrue(np.array_equal(actual, image), name)

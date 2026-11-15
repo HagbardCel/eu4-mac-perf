@@ -106,11 +106,16 @@ test('argument mapping covers each tool', () => {
 })
 
 test('environment is allowlisted', () => {
-  const env = sanitizedEnv({ PATH: '/bin', SECRET: 'x', EU4_RE_INDEX: '/i' }, { EXTRA: '1' })
+  const env = sanitizedEnv({
+    PATH: '/bin', SECRET: 'x', EU4_RE_INDEX: '/i',
+    EU4_EVIDENCE_ROOT: '/evidence', UNRELATED: 'drop',
+  }, { EXTRA: '1' })
   assert.equal(env.PATH, '/bin')
   assert.equal(env.EU4_RE_INDEX, '/i')
+  assert.equal(env.EU4_EVIDENCE_ROOT, '/evidence')
   assert.equal(env.EXTRA, '1')
   assert.equal(env.SECRET, undefined)
+  assert.equal(env.UNRELATED, undefined)
 })
 
 test('definitions are buildable with a no-op runner', () => {
