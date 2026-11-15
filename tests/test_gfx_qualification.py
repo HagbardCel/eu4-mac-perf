@@ -531,8 +531,31 @@ class CaseAgreementTests(unittest.TestCase):
         result.pop("classification", None)
         result["qualification"] = {"status": "incomplete", "qualified": False}
         status = gfx_case.campaign_status(result)
-        self.assertTrue(status["consistent"], status)
-        self.assertEqual(status["status"], "incomplete")
+        self.assertFalse(status["consistent"], status)
+        self.assertIsNone(status["status"])
+        self.assertIn("no classification", " ".join(status["problems"]))
+        self.assertIsNone(gfx_case.campaign_classification(result))
+        self.assertEqual(gfx_case._classify(result, pair, comparison),
+                         gfx_case.INCOMPLETE)
+
+    def test_missing_classification_with_difference_status_is_incomplete(self):
+        result, pair, comparison = self._different_pair()
+        result.pop("classification", None)
+        result["qualification"] = {"status": "rendering_difference",
+                                   "qualified": False}
+        status = gfx_case.campaign_status(result)
+        self.assertFalse(status["consistent"], status)
+        self.assertIn("no classification", " ".join(status["problems"]))
+        self.assertEqual(gfx_case._classify(result, pair, comparison),
+                         gfx_case.INCOMPLETE)
+
+    def test_missing_qualification_status_is_incomplete(self):
+        result, pair, comparison = self._different_pair(
+            classification="rendering_difference")
+        result["qualification"].pop("status")
+        status = gfx_case.campaign_status(result)
+        self.assertFalse(status["consistent"], status)
+        self.assertIn("no qualification status", " ".join(status["problems"]))
         self.assertEqual(gfx_case._classify(result, pair, comparison),
                          gfx_case.INCOMPLETE)
 
@@ -574,6 +597,20 @@ class CaseAgreementTests(unittest.TestCase):
         result, pair, comparison = self._different_pair(
             classification="rendering_difference")
         result.pop("qualification")
+        self.assertEqual(gfx_case._classify(result, pair, comparison),
+                         gfx_case.INCOMPLETE)
+
+    def test_passing_pair_without_classification_is_incomplete(self):
+        result, pair, comparison = self._different_pair(
+            difference_status="pass", classification="match")
+        result.pop("classification", None)
+        self.assertEqual(gfx_case._classify(result, pair, comparison),
+                         gfx_case.INCOMPLETE)
+
+    def test_passing_pair_without_qualification_status_is_incomplete(self):
+        result, pair, comparison = self._different_pair(
+            difference_status="pass", classification="match")
+        result["qualification"].pop("status")
         self.assertEqual(gfx_case._classify(result, pair, comparison),
                          gfx_case.INCOMPLETE)
 

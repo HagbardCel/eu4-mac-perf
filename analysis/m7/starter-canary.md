@@ -308,7 +308,7 @@ No new framework, no new tool, no tolerance change.
 
 ### 8.3 Regressions
 
-New `tests/test_gfx_qualification.py` (48 tests) covers every review item:
+New `tests/test_gfx_qualification.py` (52 tests) covers every review item:
 
 - repeated game-day identities with changing frame pixels → not static;
 - invalid captures with repeated hashes, and observer-marked capture-invalid dumps → not static;
@@ -383,10 +383,12 @@ same. The numerical difference statistics are unchanged.
 ### 8.5b Offline campaign floor (both verdict paths)
 
 The offline case is a package of evidence, never a second qualification pass. Its
-`campaign_status()` resolver requires the source campaign's `classification` and
-`qualification` to exist, agree, and carry a `qualified` flag consistent with the
-status (`match` ⇒ qualified; every other status ⇒ not qualified). Both offline
-paths use it:
+`campaign_status()` resolver requires **both** explicit status fields —
+`classification` and `qualification.status` — to exist and agree, and the
+`qualified` flag to match the status (`match` ⇒ qualified; every other status ⇒
+not qualified). A missing classification, missing qualification record or
+status, unknown vocabulary, or contradictory/flag-inconsistent evidence is
+unresolved. Both offline paths use it:
 
 - a passing pair yields `match` only when the campaign is a consistent, qualified
   `match` with aligned correspondence;
@@ -397,7 +399,8 @@ paths use it:
 
 The local comparison measurements (including pixel-error statistics) are still
 written to `difference/statistics.json` and the analysis when attribution is
-withheld. Regressions cover absent classification with `qualification.status =
+withheld; generated analysis reports an unresolved campaign status with its
+reasons instead of presenting a contradictory recorded status as authoritative. Regressions cover absent classification with `qualification.status =
 incomplete`, absent campaign evidence, a consistent qualified difference, a
 contradictory status, an unqualified `match` flag, and the pass-path floor.
 
@@ -406,7 +409,7 @@ contradictory status, an unqualified `match` flag, and the pass-path floor.
 The PR was rebased onto `origin/main` `5a0ac03` before validation. Focused
 modules (`test_gfx_dual_run`, `test_gfx_case`, `test_agent_tools`,
 `test_offline_campaign`, `test_gfx_metrics`, `test_gfx_replay_case`,
-`test_gfx_qualification`) pass: 164 tests, OK.
+`test_gfx_qualification`) pass: 197 tests, OK.
 
 Full suite on clean worktrees with the same command
 (`python3.14 -m unittest discover -s tests`):

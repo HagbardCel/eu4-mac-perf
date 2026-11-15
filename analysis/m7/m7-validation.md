@@ -31,7 +31,7 @@ python3.14 -m unittest tests.test_gfx_qualification tests.test_gfx_dual_run \
   tests.test_gfx_metrics tests.test_gfx_replay_case -q
 ```
 
-Result: **164 tests, OK** (the qualification module contributes 48; re-run
+Result: **197 tests, OK** (the qualification module contributes 52; re-run
 after the offline campaign-floor correction).
 
 ## Full-suite results
@@ -178,6 +178,6 @@ only base-only failure is an unrelated flaky process-identity assertion. No
 module touched by this PR appears in either failure set.
 
 The acceptance criteria for the review are covered by
-`tests/test_gfx_qualification.py` (48 tests) plus the updated campaign and case
+`tests/test_gfx_qualification.py` (52 tests) plus the updated campaign and case
 fixtures; the full evidence is in
 [the canary report](starter-canary.md#8-correction-and-regression).

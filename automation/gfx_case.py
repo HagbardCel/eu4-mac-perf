@@ -133,12 +133,14 @@ def campaign_status(result: dict) -> dict:
     if not isinstance(qualified, bool):
         qualified = None
     problems: list[str] = []
+    if classification is None:
+        problems.append("the source campaign has no classification")
     if qualification is None:
         problems.append("the source campaign has no qualification record")
-    if classification is None and status is None:
+    elif status is None:
         problems.append("the source campaign has no qualification status")
-    elif (classification is not None and status is not None
-          and classification != status):
+    if (classification is not None and status is not None
+            and classification != status):
         problems.append(
             "campaign status is contradictory: "
             f"classification {classification!r}, qualification {status!r}")
@@ -163,9 +165,13 @@ def campaign_status(result: dict) -> dict:
 
 
 def campaign_classification(result: dict) -> str | None:
-    """The source campaign's resolved qualification status, if consistent."""
+    """The source campaign's authoritative status, or None when unresolved.
+
+    An inconsistent record is never presented as the campaign verdict; callers
+    that need the diagnosis use :func:`campaign_status` for the reasons.
+    """
     value = campaign_status(result)
-    return value["status"] if value["consistent"] else value["recorded_status"]
+    return value["status"] if value["consistent"] else None
 
 
 def _campaign_floor(result: dict) -> str:
@@ -294,11 +300,14 @@ def _analysis(result: dict, pair: dict | None, comparison: dict | None,
     ]
     if (comparison or {}).get("status") == gfx_frame_compare.PASS \
             and classification != MATCH:
+        campaign = campaign_status(result)
+        verdict = (
+            f"`{campaign['status']}`" if campaign["consistent"]
+            else "unresolved (" + "; ".join(campaign["problems"]) + ")")
         lines.append(
             "- Local pixel equality is recorded here, but it does not qualify "
-            f"the campaign: the campaign verdict is `{campaign_classification(result)}`. "
-            "A packaged case cannot claim stronger equivalence than its source "
-            "campaign."
+            f"the campaign: the campaign verdict is {verdict}. A packaged case "
+            "cannot claim stronger equivalence than its source campaign."
         )
     if (comparison or {}).get("status") == gfx_frame_compare.FAIL \
             and classification != CONFIRMED_RENDERING:
