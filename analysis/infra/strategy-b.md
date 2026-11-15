@@ -702,7 +702,7 @@ The exact GitHub command (`PYTHONPATH=benchmark:. python -m unittest discover -s
 tests`) was run in an amd64 Ubuntu 24.04 VM with Python 3.14 and Node 26; the
 previously failing modules pass. The full portable workflow, including DSH,
 evidence, documentation and final-diff steps, passed on PR #191:
-https://github.com/HagbardCel/eu4-mac-perf/actions/runs/43705707227.
+https://github.com/HagbardCel/eu4-mac-perf/actions/runs/43708678925.
 
 ### Non-default framebuffer source metadata
 

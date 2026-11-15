@@ -114,7 +114,7 @@
     ]
   },
   "reviewed_head": "b8fdd0b",
-  "implementation_head": "0e620f5",
+  "implementation_head": "ae54753",
   "notes": [
     "The integration branch was synchronized with origin/main 61e7795 before these corrections; the merge commit is cb35385.",
     "Texture 442 remains the single unresolved dependency in both the historical canonical menu frame and the new menu scene 79.",
@@ -783,9 +783,9 @@
   "review_threads": 2,
   "review_threads_resolved": true,
   "portable_ci": {
-    "url": "https://github.com/HagbardCel/eu4-mac-perf/actions/runs/43705707227",
+    "url": "https://github.com/HagbardCel/eu4-mac-perf/actions/runs/43708678925",
     "conclusion": "success",
-    "head": "0e620f53604e6d0207eda84d6882e27db88aeb8b",
+    "head": "ae54753f82b0faf30d2ebf7956b00ba84d48ebbe",
     "steps": 19
   },
   "source_category_validation": "fb:0 requires metal_default; renderer-generated textures require metal_render_target; boundary inputs require their declared category; unexpected categories invalid",
