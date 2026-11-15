@@ -1,7 +1,7 @@
 # M7 PR 2 — in-process Metal shadow renderer
 
 Status: implementation and one authentic same-process launch complete. This PR
-is stacked on PR 1 (`m7/pr1-frame-seal`, commit `7517b9c`, PR #199), which is
+is stacked on PR 1 (`m7/pr1-frame-seal`, commit `2b6545c`, PR #199), which is
 still open for review. Do not merge PR 2 before PR 1.
 
 ## Architecture
@@ -86,39 +86,59 @@ first-sample-before-write entries, and one in-frame transfer.
 
 ## Authentic same-process launch (Stage C)
 
-One original x86_64 EU4 process, **pid 91051**, session
-`ce58136b-362d-4d72-9383-3846d71f2784`:
+One original x86_64 EU4 process, **pid 41754**, session
+`2d692cb3-9d0d-4460-8803-00b249e756f9`:
 
 | Field | Value |
 | --- | --- |
-| capture id / boundary | `1`, scene 617 |
+| capture id / boundary | `1`, scene 615 |
 | ordered operations | 325 (315 draws, 9 clears, 1 resolve) |
-| GL reference | `439da7ac…`, 7,720,704 bytes |
-| trace manifest | `b80c1a7c…` |
+| GL reference | `987ecbe2…`, 7,720,704 bytes |
+| trace manifest | `9797dc1f…` |
 | Metal replay | 325/325 encoded, 0 failed, readback ok, command status 4 |
-| Metal frame | `7bf78ca0…` |
-| replay duration | 410 ms |
-| total callback time | 3.33 s (translation wait + replay) |
+| Metal frame | `bdcc1322…` |
+| replay duration | 1.98 s (includes native input/blob verification) |
+| total callback time | 5.11 s (translation wait + replay) |
 | one EU4 PID | yes; no second launch |
 | termination | launcher `terminated=true`, settings restored |
 | game stdout/stderr | 0 / 0 bytes |
 | state coverage | **partial**: `gl_dither`, `multisample` unsupported |
 | pixel verdict | **fail** |
 
-Comparison: **1,160,637 / 1,930,176** pixels differ, max channel error **81**,
+Comparison: **1,159,832 / 1,930,176** pixels differ, max channel error **76**,
 mean max error 0.87, alpha differences 0. The differences are spatially
 uniform and low-amplitude over terrain and UI, and the images are visually
-equivalent, but this is **not** proven to be exclusively dithering: 262,845
-pixels differ by more than 1 and 112 by more than 40. No A/B run with dither or
+equivalent, but this is **not** proven to be exclusively dithering: 261,294
+pixels differ by more than 1 and 69 by more than 40. No A/B run with dither or
 multisample disabled exists. The canonical title fixture remains pixel-exact,
 so this is a live-frame state/coverage gap, not a core regression. The
 coordinator writes `state-coverage.json` with the exact checked/unsupported
 flags.
 
-The generic ops observer recorded `refused=0` during the blocked frame
+The generic ops observer recorded `refused=328` during the blocked frame
 boundary; the frame trace itself is complete and validated, stdout/stderr are
 empty, and no GL error was recorded. The run is a one-shot diagnostic, not
 continuous mirroring.
+
+## Bounded execution and verified inputs
+
+- One monotonic replay deadline now spans event execution, transformations,
+  copies, checkpoints, final completion and readback. The alpha-texture compute
+  path uses the shared bounded wait; there are no direct `waitUntilCompleted`
+  calls outside that helper.
+- On deadline expiry the result is `ok=0`, `timed_out=1`, no Metal readback is
+  written, and the bridge reports failure. The bridge destroys the session in an
+  `@finally`, including Objective-C exception paths.
+- The in-process bridge requires a `shader-receipt.json` bound to capture id,
+  pid/session, manifest digest, event-stream digest and translated artifact
+  digest. Missing/stale/mismatched receipts are instrumentation failures.
+- The native C ABI verifies event-stream digest/size, manifest, reference,
+  `shaders.json` and every referenced blob's recorded hash before Metal starts.
+  The standalone offline CLI may run without a seal; the in-process bridge
+  always supplies the sealed identity.
+- `shadow-report.json` write failure cannot produce callback success; replay
+  artifacts are fail-closed and full-frame success requires
+  `encoded == events` (isolated/stop-after runs are marked `partial`).
 
 ## Limits and next steps
 

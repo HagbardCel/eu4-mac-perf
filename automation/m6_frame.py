@@ -614,13 +614,19 @@ def capture(args: argparse.Namespace) -> int:
                 "--timeout",
                 str(
                     max(
-                        120.0,
+                        300.0,
                         args.duration
                         + args.shadow_wait_ms / 1000.0
                         + args.shadow_timeout_ms / 1000.0
-                        + 60.0,
+                        + 120.0,
                     )
                 ),
+                "--seal-timeout",
+                str(max(120.0, args.duration + 60.0)),
+                "--translation-timeout",
+                str(args.shadow_wait_ms / 1000.0 + 30.0),
+                "--replay-timeout",
+                str(args.shadow_timeout_ms / 1000.0 + 60.0),
             ],
             cwd=str(ROOT),
             stdout=subprocess.PIPE,
@@ -709,6 +715,7 @@ def capture(args: argparse.Namespace) -> int:
             shadow_report = _read_json(coordinator_path)
             result["shadow"] = shadow_report
             result["pixel_verdict"] = shadow_report.get("pixel_verdict")
+            result["qualified"] = False
             result["diagnostic"] = {
                 "metal": "complete"
                 if shadow_report.get("status") == "ok"
@@ -1322,7 +1329,8 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
         "shadow_dir": str(shadow),
         "status": "incomplete",
     }
-    seal_deadline = time.monotonic() + min(args.timeout, 120.0)
+    overall_deadline = time.monotonic() + args.timeout
+    seal_deadline = min(overall_deadline, time.monotonic() + args.seal_timeout)
     seal_path = frame_dir / "frame-seal.json"
     while not seal_path.is_file() and time.monotonic() < seal_deadline:
         time.sleep(0.1)
@@ -1358,7 +1366,7 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
                 json.dumps(result, indent=2) + "\n"
             )
             return 1
-    report_deadline = time.monotonic() + args.timeout
+    report_deadline = min(overall_deadline, time.monotonic() + args.replay_timeout)
     translated = translate_command(
         argparse.Namespace(frame=str(frame_dir), out=str(shader_dir), force=True)
     )
@@ -1366,8 +1374,43 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
         result["error"] = "shader translation failed"
         (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")
         return 1
+    def artifact_digest(directory: Path) -> tuple[str, int]:
+        digest = hashlib.sha256()
+        count = 0
+        for path in sorted(directory.rglob("*")):
+            if not path.is_file() or path.name in ("ready", "shader-receipt.json"):
+                continue
+            digest.update(str(path.relative_to(directory)).encode())
+            digest.update(b"\0")
+            digest.update(_sha256(path).encode())
+            digest.update(b"\n")
+            count += 1
+        return digest.hexdigest(), count
+
+    shaders_json = shader_dir / "shaders.json"
+    artifacts_sha256, artifact_count = artifact_digest(shader_dir)
+    receipt = {
+        "schema": "m7-shadow-shader-receipt/v1",
+        "capture_frame_id": seal.get("capture_frame_id"),
+        "pid": seal.get("pid"),
+        "session_id": seal.get("session_id"),
+        "trace_manifest_sha256": seal.get("manifest_sha256"),
+        "event_stream_sha256": seal.get("event_stream_sha256"),
+        "event_stream_bytes": seal.get("event_stream_bytes"),
+        "shaders_json_sha256": _sha256(shaders_json),
+        "artifacts_sha256": artifacts_sha256,
+        "artifact_count": artifact_count,
+    }
+    receipt_path = shadow / "shader-receipt.json"
+    receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     (shader_dir / "ready").write_text(
-        json.dumps({"status": "ready", "capture_frame_id": seal.get("capture_frame_id")})
+        json.dumps(
+            {
+                "status": "ready",
+                "capture_frame_id": seal.get("capture_frame_id"),
+                "shader_receipt_sha256": _sha256(receipt_path),
+            }
+        )
         + "\n"
     )
     while not report_path.is_file() and time.monotonic() < report_deadline:
@@ -1414,7 +1457,11 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
             "draws": len(draws),
             "gl_dither": dither,
             "multisample": multisample,
-            "state_coverage": "partial" if (dither or multisample) else "complete",
+            "state_coverage": (
+                "partial" if (dither or multisample)
+                else "complete_for_audited_states"
+            ),
+            "qualified": False,
             "scope": ["gl_dither", "multisample"],
             "unsupported": [
                 name
@@ -1446,6 +1493,14 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
             comparison = m6_compare.compare(frame_dir, shadow, policy)
             result["comparison"] = comparison
             result["pixel_verdict"] = comparison.get("status")
+            result["execution"] = {
+                "capture": "complete",
+                "metal": "complete",
+                "operation_coverage": "complete"
+                if report["metal"].get("encoded") == report["metal"].get("events")
+                else "partial",
+            }
+            result["qualified"] = False
             (shadow / "comparison.json").write_text(
                 json.dumps(comparison, indent=2) + "\n"
             )
@@ -1558,7 +1613,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     coord.add_argument("--run", required=True)
     coord.add_argument("--shadow-dir", default="")
-    coord.add_argument("--timeout", type=float, default=300.0)
+    coord.add_argument("--timeout", type=float, default=900.0)
+    coord.add_argument("--seal-timeout", type=float, default=300.0)
+    coord.add_argument("--translation-timeout", type=float, default=180.0)
+    coord.add_argument("--replay-timeout", type=float, default=180.0)
+    coord.add_argument("--compare-timeout", type=float, default=60.0)
     coord.add_argument("--policy")
     coord.add_argument("--no-compare", action="store_true")
     coord.set_defaults(handler=shadow_coordinator)

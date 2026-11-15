@@ -37,6 +37,16 @@ typedef struct {
     uint32_t capture_pre_images;
     uint32_t depth_from_prefix;
     uint64_t timeout_ms; /* 0: unbounded */
+    /* Sealed-input identity, required for the in-process C ABI.  Zero/NULL
+       fields mean the standalone replay is loading an offline fixture without
+       a seal; the in-process bridge always fills them. */
+    uint64_t capture_frame_id;
+    const char *session_id;
+    const char *expected_event_stream_sha256;
+    uint64_t expected_event_stream_bytes;
+    const char *expected_manifest_sha256;
+    const char *expected_reference_sha256;
+    const char *expected_shader_json_sha256;
 } eu4_metal_replay_config;
 
 typedef struct {
@@ -45,6 +55,8 @@ typedef struct {
     int32_t ok;             /* 1: every event encoded, readback succeeded */
     int32_t command_status; /* MTLCommandBufferStatus of the final buffer */
     int32_t readback_ok;    /* 1: metal-frame.bgra was written */
+    int32_t timed_out;      /* 1: the monotonic deadline expired */
+    int32_t partial;        /* 1: isolated/stop-after diagnostic mode */
     uint32_t events;        /* events in the trace */
     uint32_t encoded;       /* events attempted */
     uint32_t failed;        /* events that failed to encode */

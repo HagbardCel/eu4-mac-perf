@@ -18,12 +18,14 @@
 
 #include <CommonCrypto/CommonDigest.h>
 #include <time.h>
+#include <sys/stat.h>
 
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
 static NSString *const kErrorDomain = @"eu4.frame.replay";
+static uint64_t replay_now_ns(void);
 static BOOL wait_for_transfer(id<MTLCommandBuffer> buffer, NSString *operation,
                               NSError **error);
 
@@ -63,6 +65,7 @@ typedef struct {
 @property (nonatomic, assign) NSUInteger virtual_target_id;
 @property (nonatomic, assign) NSUInteger current_event;
 @property (nonatomic, assign) uint64_t timeout_ms;
+@property (nonatomic, assign) uint64_t deadline_ns;
 @end
 
 @implementation EU4MetalReplayState
@@ -98,6 +101,7 @@ static thread_local FrameTarget *g_default_target_ptr;
 #define g_transfer_records (g_state.transfer_records)
 #define g_current_event (g_state.current_event)
 #define g_timeout_ms (g_state.timeout_ms)
+#define g_deadline_ns (g_state.deadline_ns)
 #define g_default_target (*g_default_target_ptr)
 
 static NSMutableDictionary *target_for(NSDictionary *target, NSError **error);
@@ -394,7 +398,7 @@ static id<MTLTexture> alpha_normalized(id<MTLTexture> source,
     [encoder dispatchThreadgroups:groups threadsPerThreadgroup:threads_per_group];
     [encoder endEncoding];
     [compute_command commit];
-    [compute_command waitUntilCompleted];
+    (void)wait_for_transfer(compute_command, @"alpha transform", NULL);
     (void)command;
     g_alpha_textures[key] = destination;
     return destination;
@@ -2268,9 +2272,20 @@ static BOOL encode_clear(NSDictionary *event, NSString *frameDir,
    success would turn a harness failure into an apparent renderer difference. */
 static BOOL wait_for_transfer(id<MTLCommandBuffer> buffer, NSString *operation,
                               NSError **error) {
-    if (g_timeout_ms == 0) {
+    if (g_deadline_ns == 0) {
         [buffer waitUntilCompleted];
     } else {
+        uint64_t now = replay_now_ns();
+        if (now >= g_deadline_ns) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:83
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        [NSString stringWithFormat:
+                                                             @"%@ exceeded the replay deadline",
+                                                             operation]}];
+            }
+            return NO;
+        }
         /* Wait off the engine thread so the timeout is real.  The block retains
            the command buffer; on timeout the caller reports failure without
            touching the still-running submission. */
@@ -2281,15 +2296,14 @@ static BOOL wait_for_transfer(id<MTLCommandBuffer> buffer, NSString *operation,
             dispatch_semaphore_signal(completed);
         });
         dispatch_time_t deadline = dispatch_time(
-            DISPATCH_TIME_NOW, (int64_t)(g_timeout_ms * NSEC_PER_MSEC));
+            DISPATCH_TIME_NOW, (int64_t)(g_deadline_ns - now));
         if (dispatch_semaphore_wait(completed, deadline) != 0) {
             if (error != NULL) {
                 *error = [NSError errorWithDomain:kErrorDomain code:83
                                          userInfo:@{NSLocalizedDescriptionKey:
                                                         [NSString stringWithFormat:
-                                                             @"%@ exceeded the %llu ms replay timeout",
-                                                             operation,
-                                                             (unsigned long long)g_timeout_ms]}];
+                                                             @"%@ exceeded the replay deadline",
+                                                             operation]}];
             }
             return NO;
         }
@@ -2536,6 +2550,159 @@ static int replay_sha256_file(const char *path, char out[65]) {
     return 0;
 }
 
+static const char *find_token(const char *start, const char *end,
+                              const char *token) {
+    size_t length = strlen(token);
+    for (const char *at = start; at + length <= end; at++) {
+        if (memcmp(at, token, length) == 0) {
+            return at;
+        }
+    }
+    return NULL;
+}
+
+static BOOL verify_file_sha(NSString *path, uint64_t expected_size,
+                            const char *expected_sha, NSError **error) {
+    struct stat st;
+    if (stat(path.fileSystemRepresentation, &st) != 0) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:110
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    [NSString stringWithFormat:@"missing file %@", path]}];
+        }
+        return NO;
+    }
+    if (expected_size != 0 && (uint64_t)st.st_size != expected_size) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:111
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    [NSString stringWithFormat:@"size mismatch for %@", path]}];
+        }
+        return NO;
+    }
+    if (expected_sha == NULL || expected_sha[0] == 0) {
+        return YES;
+    }
+    char sha[65] = {0};
+    if (replay_sha256_file(path.fileSystemRepresentation, sha) != 0 ||
+        strcmp(sha, expected_sha) != 0) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:112
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    [NSString stringWithFormat:@"digest mismatch for %@", path]}];
+        }
+        return NO;
+    }
+    return YES;
+}
+
+static BOOL verify_blob_references(NSString *frame_dir, NSError **error) {
+    NSString *events_path =
+        [frame_dir stringByAppendingPathComponent:@"frame-events.jsonl"];
+    NSData *data = [NSData dataWithContentsOfFile:events_path];
+    if (data == nil) {
+        return NO;
+    }
+    const char *bytes = (const char *)data.bytes;
+    const char *end = bytes + data.length;
+    const char *cursor = bytes;
+    NSMutableSet<NSString *> *seen = [NSMutableSet set];
+    while (cursor < end) {
+        const char *file = find_token(cursor, end, "\"file\":\"");
+        const char *attribute = find_token(cursor, end, "\"data\":\"");
+        const char *marker = NULL;
+        size_t marker_length = 0;
+        if (file != NULL && (attribute == NULL || file < attribute)) {
+            marker = file;
+            marker_length = strlen("\"file\":\"");
+        } else if (attribute != NULL) {
+            marker = attribute;
+            marker_length = strlen("\"data\":\"");
+        }
+        if (marker == NULL) {
+            break;
+        }
+        const char *name_begin = marker + marker_length;
+        const char *name_end = (const char *)memchr(name_begin, '"', (size_t)(end - name_begin));
+        if (name_end == NULL) {
+            return NO;
+        }
+        NSString *name = [[NSString alloc] initWithBytes:name_begin
+                                                  length:(NSUInteger)(name_end - name_begin)
+                                                encoding:NSUTF8StringEncoding];
+        const char *sha_marker = find_token(name_end, end, "\"sha256\":\"");
+        if (name.length == 0 || sha_marker == NULL ||
+            sha_marker - name_end > 512) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:113
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        @"blob reference has no sha256"}];
+            }
+            return NO;
+        }
+        const char *sha_begin = sha_marker + strlen("\"sha256\":\"");
+        if (sha_begin + 64 > end) {
+            return NO;
+        }
+        char expected[65];
+        memcpy(expected, sha_begin, 64);
+        expected[64] = 0;
+        if (![seen containsObject:name]) {
+            [seen addObject:name];
+            NSString *path = [[frame_dir stringByAppendingPathComponent:@"blobs"]
+                stringByAppendingPathComponent:name];
+            if (!verify_file_sha(path, 0, expected, error)) {
+                return NO;
+            }
+            const char *size_marker =
+                find_token(name_end, sha_marker, "\"bytes\":");
+            if (size_marker != NULL) {
+                uint64_t size = strtoull(size_marker + strlen("\"bytes\":"), NULL, 10);
+                struct stat st;
+                if (stat(path.fileSystemRepresentation, &st) == 0 &&
+                    (uint64_t)st.st_size != size) {
+                    if (error != NULL) {
+                        *error = [NSError errorWithDomain:kErrorDomain code:114
+                                                 userInfo:@{NSLocalizedDescriptionKey:
+                                                                [NSString stringWithFormat:@"blob size mismatch for %@", name]}];
+                    }
+                    return NO;
+                }
+            }
+        }
+        cursor = sha_begin + 64;
+    }
+    return YES;
+}
+
+static BOOL verify_sealed_inputs(NSString *frame_dir, NSString *shader_dir,
+                                 const eu4_metal_replay_config *config,
+                                 NSError **error) {
+    if (config == NULL || config->expected_event_stream_sha256 == NULL ||
+        config->expected_event_stream_sha256[0] == 0) {
+        return YES;
+    }
+    NSString *events_path =
+        [frame_dir stringByAppendingPathComponent:@"frame-events.jsonl"];
+    NSString *manifest_path =
+        [frame_dir stringByAppendingPathComponent:@"frame-trace.json"];
+    NSString *reference_path =
+        [frame_dir stringByAppendingPathComponent:@"frame-reference.bgra"];
+    NSString *shader_json =
+        [shader_dir stringByAppendingPathComponent:@"shaders.json"];
+    if (!verify_file_sha(events_path, config->expected_event_stream_bytes,
+                         config->expected_event_stream_sha256, error) ||
+        !verify_file_sha(manifest_path, 0, config->expected_manifest_sha256,
+                         error) ||
+        !verify_file_sha(reference_path, 0, config->expected_reference_sha256,
+                         error) ||
+        !verify_file_sha(shader_json, 0, config->expected_shader_json_sha256,
+                         error)) {
+        return NO;
+    }
+    return verify_blob_references(frame_dir, error);
+}
+
 static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                       NSString *frame_path, NSString *shader_path,
                       NSString *output_path, NSString *checkpoint_path,
@@ -2543,12 +2710,27 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                       BOOL seed_marked, BOOL capture_post_images,
                       BOOL capture_pre_images, BOOL depth_from_prefix,
                       uint64_t timeout_ms,
+                      const eu4_metal_replay_config *config,
                       eu4_metal_replay_result *out_result) {
     g_state = state;
     g_default_target_ptr = default_target;
     g_timeout_ms = timeout_ms;
+    g_deadline_ns = timeout_ms == 0
+                        ? 0
+                        : replay_now_ns() + timeout_ms * 1000000ull;
     uint64_t started_ns = replay_now_ns();
     @autoreleasepool {
+        NSError *verify_error = nil;
+        if (!verify_sealed_inputs(frame_path, shader_path, config, &verify_error)) {
+            fprintf(stderr, "sealed input verification: %s\n",
+                    verify_error.localizedDescription.UTF8String);
+            if (out_result != NULL) {
+                snprintf(out_result->error, sizeof(out_result->error),
+                         "sealed input verification failed: %s",
+                         verify_error.localizedDescription.UTF8String ?: "unknown");
+            }
+            return 11;
+        }
         [[NSFileManager defaultManager] createDirectoryAtPath:output_path
                                   withIntermediateDirectories:YES
                                                    attributes:nil
@@ -3085,10 +3267,15 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
         }
         result[@"transfers"] = g_transfer_records;
         result[@"readback"] = @(readback_ok);
-        BOOL status_ok = readback_ok && failed == 0;
+        BOOL partial_mode = stop_after >= 0 || only_event >= 0;
+        BOOL status_ok = readback_ok && failed == 0 &&
+                         (partial_mode || encoded == events.count);
         result[@"failed"] = @(failed);
         result[@"failures"] = failures;
-        result[@"status"] = status_ok ? @"ok" : @"failed";
+        result[@"partial"] = @(partial_mode);
+        result[@"timed_out"] = @(!final_completed);
+        result[@"status"] = status_ok ? (final_completed ? @"ok" : @"timeout")
+                                      : @"failed";
         NSData *json = [NSJSONSerialization dataWithJSONObject:result
                                                        options:NSJSONWritingPrettyPrinted
                                                          error:NULL];
@@ -3119,8 +3306,11 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
             out_result->events = (uint32_t)events.count;
             out_result->encoded = (uint32_t)encoded;
             out_result->failed = (uint32_t)failed;
+            out_result->timed_out = final_completed ? 0 : 1;
+            out_result->partial = partial_mode ? 1 : 0;
             out_result->ok = (status_ok && provenance_written && json_written &&
                               failed == 0 && readback_ok &&
+                              (partial_mode || encoded == events.count) &&
                               command.status == MTLCommandBufferStatusCompleted)
                                  ? 1
                                  : 0;
@@ -3261,7 +3451,7 @@ extern "C" int eu4_metal_replay_frame(eu4_metal_replay_session *session,
                           config->capture_post_images != 0,
                           config->capture_pre_images != 0,
                           config->depth_from_prefix != 0,
-                          config->timeout_ms, result);
+                          config->timeout_ms, config, result);
     /* Do not leave the thread-local selector pointing at returned state. */
     g_state = nil;
     g_default_target_ptr = NULL;

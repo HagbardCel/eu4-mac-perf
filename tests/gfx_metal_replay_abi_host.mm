@@ -12,7 +12,10 @@
 #include <string.h>
 
 static int run_once(const char *frame, const char *shaders, const char *out,
-                    int iteration, uint64_t timeout_ms) {
+                    int iteration, uint64_t timeout_ms,
+                    const char *event_sha, uint64_t event_bytes,
+                    const char *manifest_sha, const char *reference_sha,
+                    const char *shader_sha) {
     eu4_metal_replay_config config;
     memset(&config, 0, sizeof(config));
     config.struct_size = (uint32_t)sizeof(config);
@@ -23,6 +26,11 @@ static int run_once(const char *frame, const char *shaders, const char *out,
     config.stop_after = -1;
     config.only_event = -1;
     config.timeout_ms = timeout_ms;
+    config.expected_event_stream_sha256 = event_sha;
+    config.expected_event_stream_bytes = event_bytes;
+    config.expected_manifest_sha256 = manifest_sha;
+    config.expected_reference_sha256 = reference_sha;
+    config.expected_shader_json_sha256 = shader_sha;
     char error[512] = {0};
     eu4_metal_replay_session *session =
         eu4_metal_replay_create(&config, error, sizeof(error));
@@ -114,6 +122,11 @@ int main(int argc, const char *argv[]) {
         int bad_config = 0;
         int reuse_session = 0;
         uint64_t timeout_ms = 0;
+        const char *event_sha = NULL;
+        uint64_t event_bytes = 0;
+        const char *manifest_sha = NULL;
+        const char *reference_sha = NULL;
+        const char *shader_sha = NULL;
         for (int index = 1; index < argc; index++) {
             if (strcmp(argv[index], "--frame") == 0 && index + 1 < argc) {
                 frame = argv[++index];
@@ -132,6 +145,21 @@ int main(int argc, const char *argv[]) {
             } else if (strcmp(argv[index], "--timeout-ms") == 0 &&
                        index + 1 < argc) {
                 timeout_ms = (uint64_t)strtoull(argv[++index], NULL, 10);
+            } else if (strcmp(argv[index], "--event-sha") == 0 &&
+                       index + 1 < argc) {
+                event_sha = argv[++index];
+            } else if (strcmp(argv[index], "--event-bytes") == 0 &&
+                       index + 1 < argc) {
+                event_bytes = (uint64_t)strtoull(argv[++index], NULL, 10);
+            } else if (strcmp(argv[index], "--manifest-sha") == 0 &&
+                       index + 1 < argc) {
+                manifest_sha = argv[++index];
+            } else if (strcmp(argv[index], "--reference-sha") == 0 &&
+                       index + 1 < argc) {
+                reference_sha = argv[++index];
+            } else if (strcmp(argv[index], "--shader-sha") == 0 &&
+                       index + 1 < argc) {
+                shader_sha = argv[++index];
             }
         }
         if (bad_config) {
@@ -158,7 +186,9 @@ int main(int argc, const char *argv[]) {
         }
         int result = 0;
         for (int iteration = 0; iteration < loops; iteration++) {
-            int code = run_once(frame, shaders, out, iteration, timeout_ms);
+            int code = run_once(frame, shaders, out, iteration, timeout_ms,
+                                event_sha, event_bytes, manifest_sha,
+                                reference_sha, shader_sha);
             if (code != 0 && result == 0) {
                 result = code;
             }

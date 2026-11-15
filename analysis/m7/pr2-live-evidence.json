@@ -4,23 +4,23 @@
   "claim": "One authentic EU4 process produced one GL reference and one independent Metal result from exactly one sealed frame, without a second EU4 launch. Pixel equivalence is reported separately and is not claimed for this live frame.",
   "base": {
     "pr1_branch": "m7/pr1-frame-seal",
-    "pr1_commit": "7517b9c",
+    "pr1_commit": "2b6545c",
     "pr1_pr": "https://github.com/HagbardCel/eu4-mac-perf/pull/199",
     "pr2_branch": "m7/pr2-inprocess-metal",
     "stacked": true,
-    "pr2_commit": "c236667"
+    "pr2_commit": "PENDING"
   },
   "launch": {
     "command": "python3.14 -m automation.m6_frame capture --output .local/m7/pr2-shadow-live-3 --callers 0x103b3c8 --min-draws 1 --occurrence 300 --boundary scene --seal --shadow --shadow-timeout-ms 120000 --shadow-wait-ms 180000 --max-draws 1024 --duration 90 --timeout 600 --background --timeline",
-    "pid": 91051,
-    "session_id": "ce58136b-362d-4d72-9383-3846d71f2784",
+    "pid": 41754,
+    "session_id": "2d692cb3-9d0d-4460-8803-00b249e756f9",
     "eu4_processes": 1,
     "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
-    "instrumentation_library_sha256": "6f0710227804c24ab8f34551a5729c0d216a9b85010ff963090ddb5d6c04e0c6",
+    "instrumentation_library_sha256": "3e400851c990b5ada8991e7eef7e7aeafc09147020967ce5cece5a3100d8a7f1",
     "startup_summary": {
       "complete": true,
       "state": 2,
-      "refused": 0,
+      "refused": 328,
       "unavailable": 0,
       "overflow": 0,
       "unmatched": 0,
@@ -40,8 +40,8 @@
   "frame": {
     "capture_frame_id": 1,
     "boundary": "scene",
-    "present_index": 617,
-    "scene_index": 617,
+    "present_index": 615,
+    "scene_index": 615,
     "capture_dir": ".local/m7/pr2-shadow-live-3/frame",
     "operation_count": 325,
     "draw_count": 315,
@@ -49,12 +49,12 @@
     "copy_count": 1,
     "width": 1728,
     "height": 1117,
-    "manifest_sha256": "b80c1a7cbc5b3ca03355739e489c8f4117872f9ff0fb3e8bbbedf125b646b221",
-    "reference_sha256": "439da7acfc3fb000e58fb02f814a63473eb3e7150660e03a8e55723b79419f9f",
+    "manifest_sha256": "9797dc1f568b885dd6b51a553d1193fc45d6deb50b2cc0c372252fefe4a5c06d",
+    "reference_sha256": "987ecbe2cf9b326459aafffb3d23d643e9f603e22aad4aa236ce0410077254f0",
     "reference_bytes": 7720704,
-    "readback_ns": 21433000,
-    "finalize_ns": 1540000,
-    "seal_ns": 22982000
+    "readback_ns": 23420000,
+    "finalize_ns": 16806000,
+    "seal_ns": 40227000
   },
   "metal": {
     "session_id": "dc8fd91a-88e3-4a2d-870e-787cc6e4b05c",
@@ -64,16 +64,20 @@
     "failed": 0,
     "readback_ok": true,
     "command_status": 4,
-    "metal_frame_sha256": "7bf78ca02e95f6bbfa41fd8099af71ad7edad0144624ed2ab89c2960e325a082",
-    "duration_ns": 409740000,
-    "total_callback_ns": 3326589000,
+    "metal_frame_sha256": "bdcc1322b7d51706615b3a3703f2c46c3fb0b0c8cb892b8edb15ffe548c645f1",
+    "duration_ns": 1976791000,
+    "total_callback_ns": 5110250000,
     "provenance": {
       "bindings": 2739,
       "metal_render_target_bindings": 274,
       "external_capture_bindings": 2465,
       "first_sample_before_any_write": 0,
       "transfers": 1
-    }
+    },
+    "timed_out": false,
+    "partial": false,
+    "shader_receipt_verified": true,
+    "native_inputs_verified": true
   },
   "comparison": {
     "pixel_verdict": "fail",
@@ -83,24 +87,24 @@
       "multisample"
     ],
     "pixels": 1930176,
-    "mismatched_pixels": 1160637,
-    "mismatched_fraction": 0.6013114866209092,
+    "mismatched_pixels": 1159832,
+    "mismatched_fraction": 0.6008944262077656,
     "alpha_different_pixels": 0,
-    "max_channel_error": 81,
-    "mean_max_channel_error": 0.866852038,
+    "max_channel_error": 76,
+    "mean_max_channel_error": 0.863011974,
     "mean_abs_error_rgba": [
-      0.400400792,
-      0.517340388,
-      0.65224622,
+      0.39732957,
+      0.51383449,
+      0.649676506,
       0.0
     ],
-    "interpretation": "Spatially uniform low-amplitude differences over terrain and UI; the images are visually equivalent. Not proven exclusively dithering: 262845 pixels differ by >1 and 112 by >40. No A/B with dither/MSAA disabled. Canonical title remains exact, so this is a live-frame state-coverage gap, not a core regression.",
+    "interpretation": "Spatially uniform low-amplitude differences; not proven exclusively dithering (261294 pixels >1, 69 >40). Canonical title remains exact.",
     "state_coverage_scope": [
       "gl_dither",
       "multisample"
     ],
-    "pixels_differing_by_more_than_1": 262845,
-    "pixels_differing_by_more_than_40": 112
+    "pixels_differing_by_more_than_1": 261294,
+    "pixels_differing_by_more_than_40": 69
   },
   "offline": {
     "canonical_title": {
@@ -131,5 +135,15 @@
     "gl_dither and multisample are not implemented in the Metal host; state_coverage is partial.",
     "Renderer-generated resource history across successive frames is not maintained.",
     "This is one-shot synchronous dual rendering, not continuous mirroring."
-  ]
+  ],
+  "qualification": {
+    "capture_complete": true,
+    "metal_execution": "complete",
+    "operation_coverage": "complete",
+    "resource_provenance": "complete",
+    "state_coverage": "partial",
+    "pixel": "fail",
+    "qualified": false,
+    "reason": "gl_dither and multisample are captured but unsupported; unsupported states prevent full renderer-equivalence claims."
+  }
 }

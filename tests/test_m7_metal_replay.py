@@ -232,6 +232,60 @@ class MetalReplayLibraryTests(unittest.TestCase):
             self.assertEqual(report["ok"], 0)
             self.assertEqual(report["failed"], 1)
 
+    def test_coordinator_rejects_missing_seal_and_stale_artifacts(self):
+        from tests.test_m7_frame_seal import _write_frame
+
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary) / "run"
+            missing = subprocess.run(
+                [
+                    sys.executable, "-m", "automation.m6_frame",
+                    "shadow-coordinator", "--run", str(run),
+                    "--timeout", "2", "--seal-timeout", "0.5",
+                ],
+                cwd=str(ROOT), capture_output=True, text=True, check=False,
+                timeout=30,
+            )
+            self.assertNotEqual(missing.returncode, 0)
+            stale_run = Path(temporary) / "stale"
+            _write_frame(stale_run / "frame")
+            (stale_run / "shadow" / "shaders").mkdir(parents=True)
+            (stale_run / "shadow" / "shaders" / "ready").write_text("stale")
+            stale = subprocess.run(
+                [
+                    sys.executable, "-m", "automation.m6_frame",
+                    "shadow-coordinator", "--run", str(stale_run),
+                    "--timeout", "5", "--seal-timeout", "2",
+                ],
+                cwd=str(ROOT), capture_output=True, text=True, check=False,
+                timeout=30,
+            )
+            self.assertNotEqual(stale.returncode, 0)
+            report = json.loads(
+                (stale_run / "shadow" / "coordinator.json").read_text()
+            )
+            self.assertIn("stale", report.get("error", ""))
+
+    def test_partial_replay_is_explicitly_marked(self):
+        fixture = _fixture("m6/frames/menu-occ300")
+        if fixture is None:
+            self.skipTest("canonical M6 frame is absent in this worktree")
+        frame, shaders = fixture
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "out"
+            result = subprocess.run(
+                [
+                    str(self.cli), "--frame", str(frame),
+                    "--shaders", str(shaders), "--out", str(output),
+                    "--stop-after", "1",
+                ],
+                capture_output=True, text=True, check=False, timeout=300,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads((output / "replay.json").read_text())
+            self.assertTrue(report["partial"])
+            self.assertLess(report["encoded"], report["events"])
+
     def test_core_does_not_link_opengl(self):
         linked = subprocess.run(
             ["otool", "-L", str(self.cli)],

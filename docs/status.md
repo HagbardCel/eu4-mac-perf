@@ -82,18 +82,18 @@ draw re-execution is involved.
 Offline, the refactored core replays the canonical title frame exactly
 (326/326, `ff2f4e2b…`) through both the CLI and the C ABI, repeated sessions
 agree, and the copy-bearing scene-75 case preserves its known divergence
-(1,792,005 / 1,930,176, max 23). One authentic same-process launch (pid 91051,
-capture id 1, scene 617) produced a GL reference `439da7ac…` and an independent
-Metal frame `7bf78ca0…`: 325/325 operations encoded, 0 failed, command status 4,
+(1,792,005 / 1,930,176, max 23). One authentic same-process launch (pid 41754,
+capture id 1, scene 615) produced a GL reference `987ecbe2…` and an independent
+Metal frame `bdcc1322…`: 325/325 operations encoded, 0 failed, command status 4,
 readback ok, one in-frame transfer, 274 Metal target / 2,465 external
-bindings. The live frame is **not** pixel-exact: 1,160,637 / 1,930,176 pixels
-differ, max 81, with `state_coverage=partial` for `gl_dither` and
+bindings. The live frame is **not** pixel-exact: 1,159,832 / 1,930,176 pixels
+differ, max 76, with `state_coverage=partial` for `gl_dither` and
 `multisample`; the difference is spatially uniform and low-amplitude,
 but is not proven to be exclusively dithering; no A/B with dither/MSAA
 disabled exists. Report:
-[in-process Metal](m7/pr2-inprocess-metal.md),
-[evidence](m7/pr2-live-evidence.json),
-[implementation log](m7/pr2-implementation-log.md). PR 2 is stacked on PR 1 (#199) and must
+[in-process Metal](../analysis/m7/pr2-inprocess-metal.md),
+[evidence](../analysis/m7/pr2-live-evidence.json),
+[implementation log](../analysis/m7/pr2-implementation-log.md). PR 2 is stacked on PR 1 (#199) and must
 not merge first.
 
 ## Strategy B — independent replay (2026-11-14)
