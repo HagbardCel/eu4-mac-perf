@@ -156,6 +156,9 @@ class OfflineCampaignTests(unittest.TestCase):
             "frames": {"comparison": {"status": "fail", "first_failure": pair},
                        "last_pair": pair, "aligned": 100, "paired": 100},
             "stop": {"reason": "frame_difference"},
+            # The 100-frame campaign shows a static scene up to the injected
+            # defect, which is the correspondence a renderer verdict needs.
+            "stability": {"status": "verified"},
             "artifacts": {"bytes": 100, "max_bytes": 1000, "dropped": 0},
             "processes": {}, "ledger": {}, "preflight": {}, "terminal": {},
         }
