@@ -262,25 +262,27 @@ def _budget_missing(required_bytes: int, max_bytes: int, *,
     return [entry]
 
 
-def _budget_incomplete_case(
+def _incomplete_case(
     destination: Path,
     *,
     metal_dir: Path,
     report: dict,
-    required_bytes: int,
-    max_bytes: int,
     missing: list[dict],
     schema: str,
     case_id: str,
     title: str,
+    reason: str = "artifact_budget",
+    required_bytes: int = 0,
+    max_bytes: int = 0,
 ) -> dict:
-    """Publish a bounded summary when the reproduction cannot fit the budget.
+    """Publish a bounded summary when the reproduction is not complete.
 
-    The summary contains the structured size-limit reason, the missing
-    dependencies, the required byte estimate and the scrubbed diagnostics.  It
-    never publishes a replay command and is explicitly marked incomplete.  If
-    even this minimum summary exceeds the budget, packaging fails with an
-    explicit ``case_budget`` error instead of writing an oversized case.
+    The summary contains the structured reason, the missing dependencies, the
+    required byte estimate (when the reason is the artifact budget) and the
+    scrubbed diagnostics.  It never publishes a replay command and is
+    explicitly marked incomplete.  If even this minimum summary exceeds the
+    budget, packaging fails with an explicit ``case_budget`` error instead of
+    writing an oversized case.
     """
     staged = _StagedCase(destination, [metal_dir])
     work = staged.path
@@ -288,8 +290,8 @@ def _budget_incomplete_case(
         reproduction = {
             "status": "incomplete",
             "independently_reproducible": False,
-            "reason": "artifact_budget",
-            "status_reason": "artifact_budget",
+            "reason": reason,
+            "status_reason": reason,
             "required_bytes": required_bytes,
             "max_bytes": max_bytes,
             "missing": missing,
@@ -575,6 +577,61 @@ def _diagnosis_shaders(frame_dir: Path, metal_dir: Path,
         "the Metal result directory")
 
 
+def _valid_shader_dir(path: Path) -> bool:
+    return path.is_dir() and (path / "shaders.json").is_file()
+
+
+def _frame_shader_dir(frame_dir: Path, metal_dir: Path,
+                      shaders: Path | str | None) -> Path | None:
+    """Resolve the shader directory a frame's draws were captured against.
+
+    A frame-local ``shaders/`` directory wins, mirroring the sequence CLI's
+    ``<frame>/shaders`` override.  An explicitly supplied directory is the
+    fallback for frames without their own translation; the sibling
+    ``translated/`` and Metal result directories are the legacy fallbacks.
+    Returns ``None`` when no verified translation exists.
+    """
+    frame_local = (frame_dir / "shaders").resolve()
+    if _valid_shader_dir(frame_local):
+        return frame_local
+    if shaders is not None:
+        path = Path(shaders).expanduser().resolve()
+        if _valid_shader_dir(path):
+            return path
+        raise CaseError("shaders_missing", str(path))
+    for candidate in (frame_dir.parent / "translated", metal_dir / "shaders"):
+        candidate = candidate.resolve()
+        if _valid_shader_dir(candidate):
+            return candidate
+    return None
+
+
+def _frame_programs(frame_dir: Path) -> list[int]:
+    """Programs referenced by draw events, in stable numeric order."""
+    programs: set[int] = set()
+    events = frame_dir / "frame-events.jsonl"
+    try:
+        lines = events.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or event.get("kind") != "draw":
+            continue
+        program = event.get("program")
+        if isinstance(program, dict):
+            try:
+                programs.add(int(program.get("name")))
+            except (TypeError, ValueError):
+                continue
+    return sorted(programs)
+
+
 def package_diagnosis(frame_dir: Path | str, metal_dir: Path | str,
                       case_dir: Path | str, report: dict, *,
                       case_id: str = "diagnosis-case",
@@ -605,7 +662,7 @@ def package_diagnosis(frame_dir: Path | str, metal_dir: Path | str,
         _replay_artifact_bytes(metal_dir, report) +
         (_difference_bytes(report) if include_difference else 0))
     if max_bytes > 0 and required_bytes > max_bytes:
-        return _budget_incomplete_case(
+        return _incomplete_case(
             destination, metal_dir=metal_dir, report=report,
             required_bytes=required_bytes, max_bytes=max_bytes,
             missing=_budget_missing(
@@ -696,7 +753,7 @@ def package_diagnosis(frame_dir: Path | str, metal_dir: Path | str,
         total = _case_bytes(work)
         if max_bytes > 0 and total > max_bytes:
             staged.discard()
-            return _budget_incomplete_case(
+            return _incomplete_case(
                 destination, metal_dir=metal_dir, report=report,
                 required_bytes=total, max_bytes=max_bytes,
                 missing=_budget_missing(
@@ -1058,7 +1115,6 @@ def package_sequence_diagnosis(
         return package_diagnosis(
             frames[0], metal_dir, destination, report, case_id=case_id,
             title=title, shaders=shaders, max_bytes=max_bytes)
-    shader_source = _diagnosis_shaders(frames[-1], metal_dir, shaders)
     selected, selection = _required_prefix(frames)
     full_source_bytes = _normalized_frame_bytes(frames)
     prefix_source_bytes = _normalized_frame_bytes(selected)
@@ -1066,11 +1122,35 @@ def package_sequence_diagnosis(
         return package_diagnosis(
             selected[0], metal_dir, destination, report, case_id=case_id,
             title=title, shaders=shaders, max_bytes=max_bytes)
+    shader_dirs: list[Path] = []
+    missing_shaders: list[dict] = []
+    for index, frame in enumerate(selected, start=1):
+        directory = _frame_shader_dir(frame, metal_dir, shaders)
+        if directory is None:
+            missing_shaders.append({
+                "kind": "shader_artifact",
+                "frame": index,
+                "frame_dir": f"frames/{index:06d}",
+                "detail": "no translated shader directory for this frame "
+                          "(frame/shaders, sibling translated/ or the Metal "
+                          "result directory)",
+            })
+            continue
+        shader_dirs.append(directory)
+    if missing_shaders:
+        return _incomplete_case(
+            destination, metal_dir=metal_dir, report=report,
+            missing=missing_shaders,
+            reason="shader_artifact_unavailable",
+            schema=SEQUENCE_SCHEMA, case_id=case_id, title=title)
+    shader_source = shader_dirs[-1]
+    unique_shader_dirs = list(dict.fromkeys(shader_dirs))
     required_bytes = prefix_source_bytes
-    required_bytes += _tree_bytes(shader_source)
+    required_bytes += sum(_tree_bytes(directory)
+                          for directory in unique_shader_dirs)
     required_bytes += _replay_artifact_bytes(metal_dir, report)
     if max_bytes > 0 and required_bytes > max_bytes:
-        return _budget_incomplete_case(
+        return _incomplete_case(
             destination, metal_dir=metal_dir, report=report,
             required_bytes=required_bytes, max_bytes=max_bytes,
             missing=_budget_missing(
@@ -1079,7 +1159,8 @@ def package_sequence_diagnosis(
                 detail="the minimal cross-frame prefix exceeds the case "
                        "budget"),
             schema=SEQUENCE_SCHEMA, case_id=case_id, title=title)
-    staged = _StagedCase(destination, [*selected, metal_dir, shader_source])
+    staged = _StagedCase(
+        destination, [*selected, metal_dir, *unique_shader_dirs])
     work = staged.path
     try:
         # Portable seal validation needs the owning case identity; the complete
@@ -1095,6 +1176,13 @@ def package_sequence_diagnosis(
             sequence = _relocate_sequence(frame_copy, index, len(selected),
                                           previous_copy)
             _relocate_seal(frame_copy, f"frames/{index:06d}")
+            shutil.rmtree(frame_copy / "shaders", ignore_errors=True)
+            _linked_copy(shader_dirs[index - 1], frame_copy / "shaders")
+            sequence["shader_dir"] = f"frames/{index:06d}/shaders"
+            sequence["shader_report_sha256"] = _sha(
+                frame_copy / "shaders" / "shaders.json")
+            sequence["shader_programs"] = _frame_programs(source)
+            _write_json(frame_copy / "frame-sequence.json", sequence)
             if sequence.get("session_id") != _json(
                     selected[-1] / "frame-sequence.json").get("session_id"):
                 raise CaseError("session_identity", str(source))
@@ -1103,10 +1191,11 @@ def package_sequence_diagnosis(
         _linked_copy(shader_source, work / "shaders")
         (work / "replay").mkdir(parents=True)
         replay_replacements = {str(metal_dir): "replay",
-                               str(work): ".",
-                               str(shader_source): "shaders"}
+                               str(work): "."}
         for index, source in enumerate(selected, start=1):
             replay_replacements[str(source)] = f"frames/{index:06d}"
+            replay_replacements[str(shader_dirs[index - 1])] = (
+                f"frames/{index:06d}/shaders")
         for parent in {str(Path(frame).parent) for frame in frames}:
             replay_replacements[parent] = "campaign"
         for name in REPLAY_ARTIFACTS:
@@ -1198,6 +1287,10 @@ def package_sequence_diagnosis(
                 "checkpoint_request_sha256": checkpoint["request_sha256"],
                 "checkpoint_count": checkpoint["checkpoint_count"],
                 "graph_status": checkpoint["graph_status"],
+                "shader_dir": sequence.get("shader_dir"),
+                "shader_report_sha256": sequence.get(
+                    "shader_report_sha256"),
+                "shader_programs": sequence.get("shader_programs") or [],
             })
         sequence_manifest = {
             "schema": SEQUENCE_MANIFEST_SCHEMA,
@@ -1251,7 +1344,7 @@ def package_sequence_diagnosis(
         total = _case_bytes(work)
         if max_bytes > 0 and total > max_bytes:
             staged.discard()
-            return _budget_incomplete_case(
+            return _incomplete_case(
                 destination, metal_dir=metal_dir, report=report,
                 required_bytes=total, max_bytes=max_bytes,
                 missing=_budget_missing(
@@ -1360,6 +1453,104 @@ def _verify_sequence(case_dir: Path, manifest: dict) -> tuple[list[str], dict]:
         except Exception as exc:  # noqa: BLE001 - explicit verification result
             problems.append(f"frame {index} history is unreadable: {exc}")
             history = {}
+            trace = {}
+        shader_relative = entry.get("shader_dir")
+        if not isinstance(shader_relative, str) or not shader_relative:
+            problems.append(f"frame {index} has no shader directory binding")
+        else:
+            shader_path, shader_problem = _case_relative_path(
+                case_dir, shader_relative)
+            if shader_problem is not None:
+                problems.append(
+                    f"frame {index} shader directory is invalid: "
+                    f"{shader_problem}")
+            elif not (shader_path / "shaders.json").is_file():
+                problems.append(
+                    f"frame {index} shader report is missing")
+            else:
+                try:
+                    shader_report = _json(shader_path / "shaders.json")
+                except (OSError, UnicodeError, json.JSONDecodeError,
+                        CaseError) as exc:
+                    problems.append(
+                        f"frame {index} shader report is unreadable: {exc}")
+                    shader_report = {}
+                declared_sha = entry.get("shader_report_sha256")
+                actual_sha = _sha(shader_path / "shaders.json")
+                if declared_sha != actual_sha:
+                    problems.append(
+                        f"frame {index} shader report digest drift")
+                programs = {
+                    int(program.get("program")): program
+                    for program in shader_report.get("programs") or []
+                    if isinstance(program, dict)
+                    and isinstance(program.get("program"), int)
+                }
+                required_programs = _frame_programs(frame)
+                if sorted(programs) == [] and required_programs:
+                    problems.append(
+                        f"frame {index} shader report declares no programs")
+                event_shaders: dict[int, list[dict]] = {}
+                for event in trace.get("_events") or []:
+                    if not isinstance(event, dict):
+                        continue
+                    program = event.get("program")
+                    if not isinstance(program, dict):
+                        continue
+                    try:
+                        name = int(program.get("name"))
+                    except (TypeError, ValueError):
+                        continue
+                    event_shaders.setdefault(name, []).extend(
+                        item for item in program.get("shaders") or []
+                        if isinstance(item, dict))
+                for name in required_programs:
+                    program = programs.get(name)
+                    if program is None:
+                        problems.append(
+                            f"frame {index} program {name} has no translated "
+                            "shader entry")
+                        continue
+                    if program.get("status") != "ok":
+                        problems.append(
+                            f"frame {index} program {name} translation status "
+                            f"is {program.get('status')!r}")
+                        continue
+                    stages = program.get("stages")
+                    if not isinstance(stages, dict):
+                        problems.append(
+                            f"frame {index} program {name} has no stages")
+                        continue
+                    for stage_name in ("vertex", "pixel"):
+                        stage = stages.get(stage_name)
+                        if not isinstance(stage, dict):
+                            problems.append(
+                                f"frame {index} program {name} has no "
+                                f"{stage_name} stage")
+                            continue
+                        msl_file = stage.get("msl_file")
+                        if not isinstance(msl_file, str) or not msl_file:
+                            problems.append(
+                                f"frame {index} program {name} {stage_name} "
+                                "stage has no MSL file")
+                        elif not (shader_path / msl_file).is_file():
+                            problems.append(
+                                f"frame {index} program {name} {stage_name} "
+                                f"MSL file is missing: {msl_file}")
+                    for item in event_shaders.get(name, []):
+                        stage_name = str(item.get("stage") or "")
+                        sha = item.get("sha256")
+                        stage = stages.get(stage_name)
+                        if not isinstance(stage, dict):
+                            problems.append(
+                                f"frame {index} program {name} capture stage "
+                                f"{stage_name!r} has no translation")
+                            continue
+                        source_sha = stage.get("source_sha256")
+                        if sha and source_sha and str(sha) != str(source_sha):
+                            problems.append(
+                                f"frame {index} program {name} {stage_name} "
+                                "shader identity disagrees with the capture")
         if history.get("status") != "verified":
             problems.append(
                 f"frame {index} history is invalid: " +
@@ -1637,7 +1828,30 @@ def _declared_inventory(
     return declared, problems
 
 
-def _sequence_inventory(sequence: dict) -> list[str]:
+def _shader_report_payloads(case_dir: Path, shader_dir: str) -> list[str]:
+    """Required translated payloads for one frame's shader directory."""
+    required = [f"{shader_dir}/shaders.json"]
+    try:
+        report = _json(case_dir / shader_dir / "shaders.json")
+    except (OSError, UnicodeError, json.JSONDecodeError, CaseError):
+        return required
+    for program in report.get("programs") or []:
+        if not isinstance(program, dict):
+            continue
+        stages = program.get("stages")
+        if not isinstance(stages, dict):
+            continue
+        for stage in stages.values():
+            if not isinstance(stage, dict):
+                continue
+            for field in ("msl_file", "glsl_file", "spv_file"):
+                name = stage.get(field)
+                if isinstance(name, str) and name:
+                    required.append(f"{shader_dir}/{name}")
+    return required
+
+
+def _sequence_inventory(sequence: dict, case_dir: Path) -> list[str]:
     required = list(REQUIRED_SEQUENCE_PAYLOADS)
     for entry in sequence.get("frames") or []:
         if not isinstance(entry, dict):
@@ -1648,6 +1862,9 @@ def _sequence_inventory(sequence: dict) -> list[str]:
         for name in ("frame-sequence.json", "frame-trace.json",
                      "frame-events.jsonl", "frame-reference.bgra"):
             required.append(f"{relative}/{name}")
+        shader_dir = entry.get("shader_dir")
+        if isinstance(shader_dir, str) and shader_dir:
+            required.extend(_shader_report_payloads(case_dir, shader_dir))
         if entry.get("checkpoint_request_sha256"):
             index = entry.get("index")
             if isinstance(index, int):
@@ -1702,7 +1919,7 @@ def verify(case_dir: Path | str) -> dict:
             sequence = _json(case_dir / "sequence.json")
         except (OSError, UnicodeError, json.JSONDecodeError, CaseError):
             sequence = {}
-        for name in _sequence_inventory(sequence):
+        for name in _sequence_inventory(sequence, case_dir):
             if name not in declared:
                 problems.append(f"required payload is not declared: {name}")
         # Only authoritative payload locations are exhaustively inventoried.

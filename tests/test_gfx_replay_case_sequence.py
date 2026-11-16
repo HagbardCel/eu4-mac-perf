@@ -298,6 +298,182 @@ class SequenceFixture:
         return self.frames
 
 
+class HeterogeneousShaderFixture:
+    """Three frames whose required translations live in distinct frame dirs.
+
+    Frame 1 renders texture 600 with program 1 (pattern).  Frame 2 retains it
+    with program 3 (black).  Frame 3 samples it with program 2 (sample).  No
+    directory contains the union of P1 and P2.
+    """
+
+    def __init__(self, base: Path, host: Path):
+        self.base = base
+        self.host = host
+        self.frames: list[Path] = []
+        self.frame_shaders: dict[int, Path] = {}
+        self.source_bytes: dict[int, bytes] = {}
+
+    def _stage(self, msl_file: str, entry: str, source: bytes) -> dict:
+        return {
+            "stage": "vertex" if entry == "vmain" else "pixel",
+            "msl_file": msl_file, "msl_entry": entry,
+            "msl_uniform_buffer": None, "msl_samplers": [],
+            "uniforms": [], "attributes": [], "attribute_locations": {},
+            "source_sha256": sha(source),
+        }
+
+    def _program(self, number: int, vertex_file: str, pixel_file: str,
+                 vertex_entry: str, pixel_entry: str,
+                 vertex_source: bytes, pixel_source: bytes,
+                 samplers=()) -> dict:
+        vertex = self._stage(vertex_file, vertex_entry, vertex_source)
+        pixel = self._stage(pixel_file, pixel_entry, pixel_source)
+        pixel["msl_samplers"] = list(samplers)
+        return {"program": number, "status": "ok", "stages": {
+            "vertex": vertex, "pixel": pixel}}
+
+    def _write_shaders(self, index: int, programs: list[dict],
+                       msl: dict[str, str]) -> Path:
+        directory = self.base / "campaign" / f"frame-{index}" / "shaders"
+        directory.mkdir(parents=True, exist_ok=True)
+        for name, source in msl.items():
+            (directory / name).write_text(source)
+        report = {"schema": "gfx-shader-report/v1", "frame": index,
+                  "ok": True, "programs": programs}
+        (directory / "shaders.json").write_text(json.dumps(report))
+        self.frame_shaders[index] = directory
+        return directory
+
+    def build(self):
+        black = bytes([0, 0, 0, 255]) * (WIDTH * HEIGHT)
+        for index in (1, 2, 3):
+            frame = self.base / "campaign" / f"frame-{index}"
+            (frame / "blobs").mkdir(parents=True)
+            (frame / "blobs" / "verts.bin").write_bytes(b"verts!")
+        # Frame 1: P1 pattern -> texture 600.
+        v1, p1 = b"vertex-1", b"pattern-1"
+        (self.base / "campaign" / "frame-1" / "blobs" / "v1.bin").write_bytes(v1)
+        (self.base / "campaign" / "frame-1" / "blobs" / "p1.bin").write_bytes(p1)
+        self._write_shaders(1, [self._program(
+            1, "v.metal", "f_pattern.metal", "vmain", "fpattern", v1, p1)],
+            {"v.metal": VERT, "f_pattern.metal": FRAG_PATTERN})
+        self.source_bytes[1] = v1
+        self.frame(1, [draw(1, target("600", 1),
+                            shaders=[{"stage": "vertex", "file": "v1.bin",
+                                      "sha256": sha(v1)},
+                                     {"stage": "pixel", "file": "p1.bin",
+                                      "sha256": sha(p1)}])],
+                   black, render_targets=("600",))
+        # Frame 2: P3 black, retains texture 600 without writing it.
+        v2, p2 = b"vertex-2", b"black-2"
+        (self.base / "campaign" / "frame-2" / "blobs" / "v2.bin").write_bytes(v2)
+        (self.base / "campaign" / "frame-2" / "blobs" / "p2.bin").write_bytes(p2)
+        self._write_shaders(2, [self._program(
+            3, "v.metal", "f_black.metal", "vmain", "fblack", v2, p2)],
+            {"v.metal": VERT, "f_black.metal": FRAG_BLACK})
+        self.source_bytes[2] = v2
+        self.frame(2, [draw(3, target(),
+                            shaders=[{"stage": "vertex", "file": "v2.bin",
+                                      "sha256": sha(v2)},
+                                     {"stage": "pixel", "file": "p2.bin",
+                                      "sha256": sha(p2)}])],
+                   black, previous=self.frames[-1], carried=("600",))
+        # Frame 3: P2 samples texture 600.
+        v3, p3 = b"vertex-3", b"sample-3"
+        (self.base / "campaign" / "frame-3" / "blobs" / "v3.bin").write_bytes(v3)
+        (self.base / "campaign" / "frame-3" / "blobs" / "p3.bin").write_bytes(p3)
+        self._write_shaders(3, [self._program(
+            2, "v.metal", "f_sample.metal", "vmain", "fsample", v3, p3,
+            [{"kind": "texture2d", "name": "tex0",
+              "texture_index": 0, "sampler_index": 0}])],
+            {"v.metal": VERT, "f_sample.metal": FRAG_SAMPLE})
+        self.source_bytes[3] = v3
+        sampled = {
+            "name": 600, "sampler_name": "tex0", "unit": 0,
+            "width": WIDTH, "height": HEIGHT, "internal_format": "RGB8",
+            "levels": [],
+        }
+        self.frame(3, [draw(2, target(), textures=[sampled],
+                            shaders=[{"stage": "vertex", "file": "v3.bin",
+                                      "sha256": sha(v3)},
+                                     {"stage": "pixel", "file": "p3.bin",
+                                      "sha256": sha(p3)}])],
+                   expected_image(), previous=self.frames[-1],
+                   carried=("600",))
+        return self.frames
+
+    def frame(self, index: int, events: list[dict], reference: bytes, *,
+              previous: Path | None = None, render_targets=(),
+              carried=(), lifecycle=()) -> Path:
+        frame = self.base / "campaign" / f"frame-{index}"
+        attribute = {
+            "location": 0, "name": "in_POSITION", "components": 2,
+            "gl_type": "0x1406", "stride": 8, "data": "verts.bin",
+            "sha256": sha(b"verts!"),
+        }
+        for event in events:
+            if event.get("kind") == "draw":
+                event["attributes"] = [attribute]
+            for texture in event.get("textures") or []:
+                if texture.get("name") == 600 and not texture.get("levels"):
+                    texture["levels"] = [{
+                        "level": 0, "width": WIDTH, "height": HEIGHT,
+                        "pixel_format": "RGB8",
+                        "sha256": sha(bytes(64)), "file": "tex600.bin",
+                    }]
+                    (frame / "blobs" / "tex600.bin").write_bytes(bytes(64))
+        (frame / "frame-events.jsonl").write_text(
+            "\n".join(json.dumps(event) for event in events) + "\n")
+        (frame / "frame-reference.bgra").write_bytes(reference)
+        (frame / "frame-trace.json").write_text(json.dumps(
+            manifest(events, reference)))
+        sequence = {
+            "schema": "gfx-frame-sequence/v1", "session_id": SESSION,
+            "pid": 1, "sequence_index": index, "campaign_frames": 3,
+            "capture_frame_id": index, "complete": True,
+            "boundary": "scene", "reason": "scene_present",
+            "previous": None, "render_targets": list(render_targets),
+            "carried_renderer_outputs": list(carried),
+            "lifecycle": list(lifecycle),
+            "reference_sha256": sha(reference),
+            "manifest_sha256": sha((frame / "frame-trace.json").read_bytes()),
+            "event_stream_sha256": sha(
+                (frame / "frame-events.jsonl").read_bytes()),
+            "operations": len(events), "draws": len(events),
+            "clears": 0, "copies": 0,
+        }
+        if previous is not None:
+            sequence["previous"] = {
+                "capture_frame_id": index - 1,
+                "dir": str(previous),
+                "manifest_sha256": sha(
+                    (previous / "frame-trace.json").read_bytes()),
+                "event_stream_sha256": sha(
+                    (previous / "frame-events.jsonl").read_bytes()),
+            }
+        (frame / "frame-sequence.json").write_text(json.dumps(sequence))
+        (frame / "frame-seal.json").write_text(json.dumps({
+            "schema": "gfx-frame-seal/v1", "sealed": True, "complete": True,
+            "struct_size": 2256, "abi_version": 2,
+            "trace_complete": True, "trace_integrity": True,
+            "readback_ok": True, "event_stream_verified": True,
+            "capture_frame_id": index, "pid": 1, "session_id": SESSION,
+            "capture_dir": str(frame),
+            "manifest_file": "frame-trace.json",
+            "manifest_sha256": sequence["manifest_sha256"],
+            "reference_file": "frame-reference.bgra",
+            "reference_bytes": len(reference),
+            "reference_sha256": sequence["reference_sha256"],
+            "event_stream_file": "frame-events.jsonl",
+            "event_stream_bytes": (frame / "frame-events.jsonl").stat().st_size,
+            "event_stream_sha256": sequence["event_stream_sha256"],
+            "operation_count": len(events), "draw_count": len(events),
+            "clear_count": 0, "copy_count": 0,
+        }))
+        self.frames.append(frame)
+        return frame
+
+
 def canonical_fixture():
     candidates = [ROOT, ROOT.parent / "eu4-mac-perf", ROOT.parent / "wt_infra"]
     candidates.extend(Path(item) for item in
@@ -477,7 +653,8 @@ class PortableSequenceCaseTests(unittest.TestCase):
                           for entry in sequence["frames"]], [2, 3, 4])
         prefix_bytes = sum(
             path.stat().st_size for path in (case / "frames").rglob("*")
-            if path.is_file())
+            if path.is_file() and "shaders" not in
+            path.relative_to(case / "frames").parts)
         self.assertLess(sequence["source_prefix_bytes"],
                         sequence["full_source_bytes"])
         self.assertGreater(sequence["excluded_source_bytes"], 0)
@@ -972,6 +1149,171 @@ class PortableSequenceCaseTests(unittest.TestCase):
         self.assertEqual(caught.exception.kind, "case_budget", caught.exception)
         self.assertFalse(case.exists())
 
+
+
+@unittest.skipUnless(sys.platform == "darwin", "Metal replay is macOS")
+class HeterogeneousShaderSequenceTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temporary = tempfile.TemporaryDirectory()
+        cls.base = Path(cls.temporary.name)
+        try:
+            cls.host = m6_frame.build_replay_host()
+        except Exception as exc:  # noqa: BLE001 - explicit skip
+            raise unittest.SkipTest(str(exc))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temporary.cleanup()
+
+    def setUp(self):
+        self.fixture = HeterogeneousShaderFixture(
+            self.base / self.id().split(".")[-1], self.host)
+        self.frames = self.fixture.build()
+        self.out = self.fixture.base / "out"
+        # The coordinator may pass a fallback shader directory; the sequence
+        # CLI must still use each frame's own <frame>/shaders translation.
+        report = m7_continuous.run_campaign(
+            self.frames, self.out, shaders=self.fixture.frame_shaders[3],
+            stop_on_difference=False)
+        self.assertEqual(report["status"], "complete", report)
+        self.diagnosis = json.loads(
+            (self.out / "out-003" / "diagnostic-report.json").read_text())
+
+    def package(self, case: Path):
+        return gfx_replay_case.package_sequence_diagnosis(
+            self.frames, self.out / "out-003", case, self.diagnosis,
+            shaders=None, case_id="heterogeneous-shaders")
+
+    def refresh(self, case: Path, relative: str, *,
+                update_sequence_entry: bool = False):
+        manifest = json.loads((case / "case.json").read_text())
+        path = case / relative
+        for item in manifest["files"]:
+            if item["path"] == relative:
+                item["bytes"] = path.stat().st_size
+                item["sha256"] = sha(path.read_bytes())
+                break
+        else:
+            manifest["files"].append({
+                "path": relative, "bytes": path.stat().st_size,
+                "sha256": sha(path.read_bytes())})
+        if update_sequence_entry:
+            entry_index = int(Path(relative).parts[1]) - 1
+            sequence = json.loads((case / "sequence.json").read_text())
+            sequence["frames"][entry_index]["shader_report_sha256"] = sha(
+                path.read_bytes())
+            (case / "sequence.json").write_text(json.dumps(sequence))
+            self.refresh(case, "sequence.json")
+            manifest = json.loads((case / "case.json").read_text())
+        (case / "case.json").write_text(json.dumps(manifest, indent=2) + "\n")
+
+    def test_per_frame_shaders_relocate_and_replay(self):
+        case = self.fixture.base / "case"
+        manifest = self.package(case)
+        self.assertTrue(manifest["reproduction"]["independently_reproducible"])
+        sequence = json.loads((case / "sequence.json").read_text())
+        programs = []
+        for entry in sequence["frames"]:
+            report = json.loads(
+                (case / entry["shader_dir"] / "shaders.json").read_text())
+            programs.append(sorted(
+                item["program"] for item in report["programs"]))
+        self.assertEqual(programs, [[1], [3], [2]], programs)
+        self.assertEqual([entry["shader_programs"] for entry in
+                          sequence["frames"]], [[1], [3], [2]])
+        # No shared union: the case-level fallback is the target frame's own
+        # translation directory, not a merged report.
+        fallback = json.loads(
+            (case / "shaders" / "shaders.json").read_text())
+        self.assertEqual(sorted(item["program"] for item in
+                                fallback["programs"]), [2])
+        moved = self.fixture.base / "relocated"
+        shutil.copytree(case, moved)
+        shutil.rmtree(self.fixture.base / "campaign")
+        shutil.rmtree(self.out)
+        verified = gfx_replay_case.verify(moved)
+        self.assertTrue(verified["ok"], verified["problems"])
+        replay = gfx_replay_case.replay_case(
+            moved, self.fixture.base / "replay")
+        self.assertEqual(replay["final"]["status"], "qualified_match",
+                         replay)
+        self.assertEqual(replay["campaign"]["target_sequence"], 3)
+        self.assertEqual(replay["campaign"]["frames"], 3)
+        self.assertEqual((replay.get("history") or {}).get("status"), "ok")
+        self.assertGreaterEqual(
+            (replay.get("history") or {}).get("carried_bindings") or 0, 1)
+        provenance = replay.get("provenance") or {}
+        self.assertGreaterEqual(
+            provenance.get("metal_render_target_bindings") or 0, 1)
+        rows = [json.loads(line) for line in
+                (self.fixture.base / "replay" / "out-003" /
+                 "replay-provenance.jsonl").read_text().splitlines()
+                if line.strip()]
+        sampled = [row for row in rows if str(row.get("texture")) == "600"]
+        self.assertTrue(sampled, rows)
+        self.assertTrue(all(row.get("source") == "metal_render_target"
+                            for row in sampled), sampled)
+        self.assertFalse(any(row.get("source") == "external_capture"
+                             for row in sampled), sampled)
+        self.assertEqual(replay["pixels"]["statistics"]["mismatched_pixels"],
+                         0)
+
+    def test_verifier_detects_missing_frame_shader_artifact(self):
+        case = self.fixture.base / "case-missing"
+        self.package(case)
+        relative = "frames/000003/shaders/f_sample.metal"
+        (case / relative).unlink()
+        manifest = json.loads((case / "case.json").read_text())
+        manifest["files"] = [item for item in manifest["files"]
+                             if item["path"] != relative]
+        (case / "case.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        verified = gfx_replay_case.verify(case)
+        self.assertFalse(verified["ok"], verified)
+        self.assertTrue(any("f_sample.metal" in problem
+                            for problem in verified["problems"]), verified)
+
+    def test_verifier_requires_every_captured_program(self):
+        case = self.fixture.base / "case-program"
+        self.package(case)
+        relative = "frames/000003/shaders/shaders.json"
+        report = json.loads((case / relative).read_text())
+        report["programs"] = [item for item in report["programs"]
+                              if item["program"] != 2]
+        (case / relative).write_text(json.dumps(report))
+        self.refresh(case, relative, update_sequence_entry=True)
+        verified = gfx_replay_case.verify(case)
+        self.assertFalse(verified["ok"], verified)
+        self.assertTrue(any("program 2 has no translated shader entry"
+                            in problem for problem in verified["problems"]),
+                        verified)
+
+    def test_verifier_detects_shader_identity_mismatch(self):
+        case = self.fixture.base / "case-identity"
+        self.package(case)
+        relative = "frames/000001/shaders/shaders.json"
+        report = json.loads((case / relative).read_text())
+        report["programs"][0]["stages"]["pixel"]["source_sha256"] = "0" * 64
+        (case / relative).write_text(json.dumps(report))
+        self.refresh(case, relative, update_sequence_entry=True)
+        verified = gfx_replay_case.verify(case)
+        self.assertFalse(verified["ok"], verified)
+        self.assertTrue(any("shader identity disagrees" in problem
+                            for problem in verified["problems"]), verified)
+
+    def test_unavailable_frame_translation_is_incomplete(self):
+        shutil.rmtree(self.fixture.base / "campaign" / "frame-2" / "shaders")
+        case = self.fixture.base / "case-incomplete"
+        manifest = self.package(case)
+        self.assertFalse(manifest["reproduction"]["independently_reproducible"])
+        self.assertEqual(manifest["reproduction"]["status"], "incomplete")
+        self.assertEqual(manifest["reproduction"]["reason"],
+                         "shader_artifact_unavailable")
+        missing = manifest["reproduction"]["missing"]
+        self.assertEqual(missing[0]["kind"], "shader_artifact")
+        self.assertEqual(missing[0]["frame"], 2)
+        self.assertEqual(manifest["replay_command"], [])
+        self.assertFalse(gfx_replay_case.verify(case)["ok"])
 
 
 if __name__ == "__main__":
