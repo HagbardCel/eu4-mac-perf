@@ -140,22 +140,37 @@ static NSDictionary *shadow_native_failure(const eu4_metal_replay_result *result
         stage = failure[@"stage"];
     }
     NSString *error_text = @(result->error);
+    NSInteger operation_index = -1;
     if (stage.length == 0 && error_text.length > 0) {
         NSRange colon = [error_text rangeOfString:@":"];
         NSString *prefix = colon.location != NSNotFound
             ? [error_text substringToIndex:colon.location]
             : error_text;
         NSRange operation = [prefix rangeOfString:@" (operation "];
-        stage = operation.location != NSNotFound
-            ? [prefix substringToIndex:operation.location]
-            : prefix;
+        if (operation.location != NSNotFound) {
+            stage = [prefix substringToIndex:operation.location];
+            NSString *tail = [prefix substringFromIndex:NSMaxRange(operation)];
+            NSRange close = [tail rangeOfString:@")"];
+            if (close.location != NSNotFound) {
+                NSString *digits = [tail substringToIndex:close.location];
+                NSScanner *scanner = [NSScanner scannerWithString:digits];
+                NSInteger parsed = -1;
+                if ([scanner scanInteger:&parsed] && scanner.isAtEnd &&
+                    parsed >= 0) {
+                    operation_index = parsed;
+                }
+            }
+        } else {
+            stage = prefix;
+        }
     }
     if (stage.length == 0) {
         stage = @"metal_replay";
     }
     if (failure.count == 0) {
         failure[@"stage"] = stage;
-        failure[@"operation"] = @-1;
+        failure[@"operation"] = @(operation_index);
+        failure[@"event"] = @(operation_index);
         failure[@"kind"] = @"frame";
         failure[@"timed_out"] = @(result->timed_out != 0);
         failure[@"command_status"] = @(result->command_status);

@@ -2581,7 +2581,11 @@ static BOOL upload_image_to_target(NSString *frameDir, NSDictionary *image,
 
 /* Reads a target back and writes it in the captured GL origin convention. */
 static BOOL capture_target_to_file(NSDictionary *target_info, NSString *path,
-                                   NSError **error) {
+                                   NSError **error,
+                                   NSInteger *command_status) {
+    if (command_status != NULL) {
+        *command_status = 0;
+    }
     id<MTLTexture> color = target_info[@"color"];
     if (color == nil) {
         if (error != NULL) {
@@ -2626,7 +2630,11 @@ static BOOL capture_target_to_file(NSDictionary *target_info, NSString *path,
     destinationBytesPerImage:bytes_per_row * height];
     [encoder endEncoding];
     [blit commit];
-    if (!wait_for_transfer(blit, @"checkpoint readback", error)) {
+    BOOL completed = wait_for_transfer(blit, @"checkpoint readback", error);
+    if (command_status != NULL) {
+        *command_status = (NSInteger)blit.status;
+    }
+    if (!completed) {
         return NO;
     }
     uint8_t *flipped = (uint8_t *)malloc(bytes_per_row * height);
@@ -3605,7 +3613,9 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                     NSString *path = [output_path stringByAppendingPathComponent:
                                           item[@"file"]];
                     NSError *checkpoint_error = nil;
-                    if (capture_target_to_file(info, path, &checkpoint_error)) {
+                    NSInteger readback_status = 0;
+                    if (capture_target_to_file(info, path, &checkpoint_error,
+                                               &readback_status)) {
                         checkpoint[@"ok"] = @YES;
                     } else {
                         checkpoint[@"stage"] = @"checkpoint_readback";
@@ -3615,8 +3625,8 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                         failed++;
                         [failures addObject:failure_entry(
                             @"checkpoint_readback", (NSInteger)index,
-                            @"checkpoint", checkpoint[@"error"], NO,
-                            command.status, @"")];
+                            @"checkpoint", checkpoint[@"error"],
+                            g_deadline_expired != 0, readback_status, @"")];
                     }
                     [g_checkpoint_results addObject:checkpoint];
                 }
@@ -3673,7 +3683,7 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                         [output_path stringByAppendingPathComponent:name];
                     NSError *pre_error = nil;
                     if (!capture_target_to_file(isolated_target_info, path,
-                                                &pre_error)) {
+                                                &pre_error, NULL)) {
                         return record_failure(@"pre_image_readback",
                                               (NSInteger)index, @"draw",
                                               pre_error,
@@ -3697,6 +3707,7 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
             }
             NSString *kind = event[@"kind"];
             NSString *event_stage = @"event_encode";
+            NSInteger event_command_status = (NSInteger)command.status;
             NSError *event_error = nil;
             BOOL ok = YES;
             if ([kind isEqualToString:@"clear"]) {
@@ -3744,6 +3755,7 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                         if (!wait_for_transfer(command, @"post-draw completion",
                                                &event_error)) {
                             event_stage = @"post_draw_completion";
+                            event_command_status = (NSInteger)command.status;
                             ok = NO;
                         }
                         command = [g_queue commandBuffer];
@@ -3754,10 +3766,13 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                             NSString *path =
                                 [output_path stringByAppendingPathComponent:name];
                             NSError *post_error = nil;
+                            NSInteger post_status = 0;
                             if (!capture_target_to_file(target_info, path,
-                                                        &post_error)) {
+                                                        &post_error,
+                                                        &post_status)) {
                                 ok = NO;
                                 event_stage = @"post_image_readback";
+                                event_command_status = post_status;
                                 event_error = post_error ?:
                                     [NSError errorWithDomain:kErrorDomain
                                                         code:101
@@ -3775,7 +3790,7 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                                                  @"event encoding failed");
                 [failures addObject:failure_entry(
                     event_stage, (NSInteger)index, kind ?: @"unknown",
-                    message, g_deadline_expired != 0, command.status,
+                    message, g_deadline_expired != 0, event_command_status,
                     string_value(event[@"draw"][@"caller_rva"]) ?: @"")];
             }
             encoded++;

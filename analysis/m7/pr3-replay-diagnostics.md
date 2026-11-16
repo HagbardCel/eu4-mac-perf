@@ -168,10 +168,10 @@ The native ABI host gained `--only-event`, `--stop-after`, `--checkpoints`,
 `--seed-marked`, `--capture-pre`, `--capture-post`, `--depth-from-prefix` and
 structured `stage`/`failure` output; it still exercises the v2 C ABI only.
 
-Focused final evidence: run `20261116T090134Z-4e71fb58`, 123 tests across the
+Focused final evidence: run `20261116T091007Z-b49c37f7`, 124 tests across the
 required replay, resolve, seal, m6-frame, checkpoint and output-safety modules
-— passed. `tests/test_m7_metal_replay.py` alone is 19 tests
-(`20261116T085731Z-ef19bd19`), including the native shadow-report host, the
+— passed. `tests/test_m7_metal_replay.py` alone is 20 tests
+(`20261116T090953Z-eccca51e`), including the native shadow-report host, the
 success/failure/exception semantics, first-failure and stale-artifact cases. A
 base-worktree comparison at `dac2ea92` (`20261116T080832Z-6dd0c6ce`) shows the
 one `test_agent_tools` failure found during a broader run is pre-existing, not
@@ -179,7 +179,7 @@ introduced here.
 
 Portable CI was executed on the tracked base plus this change in a Linux
 Python 3.14 container as a non-root CI user with clang, NumPy 2.5.4 and Pillow
-12.3.0: `Ran 3097 tests in 125.471s`, `OK (skipped=291)`, exit 0. Skipped tests
+12.3.0: `Ran 3098 tests in 124.400s`, `OK (skipped=292)`, exit 0. Skipped tests
 are platform-specific native/macOS or absent-evidence cases, matching the
 portable GitHub Actions selection. Structured evidence is recorded in
 [pr3-replay-diagnostics-evidence.json](pr3-replay-diagnostics-evidence.json).

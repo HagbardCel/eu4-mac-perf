@@ -119,6 +119,12 @@ int main(int argc, const char *argv[]) {
                      eu4_gfx_shadow_test_report_json(
                          &capture, &failure, 1, NULL, NULL, NULL));
 
+        eu4_metal_replay_result failure_no_json = failure;
+        failure_no_json.result_json[0] = 0;
+        print_report(@"replay_failure_no_json",
+                     eu4_gfx_shadow_test_report_json(
+                         &capture, &failure_no_json, 1, NULL, NULL, NULL));
+
         print_report(@"shader_receipt",
                      eu4_gfx_shadow_test_report_json(
                          &capture, NULL, 0, "shader_receipt",

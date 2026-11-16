@@ -655,6 +655,13 @@ class MetalReplayLibraryTests(unittest.TestCase):
         self.assertEqual(failed["timed_out"], 1)
         self.assertEqual(failed["command_status"], 2)
 
+        # Without replay.json the bridge must still recover the known
+        # operation index from the ABI error prefix.
+        no_json = reports["replay_failure_no_json"]
+        self.assertEqual(no_json["stage"], "event_boundary")
+        self.assertEqual(no_json["failure"]["operation"], 3)
+        self.assertEqual(no_json["failure"]["event"], 3)
+
         receipt = reports["shader_receipt"]
         self.assertEqual(receipt["status"], "failed")
         self.assertEqual(receipt["stage"], "shader_receipt")
@@ -934,6 +941,39 @@ class MetalReplayLibraryTests(unittest.TestCase):
             self.assertFalse(report["result_json"])
             self.assertTrue(report["error"].startswith("event_encode"))
             self.assertGreaterEqual(report["failed"], 2)
+
+    def test_checkpoint_readback_timeout_keeps_classification(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            frame, shaders, events = self._canonical_case(base)
+            selected = [events[0], dict(events[1])]
+            selected[1].pop("seed", None)
+            (frame / "frame-events.jsonl").write_text(
+                "\n".join(json.dumps(event) for event in selected) + "\n"
+            )
+            checkpoint = base / "checkpoints.json"
+            checkpoint.write_text(json.dumps({
+                "checkpoints": [{
+                    "event": 0,
+                    "target": "0",
+                    "file": "checkpoint-timeout.bgra",
+                }]
+            }))
+            output = base / "out"
+            result = self._abi(
+                frame, shaders, output, 1,
+                "--checkpoints", str(checkpoint),
+                "--timeout-ms", "1",
+            )
+            self.assertNotEqual(result.returncode, 0)
+            report = self._abi_report(result)
+            self.assertEqual(report["ok"], 0)
+            self.assertEqual(report["timed_out"], 1)
+            self.assertEqual(report["stage"], "checkpoint_readback")
+            self.assertEqual(report["failure"]["stage"],
+                             "checkpoint_readback")
+            self.assertEqual(report["failure"]["timed_out"], True)
+            self.assertNotEqual(report["failure"]["command_status"], 0)
 
     def test_native_blob_verification_uses_structured_references(self):
         from tests.test_m7_frame_seal import _write_frame

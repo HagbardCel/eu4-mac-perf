@@ -124,9 +124,9 @@
   },
   "tests": {
     "focused_final": {
-      "id": "20261116T090134Z-4e71fb58",
+      "id": "20261116T091007Z-b49c37f7",
       "status": "passed",
-      "tests": 123,
+      "tests": 124,
       "modules": [
         "tests.test_m7_metal_replay",
         "tests.test_resolve_replay",
@@ -137,9 +137,9 @@
       ]
     },
     "replay_module": {
-      "id": "20261116T085731Z-ef19bd19",
+      "id": "20261116T090953Z-eccca51e",
       "status": "passed",
-      "tests": 19
+      "tests": 20
     },
     "pre_existing_comparison": {
       "base_id": "20261116T080832Z-6dd0c6ce",
@@ -151,8 +151,8 @@
       "runtime": "python:3.14 (Debian Linux container), non-root CI user, clang, numpy 2.5.4, Pillow 12.3.0",
       "command": "python -m compileall -q ... && PYTHONPATH=benchmark:. python -m unittest discover -s tests",
       "status": "passed",
-      "tests": 3097,
-      "skipped": 291,
+      "tests": 3098,
+      "skipped": 292,
       "exit_code": 0
     }
   },
@@ -209,5 +209,9 @@
       "stale_provenance_advertised": false,
       "current_failure_report_advertised": true
     }
+  },
+  "review_fixes": {
+    "checkpoint_readback_timeout": "failure entry now carries the readback wait's real timeout flag and blit command status",
+    "artifact_failure_operation_recovery": "bridge fallback parses and preserves the operation index from the ABI error prefix when replay.json is unavailable"
   }
 }
