@@ -208,13 +208,22 @@ def copy_contract_problems(event: dict, index: int) -> list[str]:
     return problems
 
 
-def build(frame_dir: Path | str) -> dict:
-    """Derive the resource graph and coverage classification for one frame."""
+def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
+    """Derive the resource graph and coverage classification for one frame.
+
+    ``trace`` may be an already verified ``m6_frame.load_trace`` result.  The
+    diagnostic path passes it so one capture is not hashed twice; callers that
+    only have a directory keep the original signature.
+    """
     from automation import m6_frame
 
     frame_dir = Path(frame_dir)
     try:
-        trace = m6_frame.load_trace(frame_dir, verify_blobs=True)
+        if trace is None:
+            trace = m6_frame.load_trace(frame_dir, verify_blobs=True)
+        elif Path(str(trace.get("_frame_dir") or "")).resolve() != frame_dir.resolve():
+            raise m6_frame.FrameError(
+                "supplied trace belongs to another frame directory")
     except m6_frame.FrameError as exc:
         return {
             "schema": SCHEMA,
@@ -253,8 +262,30 @@ def build(frame_dir: Path | str) -> dict:
         width = target.get("width") or attachment.get("width")
         height = target.get("height") or attachment.get("height")
         internal = attachment.get("internal_format")
-        row = {"index": index, "kind": kind, "target": key,
-               "samples": [], "writes": []}
+        draw = event.get("draw") or {}
+        program = event.get("program") or {}
+        state = event.get("state") or {}
+        row = {
+            "index": index,
+            "event": index,
+            "kind": kind,
+            "target": key,
+            "samples": [],
+            "writes": [],
+            "entry": draw.get("entry"),
+            "caller_rva": draw.get("caller_rva"),
+            "program": program.get("name"),
+            "operation": event.get("operation"),
+            "state": {
+                name: state.get(name)
+                for name in (
+                    "blend", "depth", "stencil", "cull", "polygon",
+                    "alpha_test", "scissor", "viewport", "color_mask",
+                    "dither", "multisample",
+                )
+                if name in state
+            },
+        }
         if kind == "clear":
             resource = _resource(resources, key, kind="framebuffer"
                                  if key.startswith("fb:") else "texture",
@@ -623,7 +654,13 @@ def checkpoint_plan(graph: dict) -> list[dict]:
     return plan
 
 
-def write_checkpoint_request(graph: dict, path: Path | str) -> dict:
+def checkpoint_request(graph: dict) -> dict:
+    """Build the deterministic checkpoint request for one graph.
+
+    The request is derived only from the immutable captured frame.  The
+    in-process coordinator publishes this document before the Metal bridge is
+    released, and the bridge binds its digest into the shader receipt.
+    """
     plan = checkpoint_plan(graph)
     checkpoints = []
     for item in plan:
@@ -638,11 +675,26 @@ def write_checkpoint_request(graph: dict, path: Path | str) -> dict:
             "reference_height": item["reference_height"],
             "producer_events": item["producer_events"],
         })
-    value = {
+    return {
         "schema": "gfx-frame-checkpoint-request/v1",
         "checkpoints": checkpoints,
     }
-    Path(path).write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+
+def write_checkpoint_request(graph: dict, path: Path | str) -> dict:
+    """Atomically publish a checkpoint request.
+
+    A reader either sees the complete document or no document, so a stale or
+    partially written request can never be bound to a replay.
+    """
+    import os
+
+    value = checkpoint_request(graph)
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_name(path.name + ".partial")
+    partial.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    os.replace(partial, path)
     return value
 
 

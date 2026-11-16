@@ -131,6 +131,57 @@ inputs and stage injection; no EU4 launch or in-process callback behaviour
 change is involved. Report:
 [native replay diagnostics](../analysis/m7/pr3-replay-diagnostics.md).
 
+## M7 PR 3 — same-frame differential diagnosis (2026-11-16)
+
+The replay engine and the diagnostic analysis are now separate. The reusable
+`analyse_frame()` / `diagnose_frame()` path consumes an already-produced Metal
+result and performs seal/capture validation, capture/session/operation identity
+checks, dependency-graph construction, provenance evaluation, checkpoint
+reconciliation, shader-binding audit, state-coverage classification, pixel
+metrics, first-divergence localization and the qualification contract. The
+standalone `replay()` API remains and now calls the same analysis after it
+executes the host once; the normal diagnosis path does not launch EU4 or a
+second replay.
+
+The in-process coordinator publishes the checkpoint request before the shadow
+bridge is released. `shader-receipt.json` binds the request name, SHA-256 and
+count to the sealed frame; the bridge verifies them, passes `checkpoint_path`
+to the existing C ABI, and the coordinator verifies the returned request
+digest before diagnosis. Missing checkpoints are `incomplete_diagnostics`;
+duplicate, unexpected, corrupt or identity-mismatched evidence is
+`invalid_provenance`. Captured OpenGL intermediates remain reference
+checkpoints only and are never seeded as Metal inputs.
+
+State coverage now distinguishes implemented, captured-but-unsupported,
+unproven and focused-test-proven equivalent states. `gl_dither` and
+`multisample` remain unsupported; the report explicitly does not attribute the
+live difference to them without an A/B experiment. The qualification contract
+reports eight evidence axes and the disjoint classifications
+`qualified_match`, `qualified_difference`,
+`difference_with_partial_state_coverage`, `incomplete_capture`,
+`invalid_provenance`, `unsupported_state`, `gpu_execution_failure` and
+`incomplete_diagnostics`.
+
+Focused verification: 174 tests in the graph/checkpoint/case/seal/coordinator/
+ABI/diagnosis/receipt set, plus the canonical title and scene-75 fixture tests
+through the real Metal host. The canonical title frame
+remains pixel-exact (0 mismatches) with no reported divergence; its historical
+texture-442 producer gap stays `incomplete_capture`. Scene 75 keeps
+1,792,005 / 1,930,176 differing pixels (max 23) and localizes the earliest
+authoritative divergence to the copy source checkpoint at event 271. The
+original live in-process result (no checkpoint request) is
+`incomplete_diagnostics`, preserving the 60.2% / max 66 final difference; one
+explicit offline checkpointed replay localizes the earliest authoritative
+divergence to texture 442 at checkpoint event 286 (copy producer 284,
+1,237,771 checkpoint pixels, max 95) while stating that the copy source was not
+captured. The portable `m7-pr3-live-603` case verifies 1,243 payload digests.
+Report: [PR 3 diagnosis](../analysis/m7/pr3-differential-diagnosis.md),
+[evidence](../analysis/m7/pr3-diagnosis-evidence.json).
+
+PR #201 remains open; this branch includes its native early-exit diagnostic
+hardening as a cherry-pick because PR 3 must preserve the first native stage
+through the shadow report and the diagnostic package.
+
 ## Strategy B — independent replay (2026-11-14)
 
 Capture once, replay independently. A canonical authentic OpenGL title frame

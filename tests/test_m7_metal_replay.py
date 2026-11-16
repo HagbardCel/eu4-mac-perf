@@ -779,7 +779,7 @@ class MetalReplayLibraryTests(unittest.TestCase):
                 nonlocal counter
                 counter += 1
                 run = Path(temporary) / f"run-{counter}"
-                _write_frame(run / "frame")
+                _write_frame(run / "frame", operation_count=2)
                 seal = json.loads(
                     (run / "frame" / "frame-seal.json").read_text()
                 )
@@ -790,8 +790,22 @@ class MetalReplayLibraryTests(unittest.TestCase):
                 )
                 coordinator_report = report_factory(seal)
 
+                from automation import gfx_frame_graph
+
+                request_path = shadow / "checkpoint-request.json"
+                gfx_frame_graph.write_checkpoint_request(
+                    gfx_frame_graph.build(run / "frame"), request_path)
+
                 def fake_run(command, **kwargs):
                     self.assertIn("translate", command)
+                    if coordinator_report.get("status") == "ok":
+                        request = json.loads(request_path.read_text())
+                        coordinator_report.update({
+                            "checkpoint_request_file": request_path.name,
+                            "checkpoint_request_sha256": _sha(request_path),
+                            "checkpoint_count": len(
+                                request.get("checkpoints") or []),
+                        })
                     (shadow / "shadow-report.json").write_text(
                         json.dumps(coordinator_report)
                     )
@@ -806,7 +820,6 @@ class MetalReplayLibraryTests(unittest.TestCase):
                     replay_timeout=5.0,
                     compare_timeout=5.0,
                     policy=None,
-                    no_compare=True,
                 )
                 with mock.patch.object(m6_frame.subprocess, "run",
                                        side_effect=fake_run):
@@ -1048,6 +1061,43 @@ class MetalReplayLibraryTests(unittest.TestCase):
                              "checkpoint_readback")
             self.assertEqual(report["failure"]["timed_out"], True)
             self.assertNotEqual(report["failure"]["command_status"], 0)
+
+    def test_coordinator_preserves_an_early_fallback_failure(self):
+        from tests.test_m7_frame_seal import _write_frame
+
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary) / "run"
+            _write_frame(run / "frame", operation_count=2)
+            shadow = run / "shadow"
+            (shadow / "shaders").mkdir(parents=True)
+            (shadow / "shaders" / "shaders.json").write_text(
+                json.dumps({"programs": []}))
+            def fake_run(command, **kwargs):
+                (shadow / "shadow-report.json").write_text(json.dumps({
+                    "schema": "m7-shadow-report/v1",
+                    "status": "failed",
+                    "stage": "shader_wait",
+                    "error": "shader_translation_timeout",
+                }))
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            args = argparse.Namespace(
+                run=str(run), shadow_dir=str(shadow), timeout=10.0,
+                seal_timeout=5.0, translation_timeout=5.0,
+                replay_timeout=5.0, compare_timeout=5.0, policy=None,
+                continuous=False,
+            )
+            with mock.patch.object(
+                    m6_frame.subprocess, "run", side_effect=fake_run):
+                status = m6_frame.shadow_coordinator(args)
+            self.assertEqual(status, 1)
+            coordinator = json.loads(
+                (shadow / "coordinator.json").read_text())
+            self.assertEqual(coordinator["status"], "failed")
+            self.assertEqual(coordinator["stage"], "shader_wait")
+            self.assertIn("shader_translation_timeout",
+                          coordinator["error"])
+            self.assertNotIn("checkpoint request", coordinator["error"])
 
     def test_native_blob_verification_uses_structured_references(self):
         from tests.test_m7_frame_seal import _write_frame

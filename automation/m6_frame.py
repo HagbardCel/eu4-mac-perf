@@ -201,7 +201,20 @@ def load_seal(
     if capture_id <= 0 or pid <= 0 or not seal.get("session_id"):
         raise FrameError("frame seal identity is invalid")
     declared_dir = Path(str(seal.get("capture_dir") or ""))
-    if not declared_dir.is_absolute() or declared_dir.resolve() != frame_dir.resolve():
+    portable_capture = False
+    if frame_dir.name == "capture":
+        case_path = frame_dir.parent / "case.json"
+        try:
+            case = json.loads(case_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            case = None
+        portable_capture = (
+            isinstance(case, dict)
+            and case.get("schema") == "gfx-strategy-b-case/v1"
+            and case.get("capture") == "capture")
+    if not portable_capture and (
+            not declared_dir.is_absolute()
+            or declared_dir.resolve() != frame_dir.resolve()):
         raise FrameError("frame seal capture directory does not match")
 
     def member(name: object, label: str) -> Path:
@@ -1345,10 +1358,22 @@ def apply_shadow_report(result: dict, shadow_report: dict) -> str | None:
     if isinstance(failure, dict) and failure:
         result["shadow_failure"] = failure
     result["pixel_verdict"] = shadow_report.get("pixel_verdict")
-    result["qualified"] = False
+    result["qualified"] = bool(shadow_report.get("qualified"))
+    result["classification"] = shadow_report.get("classification")
+    result["first_divergence"] = shadow_report.get("first_divergence")
+    result["checkpoint_validation"] = shadow_report.get(
+        "checkpoint_validation")
+    result["state_coverage"] = shadow_report.get("state_coverage")
     result["diagnostic"] = {
         "metal": "complete" if shadow_report.get("status") == "ok" else "failed",
         "pixel": shadow_report.get("pixel_verdict"),
+        "classification": shadow_report.get("classification"),
+        "axes": (shadow_report.get("diagnosis") or {}).get("axes"),
+        "diagnostic_qualified": shadow_report.get("diagnostic_qualified"),
+        "first_divergence": shadow_report.get("first_divergence"),
+        "checkpoint_validation": shadow_report.get("checkpoint_validation"),
+        "diagnostic_report": (shadow_report.get("diagnosis") or {}).get(
+            "report"),
     }
     if shadow_report.get("status") == "ok":
         return None
@@ -1461,6 +1486,32 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
         result["error"] = "shader translation failed"
         (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")
         return 1
+    # Build the dependency graph and publish the checkpoint request before the
+    # ready marker.  The bridge binds this request's digest into the receipt,
+    # so a stale or mismatched plan cannot be executed silently.
+    try:
+        from automation import gfx_frame_graph
+
+        graph = gfx_frame_graph.build(frame_dir)
+        if graph.get("status") == "invalid":
+            raise FrameError(
+                "frame graph is invalid: "
+                + "; ".join(graph.get("reasons") or ["unknown"]))
+        request_path = shadow / "checkpoint-request.json"
+        request = gfx_frame_graph.write_checkpoint_request(graph, request_path)
+        request_sha256 = _sha256(request_path)
+    except (FrameError, OSError, ValueError) as exc:
+        result["status"] = "failed"
+        result["error"] = f"checkpoint request preparation failed: {exc}"
+        (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")
+        return 1
+    result["checkpoint_request"] = {
+        "file": request_path.name,
+        "sha256": request_sha256,
+        "count": len(request.get("checkpoints") or []),
+        "source": str(request_path),
+        "graph_status": graph.get("status"),
+    }
     def artifact_digest(directory: Path) -> tuple[str, int]:
         digest = hashlib.sha256()
         count = 0
@@ -1487,6 +1538,9 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
         "shaders_json_sha256": _sha256(shaders_json),
         "artifacts_sha256": artifacts_sha256,
         "artifact_count": artifact_count,
+        "checkpoint_request_file": request_path.name,
+        "checkpoint_request_sha256": request_sha256,
+        "checkpoint_count": len(request.get("checkpoints") or []),
     }
     receipt_path = shadow / "shader-receipt.json"
     receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
@@ -1552,100 +1606,144 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
             json.dumps(result, indent=2) + "\n"
         )
         return 1
-    try:
-        events = [
-            json.loads(line)
-            for line in (frame_dir / "frame-events.jsonl").read_text().splitlines()
-            if line.strip()
-        ]
-        draws = [event for event in events if event.get("kind") == "draw"]
-        dither = any((event.get("state") or {}).get("dither") for event in draws)
-        multisample = any(
-            (event.get("state") or {}).get("multisample") for event in draws
-        )
-        coverage = {
-            "schema": "m7-shadow-state-coverage/v1",
-            "draws": len(draws),
-            "gl_dither": dither,
-            "multisample": multisample,
-            "state_coverage": (
-                "partial" if (dither or multisample)
-                else "complete_for_audited_states"
-            ),
-            "qualified": False,
-            "scope": ["gl_dither", "multisample"],
-            "unsupported": [
-                name
-                for name, present in (("gl_dither", dither),
-                                      ("multisample", multisample))
-                if present
-            ],
-        }
-        result["state_coverage"] = coverage
-        (shadow / "state-coverage.json").write_text(
-            json.dumps(coverage, indent=2) + "\n"
-        )
-    except (OSError, ValueError) as exc:
-        result["state_coverage_error"] = str(exc)
     if execution_failed:
         result["status"] = "failed"
         result["error"] = shadow_failure_detail(report)
-        (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")
+        (shadow / "coordinator.json").write_text(
+            json.dumps(result, indent=2) + "\n"
+        )
         return 1
-    if not args.no_compare:
+    if report.get("checkpoint_request_sha256") != request_sha256:
+        result["status"] = "failed"
+        result["provenance_error"] = (
+            "shadow report checkpoint request digest does not match the "
+            "published request")
+        result["provenance_ok"] = False
+        result["error"] = result["provenance_error"]
+        (shadow / "coordinator.json").write_text(
+            json.dumps(result, indent=2) + "\n")
+        return 1
+    if report.get("checkpoint_request_file") != request_path.name:
+        result["status"] = "failed"
+        result["provenance_error"] = (
+            "shadow report checkpoint request file does not match the "
+            "published request")
+        result["provenance_ok"] = False
+        result["error"] = result["provenance_error"]
+        (shadow / "coordinator.json").write_text(
+            json.dumps(result, indent=2) + "\n")
+        return 1
+    policy_path = (
+        Path(args.policy).expanduser().resolve()
+        if args.policy
+        else ROOT / "analysis" / "m6" / "comparison-policy.json"
+    )
+    try:
+        from automation import gfx_independent_replay
+
+        class _DiagnosisTimeout(Exception):
+            pass
+
+        def _diagnosis_alarm(signum, frame):
+            raise _DiagnosisTimeout(
+                f"diagnosis exceeded {args.compare_timeout}s")
+
+        previous = signal.signal(signal.SIGALRM, _diagnosis_alarm)
+        diagnosis_budget = min(
+            args.compare_timeout,
+            max(0.0, overall_deadline - time.monotonic()),
+        )
+        if diagnosis_budget <= 0:
+            raise _DiagnosisTimeout("overall coordinator deadline expired")
+        signal.setitimer(signal.ITIMER_REAL, diagnosis_budget)
         try:
-            from automation import m6_compare
-
-            policy_path = (
-                Path(args.policy).expanduser().resolve()
-                if args.policy
-                else ROOT / "analysis" / "m6" / "comparison-policy.json"
-            )
-            policy = json.loads(policy_path.read_text())
-
-            class _CompareTimeout(Exception):
-                pass
-
-            def _compare_alarm(signum, frame):
-                raise _CompareTimeout(f"comparison exceeded {args.compare_timeout}s")
-
-            previous = signal.signal(signal.SIGALRM, _compare_alarm)
-            compare_budget = min(
-                args.compare_timeout,
-                max(0.0, overall_deadline - time.monotonic()),
-            )
-            if compare_budget <= 0:
-                raise _CompareTimeout("overall coordinator deadline expired")
-            signal.setitimer(signal.ITIMER_REAL, compare_budget)
-            try:
-                comparison = m6_compare.compare(frame_dir, shadow, policy)
-            finally:
-                signal.setitimer(signal.ITIMER_REAL, 0)
-                signal.signal(signal.SIGALRM, previous)
-            result["comparison"] = comparison
-            result["pixel_verdict"] = comparison.get("status")
-            result["execution"] = {
-                "capture": "complete",
-                "metal": "complete",
-                "operation_coverage": "complete"
-                if report["metal"].get("encoded") == report["metal"].get("events")
-                else "partial",
-            }
-            result["qualified"] = False
-            (shadow / "comparison.json").write_text(
-                json.dumps(comparison, indent=2) + "\n"
-            )
-        except (OSError, ValueError, Exception) as exc:  # noqa: BLE001
-            result["status"] = "failed"
-            result["error"] = f"comparison failed: {exc}"
-            (shadow / "coordinator.json").write_text(
-                json.dumps(result, indent=2) + "\n"
-            )
-            return 1
+            diagnosis = gfx_independent_replay.diagnose_frame(
+                frame_dir, shadow, shadow, policy_path)
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous)
+    except (OSError, ValueError, Exception) as exc:  # noqa: BLE001
+        result["status"] = "failed"
+        result["error"] = f"diagnosis failed: {exc}"
+        (shadow / "coordinator.json").write_text(
+            json.dumps(result, indent=2) + "\n"
+        )
+        return 1
+    qualification = diagnosis.get("qualification") or {}
+    final = (diagnosis.get("pixels") or {}).get("final") or {}
+    comparison = final.get("detail")
+    result["diagnosis"] = {
+        "schema": diagnosis.get("schema"),
+        "classification": diagnosis.get("classification"),
+        "axes": qualification.get("axes"),
+        "qualified": qualification.get("qualified"),
+        "diagnostic_qualified": qualification.get("diagnostic_qualified"),
+        "first_divergence": diagnosis.get("first_divergence"),
+        "checkpoint_validation": diagnosis.get("checkpoint_validation"),
+        "pixels": final.get("statistics"),
+        "report": str(shadow / "diagnostic-report.json"),
+    }
+    result["classification"] = diagnosis.get("classification")
+    result["qualified"] = bool(qualification.get("qualified"))
+    result["diagnostic_qualified"] = bool(
+        qualification.get("diagnostic_qualified"))
+    result["first_divergence"] = diagnosis.get("first_divergence")
+    result["checkpoint_validation"] = diagnosis.get("checkpoint_validation")
+    result["state_coverage"] = diagnosis.get("state_coverage")
+    (shadow / "state-coverage.json").write_text(
+        json.dumps(diagnosis.get("state_coverage"), indent=2) + "\n")
+    result["execution"] = {
+        "capture": "complete",
+        "metal": (diagnosis.get("execution") or {}).get("status", "failed"),
+        "operation_coverage": (
+            diagnosis.get("operation_coverage") or {}).get("status", "invalid"),
+    }
+    if isinstance(comparison, dict):
+        result["comparison"] = comparison
+        result["pixel_verdict"] = comparison.get("status")
+        (shadow / "comparison.json").write_text(
+            json.dumps(comparison, indent=2) + "\n")
+    else:
+        result["pixel_verdict"] = "unavailable"
+        result["comparison_error"] = final.get("reason") or (
+            "the shared comparison engine produced no report")
     result["status"] = "ok"
     (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))
     return 0
+
+
+def diagnose_command(args: argparse.Namespace) -> int:
+    """Diagnose an already-produced in-process Metal result offline."""
+    from automation import gfx_independent_replay
+
+    frame_dir = Path(args.frame).expanduser().resolve()
+    metal_dir = Path(args.metal).expanduser().resolve()
+    out = (Path(args.out).expanduser().resolve()
+           if args.out else metal_dir)
+    try:
+        report = gfx_independent_replay.diagnose_frame(
+            frame_dir, metal_dir, out, args.policy,
+            package=bool(args.package),
+            shaders=(Path(args.shaders).expanduser().resolve()
+                     if args.shaders else None))
+    except (gfx_independent_replay.ReplayError, FrameError, OSError) as exc:
+        print(json.dumps({"status": "error", "reason": str(exc)}, indent=2))
+        return 1
+    print(json.dumps({
+        "schema": report.get("schema"),
+        "status": report.get("status"),
+        "classification": report.get("classification"),
+        "qualification": report.get("qualification", {}).get("axes"),
+        "first_divergence": {
+            "kind": (report.get("first_divergence") or {}).get("kind"),
+            "event": (report.get("first_divergence") or {}).get("event"),
+            "confidence": (report.get("first_divergence") or {}).get("confidence"),
+        },
+        "checkpoint_validation": report.get("checkpoint_validation"),
+        "report": str(out / "diagnostic-report.json"),
+    }, indent=2))
+    return gfx_independent_replay.diagnosis_exit_code(report)
 
 
 # ---------------------------------------------------------------------------
@@ -1751,8 +1849,22 @@ def _parser() -> argparse.ArgumentParser:
     coord.add_argument("--replay-timeout", type=float, default=180.0)
     coord.add_argument("--compare-timeout", type=float, default=60.0)
     coord.add_argument("--policy")
-    coord.add_argument("--no-compare", action="store_true")
+    # The PR3 diagnosis always includes the shared comparison.  The old
+    # --no-compare switch could not skip it without discarding qualification
+    # evidence, so it is removed rather than silently ignored.
     coord.set_defaults(handler=shadow_coordinator)
+
+    diag = sub.add_parser(
+        "diagnose",
+        help="diagnose an already-produced Metal result without re-executing it",
+    )
+    diag.add_argument("--frame", required=True)
+    diag.add_argument("--metal", required=True)
+    diag.add_argument("--out", default="")
+    diag.add_argument("--policy")
+    diag.add_argument("--shaders", default="")
+    diag.add_argument("--package", action="store_true")
+    diag.set_defaults(handler=diagnose_command)
 
     ins = sub.add_parser("inspect", help="validate and summarize one frame trace")
     ins.add_argument("--frame", required=True)

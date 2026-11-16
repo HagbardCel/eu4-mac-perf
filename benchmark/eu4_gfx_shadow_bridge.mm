@@ -233,7 +233,8 @@ static NSMutableDictionary *shadow_report_base(
 
 static NSDictionary *shadow_report_for_failure(
     const eu4_frame_capture_descriptor *capture, NSString *shader_path,
-    NSString *stage, NSString *error, BOOL timed_out, uint64_t started_ns) {
+    NSString *stage, NSString *error, BOOL timed_out, uint64_t started_ns,
+    NSString *checkpoint_file, NSString *checkpoint_sha) {
     NSMutableDictionary *report = shadow_report_base(capture, shader_path);
     NSString *stage_text = stage.length > 0 ? stage : @"metal_replay";
     NSString *error_text = error.length > 0 ? error : @"Metal replay failed";
@@ -244,6 +245,8 @@ static NSDictionary *shadow_report_for_failure(
     report[@"failure"] = shadow_failure_object(stage_text, error_text, -1,
                                                @"frame", timed_out, 0);
     report[@"total_duration_ns"] = @(shadow_now_ns() - started_ns);
+    report[@"checkpoint_request_file"] = checkpoint_file ?: @"";
+    report[@"checkpoint_request_sha256"] = checkpoint_sha ?: @"";
     return report;
 }
 
@@ -255,12 +258,13 @@ static NSDictionary *shadow_report_for_exception(
         : @"unknown Objective-C exception";
     return shadow_report_for_failure(capture, shader_path,
                                      @"internal_exception", description, NO,
-                                     started_ns);
+                                     started_ns, @"", @"");
 }
 
 static NSDictionary *shadow_report_for_replay(
     const eu4_frame_capture_descriptor *capture, NSString *shader_path,
-    const eu4_metal_replay_result *result, int code, uint64_t started_ns) {
+    const eu4_metal_replay_result *result, int code, uint64_t started_ns,
+    NSString *checkpoint_file, NSString *checkpoint_sha) {
     NSString *native_stage = @"complete";
     NSDictionary *native_failure = @{};
     NSString *native_error = @"";
@@ -287,6 +291,8 @@ static NSDictionary *shadow_report_for_replay(
     report[@"command_status"] = @(result->command_status);
     report[@"duration_ns"] = @(result->duration_ns);
     report[@"total_duration_ns"] = @(shadow_now_ns() - started_ns);
+    report[@"checkpoint_request_file"] = checkpoint_file ?: @"";
+    report[@"checkpoint_request_sha256"] = checkpoint_sha ?: @"";
     report[@"metal"] = @{
         @"ok": @(result->ok),
         @"code": @(code),
@@ -354,7 +360,9 @@ static NSString *shadow_artifact_digest(NSString *directory) {
 
 static BOOL shadow_verify_receipt(
     const eu4_frame_capture_descriptor *capture, NSString *shadow_dir,
-    NSString *shader_dir, char shader_json_sha[65], NSString **failure) {
+    NSString *shader_dir, char shader_json_sha[65],
+    char checkpoint_request_name[256], char checkpoint_request_sha[65],
+    NSString **failure) {
     NSString *receipt_path =
         [shadow_dir stringByAppendingPathComponent:@"shader-receipt.json"];
     NSData *data = [NSData dataWithContentsOfFile:receipt_path];
@@ -391,6 +399,43 @@ static BOOL shadow_verify_receipt(
         *failure = @"shader artifact digest mismatch";
         return NO;
     }
+    id request_name = receipt[@"checkpoint_request_file"];
+    if (![request_name isKindOfClass:[NSString class]] ||
+        [request_name length] == 0 || [request_name length] >= 256 ||
+        [request_name containsString:@"/"] ||
+        [request_name isEqualToString:@".."] ||
+        [request_name isEqualToString:@"."]) {
+        *failure = @"checkpoint request file is missing or invalid";
+        return NO;
+    }
+    NSString *request_path = [shadow_dir stringByAppendingPathComponent:request_name];
+    NSData *request_data = [NSData dataWithContentsOfFile:request_path];
+    NSDictionary *request = request_data != nil
+        ? [NSJSONSerialization JSONObjectWithData:request_data options:0
+                                           error:NULL]
+        : nil;
+    if (![request isKindOfClass:[NSDictionary class]] ||
+        ![request[@"schema"] isEqualToString:@"gfx-frame-checkpoint-request/v1"] ||
+        ![request[@"checkpoints"] isKindOfClass:[NSArray class]]) {
+        *failure = @"checkpoint request is missing or invalid";
+        return NO;
+    }
+    id declared_count = receipt[@"checkpoint_count"];
+    if (![declared_count isKindOfClass:[NSNumber class]] ||
+        [declared_count unsignedLongValue] !=
+            [(NSArray *)request[@"checkpoints"] count]) {
+        *failure = @"checkpoint request count disagrees with the receipt";
+        return NO;
+    }
+    char request_sha[65] = {0};
+    if (!shadow_sha256_file(request_path.fileSystemRepresentation, request_sha) ||
+        ![receipt[@"checkpoint_request_sha256"] isEqualToString:@(request_sha)]) {
+        *failure = @"checkpoint request digest mismatch";
+        return NO;
+    }
+    snprintf(checkpoint_request_name, 256, "%s",
+             [(NSString *)request_name UTF8String]);
+    snprintf(checkpoint_request_sha, 65, "%s", request_sha);
     snprintf(shader_json_sha, 65, "%s", sha);
     return YES;
 }
@@ -410,6 +455,8 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
     eu4_metal_replay_session *active_session = NULL;
     BOOL detailed_report_written = NO;
     NSString *report_stage = @"shader_wait";
+    char checkpoint_request_name[256] = {0};
+    char checkpoint_request_sha[65] = {0};
     NSString *report_error = @"";
     BOOL report_timed_out = NO;
     @autoreleasepool {
@@ -444,7 +491,10 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
                 char shader_json_sha[65] = {0};
                 NSString *receipt_failure = @"";
                 if (!shadow_verify_receipt(capture, output_path, shader_path,
-                                           shader_json_sha, &receipt_failure)) {
+                                           shader_json_sha,
+                                           checkpoint_request_name,
+                                           checkpoint_request_sha,
+                                           &receipt_failure)) {
                     report_stage = @"shader_receipt";
                     report_error = receipt_failure.length > 0
                         ? receipt_failure
@@ -472,6 +522,11 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
                     config.expected_reference_sha256 =
                         capture->reference_sha256;
                     config.expected_shader_json_sha256 = shader_json_sha;
+                    char checkpoint_request_path[PATH_MAX];
+                    snprintf(checkpoint_request_path,
+                             sizeof(checkpoint_request_path), "%s/%s", output,
+                             checkpoint_request_name);
+                    config.checkpoint_path = checkpoint_request_path;
                     char create_error[512] = {0};
                     active_session = eu4_metal_replay_create(
                         &config, create_error, sizeof(create_error));
@@ -487,7 +542,8 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
                                                           &config, &result);
                         NSDictionary *report = shadow_report_for_replay(
                             capture, shader_path, &result, code,
-                            g_started_ns);
+                            g_started_ns, @(checkpoint_request_name),
+                            @(checkpoint_request_sha));
                         report_stage = report[@"stage"] ?: @"metal_replay";
                         report_error = report[@"error"] ?: @"";
                         report_timed_out =
@@ -508,7 +564,8 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
             if (status != 0 && !detailed_report_written) {
                 NSDictionary *report = shadow_report_for_failure(
                     capture, shader_path, report_stage, report_error,
-                    report_timed_out, g_started_ns);
+                    report_timed_out, g_started_ns,
+                    @(checkpoint_request_name), @(checkpoint_request_sha));
                 detailed_report_written = write_report(report_path, report);
             }
         } @catch (NSException *exception) {
@@ -555,13 +612,13 @@ char *eu4_gfx_shadow_test_report_json(
                 shadow_now_ns());
         } else if (result != NULL) {
             report = shadow_report_for_replay(capture, nil, result, code,
-                                              shadow_now_ns());
+                                              shadow_now_ns(), @"", @"");
         } else {
             report = shadow_report_for_failure(
                 capture, nil,
                 failure_stage != NULL ? @(failure_stage) : @"shader_wait",
                 failure_error != NULL ? @(failure_error) : @"",
-                timed_out != 0, shadow_now_ns());
+                timed_out != 0, shadow_now_ns(), @"", @"");
         }
         NSData *json = [NSJSONSerialization dataWithJSONObject:report
                                                        options:0
