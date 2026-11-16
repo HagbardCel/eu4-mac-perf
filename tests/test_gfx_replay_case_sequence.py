@@ -84,11 +84,11 @@ def expected_image() -> bytes:
                     for glrow in range(HEIGHT) for x in range(WIDTH))
 
 
-def target(name=None):
+def target(name=None, framebuffer=1):
     if name is None:
         return {"framebuffer": 0, "width": WIDTH, "height": HEIGHT}
     return {
-        "framebuffer": 1, "width": WIDTH, "height": HEIGHT,
+        "framebuffer": framebuffer, "width": WIDTH, "height": HEIGHT,
         "color_attachment": {
             "type": "texture", "name": name, "level": 0,
             "internal_format": "RGB8", "width": WIDTH, "height": HEIGHT,
@@ -170,7 +170,7 @@ class SequenceFixture:
 
     def frame(self, index: int, events: list[dict], reference: bytes, *,
               previous: Path | None = None, render_targets=(),
-              carried=()) -> Path:
+              carried=(), lifecycle=()) -> Path:
         frame = self.base / "frames" / f"frame-{index:04d}"
         (frame / "blobs").mkdir(parents=True)
         (frame / "blobs" / "v.metal").write_bytes(b"vertex")
@@ -216,7 +216,7 @@ class SequenceFixture:
             "previous": None,
             "render_targets": list(render_targets),
             "carried_renderer_outputs": list(carried),
-            "lifecycle": [],
+            "lifecycle": list(lifecycle),
             "reference_sha256": sha(reference),
             "manifest_sha256": sha((frame / "frame-trace.json").read_bytes()),
             "event_stream_sha256": sha(
@@ -268,6 +268,29 @@ class SequenceFixture:
             "levels": [],
         }
         self.frame(4, [draw(2, target(), textures=[sampled])],
+                   expected_image(), previous=self.frames[-1],
+                   carried=("500",))
+        return self.frames
+
+    def build_transitive(self):
+        """Frame 3 carries 600 from frame 2 while producing 500 for frame 5."""
+        black = bytes([0, 0, 0, 255]) * (WIDTH * HEIGHT)
+        self.frame(1, [draw(3, target())], black)
+        self.frame(2, [draw(1, target("600", 1)), draw(3, target())], black,
+                   previous=self.frames[-1], render_targets=("600",))
+        self.frame(3, [draw(1, target("500", 2)), draw(3, target())], black,
+                   previous=self.frames[-1], carried=("600",),
+                   render_targets=("500",))
+        self.frame(4, [draw(3, target())], black, previous=self.frames[-1],
+                   carried=("500",),
+                   lifecycle=({"kind": "delete", "event": 0,
+                               "names": ("600",)},))
+        sampled = {
+            "name": 500, "sampler_name": "tex0", "unit": 0,
+            "width": WIDTH, "height": HEIGHT, "internal_format": "RGB8",
+            "levels": [],
+        }
+        self.frame(5, [draw(2, target(), textures=[sampled])],
                    expected_image(), previous=self.frames[-1],
                    carried=("500",))
         return self.frames
@@ -585,6 +608,78 @@ class PortableSequenceCaseTests(unittest.TestCase):
         sequence = json.loads((case / "sequence.json").read_text())
         self.assertEqual(sequence["target_index"], 3)
         self.assertEqual(sequence["excluded_frames"], 1)
+
+    def test_prefix_is_transitively_closed_over_predecessor_carried_outputs(self):
+        self.fixture = SequenceFixture(
+            self.base / "transitive", self.host)
+        frames = self.fixture.build_transitive()
+        out = self.fixture.base / "out"
+        report = m7_continuous.run_campaign(
+            frames, out, shaders=self.fixture.shaders,
+            stop_on_difference=False)
+        self.assertEqual(report["status"], "complete", report)
+        diagnosis = json.loads(
+            (out / "out-005" / "diagnostic-report.json").read_text())
+        case = self.fixture.base / "case"
+        manifest = gfx_replay_case.package_sequence_diagnosis(
+            frames, out / "out-005", case, diagnosis,
+            shaders=self.fixture.shaders, case_id="transitive")
+        sequence = json.loads((case / "sequence.json").read_text())
+        self.assertEqual([entry["original_sequence_index"]
+                          for entry in sequence["frames"]], [2, 3, 4, 5])
+        self.assertEqual(sequence["target_index"], 4)
+        verified = gfx_replay_case.verify(case)
+        self.assertTrue(verified["ok"], verified["problems"])
+
+    def test_verifier_detects_delete_of_a_carried_resource(self):
+        out, diagnosis = self.baseline()
+        case, _ = self.package(out, diagnosis)
+        frame = case / "frames" / "000002" / "frame-sequence.json"
+        document = json.loads(frame.read_text())
+        document["lifecycle"] = [{"kind": "delete", "event": 0,
+                                  "names": ["500"]}]
+        frame.write_text(json.dumps(document))
+        self.refresh_manifest_digest(case, "frames/000002/frame-sequence.json")
+        verified = gfx_replay_case.verify(case)
+        self.assertFalse(verified["ok"], verified)
+        self.assertTrue(any("deleted without a later" in problem
+                            for problem in verified["problems"]), verified)
+
+    def test_packaging_refuses_missing_producer_and_unreproduced_mutation(self):
+        out, diagnosis = self.baseline()
+        missing = json.loads(
+            (self.frames[-1] / "frame-sequence.json").read_text())
+        original = json.loads(json.dumps(missing))
+        missing["carried_renderer_outputs"] = ["999"]
+        (self.frames[-1] / "frame-sequence.json").write_text(
+            json.dumps(missing))
+        try:
+            with self.assertRaises(gfx_replay_case.CaseError) as caught:
+                gfx_replay_case.package_sequence_diagnosis(
+                    self.frames, out / "out-004", self.fixture.base / "missing",
+                    diagnosis, shaders=self.shaders)
+            self.assertEqual(caught.exception.kind, "missing_predecessor")
+        finally:
+            (self.frames[-1] / "frame-sequence.json").write_text(
+                json.dumps(original))
+        mutated = json.loads(
+            (self.frames[1] / "frame-sequence.json").read_text())
+        original_mutated = json.loads(json.dumps(mutated))
+        mutated["lifecycle"] = [{"kind": "mutation", "event": 0,
+                                 "operation": "glTexSubImage2D",
+                                 "names": ["500"]}]
+        (self.frames[1] / "frame-sequence.json").write_text(
+            json.dumps(mutated))
+        try:
+            with self.assertRaises(gfx_replay_case.CaseError) as caught:
+                gfx_replay_case.package_sequence_diagnosis(
+                    self.frames, out / "out-004", self.fixture.base / "mutated",
+                    diagnosis, shaders=self.shaders)
+            self.assertEqual(caught.exception.kind,
+                             "missing_mutation_record")
+        finally:
+            (self.frames[1] / "frame-sequence.json").write_text(
+                json.dumps(original_mutated))
 
     def test_artifact_budget_marks_the_reproduction_incomplete(self):
         out, diagnosis = self.baseline()

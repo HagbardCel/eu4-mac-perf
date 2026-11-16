@@ -22,11 +22,13 @@ its Metal history.  A single-frame case could also retain an absolute
 `automation/gfx_replay_case.py` adds `package_sequence_diagnosis`.  When the
 target frame declares no carried renderer output it delegates to the existing
 single-frame API.  Otherwise it walks the ordered `gfx-frame-sequence/v1`
-records, finds the last included producer for every carried resource, and
-packages the smallest contiguous prefix that contains those producers and the
-target.  A missing producer, a delete without a later producer, or a CPU
-mutation of a carried resource stops packaging with an explicit
-`missing_predecessor` / `missing_mutation_record` failure.
+records and computes the smallest contiguous prefix that is **transitively
+closed** over carried resources: a predecessor that carries a resource produced
+even earlier pulls that earlier producer into the prefix.  A missing producer, a
+delete without a later producer before the last carry, or a CPU mutation of a
+carried resource stops packaging with an explicit `missing_predecessor` /
+`missing_mutation_record` failure.  The first selected frame must therefore
+declare no carried output.
 
 Only that prefix is copied.  Unrelated successful frames are excluded.
 Immutable payloads (blobs, event streams, manifests, references) are hard-linked
@@ -60,8 +62,8 @@ the owning frame.
 - corrupt resource payload (file size/digest drift and blob digest mismatch);
 - wrong session identity, including checkpoint receipts from another session;
 - a carried resource with no included producer (incorrect generation);
-- a missing lifecycle array or a mutation of a carried resource with no later
-  producer;
+- a missing lifecycle array, a mutation of a carried resource, or a delete of a
+  carried resource without a later Metal producer;
 - a stale or substituted checkpoint request (request digest and receipt
   binding);
 - nonportable absolute frame paths.
@@ -102,9 +104,13 @@ minimal prefix excludes frame 1 and packages frames 2–4 (target renumbered 3).
   frame 4 samples the carried target): final classification is divergent,
   mismatched pixels > 0, earliest affected frame is the renumbered target
   (sequence 3), operation `draw`.
+- A five-frame transitive fixture (frame 2 produces 600; frame 3 carries 600
+  while producing 500; frame 4 deletes 600; frame 5 samples 500) packages
+  frames 2–5, not 3–5, and verifies successfully.
 - Negative tests cover missing predecessor, reordered predecessor, corrupt
-  payload, wrong session, missing lifecycle/mutation record, wrong generation,
-  stale checkpoint request, and the artifact-budget incomplete result.
+  payload, wrong session, missing lifecycle/mutation record, delete of a carried
+  resource, wrong generation, stale checkpoint request, packaging-time missing
+  producer/mutation refusal, and the artifact-budget incomplete result.
 
 ### Canonical captured-frame prefix
 
@@ -142,6 +148,8 @@ Receipt: [followup-b-relocation-receipt.json](followup-b-relocation-receipt.json
 - The synthetic frames are unsealed; the canonical capture is unsealed.  The
   classification labels this limitation instead of treating it as a renderer
   match.
+- Diagnostic-only budget cases keep absolute paths out of their dependency
+  graph and state explicitly that they are not independently reproducible.
 - The replay reuses the existing Metal core and diagnosis contract; there is no
   second comparison engine or renderer implementation.
 - Portable Linux CI skips the macOS-only native/Metal tests.  A green portable

@@ -524,11 +524,17 @@ def _sequence_lifecycle_events(sequence: dict) -> dict[str, list[tuple[str, int]
 
 
 def _required_prefix(frames: list[Path]) -> tuple[list[Path], dict]:
-    """Return the smallest contiguous prefix that produces carried resources."""
+    """Return the smallest contiguous prefix closed over carried resources.
+
+    A predecessor can itself carry a resource produced even earlier.  The
+    prefix must therefore be transitively closed, not just closed over the
+    target's declarations; otherwise the first relocated frame starts with
+    carried output and no producer.
+    """
     sequences = [_json(frame / "frame-sequence.json") for frame in frames]
-    target = sequences[-1]
-    carried = target.get("carried_renderer_outputs") or []
-    if not carried:
+    target_index = len(frames) - 1
+    target_carried = set(sequences[-1].get("carried_renderer_outputs") or [])
+    if not target_carried:
         return [frames[-1]], {
             "minimal_prefix": True,
             "excluded_frames": len(frames) - 1,
@@ -538,48 +544,87 @@ def _required_prefix(frames: list[Path]) -> tuple[list[Path], dict]:
         trace = m6_frame.load_trace(frame, verify_blobs=True)
         history = gfx_frame_graph.load_frame_history(frame, trace)
         if history.get("status") != "verified":
+            reasons = history.get("reasons") or ["invalid"]
+            if any("carried resource" in reason and "identity" in reason
+                   for reason in reasons):
+                raise CaseError(
+                    "missing_predecessor",
+                    f"{frame}: " + "; ".join(reasons))
             raise CaseError(
-                "sequence_history",
-                f"{frame}: " + "; ".join(history.get("reasons") or ["invalid"]))
-    positions: dict[str, int] = {}
-    for index in range(len(frames) - 1):
-        for name in sequences[index].get("render_targets") or []:
+                "sequence_history", f"{frame}: " + "; ".join(reasons))
+
+    producers: dict[str, list[int]] = {}
+    carried_frames: dict[str, list[int]] = {}
+    for index, sequence in enumerate(sequences):
+        for name in sequence.get("render_targets") or []:
             if isinstance(name, str):
-                positions[name] = index
-    missing = [name for name in carried if name not in positions]
-    if missing:
+                producers.setdefault(name, []).append(index)
+        for name in sequence.get("carried_renderer_outputs") or []:
+            if isinstance(name, str):
+                carried_frames.setdefault(name, []).append(index)
+
+    start = target_index
+    while True:
+        moved = False
+        for index in range(start, target_index + 1):
+            for name in sequences[index].get("carried_renderer_outputs") or []:
+                candidates = [item for item in producers.get(name, [])
+                              if item < index]
+                if not candidates:
+                    raise CaseError(
+                        "missing_predecessor",
+                        f"carried resource {name} has no producer before "
+                        f"frame {index + 1}")
+                producer = max(candidates)
+                if producer < start:
+                    start = producer
+                    moved = True
+        if not moved:
+            break
+
+    if sequences[start].get("carried_renderer_outputs"):
         raise CaseError(
             "missing_predecessor",
-            "no included predecessor produced " + ", ".join(map(str, missing)))
-    start = min(positions[name] for name in carried)
-    # A delete or CPU mutation after the last producer and without a later
-    # renderer write invalidates the carried content.  Packaging must not claim
-    # a reproducible history it cannot reconstruct.
-    for name in carried:
-        last_producer = positions[name]
-        invalidations: list[str] = []
-        for index in range(last_producer, len(frames)):
+            "the first selected frame still carries renderer output without "
+            "an included producer")
+
+    carried_union: set[str] = set()
+    for index in range(start, target_index + 1):
+        carried_union.update(sequences[index].get("carried_renderer_outputs")
+                             or [])
+    for name in sorted(carried_union):
+        indices = [item for item in carried_frames.get(name, [])
+                   if item >= start]
+        if not indices:
+            continue
+        last_carry = max(indices)
+        candidates = [item for item in producers.get(name, [])
+                      if item <= last_carry]
+        if not candidates:
+            raise CaseError(
+                "missing_predecessor",
+                f"carried resource {name} has no included producer")
+        last_producer = max(candidates)
+        for index in range(last_producer, last_carry + 1):
             events = _sequence_lifecycle_events(sequences[index])
             for kind, event in events.get(name, []):
-                if index == last_producer and kind == "mutation":
-                    invalidations.append(
-                        f"{name} mutated at frame {index + 1} event {event}")
-                elif index > last_producer and kind in ("delete", "mutation"):
-                    if name not in (sequences[index].get("render_targets")
-                                    or []):
-                        invalidations.append(
-                            f"{name} {kind} at frame {index + 1} event {event}")
-        if invalidations:
-            raise CaseError(
-                "missing_mutation_record",
-                "; ".join(invalidations) +
-                "; the carried resource has no later Metal producer")
-    return frames[start:], {
-        "minimal_prefix": len(frames[start:]) < len(frames),
-        "excluded_frames": len(frames) - len(frames[start:]),
-        "carried_resources": list(carried),
+                if kind not in ("delete", "mutation"):
+                    continue
+                later_write = any(
+                    name in (sequences[item].get("render_targets") or [])
+                    for item in range(index + 1, last_carry + 1))
+                if later_write:
+                    continue
+                raise CaseError(
+                    "missing_mutation_record",
+                    f"{name} {kind} at frame {index + 1} event {event} has no "
+                    "later Metal producer before it is carried")
+    selected = frames[start:]
+    return selected, {
+        "minimal_prefix": len(selected) < len(frames),
+        "excluded_frames": len(frames) - len(selected),
+        "carried_resources": sorted(carried_union),
     }
-
 
 def _checkpoint_setup(frames: list[Path], case_dir: Path) -> list[dict]:
     base = case_dir / "checkpoints"
@@ -666,12 +711,15 @@ def _diagnostic_only_case(case_dir: Path, metal_dir: Path, report: dict,
                 _portable_diagnosis(report, case_dir, "replay"))
     graph = json.loads(json.dumps(
         report.get("graph") or gfx_frame_graph.build(metal_dir)))
+    graph["frame_dir"] = "replay"
+    _portable_paths(graph)
     _write_json(case_dir / "dependency-graph.json", graph)
     reproduction = {
         "status": "incomplete",
         "independently_reproducible": False,
         "missing": missing,
     }
+    _write_json(case_dir / "reproduction-incomplete.json", reproduction)
     manifest = {
         "schema": SEQUENCE_SCHEMA,
         "case_id": "diagnostic-only",
@@ -696,7 +744,6 @@ def _diagnostic_only_case(case_dir: Path, metal_dir: Path, report: dict,
         item for item in _relative_files(case_dir)
         if item["path"] != "case.json"]
     _write_json(case_dir / "case.json", manifest)
-    _write_json(case_dir / "reproduction-incomplete.json", reproduction)
     return manifest
 
 
@@ -708,8 +755,17 @@ def _incomplete_case(case_dir: Path, manifest: dict, missing: list[dict]) -> dic
     }
     manifest = dict(manifest)
     manifest["reproduction"] = reproduction
-    _write_json(case_dir / "case.json", manifest)
     _write_json(case_dir / "reproduction-incomplete.json", reproduction)
+    path = case_dir / "reproduction-incomplete.json"
+    files = [item for item in (manifest.get("files") or [])
+             if item.get("path") != "reproduction-incomplete.json"]
+    files.append({
+        "path": "reproduction-incomplete.json",
+        "bytes": path.stat().st_size,
+        "sha256": _sha(path),
+    })
+    manifest["files"] = files
+    _write_json(case_dir / "case.json", manifest)
     return manifest
 
 
@@ -925,6 +981,8 @@ def _verify_sequence(case_dir: Path, manifest: dict) -> tuple[list[str], dict]:
     previous_sequence = None
     previous_dir = None
     produced: set[str] = set()
+    deleted_after_producer: set[str] = set()
+    mutated_after_producer: set[str] = set()
     carried_by_target: list[str] = []
     for index, entry in enumerate(entries, start=1):
         if not isinstance(entry, dict):
@@ -994,15 +1052,16 @@ def _verify_sequence(case_dir: Path, manifest: dict) -> tuple[list[str], dict]:
             problems.append(
                 f"frame {index} history is invalid: " +
                 "; ".join(history.get("reasons") or ["unknown"]))
-        mutations = history.get("mutation_events") or {}
-        for name in mutations:
+        for name in (history.get("delete_events") or {}):
             if name in produced:
-                problems.append(
-                    f"carried resource {name} is mutated without a later "
-                    "Metal producer")
+                deleted_after_producer.add(name)
+        for name in (history.get("mutation_events") or {}):
+            if name in produced:
+                mutated_after_producer.add(name)
         for name in sequence_record.get("render_targets") or []:
             if isinstance(name, str):
                 produced.add(name)
+                deleted_after_producer.discard(name)
         if index == len(entries):
             carried_by_target = list(
                 sequence_record.get("carried_renderer_outputs") or [])
@@ -1041,6 +1100,14 @@ def _verify_sequence(case_dir: Path, manifest: dict) -> tuple[list[str], dict]:
         if name not in produced:
             problems.append(
                 f"carried resource {name} has no included predecessor")
+        if name in deleted_after_producer:
+            problems.append(
+                f"carried resource {name} is deleted without a later Metal "
+                "producer")
+        if name in mutated_after_producer:
+            problems.append(
+                f"carried resource {name} is mutated without a later Metal "
+                "producer")
     if previous_dir is None:
         problems.append("target frame is missing")
     summary = {
@@ -1142,8 +1209,15 @@ def _readme(manifest: dict) -> str:
         manifest.get("title", ""),
         "",
     ]
-    if sequence:
-        reproduction = manifest.get("reproduction") or {}
+    reproduction = manifest.get("reproduction") or {}
+    if reproduction.get("status") == "incomplete":
+        lines += [
+            f"- Reproduction: `incomplete` "
+            f"(independently reproducible: "
+            f"{reproduction.get('independently_reproducible')})",
+            f"- Classification: `{manifest.get('classification')}`",
+        ]
+    elif sequence:
         lines += [
             f"- Ordered frame prefix: `{sequence}` "
             f"({reproduction.get('status', 'unknown')})",
@@ -1162,15 +1236,27 @@ def _readme(manifest: dict) -> str:
         f"- First divergence: `{divergence.get('kind')}`"
         + (f" at event {divergence.get('event')}" if divergence.get("event") is not None else ""),
         "",
-        "## Replay",
-        "",
-        "From this directory:",
-        "",
-        "```sh",
-        " ".join(manifest.get("replay_command") or []),
-        "```",
-        "",
     ]
+    if reproduction.get("status") == "incomplete":
+        lines += [
+            "## Reproduction incomplete",
+            "",
+            "This directory preserves the diagnostic evidence, but the required",
+            "cross-frame history could not be packaged within the artifact",
+            "budget.  It is not independently reproducible.",
+            "",
+        ]
+    else:
+        lines += [
+            "## Replay",
+            "",
+            "From this directory:",
+            "",
+            "```sh",
+            " ".join(manifest.get("replay_command") or []),
+            "```",
+            "",
+        ]
     if sequence:
         lines += [
             "The replay uses the existing Metal replay host through one",
