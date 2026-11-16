@@ -204,10 +204,10 @@
   },
   "live_offline_checkpointed": {
     "status": "difference_with_partial_state_coverage",
-    "classification": "difference_with_partial_state_coverage",
+    "classification": "incomplete_diagnostics",
     "axes": {
       "capture_validity": "valid",
-      "frame_shader_identity": "verified",
+      "frame_shader_identity": "unverified_session",
       "gpu_execution": "ok",
       "resource_provenance": "verified",
       "operation_coverage": "complete",
@@ -231,7 +231,6 @@
       "producer_event": 284,
       "operation": "glCopyTexSubImage2D",
       "program": null,
-      "producer_program": null,
       "confidence": "confirmed",
       "root_cause": "not_established"
     },
@@ -264,7 +263,7 @@
     },
     "source_frame": "wt_infra/.local/m7/pr2-shadow-live-7/frame",
     "replay_dir": ".local/m7/pr3-live-offline",
-    "report_sha256": "5d704c86056d2435976e1f27c98fef551cbe6406b237744218e9ecf3cf328264",
+    "report_sha256": "d5bec99f8464f8687df10e579ae516ea0273b1fcadbc1e5e1b5389ccc2ec7246",
     "checkpoints": [
       {
         "event": 11,
@@ -330,7 +329,8 @@
       "resource": "fb:0",
       "reason": "checkpoint the copy source immediately before the transfer to separate source contents from copy execution"
     },
-    "note": "Explicit offline replay with the derived checkpoint request (allowed by PR3). The earliest authoritative divergence is the copy destination texture 442 at its first consumer; the copy source was not captured, so the source/copy split remains unresolved."
+    "note": "Explicit offline checkpointed replay. It preserves the earliest authoritative divergence (texture 442 at checkpoint event 286, copy producer 284), but after the review hardening it is classified incomplete_diagnostics because a standalone replay has no in-process session/pid identity. The first divergence remains evidence; renderer equivalence is not claimed.",
+    "identity": "unverified_session"
   },
   "live_case": {
     "case_id": "m7-pr3-live-603",

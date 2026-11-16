@@ -677,9 +677,9 @@ def _suggested_checkpoint(graph: dict, final: dict) -> dict | None:
         "target": "0" if resource == "fb:0" else resource.split(":", 1)[-1],
         "resource": resource,
         "reason": (
-            "checkpoint the last captured target state immediately before the "
-            "final readback; the scene-graph frame trace records the effective "
-            "default framebuffer only after all passes"),
+            "checkpoint the last captured event's target; when it is not the "
+            "final framebuffer, a checkpoint at or after the last default-"
+            "framebuffer write is required to separate the final pass"),
         "final_statistics": final.get("statistics"),
     }
 
@@ -1024,13 +1024,24 @@ def state_coverage(frame_dir: Path, *, trace: dict | None = None,
     evidence = dict(evidence if evidence is not None
                     else _state_evidence(Path(frame_dir)))
     observations: dict[str, dict] = {}
+    observed_fields: set[str] = set()
     draws = 0
+    saw_program = False
+    saw_textures = False
+    saw_target = False
     for event in trace.get("_events") or []:
         state = event.get("state") or {}
         if not isinstance(state, dict):
-            continue
+            state = {}
+        observed_fields.update(str(key) for key in state)
         if event.get("kind") == "draw":
             draws += 1
+            if event.get("program"):
+                saw_program = True
+            if event.get("textures"):
+                saw_textures = True
+            if event.get("target"):
+                saw_target = True
         stencil = state.get("stencil")
         observed = {
             "gl_dither": state.get("dither") is True,
@@ -1046,9 +1057,7 @@ def state_coverage(frame_dir: Path, *, trace: dict | None = None,
                 str(mode).lower() not in
                 ("0x1b02", "0x1b00", "0x1b01", "fill", "gl_fill")
                 for mode in modes)
-            observed["polygon_offset"] = bool(
-                polygon.get("offset_fill") or polygon.get("offset_factor")
-                or polygon.get("offset_units"))
+            observed["polygon_offset"] = bool(polygon.get("offset_fill"))
         for name, active in observed.items():
             if not active:
                 continue
@@ -1056,13 +1065,42 @@ def state_coverage(frame_dir: Path, *, trace: dict | None = None,
                 name, {"state": name, "draws": 0, "status": "unsupported"})
             row["draws"] += 1
     categories = []
-    for name in ("shader_bindings", "render_targets", "samplers", "viewport",
-                 "scissor", "blend", "depth", "color_mask", "cull"):
+    if saw_program:
         categories.append({
-            "state": name,
-            "status": "implemented",
+            "state": "shader_bindings", "status": "implemented",
             "captured": True,
             "evidence": "captured draw state is consumed by the Metal encoder",
+        })
+    if saw_target:
+        categories.append({
+            "state": "render_targets", "status": "implemented",
+            "captured": True,
+            "evidence": "captured draw state is consumed by the Metal encoder",
+        })
+    if saw_textures:
+        categories.append({
+            "state": "samplers", "status": "implemented",
+            "captured": True,
+            "evidence": "captured draw state is consumed by the Metal encoder",
+        })
+    for field, name in (
+        ("viewport", "viewport"), ("scissor", "scissor"),
+        ("blend", "blend"), ("depth", "depth"),
+        ("color_mask", "color_mask"), ("cull", "cull"),
+    ):
+        if field in observed_fields:
+            categories.append({
+                "state": name, "status": "implemented", "captured": True,
+                "evidence": "captured draw state is consumed by the Metal encoder",
+            })
+    known_observations = {
+        "dither", "multisample", "stencil", "polygon", "alpha_test",
+        "viewport", "scissor", "blend", "depth", "color_mask", "cull",
+    }
+    for field in sorted(observed_fields - known_observations):
+        categories.append({
+            "state": field, "status": "unproven", "captured": True,
+            "evidence": "captured state has no documented Metal mapping",
         })
     for name, row in sorted(observations.items()):
         if name in evidence:
@@ -1073,6 +1111,12 @@ def state_coverage(frame_dir: Path, *, trace: dict | None = None,
             if row["status"] == "implemented":
                 row["status"] = "implemented"
         categories.append(row)
+    if not categories:
+        categories.append({
+            "state": "draw_state", "status": "unproven",
+            "captured": False,
+            "evidence": "the trace contains no draw state to qualify",
+        })
     unsupported = sorted(row["state"] for row in categories
                          if row.get("status") == "unsupported")
     unproven = sorted(row["state"] for row in categories
@@ -1142,21 +1186,62 @@ def _identity_check(seal: dict | None, trace: dict, replay: dict,
             "note": ("offline fixture: no same-process seal is attached"
                      if not require_seal else ""),
         }
+    required = (
+        "capture_frame_id", "pid", "session_id", "trace_manifest_sha256",
+        "gl_reference_sha256", "operation_count",
+    )
+    if shadow is None:
+        # A standalone offline replay has no same-process session/pid
+        # report.  Its input digests may still agree with the seal, but that
+        # is not proof of the original execution identity: fail closed and
+        # report the missing evidence instead of copying the seal into the
+        # observed column.
+        for field in required:
+            checks.append({"check": field, "expected": seal.get(field),
+                           "actual": None, "ok": False})
+        problems.append("no in-process shadow identity report")
+        replay_reference = replay.get("manifest_reference_sha256")
+        if replay_reference and replay_reference != seal.get("reference_sha256"):
+            problems.append("offline replay reference disagrees with the seal")
+        if (not replay.get("partial")
+                and replay.get("events") != seal.get("operation_count")):
+            problems.append("offline replay event count disagrees with the seal")
+        return {
+            "status": "unverified_session",
+            "checks": checks,
+            "problems": problems,
+            "capture_frame_id": seal.get("capture_frame_id"),
+            "session_id": seal.get("session_id"),
+            "pid": seal.get("pid"),
+        }
+    missing = [field for field in required if shadow.get(field) is None]
+    if missing:
+        for field in required:
+            checks.append({"check": field, "expected": seal.get(field),
+                           "actual": shadow.get(field),
+                           "ok": shadow.get(field) is not None and
+                                 shadow.get(field) == seal.get(field)})
+        problems.append(
+            "shadow report is missing identity field(s): "
+            + ", ".join(missing))
+        return {
+            "status": "incomplete",
+            "checks": checks,
+            "problems": problems,
+            "capture_frame_id": seal.get("capture_frame_id"),
+            "session_id": seal.get("session_id"),
+            "pid": seal.get("pid"),
+        }
     check("capture_frame_id", seal.get("capture_frame_id"),
-          (shadow or {}).get("capture_frame_id", seal.get("capture_frame_id")))
-    check("pid", seal.get("pid"),
-          (shadow or {}).get("pid", seal.get("pid")))
-    check("session_id", seal.get("session_id"),
-          (shadow or {}).get("session_id", seal.get("session_id")))
+          shadow.get("capture_frame_id"))
+    check("pid", seal.get("pid"), shadow.get("pid"))
+    check("session_id", seal.get("session_id"), shadow.get("session_id"))
     check("trace_manifest_sha256", seal.get("manifest_sha256"),
-          (shadow or {}).get("trace_manifest_sha256",
-                             seal.get("manifest_sha256")))
+          shadow.get("trace_manifest_sha256"))
     check("gl_reference_sha256", seal.get("reference_sha256"),
-          (shadow or {}).get("gl_reference_sha256",
-                             seal.get("reference_sha256")))
+          shadow.get("gl_reference_sha256"))
     check("operation_count", seal.get("operation_count"),
-          (shadow or {}).get("operation_count",
-                             seal.get("operation_count")))
+          shadow.get("operation_count"))
     check("trace_events", seal.get("operation_count"), trace.get("events"))
     if replay.get("manifest_reference_sha256"):
         check("replay_reference_sha256", seal.get("reference_sha256"),
@@ -1237,6 +1322,8 @@ def classify_diagnosis(*, capture_validity: str, identity: str,
         classification = "gpu_execution_failure"
     elif identity == "mismatch":
         classification = "invalid_provenance"
+    elif identity in ("missing", "incomplete", "unverified_session"):
+        classification = "incomplete_diagnostics"
     elif capture_validity == "invalid" or provenance == "invalid":
         classification = "invalid_provenance"
     elif checkpoint_status == "invalid":
@@ -1343,8 +1430,7 @@ def _minimal_diagnosis(frame_dir: Path, metal_dir: Path, *, message: str,
         },
     }
     if classification == "incomplete_diagnostics":
-        value["capture"] = {"validity": "valid",
-                            "error": message}
+        value["capture"] = {"validity": "valid", "error": message}
         classification_value, qualification = classify_diagnosis(
             capture_validity="valid",
             identity="unknown",
@@ -1356,7 +1442,21 @@ def _minimal_diagnosis(frame_dir: Path, metal_dir: Path, *, message: str,
             divergence="inconclusive",
             checkpoint_validation={"status": "incomplete"},
         )
+    elif classification == "incomplete_capture":
+        value["capture"] = {"validity": "incomplete", "error": message}
+        classification_value, qualification = classify_diagnosis(
+            capture_validity="incomplete",
+            identity="unknown",
+            execution="missing",
+            provenance="incomplete",
+            operation_coverage="incomplete",
+            state_cov="invalid",
+            pixels="unavailable",
+            divergence="inconclusive",
+            checkpoint_validation={"status": "incomplete"},
+        )
     else:
+        value["capture"] = {"validity": "invalid", "error": message}
         classification_value, qualification = classify_diagnosis(
             capture_validity="invalid",
             identity="unknown",
@@ -1393,8 +1493,6 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
     frame_dir = Path(frame_dir).expanduser().resolve()
     metal_dir = Path(metal_result_dir).expanduser().resolve()
     policy_value = _load_policy(policy)
-    if require_seal:
-        policy_value = dict(policy_value, require_seal=True)
     state_evidence = {}
     configured = policy_value.get("state_equivalence")
     if isinstance(configured, dict):
@@ -1454,14 +1552,31 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
                         problems=list(identity.get("problems") or [])
                         + [f"frame seal: {seal_error}"])
     evaluation = gfx_frame_graph.evaluate_replay(graph, replay)
-    checkpoints, validation = reconcile_checkpoints(
-        graph, request, replay, frame_dir, metal_dir)
-    validation = dict(validation)
-    validation["request_source"] = request_source
     if request_problems:
-        validation["status"] = "invalid"
-        validation["problems"] = request_problems + list(
-            validation.get("problems") or [])
+        plan = request.get("checkpoints")
+        requested = len(plan) if isinstance(plan, list) else 0
+        checkpoints = []
+        validation = {
+            "schema": "gfx-checkpoint-validation/v1",
+            "status": "invalid",
+            "requested": requested,
+            "returned": len(replay.get("checkpoints") or []),
+            "matched": 0,
+            "diagnostic": 0,
+            "divergent": 0,
+            "invalid": 0,
+            "problems": [
+                {"kind": "malformed_request", "detail": problem}
+                for problem in request_problems
+            ],
+            "problems_count": len(request_problems),
+            "request_source": request_source,
+        }
+    else:
+        checkpoints, validation = reconcile_checkpoints(
+            graph, request, replay, frame_dir, metal_dir)
+        validation = dict(validation)
+        validation["request_source"] = request_source
     kinds = {str(item.get("kind")) for item in validation.get("problems") or []}
     if validation.get("status") == "invalid" and kinds and kinds <= {
             "missing_result"}:

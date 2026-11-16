@@ -165,6 +165,13 @@ texture 442 at its first consumer (checkpoint event 286; producer copy event
 60.2%, max 66. Checkpoint 433 at event 270 is an earlier **diagnostic**
 observation (non-authoritative RGB8 format), reported but not promoted.
 
+After the review hardening, this standalone replay is classified
+`incomplete_diagnostics`: it proves input digests and the checkpointed
+difference, but it cannot prove the original in-process session/pid identity.
+The PR 4 authentic campaign supplies that identity separately with its own
+in-process shadow reports. The divergence is still reported; equivalence is
+not claimed from an unverifiable identity.
+
 The copy source `fb:0` at event 284 was not captured in that launch
 (`--copy-source` was not enabled), so the report states the open limitation and
 proposes a source checkpoint. It does not claim that the copy implementation is

@@ -1062,6 +1062,43 @@ class MetalReplayLibraryTests(unittest.TestCase):
             self.assertEqual(report["failure"]["timed_out"], True)
             self.assertNotEqual(report["failure"]["command_status"], 0)
 
+    def test_coordinator_preserves_an_early_fallback_failure(self):
+        from tests.test_m7_frame_seal import _write_frame
+
+        with tempfile.TemporaryDirectory() as temporary:
+            run = Path(temporary) / "run"
+            _write_frame(run / "frame", operation_count=2)
+            shadow = run / "shadow"
+            (shadow / "shaders").mkdir(parents=True)
+            (shadow / "shaders" / "shaders.json").write_text(
+                json.dumps({"programs": []}))
+            def fake_run(command, **kwargs):
+                (shadow / "shadow-report.json").write_text(json.dumps({
+                    "schema": "m7-shadow-report/v1",
+                    "status": "failed",
+                    "stage": "shader_wait",
+                    "error": "shader_translation_timeout",
+                }))
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            args = argparse.Namespace(
+                run=str(run), shadow_dir=str(shadow), timeout=10.0,
+                seal_timeout=5.0, translation_timeout=5.0,
+                replay_timeout=5.0, compare_timeout=5.0, policy=None,
+                continuous=False,
+            )
+            with mock.patch.object(
+                    m6_frame.subprocess, "run", side_effect=fake_run):
+                status = m6_frame.shadow_coordinator(args)
+            self.assertEqual(status, 1)
+            coordinator = json.loads(
+                (shadow / "coordinator.json").read_text())
+            self.assertEqual(coordinator["status"], "failed")
+            self.assertEqual(coordinator["stage"], "shader_wait")
+            self.assertIn("shader_translation_timeout",
+                          coordinator["error"])
+            self.assertNotIn("checkpoint request", coordinator["error"])
+
     def test_native_blob_verification_uses_structured_references(self):
         from tests.test_m7_frame_seal import _write_frame
 

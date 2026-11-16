@@ -1836,7 +1836,9 @@ def _parser() -> argparse.ArgumentParser:
     coord.add_argument("--replay-timeout", type=float, default=180.0)
     coord.add_argument("--compare-timeout", type=float, default=60.0)
     coord.add_argument("--policy")
-    coord.add_argument("--no-compare", action="store_true")
+    # The PR3 diagnosis always includes the shared comparison.  The old
+    # --no-compare switch could not skip it without discarding qualification
+    # evidence, so it is removed rather than silently ignored.
     coord.set_defaults(handler=shadow_coordinator)
 
     diag = sub.add_parser(

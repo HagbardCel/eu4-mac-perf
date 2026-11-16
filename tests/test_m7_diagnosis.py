@@ -450,6 +450,68 @@ class DiagnosisContractTests(unittest.TestCase):
                  report["provenance"]["consumer_problems"]]
         self.assertIn("wrong_resource", kinds)
 
+    def test_missing_shadow_identity_fails_closed(self):
+        (self.fixture.metal / "shadow-report.json").unlink(missing_ok=True)
+        report = self.fixture.diagnose()
+        self.assertEqual(report["identity"]["status"],
+                         "unverified_session")
+        self.assertEqual(report["classification"],
+                         "incomplete_diagnostics")
+        self.assertFalse(report["qualification"]["diagnostic_qualified"])
+
+    def test_shadow_identity_missing_one_field_fails_closed(self):
+        shadow_path = self.fixture.metal / "shadow-report.json"
+        shadow = json.loads(shadow_path.read_text())
+        shadow.pop("pid")
+        shadow_path.write_text(json.dumps(shadow))
+        report = self.fixture.diagnose()
+        self.assertEqual(report["identity"]["status"], "incomplete")
+        self.assertEqual(report["classification"],
+                         "incomplete_diagnostics")
+
+    def test_require_seal_rejects_an_unsealed_frame(self):
+        (self.fixture.frame / "frame-seal.json").unlink()
+        report = self.fixture.diagnose(require_seal=True)
+        self.assertEqual(report["identity"]["status"], "missing")
+        self.assertEqual(report["classification"],
+                         "incomplete_diagnostics")
+        self.assertFalse(report["qualification"]["diagnostic_qualified"])
+
+    def test_malformed_checkpoint_request_fails_closed(self):
+        (self.fixture.metal / "checkpoint-request.json").write_text(
+            json.dumps({"schema": "gfx-frame-checkpoint-request/v1",
+                        "checkpoints": "not-an-array"}))
+        report = self.fixture.diagnose()
+        self.assertEqual(report["classification"], "invalid_provenance")
+        self.assertEqual(report["checkpoint_validation"]["status"],
+                         "invalid")
+        self.assertIn("checkpoint request",
+                      json.dumps(report["checkpoint_validation"]))
+
+    def test_state_coverage_does_not_invent_unobserved_state(self):
+        report = gfx_independent_replay.state_coverage(
+            self.fixture.frame,
+            trace={"_events": [{"kind": "draw", "state": {}}]})
+        self.assertEqual(report["status"], "partial")
+        self.assertIn("draw_state", report["unproven"])
+        self.assertEqual(report["supported"], [])
+
+    def test_polygon_offset_is_inert_when_fill_mode_is_disabled(self):
+        report = gfx_independent_replay.state_coverage(
+            self.fixture.frame,
+            trace={"_events": [{
+                "kind": "draw",
+                "state": {
+                    "polygon": {
+                        "mode": ["0x1b02"],
+                        "offset_fill": False,
+                        "offset_factor": 1,
+                        "offset_units": 1,
+                    },
+                },
+            }]})
+        self.assertNotIn("polygon_offset", report["unsupported"])
+
     def test_state_equivalence_requires_focused_evidence(self):
         self.fixture.write_frame(dither=True)
         report = self.fixture.diagnose()
