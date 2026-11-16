@@ -182,6 +182,47 @@ def _tree_bytes_files(roots: list[Path]) -> int:
                for path in root.rglob("*") if path.is_file())
 
 
+def _normalize_metadata_paths(value):
+    """Basename path-valued provenance fields the v2 relocation rewrites."""
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            if (key in ("dir", "capture_dir") and isinstance(item, str)
+                    and item):
+                result[key] = Path(item).name
+            else:
+                result[key] = _normalize_metadata_paths(item)
+        return result
+    if isinstance(value, list):
+        return [_normalize_metadata_paths(item) for item in value]
+    return value
+
+
+def _normalized_frame_bytes(frames: list[Path]) -> int:
+    """Content bytes independent of capture-machine directory names.
+
+    Sequence/seal metadata is measured in the same normalized form the v2
+    relocation writes, so two identical captures at different paths report the
+    same source size.
+    """
+    total = 0
+    for frame in frames:
+        for path in frame.rglob("*"):
+            if not path.is_file():
+                continue
+            if path.name in ("frame-sequence.json", "frame-seal.json"):
+                try:
+                    document = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, json.JSONDecodeError):
+                    total += path.stat().st_size
+                    continue
+                total += len(json.dumps(
+                    _normalize_metadata_paths(document), indent=2) + "\n")
+            else:
+                total += path.stat().st_size
+    return total
+
+
 def _replay_artifact_bytes(metal_dir: Path, report: dict) -> int:
     total = 0
     for name in REPLAY_ARTIFACTS:
@@ -1000,7 +1041,8 @@ def package_sequence_diagnosis(
     every authoritative capture identity and digest.
 
     ``max_bytes`` bounds the complete generated package: captured frames,
-    shaders, replay/checkpoint artifacts, manifests and the difference image.
+    shaders, replay/checkpoint artifacts and manifests.  The sequence path does
+    not generate a difference image; the single-frame path budgets one.
     The package is staged and measured before it is published, so the final
     directory respects the budget.  When the required history does not fit, a
     bounded summary marked ``reproduction.status=incomplete`` is published
@@ -1018,10 +1060,8 @@ def package_sequence_diagnosis(
             title=title, shaders=shaders, max_bytes=max_bytes)
     shader_source = _diagnosis_shaders(frames[-1], metal_dir, shaders)
     selected, selection = _required_prefix(frames)
-    full_source_bytes = _tree_bytes_files(frames)
-    prefix_source_bytes = sum(
-        path.stat().st_size for frame in selected for path in frame.rglob("*")
-        if path.is_file())
+    full_source_bytes = _normalized_frame_bytes(frames)
+    prefix_source_bytes = _normalized_frame_bytes(selected)
     if len(selected) == 1:
         return package_diagnosis(
             selected[0], metal_dir, destination, report, case_id=case_id,
@@ -1062,10 +1102,42 @@ def package_sequence_diagnosis(
             previous_copy = frame_copy
         _linked_copy(shader_source, work / "shaders")
         (work / "replay").mkdir(parents=True)
+        replay_replacements = {str(metal_dir): "replay",
+                               str(work): ".",
+                               str(shader_source): "shaders"}
+        for index, source in enumerate(selected, start=1):
+            replay_replacements[str(source)] = f"frames/{index:06d}"
+        for parent in {str(Path(frame).parent) for frame in frames}:
+            replay_replacements[parent] = "campaign"
         for name in REPLAY_ARTIFACTS:
             source = metal_dir / name
-            if source.is_file():
-                shutil.copy2(source, work / "replay" / name)
+            if not source.is_file():
+                continue
+            artifact_path = work / "replay" / name
+            if name.endswith(".jsonl"):
+                lines = []
+                for line in source.read_text(encoding="utf-8").splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        value = json.loads(line)
+                    except json.JSONDecodeError:
+                        lines.append(line)
+                        continue
+                    lines.append(json.dumps(
+                        _scrub_paths(value, replay_replacements)))
+                artifact_path.write_text("\n".join(lines) + "\n",
+                                          encoding="utf-8")
+            elif name.endswith(".json"):
+                try:
+                    value = json.loads(source.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, json.JSONDecodeError):
+                    shutil.copy2(source, artifact_path)
+                    continue
+                _write_json(artifact_path,
+                            _scrub_paths(value, replay_replacements))
+            else:
+                shutil.copy2(source, artifact_path)
         for item in report.get("checkpoints") or []:
             source = Path(str(item.get("metal_file") or item.get("file") or ""))
             if not source.is_absolute():

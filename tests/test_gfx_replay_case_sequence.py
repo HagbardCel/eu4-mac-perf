@@ -926,6 +926,24 @@ class PortableSequenceCaseTests(unittest.TestCase):
 
     def test_complete_case_evidence_is_path_independent(self):
         out, diagnosis = self.baseline()
+        # A second capture at a different path length must produce the same
+        # case digest: copied replay metadata and source-byte metrics are
+        # normalized, not measured from the capture-machine paths.
+        remote = SequenceFixture(
+            self.fixture.base.parent / "a-much-longer-capture-path" / "fixture",
+            self.host)
+        remote_frames = remote.build()
+        second_out = remote.base / "baseline"
+        report = m7_continuous.run_campaign(
+            remote_frames, second_out, shaders=remote.shaders,
+            stop_on_difference=False)
+        self.assertEqual(report["status"], "complete", report)
+        second_diagnosis = json.loads(
+            (second_out / "out-004" / "diagnostic-report.json").read_text())
+        relocated = remote.base / "deterministic-remote"
+        gfx_replay_case.package_sequence_diagnosis(
+            remote_frames, second_out / "out-004", relocated,
+            second_diagnosis, shaders=remote.shaders, case_id="cross-frame")
         first, _ = self.package(out, diagnosis,
                                 self.fixture.base / "deterministic-a")
         for name in ("dependency-graph.json", "diagnostic-report.json",
@@ -935,12 +953,14 @@ class PortableSequenceCaseTests(unittest.TestCase):
             self.assertNotIn(str(self.fixture.base),
                              (first / "frames" / "000001" /
                               "frame-sequence.json").read_text(), name)
-        second, _ = self.package(out, diagnosis,
-                                 self.fixture.base / "deterministic-b")
+        local, _ = self.package(out, diagnosis,
+                                self.fixture.base / "deterministic-b")
         self.assertEqual(sha((first / "case.json").read_bytes()),
-                         sha((second / "case.json").read_bytes()))
+                         sha((local / "case.json").read_bytes()))
+        self.assertEqual(sha((first / "case.json").read_bytes()),
+                         sha((relocated / "case.json").read_bytes()))
         self.assertEqual(sha((first / "dependency-graph.json").read_bytes()),
-                         sha((second / "dependency-graph.json").read_bytes()))
+                         sha((local / "dependency-graph.json").read_bytes()))
 
     def test_single_frame_budget_fails_below_the_minimum_summary(self):
         out, diagnosis = self.baseline()
