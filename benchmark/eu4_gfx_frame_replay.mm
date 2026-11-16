@@ -125,6 +125,11 @@ typedef struct {
 @property (nonatomic, assign) uint64_t encoded_count;
 @property (nonatomic, assign) uint64_t failed_count;
 @property (nonatomic, assign) uint64_t started_ns;
+/* Whether this replay wrote each output.  A failed replay must not expose a
+   path left by an earlier run in the same directory. */
+@property (nonatomic, assign) BOOL current_result_json;
+@property (nonatomic, assign) BOOL current_provenance;
+@property (nonatomic, assign) BOOL current_metal_frame;
 @end
 
 @implementation EU4MetalReplayState
@@ -3201,6 +3206,9 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
     g_failed_count = 0;
     uint64_t started_ns = replay_now_ns();
     g_started_ns = started_ns;
+    state.current_result_json = NO;
+    state.current_provenance = NO;
+    state.current_metal_frame = NO;
     /* Shared by the early-exit recorder and the event loop so a fatal stage
        after an encoded-event failure does not discard the earlier detail. */
     NSMutableArray *failures = [NSMutableArray array];
@@ -3229,7 +3237,14 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
             NSDictionary *entry = failure_entry(stage, operation, kind, message,
                                                 timed_out, command_status, @"");
             [failures addObject:entry];
-            NSString *full = failure_message(stage, operation, message);
+            /* The earliest meaningful failure remains the report's primary
+               diagnostic; a later fatal wait or artifact failure is retained
+               in the failures array instead of masking it. */
+            NSDictionary *primary = failures.firstObject;
+            NSString *full = failure_message(primary[@"stage"],
+                                             [primary[@"operation"]
+                                                 integerValue],
+                                             primary[@"error"]);
             if (out_result != NULL) {
                 out_result->ok = 0;
                 out_result->readback_ok = 0;
@@ -3251,9 +3266,9 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                 @"encoded": @(g_encoded_count),
                 @"failed": @(failed),
                 @"failures": failures,
-                @"failure": entry,
+                @"failure": primary,
                 @"error": full,
-                @"stage": stage.length > 0 ? stage : @"replay",
+                @"stage": primary[@"stage"] ?: @"replay",
                 @"timed_out": @(timed_out),
                 @"command_status": @(command_status),
                 @"partial": @((stop_after >= 0 || only_event >= 0)),
@@ -3269,6 +3284,9 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                 [json writeToFile:[output_path stringByAppendingPathComponent:
                                             @"replay.json"]
                        atomically:YES];
+            if (written) {
+                g_state.current_result_json = YES;
+            }
             if (out_result != NULL && written) {
                 snprintf(out_result->result_json,
                          sizeof(out_result->result_json), "%s/replay.json",
@@ -4007,15 +4025,28 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                 @"artifact_write", (NSInteger)events.count, @"artifact",
                 artifact_error, g_deadline_expired != 0, command.status, @"");
             [failures addObject:artifact_failure];
+            /* The report write failure is recorded but does not displace an
+               earlier shader/event/GPU failure as the primary diagnostic. */
+            NSDictionary *primary = failures.firstObject;
             result[@"failed"] = @(failed);
             result[@"failures"] = failures;
-            result[@"failure"] = artifact_failure;
-            result[@"stage"] = @"artifact_write";
-            primary_error = failure_message(@"artifact_write",
-                                            (NSInteger)events.count,
-                                            artifact_error);
+            result[@"failure"] = primary;
+            result[@"stage"] = primary[@"stage"] ?: @"artifact_write";
+            primary_error = failure_message(primary[@"stage"],
+                                            [primary[@"operation"]
+                                                integerValue],
+                                            primary[@"error"]);
             result[@"error"] = primary_error;
             status_ok = NO;
+        }
+        if (json_written) {
+            g_state.current_result_json = YES;
+        }
+        if (provenance_written) {
+            g_state.current_provenance = YES;
+        }
+        if (readback_ok) {
+            g_state.current_metal_frame = YES;
         }
         if (out_result != NULL) {
             memset(out_result, 0, sizeof(*out_result));
@@ -4232,17 +4263,23 @@ extern "C" int eu4_metal_replay_frame(eu4_metal_replay_session *session,
             result->failed = g_failed_count > 0 ? (uint32_t)g_failed_count : 1;
         }
         result->timed_out = g_deadline_expired ? 1 : 0;
-        if (result->result_json[0] != 0 &&
-            access(result->result_json, R_OK) != 0) {
+        /* Only artifacts written by this replay may be advertised.  Paths are
+           pre-filled before the run, so without this check a failure could
+           point at a previous successful run in the same output directory. */
+        if (!state.current_result_json ||
+            (result->result_json[0] != 0 &&
+             access(result->result_json, R_OK) != 0)) {
             result->result_json[0] = 0;
         }
-        if (result->metal_frame[0] != 0 &&
-            access(result->metal_frame, R_OK) != 0) {
+        if (!state.current_metal_frame ||
+            (result->metal_frame[0] != 0 &&
+             access(result->metal_frame, R_OK) != 0)) {
             result->metal_frame[0] = 0;
             result->metal_frame_sha256[0] = 0;
         }
-        if (result->provenance_jsonl[0] != 0 &&
-            access(result->provenance_jsonl, R_OK) != 0) {
+        if (!state.current_provenance ||
+            (result->provenance_jsonl[0] != 0 &&
+             access(result->provenance_jsonl, R_OK) != 0)) {
             result->provenance_jsonl[0] = 0;
         }
         if (result->duration_ns == 0) {

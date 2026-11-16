@@ -29,7 +29,7 @@
     {
       "stage": "event_stream_load",
       "operation": -1,
-      "error": "event_stream_load: The data couldn’t be read because it isn’t in the correct format."
+      "error": "event_stream_load: The data couldn\u2019t be read because it isn\u2019t in the correct format."
     },
     {
       "stage": "input_validation",
@@ -124,25 +124,22 @@
   },
   "tests": {
     "focused_final": {
-      "id": "20261116T082856Z-292dd1ca",
+      "id": "20261116T090134Z-4e71fb58",
       "status": "passed",
-      "tests": 201,
+      "tests": 123,
       "modules": [
         "tests.test_m7_metal_replay",
         "tests.test_resolve_replay",
         "tests.test_m7_frame_seal",
-        "tests.test_oracle_replay_frame",
         "tests.test_m6_frame",
-        "tests.test_gfx_replay_case",
         "tests.test_gfx_replay_checkpoints",
-        "tests.test_gfx_frame_graph",
         "tests.test_gfx_output_safety"
       ]
     },
     "replay_module": {
-      "id": "20261116T081052Z-2ecffb26",
+      "id": "20261116T085731Z-ef19bd19",
       "status": "passed",
-      "tests": 15
+      "tests": 19
     },
     "pre_existing_comparison": {
       "base_id": "20261116T080832Z-6dd0c6ce",
@@ -154,9 +151,63 @@
       "runtime": "python:3.14 (Debian Linux container), non-root CI user, clang, numpy 2.5.4, Pillow 12.3.0",
       "command": "python -m compileall -q ... && PYTHONPATH=benchmark:. python -m unittest discover -s tests",
       "status": "passed",
-      "tests": 3093,
-      "skipped": 287,
+      "tests": 3097,
+      "skipped": 291,
       "exit_code": 0
+    }
+  },
+  "bridge_report": {
+    "shared_identity_paths": [
+      "normal_replay",
+      "shader_receipt",
+      "metal_create",
+      "internal_exception"
+    ],
+    "required_identity_fields": [
+      "capture_frame_id",
+      "pid",
+      "session_id",
+      "capture_dir",
+      "gl_reference_sha256",
+      "trace_manifest_sha256",
+      "operation_count",
+      "status",
+      "stage",
+      "error"
+    ],
+    "success": {
+      "status": "ok",
+      "stage": "complete",
+      "error": "",
+      "failure": {}
+    },
+    "internal_exception": {
+      "stage": "internal_exception",
+      "error": "controlled bridge exception",
+      "identity_preserved": true
+    },
+    "coordinator_distinction": {
+      "provenance_ok": true,
+      "execution_failed": true,
+      "mismatch_provenance_ok": false,
+      "mismatch_error_kept_native": true
+    }
+  },
+  "first_failure_contract": {
+    "earlier_event_failure_survives_boundary_timeout": {
+      "stage": "event_encode",
+      "earliest_operation": 0,
+      "later_stage_present": "event_boundary",
+      "timed_out": true
+    },
+    "earlier_event_failure_survives_artifact_write_failure": {
+      "stage": "event_encode",
+      "c_abi_success": false
+    },
+    "failed_replay_reused_output": {
+      "stale_metal_frame_advertised": false,
+      "stale_provenance_advertised": false,
+      "current_failure_report_advertised": true
     }
   }
 }

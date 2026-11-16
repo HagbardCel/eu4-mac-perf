@@ -28,6 +28,8 @@ from automation import m6_compare, m6_frame  # noqa: E402
 CORE = BENCH / "eu4_gfx_frame_replay.mm"
 CLI = BENCH / "eu4_gfx_frame_replay_cli.mm"
 ABI_HOST = ROOT / "tests" / "gfx_metal_replay_abi_host.mm"
+SHADOW_BRIDGE = BENCH / "eu4_gfx_shadow_bridge.mm"
+SHADOW_REPORT_HOST = ROOT / "tests" / "gfx_shadow_report_host.mm"
 
 
 def _sha(path: Path) -> str:
@@ -66,6 +68,7 @@ class MetalReplayLibraryTests(unittest.TestCase):
         base = Path(cls.temporary.name)
         cls.cli = base / "gfx_frame_replay"
         cls.abi = base / "gfx_metal_replay_abi"
+        cls.shadow_report = base / "gfx_shadow_report"
         common = [
             "clang",
             "-arch",
@@ -85,6 +88,8 @@ class MetalReplayLibraryTests(unittest.TestCase):
         for output, sources in (
             (cls.cli, [CORE, CLI]),
             (cls.abi, [CORE, ABI_HOST]),
+            (cls.shadow_report,
+             [CORE, SHADOW_BRIDGE, SHADOW_REPORT_HOST]),
         ):
             built = subprocess.run(
                 [*common, "-o", str(output), *map(str, sources)],
@@ -336,7 +341,10 @@ class MetalReplayLibraryTests(unittest.TestCase):
             report = json.loads(result.stdout.splitlines()[-1])
             self.assertEqual(report["ok"], 0)
             self.assertGreaterEqual(report["failed"], 1)
-            self.assertIn("artifact_write", report["error"])
+            # The earliest meaningful failure is the metal-frame write, not
+            # the later replay.json write; both remain in the native failure
+            # list when a report can be published.
+            self.assertIn("frame_readback", report["error"])
             self.assertFalse(report["result_json"])
 
     def test_coordinator_rejects_missing_seal_and_stale_artifacts(self):
@@ -572,6 +580,102 @@ class MetalReplayLibraryTests(unittest.TestCase):
             self.assertEqual(replay["checkpoints"][0]["stage"],
                              "checkpoint_readback")
 
+    def _shadow_reports(self, replay_json: Path | None = None) -> dict:
+        command = [str(self.shadow_report)]
+        if replay_json is not None:
+            command += ["--replay-json", str(replay_json)]
+        result = subprocess.run(
+            command, capture_output=True, text=True, check=False, timeout=120
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        reports = {}
+        for line in result.stdout.splitlines():
+            item = json.loads(line)
+            reports[item["scenario"]] = item["report"]
+        return reports
+
+    def test_native_shadow_report_success_failure_and_exception(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            replay_json = Path(temporary) / "replay.json"
+            failure = {
+                "stage": "event_boundary",
+                "operation": 3,
+                "event": 3,
+                "kind": "draw",
+                "caller": "0x1000",
+                "error": "event boundary exceeded the replay deadline",
+                "timed_out": True,
+                "command_status": 2,
+            }
+            replay_json.write_text(json.dumps({
+                "schema": "gfx-metal-frame-replay/v1",
+                "status": "timeout",
+                "stage": "event_boundary",
+                "error": "event_boundary (operation 3): "
+                         "event boundary exceeded the replay deadline",
+                "failure": failure,
+                "failures": [failure],
+            }))
+            reports = self._shadow_reports(replay_json)
+
+        identity = {
+            "capture_frame_id": 42,
+            "pid": 4242,
+            "session_id": "session-1",
+            "capture_dir": "/tmp/capture",
+            "gl_reference_sha256": "reference-sha",
+            "trace_manifest_sha256": "manifest-sha",
+            "operation_count": 7,
+        }
+        for scenario, report in reports.items():
+            with self.subTest(scenario=scenario):
+                for field, value in identity.items():
+                    self.assertEqual(report[field], value)
+                self.assertIn(report["status"], ("ok", "failed"))
+                self.assertTrue(report["stage"])
+                self.assertIsInstance(report["error"], str)
+
+        success = reports["success"]
+        self.assertEqual(success["status"], "ok")
+        self.assertEqual(success["stage"], "complete")
+        self.assertEqual(success["error"], "")
+        self.assertEqual(success["failure"], {})
+        self.assertEqual(success["metal"]["error"], "")
+        self.assertEqual(success["metal"]["failure"], {})
+        self.assertEqual(success["metal"]["stage"], "complete")
+        self.assertEqual(success["metal"]["ok"], 1)
+
+        failed = reports["replay_failure"]
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(failed["stage"], "event_boundary")
+        self.assertIn("event_boundary", failed["error"])
+        self.assertEqual(failed["failure"]["stage"], "event_boundary")
+        self.assertEqual(failed["failure"]["operation"], 3)
+        self.assertEqual(failed["failure"]["timed_out"], True)
+        self.assertEqual(failed["timed_out"], 1)
+        self.assertEqual(failed["command_status"], 2)
+
+        receipt = reports["shader_receipt"]
+        self.assertEqual(receipt["status"], "failed")
+        self.assertEqual(receipt["stage"], "shader_receipt")
+        self.assertEqual(receipt["error"],
+                         "shader receipt identity mismatch")
+        self.assertEqual(receipt["failure"]["stage"], "shader_receipt")
+
+        create = reports["metal_create"]
+        self.assertEqual(create["status"], "failed")
+        self.assertEqual(create["stage"], "metal_create")
+        self.assertEqual(create["error"], "no Metal device")
+        self.assertEqual(create["failure"]["stage"], "metal_create")
+
+        exception = reports["internal_exception"]
+        self.assertEqual(exception["status"], "failed")
+        self.assertEqual(exception["stage"], "internal_exception")
+        self.assertEqual(exception["error"], "controlled bridge exception")
+        self.assertEqual(exception["failure"]["stage"], "internal_exception")
+        self.assertEqual(exception["failure"]["error"],
+                         "controlled bridge exception")
+
     def test_shadow_and_coordinator_preserve_native_failure(self):
         from tests.test_m7_frame_seal import _write_frame
 
@@ -623,55 +727,213 @@ class MetalReplayLibraryTests(unittest.TestCase):
         self.assertEqual(m6_frame.shadow_failure_detail(legacy_report),
                          native_error)
 
+        # Success must not synthesize a failure diagnostic in the summary.
+        success_report = {
+            "schema": "m7-shadow-report/v1",
+            "mode": "single-frame",
+            "status": "ok",
+            "stage": "complete",
+            "error": "",
+            "failure": {},
+            "metal": {"ok": 1, "stage": "complete", "error": "",
+                      "failure": {}},
+        }
+        success_summary: dict = {}
+        self.assertIsNone(
+            m6_frame.apply_shadow_report(success_summary, success_report)
+        )
+        self.assertEqual(success_summary["shadow_stage"], "complete")
+        self.assertNotIn("shadow_failure", success_summary)
+        self.assertEqual(success_summary["diagnostic"]["metal"], "complete")
+
         with tempfile.TemporaryDirectory() as temporary:
-            run = Path(temporary) / "run"
-            _write_frame(run / "frame")
-            seal = json.loads((run / "frame" / "frame-seal.json").read_text())
-            shadow = run / "shadow"
-            (shadow / "shaders").mkdir(parents=True)
-            (shadow / "shaders" / "shaders.json").write_text(
-                json.dumps({"programs": []})
-            )
-            coordinator_report = dict(report)
-            coordinator_report.update({
-                "capture_frame_id": seal["capture_frame_id"],
-                "pid": seal["pid"],
-                "session_id": seal["session_id"],
-                "gl_reference_sha256": seal["reference_sha256"],
-                "trace_manifest_sha256": seal["manifest_sha256"],
-                "operation_count": seal["operation_count"],
-            })
+            counter = 0
 
-            def fake_run(command, **kwargs):
-                self.assertIn("translate", command)
-                (shadow / "shadow-report.json").write_text(
-                    json.dumps(coordinator_report)
+            def run_coordinator(report_factory):
+                nonlocal counter
+                counter += 1
+                run = Path(temporary) / f"run-{counter}"
+                _write_frame(run / "frame")
+                seal = json.loads(
+                    (run / "frame" / "frame-seal.json").read_text()
                 )
-                return subprocess.CompletedProcess(command, 0, "", "")
+                shadow = run / "shadow"
+                (shadow / "shaders").mkdir(parents=True)
+                (shadow / "shaders" / "shaders.json").write_text(
+                    json.dumps({"programs": []})
+                )
+                coordinator_report = report_factory(seal)
 
-            args = argparse.Namespace(
-                run=str(run),
-                shadow_dir=str(shadow),
-                timeout=10.0,
-                seal_timeout=5.0,
-                translation_timeout=5.0,
-                replay_timeout=5.0,
-                compare_timeout=5.0,
-                policy=None,
-                no_compare=True,
-            )
-            with mock.patch.object(m6_frame.subprocess, "run",
-                                   side_effect=fake_run):
-                status = m6_frame.shadow_coordinator(args)
+                def fake_run(command, **kwargs):
+                    self.assertIn("translate", command)
+                    (shadow / "shadow-report.json").write_text(
+                        json.dumps(coordinator_report)
+                    )
+                    return subprocess.CompletedProcess(command, 0, "", "")
+
+                args = argparse.Namespace(
+                    run=str(run),
+                    shadow_dir=str(shadow),
+                    timeout=10.0,
+                    seal_timeout=5.0,
+                    translation_timeout=5.0,
+                    replay_timeout=5.0,
+                    compare_timeout=5.0,
+                    policy=None,
+                    no_compare=True,
+                )
+                with mock.patch.object(m6_frame.subprocess, "run",
+                                       side_effect=fake_run):
+                    status = m6_frame.shadow_coordinator(args)
+                coordinator = json.loads(
+                    (shadow / "coordinator.json").read_text()
+                )
+                return status, coordinator, seal
+
+            def failed_report(seal):
+                value = dict(report)
+                value.update({
+                    "capture_frame_id": seal["capture_frame_id"],
+                    "pid": seal["pid"],
+                    "session_id": seal["session_id"],
+                    "gl_reference_sha256": seal["reference_sha256"],
+                    "trace_manifest_sha256": seal["manifest_sha256"],
+                    "operation_count": seal["operation_count"],
+                })
+                return value
+
+            status, coordinator, _ = run_coordinator(failed_report)
             self.assertEqual(status, 1)
-            coordinator = json.loads(
-                (shadow / "coordinator.json").read_text()
-            )
             self.assertEqual(coordinator["status"], "failed")
             self.assertEqual(coordinator["stage"], native_stage)
             self.assertEqual(coordinator["error"], native_error)
             self.assertEqual(coordinator["failure"], native_failure)
             self.assertEqual(coordinator["metal"]["stage"], native_stage)
+            self.assertTrue(coordinator["provenance_ok"])
+            self.assertTrue(coordinator["execution_failed"])
+            self.assertNotIn("provenance_error", coordinator)
+
+            def success_report_for(seal):
+                return {
+                    "schema": "m7-shadow-report/v1",
+                    "mode": "single-frame",
+                    "status": "ok",
+                    "stage": "complete",
+                    "error": "",
+                    "failure": {},
+                    "capture_frame_id": seal["capture_frame_id"],
+                    "pid": seal["pid"],
+                    "session_id": seal["session_id"],
+                    "gl_reference_sha256": seal["reference_sha256"],
+                    "trace_manifest_sha256": seal["manifest_sha256"],
+                    "operation_count": seal["operation_count"],
+                    "metal": {"encoded": seal["operation_count"],
+                              "events": seal["operation_count"]},
+                }
+
+            status, coordinator, _ = run_coordinator(success_report_for)
+            self.assertEqual(status, 0, coordinator)
+            self.assertEqual(coordinator["status"], "ok")
+            self.assertEqual(coordinator["stage"], "complete")
+            self.assertTrue(coordinator["provenance_ok"])
+            self.assertFalse(coordinator["execution_failed"])
+            self.assertNotIn("provenance_error", coordinator)
+            self.assertNotIn("error", coordinator)
+
+            def mismatched_report(seal):
+                value = failed_report(seal)
+                value["pid"] = seal["pid"] + 1
+                return value
+
+            status, coordinator, _ = run_coordinator(mismatched_report)
+            self.assertEqual(status, 1)
+            self.assertEqual(coordinator["status"], "failed")
+            self.assertFalse(coordinator["provenance_ok"])
+            self.assertTrue(coordinator["execution_failed"])
+            self.assertIn("pid", coordinator["provenance_error"])
+            self.assertEqual(coordinator["error"], native_error)
+
+    def test_failed_replay_does_not_advertise_stale_success_artifacts(self):
+        fixture = _fixture("m6/frames/menu-occ300")
+        if fixture is None:
+            self.skipTest("canonical M6 frame is absent in this worktree")
+        frame, shaders = fixture
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "out"
+            success = self._abi(frame, shaders, output)
+            self.assertEqual(success.returncode, 0, success.stderr)
+            success_report = self._abi_report(success)
+            self.assertTrue(success_report["result_json"])
+            self.assertTrue(success_report["metal_frame"])
+            self.assertTrue(success_report["provenance_jsonl"])
+            self.assertTrue(Path(success_report["metal_frame"]).is_file())
+
+            # Same output directory, early isolated-preparation failure.
+            failed = self._abi(
+                frame, shaders, output, 1, "--only-event", "999999"
+            )
+            self.assertNotEqual(failed.returncode, 0)
+            report = self._abi_report(failed)
+            self.assertEqual(report["ok"], 0)
+            self.assertEqual(report["stage"], "isolated_preparation")
+            self.assertEqual(report["metal_frame"], "")
+            self.assertEqual(report["metal_frame_sha256"], "")
+            self.assertEqual(report["provenance_jsonl"], "")
+            self.assertTrue(report["result_json"])
+            replay = json.loads(Path(report["result_json"]).read_text())
+            self.assertEqual(replay["stage"], "isolated_preparation")
+            self.assertEqual(replay["status"], "failed")
+
+    def test_earliest_failure_survives_later_boundary_timeout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            frame, shaders, events = self._canonical_case(base)
+            selected = [dict(events[1]), dict(events[2])]
+            selected[0]["program"] = dict(selected[0]["program"])
+            selected[0]["program"]["name"] = 999999
+            (frame / "frame-events.jsonl").write_text(
+                "\n".join(json.dumps(event) for event in selected) + "\n"
+            )
+            output = base / "out"
+            result = self._abi(
+                frame, shaders, output, 1, "--inject-failure", "1"
+            )
+            self.assertNotEqual(result.returncode, 0)
+            report = self._abi_report(result)
+            self.assertEqual(report["ok"], 0)
+            self.assertEqual(report["timed_out"], 1)
+            self.assertEqual(report["stage"], "event_encode")
+            self.assertEqual(report["failure"]["stage"], "event_encode")
+            self.assertEqual(report["failure"]["operation"], 0)
+            self.assertTrue(report["error"].startswith("event_encode"))
+            stages = [item["stage"] for item in report["failures"]]
+            self.assertIn("event_encode", stages)
+            self.assertIn("event_boundary", stages)
+            self.assertGreaterEqual(report["failed"], 2)
+
+    def test_earliest_event_failure_survives_artifact_write_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            frame, shaders, events = self._canonical_case(base)
+            selected = [dict(events[1]), dict(events[2])]
+            selected[0]["program"] = dict(selected[0]["program"])
+            selected[0]["program"]["name"] = 999999
+            (frame / "frame-events.jsonl").write_text(
+                "\n".join(json.dumps(event) for event in selected) + "\n"
+            )
+            output = base / "out"
+            output.mkdir()
+            output.chmod(0o555)
+            try:
+                result = self._abi(frame, shaders, output, 1)
+            finally:
+                output.chmod(0o755)
+            self.assertNotEqual(result.returncode, 0)
+            report = self._abi_report(result)
+            self.assertEqual(report["ok"], 0)
+            self.assertFalse(report["result_json"])
+            self.assertTrue(report["error"].startswith("event_encode"))
+            self.assertGreaterEqual(report["failed"], 2)
 
     def test_native_blob_verification_uses_structured_references(self):
         from tests.test_m7_frame_seal import _write_frame

@@ -1534,10 +1534,15 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
                 f"shadow report {report_field} does not match the sealed frame"
             )
             break
+    execution_failed = report.get("status") != "ok"
+    result["provenance_ok"] = provenance_error is None
+    result["execution_failed"] = execution_failed
     if provenance_error is not None:
         result["status"] = "failed"
         result["provenance_error"] = provenance_error
-        if report.get("status") != "ok":
+        if execution_failed:
+            # Keep the native execution failure as the actionable error while
+            # recording the independent identity mismatch.
             result["error"] = shadow_failure_detail(report)
         else:
             result["error"] = provenance_error
@@ -1580,7 +1585,7 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
         )
     except (OSError, ValueError) as exc:
         result["state_coverage_error"] = str(exc)
-    if report.get("status") != "ok":
+    if execution_failed:
         result["status"] = "failed"
         result["error"] = shadow_failure_detail(report)
         (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")

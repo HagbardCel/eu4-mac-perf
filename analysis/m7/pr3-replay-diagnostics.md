@@ -106,7 +106,14 @@ process crash. Every validation/verification failure path now populates an
 `benchmark/eu4_gfx_shadow_bridge.mm` reads the structured `failure` object from
 `replay.json` (falling back to the ABI error prefix) and writes the native stage
 to `shadow-report.json` at both top level and under `metal`. It no longer
-collapses every replay failure to `stage=metal_replay`.
+collapses every replay failure to `stage=metal_replay`. Normal replay,
+shader-receipt/session-creation failures and Objective-C exceptions all build
+from one identity base (`shadow_report_base`), so every report carries the same
+`capture_frame_id`, `pid`, `session_id`, `capture_dir`, reference/manifest
+digests and operation count. A successful report has `status=ok`,
+`stage=complete`, an empty `error` and an empty `failure` object; no fallback
+failure text is synthesized on success. A caught exception keeps its original
+description under `stage=internal_exception`.
 
 `automation/m6_frame.py` uses one `shadow_failure_detail()` helper for
 `coordinator.json` and `capture-report.json`, so the native stage and underlying
@@ -141,9 +148,19 @@ The extended `tests/test_m7_metal_replay.py` covers:
 - the existing event-boundary timeout, final-command timeout, readback timeout
   and ordinary command failure, now also asserting the distinct stages
   `event_boundary`, `frame_completion` and `frame_readback`;
-- a mocked coordinator run proving `shadow-report.json` → `coordinator.json`
-  keeps `stage`, `error` and the structured `failure`, and the capture-summary
-  helper keeps the same fields;
+- a native shadow-report host exercising the actual bridge report builders for
+  success, structured replay failure, shader-receipt failure,
+  session-creation failure and a controlled exception; it asserts identical
+  sealed identity fields on every path and an empty success diagnostic;
+- mocked coordinator runs proving failure/provenance separation
+  (`provenance_ok`, `execution_failed`) and that successful reports keep
+  `status=ok`, `stage=complete` and no synthesized error;
+- first-failure coverage: an earlier `event_encode` failure survives a later
+  boundary timeout and a later artifact-write failure; timeouts retain their
+  operation index and classification;
+- stale-artifact coverage: a failed replay in a reused output directory does
+  not advertise the earlier replay's `metal-frame.bgra`,
+  `replay-provenance.jsonl` or result path;
 - canonical pixel parity, reused sessions, scene-75 known divergence,
   sealed blob verification and CLI/C ABI equivalence.
 
@@ -151,16 +168,18 @@ The native ABI host gained `--only-event`, `--stop-after`, `--checkpoints`,
 `--seed-marked`, `--capture-pre`, `--capture-post`, `--depth-from-prefix` and
 structured `stage`/`failure` output; it still exercises the v2 C ABI only.
 
-Focused final evidence: run `20261116T082856Z-292dd1ca`, 201 tests across the
-replay, seal, resolve, frame-graph, replay-case and output-safety modules —
-passed. `tests/test_m7_metal_replay.py` alone is 15 tests
-(`20261116T081052Z-2ecffb26`). A base-worktree comparison at `dac2ea92`
-(`20261116T080832Z-6dd0c6ce`) shows the one `test_agent_tools` failure found
-during a broader run is pre-existing, not introduced here.
+Focused final evidence: run `20261116T090134Z-4e71fb58`, 123 tests across the
+required replay, resolve, seal, m6-frame, checkpoint and output-safety modules
+— passed. `tests/test_m7_metal_replay.py` alone is 19 tests
+(`20261116T085731Z-ef19bd19`), including the native shadow-report host, the
+success/failure/exception semantics, first-failure and stale-artifact cases. A
+base-worktree comparison at `dac2ea92` (`20261116T080832Z-6dd0c6ce`) shows the
+one `test_agent_tools` failure found during a broader run is pre-existing, not
+introduced here.
 
 Portable CI was executed on the tracked base plus this change in a Linux
 Python 3.14 container as a non-root CI user with clang, NumPy 2.5.4 and Pillow
-12.3.0: `Ran 3093 tests in 128.403s`, `OK (skipped=287)`, exit 0. Skipped tests
+12.3.0: `Ran 3097 tests in 125.471s`, `OK (skipped=291)`, exit 0. Skipped tests
 are platform-specific native/macOS or absent-evidence cases, matching the
 portable GitHub Actions selection. Structured evidence is recorded in
 [pr3-replay-diagnostics-evidence.json](pr3-replay-diagnostics-evidence.json).

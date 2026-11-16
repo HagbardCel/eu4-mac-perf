@@ -112,8 +112,15 @@ paths in sealed verification now populate an `NSError`, and no diagnostic passes
 a possibly null error string to `%s`. The shadow bridge reads the structured
 failure and writes the native stage to `shadow-report.json`; the coordinator and
 `capture-report.json` preserve the same stage/error instead of substituting a
-generic message. Requested checkpoint readback failures and `metal-frame.bgra`
-write failures are now failures rather than silent success.
+generic message. Every report path (normal replay, receipt/session failure and
+Objective-C exception) shares the sealed capture identity; a successful report
+has `status=ok`, `stage=complete`, an empty error and no failure object, while a
+caught exception keeps its original description under `internal_exception`.
+The earliest meaningful replay failure remains primary when a later boundary
+wait or artifact write fails, and a failed replay does not advertise artifacts
+left by an earlier run in the same output directory. Requested checkpoint
+readback failures and `metal-frame.bgra` write failures are now failures rather
+than silent success.
 
 Successful replay output is unchanged: canonical title frame 326/326, 0 failed,
 command status 4, `ff2f4e2b…`. Focused native tests cover missing/malformed
