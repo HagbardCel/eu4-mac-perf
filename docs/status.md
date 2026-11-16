@@ -207,6 +207,10 @@ The bridge keeps one session in `EU4_GFX_SHADOW_MODE=continuous`; the
 coordinator translates/publishes/verifies each frame's receipt and checkpoint
 request, waits for that frame's report, diagnoses it with PR 3 and stops on the
 first non-qualified frame (or continues only under an explicit policy).
+`EU4_GFX_SHADOW_ASYNC=1` (capture `--async`) adds a bounded in-memory queue and
+one serialized worker: the sealed callback enqueues an immutable descriptor and
+returns; the worker owns the persistent session and waits for shaders/receipt
+and the per-frame decision. Queue high-water/depth are reported.
 `automation/m7_continuous.py` adds the bounded supervisor: ordered-sequence
 validation, one-session execution, stop-at-K, case preservation and
 replay/diagnosis metrics.
@@ -225,10 +229,16 @@ the configured frame limit.
 Report: [PR 4 continuous](../analysis/m7/pr4-continuous-dual-render.md),
 [evidence](../analysis/m7/pr4-evidence.json).
 
-The live asynchronous capture/replay queue is not implemented; Stage 1 is the
-synchronous bridge. Shader translation is still per frame, and ordered
-`glTexImage2D`/`glTexSubImage2D` CPU-write records are not captured (an explicit
-delete/reset is the supported resynchronization). Stages 2/3 were not run.
+The asynchronous pipeline is a bounded in-process queue with one serialized
+worker, not a cross-process/multi-worker system; shader translation is still per
+frame. Ordered `glTexImage2D`/`glTexSubImage2D` CPU-write records are not
+captured (an explicit delete/reset is the supported resynchronization).
+
+Stage 2 also passed: one EU4 process (pid 60053) ran 10 consecutive title frames
+through the async queue with `MAX_PENDING=3`; the queue reached its bound
+(high-water 3) with no dropped frames, all frames preserved ordered identity and
+history ok, replay averaged 1.57 s, callback 5.14 s, and generations continued
+to accumulate (433 reached 70). Stage 3 (longer gameplay) was not run.
 
 ## Strategy B — independent replay (2026-11-14)
 
