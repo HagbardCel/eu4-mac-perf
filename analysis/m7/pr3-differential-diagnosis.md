@@ -243,7 +243,7 @@ directory (`<metal-dir>-case`) outside both the captured frame and the Metal
 result directory. Re-running replaces only an owned case; a non-owned output
 conflict is reported as an explicit error instead of deleting user data.
 
-Regressions (final focused set: 168 passed, 11 skipped):
+Regressions (final focused set: 169 passed, 11 skipped):
 
 - stale empty request, same-count different-event request, wrong digest,
   missing binding, duplicate/extra/substituted entries, receipt from another
@@ -279,5 +279,5 @@ name and requires integer producer events; request/receipt names with path
 separators are rejected; the diagnosis fixture's seal counts are derived from
 its events.
 
-Final focused set: **168 passed, 11 skipped** (environmental NumPy/evidence
+Final focused set: **169 passed, 11 skipped** (environmental NumPy/evidence
 gates only).

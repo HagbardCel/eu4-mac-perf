@@ -421,9 +421,10 @@
         "request_name_traversal"
       ],
       "focused_tests": {
-        "passed": 168,
+        "passed": 169,
         "skipped": 11
-      }
+      },
+      "receipt_without_seal": "unverified_session"
     }
   }
 }

@@ -1831,6 +1831,13 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
     trace_events = len(trace.get("_events") or [])
     identity = _identity_check(seal, trace, replay, shadow,
                                require_seal=require_seal)
+    if (identity.get("status") == "unsealed"
+            and (request_binding or {}).get("receipt")):
+        # A receipt is only authoritative when a seal binds it to the frame.
+        identity = dict(
+            identity, status="unverified_session",
+            problems=list(identity.get("problems") or []) + [
+                "shader receipt has no frame seal to verify"])
     if seal_error:
         identity = dict(identity, status="mismatch",
                         problems=list(identity.get("problems") or [])

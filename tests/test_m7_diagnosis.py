@@ -530,6 +530,29 @@ class DiagnosisContractTests(unittest.TestCase):
                  report["checkpoint_validation"]["problems"]]
         self.assertIn("request_name_mismatch", kinds)
 
+    def test_unsealed_frame_with_receipt_binding_does_not_qualify(self):
+        seal = json.loads(
+            (self.fixture.frame / "frame-seal.json").read_text())
+        (self.fixture.frame / "frame-seal.json").unlink()
+        (self.fixture.metal / "shadow-report.json").unlink()
+        request_path = self.fixture.metal / "checkpoint-request.json"
+        request = json.loads(request_path.read_text())
+        (self.fixture.metal / "shader-receipt.json").write_text(json.dumps({
+            "schema": "m7-shadow-shader-receipt/v1",
+            "capture_frame_id": seal["capture_frame_id"],
+            "pid": seal["pid"],
+            "session_id": seal["session_id"],
+            "trace_manifest_sha256": seal["manifest_sha256"],
+            "checkpoint_request_file": request_path.name,
+            "checkpoint_request_sha256": sha(request_path.read_bytes()),
+            "checkpoint_count": len(request.get("checkpoints") or []),
+        }))
+        report = self.fixture.diagnose()
+        self.assertEqual(report["identity"]["status"],
+                         "unverified_session")
+        self.assertEqual(report["classification"],
+                         "incomplete_diagnostics")
+
     def test_unsealed_frame_with_shadow_report_does_not_qualify(self):
         (self.fixture.frame / "frame-seal.json").unlink()
         report = self.fixture.diagnose()
