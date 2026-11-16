@@ -66,6 +66,35 @@ and PR #199 targets `main`. Report:
 [implementation log](../analysis/m7/pr1-implementation-log.md). No Metal work
 and no second EU4 process are involved.
 
+## M7 PR 2 — in-process Metal shadow renderer (2026-11-15)
+
+The Metal replay engine is now a reusable session-owned core
+(`eu4_gfx_frame_replay.mm`) with a stable C ABI
+(`eu4_gfx_metal_replay.h`), a thin standalone CLI
+(`eu4_gfx_frame_replay_cli.mm`) and an opt-in in-process bridge
+(`eu4_gfx_shadow_bridge.mm`). `EU4_GFX_SHADOW_MODE=single-frame` makes the
+instrumentation dylib consume PR 1's sealed frame, wait for an external
+on-demand shader translation, execute exactly that captured operation stream
+through Metal offscreen, and write a shadow report. The original OpenGL frame
+remains the displayed frame; no second EU4 process, GL/Metal interop or engine
+draw re-execution is involved.
+
+Offline, the refactored core replays the canonical title frame exactly
+(326/326, `ff2f4e2b…`) through both the CLI and the C ABI, repeated sessions
+agree, and the copy-bearing scene-75 case preserves its known divergence
+(1,792,005 / 1,930,176, max 23). One authentic same-process launch (pid 92781,
+capture id 1, scene 603) produced a GL reference `a7991870…` and an independent
+Metal frame `0dad7bc6…`: 325/325 operations encoded, 0 failed, command status 4,
+readback ok, one in-frame transfer, 274 Metal target / 2,465 external
+bindings. The live frame is **not** pixel-exact: 1,162,852 / 1,930,176 pixels
+differ, max 66, with `state_coverage=partial` for `gl_dither` and
+`multisample`; the difference is spatially uniform and low-amplitude,
+but is not proven to be exclusively dithering; no A/B with dither/MSAA
+disabled exists. Report:
+[in-process Metal](../analysis/m7/pr2-inprocess-metal.md),
+[evidence](../analysis/m7/pr2-live-evidence.json),
+[implementation log](../analysis/m7/pr2-implementation-log.md). PR 2 is rebased onto `main` after PR 1 (#199) merged as `67bf7a1`.
+
 ## Strategy B — independent replay (2026-11-14)
 
 Capture once, replay independently. A canonical authentic OpenGL title frame

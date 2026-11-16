@@ -14,46 +14,111 @@
 #import <Metal/Metal.h>
 #import "eu4_gfx_draw_semantics.h"
 #include "eu4_gfx_replay_semantics.h"
+#include "eu4_gfx_metal_replay.h"
+
+#include <CommonCrypto/CommonDigest.h>
+#include <time.h>
+#include <sys/stat.h>
 
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
 static NSString *const kErrorDomain = @"eu4.frame.replay";
+static uint64_t replay_now_ns(void);
+static BOOL wait_for_transfer(id<MTLCommandBuffer> buffer, NSString *operation,
+                              NSError **error);
 
-static id<MTLDevice> g_device;
-static id<MTLCommandQueue> g_queue;
-static NSMutableDictionary<NSString *, id> *g_pipelines;
-static NSMutableDictionary<NSString *, id> *g_functions;
-static NSMutableDictionary<NSString *, id> *g_textures;
-static NSMutableDictionary<NSString *, id> *g_samplers;
-static NSMutableDictionary<NSNumber *, NSMutableDictionary *> *g_targets;
-static NSMutableDictionary<NSString *, NSMutableDictionary *> *g_render_targets;
-static NSMutableDictionary<NSString *, id> *g_alpha_textures;
-static NSMutableDictionary<NSString *, id> *g_orientation_textures;
-static id<MTLComputePipelineState> g_orientation_pipeline;
-static id<MTLComputePipelineState> g_copy_pipeline;
-static NSUInteger g_virtual_target_id = 100000;
+typedef struct {
+    __unsafe_unretained id<MTLTexture> color;
+    __unsafe_unretained id<MTLTexture> depth;
+    NSUInteger width;
+    NSUInteger height;
+} FrameTarget;
+
+/* All mutable replay state lives in the session.  The TLS pointer only selects
+   the active session for the synchronous execution on this thread. */
+@interface EU4MetalReplayState : NSObject
+@property (nonatomic, strong) id<MTLDevice> device;
+@property (nonatomic, strong) id<MTLCommandQueue> queue;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, id> *pipelines;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, id> *functions;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, id> *textures;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, id> *samplers;
+@property (nonatomic, strong) NSMutableDictionary<NSNumber *, NSMutableDictionary *> *targets;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSMutableDictionary *> *render_targets;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, id> *alpha_textures;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, id> *orientation_textures;
+@property (nonatomic, strong) id<MTLComputePipelineState> orientation_pipeline;
+@property (nonatomic, strong) id<MTLComputePipelineState> pipeline_for_copy;
+@property (nonatomic, strong) id<MTLComputePipelineState> alpha_pipeline;
+@property (nonatomic, strong) id<MTLFunction> debug_fragment;
+@property (nonatomic, strong) id<MTLFunction> debug_vertex;
+@property (nonatomic, strong) id<MTLFunction> debug_uv_fragment;
+@property (nonatomic, strong) id<MTLFunction> debug_attr_vertex;
+@property (nonatomic, strong) id<MTLFunction> debug_texture_fragment;
+@property (nonatomic, strong) NSMutableArray *provenance;
+@property (nonatomic, strong) NSMutableDictionary *provenance_seen;
+@property (nonatomic, strong) NSDictionary *checkpoints_by_event;
+@property (nonatomic, strong) NSMutableArray *checkpoint_results;
+@property (nonatomic, strong) NSMutableArray *transfer_records;
+@property (nonatomic, assign) NSUInteger virtual_target_id;
+@property (nonatomic, assign) NSUInteger current_event;
+@property (nonatomic, assign) uint64_t timeout_ms;
+@property (nonatomic, assign) uint64_t deadline_ns;
+@property (nonatomic, assign) int deadline_expired;
+@property (nonatomic, assign) uint64_t events_count;
+@property (nonatomic, assign) uint64_t encoded_count;
+@property (nonatomic, assign) uint64_t failed_count;
+@property (nonatomic, assign) uint64_t started_ns;
+@end
+
+@implementation EU4MetalReplayState
+@end
+
+static thread_local EU4MetalReplayState *__unsafe_unretained g_state;
+static const NSUInteger kVertexBufferBase = 8;
+static thread_local FrameTarget *g_default_target_ptr;
+
+#define g_device (g_state.device)
+#define g_queue (g_state.queue)
+#define g_pipelines (g_state.pipelines)
+#define g_functions (g_state.functions)
+#define g_textures (g_state.textures)
+#define g_samplers (g_state.samplers)
+#define g_targets (g_state.targets)
+#define g_render_targets (g_state.render_targets)
+#define g_alpha_textures (g_state.alpha_textures)
+#define g_orientation_textures (g_state.orientation_textures)
+#define g_orientation_pipeline (g_state.orientation_pipeline)
+#define g_copy_pipeline (g_state.pipeline_for_copy)
+#define g_alpha_pipeline (g_state.alpha_pipeline)
+#define g_debug_fragment (g_state.debug_fragment)
+#define g_debug_vertex (g_state.debug_vertex)
+#define g_debug_uv_fragment (g_state.debug_uv_fragment)
+#define g_debug_attr_vertex (g_state.debug_attr_vertex)
+#define g_debug_texture_fragment (g_state.debug_texture_fragment)
+#define g_virtual_target_id (g_state.virtual_target_id)
+#define g_provenance (g_state.provenance)
+#define g_provenance_seen (g_state.provenance_seen)
+#define g_checkpoints_by_event (g_state.checkpoints_by_event)
+#define g_checkpoint_results (g_state.checkpoint_results)
+#define g_transfer_records (g_state.transfer_records)
+#define g_current_event (g_state.current_event)
+#define g_timeout_ms (g_state.timeout_ms)
+#define g_deadline_ns (g_state.deadline_ns)
+#define g_deadline_expired (g_state.deadline_expired)
+#define g_events_count (g_state.events_count)
+#define g_encoded_count (g_state.encoded_count)
+#define g_failed_count (g_state.failed_count)
+#define g_started_ns (g_state.started_ns)
+#define g_default_target (*g_default_target_ptr)
+
 static NSMutableDictionary *target_for(NSDictionary *target, NSError **error);
 /* Provenance of every texture binding and of replay-time checkpoint reads.
    The coordinator uses this to distinguish external captured inputs from
    renderer-generated targets, so a replay that silently consumed a captured
    intermediate cannot be reported as complete. */
-static NSMutableArray *g_provenance;
-static NSMutableDictionary *g_provenance_seen;
-static NSDictionary *g_checkpoints_by_event;
-static NSMutableArray *g_checkpoint_results;
-static NSMutableArray *g_transfer_records;
-static NSUInteger g_current_event;
-/* Metal's vertex buffer table is shared with vertex-stage constant buffers, so
-   vertex streams start above the translated uniform block indices. */
-static const NSUInteger kVertexBufferBase = 8;
-static id<MTLComputePipelineState> g_alpha_pipeline;
-static id<MTLFunction> g_debug_fragment;
-static id<MTLFunction> g_debug_vertex;
-static id<MTLFunction> g_debug_uv_fragment;
-static id<MTLFunction> g_debug_attr_vertex;
-static id<MTLFunction> g_debug_texture_fragment;
 
 static NSString *const kDebugTextureMSL =
     @"#include <metal_stdlib>\n"
@@ -287,7 +352,7 @@ static id<MTLTexture> sample_ready_target(id<MTLTexture> source,
     [encoder dispatchThreadgroups:groups threadsPerThreadgroup:threads_per_group];
     [encoder endEncoding];
     [command commit];
-    [command waitUntilCompleted];
+    (void)wait_for_transfer(command, @"command completion", NULL);
     if (command.status != MTLCommandBufferStatusCompleted) {
         if (error != NULL) {
             *error = [NSError errorWithDomain:kErrorDomain code:67
@@ -343,7 +408,10 @@ static id<MTLTexture> alpha_normalized(id<MTLTexture> source,
     [encoder dispatchThreadgroups:groups threadsPerThreadgroup:threads_per_group];
     [encoder endEncoding];
     [compute_command commit];
-    [compute_command waitUntilCompleted];
+    if (!wait_for_transfer(compute_command, @"alpha transform", NULL) ||
+        compute_command.status != MTLCommandBufferStatusCompleted) {
+        return nil;
+    }
     (void)command;
     g_alpha_textures[key] = destination;
     return destination;
@@ -787,15 +855,6 @@ static NSString *texture_cache_key(NSDictionary *texture) {
 /* ------------------------------------------------------------------------- */
 /* Render targets                                                             */
 /* ------------------------------------------------------------------------- */
-
-typedef struct {
-    __unsafe_unretained id<MTLTexture> color;
-    __unsafe_unretained id<MTLTexture> depth;
-    NSUInteger width;
-    NSUInteger height;
-} FrameTarget;
-
-static FrameTarget g_default_target;
 
 static NSMutableDictionary *target_for(NSDictionary *target, NSError **error) {
     NSNumber *key = @(number(target[@"framebuffer"], 0));
@@ -2115,7 +2174,7 @@ static BOOL encode_copy_event(NSDictionary *event, NSString *frameDir,
     [encoder dispatchThreadgroups:groups threadsPerThreadgroup:threads_per_group];
     [encoder endEncoding];
     [command commit];
-    [command waitUntilCompleted];
+    (void)wait_for_transfer(command, @"command completion", NULL);
     const char *copy_fault = getenv("EU4_FRAME_REPLAY_COPY_FAULT");
     BOOL forced_failure = copy_fault != NULL &&
                           strcmp(copy_fault, "command") == 0;
@@ -2226,7 +2285,44 @@ static BOOL encode_clear(NSDictionary *event, NSString *frameDir,
    success would turn a harness failure into an apparent renderer difference. */
 static BOOL wait_for_transfer(id<MTLCommandBuffer> buffer, NSString *operation,
                               NSError **error) {
-    [buffer waitUntilCompleted];
+    if (g_deadline_ns == 0) {
+        [buffer waitUntilCompleted];
+    } else {
+        uint64_t now = replay_now_ns();
+        if (now >= g_deadline_ns) {
+            g_deadline_expired = 1;
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:83
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        [NSString stringWithFormat:
+                                                             @"%@ exceeded the replay deadline",
+                                                             operation]}];
+            }
+            return NO;
+        }
+        /* Wait off the engine thread so the timeout is real.  The block retains
+           the command buffer; on timeout the caller reports failure without
+           touching the still-running submission. */
+        dispatch_semaphore_t completed = dispatch_semaphore_create(0);
+        dispatch_async(dispatch_get_global_queue(
+                           QOS_CLASS_USER_INITIATED, 0), ^{
+            [buffer waitUntilCompleted];
+            dispatch_semaphore_signal(completed);
+        });
+        dispatch_time_t deadline = dispatch_time(
+            DISPATCH_TIME_NOW, (int64_t)(g_deadline_ns - now));
+        if (dispatch_semaphore_wait(completed, deadline) != 0) {
+            g_deadline_expired = 1;
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:83
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        [NSString stringWithFormat:
+                                                             @"%@ exceeded the replay deadline",
+                                                             operation]}];
+            }
+            return NO;
+        }
+    }
     if (buffer.status != MTLCommandBufferStatusCompleted) {
         if (error != NULL) {
             *error = [NSError errorWithDomain:kErrorDomain code:82
@@ -2405,7 +2501,9 @@ static BOOL capture_target_to_file(NSDictionary *target_info, NSString *path) {
     destinationBytesPerImage:bytes_per_row * height];
     [encoder endEncoding];
     [blit commit];
-    [blit waitUntilCompleted];
+    if (!wait_for_transfer(blit, @"checkpoint readback", NULL)) {
+        return NO;
+    }
     uint8_t *flipped = (uint8_t *)malloc(bytes_per_row * height);
     if (flipped == NULL) {
         return NO;
@@ -2432,71 +2530,286 @@ static BOOL draw_depth_matters(NSDictionary *event) {
 /* Main                                                                       */
 /* ------------------------------------------------------------------------- */
 
-int main(int argc, const char *argv[]) {
-    @autoreleasepool {
-        NSString *frame_path = nil;
-        NSString *shader_path = nil;
-        NSString *output_path = nil;
-        NSInteger stop_after = -1;
-        NSInteger only_event = -1;
-        BOOL seed_marked = NO;
-        BOOL capture_post_images = NO;
-        BOOL capture_pre_images = NO;
-        BOOL depth_from_prefix = NO;
-        NSString *checkpoint_path = nil;
-        for (int index = 1; index < argc; index++) {
-            if (strcmp(argv[index], "--frame") == 0 && index + 1 < argc) {
-                frame_path = @(argv[++index]);
-            } else if (strcmp(argv[index], "--shaders") == 0 && index + 1 < argc) {
-                shader_path = @(argv[++index]);
-            } else if (strcmp(argv[index], "--out") == 0 && index + 1 < argc) {
-                output_path = @(argv[++index]);
-            } else if (strcmp(argv[index], "--stop-after") == 0 && index + 1 < argc) {
-                stop_after = atoi(argv[++index]);
-            } else if (strcmp(argv[index], "--only-event") == 0 && index + 1 < argc) {
-                only_event = atoi(argv[++index]);
-            } else if (strcmp(argv[index], "--seed-marked") == 0) {
-                seed_marked = YES;
-            } else if (strcmp(argv[index], "--capture-post") == 0) {
-                capture_post_images = YES;
-            } else if (strcmp(argv[index], "--capture-pre") == 0) {
-                capture_pre_images = YES;
-            } else if (strcmp(argv[index], "--depth-from-prefix") == 0) {
-                depth_from_prefix = YES;
-            } else if (strcmp(argv[index], "--checkpoints") == 0 && index + 1 < argc) {
-                checkpoint_path = @(argv[++index]);
+static uint64_t replay_now_ns(void) {
+    struct timespec spec;
+    clock_gettime(CLOCK_MONOTONIC, &spec);
+    return (uint64_t)spec.tv_sec * 1000000000ull + (uint64_t)spec.tv_nsec;
+}
+
+static int replay_sha256_file(const char *path, char out[65]) {
+    out[0] = 0;
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) {
+        return -1;
+    }
+    CC_SHA256_CTX context;
+    CC_SHA256_Init(&context);
+    uint8_t buffer[64 * 1024];
+    size_t read_bytes = 0;
+    while ((read_bytes = fread(buffer, 1, sizeof(buffer), file)) > 0) {
+        CC_SHA256_Update(&context, buffer, (CC_LONG)read_bytes);
+    }
+    int failed = ferror(file) != 0;
+    fclose(file);
+    if (failed) {
+        return -1;
+    }
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256_Final(digest, &context);
+    static const char hex[] = "0123456789abcdef";
+    for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) {
+        out[i * 2] = hex[digest[i] >> 4];
+        out[i * 2 + 1] = hex[digest[i] & 0xf];
+    }
+    out[64] = 0;
+    return 0;
+}
+
+static BOOL verify_file_sha(NSString *path, uint64_t expected_size,
+                            const char *expected_sha, NSError **error) {
+    struct stat st;
+    if (stat(path.fileSystemRepresentation, &st) != 0) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:110
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    [NSString stringWithFormat:@"missing file %@", path]}];
+        }
+        return NO;
+    }
+    if (expected_size != 0 && (uint64_t)st.st_size != expected_size) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:111
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    [NSString stringWithFormat:@"size mismatch for %@", path]}];
+        }
+        return NO;
+    }
+    if (expected_sha == NULL || expected_sha[0] == 0) {
+        return YES;
+    }
+    char sha[65] = {0};
+    if (replay_sha256_file(path.fileSystemRepresentation, sha) != 0 ||
+        strcmp(sha, expected_sha) != 0) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:112
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    [NSString stringWithFormat:@"digest mismatch for %@", path]}];
+        }
+        return NO;
+    }
+    return YES;
+}
+
+static BOOL verify_reference_object(id object, NSString *frame_dir,
+                                    NSMutableDictionary<NSString *, NSDictionary *> *seen,
+                                    NSError **error) {
+    if ([object isKindOfClass:[NSArray class]]) {
+        for (id value in (NSArray *)object) {
+            if (!verify_reference_object(value, frame_dir, seen, error)) {
+                return NO;
             }
         }
-        if (frame_path.length == 0 || shader_path.length == 0 ||
-            output_path.length == 0) {
-            fprintf(stderr,
-                    "usage: %s --frame <dir> --shaders <dir> --out <dir> "
-                    "[--stop-after N]\n",
-                    argv[0]);
-            return 2;
+        return YES;
+    }
+    if (![object isKindOfClass:[NSDictionary class]]) {
+        return YES;
+    }
+    NSDictionary *dictionary = (NSDictionary *)object;
+    id file_value = dictionary[@"file"];
+    if (file_value == nil && [dictionary[@"name"] isKindOfClass:[NSString class]]) {
+        /* Attribute payloads use "data"; arbitrary nested data is not a blob. */
+        file_value = dictionary[@"data"];
+    }
+    if (file_value != nil) {
+        if (![file_value isKindOfClass:[NSString class]]) {
+            return NO;
+        }
+        NSString *name = (NSString *)file_value;
+        if (name.length == 0 || [name isEqualToString:@"."] ||
+            [name isEqualToString:@".."] || [name containsString:@"/"] ||
+            [name containsString:@"\\"] ||
+            name.pathComponents.count != 1) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:113
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        @"invalid blob path"}];
+            }
+            return NO;
+        }
+        id sha_value = dictionary[@"sha256"];
+        if (![sha_value isKindOfClass:[NSString class]] ||
+            [(NSString *)sha_value length] != 64) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:113
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        [NSString stringWithFormat:
+                                                             @"blob %@ has no valid sha256", name]}];
+            }
+            return NO;
+        }
+        NSString *sha = (NSString *)sha_value;
+        for (NSUInteger index = 0; index < sha.length; index++) {
+            unichar character = [sha characterAtIndex:index];
+            if (!((character >= '0' && character <= '9') ||
+                  (character >= 'a' && character <= 'f') ||
+                  (character >= 'A' && character <= 'F'))) {
+                if (error != NULL) {
+                    *error = [NSError errorWithDomain:kErrorDomain code:113
+                                             userInfo:@{NSLocalizedDescriptionKey:
+                                                            @"invalid blob sha256"}];
+                }
+                return NO;
+            }
+        }
+        id bytes_value = dictionary[@"bytes"];
+        uint64_t expected_size = 0;
+        if (bytes_value != nil) {
+            if (![bytes_value isKindOfClass:[NSNumber class]] ||
+                [bytes_value longLongValue] < 0) {
+                return NO;
+            }
+            expected_size = (uint64_t)[bytes_value unsignedLongLongValue];
+        }
+        NSDictionary *prior = seen[name];
+        if (prior != nil) {
+            if (![prior[@"sha256"] isEqualToString:sha] ||
+                (bytes_value != nil &&
+                 [prior[@"bytes"] unsignedLongLongValue] != expected_size)) {
+                if (error != NULL) {
+                    *error = [NSError errorWithDomain:kErrorDomain code:115
+                                             userInfo:@{NSLocalizedDescriptionKey:
+                                                            [NSString stringWithFormat:
+                                                                 @"conflicting repeated blob reference %@", name]}];
+                }
+                return NO;
+            }
+        } else {
+            NSString *path = [[frame_dir stringByAppendingPathComponent:@"blobs"]
+                stringByAppendingPathComponent:name];
+            if (!verify_file_sha(path, expected_size, sha.UTF8String, error)) {
+                return NO;
+            }
+            seen[name] = @{@"sha256": sha, @"bytes": @(expected_size)};
+        }
+    }
+    for (id value in dictionary.allValues) {
+        if (!verify_reference_object(value, frame_dir, seen, error)) {
+            return NO;
+        }
+    }
+    return YES;
+}
+
+static BOOL verify_blob_references(NSString *frame_dir, NSError **error) {
+    NSString *events_path =
+        [frame_dir stringByAppendingPathComponent:@"frame-events.jsonl"];
+    NSData *data = [NSData dataWithContentsOfFile:events_path];
+    if (data == nil) {
+        return NO;
+    }
+    NSString *text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    if (text == nil) {
+        return NO;
+    }
+    NSMutableDictionary<NSString *, NSDictionary *> *seen =
+        [NSMutableDictionary dictionary];
+    for (NSString *line in [text componentsSeparatedByString:@"\n"]) {
+        if (line.length == 0) {
+            continue;
+        }
+        NSData *line_data = [line dataUsingEncoding:NSUTF8StringEncoding];
+        id object = [NSJSONSerialization JSONObjectWithData:line_data
+                                                    options:0
+                                                      error:NULL];
+        if (object == nil) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:116
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        @"malformed frame event"}];
+            }
+            return NO;
+        }
+        if (!verify_reference_object(object, frame_dir, seen, error)) {
+            return NO;
+        }
+    }
+    return YES;
+}
+
+static BOOL verify_sealed_inputs(NSString *frame_dir, NSString *shader_dir,
+                                 const eu4_metal_replay_config *config,
+                                 NSError **error) {
+    if (config == NULL || config->expected_event_stream_sha256 == NULL ||
+        config->expected_event_stream_sha256[0] == 0) {
+        return YES;
+    }
+    NSString *events_path =
+        [frame_dir stringByAppendingPathComponent:@"frame-events.jsonl"];
+    NSString *manifest_path =
+        [frame_dir stringByAppendingPathComponent:@"frame-trace.json"];
+    NSString *reference_path =
+        [frame_dir stringByAppendingPathComponent:@"frame-reference.bgra"];
+    NSString *shader_json =
+        [shader_dir stringByAppendingPathComponent:@"shaders.json"];
+    if (!verify_file_sha(events_path, config->expected_event_stream_bytes,
+                         config->expected_event_stream_sha256, error) ||
+        !verify_file_sha(manifest_path, 0, config->expected_manifest_sha256,
+                         error) ||
+        !verify_file_sha(reference_path, 0, config->expected_reference_sha256,
+                         error) ||
+        (config->expected_shader_json_sha256 != NULL &&
+         config->expected_shader_json_sha256[0] != 0 &&
+         !verify_file_sha(shader_json, 0,
+                         config->expected_shader_json_sha256, error))) {
+        return NO;
+    }
+    return verify_blob_references(frame_dir, error);
+}
+
+static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
+                      NSString *frame_path, NSString *shader_path,
+                      NSString *output_path, NSString *checkpoint_path,
+                      NSInteger stop_after, NSInteger only_event,
+                      BOOL seed_marked, BOOL capture_post_images,
+                      BOOL capture_pre_images, BOOL depth_from_prefix,
+                      uint64_t timeout_ms,
+                      const eu4_metal_replay_config *config,
+                      eu4_metal_replay_result *out_result) {
+    g_state = state;
+    g_default_target_ptr = default_target;
+    g_timeout_ms = timeout_ms;
+    g_deadline_ns = timeout_ms == 0
+                        ? 0
+                        : replay_now_ns() + timeout_ms * 1000000ull;
+    g_deadline_expired = 0;
+    g_events_count = 0;
+    g_encoded_count = 0;
+    g_failed_count = 0;
+    uint64_t started_ns = replay_now_ns();
+    g_started_ns = started_ns;
+    @autoreleasepool {
+        NSError *verify_error = nil;
+        if (!verify_sealed_inputs(frame_path, shader_path, config, &verify_error)) {
+            fprintf(stderr, "sealed input verification: %s\n",
+                    verify_error.localizedDescription.UTF8String);
+            if (out_result != NULL) {
+                snprintf(out_result->error, sizeof(out_result->error),
+                         "sealed input verification failed: %s",
+                         verify_error.localizedDescription.UTF8String ?: "unknown");
+            }
+            return 11;
         }
         [[NSFileManager defaultManager] createDirectoryAtPath:output_path
                                   withIntermediateDirectories:YES
                                                    attributes:nil
                                                         error:NULL];
-        g_device = MTLCreateSystemDefaultDevice();
-        if (g_device == nil) {
-            fprintf(stderr, "no Metal device\n");
-            return 3;
-        }
-        g_queue = [g_device newCommandQueue];
-        g_pipelines = [NSMutableDictionary dictionary];
-        g_functions = [NSMutableDictionary dictionary];
-        g_textures = [NSMutableDictionary dictionary];
-        g_samplers = [NSMutableDictionary dictionary];
-        g_targets = [NSMutableDictionary dictionary];
-        g_render_targets = [NSMutableDictionary dictionary];
-        g_alpha_textures = [NSMutableDictionary dictionary];
-        g_orientation_textures = [NSMutableDictionary dictionary];
         g_provenance = [NSMutableArray array];
         g_provenance_seen = [NSMutableDictionary dictionary];
         g_checkpoint_results = [NSMutableArray array];
         g_transfer_records = [NSMutableArray array];
+        g_checkpoints_by_event = nil;
+        g_current_event = 0;
+        memset(g_default_target_ptr, 0, sizeof(*g_default_target_ptr));
 
         NSError *error = nil;
         NSDictionary *manifest = read_json(
@@ -2507,6 +2820,10 @@ int main(int argc, const char *argv[]) {
         }
         NSArray *events = read_json_lines(
             [frame_path stringByAppendingPathComponent:@"frame-events.jsonl"], &error);
+        g_events_count = events.count;
+        if (out_result != NULL) {
+            out_result->events = (uint32_t)events.count;
+        }
         if (events == nil) {
             fprintf(stderr, "events: %s\n", error.localizedDescription.UTF8String);
             return 4;
@@ -2558,6 +2875,12 @@ int main(int argc, const char *argv[]) {
                          @"height": @(g_default_target.height)},
                        &error);
         if (default_info != nil) {
+            /* target_for() may return the cached FB0 entry without repopulating
+               the session default target (session reuse). */
+            g_default_target.color = default_info[@"color"];
+            g_default_target.depth = default_info[@"depth"];
+            g_default_target.width = number(default_info[@"width"], 0);
+            g_default_target.height = number(default_info[@"height"], 0);
             g_render_targets[@"0"] = default_info;
         }
 
@@ -2678,6 +3001,9 @@ int main(int argc, const char *argv[]) {
         }
 
         for (NSUInteger index = 0; index < events.count; index++) {
+            if (config != NULL && config->test_inject_failure == 1 && index == 1) {
+                g_deadline_ns = replay_now_ns() - 1;
+            }
             if (stop_after >= 0 && (NSInteger)encoded >= stop_after) {
                 break;
             }
@@ -2860,9 +3186,32 @@ int main(int argc, const char *argv[]) {
                 }];
             }
             encoded++;
+            g_encoded_count = encoded;
+            g_failed_count = failed;
         }
         [command commit];
-        [command waitUntilCompleted];
+        if (config != NULL && config->test_inject_failure == 2) {
+            g_deadline_ns = replay_now_ns() - 1;
+        }
+        BOOL final_completed = wait_for_transfer(command, @"frame completion", &error);
+        if (config != NULL && config->test_inject_failure == 4) {
+            final_completed = NO;
+            error = [NSError errorWithDomain:kErrorDomain code:120
+                                    userInfo:@{NSLocalizedDescriptionKey:
+                                                   @"injected command failure"}];
+        }
+        if (config != NULL && config->test_inject_failure == 3) {
+            g_deadline_ns = replay_now_ns() - 1;
+        }
+        if (!final_completed) {
+            failed++;
+            [failures addObject:@{
+                @"event": @(events.count),
+                @"kind": @"frame",
+                @"caller": @"",
+                @"error": error.localizedDescription ?: @"frame did not complete",
+            }];
+        }
         NSMutableDictionary *result = [@{
             @"schema": @"gfx-metal-frame-replay/v1",
             @"events": @(events.count),
@@ -2916,8 +3265,20 @@ int main(int argc, const char *argv[]) {
             destinationBytesPerImage:bytes_per_row * height];
             [encoder endEncoding];
             [blit commit];
-            [blit waitUntilCompleted];
-            uint8_t *readback = (uint8_t *)malloc(bytes_per_row * height);
+            BOOL readback_completed =
+                wait_for_transfer(blit, @"frame readback", &error);
+            if (!readback_completed) {
+                failed++;
+                [failures addObject:@{
+                    @"event": @(events.count),
+                    @"kind": @"readback",
+                    @"caller": @"",
+                    @"error": error.localizedDescription ?: @"readback did not complete",
+                }];
+            }
+            uint8_t *readback = readback_completed
+                                    ? (uint8_t *)malloc(bytes_per_row * height)
+                                    : NULL;
             if (readback != NULL) {
                 flip_rows((const uint8_t *)buffer.contents, readback, width, height, 4);
                 NSString *path = [output_path stringByAppendingPathComponent:@"metal-frame.bgra"];
@@ -2970,6 +3331,7 @@ int main(int argc, const char *argv[]) {
                 sortedArrayUsingSelector:@selector(compare:)],
             @"first_sample_before_any_write": uninitialized,
         };
+        BOOL provenance_written = NO;
         {
             NSMutableData *lines = [NSMutableData data];
             for (NSDictionary *sample in g_provenance) {
@@ -2981,7 +3343,7 @@ int main(int argc, const char *argv[]) {
                     [lines appendBytes:"\n" length:1];
                 }
             }
-            [lines writeToFile:[output_path
+            provenance_written = [lines writeToFile:[output_path
                                    stringByAppendingPathComponent:
                                        @"replay-provenance.jsonl"]
                     atomically:YES];
@@ -2991,14 +3353,253 @@ int main(int argc, const char *argv[]) {
         }
         result[@"transfers"] = g_transfer_records;
         result[@"readback"] = @(readback_ok);
-        result[@"status"] = readback_ok && failed == 0 ? @"ok" : @"failed";
+        BOOL partial_mode = stop_after >= 0 || only_event >= 0;
+        if (!provenance_written) {
+            failed++;
+            [failures addObject:@{
+                @"event": @(events.count),
+                @"kind": @"artifact",
+                @"caller": @"",
+                @"error": @"replay-provenance.jsonl write failed",
+            }];
+        }
+        BOOL status_ok = readback_ok && failed == 0 &&
+                         (partial_mode || encoded == events.count);
+        result[@"failed"] = @(failed);
+        result[@"failures"] = failures;
+        result[@"partial"] = @(partial_mode);
+        result[@"timed_out"] = @(g_deadline_expired ? YES : NO);
+        if (status_ok) {
+            result[@"status"] = @"ok";
+        } else if (g_deadline_expired) {
+            result[@"status"] = @"timeout";
+        } else {
+            result[@"status"] = @"failed";
+        }
         NSData *json = [NSJSONSerialization dataWithJSONObject:result
                                                        options:NSJSONWritingPrettyPrinted
                                                          error:NULL];
-        [json writeToFile:[output_path stringByAppendingPathComponent:@"replay.json"]
-               atomically:YES];
-        printf("%s\n", [[[NSString alloc] initWithData:json
-                                              encoding:NSUTF8StringEncoding] UTF8String]);
+        BOOL json_written =
+            json != nil &&
+            [json writeToFile:[output_path stringByAppendingPathComponent:@"replay.json"]
+                   atomically:YES];
+        if (!json_written) {
+            failed++;
+            [failures addObject:@{
+                @"event": @(events.count),
+                @"kind": @"artifact",
+                @"caller": @"",
+                @"error": @"replay.json write failed",
+            }];
+            status_ok = NO;
+        }
+        if (out_result != NULL) {
+            memset(out_result, 0, sizeof(*out_result));
+            out_result->struct_size = (uint32_t)sizeof(*out_result);
+            out_result->abi_version = EU4_METAL_REPLAY_ABI_VERSION;
+            out_result->command_status = (int32_t)command.status;
+            out_result->readback_ok = readback_ok ? 1 : 0;
+            out_result->events = (uint32_t)events.count;
+            out_result->encoded = (uint32_t)encoded;
+            out_result->failed = (uint32_t)failed;
+            out_result->timed_out = g_deadline_expired ? 1 : 0;
+            out_result->partial = partial_mode ? 1 : 0;
+            out_result->ok = (status_ok && provenance_written && json_written &&
+                              failed == 0 && readback_ok &&
+                              (partial_mode || encoded == events.count) &&
+                              command.status == MTLCommandBufferStatusCompleted)
+                                 ? 1
+                                 : 0;
+            out_result->duration_ns = replay_now_ns() - started_ns;
+            snprintf(out_result->result_json, sizeof(out_result->result_json),
+                     "%s/replay.json", output_path.UTF8String);
+            snprintf(out_result->provenance_jsonl,
+                     sizeof(out_result->provenance_jsonl), "%s/%s",
+                     output_path.UTF8String, "replay-provenance.jsonl");
+            NSString *metal_frame_path =
+                [output_path stringByAppendingPathComponent:@"metal-frame.bgra"];
+            snprintf(out_result->metal_frame, sizeof(out_result->metal_frame),
+                     "%s", metal_frame_path.UTF8String);
+            NSString *manifest_reference =
+                (manifest[@"frame"] ?: @{})[@"reference_sha256"] ?: @"";
+            snprintf(out_result->manifest_reference_sha256,
+                     sizeof(out_result->manifest_reference_sha256), "%s",
+                     manifest_reference.UTF8String);
+            (void)replay_sha256_file(out_result->metal_frame,
+                                     out_result->metal_frame_sha256);
+            if (!out_result->ok) {
+                if (failed > 0 && failures.count > 0) {
+                    snprintf(out_result->error, sizeof(out_result->error),
+                             "%s", [[failures.firstObject[@"error"] ?: @"replay failed"
+                                     description] UTF8String]);
+                } else {
+                    snprintf(out_result->error, sizeof(out_result->error),
+                             "%s", readback_ok ? "replay did not complete"
+                                               : "metal readback failed");
+                }
+            }
+        }
         return failed == 0 && readback_ok ? 0 : 1;
     }
+}
+
+
+/* ------------------------------------------------------------------------- */
+/* Stable C ABI                                                              */
+/* ------------------------------------------------------------------------- */
+
+struct eu4_metal_replay_session {
+    void *state; /* retained EU4MetalReplayState */
+    FrameTarget default_target;
+    char error[512];
+};
+
+static void session_error(eu4_metal_replay_session *session, const char *text) {
+    if (session == NULL || text == NULL) {
+        return;
+    }
+    snprintf(session->error, sizeof(session->error), "%s", text);
+}
+
+extern "C" eu4_metal_replay_session *eu4_metal_replay_create(
+    const eu4_metal_replay_config *config, char *error, size_t error_size) {
+    if (error != NULL && error_size > 0) {
+        error[0] = 0;
+    }
+    if (config == NULL ||
+        config->struct_size < sizeof(eu4_metal_replay_config) ||
+        config->abi_version != EU4_METAL_REPLAY_ABI_VERSION ||
+        config->frame_dir == NULL || config->shader_dir == NULL ||
+        config->output_dir == NULL) {
+        if (error != NULL && error_size > 0) {
+            snprintf(error, error_size, "invalid replay config");
+        }
+        return NULL;
+    }
+    @autoreleasepool {
+        EU4MetalReplayState *state = [EU4MetalReplayState new];
+        state.device = MTLCreateSystemDefaultDevice();
+        if (state.device == nil) {
+            if (error != NULL && error_size > 0) {
+                snprintf(error, error_size, "no Metal device");
+            }
+            return NULL;
+        }
+        state.queue = [state.device newCommandQueue];
+        state.pipelines = [NSMutableDictionary dictionary];
+        state.functions = [NSMutableDictionary dictionary];
+        state.textures = [NSMutableDictionary dictionary];
+        state.samplers = [NSMutableDictionary dictionary];
+        state.targets = [NSMutableDictionary dictionary];
+        state.render_targets = [NSMutableDictionary dictionary];
+        state.alpha_textures = [NSMutableDictionary dictionary];
+        state.orientation_textures = [NSMutableDictionary dictionary];
+        state.virtual_target_id = 100000;
+        eu4_metal_replay_session *session =
+            (eu4_metal_replay_session *)calloc(1, sizeof(*session));
+        if (session == NULL) {
+            if (error != NULL && error_size > 0) {
+                snprintf(error, error_size, "out of memory");
+            }
+            return NULL;
+        }
+        session->state = (__bridge_retained void *)state;
+        return session;
+    }
+}
+
+extern "C" int eu4_metal_replay_frame(eu4_metal_replay_session *session,
+                                      const eu4_metal_replay_config *config,
+                                      eu4_metal_replay_result *result) {
+    if (result == NULL) {
+        return -1;
+    }
+    memset(result, 0, sizeof(*result));
+    result->struct_size = (uint32_t)sizeof(*result);
+    result->abi_version = EU4_METAL_REPLAY_ABI_VERSION;
+    if (session == NULL || config == NULL ||
+        config->struct_size < sizeof(eu4_metal_replay_config) ||
+        config->abi_version != EU4_METAL_REPLAY_ABI_VERSION ||
+        config->frame_dir == NULL || config->shader_dir == NULL ||
+        config->output_dir == NULL) {
+        snprintf(result->error, sizeof(result->error),
+                 "invalid replay session or config");
+        return -1;
+    }
+    snprintf(result->result_json, sizeof(result->result_json), "%s/replay.json",
+             config->output_dir);
+    snprintf(result->metal_frame, sizeof(result->metal_frame),
+             "%s/metal-frame.bgra", config->output_dir);
+    snprintf(result->provenance_jsonl, sizeof(result->provenance_jsonl),
+             "%s/replay-provenance.jsonl", config->output_dir);
+    EU4MetalReplayState *state =
+        (__bridge EU4MetalReplayState *)session->state;
+    NSString *frame_path = @(config->frame_dir);
+    NSString *shader_path = @(config->shader_dir);
+    NSString *output_path = @(config->output_dir);
+    NSString *checkpoint_path =
+        config->checkpoint_path != NULL ? @(config->checkpoint_path) : nil;
+    int code = run_replay(state, &session->default_target, frame_path,
+                          shader_path, output_path, checkpoint_path,
+                          (NSInteger)config->stop_after,
+                          (NSInteger)config->only_event,
+                          config->seed_marked != 0,
+                          config->capture_post_images != 0,
+                          config->capture_pre_images != 0,
+                          config->depth_from_prefix != 0,
+                          config->timeout_ms, config, result);
+    if (!result->ok) {
+        if (result->events == 0 && g_events_count > 0) {
+            result->events = (uint32_t)g_events_count;
+        }
+        if (result->encoded == 0 && g_encoded_count > 0) {
+            result->encoded = (uint32_t)g_encoded_count;
+        }
+        if (result->failed == 0) {
+            result->failed = g_failed_count > 0 ? (uint32_t)g_failed_count : 1;
+        }
+        result->timed_out = g_deadline_expired ? 1 : 0;
+        if (result->result_json[0] != 0 &&
+            access(result->result_json, R_OK) != 0) {
+            result->result_json[0] = 0;
+        }
+        if (result->duration_ns == 0) {
+            result->duration_ns = replay_now_ns() - state.started_ns;
+        }
+    }
+    /* Do not leave the thread-local selector pointing at returned state. */
+    g_state = nil;
+    g_default_target_ptr = NULL;
+    if (result->ok) {
+        session->error[0] = 0;
+        return 0;
+    }
+    if (result->error[0] == 0) {
+        snprintf(result->error, sizeof(result->error),
+                 "replay failed (code %d)", code);
+    }
+    session_error(session, result->error);
+    return code != 0 ? code : 1;
+}
+
+extern "C" void eu4_metal_replay_destroy(eu4_metal_replay_session *session) {
+    if (session == NULL) {
+        return;
+    }
+    if (session->state != NULL) {
+        EU4MetalReplayState *state =
+            (__bridge EU4MetalReplayState *)session->state;
+        if (g_state == state) {
+            g_state = nil;
+            g_default_target_ptr = NULL;
+        }
+        CFRelease((CFTypeRef)session->state);
+        session->state = NULL;
+    }
+    free(session);
+}
+
+extern "C" const char *eu4_metal_replay_last_error(
+    eu4_metal_replay_session *session) {
+    return session != NULL ? session->error : "";
 }

@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -234,6 +235,11 @@ def load_seal(
 
     if trace is None:
         trace = load_trace(frame_dir, verify_blobs=verify_blobs)
+    else:
+        if Path(str(trace.get("_frame_dir") or "")).resolve() != frame_dir.resolve():
+            raise FrameError("supplied trace belongs to another frame directory")
+        if verify_blobs and "_blob_count_verified" not in trace:
+            raise FrameError("supplied trace was not verified for referenced blobs")
     events = trace.get("_events") or []
     if verify_counts:
         kinds = [event.get("kind") for event in events]
@@ -558,10 +564,37 @@ def capture(args: argparse.Namespace) -> int:
         env_extra["EU4_GFX_COPY_TRACE_LIMIT"] = "4096"
     if getattr(args, "copy_source", False):
         env_extra["EU4_GFX_FRAME_TRACE_CAPTURE_COPY_SOURCE"] = "1"
-    seal_enabled = bool(getattr(args, "seal", False))
+    shadow_enabled = bool(getattr(args, "shadow", False))
+    seal_enabled = bool(getattr(args, "seal", False)) or shadow_enabled
     if getattr(args, "seal_log", False) and not seal_enabled:
         print("capture refused: --seal-log requires --seal", file=sys.stderr)
         return 2
+    shadow_dir = (
+        Path(args.shadow_dir).expanduser().resolve()
+        if getattr(args, "shadow_dir", "")
+        else output / "shadow"
+    )
+    if shadow_enabled:
+        if args.duration > 600 or args.timeout > 600:
+            print("capture refused: invalid shadow launch bounds", file=sys.stderr)
+            return 2
+        if not 1 <= args.shadow_timeout_ms <= 3_600_000:
+            print("capture refused: invalid shadow GPU timeout", file=sys.stderr)
+            return 2
+        if not 1 <= args.shadow_wait_ms <= 3_600_000:
+            print("capture refused: invalid shadow shader wait", file=sys.stderr)
+            return 2
+        if shadow_dir.exists():
+            print(
+                f"capture refused: shadow output already exists: {shadow_dir}",
+                file=sys.stderr,
+            )
+            return 2
+        env_extra["EU4_GFX_SHADOW_MODE"] = "single-frame"
+        env_extra["EU4_GFX_SHADOW_OUTPUT_DIR"] = str(shadow_dir)
+        env_extra["EU4_GFX_SHADOW_SHADER_DIR"] = str(shadow_dir / "shaders")
+        env_extra["EU4_GFX_SHADOW_TIMEOUT_MS"] = str(args.shadow_timeout_ms)
+        env_extra["EU4_GFX_SHADOW_WAIT_MS"] = str(args.shadow_wait_ms)
     if seal_enabled:
         timeout_ms = int(getattr(args, "seal_timeout_ms", 0) or 0)
         if timeout_ms < 0 or timeout_ms > 3_600_000:
@@ -572,6 +605,40 @@ def capture(args: argparse.Namespace) -> int:
             env_extra["EU4_GFX_FRAME_TRACE_TIMEOUT_MS"] = str(timeout_ms)
         if getattr(args, "seal_log", False):
             env_extra["EU4_GFX_FRAME_SEAL_LOG"] = "1"
+    coordinator = None
+    if shadow_enabled:
+        coordinator = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "automation.m6_frame",
+                "shadow-coordinator",
+                "--run",
+                str(output),
+                "--shadow-dir",
+                str(shadow_dir),
+                "--timeout",
+                str(
+                    max(
+                        300.0,
+                        args.duration
+                        + args.shadow_wait_ms / 1000.0
+                        + args.shadow_timeout_ms / 1000.0
+                        + 120.0,
+                    )
+                ),
+                "--seal-timeout",
+                str(max(120.0, args.duration + 60.0)),
+                "--translation-timeout",
+                str(args.shadow_wait_ms / 1000.0 + 30.0),
+                "--replay-timeout",
+                str(args.shadow_timeout_ms / 1000.0 + 60.0),
+            ],
+            cwd=str(ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
     try:
         report = startup.run_ops(
             targets=TARGETS,
@@ -587,6 +654,13 @@ def capture(args: argparse.Namespace) -> int:
             game_args=list(getattr(args, "game_arg", []) or []) or None,
         )
     except (startup.StartupError, OSError, RuntimeError) as exc:
+        if coordinator is not None:
+            coordinator.terminate()
+            try:
+                coordinator.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                coordinator.kill()
+                coordinator.communicate()
         if token is not None:
             live_gfx._finish_launch(
                 Path(args.campaign_run_root), token, pid=None,
@@ -633,28 +707,61 @@ def capture(args: argparse.Namespace) -> int:
     except FrameError as exc:
         result["error"] = str(exc)
         status = 5
+    if shadow_enabled:
+        try:
+            if coordinator is not None:
+                try:
+                    coordinator.communicate(timeout=30)
+                except subprocess.TimeoutExpired:
+                    coordinator.terminate()
+                    coordinator.communicate(timeout=10)
+            coordinator_path = shadow_dir / "coordinator.json"
+            if not coordinator_path.is_file():
+                raise FrameError("in-process shadow coordinator produced no report")
+            shadow_report = _read_json(coordinator_path)
+            result["shadow"] = shadow_report
+            result["pixel_verdict"] = shadow_report.get("pixel_verdict")
+            result["qualified"] = False
+            result["diagnostic"] = {
+                "metal": "complete"
+                if shadow_report.get("status") == "ok"
+                else "failed",
+                "pixel": shadow_report.get("pixel_verdict"),
+            }
+            if shadow_report.get("status") != "ok":
+                raise FrameError(
+                    "in-process shadow failed: "
+                    + str(shadow_report.get("error") or "unknown")
+                )
+        except (FrameError, OSError, subprocess.TimeoutExpired) as exc:
+            result["shadow_error"] = str(exc)
+            status = 7 if status == 0 else status
     if seal_enabled:
         try:
             seal = load_seal(frame_dir)
-            notification = load_notification(output)
-            if int(notification.get("pid", -1)) != int(seal.get("pid", -2)):
-                raise FrameError("notification pid does not match the seal")
-            if notification.get("capture_frame_id") != seal.get("capture_frame_id"):
-                raise FrameError(
-                    "notification frame id does not match the seal"
-                )
-            for field in (
-                "manifest_sha256",
-                "reference_sha256",
-                "operation_count",
-                "draw_count",
-                "clear_count",
-                "copy_count",
-            ):
-                if notification.get(field) != seal.get(field):
+            notification = None
+            if not shadow_enabled:
+                notification = load_notification(output)
+                if int(notification.get("pid", -1)) != int(seal.get("pid", -2)):
+                    raise FrameError("notification pid does not match the seal")
+                if notification.get("capture_frame_id") != seal.get(
+                    "capture_frame_id"
+                ):
                     raise FrameError(
-                        f"notification {field} does not match the seal"
+                        "notification frame id does not match the seal"
                     )
+                for field in (
+                    "manifest_sha256",
+                    "reference_sha256",
+                    "operation_count",
+                    "draw_count",
+                    "clear_count",
+                    "copy_count",
+                ):
+                    if notification.get(field) != seal.get(field):
+                        raise FrameError(
+                            f"notification {field} does not match the seal"
+                        )
             if int(seal.get("pid", -1)) != int(report.get("pid", -2)):
                 raise FrameError("sealed frame pid does not match the launch")
             result["seal"] = {
@@ -681,7 +788,8 @@ def capture(args: argparse.Namespace) -> int:
                     "seal_ns",
                 )
             }
-            result["notification"] = notification
+            if notification is not None:
+                result["notification"] = notification
             status = 0 if status == 0 else status
         except FrameError as exc:
             result["seal_error"] = str(exc)
@@ -703,11 +811,12 @@ def capture(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 REPLAY_HOST_SOURCE = BENCH / "eu4_gfx_frame_replay.mm"
+REPLAY_HOST_CLI_SOURCE = BENCH / "eu4_gfx_frame_replay_cli.mm"
 REPLAY_HOST = BENCH / ".build" / "gfx_frame_replay"
 
 
 def build_replay_host(force: bool = False) -> Path:
-    dependencies = [REPLAY_HOST_SOURCE, Path(__file__)]
+    dependencies = [REPLAY_HOST_SOURCE, REPLAY_HOST_CLI_SOURCE, Path(__file__)]
     if not force and REPLAY_HOST.is_file():
         newest = max(path.stat().st_mtime for path in dependencies if path.is_file())
         if REPLAY_HOST.stat().st_mtime >= newest:
@@ -730,6 +839,7 @@ def build_replay_host(force: bool = False) -> Path:
             "-o",
             str(REPLAY_HOST),
             str(REPLAY_HOST_SOURCE),
+            str(REPLAY_HOST_CLI_SOURCE),
         ],
         capture_output=True,
         text=True,
@@ -1198,6 +1308,285 @@ def isolate_command(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# In-process shadow coordinator
+# ---------------------------------------------------------------------------
+
+
+def shadow_coordinator(args: argparse.Namespace) -> int:
+    """Coordinates the one external translator step for a sealed live frame.
+
+    This process never launches EU4.  It waits for the PR 1 seal, runs the
+    existing shader translator into the shadow directory, publishes the ready
+    marker the in-process bridge waits for, then waits for the Metal report and
+    runs the existing differential comparison.
+    """
+    run = Path(args.run).expanduser().resolve()
+    shadow = (
+        Path(args.shadow_dir).expanduser().resolve()
+        if args.shadow_dir
+        else run / "shadow"
+    )
+    if args.timeout <= 0 or args.seal_timeout <= 0 or             args.translation_timeout <= 0 or args.replay_timeout <= 0 or             args.compare_timeout <= 0:
+        shadow.mkdir(parents=True, exist_ok=True)
+        (shadow / "coordinator.json").write_text(
+            json.dumps(
+                {"schema": "m7-shadow-coordinator/v1", "status": "failed",
+                 "error": "invalid phase budget"},
+                indent=2,
+            )
+            + "\n"
+        )
+        return 1
+    frame_dir = run / "frame"
+    shader_dir = shadow / "shaders"
+    report_path = shadow / "shadow-report.json"
+    result: dict = {
+        "schema": "m7-shadow-coordinator/v1",
+        "run": str(run),
+        "shadow_dir": str(shadow),
+        "status": "incomplete",
+    }
+    overall_deadline = time.monotonic() + args.timeout
+    seal_deadline = min(overall_deadline, time.monotonic() + args.seal_timeout)
+    seal_path = frame_dir / "frame-seal.json"
+    while not seal_path.is_file() and time.monotonic() < seal_deadline:
+        time.sleep(0.1)
+    if not seal_path.is_file():
+        result["error"] = "frame seal did not appear"
+        (shadow / "coordinator.json").parent.mkdir(parents=True, exist_ok=True)
+        (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")
+        return 1
+    try:
+        seal = load_seal(frame_dir)
+    except FrameError as exc:
+        result["error"] = f"frame seal is not usable: {exc}"
+        (shadow / "coordinator.json").parent.mkdir(parents=True, exist_ok=True)
+        (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")
+        return 1
+    result["seal"] = {
+        "capture_frame_id": seal.get("capture_frame_id"),
+        "pid": seal.get("pid"),
+        "operation_count": seal.get("operation_count"),
+        "reference_sha256": seal.get("reference_sha256"),
+    }
+    shadow.mkdir(parents=True, exist_ok=True)
+    shader_dir.mkdir(parents=True, exist_ok=True)
+    for stale in (
+        shader_dir / "ready",
+        shadow / "shadow-report.json",
+        shadow / "replay.json",
+        shadow / "comparison.json",
+    ):
+        if stale.exists():
+            result["error"] = f"stale shadow artifact: {stale}"
+            (shadow / "coordinator.json").write_text(
+                json.dumps(result, indent=2) + "\n"
+            )
+            return 1
+    try:
+        translated = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "automation.m6_frame",
+                "translate",
+                "--frame",
+                str(frame_dir),
+                "--out",
+                str(shader_dir),
+                "--force",
+            ],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            timeout=min(
+                args.translation_timeout,
+                max(0.0, overall_deadline - time.monotonic()),
+            ),
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        result["error"] = "shader translation timed out"
+        (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")
+        return 1
+    if translated.returncode != 0:
+        result["error"] = "shader translation failed"
+        (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")
+        return 1
+    def artifact_digest(directory: Path) -> tuple[str, int]:
+        digest = hashlib.sha256()
+        count = 0
+        for path in sorted(directory.rglob("*")):
+            if not path.is_file() or path.name in ("ready", "shader-receipt.json"):
+                continue
+            digest.update(str(path.relative_to(directory)).encode())
+            digest.update(b"\0")
+            digest.update(_sha256(path).encode())
+            digest.update(b"\n")
+            count += 1
+        return digest.hexdigest(), count
+
+    shaders_json = shader_dir / "shaders.json"
+    artifacts_sha256, artifact_count = artifact_digest(shader_dir)
+    receipt = {
+        "schema": "m7-shadow-shader-receipt/v1",
+        "capture_frame_id": seal.get("capture_frame_id"),
+        "pid": seal.get("pid"),
+        "session_id": seal.get("session_id"),
+        "trace_manifest_sha256": seal.get("manifest_sha256"),
+        "event_stream_sha256": seal.get("event_stream_sha256"),
+        "event_stream_bytes": seal.get("event_stream_bytes"),
+        "shaders_json_sha256": _sha256(shaders_json),
+        "artifacts_sha256": artifacts_sha256,
+        "artifact_count": artifact_count,
+    }
+    receipt_path = shadow / "shader-receipt.json"
+    receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+    (shader_dir / "ready").write_text(
+        json.dumps(
+            {
+                "status": "ready",
+                "capture_frame_id": seal.get("capture_frame_id"),
+                "shader_receipt_sha256": _sha256(receipt_path),
+            }
+        )
+        + "\n"
+    )
+    # Translation time does not consume the in-process replay budget.
+    report_deadline = min(
+        overall_deadline, time.monotonic() + args.replay_timeout
+    )
+    while not report_path.is_file() and time.monotonic() < report_deadline:
+        time.sleep(0.1)
+    if not report_path.is_file():
+        result["error"] = "in-process Metal replay report did not appear"
+        (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")
+        return 1
+    try:
+        report = _read_json(report_path)
+    except FrameError as exc:
+        result["error"] = str(exc)
+        (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")
+        return 1
+    result["metal"] = report
+    provenance_error = None
+    for report_field, seal_field in (
+        ("capture_frame_id", "capture_frame_id"),
+        ("pid", "pid"),
+        ("gl_reference_sha256", "reference_sha256"),
+        ("trace_manifest_sha256", "manifest_sha256"),
+        ("operation_count", "operation_count"),
+    ):
+        if report.get(report_field) != seal.get(seal_field):
+            provenance_error = (
+                f"shadow report {report_field} does not match the sealed frame"
+            )
+            break
+    if provenance_error is not None:
+        result["provenance_error"] = provenance_error
+        if report.get("status") != "ok":
+            result["error"] = report.get("error") or provenance_error
+        else:
+            result["error"] = provenance_error
+        (shadow / "coordinator.json").write_text(
+            json.dumps(result, indent=2) + "\n"
+        )
+        return 1
+    try:
+        events = [
+            json.loads(line)
+            for line in (frame_dir / "frame-events.jsonl").read_text().splitlines()
+            if line.strip()
+        ]
+        draws = [event for event in events if event.get("kind") == "draw"]
+        dither = any((event.get("state") or {}).get("dither") for event in draws)
+        multisample = any(
+            (event.get("state") or {}).get("multisample") for event in draws
+        )
+        coverage = {
+            "schema": "m7-shadow-state-coverage/v1",
+            "draws": len(draws),
+            "gl_dither": dither,
+            "multisample": multisample,
+            "state_coverage": (
+                "partial" if (dither or multisample)
+                else "complete_for_audited_states"
+            ),
+            "qualified": False,
+            "scope": ["gl_dither", "multisample"],
+            "unsupported": [
+                name
+                for name, present in (("gl_dither", dither),
+                                      ("multisample", multisample))
+                if present
+            ],
+        }
+        result["state_coverage"] = coverage
+        (shadow / "state-coverage.json").write_text(
+            json.dumps(coverage, indent=2) + "\n"
+        )
+    except (OSError, ValueError) as exc:
+        result["state_coverage_error"] = str(exc)
+    if report.get("status") != "ok":
+        result["error"] = report.get("error") or "Metal replay failed"
+        (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")
+        return 1
+    if not args.no_compare:
+        try:
+            from automation import m6_compare
+
+            policy_path = (
+                Path(args.policy).expanduser().resolve()
+                if args.policy
+                else ROOT / "analysis" / "m6" / "comparison-policy.json"
+            )
+            policy = json.loads(policy_path.read_text())
+
+            class _CompareTimeout(Exception):
+                pass
+
+            def _compare_alarm(signum, frame):
+                raise _CompareTimeout(f"comparison exceeded {args.compare_timeout}s")
+
+            previous = signal.signal(signal.SIGALRM, _compare_alarm)
+            compare_budget = min(
+                args.compare_timeout,
+                max(0.0, overall_deadline - time.monotonic()),
+            )
+            if compare_budget <= 0:
+                raise _CompareTimeout("overall coordinator deadline expired")
+            signal.setitimer(signal.ITIMER_REAL, compare_budget)
+            try:
+                comparison = m6_compare.compare(frame_dir, shadow, policy)
+            finally:
+                signal.setitimer(signal.ITIMER_REAL, 0)
+                signal.signal(signal.SIGALRM, previous)
+            result["comparison"] = comparison
+            result["pixel_verdict"] = comparison.get("status")
+            result["execution"] = {
+                "capture": "complete",
+                "metal": "complete",
+                "operation_coverage": "complete"
+                if report["metal"].get("encoded") == report["metal"].get("events")
+                else "partial",
+            }
+            result["qualified"] = False
+            (shadow / "comparison.json").write_text(
+                json.dumps(comparison, indent=2) + "\n"
+            )
+        except (OSError, ValueError, Exception) as exc:  # noqa: BLE001
+            result["error"] = f"comparison failed: {exc}"
+            (shadow / "coordinator.json").write_text(
+                json.dumps(result, indent=2) + "\n"
+            )
+            return 1
+    result["status"] = "ok"
+    (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Inspection
 # ---------------------------------------------------------------------------
 
@@ -1271,6 +1660,12 @@ def _parser() -> argparse.ArgumentParser:
                      help="capture the default-framebuffer pixels of in-frame copies")
     cap.add_argument("--seal", action="store_true",
                      help="publish the authoritative frame-seal/v1 handoff")
+    cap.add_argument("--shadow", action="store_true",
+                     help="execute the sealed frame through the in-process Metal bridge")
+    cap.add_argument("--shadow-dir", default="",
+                     help="shadow output directory (default: <output>/shadow)")
+    cap.add_argument("--shadow-timeout-ms", type=int, default=120000)
+    cap.add_argument("--shadow-wait-ms", type=int, default=180000)
     cap.add_argument("--seal-log", action="store_true",
                      help="register the in-process logging consumer for the seal")
     cap.add_argument("--seal-timeout-ms", type=int, default=600000,
@@ -1281,6 +1676,21 @@ def _parser() -> argparse.ArgumentParser:
     cap.add_argument("--duration", type=float, default=90.0)
     cap.add_argument("--timeout", type=float, default=180.0)
     cap.set_defaults(handler=capture)
+
+    coord = sub.add_parser(
+        "shadow-coordinator",
+        help="translate shaders and compare one sealed frame's in-process Metal replay",
+    )
+    coord.add_argument("--run", required=True)
+    coord.add_argument("--shadow-dir", default="")
+    coord.add_argument("--timeout", type=float, default=900.0)
+    coord.add_argument("--seal-timeout", type=float, default=300.0)
+    coord.add_argument("--translation-timeout", type=float, default=180.0)
+    coord.add_argument("--replay-timeout", type=float, default=180.0)
+    coord.add_argument("--compare-timeout", type=float, default=60.0)
+    coord.add_argument("--policy")
+    coord.add_argument("--no-compare", action="store_true")
+    coord.set_defaults(handler=shadow_coordinator)
 
     ins = sub.add_parser("inspect", help="validate and summarize one frame trace")
     ins.add_argument("--frame", required=True)

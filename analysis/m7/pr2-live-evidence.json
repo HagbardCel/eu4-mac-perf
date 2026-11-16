@@ -1,0 +1,150 @@
+{
+  "schema": "m7-pr2-shadow-evidence/v1",
+  "status": "completed_one_shot",
+  "claim": "One authentic EU4 process produced one GL reference and one independent Metal result from exactly one sealed frame, without a second EU4 launch. Pixel equivalence is reported separately and is not claimed for this live frame.",
+  "base": {
+    "pr1_branch": "m7/pr1-frame-seal",
+    "pr1_commit": "5e8de12",
+    "pr1_pr": "https://github.com/HagbardCel/eu4-mac-perf/pull/199",
+    "pr2_branch": "m7/pr2-inprocess-metal",
+    "stacked": true,
+    "pr2_commit": "c8553f8"
+  },
+  "launch": {
+    "command": "python3.14 -m automation.m6_frame capture --output .local/m7/pr2-shadow-live-7 --callers 0x103b3c8 --min-draws 1 --occurrence 300 --boundary scene --seal --shadow --shadow-timeout-ms 120000 --shadow-wait-ms 180000 --max-draws 1024 --duration 90 --timeout 600 --background --timeline",
+    "pid": 92781,
+    "session_id": "e42b31ac-ee4b-44f5-9f65-71ed99fe6f0b",
+    "eu4_processes": 1,
+    "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "instrumentation_library_sha256": "7ce9101ddb35aedaafa648e8baa791e58409fac61fa2418bc808187c7d5d5af9",
+    "startup_summary": {
+      "complete": true,
+      "state": 2,
+      "refused": 126,
+      "unavailable": 0,
+      "overflow": 0,
+      "unmatched": 0,
+      "reason": ""
+    },
+    "termination": {
+      "terminated": true,
+      "killed": false
+    },
+    "display_restore": {
+      "restored": true,
+      "reason": "already_original"
+    },
+    "game_stdout_bytes": 0,
+    "game_stderr_bytes": 0,
+    "binary_identity_note": "The final live run used instrumentation library 7ce9101d\u2026 built from code c8553f8, which includes the structured verifier, shader receipt, bounded deadline and detailed failure report. Earlier run 6 (library 3e400851\u2026) is historical and does not test these later fixes."
+  },
+  "frame": {
+    "capture_frame_id": 1,
+    "boundary": "scene",
+    "present_index": 603,
+    "scene_index": 603,
+    "capture_dir": ".local/m7/pr2-shadow-live-7/frame",
+    "operation_count": 325,
+    "draw_count": 315,
+    "clear_count": 9,
+    "copy_count": 1,
+    "width": 1728,
+    "height": 1117,
+    "manifest_sha256": "30daf18322ed6bde31eca1ba983da4718645ff010fe6768ee86c10b1f33941d4",
+    "reference_sha256": "a7991870ed19239cb93f19abae724ee9c4f858306b4b4424ba38572441210dd6",
+    "reference_bytes": 7720704,
+    "readback_ns": 23826000,
+    "finalize_ns": 16779000,
+    "seal_ns": 40607000
+  },
+  "metal": {
+    "session_id": "dc8fd91a-88e3-4a2d-870e-787cc6e4b05c",
+    "status": "ok",
+    "events": 325,
+    "encoded": 325,
+    "failed": 0,
+    "readback_ok": true,
+    "command_status": 4,
+    "metal_frame_sha256": "0dad7bc61424c3a199d8923ca521f92a941e0fd19475f7f86154a91041f614b3",
+    "duration_ns": 2082059000,
+    "total_callback_ns": 5433730000,
+    "provenance": {
+      "bindings": 2739,
+      "metal_render_target_bindings": 274,
+      "external_capture_bindings": 2465,
+      "first_sample_before_any_write": 0,
+      "transfers": 1
+    },
+    "timed_out": false,
+    "partial": false,
+    "verification_evidence": "The final run used library 7ce9101d built from code c8553f8, including structured blob verification, shader receipt validation and the bounded deadline; the shadow report has stage=complete, timed_out=false and partial=false."
+  },
+  "comparison": {
+    "pixel_verdict": "fail",
+    "state_coverage": "partial",
+    "unsupported": [
+      "gl_dither",
+      "multisample"
+    ],
+    "pixels": 1930176,
+    "mismatched_pixels": 1162852,
+    "mismatched_fraction": 0.6024590503663915,
+    "alpha_different_pixels": 0,
+    "max_channel_error": 66,
+    "mean_max_channel_error": 0.864247095,
+    "mean_abs_error_rgba": [
+      0.398149702,
+      0.516010975,
+      0.652904191,
+      0.0
+    ],
+    "interpretation": "Spatially uniform low-amplitude differences; not proven exclusively dithering (263,495 pixels >1, 50 >40). Canonical title remains exact; qualified=false.",
+    "state_coverage_scope": [
+      "gl_dither",
+      "multisample"
+    ],
+    "pixels_differing_by_more_than_1": 263495,
+    "pixels_differing_by_more_than_40": 50
+  },
+  "offline": {
+    "canonical_title": {
+      "events": 326,
+      "encoded": 326,
+      "failed": 0,
+      "metal_frame_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15",
+      "reference_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15",
+      "exact": true
+    },
+    "copy_bearing_scene75": {
+      "events": 283,
+      "encoded": 283,
+      "failed": 0,
+      "transfers": 1,
+      "pixels": 1930176,
+      "mismatched_pixels": 1792005,
+      "max_channel_error": 23,
+      "status": "known_divergence_preserved"
+    },
+    "library_cli_agreement": true,
+    "repeated_sessions_agree": true,
+    "core_links_opengl": false
+  },
+  "limitations": [
+    "One active replay session per process; concurrent sessions are not supported.",
+    "Shader translation is external and on demand; the engine blocks at the sealed boundary for the bounded wait.",
+    "gl_dither and multisample are not implemented in the Metal host; state_coverage is partial.",
+    "Renderer-generated resource history across successive frames is not maintained.",
+    "This is one-shot synchronous dual rendering, not continuous mirroring."
+  ],
+  "qualification": {
+    "capture_complete": true,
+    "metal_execution": "complete",
+    "operation_coverage": "complete",
+    "resource_provenance": "complete",
+    "state_coverage": "partial",
+    "pixel": "fail",
+    "qualified": false,
+    "reason": "gl_dither and multisample are captured but unsupported; unsupported states prevent full renderer-equivalence claims.",
+    "note": "Execution/coverage/pixel/qualification are reported separately. Pixel difference is not an execution error."
+  }
+}

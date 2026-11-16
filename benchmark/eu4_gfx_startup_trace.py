@@ -42,8 +42,40 @@ class StartupError(RuntimeError):
     pass
 
 
+def _build_arc_object(source: Path, output: Path) -> Path:
+    built = subprocess.run(
+        [
+            "clang",
+            "-arch",
+            "x86_64",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-fobjc-arc",
+            "-I",
+            str(BENCH),
+            "-c",
+            str(source),
+            "-o",
+            str(output),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if built.returncode:
+        raise StartupError(built.stderr.strip() or "replay object failed to build")
+    return output
+
+
 def build_library() -> Path:
     BUILD.mkdir(parents=True, exist_ok=True)
+    replay_object = _build_arc_object(
+        BENCH / "eu4_gfx_frame_replay.mm", BUILD / "eu4_gfx_frame_replay.o"
+    )
+    bridge_object = _build_arc_object(
+        BENCH / "eu4_gfx_shadow_bridge.mm", BUILD / "eu4_gfx_shadow_bridge.o"
+    )
     command = [
         "clang",
         "-arch",
@@ -54,6 +86,8 @@ def build_library() -> Path:
         "-dynamiclib",
         "-framework", "OpenGL",
         "-framework", "AppKit",
+        "-framework", "Metal",
+        "-lc++",
         "-I",
         str(BENCH),
         "-o",
@@ -73,6 +107,8 @@ def build_library() -> Path:
         str(BENCH / "eu4_gfx_startup_trace_detour.c"),
         str(BENCH / "eu4_gfx_startup_trace_gateway.S"),
         str(BENCH / "eu4_gfx_startup_trace_dylib.c"),
+        str(replay_object),
+        str(bridge_object),
     ]
     built = subprocess.run(command, capture_output=True, text=True, check=False)
     if built.returncode:
