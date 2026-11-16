@@ -1320,6 +1320,8 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
     marker the in-process bridge waits for, then waits for the Metal report and
     runs the existing differential comparison.
     """
+    if args.timeout <= 0 or args.seal_timeout <= 0 or             args.translation_timeout <= 0 or args.replay_timeout <= 0 or             args.compare_timeout <= 0:
+        return 1
     run = Path(args.run).expanduser().resolve()
     shadow = (
         Path(args.shadow_dir).expanduser().resolve()
@@ -1388,7 +1390,10 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
             cwd=str(ROOT),
             capture_output=True,
             text=True,
-            timeout=args.translation_timeout,
+            timeout=min(
+                args.translation_timeout,
+                max(1.0, overall_deadline - time.monotonic()),
+            ),
             check=False,
         )
     except subprocess.TimeoutExpired:
@@ -1439,7 +1444,9 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
         + "\n"
     )
     # Translation time does not consume the in-process replay budget.
-    report_deadline = min(overall_deadline, time.monotonic() + args.replay_timeout)
+    report_deadline = min(
+        overall_deadline, time.monotonic() + args.replay_timeout
+    )
     while not report_path.is_file() and time.monotonic() < report_deadline:
         time.sleep(0.1)
     if not report_path.is_file():
@@ -1452,6 +1459,8 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
         result["error"] = str(exc)
         (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")
         return 1
+    result["metal"] = report
+    provenance_error = None
     for report_field, seal_field in (
         ("capture_frame_id", "capture_frame_id"),
         ("pid", "pid"),
@@ -1460,14 +1469,20 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
         ("operation_count", "operation_count"),
     ):
         if report.get(report_field) != seal.get(seal_field):
-            result["error"] = (
+            provenance_error = (
                 f"shadow report {report_field} does not match the sealed frame"
             )
-            (shadow / "coordinator.json").write_text(
-                json.dumps(result, indent=2) + "\n"
-            )
-            return 1
-    result["metal"] = report
+            break
+    if provenance_error is not None:
+        result["provenance_error"] = provenance_error
+        if report.get("status") != "ok":
+            result["error"] = report.get("error") or provenance_error
+        else:
+            result["error"] = provenance_error
+        (shadow / "coordinator.json").write_text(
+            json.dumps(result, indent=2) + "\n"
+        )
+        return 1
     try:
         events = [
             json.loads(line)
@@ -1525,7 +1540,11 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
                 raise _CompareTimeout(f"comparison exceeded {args.compare_timeout}s")
 
             previous = signal.signal(signal.SIGALRM, _compare_alarm)
-            signal.setitimer(signal.ITIMER_REAL, args.compare_timeout)
+            compare_budget = min(
+                args.compare_timeout,
+                max(1.0, overall_deadline - time.monotonic()),
+            )
+            signal.setitimer(signal.ITIMER_REAL, compare_budget)
             try:
                 comparison = m6_compare.compare(frame_dir, shadow, policy)
             finally:

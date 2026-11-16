@@ -66,6 +66,11 @@ typedef struct {
 @property (nonatomic, assign) NSUInteger current_event;
 @property (nonatomic, assign) uint64_t timeout_ms;
 @property (nonatomic, assign) uint64_t deadline_ns;
+@property (nonatomic, assign) int deadline_expired;
+@property (nonatomic, assign) uint64_t events_count;
+@property (nonatomic, assign) uint64_t encoded_count;
+@property (nonatomic, assign) uint64_t failed_count;
+@property (nonatomic, assign) uint64_t started_ns;
 @end
 
 @implementation EU4MetalReplayState
@@ -102,6 +107,11 @@ static thread_local FrameTarget *g_default_target_ptr;
 #define g_current_event (g_state.current_event)
 #define g_timeout_ms (g_state.timeout_ms)
 #define g_deadline_ns (g_state.deadline_ns)
+#define g_deadline_expired (g_state.deadline_expired)
+#define g_events_count (g_state.events_count)
+#define g_encoded_count (g_state.encoded_count)
+#define g_failed_count (g_state.failed_count)
+#define g_started_ns (g_state.started_ns)
 #define g_default_target (*g_default_target_ptr)
 
 static NSMutableDictionary *target_for(NSDictionary *target, NSError **error);
@@ -2280,6 +2290,7 @@ static BOOL wait_for_transfer(id<MTLCommandBuffer> buffer, NSString *operation,
     } else {
         uint64_t now = replay_now_ns();
         if (now >= g_deadline_ns) {
+            g_deadline_expired = 1;
             if (error != NULL) {
                 *error = [NSError errorWithDomain:kErrorDomain code:83
                                          userInfo:@{NSLocalizedDescriptionKey:
@@ -2301,6 +2312,7 @@ static BOOL wait_for_transfer(id<MTLCommandBuffer> buffer, NSString *operation,
         dispatch_time_t deadline = dispatch_time(
             DISPATCH_TIME_NOW, (int64_t)(g_deadline_ns - now));
         if (dispatch_semaphore_wait(completed, deadline) != 0) {
+            g_deadline_expired = 1;
             if (error != NULL) {
                 *error = [NSError errorWithDomain:kErrorDomain code:83
                                          userInfo:@{NSLocalizedDescriptionKey:
@@ -2553,17 +2565,6 @@ static int replay_sha256_file(const char *path, char out[65]) {
     return 0;
 }
 
-static const char *find_token(const char *start, const char *end,
-                              const char *token) {
-    size_t length = strlen(token);
-    for (const char *at = start; at + length <= end; at++) {
-        if (memcmp(at, token, length) == 0) {
-            return at;
-        }
-    }
-    return NULL;
-}
-
 static BOOL verify_file_sha(NSString *path, uint64_t expected_size,
                             const char *expected_sha, NSError **error) {
     struct stat st;
@@ -2599,6 +2600,105 @@ static BOOL verify_file_sha(NSString *path, uint64_t expected_size,
     return YES;
 }
 
+static BOOL verify_reference_object(id object, NSString *frame_dir,
+                                    NSMutableDictionary<NSString *, NSDictionary *> *seen,
+                                    NSError **error) {
+    if ([object isKindOfClass:[NSArray class]]) {
+        for (id value in (NSArray *)object) {
+            if (!verify_reference_object(value, frame_dir, seen, error)) {
+                return NO;
+            }
+        }
+        return YES;
+    }
+    if (![object isKindOfClass:[NSDictionary class]]) {
+        return YES;
+    }
+    NSDictionary *dictionary = (NSDictionary *)object;
+    id file_value = dictionary[@"file"];
+    if (file_value == nil) {
+        file_value = dictionary[@"data"];
+    }
+    if (file_value != nil) {
+        if (![file_value isKindOfClass:[NSString class]]) {
+            return NO;
+        }
+        NSString *name = (NSString *)file_value;
+        if (name.length == 0 || [name isEqualToString:@"."] ||
+            [name isEqualToString:@".."] || [name containsString:@"/"] ||
+            [name containsString:@"\\"] ||
+            name.pathComponents.count != 1) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:113
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        @"invalid blob path"}];
+            }
+            return NO;
+        }
+        id sha_value = dictionary[@"sha256"];
+        if (![sha_value isKindOfClass:[NSString class]] ||
+            [(NSString *)sha_value length] != 64) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:113
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        [NSString stringWithFormat:
+                                                             @"blob %@ has no valid sha256", name]}];
+            }
+            return NO;
+        }
+        NSString *sha = (NSString *)sha_value;
+        for (NSUInteger index = 0; index < sha.length; index++) {
+            unichar character = [sha characterAtIndex:index];
+            if (!((character >= '0' && character <= '9') ||
+                  (character >= 'a' && character <= 'f') ||
+                  (character >= 'A' && character <= 'F'))) {
+                if (error != NULL) {
+                    *error = [NSError errorWithDomain:kErrorDomain code:113
+                                             userInfo:@{NSLocalizedDescriptionKey:
+                                                            @"invalid blob sha256"}];
+                }
+                return NO;
+            }
+        }
+        id bytes_value = dictionary[@"bytes"];
+        uint64_t expected_size = 0;
+        if (bytes_value != nil) {
+            if (![bytes_value isKindOfClass:[NSNumber class]] ||
+                [bytes_value longLongValue] < 0) {
+                return NO;
+            }
+            expected_size = (uint64_t)[bytes_value unsignedLongLongValue];
+        }
+        NSDictionary *prior = seen[name];
+        if (prior != nil) {
+            if (![prior[@"sha256"] isEqualToString:sha] ||
+                (bytes_value != nil &&
+                 [prior[@"bytes"] unsignedLongLongValue] != expected_size)) {
+                if (error != NULL) {
+                    *error = [NSError errorWithDomain:kErrorDomain code:115
+                                             userInfo:@{NSLocalizedDescriptionKey:
+                                                            [NSString stringWithFormat:
+                                                                 @"conflicting repeated blob reference %@", name]}];
+                }
+                return NO;
+            }
+        } else {
+            NSString *path = [[frame_dir stringByAppendingPathComponent:@"blobs"]
+                stringByAppendingPathComponent:name];
+            if (!verify_file_sha(path, expected_size, sha.UTF8String, error)) {
+                return NO;
+            }
+            seen[name] = @{@"sha256": sha, @"bytes": @(expected_size)};
+        }
+    }
+    for (id value in dictionary.allValues) {
+        if (!verify_reference_object(value, frame_dir, seen, error)) {
+            return NO;
+        }
+    }
+    return YES;
+}
+
 static BOOL verify_blob_references(NSString *frame_dir, NSError **error) {
     NSString *events_path =
         [frame_dir stringByAppendingPathComponent:@"frame-events.jsonl"];
@@ -2606,74 +2706,31 @@ static BOOL verify_blob_references(NSString *frame_dir, NSError **error) {
     if (data == nil) {
         return NO;
     }
-    const char *bytes = (const char *)data.bytes;
-    const char *end = bytes + data.length;
-    const char *cursor = bytes;
-    NSMutableSet<NSString *> *seen = [NSMutableSet set];
-    while (cursor < end) {
-        const char *file = find_token(cursor, end, "\"file\":\"");
-        const char *attribute = find_token(cursor, end, "\"data\":\"");
-        const char *marker = NULL;
-        size_t marker_length = 0;
-        if (file != NULL && (attribute == NULL || file < attribute)) {
-            marker = file;
-            marker_length = strlen("\"file\":\"");
-        } else if (attribute != NULL) {
-            marker = attribute;
-            marker_length = strlen("\"data\":\"");
+    NSString *text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    if (text == nil) {
+        return NO;
+    }
+    NSMutableDictionary<NSString *, NSDictionary *> *seen =
+        [NSMutableDictionary dictionary];
+    for (NSString *line in [text componentsSeparatedByString:@"\n"]) {
+        if (line.length == 0) {
+            continue;
         }
-        if (marker == NULL) {
-            break;
-        }
-        const char *name_begin = marker + marker_length;
-        const char *name_end = (const char *)memchr(name_begin, '"', (size_t)(end - name_begin));
-        if (name_end == NULL) {
-            return NO;
-        }
-        NSString *name = [[NSString alloc] initWithBytes:name_begin
-                                                  length:(NSUInteger)(name_end - name_begin)
-                                                encoding:NSUTF8StringEncoding];
-        const char *sha_marker = find_token(name_end, end, "\"sha256\":\"");
-        if (name.length == 0 || sha_marker == NULL ||
-            sha_marker - name_end > 512) {
+        NSData *line_data = [line dataUsingEncoding:NSUTF8StringEncoding];
+        id object = [NSJSONSerialization JSONObjectWithData:line_data
+                                                    options:0
+                                                      error:NULL];
+        if (object == nil) {
             if (error != NULL) {
-                *error = [NSError errorWithDomain:kErrorDomain code:113
+                *error = [NSError errorWithDomain:kErrorDomain code:116
                                          userInfo:@{NSLocalizedDescriptionKey:
-                                                        @"blob reference has no sha256"}];
+                                                        @"malformed frame event"}];
             }
             return NO;
         }
-        const char *sha_begin = sha_marker + strlen("\"sha256\":\"");
-        if (sha_begin + 64 > end) {
+        if (!verify_reference_object(object, frame_dir, seen, error)) {
             return NO;
         }
-        char expected[65];
-        memcpy(expected, sha_begin, 64);
-        expected[64] = 0;
-        if (![seen containsObject:name]) {
-            [seen addObject:name];
-            NSString *path = [[frame_dir stringByAppendingPathComponent:@"blobs"]
-                stringByAppendingPathComponent:name];
-            if (!verify_file_sha(path, 0, expected, error)) {
-                return NO;
-            }
-            const char *size_marker =
-                find_token(name_end, sha_marker, "\"bytes\":");
-            if (size_marker != NULL) {
-                uint64_t size = strtoull(size_marker + strlen("\"bytes\":"), NULL, 10);
-                struct stat st;
-                if (stat(path.fileSystemRepresentation, &st) == 0 &&
-                    (uint64_t)st.st_size != size) {
-                    if (error != NULL) {
-                        *error = [NSError errorWithDomain:kErrorDomain code:114
-                                                 userInfo:@{NSLocalizedDescriptionKey:
-                                                                [NSString stringWithFormat:@"blob size mismatch for %@", name]}];
-                    }
-                    return NO;
-                }
-            }
-        }
-        cursor = sha_begin + 64;
     }
     return YES;
 }
@@ -2699,8 +2756,10 @@ static BOOL verify_sealed_inputs(NSString *frame_dir, NSString *shader_dir,
                          error) ||
         !verify_file_sha(reference_path, 0, config->expected_reference_sha256,
                          error) ||
-        !verify_file_sha(shader_json, 0, config->expected_shader_json_sha256,
-                         error)) {
+        (config->expected_shader_json_sha256 != NULL &&
+         config->expected_shader_json_sha256[0] != 0 &&
+         !verify_file_sha(shader_json, 0,
+                         config->expected_shader_json_sha256, error))) {
         return NO;
     }
     return verify_blob_references(frame_dir, error);
@@ -2721,7 +2780,12 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
     g_deadline_ns = timeout_ms == 0
                         ? 0
                         : replay_now_ns() + timeout_ms * 1000000ull;
+    g_deadline_expired = 0;
+    g_events_count = 0;
+    g_encoded_count = 0;
+    g_failed_count = 0;
     uint64_t started_ns = replay_now_ns();
+    g_started_ns = started_ns;
     @autoreleasepool {
         NSError *verify_error = nil;
         if (!verify_sealed_inputs(frame_path, shader_path, config, &verify_error)) {
@@ -2755,6 +2819,7 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
         }
         NSArray *events = read_json_lines(
             [frame_path stringByAppendingPathComponent:@"frame-events.jsonl"], &error);
+        g_events_count = events.count;
         if (out_result != NULL) {
             out_result->events = (uint32_t)events.count;
         }
@@ -2935,6 +3000,9 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
         }
 
         for (NSUInteger index = 0; index < events.count; index++) {
+            if (config != NULL && config->test_inject_failure == 1 && index == 1) {
+                g_deadline_ns = replay_now_ns() - 1;
+            }
             if (stop_after >= 0 && (NSInteger)encoded >= stop_after) {
                 break;
             }
@@ -3117,9 +3185,23 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                 }];
             }
             encoded++;
+            g_encoded_count = encoded;
+            g_failed_count = failed;
         }
         [command commit];
+        if (config != NULL && config->test_inject_failure == 2) {
+            g_deadline_ns = replay_now_ns() - 1;
+        }
         BOOL final_completed = wait_for_transfer(command, @"frame completion", &error);
+        if (config != NULL && config->test_inject_failure == 4) {
+            final_completed = NO;
+            error = [NSError errorWithDomain:kErrorDomain code:120
+                                    userInfo:@{NSLocalizedDescriptionKey:
+                                                   @"injected command failure"}];
+        }
+        if (config != NULL && config->test_inject_failure == 3) {
+            g_deadline_ns = replay_now_ns() - 1;
+        }
         if (!final_completed) {
             failed++;
             [failures addObject:@{
@@ -3271,14 +3353,28 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
         result[@"transfers"] = g_transfer_records;
         result[@"readback"] = @(readback_ok);
         BOOL partial_mode = stop_after >= 0 || only_event >= 0;
+        if (!provenance_written) {
+            failed++;
+            [failures addObject:@{
+                @"event": @(events.count),
+                @"kind": @"artifact",
+                @"caller": @"",
+                @"error": @"replay-provenance.jsonl write failed",
+            }];
+        }
         BOOL status_ok = readback_ok && failed == 0 &&
                          (partial_mode || encoded == events.count);
         result[@"failed"] = @(failed);
         result[@"failures"] = failures;
         result[@"partial"] = @(partial_mode);
-        result[@"timed_out"] = @(!final_completed);
-        result[@"status"] = status_ok ? (final_completed ? @"ok" : @"timeout")
-                                      : @"failed";
+        result[@"timed_out"] = @(g_deadline_expired ? YES : NO);
+        if (status_ok) {
+            result[@"status"] = @"ok";
+        } else if (g_deadline_expired) {
+            result[@"status"] = @"timeout";
+        } else {
+            result[@"status"] = @"failed";
+        }
         NSData *json = [NSJSONSerialization dataWithJSONObject:result
                                                        options:NSJSONWritingPrettyPrinted
                                                          error:NULL];
@@ -3286,19 +3382,15 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
             json != nil &&
             [json writeToFile:[output_path stringByAppendingPathComponent:@"replay.json"]
                    atomically:YES];
-        if (!provenance_written || !json_written) {
+        if (!json_written) {
             failed++;
             [failures addObject:@{
                 @"event": @(events.count),
                 @"kind": @"artifact",
                 @"caller": @"",
-                @"error": provenance_written ? @"replay.json write failed"
-                                            : @"replay-provenance.jsonl write failed",
+                @"error": @"replay.json write failed",
             }];
             status_ok = NO;
-            result[@"failed"] = @(failed);
-            result[@"failures"] = failures;
-            result[@"status"] = @"failed";
         }
         if (out_result != NULL) {
             memset(out_result, 0, sizeof(*out_result));
@@ -3309,7 +3401,7 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
             out_result->events = (uint32_t)events.count;
             out_result->encoded = (uint32_t)encoded;
             out_result->failed = (uint32_t)failed;
-            out_result->timed_out = final_completed ? 0 : 1;
+            out_result->timed_out = g_deadline_expired ? 1 : 0;
             out_result->partial = partial_mode ? 1 : 0;
             out_result->ok = (status_ok && provenance_written && json_written &&
                               failed == 0 && readback_ok &&
@@ -3455,6 +3547,21 @@ extern "C" int eu4_metal_replay_frame(eu4_metal_replay_session *session,
                           config->capture_pre_images != 0,
                           config->depth_from_prefix != 0,
                           config->timeout_ms, config, result);
+    if (!result->ok) {
+        if (result->events == 0 && g_events_count > 0) {
+            result->events = (uint32_t)g_events_count;
+        }
+        if (result->encoded == 0 && g_encoded_count > 0) {
+            result->encoded = (uint32_t)g_encoded_count;
+        }
+        if (result->failed == 0 && g_failed_count > 0) {
+            result->failed = (uint32_t)g_failed_count;
+        }
+        result->timed_out = g_deadline_expired ? 1 : 0;
+        if (result->duration_ns == 0) {
+            result->duration_ns = replay_now_ns() - state.started_ns;
+        }
+    }
     /* Do not leave the thread-local selector pointing at returned state. */
     g_state = nil;
     g_default_target_ptr = NULL;

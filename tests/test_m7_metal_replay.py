@@ -230,7 +230,7 @@ class MetalReplayLibraryTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             report = json.loads(result.stdout.splitlines()[-1])
             self.assertEqual(report["ok"], 0)
-            self.assertEqual(report["failed"], 1)
+            self.assertGreaterEqual(report["failed"], 1)
 
     def test_coordinator_rejects_missing_seal_and_stale_artifacts(self):
         from tests.test_m7_frame_seal import _write_frame
@@ -285,6 +285,84 @@ class MetalReplayLibraryTests(unittest.TestCase):
             report = json.loads((output / "replay.json").read_text())
             self.assertTrue(report["partial"])
             self.assertLess(report["encoded"], report["events"])
+
+    def test_timeout_and_command_failure_are_classified_distinctly(self):
+        fixture = _fixture("m6/frames/menu-occ300")
+        if fixture is None:
+            self.skipTest("canonical M6 frame is absent in this worktree")
+        frame, shaders = fixture
+        expectations = {
+            1: (1, 0),  # event boundary timeout: timed_out, no ordinary failure
+            2: (1, 1),  # final command timeout
+            3: (1, 1),  # readback timeout
+            4: (0, 1),  # ordinary command failure, not a timeout
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            for injection, (timed_out, failed) in expectations.items():
+                with self.subTest(injection=injection):
+                    output = Path(temporary) / str(injection)
+                    result = self._abi(
+                        frame, shaders, output, 1,
+                        "--inject-failure", str(injection),
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    report = json.loads(result.stdout.splitlines()[-1])
+                    self.assertEqual(report["ok"], 0)
+                    self.assertEqual(report["timed_out"], timed_out)
+                    self.assertGreaterEqual(report["failed"], failed)
+                    self.assertGreater(report["events"], 0)
+
+    def test_native_blob_verification_uses_structured_references(self):
+        from tests.test_m7_frame_seal import _write_frame
+
+        def run_verify(frame: Path):
+            event_data = (frame / "frame-events.jsonl").read_bytes()
+            manifest = (frame / "frame-trace.json").read_bytes()
+            reference = (frame / "frame-reference.bgra").read_bytes()
+            return self._abi(
+                frame, frame / "shaders", frame / "out", 1,
+                "--event-sha", hashlib.sha256(event_data).hexdigest(),
+                "--event-bytes", str(len(event_data)),
+                "--manifest-sha", hashlib.sha256(manifest).hexdigest(),
+                "--reference-sha", hashlib.sha256(reference).hexdigest(),
+            )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            valid = base / "valid"
+            _write_frame(valid)
+            (valid / "shaders").mkdir()
+            result = run_verify(valid)
+            self.assertNotIn("sealed input verification", result.stderr)
+
+            corrupt = base / "corrupt"
+            _write_frame(corrupt)
+            (corrupt / "blobs" / "attr.bin").write_bytes(b"tampered")
+            (corrupt / "shaders").mkdir()
+            self.assertIn("sealed input verification", run_verify(corrupt).stderr)
+
+            traversal = base / "traversal"
+            _write_frame(traversal)
+            events = json.loads((traversal / "frame-events.jsonl").read_text().splitlines()[0])
+            events["attributes"][0]["data"] = "../attr.bin"
+            lines = [json.dumps(events)] + [
+                line for line in (traversal / "frame-events.jsonl").read_text().splitlines()[1:]
+            ]
+            (traversal / "frame-events.jsonl").write_text("\n".join(lines) + "\n")
+            (traversal / "shaders").mkdir()
+            self.assertIn("sealed input verification", run_verify(traversal).stderr)
+
+            conflict = base / "conflict"
+            _write_frame(conflict)
+            events = json.loads((conflict / "frame-events.jsonl").read_text().splitlines()[0])
+            events["attributes"].append(dict(events["attributes"][0]))
+            events["attributes"][1]["sha256"] = "0" * 64
+            lines = [json.dumps(events)] + [
+                line for line in (conflict / "frame-events.jsonl").read_text().splitlines()[1:]
+            ]
+            (conflict / "frame-events.jsonl").write_text("\n".join(lines) + "\n")
+            (conflict / "shaders").mkdir()
+            self.assertIn("sealed input verification", run_verify(conflict).stderr)
 
     def test_core_does_not_link_opengl(self):
         linked = subprocess.run(

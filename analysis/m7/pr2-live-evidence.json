@@ -78,7 +78,7 @@
     "timed_out": false,
     "partial": false,
     "report_fields_note": "timed_out=false and partial=false are the core result values; the live shadow-report artifact predates the bridge report-field addition.",
-    "verification_evidence": "The run produced shader-receipt.json with matching identity; receipt validation exists in the code path and is covered by offline tests. The live binary predates the receipt-verification commit, so this artifact alone does not prove the bridge checked it."
+    "verification_evidence": "The archived live run predates the final structured blob verifier and detailed failure-report changes; it produced a matching shader receipt and succeeded through the then-current path. Deterministic offline tests cover the final verifier and failure classification."
   },
   "comparison": {
     "pixel_verdict": "fail",
@@ -145,6 +145,7 @@
     "state_coverage": "partial",
     "pixel": "fail",
     "qualified": false,
-    "reason": "gl_dither and multisample are captured but unsupported; unsupported states prevent full renderer-equivalence claims."
+    "reason": "gl_dither and multisample are captured but unsupported; unsupported states prevent full renderer-equivalence claims.",
+    "note": "Execution/coverage/pixel/qualification are reported separately. Pixel difference is not an execution error."
   }
 }

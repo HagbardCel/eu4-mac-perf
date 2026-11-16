@@ -214,6 +214,7 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
     __block int status = 1;
     __block NSString *failure = @"";
     __block eu4_metal_replay_session *active_session = NULL;
+    __block BOOL detailed_report_written = NO;
     @autoreleasepool {
         @try {
             char output[PATH_MAX];
@@ -320,6 +321,7 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
                             @"error": @(result.error),
                         },
                         @"status": result.ok ? @"ok" : @"failed",
+                        @"stage": result.ok ? @"complete" : @"metal_replay",
                         @"qualified": @NO,
                         @"error": @(result.error),
                         @"duration_ns": @(result.duration_ns),
@@ -335,6 +337,7 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
                         [output_path stringByAppendingPathComponent:
                                         @"shadow-report.json"],
                         report);
+                    detailed_report_written = report_written;
                     if (result.ok && report_written) {
                         status = 0;
                     } else if (result.ok) {
@@ -344,7 +347,7 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
                 }
                 }
             }
-            if (status != 0) {
+            if (status != 0 && !detailed_report_written) {
                 NSDictionary *report = @{
                     @"schema": @"m7-shadow-report/v1",
                     @"mode": @"single-frame",
@@ -355,6 +358,8 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
                     @"gl_reference_sha256": @(capture->reference_sha256),
                     @"trace_manifest_sha256": @(capture->manifest_sha256),
                     @"status": @"failed",
+                    @"stage": status == 2 ? @"objective_c_exception"
+                                         : (failure != nil ? failure : @"unknown"),
                     @"error": failure,
                     @"total_duration_ns":
                         @(shadow_now_ns() - g_started_ns),

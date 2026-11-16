@@ -15,7 +15,7 @@ static int run_once(const char *frame, const char *shaders, const char *out,
                     int iteration, uint64_t timeout_ms,
                     const char *event_sha, uint64_t event_bytes,
                     const char *manifest_sha, const char *reference_sha,
-                    const char *shader_sha) {
+                    const char *shader_sha, uint32_t inject_failure) {
     eu4_metal_replay_config config;
     memset(&config, 0, sizeof(config));
     config.struct_size = (uint32_t)sizeof(config);
@@ -31,6 +31,7 @@ static int run_once(const char *frame, const char *shaders, const char *out,
     config.expected_manifest_sha256 = manifest_sha;
     config.expected_reference_sha256 = reference_sha;
     config.expected_shader_json_sha256 = shader_sha;
+    config.test_inject_failure = inject_failure;
     char error[512] = {0};
     eu4_metal_replay_session *session =
         eu4_metal_replay_create(&config, error, sizeof(error));
@@ -46,6 +47,8 @@ static int run_once(const char *frame, const char *shaders, const char *out,
         @"ok": @(result.ok),
         @"command_status": @(result.command_status),
         @"readback_ok": @(result.readback_ok),
+        @"timed_out": @(result.timed_out),
+        @"partial": @(result.partial),
         @"events": @(result.events),
         @"encoded": @(result.encoded),
         @"failed": @(result.failed),
@@ -127,6 +130,7 @@ int main(int argc, const char *argv[]) {
         const char *manifest_sha = NULL;
         const char *reference_sha = NULL;
         const char *shader_sha = NULL;
+        uint32_t inject_failure = 0;
         for (int index = 1; index < argc; index++) {
             if (strcmp(argv[index], "--frame") == 0 && index + 1 < argc) {
                 frame = argv[++index];
@@ -160,6 +164,9 @@ int main(int argc, const char *argv[]) {
             } else if (strcmp(argv[index], "--shader-sha") == 0 &&
                        index + 1 < argc) {
                 shader_sha = argv[++index];
+            } else if (strcmp(argv[index], "--inject-failure") == 0 &&
+                       index + 1 < argc) {
+                inject_failure = (uint32_t)strtoul(argv[++index], NULL, 10);
             }
         }
         if (bad_config) {
@@ -188,7 +195,7 @@ int main(int argc, const char *argv[]) {
         for (int iteration = 0; iteration < loops; iteration++) {
             int code = run_once(frame, shaders, out, iteration, timeout_ms,
                                 event_sha, event_bytes, manifest_sha,
-                                reference_sha, shader_sha);
+                                reference_sha, shader_sha, inject_failure);
             if (code != 0 && result == 0) {
                 result = code;
             }

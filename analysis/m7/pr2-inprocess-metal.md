@@ -140,6 +140,33 @@ continuous mirroring.
   artifacts are fail-closed and full-frame success requires
   `encoded == events` (isolated/stop-after runs are marked `partial`).
 
+## Final bounded-execution and structured-verification pass
+
+- The replay result tracks whether the monotonic deadline actually expired.
+  Event-boundary, final-command, readback and ordinary command failures are
+  classified separately (`timed_out` true only for deadline expiry). Early exits
+  preserve duration, event/encoded/failed counters and the first error.
+- The alpha-transform path uses the same bounded wait; no direct
+  `waitUntilCompleted` remains outside the helper.
+- Blob verification now parses each event object and follows the canonical
+  Python rules: a `file`/`data` name, digest and optional size must belong to the
+  same object; invalid paths, missing digests, conflicting repeated references
+  and corrupt bytes fail before Metal. Text-token proximity is gone.
+- `replay.json` status is finalized after provenance publication; if provenance
+  or the report cannot be written, the result cannot be `ok`. Full-frame success
+  requires `encoded == events`; isolated/stop-after runs are `partial`.
+- Shadow reports keep the detailed Metal result on failure. A translated-shader
+  or session-creation failure writes a structurally valid identity-bearing
+  report with an explicit stage. A failed report write cannot produce callback
+  success.
+- The coordinator applies the remaining overall budget to translation, replay
+  and comparison; phase-specific timeout records are preserved.
+
+Deterministic injection tests cover event-boundary timeout, final-command
+timeout, readback timeout and a non-timeout command failure. Structured blob
+tests cover valid resources, corrupt blobs, path traversal and conflicting
+references.
+
 ## Limits and next steps
 
 - One active replay session per process; the C ABI is not designed for

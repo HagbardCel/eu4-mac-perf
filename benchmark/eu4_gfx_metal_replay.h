@@ -47,6 +47,7 @@ typedef struct {
     const char *expected_manifest_sha256;
     const char *expected_reference_sha256;
     const char *expected_shader_json_sha256;
+    uint32_t test_inject_failure; /* test-only: 1 event, 2 final, 3 readback, 4 command */
 } eu4_metal_replay_config;
 
 typedef struct {
