@@ -208,6 +208,233 @@ def copy_contract_problems(event: dict, index: int) -> list[str]:
     return problems
 
 
+HISTORY_SCHEMA = "gfx-frame-sequence/v1"
+
+
+def _file_sha256(path: Path) -> str | None:
+    try:
+        import hashlib
+        digest = hashlib.sha256()
+        with Path(path).open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest()
+    except OSError:
+        return None
+
+
+def _optional_document(path: Path) -> dict | None:
+    try:
+        value = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def load_frame_history(frame_dir: Path | str, trace: dict) -> dict:
+    """Load and verify one continuous frame's ``frame-sequence.json`` record.
+
+    A declared carried set is not evidence by itself.  The record must belong
+    to this exact captured frame (manifest/reference digests), and its
+    ``previous`` identity must resolve to the immediately preceding sequence
+    record whose renderer history contains every declared carried name.  The
+    result is ``absent`` for one-shot frames, ``verified`` for a bound record,
+    and ``invalid`` when any identity or resource-history link disagrees.
+    """
+    frame_dir = Path(frame_dir)
+    path = frame_dir / "frame-sequence.json"
+    if not path.is_file():
+        return {
+            "schema": HISTORY_SCHEMA,
+            "status": "absent",
+            "reasons": [],
+            "sequence_index": None,
+            "previous": None,
+            "render_targets": [],
+            "carried_renderer_outputs": [],
+            "delete_events": {},
+            "mutation_events": {},
+            "session_id": None,
+            "pid": None,
+            "capture_frame_id": None,
+        }
+    document = _optional_document(path)
+    if document is None:
+        return {
+            "schema": HISTORY_SCHEMA,
+            "status": "invalid",
+            "reasons": ["frame-sequence.json is not a JSON object"],
+            "sequence_index": None, "previous": None,
+            "render_targets": [], "carried_renderer_outputs": [],
+            "delete_events": {}, "mutation_events": {},
+            "session_id": None, "pid": None,
+            "capture_frame_id": None,
+        }
+    problems: list[str] = []
+    if document.get("schema") != HISTORY_SCHEMA:
+        problems.append("frame sequence schema is invalid")
+    frame = trace.get("frame") or {}
+    manifest_sha = _file_sha256(frame_dir / "frame-trace.json")
+    seal = _optional_document(frame_dir / "frame-seal.json")
+    if manifest_sha and document.get("manifest_sha256") != manifest_sha:
+        problems.append(
+            "frame sequence manifest_sha256 does not match the captured frame")
+    if (frame.get("reference_sha256")
+            and document.get("reference_sha256") != frame.get("reference_sha256")):
+        problems.append(
+            "frame sequence reference_sha256 does not match the captured "
+            "reference")
+    if seal is not None:
+        if document.get("capture_frame_id") != seal.get("capture_frame_id"):
+            problems.append(
+                "frame sequence capture_frame_id does not match the seal")
+        if document.get("session_id") != seal.get("session_id"):
+            problems.append("frame sequence session_id does not match the seal")
+        if document.get("pid") != seal.get("pid"):
+            problems.append("frame sequence pid does not match the seal")
+        if (seal.get("event_stream_sha256")
+                and document.get("event_stream_sha256")
+                != seal.get("event_stream_sha256")):
+            problems.append(
+                "frame sequence event_stream_sha256 does not match the seal")
+    try:
+        sequence_index = int(document.get("sequence_index") or 0)
+    except (TypeError, ValueError):
+        sequence_index = 0
+    if sequence_index <= 0:
+        problems.append("frame sequence index is invalid")
+
+    def names(value, label: str) -> list[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            problems.append(f"frame sequence {label} is not an array")
+            return []
+        result = []
+        for item in value:
+            if not isinstance(item, str) or not item:
+                problems.append(f"frame sequence {label} contains an invalid name")
+                continue
+            if item in result:
+                problems.append(f"frame sequence {label} repeats {item}")
+                continue
+            result.append(item)
+        return result
+
+    render_targets = names(document.get("render_targets"), "render_targets")
+    carried = names(document.get("carried_renderer_outputs"),
+                    "carried_renderer_outputs")
+    delete_events: dict[str, list[int]] = {}
+    mutation_events: dict[str, list[int]] = {}
+    lifecycle = document.get("lifecycle")
+    if lifecycle is not None and not isinstance(lifecycle, list):
+        problems.append("frame sequence lifecycle is not an array")
+        lifecycle = []
+    for item in lifecycle or []:
+        if not isinstance(item, dict):
+            problems.append("frame sequence lifecycle entry is invalid")
+            continue
+        kind = item.get("kind")
+        if kind not in ("delete", "create", "reset", "mutation"):
+            problems.append(f"unsupported lifecycle kind {kind!r}")
+            continue
+        try:
+            event = int(item.get("event"))
+        except (TypeError, ValueError):
+            problems.append("lifecycle entry has no integer event index")
+            continue
+        entry_names = item.get("names")
+        if not isinstance(entry_names, list):
+            problems.append("lifecycle entry names are invalid")
+            continue
+        if kind == "delete":
+            for name in entry_names:
+                if isinstance(name, str) and name:
+                    delete_events.setdefault(name, []).append(event)
+        elif kind == "mutation":
+            for name in entry_names:
+                if isinstance(name, str) and name:
+                    mutation_events.setdefault(name, []).append(event)
+
+    previous = document.get("previous")
+    previous_info = None
+    if sequence_index > 1:
+        if not isinstance(previous, dict):
+            problems.append(
+                "continuous frame has no previous-frame identity")
+        else:
+            previous_info = previous
+            previous_dir = Path(str(previous.get("dir") or ""))
+            previous_path = previous_dir / "frame-sequence.json"
+            previous_document = (
+                _optional_document(previous_path)
+                if previous_path.is_file() else None)
+            if previous_document is None:
+                problems.append(
+                    "previous frame sequence record is absent or unreadable")
+            else:
+                if previous_document.get("schema") != HISTORY_SCHEMA:
+                    problems.append("previous frame sequence schema is invalid")
+                if int(previous_document.get("sequence_index") or 0) != (
+                        sequence_index - 1):
+                    problems.append(
+                        "previous frame sequence index is not contiguous")
+                if previous_document.get("capture_frame_id") != previous.get(
+                        "capture_frame_id"):
+                    problems.append(
+                        "previous-frame capture id does not match its record")
+                if previous_document.get("manifest_sha256") != previous.get(
+                        "manifest_sha256"):
+                    problems.append(
+                        "previous-frame manifest digest does not match its "
+                        "record")
+                if previous_document.get("event_stream_sha256") != previous.get(
+                        "event_stream_sha256"):
+                    problems.append(
+                        "previous-frame event stream digest does not match "
+                        "its record")
+                if (previous_document.get("session_id")
+                        != document.get("session_id")):
+                    problems.append(
+                        "previous frame belongs to another session")
+                previous_manifest = _file_sha256(
+                    previous_dir / "frame-trace.json")
+                if (previous_manifest
+                        and previous_document.get("manifest_sha256")
+                        != previous_manifest):
+                    problems.append(
+                        "previous frame manifest digest does not match the "
+                        "captured file")
+                previous_owned = set(
+                    previous_document.get("render_targets") or []) | set(
+                    previous_document.get("carried_renderer_outputs") or [])
+                for name in carried:
+                    if name not in previous_owned:
+                        problems.append(
+                            f"carried resource {name} has no previous-frame "
+                            "renderer identity")
+    elif previous is not None:
+        problems.append("first frame declares a previous-frame identity")
+    elif carried:
+        problems.append(
+            "first frame declares carried renderer output without history")
+
+    return {
+        "schema": HISTORY_SCHEMA,
+        "status": "invalid" if problems else "verified",
+        "reasons": problems,
+        "sequence_index": sequence_index or None,
+        "previous": previous_info,
+        "render_targets": render_targets,
+        "carried_renderer_outputs": carried,
+        "delete_events": delete_events,
+        "mutation_events": mutation_events,
+        "session_id": document.get("session_id"),
+        "pid": document.get("pid"),
+        "capture_frame_id": document.get("capture_frame_id"),
+    }
+
+
 def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
     """Derive the resource graph and coverage classification for one frame.
 
@@ -235,6 +462,7 @@ def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
         }
     events = trace.get("_events") or []
     manifest = trace
+    history = load_frame_history(frame_dir, trace)
     logical = [
         int((manifest.get("frame") or {}).get("width") or 0),
         int((manifest.get("frame") or {}).get("height") or 0),
@@ -495,8 +723,60 @@ def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
             if not producers:
                 resource["unproven_reason"] = "written resource has no producer"
 
+        name = key.split(":", 1)[1] if key.startswith("tex:") else None
+        carried_names = set(history.get("carried_renderer_outputs") or [])
+        if name and name in carried_names:
+            resource["history"] = {
+                "carried": True,
+                "status": history.get("status"),
+                "previous": history.get("previous"),
+                "sequence_index": history.get("sequence_index"),
+                "capture_frame_id": history.get("capture_frame_id"),
+            }
+            if resource["origin"] in (EXTERNAL, UNPROVEN) and not producers:
+                first_consumer = (min(
+                    (int(item["event"]) for item in consumers
+                     if item.get("event") is not None),
+                    default=None))
+                deletes = [int(event) for event in
+                           (history.get("delete_events") or {}).get(name, [])
+                           if isinstance(event, int)]
+                blocking = [event for event in deletes
+                            if first_consumer is None or event <= first_consumer]
+                mutations = [int(event) for event in
+                             (history.get("mutation_events") or {}).get(
+                                 name, []) if isinstance(event, int)]
+                if mutations:
+                    resource["unproven_reason"] = (
+                        "carried renderer output has an ordered CPU texture "
+                        "mutation that the replay does not reproduce")
+                    resource["classification_basis"] = [
+                        "carried declaration invalidated by glTex* mutation"]
+                elif history.get("status") != "verified":
+                    resource["unproven_reason"] = (
+                        "carried renderer output declares unverified "
+                        "frame-sequence history")
+                    resource["classification_basis"] = [
+                        "carried declaration without verified history"]
+                elif blocking:
+                    resource["unproven_reason"] = (
+                        "carried renderer output was deleted before its "
+                        "first consumer")
+                    resource["classification_basis"] = [
+                        "carried declaration invalidated by lifecycle delete"]
+                else:
+                    resource["origin"] = BOUNDARY
+                    resource["classification_basis"] = [
+                        "authorized prior-frame Metal renderer output",
+                        "previous-frame identity and resource link verified"]
+                    resource["history"]["verified"] = True
+
     # Coverage reasons.
     reasons: list[str] = []
+    if history.get("status") == "invalid":
+        reasons.append(
+            "frame-sequence history is invalid: "
+            + "; ".join(history.get("reasons") or ["unknown"]))
     if not manifest.get("complete"):
         reasons.append("frame manifest is not complete")
     if unknown_events:
@@ -584,6 +864,19 @@ def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
         "renderer_generated": generated,
         "renderer_generated_sampled": generated_sampled,
         "unproven": unproven,
+        "history": {
+            "status": history.get("status"),
+            "sequence_index": history.get("sequence_index"),
+            "previous": history.get("previous"),
+            "carried_renderer_outputs": history.get(
+                "carried_renderer_outputs") or [],
+            "reasons": history.get("reasons") or [],
+            "mutation_events": history.get("mutation_events") or {},
+        },
+        "carried_resources": sorted(
+            key for key, value in resources.items()
+            if value.get("origin") == BOUNDARY
+            and (value.get("history") or {}).get("carried")),
     }
 
 
@@ -746,6 +1039,51 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
              str(sample.get("sampler") or "")),
             []).append(sample)
 
+    history_resources: dict[str, dict] = {}
+    if (isinstance(history, dict) and history.get("status") == "ok"
+            and history.get("sequence")):
+        for entry in history.get("resources") or []:
+            if isinstance(entry, dict) and entry.get("name") is not None:
+                history_resources[str(entry["name"])] = entry
+
+    def generation_problem(resource_key: str, resource: dict,
+                           event: int, required: int | None,
+                           actual: int) -> dict | None:
+        """Exact expected generation, derived from the session's own history.
+
+        A newer generation is not acceptable merely because it exceeds the
+        frame-local producer count: the base generation retained by the
+        persistent session is subtracted first, so an unrelated recreation or
+        a stale carry cannot pass.
+        """
+        if required is None:
+            return None
+        name = (resource_key.split(":", 1)[1]
+                if resource_key.startswith("tex:") else resource_key)
+        entry = history_resources.get(name)
+        if entry is None or not resource_key.startswith("tex:"):
+            expected = required
+        else:
+            try:
+                final = int(entry.get("generation") or 0)
+            except (TypeError, ValueError):
+                final = 0
+            writes = len(resource.get("producers") or [])
+            base = final - writes
+            if base < 0:
+                return {"kind": "history_generation_inconsistent",
+                        "expected_generation": required,
+                        "actual_generation": actual,
+                        "history_generation": final,
+                        "frame_writes": writes}
+            expected = base + required
+        if actual != expected:
+            return {"kind": "stale_generation",
+                    "expected_generation": expected,
+                    "actual_generation": actual,
+                    "local_required_generation": required}
+        return None
+
     # Every captured consumer must be represented exactly once per
     # (event, sampler), with the captured resource and required generation.
     consumer_problems: list[dict] = []
@@ -801,25 +1139,65 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
                             "kind": "captured_intermediate_substitution"})
                     required = required_by_event.get(event)
                     actual_generation = int(row.get("generation") or 0)
-                    generation_ok = actual_generation == required
                     if (row.get("carried")
                             and row.get("history_generation") is not None):
                         # A carried sample must equal the exact generation
-                        # recorded for the previous frame; a newer one would
-                        # mean the carried producer was not the one observed.
-                        generation_ok = (
-                            actual_generation ==
-                            int(row["history_generation"]))
-                    elif continuous and required is not None:
-                        # In a persistent sequence the session generation is
-                        # cumulative across frames.  A rewritten target must
-                        # be at least as new as the frame-local producer count.
-                        generation_ok = actual_generation >= required
-                    if required is not None and not generation_ok:
+                        # retained by the session: the final history
+                        # generation minus every write this frame.
+                        name = key.split(":", 1)[1]
+                        entry = history_resources.get(name) or {}
+                        try:
+                            final_generation = int(
+                                entry.get("generation") or 0)
+                        except (TypeError, ValueError):
+                            final_generation = 0
+                        base_generation = final_generation - len(
+                            resource.get("producers") or [])
+                        if (actual_generation != int(row["history_generation"])
+                                or actual_generation <= 0
+                                or actual_generation != base_generation
+                                or not row.get("carried")):
+                            consumer_problems.append({
+                                "event": event, "sampler": sampler,
+                                "resource": key, "kind": "stale_generation",
+                                "expected_generation":
+                                    int(row["history_generation"]),
+                                "actual_generation": actual_generation})
+                    else:
+                        problem = generation_problem(
+                            key, resource, event, required, actual_generation)
+                        if problem is not None:
+                            consumer_problems.append(dict(
+                                problem, event=event, sampler=sampler,
+                                resource=key))
+                elif resource.get("origin") == BOUNDARY:
+                    actual_generation = int(row.get("generation") or 0)
+                    history_generation = row.get("history_generation")
+                    name = key.split(":", 1)[1]
+                    entry = history_resources.get(name) or {}
+                    try:
+                        expected_carried = int(entry.get("generation") or 0)
+                    except (TypeError, ValueError):
+                        expected_carried = 0
+                    if source != "metal_render_target":
                         consumer_problems.append({
                             "event": event, "sampler": sampler,
-                            "resource": key, "kind": "stale_generation",
-                            "expected_generation": required,
+                            "resource": key,
+                            "kind": "carried_resource_external_substitution"})
+                    elif not row.get("carried"):
+                        consumer_problems.append({
+                            "event": event, "sampler": sampler,
+                            "resource": key,
+                            "kind": "carried_resource_not_declared"})
+                    elif (history_generation is None
+                          or actual_generation != int(history_generation)
+                          or expected_carried <= 0
+                          or actual_generation != expected_carried):
+                        consumer_problems.append({
+                            "event": event, "sampler": sampler,
+                            "resource": key, "kind": "stale_carried_generation",
+                            "expected_generation": expected_carried,
+                            "history_generation": history_generation,
                             "actual_generation": actual_generation})
                 elif resource.get("origin") == EXTERNAL:
                     if source != "external_capture":
@@ -887,7 +1265,8 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
                     allowed_kinds = {"metal_default"}
                 else:
                     allowed_kinds = {"boundary_capture"}
-            elif key.startswith("tex:") and resource.get("origin") == GENERATED:
+            elif key.startswith("tex:") and resource.get("origin") in (
+                    GENERATED, BOUNDARY):
                 allowed_kinds = {"metal_render_target"}
             else:
                 allowed_kinds = {"boundary_capture"}
@@ -903,23 +1282,43 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
                      for row in resource.get("consumer_generations") or []
                      if event_index(row.get("event")) == event), None)
                 actual_generation = int(transfer.get("source_generation") or 0)
-                if required is not None and actual_generation != required:
-                    transfer_problems.append({
-                        "event": event, "resource": key,
-                        "kind": "stale_source_generation",
-                        "expected": required,
-                        "actual": actual_generation})
+                if resource.get("origin") == BOUNDARY:
+                    name = key.split(":", 1)[1]
+                    entry = history_resources.get(name) or {}
+                    expected = int(entry.get("generation") or 0)
+                    if actual_generation != expected or expected <= 0:
+                        transfer_problems.append({
+                            "event": event, "resource": key,
+                            "kind": "stale_carried_source_generation",
+                            "expected": expected,
+                            "actual": actual_generation})
+                else:
+                    problem = generation_problem(
+                        key, resource, event, required, actual_generation)
+                    if problem is not None:
+                        if problem.get("kind") == "stale_generation":
+                            problem["kind"] = "stale_source_generation"
+                        transfer_problems.append(dict(
+                            problem, event=event, resource=key))
             if destination:
                 destination_resource = resources.get(str(destination)) or {}
                 producers = destination_resource.get("producers") or []
                 expected_after = sum(
                     1 for producer in producers
                     if event_index(producer.get("event")) <= event)
+                destination_entry = history_resources.get(
+                    str(destination).split(":", 1)[-1])
+                if destination_entry is not None:
+                    try:
+                        final = int(destination_entry.get("generation") or 0)
+                    except (TypeError, ValueError):
+                        final = 0
+                    base = final - len(producers)
+                    if base >= 0:
+                        expected_after = base + expected_after
                 before = int(transfer.get("destination_generation_before") or 0)
                 after = int(transfer.get("destination_generation_after") or 0)
-                if (after != before + 1 or
-                        (not continuous and after != expected_after) or
-                        (continuous and after < expected_after)):
+                if after != before + 1 or after != expected_after:
                     transfer_problems.append({
                         "event": event, "resource": destination,
                         "kind": "destination_generation",
@@ -931,7 +1330,11 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
         status = "invalid"
 
     seeded: list[dict] = []
-    for key in graph.get("renderer_generated_sampled") or []:
+    sampled_keys = list(graph.get("renderer_generated_sampled") or [])
+    for key in graph.get("carried_resources") or []:
+        if key not in sampled_keys:
+            sampled_keys.append(key)
+    for key in sampled_keys:
         resource = (graph.get("resources") or {}).get(key, {})
         draw_consumers = [
             consumer for consumer in resource.get("consumers") or []
@@ -967,18 +1370,24 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
             if expected is None:
                 continue
             generation = int(item.get("generation") or 0)
-            if (item.get("carried")
-                    and item.get("history_generation") is not None):
-                if generation == int(item["history_generation"]):
+            if resource.get("origin") == BOUNDARY:
+                history_generation = item.get("history_generation")
+                if (item.get("carried")
+                        and history_generation is not None
+                        and generation == int(history_generation)
+                        and generation > 0):
                     continue
-            if continuous and generation >= expected:
-                continue
-            if generation != expected:
                 stale.append({
                     "event": item.get("event"),
-                    "expected_generation": expected,
+                    "expected_generation": history_generation,
                     "actual_generation": generation,
                 })
+                continue
+            problem = generation_problem(
+                key, resource, event_index(item.get("event")), expected,
+                generation)
+            if problem is not None:
+                stale.append(dict(problem, event=item.get("event")))
         if external or zero or stale:
             seeded.append({
                 "resource": key,

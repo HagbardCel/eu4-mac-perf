@@ -608,6 +608,17 @@ static int shadow_execute_capture(
                                         status = 1;
                                         report_stage = @"decision_wait";
                                         report_error = @"decision_invalid";
+                                    } else if (value[@"sequence"] != nil &&
+                                               (![value[@"sequence"]
+                                                    isKindOfClass:
+                                                        [NSNumber class]] ||
+                                                [value[@"sequence"]
+                                                    intValue] !=
+                                                    (int)sequence)) {
+                                        status = 1;
+                                        report_stage = @"decision_wait";
+                                        report_error =
+                                            @"decision_for_another_frame";
                                     } else if (![value[@"continue"]
                                                      boolValue]) {
                                         g_stop_requested = 1;

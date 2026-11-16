@@ -718,13 +718,43 @@ static BOOL sequence_error(NSError **error, NSString *message) {
     return NO;
 }
 
-static void apply_lifecycle_entry(NSDictionary *item) {
+static BOOL apply_lifecycle_entry(NSDictionary *item) {
     NSString *kind = string_value(item[@"kind"]);
     NSArray *names = item[@"names"] ?: @[];
+    if ([kind isEqualToString:@"mutation"]) {
+        for (id raw in names) {
+            NSString *name = texture_key(raw);
+            if (name.length == 0) {
+                continue;
+            }
+            NSDictionary *history = g_resource_history[name];
+            BOOL renderer_owned =
+                [history[@"kind"] isEqualToString:@"renderer_generated"] ||
+                [g_current_carried containsObject:name] ||
+                [g_frame_targets containsObject:name];
+            if (!renderer_owned) {
+                /* External CPU content is captured at each sample; no
+                   persistent Metal identity depends on the mutation. */
+                continue;
+            }
+            g_history_status = 2;
+            g_missing_history++;
+            snprintf(g_history_error, sizeof(g_history_error),
+                     "%s was mutated by %s at event %ld; ordered CPU texture "
+                     "writes are not reproduced, so this frame cannot claim "
+                     "persistent resource equivalence",
+                     safe_utf8(name, "?"),
+                     safe_utf8(string_value(item[@"operation"]) ?: @"?",
+                               "?"),
+                     (long)number(item[@"event"], -1));
+            return NO;
+        }
+        return YES;
+    }
     if (![kind isEqualToString:@"delete"] &&
         ![kind isEqualToString:@"create"] &&
         ![kind isEqualToString:@"reset"]) {
-        return;
+        return YES;
     }
     for (id raw in names) {
         NSString *name = texture_key(raw);
@@ -743,19 +773,23 @@ static void apply_lifecycle_entry(NSDictionary *item) {
         [g_render_targets removeObjectForKey:name];
         [g_frame_written removeObject:name];
     }
+    return YES;
 }
 
-static void apply_due_lifecycle(NSInteger event) {
+static BOOL apply_due_lifecycle(NSInteger event) {
     NSMutableArray *remaining = [NSMutableArray array];
     for (NSDictionary *item in g_pending_lifecycle) {
         NSInteger at = number(item[@"event"], 0);
         if (at <= event) {
-            apply_lifecycle_entry(item);
+            if (!apply_lifecycle_entry(item)) {
+                return NO;
+            }
         } else {
             [remaining addObject:item];
         }
     }
     g_pending_lifecycle = remaining;
+    return YES;
 }
 
 /* Reads and validates one continuous-frame record.  A missing record is a
@@ -829,7 +863,8 @@ static BOOL apply_frame_sequence(NSString *frame_dir, uint64_t expected,
         }
         if (![kind isEqualToString:@"delete"] &&
             ![kind isEqualToString:@"create"] &&
-            ![kind isEqualToString:@"reset"]) {
+            ![kind isEqualToString:@"reset"] &&
+            ![kind isEqualToString:@"mutation"]) {
             return sequence_error(
                 error, [NSString stringWithFormat:
                             @"unsupported lifecycle operation %@", kind]);
@@ -3976,7 +4011,10 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
             }
         }
 
-        apply_due_lifecycle(-1);
+        if (!apply_due_lifecycle(-1)) {
+            return record_failure(@"history_mutation", -1, @"frame", nil,
+                                  @(g_history_error), 12, nil);
+        }
         for (NSUInteger index = 0; index < events.count; index++) {
             if (config != NULL && config->test_inject_failure == 1 && index == 1) {
                 g_deadline_ns = replay_now_ns() - 1;
@@ -3985,7 +4023,11 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                 break;
             }
             g_current_event = index;
-            apply_due_lifecycle((NSInteger)index);
+            if (!apply_due_lifecycle((NSInteger)index)) {
+                return record_failure(@"history_mutation", (NSInteger)index,
+                                      @"frame", nil, @(g_history_error), 12,
+                                      nil);
+            }
             /* Execute one event per submission.  Render-target sampling may
                need a compute pass in its own command buffer; that pass must
                observe every prior event as completed or it reads stale

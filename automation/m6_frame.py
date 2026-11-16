@@ -58,6 +58,25 @@ def _sha256(path: Path) -> str:
             digest.update(block)
     return digest.hexdigest()
 
+# Immutable capture payloads are verified once per process.  The key includes
+# size and nanosecond mtime, so a replaced artifact is re-hashed; repeated
+# graph builds over the same ten-frame campaign avoid re-reading gigabytes.
+_BLOB_DIGESTS: dict[tuple[str, int, int], str] = {}
+
+
+def _verified_blob_sha256(path: Path) -> str:
+    stat = path.stat()
+    key = (str(path), stat.st_size, stat.st_mtime_ns)
+    cached = _BLOB_DIGESTS.get(key)
+    if cached is not None:
+        return cached
+    digest = _sha256(path)
+    if len(_BLOB_DIGESTS) > 8192:
+        _BLOB_DIGESTS.clear()
+    _BLOB_DIGESTS[key] = digest
+    return digest
+
+
 
 def _read_json(path: Path) -> dict:
     try:
@@ -133,7 +152,7 @@ def load_trace(frame_dir: Path, *, verify_blobs: bool = True) -> dict:
                 path = frame_dir / "blobs" / str(name)
                 if not path.is_file():
                     raise FrameError(f"missing blob: {name}")
-                digest = _sha256(path)
+                digest = _verified_blob_sha256(path)
                 if member.get("sha256") and member["sha256"] != digest:
                     raise FrameError(f"blob digest mismatch: {name}")
                 blobs[name] = digest
@@ -939,6 +958,40 @@ def build_replay_host(force: bool = False) -> Path:
     return REPLAY_HOST
 
 
+def _shader_source_identity(trace: dict) -> dict:
+    """Content identity of the translated shader sources for one frame.
+
+    Translation is deterministic in the source program/stage digests; a cache
+    keyed by these digests can never reuse a translation for different source
+    content.  The key deliberately excludes frame/event identity.
+    """
+    programs = {}
+    for event in trace.get("_events") or []:
+        if event.get("kind") != "draw":
+            continue
+        program = event.get("program") or {}
+        name = str(program.get("name") or "")
+        for shader in program.get("shaders") or []:
+            stage = str(shader.get("stage") or "")
+            digest = str(shader.get("sha256") or "")
+            if name and stage and digest:
+                programs.setdefault(name, {})[stage] = digest
+    identity = {
+        "schema": "gfx-shader-source-identity/v1",
+        "programs": {name: dict(sorted(stages.items()))
+                     for name, stages in sorted(programs.items())},
+    }
+    canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    identity["sha256"] = _bytes_sha256(canonical.encode("utf-8"))
+    return identity
+
+
+def _copy_translation_cache(source: Path, destination: Path) -> None:
+    if destination.exists():
+        shutil.rmtree(destination)
+    shutil.copytree(source, destination)
+
+
 def translate_command(args: argparse.Namespace) -> int:
     from automation import gfx_shader_translate
 
@@ -948,6 +1001,8 @@ def translate_command(args: argparse.Namespace) -> int:
         if args.out
         else frame_dir / "shaders"
     )
+    cache_dir = (Path(args.cache_dir).expanduser().resolve()
+                 if getattr(args, "cache_dir", None) else None)
     if out_dir.exists() and args.force:
         shutil.rmtree(out_dir)
     try:
@@ -955,7 +1010,35 @@ def translate_command(args: argparse.Namespace) -> int:
     except FrameError as exc:
         print(json.dumps({"status": "invalid", "reason": str(exc)}, indent=2))
         return 1
-    report = gfx_shader_translate.translate_trace(frame_dir, out_dir)
+    identity = _shader_source_identity(trace)
+    cache_root = cache_dir / identity["sha256"] if cache_dir else None
+    cache_hit = False
+    report = None
+    if (cache_root is not None and not args.force
+            and (cache_root / "shaders.json").is_file()):
+        _copy_translation_cache(cache_root, out_dir)
+        cache_hit = True
+    if not cache_hit:
+        report = gfx_shader_translate.translate_trace(frame_dir, out_dir)
+        if cache_root is not None and report.get("ok"):
+            cache_root.parent.mkdir(parents=True, exist_ok=True)
+            partial = cache_root.with_name(cache_root.name + ".partial")
+            if partial.exists():
+                shutil.rmtree(partial)
+            shutil.copytree(out_dir, partial)
+            os.replace(partial, cache_root)
+    if report is None:
+        try:
+            report = json.loads((out_dir / "shaders.json").read_text())
+            report = {"ok": True, "programs": report.get("programs") or []}
+        except (OSError, json.JSONDecodeError):
+            report = {"ok": False, "programs": []}
+    (out_dir / "translation-cache.json").write_text(json.dumps({
+        "schema": "gfx-shader-translation-cache/v1",
+        "identity": identity,
+        "cache_dir": str(cache_dir) if cache_dir else None,
+        "hit": cache_hit,
+    }, indent=2) + "\n")
     summary = {
         "status": "ok" if report["ok"] else "partial",
         "programs": len(report["programs"]),
@@ -966,6 +1049,11 @@ def translate_command(args: argparse.Namespace) -> int:
         ],
         "out": str(out_dir),
         "draws": len(trace.get("_draws") or []),
+        "translation_cache": {
+            "hit": cache_hit,
+            "key": identity["sha256"],
+            "dir": str(cache_dir) if cache_dir else None,
+        },
     }
     print(json.dumps(summary, indent=2))
     return 0 if report["ok"] else 2
@@ -1898,9 +1986,11 @@ def _continuous_frame_coordinator(
     if not _wait_for_path(seal_path, seal_deadline):
         raise FrameError(f"frame {frame_index} seal did not appear")
     seal = load_seal(frame_dir)
+    cache_dir = shadow / "translation-cache"
     translated = subprocess.run(
         [sys.executable, "-m", "automation.m6_frame", "translate",
-         "--frame", str(frame_dir), "--out", str(shader_dir), "--force"],
+         "--frame", str(frame_dir), "--out", str(shader_dir),
+         "--cache-dir", str(cache_dir)],
         cwd=str(ROOT), capture_output=True, text=True,
         timeout=max(0.0, min(args.translation_timeout,
                              overall_deadline - time.monotonic())),
@@ -2203,6 +2293,7 @@ def _parser() -> argparse.ArgumentParser:
     tr.add_argument("--frame", required=True)
     tr.add_argument("--out")
     tr.add_argument("--force", action="store_true")
+    tr.add_argument("--cache-dir", default="")
     tr.set_defaults(handler=translate_command)
 
     rep = sub.add_parser("replay", help="execute a traced frame through Metal")

@@ -230,9 +230,22 @@ Report: [PR 4 continuous](../analysis/m7/pr4-continuous-dual-render.md),
 [evidence](../analysis/m7/pr4-evidence.json).
 
 The asynchronous pipeline is a bounded in-process queue with one serialized
-worker, not a cross-process/multi-worker system; shader translation is still per
-frame. Ordered `glTexImage2D`/`glTexSubImage2D` CPU-write records are not
-captured (an explicit delete/reset is the supported resynchronization).
+worker, not a cross-process/multi-worker system.
+
+PR 4 completion hardening adds: a persistent carried renderer-output set that
+survives frames in which a resource is neither written nor sampled; a
+history-aware dependency graph that verifies `frame-sequence.json`, the
+previous-frame identity/resource link and the exact session generation; a
+per-frame sequence-checkpoint interface (`--sequence-checkpoints`) with the
+established request/receipt binding; a supervisor with overall/per-frame
+deadlines, cancellation and bounded stderr draining; a fail-closed
+`glTexImage2D`/`glTexSubImage2D` mutation record; and a shader translation cache
+keyed by verified source identity plus cross-frame payload hard-linking.
+
+Ordered CPU texture mutations are still not reproduced: a mutation of a
+renderer-owned/carried resource fails the frame with `history_mutation`.
+Successful frame outputs are retained rather than pruned; payload hard-linking
+is an explicit byte-saving measure, not an unlimited-retention claim.
 
 Stage 2 also passed: one EU4 process (pid 60053) ran 10 consecutive title frames
 through the async queue with `MAX_PENDING=3`; the queue reached its bound

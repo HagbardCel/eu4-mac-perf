@@ -24,6 +24,10 @@
 typedef void (*copy_fn)(GLenum, GLint, GLint, GLint, GLint, GLint, GLsizei,
                         GLsizei);
 typedef void (*delete_fn)(GLsizei, const GLuint *);
+typedef void (*tex_image_2d_fn)(GLenum, GLint, GLint, GLsizei, GLsizei, GLint,
+                                GLenum, GLenum, const void *);
+typedef void (*tex_sub_image_2d_fn)(GLenum, GLint, GLint, GLint, GLsizei,
+                                    GLsizei, GLenum, GLenum, const void *);
 
 static copy_fn g_real;
 static uint64_t g_sequence;
@@ -80,6 +84,11 @@ static void eu4_gfx_interposed_copy_tex_sub_image(GLenum target, GLint level,
                                                   GLint xoffset, GLint yoffset,
                                                   GLint x, GLint y,
                                                   GLsizei width, GLsizei height);
+static void eu4_gfx_interposed_tex_sub_image_2d(GLenum target, GLint level,
+                                                GLint xoffset, GLint yoffset,
+                                                GLsizei width, GLsizei height,
+                                                GLenum format, GLenum type,
+                                                const void *pixels);
 
 /* Resolve the framework implementation, never this interposer.  RTLD_NEXT can
    return the replacement itself on macOS when the symbol is interposed, which
@@ -434,6 +443,14 @@ void eu4_gfx_interpose_test_invoke(GLenum target, GLint level, GLint xoffset,
     eu4_gfx_interposed_copy_tex_sub_image(target, level, xoffset, yoffset, x, y,
                                          width, height);
 }
+
+void eu4_gfx_interpose_test_mutate(GLenum target, GLint level, GLint xoffset,
+                                   GLint yoffset, GLsizei width,
+                                   GLsizei height, const void *pixels) {
+    eu4_gfx_interposed_tex_sub_image_2d(target, level, xoffset, yoffset, width,
+                                        height, GL_RGBA, GL_UNSIGNED_BYTE,
+                                        pixels);
+}
 #endif
 
 
@@ -500,4 +517,118 @@ __attribute__((used)) static struct {
 
 static void *interpose_replacee(void) {
     return (void *)eu4_gfx_copy_interpose.replacee;
+}
+
+/* CPU texture-write observation.  The replay core does not reconstruct
+   ordered glTexImage2D/glTexSubImage2D semantics, so the engine call is
+   forwarded unchanged and the trace is told that a renderer-owned resource
+   may have changed outside Metal.  The sequence then fails closed instead of
+   reusing a stale persistent texture. */
+static tex_image_2d_fn g_real_tex_image;
+static tex_sub_image_2d_fn g_real_tex_sub_image;
+static void *interpose_tex_image_replacee(void);
+static void *interpose_tex_sub_image_replacee(void);
+
+static void eu4_gfx_interposed_tex_image_2d(GLenum target, GLint level,
+                                            GLint internalformat,
+                                            GLsizei width, GLsizei height,
+                                            GLint border, GLenum format,
+                                            GLenum type,
+                                            const void *pixels) {
+    if (g_real_tex_image == NULL) {
+        void *replacee = interpose_tex_image_replacee();
+        g_real_tex_image = replacee != NULL &&
+                           replacee != (void *)eu4_gfx_interposed_tex_image_2d
+            ? (tex_image_2d_fn)replacee : NULL;
+        if (g_real_tex_image == NULL) {
+            if (g_opengl_handle == NULL) {
+                g_opengl_handle = dlopen(
+                    "/System/Library/Frameworks/OpenGL.framework/OpenGL",
+                    RTLD_LAZY | RTLD_LOCAL | RTLD_FIRST);
+            }
+            void *framework = g_opengl_handle != NULL
+                ? dlsym(g_opengl_handle, "glTexImage2D") : NULL;
+            g_real_tex_image = framework == (void *)eu4_gfx_interposed_tex_image_2d
+                ? NULL : (tex_image_2d_fn)framework;
+        }
+        if (g_real_tex_image == NULL) {
+            interpose_fatal("cannot resolve the original glTexImage2D");
+        }
+    }
+    GLint binding = 0;
+    if (target == GL_TEXTURE_2D) {
+        glGetIntegerv(0x8069, &binding); /* GL_TEXTURE_BINDING_2D */
+    } else if (target >= 0x8515 && target <= 0x851A) {
+        glGetIntegerv(0x8514, &binding); /* GL_TEXTURE_BINDING_CUBE_MAP */
+    }
+    if (binding > 0) {
+        eu4_gfx_frame_trace_texture_mutated((unsigned)binding, level, 0,
+                                            target == GL_TEXTURE_2D);
+    }
+    g_real_tex_image(target, level, internalformat, width, height, border,
+                     format, type, pixels);
+}
+
+static void eu4_gfx_interposed_tex_sub_image_2d(GLenum target, GLint level,
+                                                GLint xoffset, GLint yoffset,
+                                                GLsizei width, GLsizei height,
+                                                GLenum format, GLenum type,
+                                                const void *pixels) {
+    if (g_real_tex_sub_image == NULL) {
+        void *replacee = interpose_tex_sub_image_replacee();
+        g_real_tex_sub_image = replacee != NULL &&
+            replacee != (void *)eu4_gfx_interposed_tex_sub_image_2d
+            ? (tex_sub_image_2d_fn)replacee : NULL;
+        if (g_real_tex_sub_image == NULL) {
+            if (g_opengl_handle == NULL) {
+                g_opengl_handle = dlopen(
+                    "/System/Library/Frameworks/OpenGL.framework/OpenGL",
+                    RTLD_LAZY | RTLD_LOCAL | RTLD_FIRST);
+            }
+            void *framework = g_opengl_handle != NULL
+                ? dlsym(g_opengl_handle, "glTexSubImage2D") : NULL;
+            g_real_tex_sub_image =
+                framework == (void *)eu4_gfx_interposed_tex_sub_image_2d
+                    ? NULL : (tex_sub_image_2d_fn)framework;
+        }
+        if (g_real_tex_sub_image == NULL) {
+            interpose_fatal("cannot resolve the original glTexSubImage2D");
+        }
+    }
+    GLint binding = 0;
+    if (target == GL_TEXTURE_2D) {
+        glGetIntegerv(0x8069, &binding);
+    } else if (target >= 0x8515 && target <= 0x851A) {
+        glGetIntegerv(0x8514, &binding);
+    }
+    if (binding > 0) {
+        eu4_gfx_frame_trace_texture_mutated((unsigned)binding, level, 1,
+                                            target == GL_TEXTURE_2D);
+    }
+    g_real_tex_sub_image(target, level, xoffset, yoffset, width, height,
+                         format, type, pixels);
+}
+
+__attribute__((used)) static struct {
+    const void *replacement;
+    const void *replacee;
+} eu4_gfx_tex_image_interpose __attribute__((section("__DATA,__interpose"))) = {
+    (const void *)eu4_gfx_interposed_tex_image_2d,
+    (const void *)glTexImage2D,
+};
+
+__attribute__((used)) static struct {
+    const void *replacement;
+    const void *replacee;
+} eu4_gfx_tex_sub_image_interpose __attribute__((section("__DATA,__interpose"))) = {
+    (const void *)eu4_gfx_interposed_tex_sub_image_2d,
+    (const void *)glTexSubImage2D,
+};
+
+static void *interpose_tex_image_replacee(void) {
+    return (void *)eu4_gfx_tex_image_interpose.replacee;
+}
+
+static void *interpose_tex_sub_image_replacee(void) {
+    return (void *)eu4_gfx_tex_sub_image_interpose.replacee;
 }

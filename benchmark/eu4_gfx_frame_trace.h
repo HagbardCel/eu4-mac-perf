@@ -115,6 +115,19 @@ int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event);
    name cannot silently reuse a previous Metal image. */
 void eu4_gfx_frame_trace_texture_deleted(int count, const unsigned *names);
 
+/* GL CPU-write notification from the texture interposer.  Ordered
+   glTexImage2D/glTexSubImage2D semantics are not reconstructed by the replay,
+   so a mutation of a renderer-generated/carried resource must invalidate that
+   frame's resource-history qualification instead of silently reusing a stale
+   Metal texture.  The engine call is always forwarded unchanged. */
+void eu4_gfx_frame_trace_texture_mutated(unsigned name, int level,
+                                         int sub_image, int texture_target);
+
+/* Test-only analogue of a renderer write for the offline continuous-writer
+   host.  It is ignored unless TEST_ONLY capture is active, so production
+   callers cannot inject a synthetic renderer target. */
+void eu4_gfx_frame_trace_test_register_target(const char *name);
+
 /* Cheap per-call probe for the GL interposer.  Returns 1 when the caller must
    collect the full effective state (an armed capture or the first copy of a
    scene).  Returns 0 after counting the copy without any GL queries. */

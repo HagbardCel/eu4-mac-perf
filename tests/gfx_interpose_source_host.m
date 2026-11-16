@@ -18,6 +18,7 @@
 
 static eu4_gfx_copy_event g_event;
 static int g_events;
+static int g_mutations;
 
 int eu4_gfx_gl_drawable_extent(uint32_t *width, uint32_t *height) {
     if (width != NULL) *width = 8;
@@ -29,6 +30,12 @@ int eu4_gfx_frame_trace_copy_mode(void) { return 1; }
 void eu4_gfx_frame_trace_texture_deleted(int count, const unsigned *names) {
     (void)count;
     (void)names;
+}
+
+void eu4_gfx_frame_trace_texture_mutated(unsigned name, int level,
+                                         int sub_image, int texture_target) {
+    (void)name; (void)level; (void)sub_image; (void)texture_target;
+    g_mutations++;
 }
 
 int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event) {
@@ -44,6 +51,9 @@ void eu4_gfx_interpose_test_set_resolvers(void *(*next)(const char *),
 void eu4_gfx_interpose_test_invoke(GLenum target, GLint level, GLint xoffset,
                                    GLint yoffset, GLint x, GLint y,
                                    GLsizei width, GLsizei height);
+void eu4_gfx_interpose_test_mutate(GLenum target, GLint level, GLint xoffset,
+                                   GLint yoffset, GLsizei width,
+                                   GLsizei height, const void *pixels);
 
 static void fake_original(GLenum target, GLint level, GLint xoffset,
                           GLint yoffset, GLint x, GLint y, GLsizei width,
@@ -109,6 +119,9 @@ static int run_case(int unsupported) {
     glReadBuffer(GL_COLOR_ATTACHMENT0);
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, bound);
+    unsigned char patch[4] = {1, 2, 3, 4};
+    g_mutations = 0;
+    eu4_gfx_interpose_test_mutate(GL_TEXTURE_2D, 0, 0, 0, 1, 1, patch);
 
     while (glGetError() != GL_NO_ERROR) {
     }
@@ -130,6 +143,7 @@ static int run_case(int unsupported) {
     ok = ok && binding == (GLint)bound;
     ok = ok && read_fbo == (GLint)fbo;
     ok = ok && read_buffer == GL_COLOR_ATTACHMENT0;
+    ok = ok && g_mutations >= 1;
     if (unsupported) {
         ok = ok && !g_event.source_resolved;
     } else {

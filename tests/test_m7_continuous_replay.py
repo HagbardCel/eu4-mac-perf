@@ -224,6 +224,25 @@ class ContinuousReplayHistoryTests(unittest.TestCase):
         row = next(item for item in provenance if item.get("texture") == "443")
         self.assertTrue(row.get("carried"))
 
+    def test_cpu_mutation_of_a_carried_output_fails_closed(self):
+        frame1 = self.make_frame("mutation-1")
+        frame2 = self.make_frame("mutation-2", remove_events=(288, 289))
+        self.write_sequence(frame1, 1)
+        self.write_sequence(
+            frame2, 2, previous=frame1, carried=("443",),
+            lifecycle=({"kind": "mutation", "event": 0, "level": 0,
+                        "operation": "glTexSubImage2D",
+                        "names": ("443",)},))
+        ran, rows, _ = self.run_sequence([frame1, frame2])
+        self.assertNotEqual(ran.returncode, 0)
+        self.assertEqual(len(rows), 2, rows)
+        self.assert_ok(rows[0])
+        self.assertFalse(rows[1]["ok"])
+        self.assertEqual(rows[1]["history_status"], 2)
+        self.assertEqual(rows[1]["stage"], "history_mutation")
+        self.assertIn("mutated", rows[1]["error"])
+        self.assertIn("not reproduced", rows[1]["error"])
+
     def test_missing_previous_producer_fails_closed(self):
         frame1 = self.make_frame("missing-1", remove_events=(288, 289))
         frame2 = self.make_frame("missing-2", remove_events=(288, 289))

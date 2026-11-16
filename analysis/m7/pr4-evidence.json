@@ -1182,5 +1182,85 @@
       "bytes_on_disk": 4687572023
     },
     "note": "Stage 2: 10 consecutive frames from one EU4 process through one persistent session and the bounded asynchronous worker queue (MAX_PENDING=3). Queue reached its bound; no frames were dropped."
+  },
+  "completion_hardening": {
+    "pr3_base": "fc9e3838/e04568eb",
+    "persistent_carried_set": {
+      "three_frame_fixture": "frame1 writes 443; frame2 writes/samples nothing; frame3 still advertises 443",
+      "delete_recreate": "lifecycle delete event published and name re-carried by the new write"
+    },
+    "history_aware_graph": {
+      "verified_inputs": [
+        "capture manifest",
+        "reference digest",
+        "seal identity",
+        "previous frame record",
+        "previous renderer resource set"
+      ],
+      "origins": [
+        "current producer",
+        "authorized prior-frame Metal output",
+        "captured external input",
+        "unproven"
+      ],
+      "generation_rule": "exact session base + frame-local producer count; newer unrelated generations rejected"
+    },
+    "sequence_checkpoints": {
+      "interface": "--sequence-checkpoints with established checkpoint-request.json and shader-receipt.json",
+      "authentic_replay": {
+        "campaign": ".local/m7/pr4-continuous-live-5",
+        "frames": 3,
+        "checkpoint_validation": "6/6 requested/returned/reconciled per frame",
+        "classification": "difference_with_partial_state_coverage",
+        "history_status": 1,
+        "carried_bindings": 0,
+        "wall_seconds": 25.2,
+        "output_bytes": 138985175
+      }
+    },
+    "supervisor": {
+      "deadlines": [
+        "overall",
+        "per-frame"
+      ],
+      "cancellation": "while waiting for the next result",
+      "stderr": "bounded concurrent drain",
+      "cleanup": "terminate then kill, bounded",
+      "tests": [
+        "hang before first result",
+        "hang halfway",
+        "heavy stderr",
+        "cancel silent worker"
+      ]
+    },
+    "cpu_mutation_contract": {
+      "observation": "glTexImage2D/glTexSubImage2D via the existing interposer, forwarded unchanged",
+      "qualification": "renderer-owned/carried mutation fails closed (history_mutation); ordered reproduction not claimed",
+      "tests": [
+        "before draw",
+        "after draw",
+        "subresource",
+        "delete/recreate",
+        "missing mutation evidence"
+      ]
+    },
+    "efficiency": {
+      "shader_cache": "keyed by verified program/stage source identity",
+      "payload_dedup": "hard link from previous frame when the content digest matches",
+      "digest_memoization": "verified blob digests cached per process by path/size/mtime",
+      "retention": "successful outputs retained; explicit byte savings only"
+    },
+    "authentic_vs_synthetic": {
+      "authentic": "three-frame captured campaign replayed through the new path",
+      "synthetic": "carried persistence, mutation, history/generation, supervisor deadlines",
+      "not_performed": [
+        "fresh EU4 launch after native tracer changes",
+        "gameplay campaign"
+      ]
+    },
+    "focused_tests": {
+      "passed": 222,
+      "skipped": 1
+    }
   }
 }

@@ -142,6 +142,46 @@ class FrameTraceWriterTests(unittest.TestCase):
             self.assertIn("443", lifecycle_seen)
             self.assertFalse((directory / "frame-000004").exists())
 
+    def _sequence(self, directory: Path, index: int) -> dict:
+        return json.loads(
+            (directory / f"frame-{index:06d}" / "frame-sequence.json").read_text())
+
+    def test_carried_set_persists_across_an_unwritten_unused_frame(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "campaign"
+            self._run("continuous-carried", directory, 3, 64 * 1024 * 1024)
+            first = self._sequence(directory, 1)
+            second = self._sequence(directory, 2)
+            third = self._sequence(directory, 3)
+            self.assertIn("443", first["render_targets"])
+            self.assertEqual(first["carried_renderer_outputs"], [])
+            # Frame 2 neither writes nor samples the target.
+            self.assertEqual(second["render_targets"], [])
+            self.assertIn("443", second["carried_renderer_outputs"])
+            # Frame 3 still sees the frame-1 resource; replacing the set with
+            # the preceding frame's writes would have dropped it here.
+            self.assertEqual(third["render_targets"], [])
+            self.assertIn("443", third["carried_renderer_outputs"])
+
+    def test_delete_recreate_publishes_lifecycle_and_recarries_the_name(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "campaign"
+            self._run("continuous-carried-lifecycle", directory, 3,
+                      64 * 1024 * 1024)
+            first = self._sequence(directory, 1)
+            second = self._sequence(directory, 2)
+            third = self._sequence(directory, 3)
+            self.assertIn("443", first["render_targets"])
+            self.assertIn("443", second["render_targets"])
+            deletes = [item for item in second["lifecycle"]
+                       if item.get("kind") == "delete"]
+            self.assertEqual(len(deletes), 1, second["lifecycle"])
+            self.assertIn("443", deletes[0]["names"])
+            self.assertIsInstance(deletes[0]["event"], int)
+            # The recreated name is carried by its new write; the delete did
+            # not permanently remove the resource identity.
+            self.assertIn("443", third["carried_renderer_outputs"])
+
     def test_continuous_byte_budget_stops_incomplete_without_dropping_frames(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary) / "campaign"

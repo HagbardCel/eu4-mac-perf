@@ -262,21 +262,94 @@ diagnosis).
   stop policy, tool failure vs difference.
 - `tests/test_gfx_interpose.py`: the delete interposer still forwards.
 
+## Completion hardening (final PR4 head)
+
+### Persistent renderer-output tracking
+
+`eu4_gfx_frame_trace.c` keeps a separate carried set that is merged with each
+frame's writes and only removed by an evidenced delete/lifecycle transition.
+The frame-sequence snapshot is taken at frame start, so a resource written in
+frame N is still advertised in frame N+1 and N+2 even when neither frame writes
+or samples it. Three-frame regressions cover write-without-use, delete/recreate
+name reuse and the published lifecycle event.
+
+### History-aware dependency graph
+
+`gfx_frame_graph.build()` loads and verifies `frame-sequence.json`: schema,
+capture manifest/reference/seal digests, contiguous `previous` identity,
+previous-frame manifest/event-stream digests and the previous frame's renderer
+resource set. A declared carried name is classified
+`pre_frame_renderer_output`, never `external_input`, only when that chain is
+verified. `evaluate_replay()` derives the exact expected generation from the
+Metal session's own history (`final history generation - frame writes + writes
+before the consumer`) and rejects a newer unrelated generation. A missing or
+invalid previous link, absent carry record or generation mismatch fails closed.
+CPU texture mutations recorded in the lifecycle invalidate a carried
+declaration.
+
+### Per-frame sequence checkpoints
+
+`m7_continuous` publishes, per frame, a graph-derived
+`checkpoint-request.json` and an established `shader-receipt.json` binding its
+SHA-256/count to the sealed frame/session identity. The sequence CLI
+(`--sequence-checkpoints`) copies both into the output directory, passes the
+request path to the Metal core and writes the established
+`shadow-report.json` identity/binding contract. Diagnosis then uses the same
+PR3 reconciliation; no checkpoint requirement is disabled.
+
+### Bounded supervisor
+
+`run_campaign()` uses concurrent reader threads and a bounded queue. It
+enforces an overall deadline, a per-frame result deadline, cancellation while
+waiting, a bounded stderr drain, and process termination/cleanup. A silent or
+hung worker yields an explicit `frame_timeout` with the unexecuted frames
+listed. Native sequence frames receive a positive `config.timeout_ms`; the CLI
+rejects a zero timeout. Decision files carry the frame sequence and a decision
+for another frame is rejected by both the CLI and the bridge.
+
+### Fail-closed CPU mutations and efficiency
+
+`glTexImage2D`/`glTexSubImage2D` are observed by the existing interposer and
+forwarded unchanged. A mutation of a renderer-owned/carried resource is
+published in the frame lifecycle; the graph marks the carried declaration
+unproven and the Metal core fails the frame with `history_mutation`. Ordered
+reproduction of arbitrary CPU uploads remains explicitly unsupported.
+
+Shader translation is cached by verified program/stage source identity, so a
+repeated frame reuses one translation. Immutable payloads are hard-linked from
+the previous frame when the content digest matches, and verified blob digests
+are memoized per process. The campaign manifest publishes
+`deduplicated_bytes`.
+
+### Authentic replay verification
+
+The existing authentic three-frame campaign (`pr4-continuous-live-5`, one EU4
+process, session `4b1de013-bfdc-40d1-b3e6-8bbef4a52cbc`) was replayed offline
+through the new sequence-checkpoint path:
+
+- 3/3 frames `ok`, `history_status=1`, `carried_bindings=0` (title scene
+  re-renders its targets);
+- each frame reconciled **6/6** requested checkpoints (`checkpoint_validation
+  = ok`);
+- all three remain `difference_with_partial_state_coverage` with pixel-exact
+  final metrics matching the recorded campaign;
+- replay total 25.2 s wall, 139 MB campaign output, 3-frame capture retained
+  (1.3 GB). This is authentic captured evidence replayed through new code, not
+  a fresh EU4 launch.
+
 ## Known limitations
 
 - The asynchronous pipeline is a bounded in-process queue with one serialized
-  Metal worker. It is not a cross-process or multi-worker pipeline, and the
-  coordinator still translates shaders per frame.
+  Metal worker. It is not a cross-process or multi-worker pipeline.
 - The capture byte budget is checked at frame boundaries, so one frame may
   overshoot the configured budget before the campaign stops. It is a bounded
   campaign guard, not a hard per-frame allocation limit.
-- Shader translation is still done per frame by the coordinator with `--force`.
-  Cross-frame translation caching by authoritative source identity is not yet
-  implemented.
-- Lifecycle capture covers GL texture deletion. It does not yet capture every
-  `glTexImage2D`/`glTexSubImage2D` update as an ordered CPU-write record; a
-  deliberate `delete`/`reset` lifecycle record is the supported resynchronization
-  mechanism.
+- Shader translation is cached by source identity. A change in any program or
+  stage digest produces a new key; the cache stores only translated output.
+- Ordered `glTexImage2D`/`glTexSubImage2D` mutation semantics are not
+  reproduced. The interposer records the mutation and the affected frame fails
+  closed (`history_mutation`); explicit delete/reset remains the supported
+  resynchronization.
 - A lifecycle delete whose name is still a colour attachment in the current
   frame is not applied immediately: applying it would remove a target that the
   same frame's checkpoint plan requests. Full per-event delete/recreate identity
@@ -287,9 +360,14 @@ diagnosis).
 - Stage 3 (a longer gameplay campaign) was not run. Stage 2 covered 10
   successive animated title frames; the pipeline is bounded and stable but has
   not been exercised on gameplay for an extended period.
-- Package retention is bounded by the per-frame case already produced by PR 3;
-  successful intermediate replay directories are retained for now rather than
-  deduplicated.
+- Payload deduplication uses hard links within one campaign filesystem. It does
+  not delete successful frame outputs; a 10-frame authentic campaign can still
+  retain approximately the captured payload size. Retention policy is explicit
+  and budgeted, not unbounded by default.
+- A fresh authentic launch was not performed after the native trace/interposer
+  changes. The replay above proves the new diagnostic path over authentic
+  captured frames, but not new live capture semantics. Gameplay was not
+  exercised.
 
 ## Review
 
