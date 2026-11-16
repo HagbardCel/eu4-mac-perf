@@ -78,16 +78,56 @@ plus `campaign` and `reproduction` summaries.  Existing fault switches
 (`EU4_FRAME_REPLAY_DISABLE_RT_FLIP`, sampler shift) are scoped to the replay
 process.
 
-### Explicit incomplete packaging
+### Explicit artifact budget on every path
 
-If the minimal prefix exceeds the configured artifact budget, the case falls
-back to the target's single-frame diagnostic evidence when possible, writes
-`reproduction-incomplete.json`, sets
-`reproduction.status="incomplete"`/`independently_reproducible=false`, and
-records the exact missing dependency or required byte count.  `verify` then
-fails, so the case cannot be advertised as independently reproducible.  If the
-target itself carries history, only a diagnostic-only case is written; the raw
-diagnostic report and replay artifacts are preserved.
+Both `package_sequence_diagnosis` and `package_diagnosis` now enforce
+`max_bytes` against the **whole generated package**: captured frame payloads,
+shader artifacts, replay/checkpoint readbacks, manifests, diagnostics and the
+generated difference image.  The reviewed head instead fell back to an
+unlimited (`max_bytes=0`) single-frame package when the prefix did not fit, so
+the published case could exceed the configured budget by orders of magnitude.
+
+Packaging is staged in a temporary sibling directory, measured after it is
+complete and published only when the total size fits.  A pre-write estimate
+(frames + shaders + replay/checkpoint bytes + difference image) skips the work
+entirely when the payload alone already exceeds the budget.  When the required
+history does not fit, a bounded summary is published instead:
+
+- `reproduction.status="incomplete"`, `independently_reproducible=false`,
+  `reason="artifact_budget"`, `required_bytes`, `max_bytes` and the structured
+  `missing` list (including `required_frames`);
+- `reproduction-incomplete.json`, the scrubbed diagnostic report, the
+  dependency graph, `graph.json` and the README, with no replay command;
+- `verify` fails with `reproduction is explicitly incomplete`, and
+  `replay_case` refuses the case before Metal starts.
+
+If even that minimum summary exceeds the budget, packaging raises an explicit
+`case_budget` error and publishes nothing.  Source input directories are never
+deleted or overwritten: the destination is validated for ownership/overlap
+before staging, and a failed or over-budget build removes only its staging
+directory.
+
+### Complete manifest verification
+
+`verify` now requires the v2 inventory to be complete, not merely internally
+consistent:
+
+- every structurally required payload (sequence manifest, shader report,
+  diagnostics, dependency graph, each frame's sequence/trace/events/reference,
+  each checkpoint request and receipt) must be listed in `case.json.files`;
+- any file present under the case directory but absent from the inventory is
+  rejected, so a substituted shader, checkpoint or resource blob cannot hide
+  outside the inventory;
+- duplicate manifest paths are rejected;
+- absolute paths, `..` traversal and symlink escapes are rejected by resolving
+  every declared path and requiring it to stay inside the case directory;
+- each declared file's size and SHA-256 are rechecked, and every resource blob
+  referenced by an event stream is re-hashed by `m6_frame.load_trace`.
+
+These checks run in `verify` before `replay_case` can start Metal.  Valid
+historical v1 cases keep the original required-file rules; the stricter
+inventory additionally applies only to complete v2 sequence packages, while
+path-safety and duplicate-entry checks apply to every schema.
 
 ## Evidence
 
@@ -115,7 +155,33 @@ minimal prefix excludes frame 1 and packages frames 2–4 (target renumbered 3).
 - Negative tests cover missing predecessor, reordered predecessor, corrupt
   payload, wrong session, missing lifecycle/mutation record, delete of a carried
   resource, wrong generation, stale checkpoint request, packaging-time missing
-  producer/mutation refusal, and the artifact-budget incomplete result.
+  producer/mutation refusal, an undeclared required shader, an undeclared
+  checkpoint request, duplicate manifest entries, `..` traversal, a symlink
+  outside the case and a missing predecessor resource blob.
+- Budget tests cover `max_bytes=1` (explicit `case_budget`, nothing published),
+  a complete package measured at N bytes and repackaged at N-1 (incomplete
+  summary no larger than N-1, no replay command, `verify` fails) and at N
+  (complete and verifiable), a single-frame budget below its summary, and an
+  over-budget run that leaves every source frame byte-identical.
+
+### Prefix efficiency
+
+The selected prefix is the contiguous run from the earliest transitive producer
+to the target frame.  It is conservative, not provably minimal:
+
+| fixture | selected original frames | carrying resources | producing frames | prefix / full bytes | excluded |
+| --- | --- | --- | --- | --- | --- |
+| four-frame | 2, 3, 4 (target renumbered 3) | 500 | 2 | 10,889 / 13,797 (78.9%) | 1 frame, 2,908 bytes (21.1%) |
+| transitive five-frame | 2, 3, 4, 5 (target renumbered 4) | 500, 600 | 2, 3 | 15,133 / 18,041 (83.9%) | 1 frame, 2,908 bytes (16.1%) |
+
+In the transitive fixture only frames 2 and 3 actually produce the carried
+resources; frames 4 and 5 are the cleanup frame and the target.  Frame 4 is
+retained because the replay contract binds each frame to the immediately
+preceding capture identity and to the cumulative carried set at frame start.
+Removing an interior frame would require rewriting the predecessor digest chain
+and re-deriving every later carried snapshot; the resource graph alone does not
+prove that unnecessary, so selection stays conservative rather than claiming
+minimality.  Exact file counts and case sizes are recorded in the receipt.
 
 ### Canonical captured-frame prefix
 
@@ -160,9 +226,10 @@ Receipt: [followup-b-relocation-receipt.json](followup-b-relocation-receipt.json
   second comparison engine or renderer implementation.
 - Portable Linux CI skips the macOS-only native/Metal tests.  A green portable
   check is not macOS runtime evidence.
-- The three-frame canonical prefix is larger than the 512 MiB default budget;
-  the budget-limited path correctly produces an incomplete case, so the
-  relocation test uses an explicit unlimited budget.
+- The three-frame canonical prefix is larger than the 512 MiB default budget.
+  The default path now publishes an incomplete budget summary; the relocation
+  test opts into an explicit unlimited budget (`max_bytes=0`) because it
+  measures relocation, not budget policy.
 
 ## Files
 
@@ -171,5 +238,6 @@ Receipt: [followup-b-relocation-receipt.json](followup-b-relocation-receipt.json
 - `automation/m6_frame.py`
 - `automation/gfx_frame_graph.py`
 - `tests/test_gfx_replay_case_sequence.py`
+- `tests/test_gfx_replay_case.py`, `tests/test_gfx_output_safety.py`
 - `tests/test_m7_continuous_supervisor.py`
 - `analysis/m7/followup-b-relocation-receipt.json`

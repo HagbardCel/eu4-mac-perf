@@ -2,11 +2,12 @@
   "schema": "m7-followup-b-relocation-receipt/v1",
   "kind": "authentic_captured_frames_with_synthetic_ordered_packaging",
   "fixture": "canonical menu-occ300 captured frame content",
+  "tested_head": "d9a632ca",
   "case": {
     "schema": "gfx-strategy-b-case/v2",
     "case_id": "canonical-prefix",
-    "sequence_file_sha256": "6221c9feb832a2872594d094ce3054ffb434cd52d173f2e134b5db2a6332e583",
-    "case_json_sha256": "ad796119153d01e566092939311c7b612c7c1c5d59864ae48e74a959a63b1ed7",
+    "sequence_file_sha256": "2671bf0bd3162e2359c82ba7eff451424de2ebed6e2fac87613f27691f5ea8e0",
+    "case_json_sha256": "48cdf60eb10013aab8c5def279c6bfcec6557504f98b340f5632df4a80c13f2f",
     "frames": [
       {
         "index": 1,
@@ -33,12 +34,14 @@
         "reference_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15"
       }
     ],
+    "frame_count": 3,
+    "file_count": 3508,
     "minimal_prefix": false,
     "excluded_frames": 0,
-    "source_prefix_bytes": 1279168572,
-    "full_source_bytes": 1279168572,
+    "source_prefix_bytes": 1279168602,
+    "full_source_bytes": 1279168602,
     "excluded_source_bytes": 0,
-    "bytes_on_disk": 1317991621
+    "bytes_on_disk": 1317991340
   },
   "relocation": {
     "verified": true,
@@ -104,6 +107,67 @@
       "root_cause": "none_observed",
       "reason": "all authoritative checkpoints and the final output match",
       "fault": null
+    },
+    "reproduction": {
+      "earliest_affected_frame": null,
+      "earliest_affected_event": null,
+      "earliest_affected_operation": null,
+      "first_divergent_frame": null,
+      "target_sequence": 3
     }
-  }
+  },
+  "synthetic_cases": {
+    "four_frame": {
+      "selected_original_frames": [
+        2,
+        3,
+        4
+      ],
+      "target_index": 3,
+      "excluded_frames": 1,
+      "carried_resources": [
+        "500"
+      ],
+      "producing_frames": [
+        2
+      ],
+      "source_prefix_bytes": 10889,
+      "full_source_bytes": 13797,
+      "excluded_source_bytes": 2908,
+      "case_file_count": 55,
+      "case_bytes": 60312
+    },
+    "transitive_five_frame": {
+      "selected_original_frames": [
+        2,
+        3,
+        4,
+        5
+      ],
+      "target_index": 4,
+      "excluded_frames": 1,
+      "carried_resources": [
+        "500",
+        "600"
+      ],
+      "producing_frames": [
+        2,
+        3
+      ],
+      "source_prefix_bytes": 15133,
+      "full_source_bytes": 18041,
+      "excluded_source_bytes": 2908,
+      "case_file_count": 68,
+      "case_bytes": 68634,
+      "conservative_note": "Interior cleanup/target frames are retained because the predecessor digest chain and cumulative carried snapshots bind the ordered sequence; selection is not claimed minimal."
+    }
+  },
+  "budget": {
+    "complete_package_bytes": 60312,
+    "at_budget": "complete and verifiable",
+    "one_byte_below": "incomplete summary, no replay command, verify fails",
+    "one_byte_budget": "explicit case_budget error, nothing published",
+    "source_inputs_unchanged": true
+  },
+  "tested_head_note": "The relocation, verification and replay measurements above were produced from this code commit.  A documentation-only commit updates this receipt; the replay-critical code is unchanged."
 }
