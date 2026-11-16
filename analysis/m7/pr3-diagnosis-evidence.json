@@ -3,13 +3,14 @@
   "status": "implementation_complete_offline_and_authentic_evidence",
   "claim": "One already-produced in-process Metal result and one explicit offline checkpointed replay were diagnosed without launching EU4 again. Missing checkpoint evidence is classified as incomplete, not as a renderer defect.",
   "base": {
-    "main_commit": "dac2ea922cb50933863e0c74000b8ad172e06be5",
+    "main_commit": "35b8f5045d291da4cfd07f77e670b7adfa5f35a6",
     "merged_prs": [
       199,
-      200
+      200,
+      201
     ],
-    "native_diagnostics_cherry_pick": "e8974cb3535026572aa8d595a5d396df9b904fbc",
-    "note": "PR #201 native early-exit diagnostic hardening is included because PR3 must preserve the first native stage through the shadow report and diagnostic package."
+    "native_diagnostics_in_main": true,
+    "note": "PR3 was rebased onto main after PR #201 merged; the duplicate cherry-pick was dropped."
   },
   "canonical_title": {
     "status": "partial",

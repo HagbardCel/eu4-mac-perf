@@ -1,11 +1,10 @@
 # M7 PR 3 — same-process differential diagnosis and first-divergence evidence
 
 Status: implementation and offline/authentic diagnosis complete. This branch is
-based on `main` at `dac2ea92` (PRs #199 and #200) and includes the native
-early-exit diagnostic hardening from the open follow-up `e8974cb3`, because PR 3
-must preserve the first native stage through the shadow report and the final
-diagnostic package. It does not reopen #199/#200 and does not implement
-continuous rendering.
+rebased onto `main` at `35b8f504` (PRs #199, #200 and #201 merged). The native
+early-exit diagnostic hardening from #201 is therefore in the base rather than a
+cherry-pick. It does not reopen #199/#200 and does not implement continuous
+rendering.
 
 ## What changed
 
