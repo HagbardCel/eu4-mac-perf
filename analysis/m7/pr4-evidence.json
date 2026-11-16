@@ -638,7 +638,7 @@
       "test_m7_continuous_supervisor": "6 passed",
       "test_m7_continuous_coordinator": "2 passed",
       "test_gfx_interpose": "1 passed",
-      "pr4_focused_set": "91 passed, 1 skipped"
+      "pr4_focused_set": "96 passed, 1 skipped"
     },
     "scope_note": "Synthetic canonical two-frame fixtures; not authentic EU4 continuation."
   },
@@ -652,9 +652,11 @@
     "The authentic Stage-1 run predates the per-frame blob-budget accounting fix; its campaign manifest overcounts bytes. The reported disk bytes are authoritative for that run."
   ],
   "code_identity": {
-    "campaign_commit": "c0d11e4f",
+    "campaign_commit": "a7a99c00",
+    "rebased_pr4_head": "25f943f3",
     "post_campaign_fixes": [
-      "Decision handshake and lifecycle guard verified in this run."
+      "Rebased onto the reviewed/rebased PR3 branch.",
+      "Streaming per-frame stop decisions, hard-stop policy, decision handshake, event-indexed lifecycle, prior-write producer rule, exact carried generations, per-frame shader dirs, reference/seal validation."
     ]
   }
 }

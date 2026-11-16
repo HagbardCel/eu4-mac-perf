@@ -209,7 +209,7 @@ under `.local` (gitignored).
 
 ## Tests
 
-Focused PR4 set: 91 passed, 1 skipped (frame-trace writer, interpose, continuous
+Focused PR4 set: 96 passed, 1 skipped (frame-trace writer, interpose, continuous
 replay, supervisor, coordinator, PR3 diagnosis, Metal replay and canonical
 diagnosis).
 
