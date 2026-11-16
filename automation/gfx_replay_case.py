@@ -16,6 +16,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -626,16 +627,33 @@ def _shader_member(shader_dir: Path, name) -> Path | None:
     return target if target.is_file() else None
 
 
-def _frame_shader_problems(frame_dir: Path, shader_dir: Path,
-                          index: int) -> list[dict]:
-    """Packaging-time validation of one frame's translated shader report."""
+_SHA256_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
+def _valid_sha256(value) -> bool:
+    return isinstance(value, str) and bool(_SHA256_PATTERN.match(value))
+
+
+def _frame_shader_identity_problems(frame_dir: Path, shader_dir: Path,
+                                    index: int) -> list[dict]:
+    """Validate one frame's shader provenance, identically for package/verify.
+
+    Every draw-referenced program must have a translated entry whose vertex and
+    pixel stages are usable, and each stage used by a captured draw must carry
+    an authoritative 64-hex captured identity that equals the translation's
+    ``source_sha256``.  Missing, malformed, contradictory or mismatched
+    identities are reported; they are never treated as "not applicable".
+    """
     problems: list[dict] = []
+
+    def add(kind: str, detail: str) -> None:
+        problems.append({"kind": kind, "frame": index, "detail": detail})
+
     try:
         report = _json(shader_dir / "shaders.json")
     except (OSError, UnicodeError, json.JSONDecodeError, CaseError) as exc:
         return [{
-            "kind": "shader_artifact",
-            "frame": index,
+            "kind": "shader_artifact", "frame": index,
             "detail": f"shader report is unreadable: {exc}",
         }]
     programs = {
@@ -644,7 +662,10 @@ def _frame_shader_problems(frame_dir: Path, shader_dir: Path,
         if isinstance(program, dict)
         and isinstance(program.get("program"), int)
     }
-    event_shaders: dict[int, list[dict]] = {}
+    # Per program and stage: captured identities observed in draw events plus
+    # any contradictory repeats.
+    captured: dict[int, dict[str, set[str]]] = {}
+    captured_stages: dict[int, set[str]] = {}
     events_path = frame_dir / "frame-events.jsonl"
     try:
         event_lines = events_path.read_text(encoding="utf-8").splitlines()
@@ -666,82 +687,89 @@ def _frame_shader_problems(frame_dir: Path, shader_dir: Path,
             name = int(program.get("name"))
         except (TypeError, ValueError):
             continue
-        event_shaders.setdefault(name, []).extend(
-            item for item in program.get("shaders") or []
-            if isinstance(item, dict))
+        shaders = program.get("shaders")
+        if not isinstance(shaders, list) or not shaders:
+            add("shader_identity",
+                f"program {name} draw has no captured shader-stage entries")
+            continue
+        for item in shaders:
+            if not isinstance(item, dict):
+                add("shader_identity",
+                    f"program {name} has a malformed captured stage entry")
+                continue
+            stage_name = str(item.get("stage") or "")
+            captured_stages.setdefault(name, set()).add(stage_name)
+            digest = item.get("sha256")
+            if not _valid_sha256(digest):
+                add("shader_identity",
+                    f"program {name} {stage_name or '?'} has no valid captured "
+                    "sha256 identity")
+                continue
+            captured.setdefault(name, {}).setdefault(
+                stage_name, set()).add(str(digest))
     for name in _frame_programs(frame_dir):
         program = programs.get(name)
         if program is None:
-            problems.append({
-                "kind": "shader_artifact", "frame": index,
-                "detail": f"program {name} has no translated shader entry",
-            })
+            add("shader_artifact",
+                f"program {name} has no translated shader entry")
             continue
         if program.get("status") != "ok":
-            problems.append({
-                "kind": "shader_artifact", "frame": index,
-                "detail": f"program {name} translation status is "
-                          f"{program.get('status')!r}",
-            })
+            add("shader_artifact",
+                f"program {name} translation status is "
+                f"{program.get('status')!r}")
             continue
         stages = program.get("stages")
         if not isinstance(stages, dict):
-            problems.append({
-                "kind": "shader_artifact", "frame": index,
-                "detail": f"program {name} has no stages",
-            })
+            add("shader_artifact", f"program {name} has no stages")
             continue
         for stage_name in ("vertex", "pixel"):
             stage = stages.get(stage_name)
             if not isinstance(stage, dict):
-                problems.append({
-                    "kind": "shader_artifact", "frame": index,
-                    "detail": f"program {name} has no {stage_name} stage",
-                })
+                add("shader_artifact",
+                    f"program {name} has no {stage_name} stage")
                 continue
             msl_file = stage.get("msl_file")
             if _shader_member(shader_dir, msl_file) is None:
-                problems.append({
-                    "kind": "shader_artifact", "frame": index,
-                    "detail": f"program {name} {stage_name} MSL payload is "
-                              f"missing or outside the translation: "
-                              f"{msl_file!r}",
-                })
+                add("shader_artifact",
+                    f"program {name} {stage_name} MSL payload is missing or "
+                    f"outside the translation: {msl_file!r}")
             for field in ("glsl_file", "spv_file"):
                 declared = stage.get(field)
                 if declared and _shader_member(shader_dir, declared) is None:
-                    problems.append({
-                        "kind": "shader_artifact", "frame": index,
-                        "detail": f"program {name} {stage_name} {field} is "
-                                  f"missing or outside the translation: "
-                                  f"{declared!r}",
-                    })
-            source_sha = stage.get("source_sha256")
-            if not isinstance(source_sha, str) or not source_sha:
-                problems.append({
-                    "kind": "shader_artifact", "frame": index,
-                    "detail": f"program {name} {stage_name} does not declare "
-                              "the captured stage identity",
-                })
-        for item in event_shaders.get(name, []):
-            stage_name = str(item.get("stage") or "")
-            captured_sha = item.get("sha256")
+                    add("shader_artifact",
+                        f"program {name} {stage_name} {field} is missing or "
+                        f"outside the translation: {declared!r}")
+            if not _valid_sha256(stage.get("source_sha256")):
+                add("shader_identity",
+                    f"program {name} {stage_name} translation has no valid "
+                    "captured stage identity")
+        for required_stage in ("vertex", "pixel"):
+            if required_stage not in captured_stages.get(name, set()):
+                add("shader_identity",
+                    f"program {name} draw has no captured {required_stage} "
+                    "stage entry")
+        for stage_name, identities in captured.get(name, {}).items():
+            if len(identities) > 1:
+                add("shader_identity",
+                    f"program {name} {stage_name} has conflicting captured "
+                    f"sha256 identities: {sorted(identities)}")
+                continue
+            captured_sha = next(iter(identities))
             stage = stages.get(stage_name)
             if not isinstance(stage, dict):
-                problems.append({
-                    "kind": "shader_artifact", "frame": index,
-                    "detail": f"program {name} captured stage "
-                              f"{stage_name!r} has no translation",
-                })
+                add("shader_identity",
+                    f"program {name} captured stage {stage_name!r} has no "
+                    "translation")
                 continue
             source_sha = stage.get("source_sha256")
-            if captured_sha and source_sha and str(captured_sha) != str(
-                    source_sha):
-                problems.append({
-                    "kind": "shader_artifact", "frame": index,
-                    "detail": f"program {name} {stage_name} captured identity "
-                              "disagrees with the translation",
-                })
+            if not _valid_sha256(source_sha):
+                add("shader_identity",
+                    f"program {name} {stage_name} translation has no valid "
+                    "captured stage identity")
+            elif str(source_sha) != captured_sha:
+                add("shader_identity",
+                    f"program {name} {stage_name} translated identity "
+                    f"{source_sha} disagrees with captured {captured_sha}")
     return problems
 
 
@@ -1289,13 +1317,17 @@ def package_sequence_diagnosis(
     for index, (frame, directory) in enumerate(
             zip(selected, shader_dirs), start=1):
         shader_problems.extend(
-            _frame_shader_problems(frame, directory, index))
+            _frame_shader_identity_problems(frame, directory, index))
     if shader_problems:
+        reason = ("shader_identity_unavailable"
+                  if any(problem.get("kind") == "shader_identity"
+                         for problem in shader_problems)
+                  else "shader_artifact_unavailable")
         return _incomplete_case(
             destination, metal_dir=metal_dir, report=report,
             inputs=[*selected, *shader_dirs],
             missing=shader_problems,
-            reason="shader_artifact_unavailable",
+            reason=reason,
             schema=SEQUENCE_SCHEMA, case_id=case_id, title=title)
     shader_source = shader_dirs[-1]
     unique_shader_dirs = list(dict.fromkeys(shader_dirs))
@@ -1636,84 +1668,10 @@ def _verify_sequence(case_dir: Path, manifest: dict) -> tuple[list[str], dict]:
                 if declared_sha != actual_sha:
                     problems.append(
                         f"frame {index} shader report digest drift")
-                programs = {
-                    int(program.get("program")): program
-                    for program in shader_report.get("programs") or []
-                    if isinstance(program, dict)
-                    and isinstance(program.get("program"), int)
-                }
-                required_programs = _frame_programs(frame)
-                if sorted(programs) == [] and required_programs:
+                for problem in _frame_shader_identity_problems(
+                        frame, shader_path, index):
                     problems.append(
-                        f"frame {index} shader report declares no programs")
-                event_shaders: dict[int, list[dict]] = {}
-                for event in trace.get("_events") or []:
-                    if not isinstance(event, dict):
-                        continue
-                    program = event.get("program")
-                    if not isinstance(program, dict):
-                        continue
-                    try:
-                        name = int(program.get("name"))
-                    except (TypeError, ValueError):
-                        continue
-                    event_shaders.setdefault(name, []).extend(
-                        item for item in program.get("shaders") or []
-                        if isinstance(item, dict))
-                for name in required_programs:
-                    program = programs.get(name)
-                    if program is None:
-                        problems.append(
-                            f"frame {index} program {name} has no translated "
-                            "shader entry")
-                        continue
-                    if program.get("status") != "ok":
-                        problems.append(
-                            f"frame {index} program {name} translation status "
-                            f"is {program.get('status')!r}")
-                        continue
-                    stages = program.get("stages")
-                    if not isinstance(stages, dict):
-                        problems.append(
-                            f"frame {index} program {name} has no stages")
-                        continue
-                    for stage_name in ("vertex", "pixel"):
-                        stage = stages.get(stage_name)
-                        if not isinstance(stage, dict):
-                            problems.append(
-                                f"frame {index} program {name} has no "
-                                f"{stage_name} stage")
-                            continue
-                        msl_file = stage.get("msl_file")
-                        if not isinstance(msl_file, str) or not msl_file:
-                            problems.append(
-                                f"frame {index} program {name} {stage_name} "
-                                "stage has no MSL file")
-                        elif not (shader_path / msl_file).is_file():
-                            problems.append(
-                                f"frame {index} program {name} {stage_name} "
-                                f"MSL file is missing: {msl_file}")
-                    for item in event_shaders.get(name, []):
-                        stage_name = str(item.get("stage") or "")
-                        sha = item.get("sha256")
-                        stage = stages.get(stage_name)
-                        if not isinstance(stage, dict):
-                            problems.append(
-                                f"frame {index} program {name} capture stage "
-                                f"{stage_name!r} has no translation")
-                            continue
-                        source_sha = stage.get("source_sha256")
-                        if sha:
-                            if not source_sha:
-                                problems.append(
-                                    f"frame {index} program {name} "
-                                    f"{stage_name} translation does not "
-                                    "declare the captured stage identity")
-                            elif str(sha) != str(source_sha):
-                                problems.append(
-                                    f"frame {index} program {name} "
-                                    f"{stage_name} shader identity disagrees "
-                                    "with the capture")
+                        f"frame {index} {problem['detail']}")
         if history.get("status") != "verified":
             problems.append(
                 f"frame {index} history is invalid: " +

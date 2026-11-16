@@ -1193,25 +1193,26 @@ class HeterogeneousShaderSequenceTests(unittest.TestCase):
 
     def refresh(self, case: Path, relative: str, *,
                 update_sequence_entry: bool = False):
-        manifest = json.loads((case / "case.json").read_text())
         path = case / relative
-        for item in manifest["files"]:
-            if item["path"] == relative:
-                item["bytes"] = path.stat().st_size
-                item["sha256"] = sha(path.read_bytes())
-                break
-        else:
-            manifest["files"].append({
-                "path": relative, "bytes": path.stat().st_size,
-                "sha256": sha(path.read_bytes())})
         if update_sequence_entry:
             entry_index = int(Path(relative).parts[1]) - 1
             sequence = json.loads((case / "sequence.json").read_text())
             sequence["frames"][entry_index]["shader_report_sha256"] = sha(
                 path.read_bytes())
             (case / "sequence.json").write_text(json.dumps(sequence))
-            self.refresh(case, "sequence.json")
-            manifest = json.loads((case / "case.json").read_text())
+        manifest = json.loads((case / "case.json").read_text())
+        changed = {relative}
+        if update_sequence_entry:
+            changed.add("sequence.json")
+        manifest["files"] = [item for item in manifest["files"]
+                             if item["path"] not in changed]
+        for name in sorted(changed):
+            changed_path = case / name
+            manifest["files"].append({
+                "path": name,
+                "bytes": changed_path.stat().st_size,
+                "sha256": sha(changed_path.read_bytes()),
+            })
         (case / "case.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
     def test_per_frame_shaders_relocate_and_replay(self):
@@ -1304,7 +1305,7 @@ class HeterogeneousShaderSequenceTests(unittest.TestCase):
         self.refresh(case, relative, update_sequence_entry=True)
         verified = gfx_replay_case.verify(case)
         self.assertFalse(verified["ok"], verified)
-        self.assertTrue(any("shader identity disagrees" in problem
+        self.assertTrue(any("disagrees with captured" in problem
                             for problem in verified["problems"]), verified)
 
     def test_unusable_frame_translation_never_claims_complete(self):
@@ -1367,13 +1368,20 @@ class HeterogeneousShaderSequenceTests(unittest.TestCase):
                     manifest["reproduction"]["independently_reproducible"])
                 self.assertEqual(manifest["reproduction"]["status"],
                                  "incomplete")
-                self.assertEqual(manifest["reproduction"]["reason"],
-                                 "shader_artifact_unavailable")
+                self.assertEqual(
+                    manifest["reproduction"]["reason"],
+                    expected_reasons[variant.counter - 1])
                 self.assertEqual(manifest["replay_command"], [])
             finally:
                 report_path.write_text(json.dumps(original))
 
         variant.counter = 0
+        expected_reasons = (
+            "shader_identity_unavailable",
+            "shader_artifact_unavailable",
+            "shader_artifact_unavailable",
+            "shader_artifact_unavailable",
+        )
         for mutate in (
                 lambda stage: stage.__setitem__("source_sha256", ""),
                 lambda stage: stage.__setitem__(
@@ -1385,6 +1393,90 @@ class HeterogeneousShaderSequenceTests(unittest.TestCase):
             with self.subTest(case=variant.counter):
                 variant(mutate)
 
+    def test_missing_or_conflicting_captured_identity_is_incomplete(self):
+        events_path = (self.fixture.base / "campaign" / "frame-1" /
+                       "frame-events.jsonl")
+        original = events_path.read_text()
+
+        def mutate(kind):
+            events = [json.loads(line) for line in original.splitlines()
+                      if line.strip()]
+            draw = next(event for event in events
+                        if event.get("kind") == "draw")
+            shaders = draw["program"]["shaders"]
+            if kind == "missing-vertex-hash":
+                shaders[0].pop("sha256", None)
+            elif kind == "missing-pixel-hash":
+                shaders[1].pop("sha256", None)
+            elif kind == "missing-stage-entry":
+                draw["program"]["shaders"] = [shaders[0]]
+            elif kind == "conflicting":
+                conflicting = dict(shaders[1])
+                conflicting["sha256"] = "0" * 64
+                shaders.append(conflicting)
+            events_path.write_text(
+                "\n".join(json.dumps(event) for event in events) + "\n")
+            try:
+                case = self.fixture.base / f"identity-{kind}"
+                manifest = self.package(case)
+                self.assertFalse(
+                    manifest["reproduction"]["independently_reproducible"],
+                    manifest["reproduction"])
+                self.assertEqual(manifest["reproduction"]["status"],
+                                 "incomplete")
+                self.assertEqual(
+                    manifest["reproduction"]["reason"],
+                    "shader_identity_unavailable")
+                self.assertEqual(manifest["replay_command"], [])
+                self.assertTrue(any(
+                    problem.get("kind") == "shader_identity"
+                    for problem in manifest["reproduction"]["missing"]),
+                    manifest["reproduction"]["missing"])
+            finally:
+                events_path.write_text(original)
+
+        for kind in ("missing-vertex-hash", "missing-pixel-hash",
+                     "missing-stage-entry", "conflicting"):
+            with self.subTest(kind=kind):
+                mutate(kind)
+
+    def test_verifier_rejects_missing_captured_identity(self):
+        case = self.fixture.base / "case-missing-identity"
+        self.package(case)
+        relative = "frames/000003/frame-events.jsonl"
+        events_path = case / relative
+        events = [json.loads(line)
+                  for line in events_path.read_text().splitlines() if line]
+        draw = next(event for event in events if event.get("kind") == "draw")
+        draw["program"]["shaders"][1].pop("sha256", None)
+        events_path.write_text(
+            "\n".join(json.dumps(event) for event in events) + "\n")
+        digest = sha(events_path.read_bytes())
+        manifest = json.loads((case / "case.json").read_text())
+        sequence = json.loads((case / "sequence.json").read_text())
+        sequence["frames"][2]["event_stream_sha256"] = digest
+        (case / "sequence.json").write_text(json.dumps(sequence))
+        record_path = case / "frames/000003/frame-sequence.json"
+        record = json.loads(record_path.read_text())
+        record["event_stream_sha256"] = digest
+        record_path.write_text(json.dumps(record))
+        changed = {relative, "sequence.json",
+                   "frames/000003/frame-sequence.json"}
+        manifest["files"] = [item for item in manifest["files"]
+                             if item["path"] not in changed]
+        for name in sorted(changed):
+            changed_path = case / name
+            manifest["files"].append({
+                "path": name, "bytes": changed_path.stat().st_size,
+                "sha256": sha(changed_path.read_bytes())})
+        (case / "case.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        verified = gfx_replay_case.verify(case)
+        self.assertFalse(verified["ok"], verified)
+        self.assertTrue(any("has no valid captured sha256 identity" in problem
+                            for problem in verified["problems"]), verified)
+        with self.assertRaises(gfx_replay_case.CaseError):
+            gfx_replay_case.replay_case(case, self.fixture.base / "replay-refused")
+
     def test_identity_must_be_declared(self):
         case = self.fixture.base / "case-no-identity"
         self.package(case)
@@ -1395,9 +1487,8 @@ class HeterogeneousShaderSequenceTests(unittest.TestCase):
         self.refresh(case, relative, update_sequence_entry=True)
         verified = gfx_replay_case.verify(case)
         self.assertFalse(verified["ok"], verified)
-        self.assertTrue(any("does not declare the captured stage identity"
-                            in problem for problem in verified["problems"]),
-                        verified)
+        self.assertTrue(any("has no valid captured stage identity" in problem
+                            for problem in verified["problems"]), verified)
 
     def test_budget_at_actual_size_with_per_frame_shaders(self):
         unlimited = self.fixture.base / "case-size"
