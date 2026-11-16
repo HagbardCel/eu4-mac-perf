@@ -601,7 +601,22 @@
     "bytes_written": 1406082344,
     "queue_high_water": 1,
     "max_pending": 2,
-    "note": "Replay duration is the native command/readback duration; callback duration additionally includes bounded shader-translation wait and the per-frame decision handshake. No uninstrumented/capture-only EU4 pacing comparison was measured."
+    "note": "Replay duration is the native command/readback duration; callback duration additionally includes bounded shader-translation wait and the per-frame decision handshake. No uninstrumented/capture-only EU4 pacing comparison was measured.",
+    "async": {
+      "replay_seconds": [
+        1.668373,
+        1.483613,
+        1.491777
+      ],
+      "callback_seconds": [
+        5.242667,
+        4.889833,
+        4.983036
+      ],
+      "queue_high_water": 2,
+      "max_pending": 2,
+      "bytes_on_disk": 1406077301
+    }
   },
   "offline": {
     "carried_renderer_output": {
@@ -649,7 +664,8 @@
     "The authentic title frame re-renders all targets every frame, so carried_bindings is 0; the carried path is proven by the canonical two-frame fixture.",
     "Stages 2/3 (10-20 frames, gameplay, async) were not run.",
     "Performance comparison against uninstrumented EU4 and capture-only mode was not measured in this bounded campaign.",
-    "The authentic Stage-1 run predates the per-frame blob-budget accounting fix; its campaign manifest overcounts bytes. The reported disk bytes are authoritative for that run."
+    "The authentic Stage-1 run predates the per-frame blob-budget accounting fix; its campaign manifest overcounts bytes. The reported disk bytes are authoritative for that run.",
+    "The asynchronous pipeline is a single bounded in-process worker; shader translation remains per frame and no cross-process/multi-worker queue is implemented."
   ],
   "code_identity": {
     "campaign_commit": "a7a99c00",
@@ -658,5 +674,284 @@
       "Rebased onto the reviewed/rebased PR3 branch.",
       "Streaming per-frame stop decisions, hard-stop policy, decision handshake, event-indexed lifecycle, prior-write producer rule, exact carried generations, per-frame shader dirs, reference/seal validation."
     ]
+  },
+  "async": {
+    "pi": 59281,
+    "pid": 59281,
+    "session": "5042cfd8-e105-48c5-9863-1493acea0cbe",
+    "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "instrumentation_library_sha256": "1b3fdd0bb5205b66d7ac5f07fb2612e328842f78559d1974a63f84a587e2b5bc",
+    "campaign": {
+      "schema": "gfx-frame-sequence-campaign/v1",
+      "session_id": "5042cfd8-e105-48c5-9863-1493acea0cbe",
+      "pid": 59281,
+      "status": "complete",
+      "reason": "frame_limit",
+      "max_frames": 3,
+      "max_pending": 2,
+      "max_bytes": 2147483648,
+      "frames_completed": 3,
+      "bytes_written": 1263128298,
+      "frames": [
+        {
+          "sequence": 1,
+          "capture_frame_id": 1,
+          "dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/wt_m7_pr4/.local/m7/pr4-async-live-2/frames/frame-000001",
+          "manifest_sha256": "fd7a9f7c60d1bc96e76d07ac10dcdfb43b9c1b0a2dfa632e385193abfe0f147c",
+          "event_stream_sha256": "5d398297b60ba749ed38836fa01132f5352d159d0ab207fb31ad463c166bd157",
+          "reference_sha256": "b4774d25b71dabc61791658961aa9deafe54d99dd2ee33d4f5f8114b08508801",
+          "operations": 325,
+          "draws": 315,
+          "clears": 9,
+          "copies": 1
+        },
+        {
+          "sequence": 2,
+          "capture_frame_id": 2,
+          "dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/wt_m7_pr4/.local/m7/pr4-async-live-2/frames/frame-000002",
+          "manifest_sha256": "07e9396103220e339e3bacf73edd4e69755b0f9db040b0f6a9c6606554526590",
+          "event_stream_sha256": "6ac6ad68755c0d7e8f98cc66d19c4e9005181c1b6dbec648a290497f5ae509d5",
+          "reference_sha256": "58a75ad75fb63f4cebdb3ee742ac8038e9e49c705e668a33bfe9559f30afaa45",
+          "operations": 325,
+          "draws": 315,
+          "clears": 9,
+          "copies": 1
+        },
+        {
+          "sequence": 3,
+          "capture_frame_id": 3,
+          "dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/wt_m7_pr4/.local/m7/pr4-async-live-2/frames/frame-000003",
+          "manifest_sha256": "a02f4e768501c76506f00b489ebc0e6a5b4fe2b93ebb2f250c6c8d4d0b572bae",
+          "event_stream_sha256": "10abbd608eae04abd8b8d891ca3102843ec09a5503c51630d8dcf1b6bb15eeff",
+          "reference_sha256": "2d5c92e2c75f66ad57601ca844a681206a7c16b7699aabee7b4cf66bb25ec8f3",
+          "operations": 325,
+          "draws": 315,
+          "clears": 9,
+          "copies": 1
+        }
+      ]
+    },
+    "frames": [
+      {
+        "sequence": 1,
+        "capture_frame_id": 1,
+        "manifest_sha256": "fd7a9f7c60d1bc96e76d07ac10dcdfb43b9c1b0a2dfa632e385193abfe0f147c",
+        "event_stream_sha256": "5d398297b60ba749ed38836fa01132f5352d159d0ab207fb31ad463c166bd157",
+        "reference_sha256": "b4774d25b71dabc61791658961aa9deafe54d99dd2ee33d4f5f8114b08508801",
+        "previous_capture_frame_id": null,
+        "readback_ns": 21621000,
+        "seal_ns": 38406000,
+        "metal": {
+          "status": "ok",
+          "events": 325,
+          "encoded": 325,
+          "failed": 0,
+          "duration_ns": 1668373000,
+          "total_callback_ns": 5242667000,
+          "history_status": 1,
+          "carried_bindings": 0,
+          "async": true,
+          "queue_high_water": 1,
+          "queue_depth": 0
+        },
+        "history": {
+          "status": "ok",
+          "sequence": 1,
+          "renderer_generated": [
+            {
+              "name": "0",
+              "generation": 307
+            },
+            {
+              "name": "430",
+              "generation": 1
+            },
+            {
+              "name": "431",
+              "generation": 3
+            },
+            {
+              "name": "432",
+              "generation": 2
+            },
+            {
+              "name": "433",
+              "generation": 7
+            },
+            {
+              "name": "442",
+              "generation": 1
+            },
+            {
+              "name": "443",
+              "generation": 2
+            },
+            {
+              "name": "447",
+              "generation": 2
+            }
+          ]
+        },
+        "classification": "difference_with_partial_state_coverage",
+        "first_divergence": {
+          "kind": "intermediate",
+          "event": 286,
+          "target": "442",
+          "producer_event": 284,
+          "operation": "glCopyTexSubImage2D",
+          "confidence": "confirmed",
+          "root_cause": "not_established"
+        }
+      },
+      {
+        "sequence": 2,
+        "capture_frame_id": 2,
+        "manifest_sha256": "07e9396103220e339e3bacf73edd4e69755b0f9db040b0f6a9c6606554526590",
+        "event_stream_sha256": "6ac6ad68755c0d7e8f98cc66d19c4e9005181c1b6dbec648a290497f5ae509d5",
+        "reference_sha256": "58a75ad75fb63f4cebdb3ee742ac8038e9e49c705e668a33bfe9559f30afaa45",
+        "previous_capture_frame_id": 1,
+        "readback_ns": 22877000,
+        "seal_ns": 40820000,
+        "metal": {
+          "status": "ok",
+          "events": 325,
+          "encoded": 325,
+          "failed": 0,
+          "duration_ns": 1483613000,
+          "total_callback_ns": 4889833000,
+          "history_status": 1,
+          "carried_bindings": 0,
+          "async": true,
+          "queue_high_water": 2,
+          "queue_depth": 1
+        },
+        "history": {
+          "status": "ok",
+          "sequence": 2,
+          "renderer_generated": [
+            {
+              "name": "0",
+              "generation": 614
+            },
+            {
+              "name": "430",
+              "generation": 2
+            },
+            {
+              "name": "431",
+              "generation": 6
+            },
+            {
+              "name": "432",
+              "generation": 4
+            },
+            {
+              "name": "433",
+              "generation": 14
+            },
+            {
+              "name": "442",
+              "generation": 2
+            },
+            {
+              "name": "443",
+              "generation": 4
+            },
+            {
+              "name": "447",
+              "generation": 4
+            }
+          ]
+        },
+        "classification": "difference_with_partial_state_coverage",
+        "first_divergence": {
+          "kind": "intermediate",
+          "event": 286,
+          "target": "442",
+          "producer_event": 284,
+          "operation": "glCopyTexSubImage2D",
+          "confidence": "confirmed",
+          "root_cause": "not_established"
+        }
+      },
+      {
+        "sequence": 3,
+        "capture_frame_id": 3,
+        "manifest_sha256": "a02f4e768501c76506f00b489ebc0e6a5b4fe2b93ebb2f250c6c8d4d0b572bae",
+        "event_stream_sha256": "10abbd608eae04abd8b8d891ca3102843ec09a5503c51630d8dcf1b6bb15eeff",
+        "reference_sha256": "2d5c92e2c75f66ad57601ca844a681206a7c16b7699aabee7b4cf66bb25ec8f3",
+        "previous_capture_frame_id": 2,
+        "readback_ns": 21676000,
+        "seal_ns": 39414000,
+        "metal": {
+          "status": "ok",
+          "events": 325,
+          "encoded": 325,
+          "failed": 0,
+          "duration_ns": 1491777000,
+          "total_callback_ns": 4983036000,
+          "history_status": 1,
+          "carried_bindings": 0,
+          "async": true,
+          "queue_high_water": 2,
+          "queue_depth": 0
+        },
+        "history": {
+          "status": "ok",
+          "sequence": 3,
+          "renderer_generated": [
+            {
+              "name": "0",
+              "generation": 921
+            },
+            {
+              "name": "430",
+              "generation": 3
+            },
+            {
+              "name": "431",
+              "generation": 9
+            },
+            {
+              "name": "432",
+              "generation": 6
+            },
+            {
+              "name": "433",
+              "generation": 21
+            },
+            {
+              "name": "442",
+              "generation": 3
+            },
+            {
+              "name": "443",
+              "generation": 6
+            },
+            {
+              "name": "447",
+              "generation": 6
+            }
+          ]
+        },
+        "classification": "difference_with_partial_state_coverage",
+        "first_divergence": {
+          "kind": "intermediate",
+          "event": 286,
+          "target": "442",
+          "producer_event": 284,
+          "operation": "glCopyTexSubImage2D",
+          "confidence": "confirmed",
+          "root_cause": "not_established"
+        }
+      }
+    ],
+    "classifications": [
+      "difference_with_partial_state_coverage",
+      "difference_with_partial_state_coverage",
+      "difference_with_partial_state_coverage"
+    ],
+    "queue_high_water": 2,
+    "note": "Bounded asynchronous in-process queue with MAX_PENDING=2; engine callback enqueued while the serialized worker replayed. Same persistent session and classifications as the synchronous run."
   }
 }

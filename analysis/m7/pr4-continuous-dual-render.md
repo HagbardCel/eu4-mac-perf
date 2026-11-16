@@ -121,9 +121,23 @@ always stop, regardless of `stop_on_difference`; the policy flag applies only to
 rendering-difference classifications. An early stop is also propagated to the
 tracer (`EU4_GFX_FRAME_TRACE_STOP_FILE`) and the bridge (`shadow/stop`).
 
-The current implementation is the synchronous stage: all captured frames are on
-disk before the Metal worker starts. A live asynchronous capture/replay pipeline
-is **not** claimed.
+### Bounded asynchronous worker
+
+`EU4_GFX_SHADOW_ASYNC=1` (capture `--async`) starts one serialized Metal worker
+inside the instrumentation dylib. The sealed callback now:
+
+1. copies the immutable capture descriptor into a bounded in-memory job;
+2. blocks at the frame boundary only while the queue is full (`MAX_PENDING`),
+   with a bounded wait;
+3. returns to the engine without translating or replaying on the GL thread.
+
+The worker owns the one persistent replay session, waits for the coordinator's
+translated shaders/receipt for that frame, executes Metal, writes the report and
+waits for the coordinator's per-frame `continue`/`stop` decision. The
+coordinator still diagnoses each frame with PR 3 in order and can stop the
+campaign; queued frames behind a stop are explicitly marked stopped rather than
+silently dropped. Queue high-water and depth are published in each shadow
+report.
 
 ## Evidence
 
@@ -207,6 +221,18 @@ bridge.
 Report package: [pr4-evidence.json](pr4-evidence.json). Raw captures remain
 under `.local` (gitignored).
 
+### Sync vs async (same 3-frame title sequence)
+
+| mode | replay s | callback s | queue high-water | classifications |
+| --- | --- | --- | --- | --- |
+| synchronous (pid 12009) | 2.07 / 1.43 / 1.43 | 5.45 / 4.92 / 4.90 | 1 | all partial-state differences |
+| asynchronous (pid 59281, `MAX_PENDING=2`) | 1.67 / 1.48 / 1.49 | 5.24 / 4.89 / 4.98 | 2 | all partial-state differences |
+
+The asynchronous run observed a real queue depth of 1 and high-water 2, with
+the same persistent generations and classifications, proving the capture and
+Metal execution paths are decoupled while ordering and qualification are
+preserved.
+
 ## Tests
 
 Focused PR4 set: 96 passed, 1 skipped (frame-trace writer, interpose, continuous
@@ -226,10 +252,9 @@ diagnosis).
 
 ## Known limitations
 
-- The live asynchronous pipeline (engine callback enqueues and returns while a
-  worker replays) is not implemented. The synchronous bridge blocks the engine
-  at each frame boundary; that is the Stage 1 design. A bounded file-queue
-  worker is the next architectural step.
+- The asynchronous pipeline is a bounded in-process queue with one serialized
+  Metal worker. It is not a cross-process or multi-worker pipeline, and the
+  coordinator still translates shaders per frame.
 - The capture byte budget is checked at frame boundaries, so one frame may
   overshoot the configured budget before the campaign stops. It is a bounded
   campaign guard, not a hard per-frame allocation limit.

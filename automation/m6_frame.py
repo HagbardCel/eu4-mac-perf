@@ -579,7 +579,12 @@ def capture(args: argparse.Namespace) -> int:
         env_extra["EU4_GFX_FRAME_TRACE_CAPTURE_COPY_SOURCE"] = "1"
     shadow_enabled = bool(getattr(args, "shadow", False))
     continuous = bool(getattr(args, "continuous", False))
+    asynchronous = bool(getattr(args, "async", False))
     seal_enabled = bool(getattr(args, "seal", False)) or shadow_enabled
+    if asynchronous and not continuous:
+        print("capture refused: --async requires --continuous",
+              file=sys.stderr)
+        return 2
     if continuous:
         if not shadow_enabled:
             print("capture refused: --continuous requires --shadow",
@@ -632,6 +637,10 @@ def capture(args: argparse.Namespace) -> int:
             env_extra["EU4_GFX_SHADOW_MAX_FRAMES"] = str(args.max_frames)
             env_extra["EU4_GFX_SHADOW_MAX_PENDING"] = str(args.max_pending)
             env_extra["EU4_GFX_SHADOW_MAX_BYTES"] = str(args.max_bytes)
+            env_extra["EU4_GFX_FRAME_TRACE_STOP_FILE"] = str(
+                shadow_dir / "stop")
+            if asynchronous:
+                env_extra["EU4_GFX_SHADOW_ASYNC"] = "1"
         else:
             env_extra["EU4_GFX_SHADOW_MODE"] = "single-frame"
             env_extra["EU4_GFX_SHADOW_SHADER_DIR"] = str(
@@ -1986,6 +1995,9 @@ def _continuous_frame_coordinator(
         "carried_bindings": report.get("carried_bindings"),
         "missing_history": report.get("missing_history"),
         "stale_history": report.get("stale_history"),
+        "async": bool(report.get("async", False)),
+        "queue_high_water": report.get("queue_high_water"),
+        "queue_depth": report.get("queue_depth"),
         "diagnostic_report": str(output / "diagnostic-report.json"),
     }
     return summary, diagnosis
@@ -2134,6 +2146,8 @@ def _parser() -> argparse.ArgumentParser:
     cap.add_argument("--max-pending", type=int, default=4)
     cap.add_argument("--max-bytes", type=int, default=512 * 1024 * 1024)
     cap.add_argument("--continue-on-difference", action="store_true")
+    cap.add_argument("--async", action="store_true",
+                     help="use the bounded asynchronous Metal worker queue")
     cap.add_argument("--shadow-dir", default="",
                      help="shadow output directory (default: <output>/shadow)")
     cap.add_argument("--shadow-timeout-ms", type=int, default=120000)
