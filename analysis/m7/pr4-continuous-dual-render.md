@@ -233,6 +233,18 @@ the same persistent generations and classifications, proving the capture and
 Metal execution paths are decoupled while ordering and qualification are
 preserved.
 
+### Stage 2: 10-frame asynchronous campaign
+
+One EU4 process (pid 60053, session `8d60ee02-944a-452d-b62c-ceb2fbadf7bd`)
+captured 10 consecutive frames with `MAX_PENDING=3`. The queue reached its bound
+(high-water 3) without dropping a frame; every frame preserved ordered previous
+identity, ran through the same Metal session, and classified as
+`difference_with_partial_state_coverage` with history ok. Replay averaged
+1.57 s (worst 2.17 s), callback averaged 5.14 s, readback/seal averaged
+21.7 ms / 39.5 ms, and the campaign wrote 4.69 GB on disk. Renderer-owned
+generations continued to accumulate (433 reached 70, 431 30, 443 20), so the
+session was not reset between frames.
+
 ## Tests
 
 Focused PR4 set: 96 passed, 1 skipped (frame-trace writer, interpose, continuous

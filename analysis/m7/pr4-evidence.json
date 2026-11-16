@@ -662,10 +662,10 @@
     "Shader translation is performed per frame with --force; cross-frame translation caching by source identity is not implemented.",
     "Lifecycle capture covers glDeleteTextures. Ordered glTexImage2D/glTexSubImage2D CPU-write records are not captured; an explicit delete/reset is the supported resynchronization.",
     "The authentic title frame re-renders all targets every frame, so carried_bindings is 0; the carried path is proven by the canonical two-frame fixture.",
-    "Stages 2/3 (10-20 frames, gameplay, async) were not run.",
     "Performance comparison against uninstrumented EU4 and capture-only mode was not measured in this bounded campaign.",
     "The authentic Stage-1 run predates the per-frame blob-budget accounting fix; its campaign manifest overcounts bytes. The reported disk bytes are authoritative for that run.",
-    "The asynchronous pipeline is a single bounded in-process worker; shader translation remains per frame and no cross-process/multi-worker queue is implemented."
+    "The asynchronous pipeline is a single bounded in-process worker; shader translation remains per frame and no cross-process/multi-worker queue is implemented.",
+    "Stage 3 (longer gameplay campaign) was not run; Stage 2 covered 10 successive title frames asynchronously."
   ],
   "code_identity": {
     "campaign_commit": "a7a99c00",
@@ -953,5 +953,234 @@
     ],
     "queue_high_water": 2,
     "note": "Bounded asynchronous in-process queue with MAX_PENDING=2; engine callback enqueued while the serialized worker replayed. Same persistent session and classifications as the synchronous run."
+  },
+  "async_stage2": {
+    "pid": 60053,
+    "session": "8d60ee02-944a-452d-b62c-ceb2fbadf7bd",
+    "frames_count": 10,
+    "max_pending": 3,
+    "queue_high_water": 3,
+    "campaign": {
+      "status": "complete",
+      "reason": "frame_limit",
+      "bytes_written": 4210947074
+    },
+    "classifications": [
+      "difference_with_partial_state_coverage"
+    ],
+    "history": [
+      "1"
+    ],
+    "frames": [
+      {
+        "sequence": 1,
+        "capture_frame_id": 1,
+        "operations": 325,
+        "previous_capture_frame_id": null,
+        "readback_ns": 21396000,
+        "seal_ns": 38463000,
+        "metal": {
+          "duration_ns": 2165081000,
+          "total_callback_ns": 5741617000,
+          "history_status": 1,
+          "carried_bindings": 0,
+          "async": true,
+          "queue_high_water": 1,
+          "queue_depth": 0
+        },
+        "classification": "difference_with_partial_state_coverage",
+        "manifest_sha256": "f663bde59970d3e3b5505b8240dea4056c2ddf58508ca574f8c00eadd2eb739f",
+        "reference_sha256": "22121ec6e327cb6ae389eaac72f8361ffcb7d77ddaa25585235367119f43d75f"
+      },
+      {
+        "sequence": 2,
+        "capture_frame_id": 2,
+        "operations": 325,
+        "previous_capture_frame_id": 1,
+        "readback_ns": 22991000,
+        "seal_ns": 40685000,
+        "metal": {
+          "duration_ns": 1511681000,
+          "total_callback_ns": 5152738000,
+          "history_status": 1,
+          "carried_bindings": 0,
+          "async": true,
+          "queue_high_water": 2,
+          "queue_depth": 1
+        },
+        "classification": "difference_with_partial_state_coverage",
+        "manifest_sha256": "b052f772d3441143ea74df15b32a5784a41248c0e92f81e8ca2e4aa5dc278e53",
+        "reference_sha256": "908ffb896dcd2ea2124f4e6bcf2c030203849d86faccc8ad9def4be4109ed689"
+      },
+      {
+        "sequence": 3,
+        "capture_frame_id": 3,
+        "operations": 325,
+        "previous_capture_frame_id": 2,
+        "readback_ns": 21369000,
+        "seal_ns": 38996000,
+        "metal": {
+          "duration_ns": 1510382000,
+          "total_callback_ns": 5073134000,
+          "history_status": 1,
+          "carried_bindings": 0,
+          "async": true,
+          "queue_high_water": 3,
+          "queue_depth": 2
+        },
+        "classification": "difference_with_partial_state_coverage",
+        "manifest_sha256": "2bb8bb7128174cd293aa85503a7440dbb54c951fee08bd0b6b68b71ae226d516",
+        "reference_sha256": "5875047197e8a5f22a5d33ded02f4e4a790bd17340ec22824df8799b8f1844f4"
+      },
+      {
+        "sequence": 4,
+        "capture_frame_id": 4,
+        "operations": 327,
+        "previous_capture_frame_id": 3,
+        "readback_ns": 21497000,
+        "seal_ns": 39150000,
+        "metal": {
+          "duration_ns": 1513658000,
+          "total_callback_ns": 5155864000,
+          "history_status": 1,
+          "carried_bindings": 0,
+          "async": true,
+          "queue_high_water": 3,
+          "queue_depth": 3
+        },
+        "classification": "difference_with_partial_state_coverage",
+        "manifest_sha256": "557e1fcc37c68690a0f89e7458bba8120899887d165e0cecda28af5a432fa463",
+        "reference_sha256": "9343c1a741b69878079db896a87b5f53e8c6a4a3c701f6c094bbe86c9406f274"
+      },
+      {
+        "sequence": 5,
+        "capture_frame_id": 5,
+        "operations": 327,
+        "previous_capture_frame_id": 4,
+        "readback_ns": 21280000,
+        "seal_ns": 39095000,
+        "metal": {
+          "duration_ns": 1519032000,
+          "total_callback_ns": 5147753000,
+          "history_status": 1,
+          "carried_bindings": 0,
+          "async": true,
+          "queue_high_water": 3,
+          "queue_depth": 3
+        },
+        "classification": "difference_with_partial_state_coverage",
+        "manifest_sha256": "4a15589c64accbb76b57514bf79fd46721f24495bf1a1ce3a23f172bf245d81d",
+        "reference_sha256": "b84286b221a0cdecd40e3c8820be30b5fecfc2398e8c0f6cfe33e873374cc725"
+      },
+      {
+        "sequence": 6,
+        "capture_frame_id": 6,
+        "operations": 327,
+        "previous_capture_frame_id": 5,
+        "readback_ns": 21956000,
+        "seal_ns": 40331000,
+        "metal": {
+          "duration_ns": 1512090000,
+          "total_callback_ns": 5145474000,
+          "history_status": 1,
+          "carried_bindings": 0,
+          "async": true,
+          "queue_high_water": 3,
+          "queue_depth": 3
+        },
+        "classification": "difference_with_partial_state_coverage",
+        "manifest_sha256": "dbb8adf3f6cb7cf781b36816c26464ac3053467425a39649c3e7f53b8666c9fc",
+        "reference_sha256": "925140317dfb992842a553cce9e6e962adaf3f0d7b6e20bba6a914ff03c53c34"
+      },
+      {
+        "sequence": 7,
+        "capture_frame_id": 7,
+        "operations": 327,
+        "previous_capture_frame_id": 6,
+        "readback_ns": 21784000,
+        "seal_ns": 39690000,
+        "metal": {
+          "duration_ns": 1482935000,
+          "total_callback_ns": 4933320000,
+          "history_status": 1,
+          "carried_bindings": 0,
+          "async": true,
+          "queue_high_water": 3,
+          "queue_depth": 3
+        },
+        "classification": "difference_with_partial_state_coverage",
+        "manifest_sha256": "ef3f65a021c2573bee1da4f2c86bbfd3867eb7f5212e74e4d76586b0e13a3312",
+        "reference_sha256": "5844768e75b59124912a396e6711784fd58113f2bf574af25a64ab222a3fdcd3"
+      },
+      {
+        "sequence": 8,
+        "capture_frame_id": 8,
+        "operations": 327,
+        "previous_capture_frame_id": 7,
+        "readback_ns": 21705000,
+        "seal_ns": 39566000,
+        "metal": {
+          "duration_ns": 1493074000,
+          "total_callback_ns": 5067889000,
+          "history_status": 1,
+          "carried_bindings": 0,
+          "async": true,
+          "queue_high_water": 3,
+          "queue_depth": 2
+        },
+        "classification": "difference_with_partial_state_coverage",
+        "manifest_sha256": "a488b15cdabc25106bd66c0cffdb5c0b80df3ef616d99d0686a965e354f87849",
+        "reference_sha256": "df4dfbe4ac5308e18423e82828833552aac437f0e7dcd577f1f2563c1349c79b"
+      },
+      {
+        "sequence": 9,
+        "capture_frame_id": 9,
+        "operations": 327,
+        "previous_capture_frame_id": 8,
+        "readback_ns": 21444000,
+        "seal_ns": 39261000,
+        "metal": {
+          "duration_ns": 1503027000,
+          "total_callback_ns": 4985795000,
+          "history_status": 1,
+          "carried_bindings": 0,
+          "async": true,
+          "queue_high_water": 3,
+          "queue_depth": 1
+        },
+        "classification": "difference_with_partial_state_coverage",
+        "manifest_sha256": "a3f9414bec38c89a1429d6848edd13a4f522883277fcaf6ed23912616c061443",
+        "reference_sha256": "23fdd026e7c9ae50f5fb08db8c50bd61cf93300592a100baba952033df4a025e"
+      },
+      {
+        "sequence": 10,
+        "capture_frame_id": 10,
+        "operations": 327,
+        "previous_capture_frame_id": 9,
+        "readback_ns": 21584000,
+        "seal_ns": 39429000,
+        "metal": {
+          "duration_ns": 1497543000,
+          "total_callback_ns": 4991542000,
+          "history_status": 1,
+          "carried_bindings": 0,
+          "async": true,
+          "queue_high_water": 3,
+          "queue_depth": 0
+        },
+        "classification": "difference_with_partial_state_coverage",
+        "manifest_sha256": "e2e65a680eb89cc5eb087f054ffec4e2db441762e7c8ecb53268d657b029749b",
+        "reference_sha256": "d50d9a77f5671d05a40fa649ddbd39bfa9ff171d87421a039411f319be8b0653"
+      }
+    ],
+    "metrics": {
+      "replay_seconds_mean": 1.5708503,
+      "replay_seconds_p95": 2.165081,
+      "callback_seconds_mean": 5.1395126,
+      "readback_ms_mean": 21.7006,
+      "seal_ms_mean": 39.4666,
+      "bytes_on_disk": 4687572023
+    },
+    "note": "Stage 2: 10 consecutive frames from one EU4 process through one persistent session and the bounded asynchronous worker queue (MAX_PENDING=3). Queue reached its bound; no frames were dropped."
   }
 }
