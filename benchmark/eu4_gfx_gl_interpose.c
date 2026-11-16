@@ -563,7 +563,7 @@ static void eu4_gfx_interposed_tex_image_2d(GLenum target, GLint level,
     }
     if (binding > 0) {
         eu4_gfx_frame_trace_texture_mutated((unsigned)binding, level, 0,
-                                            target == GL_TEXTURE_2D);
+                                            (unsigned)target);
     }
     g_real_tex_image(target, level, internalformat, width, height, border,
                      format, type, pixels);
@@ -603,7 +603,7 @@ static void eu4_gfx_interposed_tex_sub_image_2d(GLenum target, GLint level,
     }
     if (binding > 0) {
         eu4_gfx_frame_trace_texture_mutated((unsigned)binding, level, 1,
-                                            target == GL_TEXTURE_2D);
+                                            (unsigned)target);
     }
     g_real_tex_sub_image(target, level, xoffset, yoffset, width, height,
                          format, type, pixels);

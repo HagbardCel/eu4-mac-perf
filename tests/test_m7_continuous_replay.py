@@ -227,6 +227,48 @@ class ContinuousReplayHistoryTests(unittest.TestCase):
         row = next(item for item in provenance if item.get("texture") == "443")
         self.assertTrue(row.get("carried"))
 
+    def test_delete_before_recreate_resets_the_resource_generation(self):
+        frame1 = self.make_frame("recreate-1")
+        frame2 = self.make_frame("recreate-2")
+        self.write_sequence(frame1, 1, render_targets=("443",))
+        # 443 is re-rendered by events 288/289 after the delete at event 0.
+        # The frame writes 443 twice (clear + draw), so a fresh identity ends
+        # at generation 2.  Without applying the delete the recreated target
+        # would continue the previous frame's identity and end at 4.
+        self.write_sequence(
+            frame2, 2, previous=frame1,
+            lifecycle=({"kind": "delete", "event": 0,
+                        "names": ("443",)},))
+        ran, rows, out = self.run_sequence([frame1, frame2])
+        self.assertEqual(ran.returncode, 0, ran.stderr[-1000:])
+        self.assert_ok(rows[1])
+        history = json.loads(
+            (out / "out-002" / "replay.json").read_text())["history"]
+        resource = next(item for item in history["resources"]
+                        if item["name"] == "443")
+        self.assertEqual(resource["generation"], 2, resource)
+
+    def test_repeated_delete_removes_the_recreated_resource(self):
+        frame1 = self.make_frame("repeat-1")
+        frame2 = self.make_frame("repeat-2")
+        self.write_sequence(frame1, 1, render_targets=("443",))
+        # Two logically distinct deletions of the same numeric name: before
+        # the recreation and after it.  The final history must not retain the
+        # recreated target, which is only true when both records survive.
+        self.write_sequence(
+            frame2, 2, previous=frame1,
+            lifecycle=({"kind": "delete", "event": 0,
+                        "names": ("443",)},
+                       {"kind": "delete", "event": 326,
+                        "names": ("443",)}))
+        ran, rows, out = self.run_sequence([frame1, frame2])
+        self.assertEqual(ran.returncode, 0, ran.stderr[-1000:])
+        self.assert_ok(rows[1])
+        history = json.loads(
+            (out / "out-002" / "replay.json").read_text())["history"]
+        names = [item["name"] for item in history["resources"]]
+        self.assertNotIn("443", names)
+
     def test_cpu_mutation_of_a_carried_output_fails_closed(self):
         frame1 = self.make_frame("mutation-1")
         frame2 = self.make_frame("mutation-2", remove_events=(288, 289))

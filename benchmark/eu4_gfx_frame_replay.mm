@@ -770,6 +770,15 @@ static BOOL apply_lifecycle_entry(NSDictionary *item) {
            also a target in this frame: the write/clear that recreates it is
            ordered after this deletion by the event stream.  Skipping it would
            silently reuse the old Metal identity. */
+        NSMutableDictionary *existing = g_render_targets[name];
+        NSNumber *framebuffer = existing[@"framebuffer"];
+        if ([framebuffer isKindOfClass:[NSNumber class]] &&
+            [framebuffer unsignedIntegerValue] != 0) {
+            /* The framebuffer-keyed allocation is the Metal identity behind
+               the texture name.  Dropping only the name would let a later
+               recreation continue the deleted target's generation. */
+            [g_targets removeObjectForKey:framebuffer];
+        }
         [g_resource_history removeObjectForKey:name];
         [g_render_targets removeObjectForKey:name];
         [g_frame_written removeObject:name];

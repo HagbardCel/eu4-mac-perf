@@ -1,0 +1,139 @@
+{
+  "schema": "m7-followup-a-evidence/v1",
+  "status": "authentic_three_frame_campaign_complete",
+  "base_main": "e2853b1f771100929b0849ce3405af8414c71352",
+  "authentic": {
+    "launch_command": "python3 -m automation.m6_frame capture --output .local/m7/followup-a-live-3 --callers 0x103b3c8 --min-draws 1 --occurrence 300 --boundary scene --continuous --max-frames 3 --max-pending 2 --max-bytes 2147483648 --shadow --seal --max-draws 1024 --duration 180 --timeout 600 --shadow-timeout-ms 180000 --shadow-wait-ms 240000 --continue-on-difference --background",
+    "pid": 27780,
+    "session": "c66b3625-e06f-43f2-b957-61f2f14f66c2",
+    "eu4_processes": 1,
+    "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "instrumentation_library_sha256": "e8f683c934b726e24188a68c6f78a6b79cc06cc8cda4b3c6215e6e2ec5283b3f",
+    "termination": {
+      "terminated": true,
+      "killed": false
+    },
+    "display_restore": {
+      "restored": true,
+      "reason": "already_original"
+    },
+    "campaign": {
+      "status": "complete",
+      "reason": "frame_limit",
+      "frames_completed": 3,
+      "bytes_written": 487868876,
+      "deduplicated_bytes": 775259422
+    },
+    "frames": [
+      {
+        "sequence": 1,
+        "capture_frame_id": 1,
+        "manifest_sha256": "70969fd710a10e092549940feea2badb9595e8fe67a978610651d7b69032db2c",
+        "event_stream_sha256": "46b2e6c8072ca46eb9dce3d86c7a8c442312381a2ffdebc73420ba49348b27f3",
+        "reference_sha256": "b48d99864ee7bba8d9a135681d9222804a7b40339908e99914ea0440a3c2c62e",
+        "operations": 325,
+        "sealed": true,
+        "readback_ms": 23.81,
+        "seal_ms": 40.71,
+        "carried": 0,
+        "lifecycle_entries": 1,
+        "texture_cache": {
+          "reads": 2467,
+          "hits": 2406,
+          "invalidations": 0
+        }
+      },
+      {
+        "sequence": 2,
+        "capture_frame_id": 2,
+        "manifest_sha256": "33ad97c52bb617b95f01158b302359fc26adeeb9471f51e54c6fe5bafebb299d",
+        "event_stream_sha256": "871c03b9095fa0c15abcf0bb60fc7ffab56c4701f02288d57dff81915b118964",
+        "reference_sha256": "52d93230197077699a52fe97fb70e8caeefbca30be8bea387c2eeb26395c8e33",
+        "operations": 325,
+        "sealed": true,
+        "readback_ms": 23.8,
+        "seal_ms": 41.38,
+        "carried": 6,
+        "lifecycle_entries": 0,
+        "texture_cache": {
+          "reads": 2467,
+          "hits": 2406,
+          "invalidations": 0
+        }
+      },
+      {
+        "sequence": 3,
+        "capture_frame_id": 3,
+        "manifest_sha256": "56ceaee2e9df04df91193049d2507334d150d0b86d87ea4fa6e2b6ba31ecb445",
+        "event_stream_sha256": "8045ad6d8f7d1ce4445c8f49038bc69815751431f17db50bc0b673d71ee18c4e",
+        "reference_sha256": "e44aecb4189b9024872edb05188ba6074575968e68141b23f7a8bf1162c4469c",
+        "operations": 325,
+        "sealed": true,
+        "readback_ms": 20.95,
+        "seal_ms": 37.61,
+        "carried": 6,
+        "lifecycle_entries": 0,
+        "texture_cache": {
+          "reads": 2467,
+          "hits": 2406,
+          "invalidations": 0
+        }
+      }
+    ],
+    "shadow": [
+      {
+        "sequence": 1,
+        "status": "ok",
+        "history_status": 1,
+        "carried_bindings": 0,
+        "missing_history": 0,
+        "stale_history": 0
+      },
+      {
+        "sequence": 2,
+        "status": "ok",
+        "history_status": 1,
+        "carried_bindings": 0,
+        "missing_history": 0,
+        "stale_history": 0
+      },
+      {
+        "sequence": 3,
+        "status": "ok",
+        "history_status": 1,
+        "carried_bindings": 0,
+        "missing_history": 0,
+        "stale_history": 0
+      }
+    ],
+    "coordinator_status": "ok",
+    "interpose_errors": 0
+  },
+  "synthetic": {
+    "texture_version_tests": [
+      "subimage",
+      "realloc",
+      "name-reuse",
+      "presample",
+      "unchanged"
+    ],
+    "capacity_tests": [
+      "targets 64/65",
+      "deletes 64/65",
+      "mutations 64/65",
+      "carried 64+1",
+      "campaign 64 frames"
+    ],
+    "metal_tests": [
+      "repeated delete before/after recreate resets generation",
+      "both deletes survive",
+      "renderer-owned mutation fails closed",
+      "two payload versions of one texture name render distinct checkpoints"
+    ]
+  },
+  "notes": [
+    "The authentic title frame recorded no CPU texture mutation, so A1 versioning is proven by the native GL capture regression, not by this campaign.",
+    "No carried renderer output was sampled in the authentic campaign; carry/mutation fail-closed branches remain synthetic evidence.",
+    "Readback/sealing cost is unchanged from PR4 within measurement noise."
+  ]
+}

@@ -15,6 +15,10 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from automation import gfx_frame_graph  # noqa: E402
 BENCH = ROOT / "benchmark"
 
 
@@ -92,6 +96,91 @@ class FrameTraceWriterTests(unittest.TestCase):
             self.assertTrue(manifest["truncated"])
             self.assertEqual(manifest["reason"], "draw_cap")
             self.assertEqual(manifest["events"], 1)
+
+    def test_repeated_delete_lifecycle_keeps_both_transitions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "campaign"
+            self._run("continuous-reuse", directory)
+            sequence = json.loads(
+                (directory / "frame-000001" / "frame-sequence.json").read_text())
+            deletes = [entry for entry in sequence["lifecycle"]
+                       if entry["kind"] == "delete"]
+            self.assertEqual([entry["event"] for entry in deletes], [2, 4])
+            self.assertEqual([entry["names"] for entry in deletes],
+                             [["443"], ["443"]])
+            self.assertEqual(sequence["carried_renderer_outputs"], [])
+
+    def test_renderer_owned_mutation_is_recorded_for_fail_closed_replay(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "campaign"
+            self._run("mutation-target", directory)
+            sequence = json.loads(
+                (directory / "frame-000001" / "frame-sequence.json").read_text())
+            mutations = [entry for entry in sequence["lifecycle"]
+                         if entry["kind"] == "mutation"]
+            self.assertEqual(len(mutations), 1, sequence["lifecycle"])
+            self.assertEqual(mutations[0]["names"], ["443"])
+            self.assertEqual(mutations[0]["target"], "0xde1")
+            self.assertEqual(mutations[0]["operation"], "glTexSubImage2D")
+
+    def test_capacity_exact_and_one_beyond(self):
+        expected = {
+            "targets": ("capacity_limit", "render_targets(64)"),
+            "deletes": ("capacity_limit", "delete_records"),
+            "mutations": ("capacity_limit", "mutation_records"),
+        }
+        for kind in expected:
+            for count, complete in ((64, True), (65, False)):
+                with self.subTest(kind=kind, count=count), \
+                        tempfile.TemporaryDirectory() as temporary:
+                    directory = Path(temporary) / "campaign"
+                    self._run(f"capacity-{kind}", directory, count)
+                    manifest = self._manifest(directory / "frame-000001")
+                    self.assertEqual(manifest["complete"], complete, manifest)
+                    self.assertEqual(manifest["capacity_exceeded"], not complete)
+                    if complete:
+                        sequence = json.loads(
+                            (directory / "frame-000001" /
+                             "frame-sequence.json").read_text())
+                        if kind == "deletes":
+                            names = [name for entry in sequence["lifecycle"]
+                                     for name in entry["names"]]
+                            self.assertEqual(len(names), 64)
+                            self.assertEqual(len(set(names)), 64)
+                        if kind == "mutations":
+                            mutations = [entry for entry in sequence["lifecycle"]
+                                         if entry["kind"] == "mutation"]
+                            self.assertEqual(len(mutations), 64)
+                    else:
+                        self.assertEqual(manifest["reason"], "resource_limit")
+                        campaign = json.loads(
+                            (directory / "sequence.json").read_text())
+                        self.assertEqual(campaign["status"], "incomplete")
+                        self.assertEqual(campaign["reason"], "resource_limit")
+
+    def test_carried_capacity_fails_the_campaign_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "campaign"
+            self._run("capacity-carried", directory)
+            third = self._manifest(directory / "frame-000003")
+            self.assertFalse(third["complete"], third)
+            self.assertEqual(third["reason"], "resource_limit")
+            self.assertTrue(third["capacity_exceeded"], third)
+            campaign = json.loads((directory / "sequence.json").read_text())
+            self.assertEqual(campaign["status"], "incomplete")
+            self.assertEqual(campaign["reason"], "resource_limit")
+            self.assertEqual(campaign["frames_completed"], 2)
+            graph = gfx_frame_graph.build(directory / "frame-000003")
+            self.assertEqual(graph["status"], "invalid", graph.get("reasons"))
+
+    def test_campaign_record_capacity_holds_exactly_64_frames(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "campaign"
+            self._run("continuous", directory, 64, 64 * 1024 * 1024)
+            campaign = json.loads((directory / "sequence.json").read_text())
+            self.assertEqual(campaign["status"], "complete")
+            self.assertEqual(campaign["frames_completed"], 64)
+            self.assertEqual(len(campaign["frames"]), 64)
 
     def test_continuous_capture_publishes_ordered_sealed_frames(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -451,6 +451,152 @@ static int scenario_continuous_carried(const char *directory, int max_frames,
     return 0;
 }
 
+static int configure_continuous_test(const char *directory, int max_frames) {
+    reset_env();
+    setenv("EU4_GFX_FRAME_TRACE_DIR", directory, 1);
+    setenv("EU4_GFX_FRAME_TRACE_TEST_ONLY", "1", 1);
+    setenv("EU4_GFX_FRAME_TRACE_CONTINUOUS", "1", 1);
+    setenv("EU4_GFX_FRAME_TRACE_BOUNDARY", "scene", 1);
+    setenv("EU4_GFX_FRAME_TRACE_MIN_DRAWS", "1", 1);
+    setenv("EU4_GFX_FRAME_SEAL", "1", 1);
+    char frames[32];
+    snprintf(frames, sizeof(frames), "%d", max_frames);
+    setenv("EU4_GFX_FRAME_TRACE_MAX_FRAMES", frames, 1);
+    setenv("EU4_GFX_FRAME_TRACE_MAX_PENDING", "2", 1);
+    setenv("EU4_GFX_FRAME_TRACE_MAX_BYTES", "268435456", 1);
+    return eu4_gfx_frame_trace_configure_from_env();
+}
+
+/* Arm one continuous frame, then perform the scenario inside that frame so
+   event indices are the ones the lifecycle record publishes. */
+static int arm_continuous_by_scene(void) {
+    eu4_gfx_capture_frame frame;
+    eu4_gfx_observe_call call;
+    memset(&frame, 0, sizeof(frame));
+    make_call(&call, 0x2000);
+    draw(true, 0x2000);
+    draw(false, 0x2000);
+    eu4_gfx_frame_trace_boundary_entry(&frame, &call);
+    eu4_gfx_frame_trace_boundary_exit(&frame, &call, NULL);
+    return 0;
+}
+
+static int finish_continuous_by_scene(void) {
+    eu4_gfx_capture_frame frame;
+    eu4_gfx_observe_call call;
+    memset(&frame, 0, sizeof(frame));
+    make_call(&call, 0x2000);
+    eu4_gfx_frame_trace_boundary_entry(&frame, &call);
+    eu4_gfx_frame_trace_boundary_exit(&frame, &call, NULL);
+    return 0;
+}
+
+static int scenario_continuous_reuse(const char *directory) {
+    if (configure_continuous_test(directory, 1) != 1) {
+        return 1;
+    }
+    arm_continuous_by_scene();
+    /* Captured frame.  delete(2) -> draw(3) -> recreate/render(4) ->
+       delete(5): the second deletion must not be folded into the first. */
+    draw(true, 0x2000);
+    draw(false, 0x2000);
+    draw(true, 0x2000);
+    draw(false, 0x2000);
+    unsigned deleted = 443;
+    eu4_gfx_frame_trace_texture_deleted(1, &deleted);
+    draw(true, 0x2000);
+    draw(false, 0x2000);
+    eu4_gfx_frame_trace_test_register_target("443");
+    draw(true, 0x2000);
+    draw(false, 0x2000);
+    eu4_gfx_frame_trace_texture_deleted(1, &deleted);
+    finish_continuous_by_scene();
+    return 0;
+}
+
+static int scenario_mutation_target(const char *directory) {
+    if (configure_continuous_test(directory, 1) != 1) {
+        return 1;
+    }
+    arm_continuous_by_scene();
+    draw(true, 0x2000);
+    draw(false, 0x2000);
+    eu4_gfx_frame_trace_test_register_target("443");
+    eu4_gfx_frame_trace_texture_mutated(443, 0, 1, 0x0DE1u);
+    finish_continuous_by_scene();
+    return 0;
+}
+
+static int scenario_capacity(const char *directory, const char *kind,
+                             int count) {
+    if (configure_continuous_test(directory, 1) != 1) {
+        return 1;
+    }
+    arm_continuous_by_scene();
+    draw(true, 0x2000);
+    draw(false, 0x2000);
+    if (strcmp(kind, "targets") == 0) {
+        for (int i = 0; i < count; i++) {
+            char name[32];
+            snprintf(name, sizeof(name), "%d", 9000 + i);
+            eu4_gfx_frame_trace_test_register_target(name);
+        }
+    } else if (strcmp(kind, "deletes") == 0) {
+        for (int i = 0; i < count; i++) {
+            unsigned name = (unsigned)(8000 + i);
+            eu4_gfx_frame_trace_texture_deleted(1, &name);
+        }
+    } else if (strcmp(kind, "mutations") == 0) {
+        eu4_gfx_frame_trace_test_register_target("443");
+        for (int i = 0; i < count; i++) {
+            eu4_gfx_frame_trace_texture_mutated(443, 0, 1, 0x0DE1u);
+        }
+    } else {
+        return 2;
+    }
+    finish_continuous_by_scene();
+    return 0;
+}
+
+static int scenario_carried_capacity(const char *directory) {
+    if (configure_continuous_test(directory, 3) != 1) {
+        return 1;
+    }
+    eu4_gfx_capture_frame frame;
+    eu4_gfx_observe_call call;
+    memset(&frame, 0, sizeof(frame));
+    make_call(&call, 0x2000);
+    /* Frame 1: 64 distinct renderer targets fill the carried set exactly. */
+    draw(true, 0x2000);
+    draw(false, 0x2000);
+    eu4_gfx_frame_trace_boundary_entry(&frame, &call);
+    eu4_gfx_frame_trace_boundary_exit(&frame, &call, NULL);
+    for (int i = 0; i < 64; i++) {
+        char name[32];
+        snprintf(name, sizeof(name), "%d", 7000 + i);
+        eu4_gfx_frame_trace_test_register_target(name);
+    }
+    draw(true, 0x2000);
+    draw(false, 0x2000);
+    eu4_gfx_frame_trace_boundary_entry(&frame, &call);
+    eu4_gfx_frame_trace_boundary_exit(&frame, &call, NULL);
+    /* Frame 2: one additional target.  Frame 3 merges it into the carried
+       set, which would become 65 and must fail closed instead of silently
+       omitting the resource. */
+    draw(true, 0x2000);
+    draw(false, 0x2000);
+    eu4_gfx_frame_trace_test_register_target("6999");
+    draw(true, 0x2000);
+    draw(false, 0x2000);
+    eu4_gfx_frame_trace_boundary_entry(&frame, &call);
+    eu4_gfx_frame_trace_boundary_exit(&frame, &call, NULL);
+    draw(true, 0x2000);
+    draw(false, 0x2000);
+    eu4_gfx_frame_trace_boundary_entry(&frame, &call);
+    eu4_gfx_frame_trace_boundary_exit(&frame, &call, NULL);
+    return 0;
+}
+
 static void report_seal(const char *scenario, const seal_state *state) {
     printf("scenario=%s callback_calls=%d lock_free=%d files_ready=%d abi_ok=%d reentrant=%u "
            "notifications=%u callback_status=%d seal_written=%d complete=%u "
@@ -649,6 +795,19 @@ int main(int argc, char **argv) {
     }
     if (strcmp(scenario, "continuous-byte-budget") == 0) {
         return scenario_continuous(directory, 8, 1);
+    }
+    if (strcmp(scenario, "continuous-reuse") == 0) {
+        return scenario_continuous_reuse(directory);
+    }
+    if (strcmp(scenario, "mutation-target") == 0) {
+        return scenario_mutation_target(directory);
+    }
+    if (strcmp(scenario, "capacity-carried") == 0) {
+        return scenario_carried_capacity(directory);
+    }
+    if (strncmp(scenario, "capacity-", 9) == 0) {
+        int count = argc > 3 ? atoi(argv[3]) : 64;
+        return scenario_capacity(directory, scenario + 9, count);
     }
     if (strcmp(scenario, "scene-sequence") == 0) {
         return scenario_scene(directory, 0);

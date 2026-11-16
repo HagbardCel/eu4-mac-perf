@@ -253,6 +253,34 @@ through the async queue with `MAX_PENDING=3`; the queue reached its bound
 history ok, replay averaged 1.57 s, callback 5.14 s, and generations continued
 to accumulate (433 reached 70). Stage 3 (longer gameplay) was not run.
 
+## M7 follow-up A — capture and lifecycle correctness (2026-11-16)
+
+Captured texture contents are now invalidated by the real `(target, name)` when
+`glTexImage2D`/`glTexSubImage2D` observes a write, so a draw after a mutation
+references the new payload while an unchanged texture keeps its cached readback.
+Deletes are recorded per transition (a numeric name may be deleted, recreated
+and deleted again), and the Metal registry drops the framebuffer allocation so a
+recreated target starts a fresh generation.  Every 64-entry resource/lifecycle
+collection now fails closed with `resource_limit` instead of silently dropping
+an entry; lifecycle JSON is dynamically sized.
+
+Native regressions cover subimage mutation, reallocation, name reuse, update
+before first sample, unchanged caching, repeated deletes, exact/over-capacity
+collections, carried-set overflow and 64-frame campaign records.  The production
+Metal host renders two payload versions of one texture name in one frame and
+reads back distinct checkpoints; renderer-owned mutations still fail closed.
+
+One authentic three-frame EU4 campaign (pid 27780, session
+`c66b3625…`, instrumentation `e8f683c9…`) completed with valid seals, ordered
+frames, one process, clean termination and restored display.  All three frames
+replayed in one session with `history_status=ok`; readback/sealing cost
+(21–24 ms / 38–41 ms) is unchanged from PR #203.  The title frame observed no
+CPU texture mutation and sampled no carried output, so those branches remain
+synthetic evidence.  Report:
+[follow-up A](../analysis/m7/followup-a-capture-lifecycle.md),
+[evidence](../analysis/m7/followup-a-evidence.json).  Independent review and merge
+authorization are pending; automerge is disabled.
+
 ## Strategy B — independent replay (2026-11-14)
 
 Capture once, replay independently. A canonical authentic OpenGL title frame
