@@ -182,7 +182,7 @@ def load_seal(
         raise FrameError("frame seal has no ABI identity") from exc
     if abi_version != SEAL_ABI_VERSION:
         raise FrameError(f"unsupported frame seal ABI {abi_version}")
-    if struct_size < 128 or struct_size > 65536:
+    if struct_size < 2256 or struct_size > 65536:
         raise FrameError("frame seal descriptor size is invalid")
     if seal.get("trace_complete") is not True:
         raise FrameError("sealed trace manifest is not complete")
@@ -614,6 +614,7 @@ def capture(args: argparse.Namespace) -> int:
         },
     }
     status = 0
+    trace = None
     try:
         trace = load_trace(frame_dir)
         coverage = coverage_report(trace)

@@ -56,8 +56,8 @@ One authentic background launch (pid 16791) sealed capture id 1 at scene 617:
 termination and restored settings. Total sealing cost was 40.9 ms (readback
 23.9 ms, finalize 17.0 ms including event-stream hashing); the consumer
 callback took 18.6 ms. The seal records the event-stream SHA-256 (`31d03c73…`)
-and byte count (6,392,559) and the consumer re-verifies them plus the
-referenced blobs. The historical
+and byte count (6,392,559); the Python `load_seal`/`load_trace` consumer
+re-verifies them plus every referenced blob. The historical
 M6 `menu-occ300` frame still loads unchanged (326 events, `ff2f4e2b…`). PR 1
 was developed on the PR #198 head `271cd04`; #198 is now merged as `b4c3955`
 and PR #199 targets `main`. Report:

@@ -87,7 +87,7 @@ def _write_frame(directory: Path, *, sealed: bool = True,
     seal = {
         "schema": "gfx-frame-seal/v1",
         "sealed": sealed,
-        "struct_size": 2040,
+        "struct_size": 2256,
         "abi_version": 2,
         "capture_frame_id": 7,
         "session_id": "session-1",

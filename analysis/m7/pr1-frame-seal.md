@@ -149,7 +149,7 @@ lease/background-display tooling. The canonical menu selection (caller
 | notification callback | 18.6 ms, outside the trace mutex |
 | game stdout/stderr | 0 / 0 bytes |
 | launcher termination | `terminated=true`, `killed=false`, settings restored |
-| startup summary | complete, 0 overflow/unmatched/unavailable; the generic ops observer reported 4 refused at shutdown |
+| startup summary | complete, 0 overflow/unmatched/unavailable; the generic ops observer reported 327 refused / 14,615 unavailable at shutdown |
 
 The earlier launches are retained as excluded instrumentation runs: run 1 used
 the CLI default draw cap (256) below the frame's 325 events and produced an
@@ -157,8 +157,8 @@ explicit `draw_cap` incomplete seal with no notification; run 2 captured a
 complete frame but the seal serializer omitted the redundant `complete` field
 and the Python validator rejected it; run 3 was complete but finalized at
 `PresentScene` exit before the entry-boundary correction (valid only because the
-menu skips `_GfxPresent`). Run 4 uses the final entry boundary, terminates
-normally through the launcher and returns `0`. The full package is
+menu skips `_GfxPresent`). Run 4 was the entry-boundary ABI-1 run; run 5 is the final ABI-2
+event-digest run, terminates normally through the launcher and returns `0`. The full package is
 [pr1-live-evidence.json](pr1-live-evidence.json).
 
 ### Existing M6 compatibility

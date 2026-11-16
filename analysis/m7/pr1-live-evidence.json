@@ -90,7 +90,7 @@
     "event_stream_verified": true
   },
   "notification": {
-    "consumer": "in-process logging sink registered with eu4_gfx_frame_sealed_subscribe; it verifies the manifest and reference digests and operation counters. Event-stream and referenced-blob verification is performed by the Python load_seal/load_trace consumer path.",
+    "consumer": "in-process logging sink registered with eu4_gfx_frame_sealed_subscribe; it verifies the manifest and reference digests only. Operation counters, the event stream and referenced blobs are verified by the Python load_seal/load_trace path.",
     "notification_index": 1,
     "count": 1,
     "verified_manifest": true,
@@ -98,7 +98,7 @@
     "callback_outside_trace_mutex": "proven by the native lock-probe test; the live artifact records the callback but does not probe the mutex",
     "notification_duration_ns": 18583000,
     "notified_since_process_start_ns": 27759788000,
-    "verification_scope": "The native sink does not hash the event stream or every blob; that is the Python validator responsibility."
+    "verification_scope": "Native sink: manifest and reference digests. Python validator: counters, event-stream SHA-256/bytes, manifest, reference and every referenced blob."
   },
   "performance": {
     "readback_ns": 23947000,
