@@ -103,6 +103,69 @@ class NativeBridgeTests(unittest.TestCase):
         self.assertEqual(ran.returncode, 0, ran.stderr + ran.stdout)
         return json.loads(ran.stdout.strip().splitlines()[-1])
 
+    @unittest.skipUnless(sys.platform == "darwin", "Metal replay is macOS")
+    def test_native_v2_case_is_inspected_verified_and_replayed(self):
+        """The DSH bridge reaches the real v2 packager, verifier and replay."""
+        from automation import gfx_replay_case, m6_frame, m7_continuous
+        from tests.test_gfx_replay_case_sequence import (
+            HeterogeneousShaderFixture)
+
+        try:
+            host = m6_frame.build_replay_host()
+        except Exception as exc:  # noqa: BLE001 - explicit skip
+            raise unittest.SkipTest(str(exc))
+        fixture = HeterogeneousShaderFixture(self.root / "v2", host)
+        frames = fixture.build()
+        out = fixture.base / "out"
+        report = m7_continuous.run_campaign(
+            frames, out, shaders=fixture.frame_shaders[3],
+            stop_on_difference=False)
+        self.assertEqual(report["status"], "complete", report)
+        diagnosis = json.loads(
+            (out / "out-003" / "diagnostic-report.json").read_text())
+        case = fixture.base / "case"
+        manifest = gfx_replay_case.package_sequence_diagnosis(
+            frames, out / "out-003", case, diagnosis,
+            shaders=None, case_id="native-v2")
+        self.assertEqual(manifest["schema"], gfx_replay_case.SEQUENCE_SCHEMA)
+
+        # Relocate and remove the original campaign before the bridge sees it.
+        moved = fixture.base / "relocated"
+        shutil.copytree(case, moved)
+        shutil.rmtree(fixture.base / "campaign")
+        shutil.rmtree(out)
+
+        inspected = self.run_node("eu4_case_inspect", {"case": str(moved)})
+        self.assertEqual(inspected["schema"], "eu4-agent-tool/v2")
+        self.assertTrue(inspected["ok"], inspected)
+        self.assertEqual(inspected["result"]["schema"],
+                         gfx_replay_case.SEQUENCE_SCHEMA)
+        self.assertEqual(len(inspected["result"]["sequence"]["frames"]), 3)
+        self.assertFalse(inspected["outcome"]["qualified"])
+
+        verified = self.run_node(
+            "eu4_replay", {"op": "verify", "case": str(moved)})
+        self.assertTrue(verified["ok"], verified)
+        self.assertEqual(verified["result"]["execution"], "not_run")
+        self.assertEqual(
+            verified["result"]["verification"]["independently_reproducible"],
+            True)
+
+        replayed = self.run_node(
+            "eu4_replay", {"op": "case", "case": str(moved),
+                           "replay_out": str(fixture.base / "rerun")})
+        self.assertEqual(replayed["schema"], "eu4-agent-tool/v2")
+        self.assertEqual(replayed["result"]["schema"],
+                         gfx_replay_case.SEQUENCE_SCHEMA)
+        self.assertEqual(replayed["result"]["classification"],
+                         diagnosis["classification"])
+        self.assertEqual(
+            replayed["result"]["campaign"]["target_sequence"], 3)
+        self.assertIn(replayed["outcome"]["diagnostic"],
+                      ("complete", "partial"))
+        self.assertEqual(replayed["outcome"]["qualified"],
+                         replayed["result"]["qualification"]["qualified"])
+
     def test_native_replay_uses_the_configured_interpreter_and_completes(self):
         case = build_case(self.root)
         value = self.run_node("eu4_replay", {"op": "case", "case": str(case)})

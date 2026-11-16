@@ -61,6 +61,7 @@ class DiscoveryTests(unittest.TestCase):
             self.assertEqual(len(row["provenance"]["result_sha256"]), 64)
             self.assertTrue(row["provenance"]["read_only"])
             self.assertTrue(row["has_case"])
+            self.assertEqual(row["case_schema"], "gfx-diagnostic-case/v1")
             self.assertEqual(len(row["provenance"]["case_sha256"]), 64)
 
     def test_filtering_by_query_and_classification(self):

@@ -342,6 +342,19 @@ def _percentile(values: list[float], fraction: float) -> float:
     return ordered[index]
 
 
+def _effective_frame_shaders(frame: Path, fallback: Path | str) -> Path:
+    """Resolve the translation directory the sequence CLI uses for a frame.
+
+    The native sequence host prefers ``<frame>/shaders`` and falls back to its
+    single ``--shaders`` argument.  Diagnosis must inspect the same translation
+    that produced the frame, not the target's directory for every frame.
+    """
+    local = frame / "shaders"
+    if (local / "shaders.json").is_file():
+        return local.resolve()
+    return Path(fallback).expanduser().resolve()
+
+
 def run_campaign(frames: list[Path], out_dir: Path, *,
                  shaders: Path | str,
                  policy: Path | str | None = None,
@@ -355,6 +368,7 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
                  cancel=None,
                  timeout: float = 3600.0,
                  frame_timeout: float = 120.0,
+                 case_max_bytes: int = 0,
                  stderr_limit: int = 1_000_000) -> dict:
     """Execute, diagnose and supervise one bounded ordered frame sequence."""
     if max_pending < 1:
@@ -431,6 +445,7 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
         output = Path(str(row.get("output_dir") or
                           out_dir / f"out-{sequence:03d}")).resolve()
         diagnosis_started = time.monotonic()
+        effective_shaders = _effective_frame_shaders(frame, shaders)
         if not row.get("ok"):
             diagnosis = {
                 "classification": "gpu_execution_failure",
@@ -445,7 +460,7 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
         else:
             diagnosis = gfx_independent_replay.diagnose_frame(
                 frame, output, output, policy,
-                shaders=Path(shaders).expanduser().resolve(),
+                shaders=effective_shaders,
                 require_seal=bool(validation.get("sealed")))
         diagnosis_seconds = time.monotonic() - diagnosis_started
         diagnosis_times.append(diagnosis_seconds)
@@ -471,6 +486,7 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
             "pixels": (diagnosis.get("pixels") or {}).get("statistics"),
             "checkpoint_validation": diagnosis.get("checkpoint_validation"),
             "diagnostic_report": str(output / "diagnostic-report.json"),
+            "shader_dir": str(effective_shaders),
             "diagnosis_seconds": diagnosis_seconds,
         }
         result["frames"].append(entry)
@@ -489,15 +505,27 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
             result["stopped_at"] = sequence
             try:
                 case = Path(package_dir) if package_dir else (out_dir / "case")
+                package_kwargs = {
+                    "shaders": Path(shaders).expanduser().resolve(),
+                    "case_id": f"m7-continuous-frame-{sequence:06d}",
+                    "checkpoint_sources": [
+                        out_dir / "checkpoints" / f"frame-{index:03d}"
+                        for index in range(1, sequence + 1)],
+                }
+                if case_max_bytes > 0:
+                    package_kwargs["max_bytes"] = case_max_bytes
                 manifest = gfx_replay_case.package_sequence_diagnosis(
                     frames[:sequence], output, case, diagnosis,
-                    shaders=Path(shaders).expanduser().resolve(),
-                    case_id=f"m7-continuous-frame-{sequence:06d}")
+                    **package_kwargs)
+                reproduction = manifest.get("reproduction") or {}
                 entry["case"] = {
                     "case_id": manifest.get("case_id"),
                     "files": len(manifest.get("files") or []),
                     "bytes": sum(item["bytes"]
                                  for item in manifest.get("files") or []),
+                    "reproduction": reproduction,
+                    "independently_reproducible": reproduction.get(
+                        "independently_reproducible"),
                 }
             except (gfx_replay_case.CaseError, OSError) as exc:
                 entry["case_error"] = str(exc)

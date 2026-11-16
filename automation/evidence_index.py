@@ -122,6 +122,7 @@ def _record(session_dir: Path, root: Path) -> dict:
     result = _read_json(result_path)
     case_dir = session_dir / "case"
     case_path = case_dir / "case.json"
+    case_manifest = _read_json(case_path) if case_path.is_file() else {}
     qualification = result.get("qualification") or {}
     comparison = (result.get("frames") or {}).get("comparison") or {}
     health = result.get("health") or {}
@@ -158,6 +159,8 @@ def _record(session_dir: Path, root: Path) -> dict:
         "created_utc": created,
         "finished_utc": finished,
         "has_case": case_path.is_file(),
+        "case_schema": case_manifest.get("schema"),
+        "case_sequence": case_manifest.get("sequence"),
         "provenance": {
             "result_path": str(result_path),
             "result_sha256": _sha256(result_path),

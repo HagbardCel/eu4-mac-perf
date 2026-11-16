@@ -32,6 +32,7 @@ function tool(name, description, properties, required, execute) {
 
 const string = (description) => ({ type: 'string', description })
 const integer = (description) => ({ type: 'integer', description })
+const number = (description) => ({ type: 'number', description })
 const boolean = (description) => ({ type: 'boolean', description })
 
 export function definitions(run) {
@@ -157,15 +158,28 @@ export function definitions(run) {
     ),
     tool(
       'eu4_replay',
-      'Run a stored offline reproduction (packaged case comparison or selected-event frame replay).',
+      'Run a stored reproduction or a bounded M7 same-session sequence: packaged v1/v2 case ' +
+        'comparison, case verification, diagnosis of already-produced Metal results, or ordered ' +
+        'sequence execution. This is not the two-process eu4_diff_run workflow.',
       {
-        op: { type: 'string', enum: ['case', 'frame', 'independent'], description: 'replay kind' },
-        case: string('case directory'),
-        frame: string('frame trace directory'),
+        op: { type: 'string', enum: ['case', 'frame', 'independent', 'sequence', 'diagnose', 'verify'], description: 'replay/verification kind' },
+        case: string('case directory (case/verify)'),
+        frame: string('frame trace directory (frame/diagnose)'),
+        frame_dirs: { type: 'array', items: { type: 'string' }, description: 'ordered M7 frame directories (sequence)' },
+        metal: string('already-produced Metal result directory (diagnose)'),
         shaders: string('shader directory'),
-        output: string('replay output directory (envelope --out remains separate)'),
-        replay_out: string('replay output directory'),
+        replay_out: string('replay/diagnosis output directory'),
         out: string('replay output directory (legacy alias)'),
+        policy: string('comparison/state policy JSON'),
+        require_seal: boolean('require an authoritative frame seal for diagnosis'),
+        max_frames: integer('bounded M7 sequence length'),
+        max_bytes: integer('bounded captured-sequence input budget'),
+        case_max_bytes: integer('bounded reproduction-case budget'),
+        max_seconds: number('bounded M7 wall-clock budget'),
+        frame_timeout: number('bounded M7 per-frame deadline'),
+        timeout: number('bounded M7 overall deadline'),
+        continue_on_difference: boolean('keep executing after a nonqualified M7 frame'),
+        package_dir: string('explicit reproduction case destination'),
         only_event: integer('selected event index'),
         disable_render_target_vflip: boolean('controlled divergence experiment: disable render-target V flip'),
         sampler_shift: integer('controlled sampler-unit shift for the historical defect'),

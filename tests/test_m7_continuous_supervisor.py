@@ -17,7 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import gfx_independent_replay, m7_continuous  # noqa: E402
+from automation import (gfx_independent_replay, gfx_replay_case, m6_frame,
+                        m7_continuous)  # noqa: E402
 
 
 def _sha(data: bytes) -> str:
@@ -351,6 +352,133 @@ class SupervisorTests(unittest.TestCase):
         with self.assertRaises(m7_continuous.ContinuousError) as caught:
             m7_continuous.validate_sequence(self.frames, max_bytes=1)
         self.assertEqual(caught.exception.kind, "byte_budget")
+
+
+class LiveCoordinatorPackagingTests(unittest.TestCase):
+    """The live coordinator packages the exact per-frame translations it used."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.run = self.root / "run"
+        self.shadow = self.run / "shadow"
+        for index in (1, 2, 3):
+            frame = self.run / "frames" / f"frame-{index:06d}"
+            frame.mkdir(parents=True)
+            shader = self.shadow / f"frame-{index:06d}" / "shaders"
+            shader.mkdir(parents=True)
+            (shader / "shaders.json").write_text(json.dumps({
+                "schema": "gfx-shader-report/v1",
+                "programs": [{"program": index}],
+            }))
+            checkpoint = self.shadow / f"frame-{index:06d}"
+            (checkpoint / "checkpoint-request.json").write_text(
+                json.dumps({"frame": index}))
+            (checkpoint / "shader-receipt.json").write_text(
+                json.dumps({"frame": index}))
+        (self.shadow / "frame-000003" / "diagnostic-report.json").write_text(
+            json.dumps({"classification": "qualified_match"}))
+        self.args = type("Args", (), {
+            "case_dir": "", "case_max_bytes": 0,
+        })()
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def test_packages_all_included_frames_with_their_own_shaders(self):
+        captured = {}
+
+        def package(frames, metal_dir, case_dir, report, **kwargs):
+            captured.update({
+                "frames": [str(item) for item in frames],
+                "metal_dir": str(metal_dir), "case_dir": str(case_dir),
+                "report": report, "kwargs": kwargs,
+            })
+            return {
+                "case_id": "live", "files": [{"bytes": 10}],
+                "reproduction": {"status": "complete",
+                                 "independently_reproducible": True},
+            }
+
+        with mock.patch.object(gfx_replay_case,
+                               "package_sequence_diagnosis",
+                               side_effect=package):
+            value = m6_frame._package_continuous_case(
+                self.run, self.shadow, 3, self.args)
+        self.assertEqual(value["status"], "complete")
+        self.assertEqual(len(captured["frames"]), 3)
+        self.assertEqual(captured["metal_dir"],
+                         str(self.shadow / "frame-000003"))
+        for index, frame in enumerate(captured["frames"], start=1):
+            self.assertEqual(
+                str(captured["kwargs"]["frame_shaders"][frame]),
+                str(self.shadow / f"frame-{index:06d}" / "shaders"))
+            self.assertEqual(
+                str(captured["kwargs"]["checkpoint_sources"][index - 1]),
+                str(self.shadow / f"frame-{index:06d}"))
+        self.assertEqual(captured["kwargs"]["max_bytes"],
+                         512 * 1024 * 1024)
+
+    def test_incomplete_reproduction_is_not_claimed_complete(self):
+        with mock.patch.object(
+                gfx_replay_case, "package_sequence_diagnosis",
+                return_value={
+                    "case_id": "live", "files": [],
+                    "reproduction": {
+                        "status": "incomplete",
+                        "independently_reproducible": False,
+                        "reason": "artifact_budget",
+                    },
+                }):
+            value = m6_frame._package_continuous_case(
+                self.run, self.shadow, 3, self.args)
+        self.assertEqual(value["status"], "incomplete")
+        self.assertFalse(value["reproduction"]["independently_reproducible"])
+
+    def test_packaging_refusal_is_structured(self):
+        with mock.patch.object(
+                gfx_replay_case, "package_sequence_diagnosis",
+                side_effect=gfx_replay_case.CaseError(
+                    "missing_predecessor", "no producer")):
+            value = m6_frame._package_continuous_case(
+                self.run, self.shadow, 3, self.args)
+        self.assertEqual(value["status"], "failed")
+        self.assertIn("missing_predecessor", value["reason"])
+
+    def test_stop_and_frame_limit_publish_the_case(self):
+        summaries = [
+            {"sequence": 1, "classification": "qualified_match"},
+            {"sequence": 2, "classification": "qualified_difference"},
+        ]
+
+        def coordinator(run, shadow, frame_index, args, deadline):
+            return summaries[frame_index - 1], {"classification": "x"}
+
+        args = type("Args", (), {
+            "run": str(self.run), "shadow_dir": str(self.shadow),
+            "max_frames": 3, "timeout": 30.0, "continue_on_difference": False,
+            "case_dir": "", "case_max_bytes": 0,
+        })()
+        packaged = []
+
+        def package(run, shadow, count, args):
+            packaged.append(count)
+            return {"status": "complete",
+                    "reproduction": {"independently_reproducible": True}}
+
+        with mock.patch.object(m6_frame, "_continuous_frame_coordinator",
+                               side_effect=coordinator), \
+             mock.patch.object(m6_frame, "_package_continuous_case",
+                               side_effect=package):
+            code = m6_frame.shadow_coordinator_continuous(args)
+        self.assertEqual(code, 0)
+        self.assertEqual(packaged, [2])
+        report = json.loads(
+            (self.shadow / "coordinator.json").read_text())
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["stop_reason"],
+                         "first_qualified_difference")
+        self.assertEqual(report["case"]["status"], "complete")
 
 
 class BoundedWorkerTests(unittest.TestCase):

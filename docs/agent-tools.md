@@ -219,15 +219,35 @@ described below. `--full` restores the raw recorded comparison and first pair.
 ### `eu4_replay`
 
 ```sh
-python3 -m automation.agent_tools eu4_replay case --case <case-dir>
+# v1 single-frame and v2 ordered-prefix Strategy B cases are recognized by the
+# same schema dispatch; omit --out to verify, pass it to replay.
+python3 -m automation.agent_tools eu4_replay verify --case <case-dir>
+python3 -m automation.agent_tools eu4_replay case --case <case-dir> \
+  --out <replay-dir>
+
+# Diagnose already-produced Metal evidence without executing Metal again.
+python3 -m automation.agent_tools eu4_replay diagnose --frame <frame-dir> \
+  --metal <metal-result-dir> --out <diagnosis-dir> --require-seal
+
+# Bounded M7 ordered sequence: one persistent Metal session, one translation
+# per frame, explicit input/case/time budgets.
+python3 -m automation.agent_tools eu4_replay sequence \
+  --frame-dir <frame-1> --frame-dir <frame-2> --frame-dir <frame-3> \
+  --shaders <fallback-shader-dir> --out <campaign-dir> \
+  --max-frames 3 --case-max-bytes 536870912 --frame-timeout 180
+
+# Existing selected-event single-frame replay.
 python3 -m automation.agent_tools eu4_replay frame --frame <trace-dir> \
   --shaders <shader-dir> --out <dir> --only-event 92
 ```
 
-The case comparison is fully offline. A missing NumPy is `unavailable`, never a
+The case path is fully offline. A missing NumPy is `unavailable`, never a
 successful diagnostic; a successful comparison with a difference verdict is
-`ok` with `verdict: "different"`. The frame replay path is the existing
-selected-event replay host; it does not require a new EU4 launch.
+`ok` with `verdict: "different"`. A v2 case whose reproduction is explicitly
+incomplete, or whose verification finds digest/identity/path problems, is
+`incomplete` or `invalid` and is never replayed or marked qualified. The
+`sequence` and `diagnose` operations are M7 operations; they are not the older
+two-process `eu4_diff_run` workflow.
 
 ### `eu4_case_inspect`
 

@@ -1322,6 +1322,61 @@ class HeterogeneousShaderSequenceTests(unittest.TestCase):
         self.assertEqual(replay["pixels"]["statistics"]["mismatched_pixels"],
                          0)
 
+    def test_live_layout_uses_per_frame_shaders_and_preserves_checkpoints(self):
+        """A live-style layout has no frame-local shaders; the mapping is used.
+
+        The production continuous coordinator keeps each translation beside
+        that frame's Metal output, not in ``<frame>/shaders``.  Packaging must
+        resolve every included frame's translation and copy the coordinator's
+        checkpoint request/receipt, then relocate and replay without the
+        original campaign.
+        """
+        saved = {}
+        for index, frame in enumerate(self.frames, start=1):
+            destination = self.fixture.base / "live-shaders" / str(index)
+            shutil.copytree(frame / "shaders", destination)
+            saved[str(frame)] = destination
+            shutil.rmtree(frame / "shaders")
+        checkpoint_sources = [
+            self.out / "checkpoints" / f"frame-{index:03d}"
+            for index in range(1, len(self.frames) + 1)]
+        case = self.fixture.base / "live-case"
+        manifest = gfx_replay_case.package_sequence_diagnosis(
+            self.frames, self.out / "out-003", case, self.diagnosis,
+            shaders=None, frame_shaders=saved,
+            checkpoint_sources=checkpoint_sources,
+            case_id="live-layout")
+        self.assertTrue(manifest["reproduction"]["independently_reproducible"])
+        sequence = json.loads((case / "sequence.json").read_text())
+        self.assertEqual(len(sequence["frames"]), 3)
+        programs = []
+        for entry in sequence["frames"]:
+            report = json.loads(
+                (case / entry["shader_dir"] / "shaders.json").read_text())
+            programs.append(sorted(
+                item["program"] for item in report["programs"]))
+            index = entry["index"]
+            self.assertEqual(
+                sha((case / "checkpoints" / f"frame-{index:03d}" /
+                     "shader-receipt.json").read_bytes()),
+                sha((checkpoint_sources[index - 1] /
+                     "shader-receipt.json").read_bytes()))
+        self.assertEqual(programs, [[1], [3], [2]], programs)
+        moved = self.fixture.base / "live-relocated"
+        shutil.copytree(case, moved)
+        shutil.rmtree(self.fixture.base / "campaign")
+        shutil.rmtree(self.out)
+        verified = gfx_replay_case.verify(moved)
+        self.assertTrue(verified["ok"], verified["problems"])
+        replay = gfx_replay_case.replay_case(
+            moved, self.fixture.base / "live-replay")
+        self.assertEqual(replay["classification"], "qualified_match", replay)
+        self.assertEqual(replay["campaign"]["target_sequence"], 3)
+        self.assertEqual(replay["campaign"]["frames"], 3)
+        self.assertEqual((replay.get("history") or {}).get("status"), "ok")
+        self.assertGreaterEqual(
+            (replay.get("history") or {}).get("carried_bindings") or 0, 1)
+
     def test_verifier_detects_missing_frame_shader_artifact(self):
         case = self.fixture.base / "case-missing"
         self.package(case)

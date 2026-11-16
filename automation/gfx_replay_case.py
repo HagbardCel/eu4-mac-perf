@@ -589,18 +589,31 @@ def _valid_shader_dir(path: Path) -> bool:
 
 
 def _frame_shader_dir(frame_dir: Path, metal_dir: Path,
-                      shaders: Path | str | None) -> Path | None:
+                      shaders: Path | str | None,
+                      frame_shaders: dict | None = None) -> Path | None:
     """Resolve the shader directory a frame's draws were captured against.
 
     A frame-local ``shaders/`` directory wins, mirroring the sequence CLI's
-    ``<frame>/shaders`` override.  An explicitly supplied directory is the
-    fallback for frames without their own translation; the sibling
+    ``<frame>/shaders`` override.  A live coordinator keeps each frame's
+    translation beside that frame's Metal output (for example
+    ``shadow/frame-000003/shaders``), so an explicit per-frame mapping takes
+    precedence over the single fallback.  The explicitly supplied directory is
+    the fallback for frames without their own translation; the sibling
     ``translated/`` and Metal result directories are the legacy fallbacks.
     Returns ``None`` when no verified translation exists.
     """
     frame_local = (frame_dir / "shaders").resolve()
     if _valid_shader_dir(frame_local):
         return frame_local
+    if frame_shaders:
+        mapped = (frame_shaders.get(frame_dir)
+                  or frame_shaders.get(str(frame_dir))
+                  or frame_shaders.get(str(frame_dir.resolve())))
+        if mapped is not None:
+            path = Path(mapped).expanduser().resolve()
+            if _valid_shader_dir(path):
+                return path
+            raise CaseError("shaders_missing", str(path))
     if shaders is not None:
         path = Path(shaders).expanduser().resolve()
         if _valid_shader_dir(path):
@@ -1183,7 +1196,16 @@ def _required_prefix(frames: list[Path]) -> tuple[list[Path], dict]:
         "carried_resources": sorted(carried_union),
     }
 
-def _checkpoint_setup(frames: list[Path], case_dir: Path) -> list[dict]:
+def _checkpoint_setup(frames: list[Path], case_dir: Path,
+                      sources: list[Path | str] | None = None) -> list[dict]:
+    """Publish one bound checkpoint request/receipt per included frame.
+
+    When the live coordinator already published a frame's request and receipt,
+    copy that exact pair instead of synthesising a replacement.  The copied
+    receipt is used only when it binds the request digest, capture identity and
+    session of the frame being packaged; otherwise the deterministic request is
+    regenerated and a fresh receipt is written.
+    """
     base = case_dir / "checkpoints"
     base.mkdir(parents=True, exist_ok=True)
     records = []
@@ -1197,9 +1219,51 @@ def _checkpoint_setup(frames: list[Path], case_dir: Path) -> list[dict]:
         directory = base / f"frame-{index:03d}"
         directory.mkdir(parents=True, exist_ok=True)
         request_path = directory / "checkpoint-request.json"
+        receipt_path = directory / "shader-receipt.json"
+        sequence = _json(frame / "frame-sequence.json")
+        source_value = (sources[index - 1]
+                        if sources and index - 1 < len(sources) else None)
+        source = (Path(source_value).expanduser().resolve()
+                  if source_value is not None else None)
+        if source is not None:
+            source_request = source / "checkpoint-request.json"
+            source_receipt = source / "shader-receipt.json"
+            if source_request.is_file() and source_receipt.is_file():
+                # Only preserve a request that is identical to the
+                # deterministic request for this graph; a stale or substituted
+                # checkpoint artifact must never be copied into the case.
+                expected_path = directory / ".expected-checkpoint-request.json"
+                gfx_frame_graph.write_checkpoint_request(graph, expected_path)
+                expected_sha = _sha(expected_path)
+                expected_path.unlink()
+                if _sha(source_request) == expected_sha:
+                    shutil.copy2(source_request, request_path)
+                    request_sha = _sha(request_path)
+                    try:
+                        receipt = _json(source_receipt)
+                    except (OSError, UnicodeError, json.JSONDecodeError,
+                            CaseError):
+                        receipt = {}
+                    if (receipt.get("checkpoint_request_sha256")
+                            == request_sha
+                            and receipt.get("capture_frame_id")
+                            == sequence.get("capture_frame_id")
+                            and receipt.get("session_id")
+                            == sequence.get("session_id")):
+                        shutil.copy2(source_receipt, receipt_path)
+                        records.append({
+                            "index": index,
+                            "directory": directory.relative_to(
+                                case_dir).as_posix(),
+                            "request_sha256": request_sha,
+                            "checkpoint_count": len(
+                                _json(request_path).get("checkpoints") or []),
+                            "graph_status": graph.get("status"),
+                            "preserved": True,
+                        })
+                        continue
         request = gfx_frame_graph.write_checkpoint_request(graph, request_path)
         request_sha = _sha(request_path)
-        sequence = _json(frame / "frame-sequence.json")
         seal = None
         if (frame / "frame-seal.json").is_file():
             try:
@@ -1234,7 +1298,6 @@ def _checkpoint_setup(frames: list[Path], case_dir: Path) -> list[dict]:
             "sequence": index,
             "graph_status": graph.get("status"),
         }
-        receipt_path = directory / "shader-receipt.json"
         _write_json(receipt_path, receipt)
         records.append({
             "index": index,
@@ -1242,6 +1305,7 @@ def _checkpoint_setup(frames: list[Path], case_dir: Path) -> list[dict]:
             "request_sha256": request_sha,
             "checkpoint_count": len(request.get("checkpoints") or []),
             "graph_status": graph.get("status"),
+            "preserved": False,
         })
     return records
 
@@ -1269,6 +1333,8 @@ def package_sequence_diagnosis(
     case_id: str = "diagnosis-case",
     title: str = "M7 cross-frame differential diagnosis",
     shaders: Path | str | None = None,
+    frame_shaders: dict | None = None,
+    checkpoint_sources: list[Path | str] | dict | None = None,
     max_bytes: int = 512 * 1024 * 1024,
 ) -> dict:
     """Package the minimal ordered frame prefix needed to reproduce a fault.
@@ -1292,6 +1358,16 @@ def package_sequence_diagnosis(
     destination = Path(case_dir).expanduser().resolve()
     if not frames:
         raise CaseError("empty_sequence")
+    if frame_shaders:
+        # Resolve mapping keys once so /var and /private/var spellings of the
+        # same live frame directory cannot silently miss their translation.
+        normalized_shaders = {}
+        for key, value in frame_shaders.items():
+            try:
+                normalized_shaders[str(Path(key).expanduser().resolve())] = value
+            except (OSError, TypeError, ValueError):
+                normalized_shaders[str(key)] = value
+        frame_shaders = normalized_shaders
     if len(frames) == 1:
         return package_diagnosis(
             frames[0], metal_dir, destination, report, case_id=case_id,
@@ -1306,7 +1382,8 @@ def package_sequence_diagnosis(
     shader_dirs: list[Path] = []
     missing_shaders: list[dict] = []
     for index, frame in enumerate(selected, start=1):
-        directory = _frame_shader_dir(frame, metal_dir, shaders)
+        directory = _frame_shader_dir(frame, metal_dir, shaders,
+                                      frame_shaders)
         if directory is None:
             missing_shaders.append({
                 "kind": "shader_artifact",
@@ -1464,7 +1541,26 @@ def package_sequence_diagnosis(
             "renderer_generated_sampled": graph.get("renderer_generated_sampled"),
             "unproven": graph.get("unproven"),
         })
-        checkpoints = _checkpoint_setup(copied, work)
+        selected_sources = None
+        if checkpoint_sources is not None:
+            if isinstance(checkpoint_sources, dict):
+                selected_sources = [
+                    checkpoint_sources.get(str(frame))
+                    or checkpoint_sources.get(frame)
+                    for frame in selected]
+            else:
+                # A list is aligned with the caller's full ordered frames;
+                # remap it after prefix selection so a suffix cannot bind a
+                # predecessor's checkpoint receipt to the wrong frame.
+                by_frame = {
+                    str(frame.resolve()): Path(source)
+                    for frame, source in zip(frames, checkpoint_sources)}
+                selected_sources = [
+                    by_frame.get(str(frame.resolve())) for frame in selected]
+            selected_sources = [
+                (Path(item) if item is not None else None)
+                for item in selected_sources]
+        checkpoints = _checkpoint_setup(copied, work, selected_sources)
         entries = []
         for index, (source, frame_copy) in enumerate(
                 zip(selected, copied), start=1):

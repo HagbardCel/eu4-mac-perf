@@ -729,6 +729,11 @@ def capture(args: argparse.Namespace) -> int:
                   if continuous else []),
                 *(["--continue-on-difference"]
                   if getattr(args, "continue_on_difference", False) else []),
+                *(["--case-max-bytes", str(getattr(
+                    args, "case_max_bytes", 512 * 1024 * 1024))]
+                  if continuous else []),
+                *(["--case-dir", str(args.case_dir)]
+                  if continuous and getattr(args, "case_dir", "") else []),
             ],
             cwd=str(ROOT),
             stdout=subprocess.PIPE,
@@ -1569,6 +1574,11 @@ def apply_shadow_report(result: dict, shadow_report: dict) -> str | None:
         result["qualified"] = bool(
             frames and all(item.get("classification") == "qualified_match"
                            for item in frames))
+        result["case"] = shadow_report.get("case")
+        result["reproduction"] = shadow_report.get("reproduction")
+        result["reproduction_complete"] = bool(
+            isinstance(result["reproduction"], dict)
+            and result["reproduction"].get("independently_reproducible"))
         result["diagnostic"] = {
             "mode": "continuous",
             "frames": len(frames),
@@ -2126,6 +2136,69 @@ def _continuous_frame_coordinator(
     return summary, diagnosis
 
 
+def _package_continuous_case(run: Path, shadow: Path, count: int,
+                             args: argparse.Namespace) -> dict:
+    """Package the diagnosed ordered prefix from the live coordinator.
+
+    The live layout keeps each frame's capture under ``run/frames`` and that
+    frame's exact translation under ``shadow/frame-NNNNNN/shaders``.  Both the
+    per-frame shader mapping and the published checkpoint request/receipt are
+    passed to the existing v2 packager, so predecessor history, lifecycle
+    records, capture identity and the target diagnosis remain authoritative.
+    """
+    if count < 1:
+        return {"status": "unavailable", "reason": "no diagnosed frame"}
+    from automation import gfx_replay_case
+
+    frames = [run / "frames" / f"frame-{index:06d}"
+              for index in range(1, count + 1)]
+    last_output = shadow / f"frame-{count:06d}"
+    diagnosis = _read_json(last_output / "diagnostic-report.json") if (
+        last_output / "diagnostic-report.json").is_file() else {}
+    if not diagnosis:
+        return {"status": "incomplete", "reason": "target diagnosis missing"}
+    frame_shaders = {
+        str(frame): shadow / f"frame-{index:06d}" / "shaders"
+        for index, frame in enumerate(frames, start=1)
+    }
+    checkpoint_sources = [
+        shadow / f"frame-{index:06d}" for index in range(1, count + 1)]
+    case_dir = (Path(getattr(args, "case_dir", "") or "").expanduser().resolve()
+                if getattr(args, "case_dir", "") else shadow / "case")
+    max_bytes = int(getattr(args, "case_max_bytes", 0) or 0)
+    if max_bytes <= 0:
+        max_bytes = 512 * 1024 * 1024
+    try:
+        manifest = gfx_replay_case.package_sequence_diagnosis(
+            frames, last_output, case_dir, diagnosis,
+            shaders=last_output / "shaders",
+            frame_shaders=frame_shaders,
+            checkpoint_sources=checkpoint_sources,
+            case_id=f"m7-live-frame-{count:06d}",
+            max_bytes=max_bytes,
+        )
+    except (gfx_replay_case.CaseError, OSError, ValueError,
+            TypeError, KeyError) as exc:
+        return {
+            "status": "failed",
+            "reason": str(exc),
+            "case_dir": str(case_dir),
+        }
+    reproduction = manifest.get("reproduction") or {}
+    return {
+        "status": ("complete" if reproduction.get(
+            "independently_reproducible") else "incomplete"),
+        "case_id": manifest.get("case_id"),
+        "case_dir": str(case_dir),
+        "files": len(manifest.get("files") or []),
+        "bytes": sum(item.get("bytes", 0)
+                     for item in manifest.get("files") or []),
+        "reproduction": reproduction,
+        "replay_command": manifest.get("replay_command"),
+        "verify_command": manifest.get("verify_command"),
+    }
+
+
 def shadow_coordinator_continuous(args: argparse.Namespace) -> int:
     """Coordinate a bounded ordered sequence through one persistent session."""
     run = Path(args.run).expanduser().resolve()
@@ -2163,6 +2236,11 @@ def shadow_coordinator_continuous(args: argparse.Namespace) -> int:
             result["status"] = "failed"
             result["error"] = str(exc)
             result["stop_reason"] = "tool_failure"
+            result["qualified"] = False
+            if result["frames"]:
+                result["case"] = _package_continuous_case(
+                    run, shadow, len(result["frames"]), args)
+                result["reproduction"] = result["case"].get("reproduction")
             (shadow / "coordinator.json").write_text(
                 json.dumps(result, indent=2) + "\n")
             return 1
@@ -2176,11 +2254,25 @@ def shadow_coordinator_continuous(args: argparse.Namespace) -> int:
                 if classification == "qualified_difference"
                 else f"stop_{classification}")
             result["stopped_at"] = frame_index
+            result["case"] = _package_continuous_case(
+                run, shadow, frame_index, args)
+            result["reproduction"] = result["case"].get("reproduction")
+            result["qualified"] = bool(
+                result["frames"] and all(
+                    item.get("classification") == "qualified_match"
+                    for item in result["frames"]))
             (shadow / "coordinator.json").write_text(
                 json.dumps(result, indent=2) + "\n")
             return 0
     result["status"] = "ok"
     result["stop_reason"] = "frame_limit"
+    result["qualified"] = bool(
+        result["frames"] and all(
+            item.get("classification") == "qualified_match"
+            for item in result["frames"]))
+    result["case"] = _package_continuous_case(
+        run, shadow, len(result["frames"]), args)
+    result["reproduction"] = result["case"].get("reproduction")
     (shadow / "coordinator.json").write_text(
         json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))
@@ -2268,6 +2360,10 @@ def _parser() -> argparse.ArgumentParser:
     cap.add_argument("--max-frames", type=int, default=3)
     cap.add_argument("--max-pending", type=int, default=4)
     cap.add_argument("--max-bytes", type=int, default=512 * 1024 * 1024)
+    cap.add_argument("--case-max-bytes", type=int, default=512 * 1024 * 1024,
+                     help="bounded reproduction-case budget for a continuous run")
+    cap.add_argument("--case-dir", default="",
+                     help="explicit reproduction case directory (continuous)")
     cap.add_argument("--continue-on-difference", action="store_true")
     cap.add_argument("--async", action="store_true",
                      help="use the bounded asynchronous Metal worker queue")
@@ -2301,6 +2397,9 @@ def _parser() -> argparse.ArgumentParser:
     coord.add_argument("--continuous", action="store_true")
     coord.add_argument("--max-frames", type=int, default=3)
     coord.add_argument("--continue-on-difference", action="store_true")
+    coord.add_argument("--case-max-bytes", type=int,
+                       default=512 * 1024 * 1024)
+    coord.add_argument("--case-dir", default="")
     # The PR3 diagnosis always includes the shared comparison.  The old
     # --no-compare switch could not skip it without discarding qualification
     # evidence, so it is removed rather than silently ignored.
