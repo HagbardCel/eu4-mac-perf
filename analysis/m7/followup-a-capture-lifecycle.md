@@ -140,6 +140,11 @@ Native (macOS, real legacy GL context, no Metal or EU4):
   unchanged.  The opposite case deletes only the depth attachment: the depth
   generation resets, the colour generation is unchanged, and the dependent
   draw now fails.  Both cases fail on the pre-fix head.
+- A third case deletes the default framebuffer's colour attachment at the
+  end-of-frame lifecycle drain.  The session's unretained readback pointer is
+  cleared, so the frame fails closed with `frame_readback`/`readback target is
+  missing` instead of dereferencing the released texture; the pre-fix head
+  segfaults on this frame.
 - `tests/test_m7_continuous_replay.py`: delete-before-recreate resets the
   Metal generation; two distinct deletes leave no stale recreated resource;
   same-event sequences reset the generation; duplicate ordering identities and

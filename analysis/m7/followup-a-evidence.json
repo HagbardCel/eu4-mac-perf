@@ -155,7 +155,12 @@
         "depth_generation": 3,
         "reference_depth_generation": 5
       },
-      "pre_fix_result": "both tests fail on 72a11af1"
+      "pre_fix_result": "both tests fail on 72a11af1",
+      "default_target_delete": {
+        "test": "test_default_colour_delete_at_the_end_fails_closed",
+        "result": "frame_readback failure (readback target is missing)",
+        "pre_fix": "segmentation fault on 2d69feaf"
+      }
     },
     "lifecycle_sequence": {
       "test": "tests.test_gfx_frame_trace_writer + tests.test_m7_continuous_replay",
