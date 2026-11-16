@@ -11,7 +11,7 @@
     "pr2_commit": "55174d5"
   },
   "launch": {
-    "command": "python3.14 -m automation.m6_frame capture --output .local/m7/pr2-shadow-live-3 --callers 0x103b3c8 --min-draws 1 --occurrence 300 --boundary scene --seal --shadow --shadow-timeout-ms 120000 --shadow-wait-ms 180000 --max-draws 1024 --duration 90 --timeout 600 --background --timeline",
+    "command": "python3.14 -m automation.m6_frame capture --output .local/m7/pr2-shadow-live-6 --callers 0x103b3c8 --min-draws 1 --occurrence 300 --boundary scene --seal --shadow --shadow-timeout-ms 120000 --shadow-wait-ms 180000 --max-draws 1024 --duration 90 --timeout 600 --background --timeline",
     "pid": 41754,
     "session_id": "2d692cb3-9d0d-4460-8803-00b249e756f9",
     "eu4_processes": 1,
@@ -43,7 +43,7 @@
     "boundary": "scene",
     "present_index": 615,
     "scene_index": 615,
-    "capture_dir": ".local/m7/pr2-shadow-live-3/frame",
+    "capture_dir": ".local/m7/pr2-shadow-live-6/frame",
     "operation_count": 325,
     "draw_count": 315,
     "clear_count": 9,
@@ -77,9 +77,8 @@
     },
     "timed_out": false,
     "partial": false,
-    "shader_receipt_verified": true,
-    "native_inputs_verified": true,
-    "report_fields_note": "timed_out=false and partial=false are the core result values; the live shadow-report artifact predates the bridge report-field addition."
+    "report_fields_note": "timed_out=false and partial=false are the core result values; the live shadow-report artifact predates the bridge report-field addition.",
+    "verification_evidence": "The coordinator produced shader-receipt.json and the replay succeeded only after the bridge validated it; the live shadow-report predates the report-field addition. Native input verification is covered by offline tests and the same code path."
   },
   "comparison": {
     "pixel_verdict": "fail",

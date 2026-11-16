@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -234,6 +235,11 @@ def load_seal(
 
     if trace is None:
         trace = load_trace(frame_dir, verify_blobs=verify_blobs)
+    else:
+        if Path(str(trace.get("_frame_dir") or "")).resolve() != frame_dir.resolve():
+            raise FrameError("supplied trace belongs to another frame directory")
+        if verify_blobs and "_blob_count_verified" not in trace:
+            raise FrameError("supplied trace was not verified for referenced blobs")
     events = trace.get("_events") or []
     if verify_counts:
         kinds = [event.get("kind") for event in events]
@@ -1367,10 +1373,30 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
             )
             return 1
     report_deadline = min(overall_deadline, time.monotonic() + args.replay_timeout)
-    translated = translate_command(
-        argparse.Namespace(frame=str(frame_dir), out=str(shader_dir), force=True)
-    )
-    if translated != 0:
+    try:
+        translated = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "automation.m6_frame",
+                "translate",
+                "--frame",
+                str(frame_dir),
+                "--out",
+                str(shader_dir),
+                "--force",
+            ],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            timeout=args.translation_timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        result["error"] = "shader translation timed out"
+        (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")
+        return 1
+    if translated.returncode != 0:
         result["error"] = "shader translation failed"
         (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")
         return 1
@@ -1490,7 +1516,20 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
                 else ROOT / "analysis" / "m6" / "comparison-policy.json"
             )
             policy = json.loads(policy_path.read_text())
-            comparison = m6_compare.compare(frame_dir, shadow, policy)
+
+            class _CompareTimeout(Exception):
+                pass
+
+            def _compare_alarm(signum, frame):
+                raise _CompareTimeout(f"comparison exceeded {args.compare_timeout}s")
+
+            previous = signal.signal(signal.SIGALRM, _compare_alarm)
+            signal.setitimer(signal.ITIMER_REAL, args.compare_timeout)
+            try:
+                comparison = m6_compare.compare(frame_dir, shadow, policy)
+            finally:
+                signal.setitimer(signal.ITIMER_REAL, 0)
+                signal.signal(signal.SIGALRM, previous)
             result["comparison"] = comparison
             result["pixel_verdict"] = comparison.get("status")
             result["execution"] = {

@@ -398,7 +398,10 @@ static id<MTLTexture> alpha_normalized(id<MTLTexture> source,
     [encoder dispatchThreadgroups:groups threadsPerThreadgroup:threads_per_group];
     [encoder endEncoding];
     [compute_command commit];
-    (void)wait_for_transfer(compute_command, @"alpha transform", NULL);
+    if (!wait_for_transfer(compute_command, @"alpha transform", NULL) ||
+        compute_command.status != MTLCommandBufferStatusCompleted) {
+        return nil;
+    }
     (void)command;
     g_alpha_textures[key] = destination;
     return destination;

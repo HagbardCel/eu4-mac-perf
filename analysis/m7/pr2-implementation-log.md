@@ -2,7 +2,7 @@
 
 ## Stack and base
 
-- PR 1 (`m7/pr1-frame-seal`, commit `7517b9c`, PR #199) is the base. PR 2 is an
+- PR 1 (`m7/pr1-frame-seal`, commit `2b6545c`, PR #199) is the base. PR 2 is an
   explicitly documented stacked branch `m7/pr2-inprocess-metal`.
 - PR #198 is merged to `main` as `b4c3955`; PR 1 targets `main`.
 
@@ -54,8 +54,8 @@
 - Copy-bearing scene 75: 283/283, one transfer, known divergence preserved
   (1,792,005 / 1,930,176, max 23).
 - Invalid trace/config rejected; timeout bounded; core has no OpenGL linkage.
-- One live launch (pid 40775): one sealed frame, 325/325 Metal operations,
+- One live launch (pid 41754): one sealed frame, 325/325 Metal operations,
   readback ok, one GL reference and one Metal output. Pixel verdict `fail`
-  (1,161,038 / 1,930,176, max 68) with `state_coverage=partial` for dither and
-  multisampling; the amplified difference is quantization noise, not a missing
-  region.
+  (1,159,832 / 1,930,176, max 76) with `state_coverage=partial` for dither and
+  multisampling; the difference is low-amplitude, not proven exclusively
+  dithering, and the canonical fixture remains exact.
