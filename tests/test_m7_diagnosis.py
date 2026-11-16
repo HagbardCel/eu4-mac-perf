@@ -377,6 +377,123 @@ class DiagnosisContractTests(unittest.TestCase):
                          "incomplete_checkpoint")
         self.assertFalse(report["qualification"]["diagnostic_qualified"])
 
+    def _rewrite_request(self, mutate):
+        """Replace the request and rebind the shadow report to the new file."""
+        request = json.loads(
+            (self.fixture.metal / "checkpoint-request.json").read_text())
+        mutate(request)
+        path = self.fixture.metal / "checkpoint-request.json"
+        path.write_text(json.dumps(request))
+        shadow_path = self.fixture.metal / "shadow-report.json"
+        shadow = json.loads(shadow_path.read_text())
+        shadow["checkpoint_request_file"] = path.name
+        shadow["checkpoint_request_sha256"] = sha(path.read_bytes())
+        shadow["checkpoint_count"] = len(request.get("checkpoints") or [])
+        shadow_path.write_text(json.dumps(shadow))
+        return request
+
+    def test_stale_empty_request_fails_closed(self):
+        self._rewrite_request(lambda request: request.update(checkpoints=[]))
+        report = self.fixture.diagnose()
+        self.assertEqual(report["classification"], "invalid_provenance")
+        kinds = [problem["kind"] for problem in
+                 report["checkpoint_validation"]["problems"]]
+        self.assertIn("missing_required_request", kinds)
+        self.assertFalse(report["qualification"]["qualified"])
+
+    def test_request_with_same_count_but_different_events_fails_closed(self):
+        def mutate(request):
+            for item in request["checkpoints"]:
+                item["event"] = int(item["event"]) + 100
+        self._rewrite_request(mutate)
+        report = self.fixture.diagnose()
+        self.assertEqual(report["classification"], "invalid_provenance")
+        kinds = [problem["kind"] for problem in
+                 report["checkpoint_validation"]["problems"]]
+        self.assertIn("unexpected_request", kinds)
+        self.assertIn("missing_required_request", kinds)
+
+    def test_wrong_request_digest_fails_closed(self):
+        shadow_path = self.fixture.metal / "shadow-report.json"
+        shadow = json.loads(shadow_path.read_text())
+        shadow["checkpoint_request_sha256"] = "0" * 64
+        shadow_path.write_text(json.dumps(shadow))
+        report = self.fixture.diagnose()
+        self.assertEqual(report["classification"], "invalid_provenance")
+        kinds = [problem["kind"] for problem in
+                 report["checkpoint_validation"]["problems"]]
+        self.assertIn("request_digest_mismatch", kinds)
+
+    def test_request_without_authoritative_binding_is_incomplete(self):
+        shadow_path = self.fixture.metal / "shadow-report.json"
+        shadow = json.loads(shadow_path.read_text())
+        for field in ("checkpoint_request_file", "checkpoint_request_sha256",
+                      "checkpoint_count"):
+            shadow.pop(field, None)
+        shadow_path.write_text(json.dumps(shadow))
+        report = self.fixture.diagnose()
+        self.assertEqual(report["classification"],
+                         "incomplete_diagnostics")
+        self.assertEqual(report["checkpoint_validation"]["status"],
+                         "incomplete")
+        kinds = [problem["kind"] for problem in
+                 report["checkpoint_validation"]["problems"]]
+        self.assertIn("unbound_request", kinds)
+
+    def test_unexpected_extra_checkpoint_fails_closed(self):
+        def mutate(request):
+            extra = dict(request["checkpoints"][0])
+            extra["event"] = int(extra["event"]) + 1
+            extra["file"] = "intermediate-extra.bgra"
+            request["checkpoints"].append(extra)
+        self._rewrite_request(mutate)
+        report = self.fixture.diagnose()
+        self.assertEqual(report["classification"], "invalid_provenance")
+        kinds = [problem["kind"] for problem in
+                 report["checkpoint_validation"]["problems"]]
+        self.assertIn("unexpected_request", kinds)
+
+    def test_duplicate_request_entry_fails_closed(self):
+        def mutate(request):
+            request["checkpoints"].append(
+                dict(request["checkpoints"][0]))
+        self._rewrite_request(mutate)
+        report = self.fixture.diagnose()
+        self.assertEqual(report["classification"], "invalid_provenance")
+        kinds = [problem["kind"] for problem in
+                 report["checkpoint_validation"]["problems"]]
+        self.assertIn("duplicate_request", kinds)
+
+    def test_substituted_checkpoint_resource_fails_closed(self):
+        def mutate(request):
+            request["checkpoints"][0]["resource"] = "tex:999"
+        self._rewrite_request(mutate)
+        report = self.fixture.diagnose()
+        self.assertEqual(report["classification"], "invalid_provenance")
+        kinds = [problem["kind"] for problem in
+                 report["checkpoint_validation"]["problems"]]
+        self.assertIn("substituted_request", kinds)
+
+    def test_shader_receipt_for_another_frame_fails_closed(self):
+        request_path = self.fixture.metal / "checkpoint-request.json"
+        (self.fixture.metal / "shader-receipt.json").write_text(json.dumps({
+            "schema": "m7-shadow-shader-receipt/v1",
+            "capture_frame_id": 999,
+            "pid": 4242,
+            "session_id": "session-1",
+            "trace_manifest_sha256": sha(
+                (self.fixture.frame / "frame-trace.json").read_bytes()),
+            "checkpoint_request_file": request_path.name,
+            "checkpoint_request_sha256": sha(request_path.read_bytes()),
+            "checkpoint_count": len(json.loads(
+                request_path.read_text())["checkpoints"]),
+        }))
+        report = self.fixture.diagnose()
+        self.assertEqual(report["classification"], "invalid_provenance")
+        kinds = [problem["kind"] for problem in
+                 report["checkpoint_validation"]["problems"]]
+        self.assertIn("request_frame_mismatch", kinds)
+
     def test_checkpoint_request_not_bound_is_incomplete_diagnostics(self):
         (self.fixture.metal / "checkpoint-request.json").unlink()
         report = self.fixture.diagnose()
@@ -538,6 +655,55 @@ class DiagnosisContractTests(unittest.TestCase):
         self.assertEqual(gfx_independent_replay.diagnosis_exit_code(report), 1)
 
 
+class DiagnoseCliPackagingTests(unittest.TestCase):
+    """Exercise the real ``m6_frame diagnose --package`` CLI entry point."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.fixture = DiagnosisFixture(Path(self.temporary.name))
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def _run(self):
+        return m6_frame.main([
+            "diagnose",
+            "--frame", str(self.fixture.frame),
+            "--metal", str(self.fixture.metal),
+            "--package",
+        ])
+
+    def test_default_package_is_outside_frame_and_metal_directories(self):
+        status = self._run()
+        self.assertEqual(status, 0)
+        case_dir = self.fixture.root / "metal-case"
+        self.assertTrue((case_dir / "case.json").is_file())
+        self.assertFalse((self.fixture.frame / "case").exists())
+        self.assertFalse((self.fixture.metal / "case").exists())
+        report = json.loads(
+            (self.fixture.metal / "diagnostic-report.json").read_text())
+        self.assertEqual(Path(report["case"]["files"][0]["path"]).is_absolute(),
+                         False)
+
+    def test_repeated_invocation_replaces_the_owned_case(self):
+        self.assertEqual(self._run(), 0)
+        case_dir = self.fixture.root / "metal-case"
+        first = (case_dir / "case.json").read_text()
+        self.assertEqual(self._run(), 0)
+        self.assertTrue((case_dir / "case.json").is_file())
+        self.assertEqual(json.loads(first)["schema"],
+                         json.loads((case_dir / "case.json").read_text())["schema"])
+
+    def test_non_owned_output_conflict_is_rejected(self):
+        case_dir = self.fixture.root / "metal-case"
+        case_dir.mkdir()
+        (case_dir / "unrelated.txt").write_text("keep me")
+        status = self._run()
+        self.assertEqual(status, 1)
+        self.assertTrue((case_dir / "unrelated.txt").is_file())
+        self.assertFalse((case_dir / "case.json").exists())
+
+
 class DiagnosisPackageTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -570,9 +736,10 @@ class DiagnosisPackageTests(unittest.TestCase):
 
     def test_diagnose_package_flag_publishes_case(self):
         report = self.fixture.diagnose(package=True)
-        case_dir = self.fixture.root / "diagnosis" / "case"
+        case_dir = self.fixture.root / "metal-case"
         self.assertTrue((case_dir / "case.json").is_file())
         self.assertTrue(report.get("case"))
+        self.assertFalse((self.fixture.metal / "case").exists())
 
 
 if __name__ == "__main__":

@@ -255,6 +255,15 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
             problems.append({"kind": "duplicate_request", "event": key[0],
                              "target": key[1]})
             continue
+        target = key[1]
+        expected_resource = "fb:0" if target == "0" else f"tex:{target}"
+        if str(item.get("resource") or expected_resource) != expected_resource:
+            problems.append({
+                "kind": "substituted_request", "event": key[0],
+                "target": key[1],
+                "expected_resource": expected_resource,
+                "actual_resource": item.get("resource")})
+            continue
         requested[key] = item
 
     returned: dict[tuple[int, str], list[dict]] = {}
@@ -286,6 +295,27 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
                 requested=True))
             continue
         item = rows[0]
+        expected_resource = "fb:0" if target == "0" else f"tex:{target}"
+        if item.get("target") is not None and str(item.get("target")) != target:
+            problems.append({"kind": "substituted_result", "event": event,
+                             "target": target,
+                             "returned_target": item.get("target")})
+            results.append(_invalid_checkpoint(
+                wanted, graph,
+                "checkpoint result names a different render target",
+                requested=True))
+            continue
+        if (item.get("resource") is not None
+                and str(item.get("resource")) != expected_resource):
+            problems.append({"kind": "substituted_result", "event": event,
+                             "target": target,
+                             "expected_resource": expected_resource,
+                             "returned_resource": item.get("resource")})
+            results.append(_invalid_checkpoint(
+                wanted, graph,
+                "checkpoint result names a different resource identity",
+                requested=True))
+            continue
         requested_width = int(wanted.get("reference_width")
                               or wanted.get("width") or 0)
         requested_height = int(wanted.get("reference_height")
@@ -1258,18 +1288,247 @@ def _identity_check(seal: dict | None, trace: dict, replay: dict,
     }
 
 
-def _checkpoint_request_state(graph: dict, metal_dir: Path
-                              ) -> tuple[dict, str, list[str]]:
-    published = _optional_json(Path(metal_dir) / "checkpoint-request.json")
-    if published is not None:
-        problems = []
-        if published.get("schema") != "gfx-frame-checkpoint-request/v1":
-            problems.append("checkpoint request schema is invalid")
-        checkpoints = published.get("checkpoints")
-        if checkpoints is not None and not isinstance(checkpoints, list):
-            problems.append("checkpoint request is not an array")
-        return published, "published", problems
-    return gfx_frame_graph.checkpoint_request(graph), "derived", []
+def _checkpoint_problem(kind: str, detail: str, *, severity: str) -> dict:
+    """One request/provenance problem with fail-closed severity.
+
+    ``invalid`` means evidence actively disagrees (a stale request, a wrong
+    digest, a substituted plan).  ``incomplete`` means required authoritative
+    metadata is absent, so no equivalence claim may be made but the evidence
+    can still be inspected.
+    """
+    return {"kind": kind, "detail": detail, "severity": severity}
+
+
+def _checkpoint_request_plan_problems(graph: dict,
+                                      checkpoints: list) -> list[dict]:
+    """Require the published request to equal the graph-derived plan exactly."""
+    expected = gfx_frame_graph.checkpoint_request(graph).get("checkpoints") or []
+    expected_by_key = {_checkpoint_key(item): item for item in expected}
+    problems: list[dict] = []
+    seen: set[tuple[int, str]] = set()
+    for item in checkpoints:
+        if not isinstance(item, dict):
+            problems.append(_checkpoint_problem(
+                "malformed_request", "checkpoint entry is not an object",
+                severity="invalid"))
+            continue
+        key = _checkpoint_key(item)
+        if key in seen:
+            problems.append(_checkpoint_problem(
+                "duplicate_request",
+                f"checkpoint ({key[0]}, {key[1]}) is requested more than once",
+                severity="invalid"))
+            continue
+        seen.add(key)
+        wanted = expected_by_key.get(key)
+        if wanted is None:
+            problems.append(_checkpoint_problem(
+                "unexpected_request",
+                f"checkpoint ({key[0]}, {key[1]}) is not required by the "
+                "validated capture graph",
+                severity="invalid"))
+            continue
+        target = str(item.get("target"))
+        expected_resource = ("fb:0" if target == "0" else f"tex:{target}")
+        resource = str(item.get("resource") or expected_resource)
+        if resource != expected_resource:
+            problems.append(_checkpoint_problem(
+                "substituted_request",
+                f"checkpoint ({key[0]}, {key[1]}) names resource {resource} "
+                f"but the graph requires {expected_resource}",
+                severity="invalid"))
+            continue
+        for field in ("reference_file", "reference_sha256",
+                      "reference_width", "reference_height"):
+            if item.get(field) != wanted.get(field):
+                problems.append(_checkpoint_problem(
+                    "substituted_request",
+                    f"checkpoint ({key[0]}, {key[1]}) {field} disagrees with "
+                    "the validated capture graph",
+                    severity="invalid"))
+                break
+        if [int(value) for value in item.get("producer_events") or [] if
+                isinstance(value, int)] != [
+                int(value) for value in wanted.get("producer_events") or [] if
+                isinstance(value, int)]:
+            problems.append(_checkpoint_problem(
+                "substituted_request",
+                f"checkpoint ({key[0]}, {key[1]}) producer history disagrees "
+                "with the validated capture graph",
+                severity="invalid"))
+    for key in expected_by_key:
+        if key not in seen:
+            problems.append(_checkpoint_problem(
+                "missing_required_request",
+                f"required checkpoint ({key[0]}, {key[1]}) is absent from the "
+                "published request",
+                severity="invalid"))
+    return problems
+
+
+def _checkpoint_receipt_dict(metal_dir: Path) -> dict | None:
+    """Load the coordinator's authoritative bridge receipt, if published."""
+    return _optional_json(Path(metal_dir) / "shader-receipt.json")
+
+
+def _checkpoint_binding_problems(metal_dir: Path, request: dict,
+                                 shadow: dict | None, receipt: dict | None,
+                                 seal: dict | None) -> tuple[list[dict], list[str]]:
+    """Bind the request to the exact sealed frame through authoritative data.
+
+    The request file alone is only a plan; it proves nothing about which frame
+    or execution produced it.  The shadow report (live coordinator/bridge) or
+    the shader receipt (coordinator publication) records the request digest,
+    name and count.  At least one must bind it, and every present binding must
+    agree.
+    """
+    path = Path(metal_dir) / "checkpoint-request.json"
+    request_sha = _sha(path)
+    count = len(request.get("checkpoints") or [])
+    problems: list[dict] = []
+    bindings: list[str] = []
+
+    if shadow is not None:
+        sha = shadow.get("checkpoint_request_sha256")
+        name = shadow.get("checkpoint_request_file")
+        reported_count = shadow.get("checkpoint_count")
+        if sha or name or reported_count is not None:
+            bindings.append("shadow-report")
+            if not sha:
+                problems.append(_checkpoint_problem(
+                    "unbound_request",
+                    "shadow report has no checkpoint request digest",
+                    severity="incomplete"))
+            elif str(sha) != request_sha:
+                problems.append(_checkpoint_problem(
+                    "request_digest_mismatch",
+                    "checkpoint request sha256 disagrees with the shadow "
+                    "report that produced this result",
+                    severity="invalid"))
+            if not name:
+                problems.append(_checkpoint_problem(
+                    "unbound_request",
+                    "shadow report has no checkpoint request file name",
+                    severity="incomplete"))
+            elif Path(str(name)).name != path.name:
+                problems.append(_checkpoint_problem(
+                    "request_name_mismatch",
+                    "checkpoint request file name disagrees with the shadow "
+                    "report",
+                    severity="invalid"))
+            if reported_count is not None and int(reported_count) != count:
+                problems.append(_checkpoint_problem(
+                    "request_count_mismatch",
+                    "shadow report checkpoint count disagrees with the "
+                    "published request",
+                    severity="invalid"))
+
+    if receipt is not None:
+        bindings.append("shader-receipt")
+        if receipt.get("schema") != "m7-shadow-shader-receipt/v1":
+            problems.append(_checkpoint_problem(
+                "receipt_schema",
+                "shader receipt schema is invalid",
+                severity="invalid"))
+        receipt_sha = receipt.get("checkpoint_request_sha256")
+        receipt_name = receipt.get("checkpoint_request_file")
+        receipt_count = receipt.get("checkpoint_count")
+        if not receipt_sha or not receipt_name:
+            problems.append(_checkpoint_problem(
+                "unbound_request",
+                "shader receipt has no checkpoint request binding",
+                severity="incomplete"))
+        else:
+            if str(receipt_sha) != request_sha:
+                problems.append(_checkpoint_problem(
+                    "request_digest_mismatch",
+                    "checkpoint request sha256 disagrees with the shader "
+                    "receipt",
+                    severity="invalid"))
+            if Path(str(receipt_name)).name != path.name:
+                problems.append(_checkpoint_problem(
+                    "request_name_mismatch",
+                    "checkpoint request file name disagrees with the shader "
+                    "receipt",
+                    severity="invalid"))
+            if receipt_count is None or int(receipt_count) != count:
+                problems.append(_checkpoint_problem(
+                    "request_count_mismatch",
+                    "shader receipt checkpoint count disagrees with the "
+                    "published request",
+                    severity="invalid"))
+        if seal is not None:
+            for field in ("capture_frame_id", "pid", "session_id",
+                          "trace_manifest_sha256"):
+                expected = seal.get(
+                    "manifest_sha256" if field == "trace_manifest_sha256"
+                    else field)
+                actual = receipt.get(field)
+                if actual is None:
+                    problems.append(_checkpoint_problem(
+                        "unbound_request",
+                        f"shader receipt is missing identity field {field}",
+                        severity="incomplete"))
+                elif actual != expected:
+                    problems.append(_checkpoint_problem(
+                        "request_frame_mismatch",
+                        f"shader receipt {field} does not belong to the "
+                        "sealed frame",
+                        severity="invalid"))
+
+    if not bindings:
+        problems.append(_checkpoint_problem(
+            "unbound_request",
+            "checkpoint request is not bound to an authoritative shadow "
+            "report or shader receipt",
+            severity="incomplete"))
+    return problems, bindings
+
+
+def _checkpoint_request_state(graph: dict, metal_dir: Path,
+                              shadow: dict | None = None,
+                              seal: dict | None = None
+                              ) -> tuple[dict, str, list[dict], dict]:
+    """Load and validate the checkpoint request bound to one Metal result.
+
+    An unbound or disagreeing request is reported with an explicit severity;
+    it is never silently replaced by a derived plan, and a later valid pixel
+    match cannot repair it.
+    """
+    metal_dir = Path(metal_dir)
+    published = _optional_json(metal_dir / "checkpoint-request.json")
+    if published is None:
+        return gfx_frame_graph.checkpoint_request(graph), "derived", [], {
+            "status": "derived",
+            "bindings": [],
+            "sha256": None,
+        }
+    problems: list[dict] = []
+    if published.get("schema") != "gfx-frame-checkpoint-request/v1":
+        problems.append(_checkpoint_problem(
+            "malformed_request", "checkpoint request schema is invalid",
+            severity="invalid"))
+    checkpoints = published.get("checkpoints")
+    if not isinstance(checkpoints, list):
+        problems.append(_checkpoint_problem(
+            "malformed_request", "checkpoint request is not an array",
+            severity="invalid"))
+        checkpoints = []
+    if not problems:
+        problems.extend(_checkpoint_request_plan_problems(graph, checkpoints))
+    receipt = _checkpoint_receipt_dict(metal_dir)
+    binding_problems, bindings = _checkpoint_binding_problems(
+        metal_dir, published, shadow, receipt, seal)
+    problems.extend(binding_problems)
+    status = "invalid" if any(
+        problem.get("severity") == "invalid" for problem in problems) else (
+        "incomplete" if problems else "bound")
+    return published, "published", problems, {
+        "status": status,
+        "bindings": bindings,
+        "sha256": _sha(metal_dir / "checkpoint-request.json"),
+        "receipt": receipt is not None,
+    }
 
 
 def _provenance_axis(evaluation: dict) -> dict:
@@ -1538,9 +1797,10 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
     replay["_provenance_samples"] = _read_jsonl(
         metal_dir / "replay-provenance.jsonl")
     shadow = _optional_json(metal_dir / "shadow-report.json")
+    request_binding: dict = {"status": "in_process", "bindings": []}
     if request is None:
-        request, request_source, request_problems = _checkpoint_request_state(
-            graph, metal_dir)
+        request, request_source, request_problems, request_binding = (
+            _checkpoint_request_state(graph, metal_dir, shadow, seal))
     else:
         request_source = request_source or "provided"
         request_problems = []
@@ -1555,10 +1815,12 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
     if request_problems:
         plan = request.get("checkpoints")
         requested = len(plan) if isinstance(plan, list) else 0
+        invalid = any(problem.get("severity") == "invalid"
+                      for problem in request_problems)
         checkpoints = []
         validation = {
             "schema": "gfx-checkpoint-validation/v1",
-            "status": "invalid",
+            "status": "invalid" if invalid else "incomplete",
             "requested": requested,
             "returned": len(replay.get("checkpoints") or []),
             "matched": 0,
@@ -1566,17 +1828,27 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
             "divergent": 0,
             "invalid": 0,
             "problems": [
-                {"kind": "malformed_request", "detail": problem}
+                {"kind": problem.get("kind"),
+                 "detail": problem.get("detail"),
+                 "severity": problem.get("severity")}
                 for problem in request_problems
             ],
             "problems_count": len(request_problems),
             "request_source": request_source,
+            "request_binding": request_binding,
+            "note": (
+                "the published checkpoint request is not bound to the sealed "
+                "frame; qualification fails closed"
+                if not invalid else
+                "the published checkpoint request disagrees with the "
+                "authoritative evidence; qualification fails closed"),
         }
     else:
         checkpoints, validation = reconcile_checkpoints(
             graph, request, replay, frame_dir, metal_dir)
         validation = dict(validation)
         validation["request_source"] = request_source
+        validation["request_binding"] = request_binding
     kinds = {str(item.get("kind")) for item in validation.get("problems") or []}
     if validation.get("status") == "invalid" and kinds and kinds <= {
             "missing_result"}:
@@ -1587,6 +1859,7 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
             "requested checkpoint results are missing; this is incomplete "
             "evidence, not a difference")
     if request_source == "derived" and request.get("checkpoints"):
+        validation["request_binding"] = request_binding
         # A request that was not published with the result cannot be bound to
         # the replay.  Individual checkpoint files may still be useful, but
         # the qualification cannot silently claim they belong to this run.
@@ -1764,6 +2037,35 @@ def _prepare_diagnosis_output(out_dir: Path, inputs: list[Path]) -> Path:
     return out_dir
 
 
+def _default_case_destination(frame_dir: Path, metal_dir: Path,
+                              out_dir: Path) -> Path:
+    """Choose a deterministic case destination outside every input.
+
+    The default must never be ``<metal_dir>/case``: the Metal result directory
+    is a protected package input.  Prefer a sibling of the result directory so
+    repeated diagnostics of the same fixture reuse one owned case directory,
+    then fall back to another sibling if the workspace shape is unusual.
+    """
+    protected = [frame_dir.resolve(), metal_dir.resolve(), out_dir.resolve()]
+
+    def usable(candidate: Path) -> bool:
+        candidate = candidate.resolve()
+        if _protected_output(candidate):
+            return False
+        return not any(_path_overlap(candidate, item) for item in protected)
+
+    stem = metal_dir.name or "metal"
+    for suffix in range(0, 16):
+        name = f"{stem}-case" if suffix == 0 else f"{stem}-case-{suffix + 1}"
+        candidate = metal_dir.parent / name
+        if usable(candidate):
+            return candidate
+    raise ReplayError(
+        "output_overlap",
+        "no package destination outside the captured frame and Metal result "
+        "directories is available")
+
+
 def diagnose_frame(frame_dir: Path | str, metal_result_dir: Path | str,
                    output_dir: Path | str,
                    policy: Path | str | None = None, *,
@@ -1792,11 +2094,15 @@ def diagnose_frame(frame_dir: Path | str, metal_result_dir: Path | str,
     if package:
         from automation import gfx_replay_case
 
-        destination = Path(case_dir) if case_dir else out_dir / "case"
-        manifest = gfx_replay_case.package_diagnosis(
-            frame_dir, metal_dir, destination, report,
-            shaders=shaders,
-            case_id=case_id or f"diagnosis-{report.get('frame', {}).get('capture_frame_id') or 'frame'}")
+        destination = (Path(case_dir) if case_dir else
+                       _default_case_destination(frame_dir, metal_dir, out_dir))
+        try:
+            manifest = gfx_replay_case.package_diagnosis(
+                frame_dir, metal_dir, destination, report,
+                shaders=shaders,
+                case_id=case_id or f"diagnosis-{report.get('frame', {}).get('capture_frame_id') or 'frame'}")
+        except gfx_replay_case.CaseError as exc:
+            raise ReplayError(exc.kind, exc.detail) from exc
         report["case"] = manifest
         report_path.write_text(json.dumps(report, indent=2) + "\n",
                                encoding="utf-8")
