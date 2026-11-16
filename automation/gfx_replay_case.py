@@ -254,10 +254,14 @@ def _portable_paths(value, *, replay_dir: str = "replay",
                 value[key] = capture_dir
             elif key == "metal_result_dir" and isinstance(item, str) and item:
                 value[key] = replay_dir
-            elif key == "path" and isinstance(item, str) and (
-                    "/metal/" in item or "/output/" in item):
-                # A conventional absolute path; keep only the basename.
+            elif key == "path" and isinstance(item, str) and Path(item).is_absolute():
+                # A conventional absolute artifact path; keep only the
+                # basename so the report is relocatable.
                 value[key] = Path(item).name
+            elif key == "dir" and isinstance(item, str) and Path(item).is_absolute():
+                # Resource-history provenance must not point at the original
+                # campaign directory in a portable case.
+                value[key] = capture_dir
             else:
                 _portable_paths(item, replay_dir=replay_dir,
                                 capture_dir=capture_dir)
@@ -273,7 +277,7 @@ def _portable_diagnosis(report: dict, case_dir: Path,
     value = json.loads(json.dumps(report))
     value["frame_dir"] = capture_dir
     value["metal_result_dir"] = "replay"
-    _portable_paths(value)
+    _portable_paths(value, replay_dir="replay", capture_dir=capture_dir)
     for item in value.get("checkpoints") or []:
         if item.get("metal_file"):
             item["metal_file"] = "replay/" + Path(item["metal_file"]).name
@@ -610,10 +614,25 @@ def _required_prefix(frames: list[Path]) -> tuple[list[Path], dict]:
             for kind, event in events.get(name, []):
                 if kind not in ("delete", "mutation"):
                     continue
+                same_frame_write = name in (
+                    sequences[index].get("render_targets") or [])
                 later_write = any(
                     name in (sequences[item].get("render_targets") or [])
                     for item in range(index + 1, last_carry + 1))
-                if later_write:
+                if kind == "mutation":
+                    # Metal fails closed on a renderer-owned CPU mutation at
+                    # its event; only a producer in a later frame can make the
+                    # carried resource reproducible again.
+                    if later_write:
+                        continue
+                elif same_frame_write or later_write:
+                    continue
+                # A delete in the frame that last carries the resource is
+                # normal end-of-life cleanup: the samples in that frame happen
+                # before the delete event, and no later frame needs the
+                # resource.  Only a delete before the last carry leaves a
+                # later consumer without a producer.
+                if kind == "delete" and index == last_carry:
                     continue
                 raise CaseError(
                     "missing_mutation_record",
@@ -712,7 +731,7 @@ def _diagnostic_only_case(case_dir: Path, metal_dir: Path, report: dict,
     graph = json.loads(json.dumps(
         report.get("graph") or gfx_frame_graph.build(metal_dir)))
     graph["frame_dir"] = "replay"
-    _portable_paths(graph)
+    _portable_paths(graph, replay_dir="replay", capture_dir="replay")
     _write_json(case_dir / "dependency-graph.json", graph)
     reproduction = {
         "status": "incomplete",
@@ -1266,7 +1285,7 @@ def _readme(manifest: dict) -> str:
             "reference checkpoints only.",
             "",
         ]
-    else:
+    elif not sequence:
         lines += [
             "The replay uses the existing M6 Metal replay host and the captured",
             "OpenGL frame. Renderer-generated intermediates are produced by Metal;",

@@ -281,8 +281,10 @@ class SequenceFixture:
         self.frame(3, [draw(1, target("500", 2)), draw(3, target())], black,
                    previous=self.frames[-1], carried=("600",),
                    render_targets=("500",))
+        # Native capture snapshots the cumulative carried set at frame start,
+        # so the frame that deletes 600 still declares it as carried.
         self.frame(4, [draw(3, target())], black, previous=self.frames[-1],
-                   carried=("500",),
+                   carried=("500", "600"),
                    lifecycle=({"kind": "delete", "event": 0,
                                "names": ("600",)},))
         sampled = {
@@ -630,6 +632,11 @@ class PortableSequenceCaseTests(unittest.TestCase):
         self.assertEqual(sequence["target_index"], 4)
         verified = gfx_replay_case.verify(case)
         self.assertTrue(verified["ok"], verified["problems"])
+        replay = gfx_replay_case.replay_case(
+            case, self.fixture.base / "transitive-replay")
+        self.assertEqual(replay["final"]["status"], "qualified_match", replay)
+        self.assertEqual((replay.get("history") or {}).get("carried_bindings"),
+                         1)
 
     def test_verifier_detects_delete_of_a_carried_resource(self):
         out, diagnosis = self.baseline()
@@ -696,6 +703,13 @@ class PortableSequenceCaseTests(unittest.TestCase):
         self.assertEqual(
             manifest["reproduction"]["missing"][0]["kind"], "artifact_budget")
         self.assertTrue((case / "reproduction-incomplete.json").is_file())
+        readme = (case / "README.md").read_text()
+        self.assertIn("Reproduction incomplete", readme)
+        self.assertNotIn("captured OpenGL frame", readme)
+        graph_text = (case / "dependency-graph.json").read_text()
+        report_text = (case / "diagnostic-report.json").read_text()
+        self.assertNotIn(str(self.fixture.base), graph_text)
+        self.assertNotIn(str(self.fixture.base), report_text)
         with self.assertRaises(gfx_replay_case.CaseError) as caught:
             gfx_replay_case.replay_case(case, self.fixture.base / "budget-out")
         self.assertEqual(caught.exception.kind, "verification")

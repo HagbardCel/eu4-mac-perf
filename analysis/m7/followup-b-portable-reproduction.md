@@ -25,9 +25,12 @@ single-frame API.  Otherwise it walks the ordered `gfx-frame-sequence/v1`
 records and computes the smallest contiguous prefix that is **transitively
 closed** over carried resources: a predecessor that carries a resource produced
 even earlier pulls that earlier producer into the prefix.  A missing producer, a
-delete without a later producer before the last carry, or a CPU mutation of a
-carried resource stops packaging with an explicit `missing_predecessor` /
-`missing_mutation_record` failure.  The first selected frame must therefore
+delete before the last carry without a later producer, or a CPU mutation of a
+carried resource without a later producer stops packaging with an explicit
+`missing_predecessor` / `missing_mutation_record` failure.  A delete in the
+frame that last carries a resource is normal end-of-life cleanup and is allowed;
+native capture snapshots the cumulative carried set at frame start, so that
+frame may still list the resource.  The first selected frame must therefore
 declare no carried output.
 
 Only that prefix is copied.  Unrelated successful frames are excluded.
@@ -105,8 +108,10 @@ minimal prefix excludes frame 1 and packages frames 2–4 (target renumbered 3).
   mismatched pixels > 0, earliest affected frame is the renumbered target
   (sequence 3), operation `draw`.
 - A five-frame transitive fixture (frame 2 produces 600; frame 3 carries 600
-  while producing 500; frame 4 deletes 600; frame 5 samples 500) packages
-  frames 2–5, not 3–5, and verifies successfully.
+  while producing 500; frame 4 carries 500/600 and deletes 600; frame 5 samples
+  500) packages frames 2–5, not 3–5, verifies, and replays to
+  `qualified_match` with carried history.  The delete frame keeps the
+  cumulative carried declaration that native capture writes.
 - Negative tests cover missing predecessor, reordered predecessor, corrupt
   payload, wrong session, missing lifecycle/mutation record, delete of a carried
   resource, wrong generation, stale checkpoint request, packaging-time missing
@@ -149,7 +154,8 @@ Receipt: [followup-b-relocation-receipt.json](followup-b-relocation-receipt.json
   classification labels this limitation instead of treating it as a renderer
   match.
 - Diagnostic-only budget cases keep absolute paths out of their dependency
-  graph and state explicitly that they are not independently reproducible.
+  graph and diagnostic report, include the incomplete receipt in the manifest,
+  and state explicitly that they are not independently reproducible.
 - The replay reuses the existing Metal core and diagnosis contract; there is no
   second comparison engine or renderer implementation.
 - Portable Linux CI skips the macOS-only native/Metal tests.  A green portable
