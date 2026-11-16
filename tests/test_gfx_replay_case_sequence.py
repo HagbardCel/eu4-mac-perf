@@ -1350,6 +1350,41 @@ class HeterogeneousShaderSequenceTests(unittest.TestCase):
         finally:
             msl.write_bytes(original_msl)
 
+    def test_malformed_translation_never_claims_complete(self):
+        report_path = (self.fixture.base / "campaign" / "frame-1" /
+                       "shaders" / "shaders.json")
+        original = json.loads(report_path.read_text())
+
+        def variant(mutate):
+            report = json.loads(json.dumps(original))
+            mutate(report["programs"][0]["stages"]["pixel"])
+            report_path.write_text(json.dumps(report))
+            try:
+                case = self.fixture.base / f"malformed-{variant.counter}"
+                variant.counter += 1
+                manifest = self.package(case)
+                self.assertFalse(
+                    manifest["reproduction"]["independently_reproducible"])
+                self.assertEqual(manifest["reproduction"]["status"],
+                                 "incomplete")
+                self.assertEqual(manifest["reproduction"]["reason"],
+                                 "shader_artifact_unavailable")
+                self.assertEqual(manifest["replay_command"], [])
+            finally:
+                report_path.write_text(json.dumps(original))
+
+        variant.counter = 0
+        for mutate in (
+                lambda stage: stage.__setitem__("source_sha256", ""),
+                lambda stage: stage.__setitem__(
+                    "msl_file", "../blobs/verts.bin"),
+                lambda stage: stage.__setitem__("msl_file", "/etc/hosts"),
+                lambda stage: stage.__setitem__(
+                    "glsl_file", "missing.glsl"),
+        ):
+            with self.subTest(case=variant.counter):
+                variant(mutate)
+
     def test_identity_must_be_declared(self):
         case = self.fixture.base / "case-no-identity"
         self.package(case)

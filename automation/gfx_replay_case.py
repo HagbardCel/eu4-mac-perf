@@ -612,6 +612,20 @@ def _frame_shader_dir(frame_dir: Path, metal_dir: Path,
     return None
 
 
+def _shader_member(shader_dir: Path, name) -> Path | None:
+    """Resolve a declared shader payload and require it to stay inside the dir."""
+    if not isinstance(name, str) or not name:
+        return None
+    relative = Path(name)
+    if relative.is_absolute() or ".." in relative.parts:
+        return None
+    root = shader_dir.resolve()
+    target = (shader_dir / relative).resolve()
+    if target != root and root not in target.parents:
+        return None
+    return target if target.is_file() else None
+
+
 def _frame_shader_problems(frame_dir: Path, shader_dir: Path,
                           index: int) -> list[dict]:
     """Packaging-time validation of one frame's translated shader report."""
@@ -686,19 +700,24 @@ def _frame_shader_problems(frame_dir: Path, shader_dir: Path,
                 })
                 continue
             msl_file = stage.get("msl_file")
-            if not isinstance(msl_file, str) or not msl_file:
+            if _shader_member(shader_dir, msl_file) is None:
                 problems.append({
                     "kind": "shader_artifact", "frame": index,
-                    "detail": f"program {name} {stage_name} has no MSL file",
+                    "detail": f"program {name} {stage_name} MSL payload is "
+                              f"missing or outside the translation: "
+                              f"{msl_file!r}",
                 })
-            elif not (shader_dir / msl_file).is_file():
-                problems.append({
-                    "kind": "shader_artifact", "frame": index,
-                    "detail": f"program {name} {stage_name} MSL file is "
-                              f"missing: {msl_file}",
-                })
+            for field in ("glsl_file", "spv_file"):
+                declared = stage.get(field)
+                if declared and _shader_member(shader_dir, declared) is None:
+                    problems.append({
+                        "kind": "shader_artifact", "frame": index,
+                        "detail": f"program {name} {stage_name} {field} is "
+                                  f"missing or outside the translation: "
+                                  f"{declared!r}",
+                    })
             source_sha = stage.get("source_sha256")
-            if source_sha is None or not isinstance(source_sha, str):
+            if not isinstance(source_sha, str) or not source_sha:
                 problems.append({
                     "kind": "shader_artifact", "frame": index,
                     "detail": f"program {name} {stage_name} does not declare "
