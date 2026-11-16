@@ -243,7 +243,7 @@ directory (`<metal-dir>-case`) outside both the captured frame and the Metal
 result directory. Re-running replaces only an owned case; a non-owned output
 conflict is reported as an explicit error instead of deleting user data.
 
-Regressions (final focused set: 179 passed, 1 skipped):
+Regressions (final focused set: 162 passed, 11 skipped):
 
 - stale empty request, same-count different-event request, wrong digest,
   missing binding, duplicate/extra/substituted entries, receipt from another

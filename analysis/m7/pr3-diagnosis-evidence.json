@@ -403,8 +403,8 @@
     ],
     "packaging_default": "sibling <metal-dir>-case outside captured frame and Metal result",
     "focused_tests": {
-      "passed": 179,
-      "skipped": 1
+      "passed": 162,
+      "skipped": 11
     }
   }
 }
