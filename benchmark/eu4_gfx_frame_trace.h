@@ -1,6 +1,7 @@
 #ifndef EU4_GFX_FRAME_TRACE_H
 #define EU4_GFX_FRAME_TRACE_H
 
+#include "eu4_gfx_frame_seal.h"
 #include "eu4_gfx_observe.h"
 
 #include <stdint.h>
@@ -25,6 +26,11 @@
  *   EU4_GFX_FRAME_TRACE_OCCURRENCE selecting frame to capture (default 1)
  *   EU4_GFX_FRAME_TRACE_AT_FRAME   capture this present index directly
  *   EU4_GFX_FRAME_TRACE_MAX_DRAWS  hard draw cap inside a captured frame
+ *   EU4_GFX_FRAME_TRACE_TIMEOUT_MS bounded time from arming to finish; an
+ *                                  expired frame is published as an explicit
+ *                                  incomplete result
+ *   EU4_GFX_FRAME_SEAL             "1" publishes frame-seal.json and enables
+ *                                  the one-shot completion notification
  *   EU4_GFX_FRAME_TRACE_TEST_ONLY  "1" allows frame tracing without a dir
  *                                  (host tests)
  */
@@ -58,6 +64,11 @@ void eu4_gfx_frame_trace_draw_exit(eu4_gfx_capture_frame *frame,
    state. Returns 0 when the bind took effect. */
 int eu4_gfx_frame_trace_texture_probe(unsigned target, unsigned name);
 int eu4_gfx_frame_trace_readback_probe(void);
+/* Host-test only: returns 1 when the trace writer's mutex is not held by the
+ * calling thread (the callback contract). */
+int eu4_gfx_frame_trace_lock_probe(void);
+/* Host-test only: clears the seal registry and counters. */
+void eu4_gfx_frame_trace_test_reset_seal(void);
 /* Host-test only: run the production final-reference readback/validation.
    Returns 0 only when the reference was written and its digest/size checks
    passed. */

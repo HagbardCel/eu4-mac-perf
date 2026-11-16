@@ -1,0 +1,160 @@
+{
+  "schema": "m7-pr1-frame-seal-evidence/v1",
+  "status": "qualified_for_pr1_handoff",
+  "claim": "One authentic x86_64 EU4 process captured and sealed one title/menu frame, invoked one consumer exactly once, and published a valid original-GL reference and immutable trace.",
+  "base": {
+    "requested": "main with PR #198 merged",
+    "pr198_state": "merged to main as b4c3955",
+    "pr198_head": "271cd04",
+    "pr1_branch": "m7/pr1-frame-seal",
+    "pr1_base": "main (retargeted after #198 merged); 271cd04 is an ancestor"
+  },
+  "launch": {
+    "command": "python3.14 -m automation.m6_frame capture --output .local/m7/pr1-live-seal-5 --callers 0x103b3c8 --min-draws 1 --occurrence 300 --boundary scene --seal --seal-log --seal-timeout-ms 600000 --max-draws 1024 --duration 90 --timeout 600 --background --timeline",
+    "selection": {
+      "callers": [
+        "0x103b3c8"
+      ],
+      "min_draws": 1,
+      "occurrence": 300,
+      "boundary": "scene",
+      "max_draws": 1024
+    },
+    "pid": 16791,
+    "session_id": "9f036235-9cc0-4357-9e45-c35d12eb1619",
+    "eu4_processes": 1,
+    "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "instrumentation_library_sha256": "0ab6017f6e9dc1274b5b48ab57ba62a6cf3cdc0cc501dc2b03ac5de036e89a4d",
+    "startup_status": "installed",
+    "startup_summary_complete": true,
+    "startup_summary": {
+      "state": 2,
+      "event_count": 4,
+      "overflow": 0,
+      "unmatched": 0,
+      "refused": 327,
+      "unavailable": 0,
+      "in_flight": 0,
+      "reason": ""
+    },
+    "game_stdout_bytes": 0,
+    "game_stderr_bytes": 0,
+    "display": {
+      "mode": "background",
+      "settings_restored": true,
+      "restore_reason": "already_original"
+    },
+    "termination": {
+      "method": "run_ops bounded termination after the 90 s observation window",
+      "tool_recorded_terminated": true,
+      "note": "The sealed frame and notification completed before termination. The generic ops observer recorded events=0 because retention=state and no target draw was requested, so launcher-report accepted=false; this is unrelated to the frame seal."
+    },
+    "eu4_processes_evidence": "launcher-report records one pid (16791); the launch tool starts exactly one process and the host lease was free after termination. No second EU4 process is started by the seal path."
+  },
+  "frame": {
+    "capture_frame_id": 1,
+    "boundary": "scene",
+    "present_index": 617,
+    "scene_index": 617,
+    "capture_dir": ".local/m7/pr1-live-seal-5/frame",
+    "width": 1728,
+    "height": 1117,
+    "pixel_format": "BGRA8",
+    "operation_count": 325,
+    "draw_count": 315,
+    "clear_count": 9,
+    "copy_count": 1,
+    "manifest_file": "frame-trace.json",
+    "manifest_sha256": "b9de8e336880752af05cac5a87f95117658aaa745e317f2d2edde30db4e3e22f",
+    "manifest_events": 325,
+    "manifest_complete": true,
+    "manifest_stream_validated": true,
+    "frame_events_sha256": "31d03c730ebe913e83c3ca3627bf01fa6b1865ecf1c7d15718e6c4574dfbaca6",
+    "frame_events_bytes": 6392559,
+    "blob_count": 1119,
+    "reference_file": "frame-reference.bgra",
+    "reference_bytes": 7720704,
+    "reference_sha256": "cd0e7a1610e25567d508dddb51cdf2fc434db30b9289340dc28c488c2499b2c9",
+    "seal_file": "frame-seal.json",
+    "seal_sha256": "37b76727d1017afa73997530964539961131f3669c693f571de23b8d20464e7e",
+    "seal_schema": "gfx-frame-seal/v1",
+    "sealed": true,
+    "failure_reason": "",
+    "unsupported_dependencies": "",
+    "entry_boundary": "PresentScene entry (after frame draws, before conditional _GfxPresent)",
+    "readback_ns": 23947000,
+    "finalize_ns": 16961000,
+    "seal_ns": 40909000,
+    "event_stream_sha256": "31d03c730ebe913e83c3ca3627bf01fa6b1865ecf1c7d15718e6c4574dfbaca6",
+    "event_stream_bytes": 6392559,
+    "event_stream_verified": true
+  },
+  "notification": {
+    "consumer": "in-process logging sink registered with eu4_gfx_frame_sealed_subscribe; it verifies the manifest and reference digests only. Operation counters, the event stream and referenced blobs are verified by the Python load_seal/load_trace path.",
+    "notification_index": 1,
+    "count": 1,
+    "verified_manifest": true,
+    "verified_reference": true,
+    "callback_outside_trace_mutex": "proven by the native lock-probe test; the live artifact records the callback but does not probe the mutex",
+    "notification_duration_ns": 18583000,
+    "notified_since_process_start_ns": 27759788000,
+    "verification_scope": "Native sink: manifest and reference digests. Python validator: counters, event-stream SHA-256/bytes, manifest, reference and every referenced blob."
+  },
+  "performance": {
+    "readback_ns": 23947000,
+    "finalize_ns": 16961000,
+    "seal_total_ns": 40909000,
+    "note": "seal_total_ns includes readback and finalize. The frame capture itself (325 events, 1,119 blobs) dominates; no callback ran on unselected frames and no Metal work occurred."
+  },
+  "validation": {
+    "m6_inspect_exit": 0,
+    "m6_inspect_coverage_ok": true,
+    "m6_load_seal": "pass",
+    "notification_pid_matches_launch": true,
+    "notification_frame_id_matches_seal": true,
+    "native_seal_tests": "tests.test_gfx_frame_trace_writer (seal scenarios) pass",
+    "python_seal_tests": "tests.test_m7_frame_seal pass",
+    "dependent_m6_suites": [
+      "tests.test_m6_frame",
+      "tests.test_gfx_frame_graph",
+      "tests.test_gfx_replay_case",
+      "tests.test_gfx_replay_checkpoints",
+      "tests.test_gfx_replay_semantics",
+      "tests.test_resolve_replay"
+    ],
+    "canonical_m6_frame_still_loads": {
+      "frame": ".local/m6/frames/menu-occ300/frame (main worktree; outside this worktree)",
+      "events": 326,
+      "reference_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15",
+      "coverage_ok": true
+    },
+    "launcher_termination": "terminated=true, killed=false",
+    "live_callback_unlock_probe": false,
+    "native_callback_lock_probe": true,
+    "descriptor_abi_size_probe": true
+  },
+  "excluded_instrumentation_runs": [
+    {
+      "run": 1,
+      "reason": "capture was launched with the CLI default --max-draws 256; the synced menu frame has 325 events, so the run produced an explicit draw_cap incomplete seal and no notification. This validated the incomplete path but is not positive evidence."
+    },
+    {
+      "run": 2,
+      "reason": "frame-seal.json omitted the redundant complete field, so the Python consumer rejected an otherwise sealed frame. The writer was corrected to emit complete and the bounded timeout remains explicit. The captured frame itself was complete (325 events, reference a0d714da...)."
+    },
+    {
+      "run": 3,
+      "reason": "Captured a complete 325-event menu frame at PresentScene exit before the entry-boundary correction. It was valid because the menu skips _GfxPresent (no swap), but final evidence uses the entry-boundary event-digest run."
+    },
+    {
+      "run": 4,
+      "reason": "Entry-boundary run (pid 7100, scene 595) used ABI-1 seals without the event-stream digest. Superseded by run 5, which carries ABI-2 and the event-stream digest; preserved as historical evidence only."
+    }
+  ],
+  "limitations": [
+    "The seal is logical immutability: atomic publication and a one-shot writer, not a read-only directory.",
+    "The built-in consumer verifies manifest/reference digests and counters only; event-stream and blob verification is performed by the Python validator.",
+    "The owned process was stopped externally after sealing; normal presentation was not re-qualified with a screenshot in this run.",
+    "No Metal execution, no second EU4 process and no simulation pause occurred."
+  ]
+}

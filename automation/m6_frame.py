@@ -143,6 +143,150 @@ def load_trace(frame_dir: Path, *, verify_blobs: bool = True) -> dict:
     return manifest
 
 
+SEAL_SCHEMA = "gfx-frame-seal/v1"
+SEAL_ABI_VERSION = 2
+
+
+def load_seal(
+    frame_dir: Path,
+    *,
+    trace: dict | None = None,
+    verify_counts: bool = True,
+    verify_blobs: bool = True,
+) -> dict:
+    """Loads and validates the authoritative same-process frame seal.
+
+    The seal is the handoff contract: a consumer may act only on a document
+    whose ``sealed`` flag is true, whose trace manifest, GL reference and
+    immutable event stream still match their declared digests, and whose
+    ordered operation accounting matches the event stream on disk.  Referenced
+    blobs are checked by the canonical ``load_trace`` verifier; pass an already
+    verified ``trace`` to avoid hashing them twice.
+    """
+    frame_dir = Path(frame_dir)
+    path = frame_dir / "frame-seal.json"
+    seal = _read_json(path)
+    if seal.get("schema") != SEAL_SCHEMA:
+        raise FrameError("unexpected frame seal schema")
+    if seal.get("sealed") is not True:
+        raise FrameError(
+            "frame is not sealed: "
+            + str(seal.get("failure_reason") or "unknown")
+        )
+    if seal.get("complete") is not True:
+        raise FrameError("sealed descriptor is not complete")
+    try:
+        struct_size = int(seal.get("struct_size"))
+        abi_version = int(seal.get("abi_version"))
+    except (TypeError, ValueError) as exc:
+        raise FrameError("frame seal has no ABI identity") from exc
+    if abi_version != SEAL_ABI_VERSION:
+        raise FrameError(f"unsupported frame seal ABI {abi_version}")
+    if struct_size < 2256 or struct_size > 65536:
+        raise FrameError("frame seal descriptor size is invalid")
+    if seal.get("trace_complete") is not True:
+        raise FrameError("sealed trace manifest is not complete")
+    if seal.get("trace_integrity") is not True:
+        raise FrameError("sealed trace integrity is not validated")
+    if seal.get("readback_ok") is not True:
+        raise FrameError("sealed frame has no reference readback")
+    if seal.get("event_stream_verified") is not True:
+        raise FrameError("sealed event stream is not verified")
+    try:
+        capture_id = int(seal.get("capture_frame_id"))
+        pid = int(seal.get("pid"))
+    except (TypeError, ValueError) as exc:
+        raise FrameError("frame seal has no numeric identity") from exc
+    if capture_id <= 0 or pid <= 0 or not seal.get("session_id"):
+        raise FrameError("frame seal identity is invalid")
+    declared_dir = Path(str(seal.get("capture_dir") or ""))
+    if not declared_dir.is_absolute() or declared_dir.resolve() != frame_dir.resolve():
+        raise FrameError("frame seal capture directory does not match")
+
+    def member(name: object, label: str) -> Path:
+        text = str(name or "")
+        path = Path(text)
+        if not text or path.is_absolute() or path.name != text or "/" in text:
+            raise FrameError(f"sealed {label} path is invalid")
+        return frame_dir / path
+
+    manifest_path = member(seal.get("manifest_file"), "manifest")
+    if not manifest_path.is_file():
+        raise FrameError("sealed trace manifest is absent")
+    if _sha256(manifest_path) != seal.get("manifest_sha256"):
+        raise FrameError("sealed trace manifest digest does not match")
+
+    reference_path = member(seal.get("reference_file"), "reference")
+    if not reference_path.is_file():
+        raise FrameError("sealed reference pixels are absent")
+    if reference_path.stat().st_size != seal.get("reference_bytes"):
+        raise FrameError("sealed reference size does not match")
+    if _sha256(reference_path) != seal.get("reference_sha256"):
+        raise FrameError("sealed reference digest does not match")
+
+    events_path = member(seal.get("event_stream_file"), "event stream")
+    if not events_path.is_file():
+        raise FrameError("sealed event stream is absent")
+    if events_path.stat().st_size != seal.get("event_stream_bytes"):
+        raise FrameError("sealed event stream size does not match")
+    if _sha256(events_path) != seal.get("event_stream_sha256"):
+        raise FrameError("sealed event stream digest does not match")
+
+    if trace is None:
+        trace = load_trace(frame_dir, verify_blobs=verify_blobs)
+    events = trace.get("_events") or []
+    if verify_counts:
+        kinds = [event.get("kind") for event in events]
+        counts = {
+            "operation_count": len(events),
+            "draw_count": kinds.count("draw"),
+            "clear_count": kinds.count("clear"),
+            "copy_count": kinds.count("resolve"),
+        }
+        for field, actual in counts.items():
+            try:
+                declared = int(seal.get(field, -1))
+            except (TypeError, ValueError) as exc:
+                raise FrameError(f"frame seal {field} is not an integer") from exc
+            if declared != actual:
+                raise FrameError(
+                    f"frame seal {field} {seal.get(field)!r} != {actual}"
+                )
+        manifest = _read_json(manifest_path)
+        if manifest.get("events") != len(events):
+            raise FrameError("sealed manifest event count does not match")
+        if manifest.get("complete") is not True:
+            raise FrameError("sealed manifest is incomplete")
+    seal["verification"] = {
+        "event_stream": True,
+        "manifest": True,
+        "reference": True,
+        "blobs": (
+            trace.get("_blob_count_verified") if verify_blobs else None
+        ),
+        "counts": bool(verify_counts),
+    }
+    seal["_verified"] = True
+    seal["_seal_path"] = str(path)
+    seal["_frame_dir"] = str(frame_dir)
+    return seal
+
+
+def load_notification(output: Path) -> dict:
+    """Loads the one completion notification emitted by the injected consumer."""
+    output = Path(output)
+    notification = _read_json(output / "frame-seal-notification.json")
+    if notification.get("schema") != "gfx-frame-seal-notification/v1":
+        raise FrameError("unexpected seal notification schema")
+    if notification.get("notification_index") != 1:
+        raise FrameError("more than one completion notification was emitted")
+    if notification.get("verified_manifest") is not True:
+        raise FrameError("consumer could not verify the sealed manifest")
+    if notification.get("verified_reference") is not True:
+        raise FrameError("consumer could not verify the sealed reference")
+    return notification
+
+
 def _iter_blob_members(value):
     """Yields every dict that declares a blob file, recursively."""
     if isinstance(value, dict):
@@ -414,6 +558,20 @@ def capture(args: argparse.Namespace) -> int:
         env_extra["EU4_GFX_COPY_TRACE_LIMIT"] = "4096"
     if getattr(args, "copy_source", False):
         env_extra["EU4_GFX_FRAME_TRACE_CAPTURE_COPY_SOURCE"] = "1"
+    seal_enabled = bool(getattr(args, "seal", False))
+    if getattr(args, "seal_log", False) and not seal_enabled:
+        print("capture refused: --seal-log requires --seal", file=sys.stderr)
+        return 2
+    if seal_enabled:
+        timeout_ms = int(getattr(args, "seal_timeout_ms", 0) or 0)
+        if timeout_ms < 0 or timeout_ms > 3_600_000:
+            print("capture refused: invalid seal timeout", file=sys.stderr)
+            return 2
+        env_extra["EU4_GFX_FRAME_SEAL"] = "1"
+        if timeout_ms:
+            env_extra["EU4_GFX_FRAME_TRACE_TIMEOUT_MS"] = str(timeout_ms)
+        if getattr(args, "seal_log", False):
+            env_extra["EU4_GFX_FRAME_SEAL_LOG"] = "1"
     try:
         report = startup.run_ops(
             targets=TARGETS,
@@ -456,6 +614,7 @@ def capture(args: argparse.Namespace) -> int:
         },
     }
     status = 0
+    trace = None
     try:
         trace = load_trace(frame_dir)
         coverage = coverage_report(trace)
@@ -474,6 +633,59 @@ def capture(args: argparse.Namespace) -> int:
     except FrameError as exc:
         result["error"] = str(exc)
         status = 5
+    if seal_enabled:
+        try:
+            seal = load_seal(frame_dir)
+            notification = load_notification(output)
+            if int(notification.get("pid", -1)) != int(seal.get("pid", -2)):
+                raise FrameError("notification pid does not match the seal")
+            if notification.get("capture_frame_id") != seal.get("capture_frame_id"):
+                raise FrameError(
+                    "notification frame id does not match the seal"
+                )
+            for field in (
+                "manifest_sha256",
+                "reference_sha256",
+                "operation_count",
+                "draw_count",
+                "clear_count",
+                "copy_count",
+            ):
+                if notification.get(field) != seal.get(field):
+                    raise FrameError(
+                        f"notification {field} does not match the seal"
+                    )
+            if int(seal.get("pid", -1)) != int(report.get("pid", -2)):
+                raise FrameError("sealed frame pid does not match the launch")
+            result["seal"] = {
+                key: seal.get(key)
+                for key in (
+                    "schema",
+                    "capture_frame_id",
+                    "session_id",
+                    "pid",
+                    "boundary",
+                    "present_index",
+                    "scene_index",
+                    "operation_count",
+                    "draw_count",
+                    "clear_count",
+                    "copy_count",
+                    "width",
+                    "height",
+                    "pixel_format",
+                    "manifest_sha256",
+                    "reference_sha256",
+                    "readback_ns",
+                    "finalize_ns",
+                    "seal_ns",
+                )
+            }
+            result["notification"] = notification
+            status = 0 if status == 0 else status
+        except FrameError as exc:
+            result["seal_error"] = str(exc)
+            status = 6
     (output / "capture-report.json").write_text(json.dumps(result, indent=2) + "\n")
     if token is not None:
         live_gfx._finish_launch(
@@ -1020,6 +1232,12 @@ def inspect(args: argparse.Namespace) -> int:
             for event in trace.get("_draws") or []
         ],
     }
+    seal_path = frame_dir / "frame-seal.json"
+    if seal_path.is_file():
+        try:
+            summary["seal"] = load_seal(frame_dir, trace=trace)
+        except FrameError as exc:
+            summary["seal"] = {"invalid": str(exc)}
     print(json.dumps(summary, indent=2))
     return 0
 
@@ -1051,6 +1269,12 @@ def _parser() -> argparse.ArgumentParser:
                      help="bounded full-copy trace for one destination texture")
     cap.add_argument("--copy-source", action="store_true",
                      help="capture the default-framebuffer pixels of in-frame copies")
+    cap.add_argument("--seal", action="store_true",
+                     help="publish the authoritative frame-seal/v1 handoff")
+    cap.add_argument("--seal-log", action="store_true",
+                     help="register the in-process logging consumer for the seal")
+    cap.add_argument("--seal-timeout-ms", type=int, default=600000,
+                     help="bounded time from arming to a sealed/incomplete result")
     cap.add_argument("--background", action="store_true")
     cap.add_argument("--game-arg", action="append", default=[])
     cap.add_argument("--max-draws", type=int, default=256)

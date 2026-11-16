@@ -37,6 +37,35 @@ No EU4 launch was made and no Metal claim is involved. Reports:
 [native instrumentation follow-up](../analysis/m7/m7-instrumentation-followup.md).
 Tool surface: [structured EU4 reconstruction tools](agent-tools.md).
 
+## M7 PR 1 — authoritative same-process frame seal (2026-11-15)
+
+The M6 tracer now publishes an opt-in, one-shot handoff for one authentic
+frame. `EU4_GFX_FRAME_SEAL=1` writes `frame-seal.json`
+(`gfx-frame-seal/v1`) after the GL reference readback, event-stream validation
+and `gfx-frame-trace/v1` manifest publication. A single registered consumer is
+invoked exactly once for a complete frame, outside the trace writer's mutex;
+incomplete frames publish `sealed=false` and never notify. The descriptor carries
+a process-monotonic capture id, session/pid identity, boundary, ordered
+draw/clear/copy counts, dimensions, reference and manifest digests, readback
+status and sealing cost. The existing title/menu `PresentScene` boundary is
+finalized at entry (pre-swap) and works when `_GfxPresent` is skipped.
+
+One authentic background launch (pid 16791) sealed capture id 1 at scene 617:
+325 events (315 draws, 9 clears, 1 resolve), 1728×1117 reference
+`cd0e7a16…`, one verified notification, empty stdout/stderr, clean launcher
+termination and restored settings. Total sealing cost was 40.9 ms (readback
+23.9 ms, finalize 17.0 ms including event-stream hashing); the consumer
+callback took 18.6 ms. The seal records the event-stream SHA-256 (`31d03c73…`)
+and byte count (6,392,559); the Python `load_seal`/`load_trace` consumer
+re-verifies them plus every referenced blob. The historical
+M6 `menu-occ300` frame still loads unchanged (326 events, `ff2f4e2b…`). PR 1
+was developed on the PR #198 head `271cd04`; #198 is now merged as `b4c3955`
+and PR #199 targets `main`. Report:
+[PR 1 frame seal](../analysis/m7/pr1-frame-seal.md),
+[evidence](../analysis/m7/pr1-live-evidence.json),
+[implementation log](../analysis/m7/pr1-implementation-log.md). No Metal work
+and no second EU4 process are involved.
+
 ## Strategy B — independent replay (2026-11-14)
 
 Capture once, replay independently. A canonical authentic OpenGL title frame
@@ -282,6 +311,7 @@ rewrite it, and a derived artifact never upgrades a capture's coverage claim.
 | Stage | Producer / entry point | Owns | Never does |
 | --- | --- | --- | --- |
 | Capture | `eu4_capture` probe/request; the frame-trace writer | the run/session directory and the immutable frame trace, blobs and reference | rewrite a captured frame, synthesize a missing producer, or count a failed event as captured |
+| Seal | the frame-trace writer with `EU4_GFX_FRAME_SEAL=1` | `frame-seal.json` and the single completion notification | notify for an incomplete frame, notify twice, or rewrite a sealed artifact |
 | Graph | `eu4_capture graph`; `automation.gfx_frame_graph` | derived `graph.json` and its coverage/provenance report | resolve a resource the capture did not record |
 | Replay | `eu4_replay independent` / `case`; `automation.gfx_independent_replay`, `automation.gfx_replay_case` | the replay output directory and its readbacks | overwrite the capture or an existing case, or report command-buffer completion as pixel correctness |
 | Live comparison | `eu4_diff_run` and `eu4_diff_inspect` | the campaign session/run directory, paired observations, health, first divergence | terminate an unrelated process, or turn inconclusive alignment into a rendering verdict |

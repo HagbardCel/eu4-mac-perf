@@ -45,6 +45,7 @@ extern int eu4_gfx_frame_observe_emit(const uint8_t *, uint32_t, uint32_t,
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -78,6 +79,7 @@ static void load_sampler_queries(void) {
 #define FTRACE_MAX_LEVELS 16
 #define FTRACE_MAX_EVENTS 16384
 #define FTRACE_MAX_TEX_BYTES (256u * 1024u * 1024u)
+#define FTRACE_MAX_BLOB_BYTES (512u * 1024u * 1024u)
 #define FTRACE_NAME 96
 
 #define GL_TEXTURE_MAX_ANISOTROPY 0x84FE
@@ -120,6 +122,7 @@ static struct {
     int present_index;
     int captured;
     int armed;
+    int finishing;
     int capturing_frame;
     int matching_frames;
     int matching_scenes;
@@ -130,7 +133,31 @@ static struct {
     uint64_t copy_count;
     int test_only;
     int test_fail_flush;
+    int test_fail_reference;
+    int test_fail_manifest_hash;
+    int test_fail_event_digest;
     int have_seed;
+
+    /* Authoritative same-process identity and one-shot handoff. */
+    int seal_enabled;
+    uint64_t capture_id;
+    uint64_t next_capture_id;
+    uint64_t process_start_ns;
+    int32_t process_pid;
+    char session_id[64];
+    uint64_t timeout_ms;
+    uint64_t armed_ms;
+    uint64_t draw_events;
+    uint64_t clear_events;
+    uint64_t copy_events;
+    int seal_written;
+    uint64_t readback_ns;
+    uint64_t finalize_ns;
+    uint64_t seal_ns;
+    char manifest_sha[65];
+    uint64_t events_bytes;
+    char events_sha[65];
+    int events_verified;
 
     /* Caller set of the frame currently being observed (cheap, always on). */
     uint64_t frame_callers[FTRACE_MAX_CALLERS];
@@ -161,6 +188,7 @@ static struct {
 
     struct blob_entry *blobs;
     int blob_count;
+    size_t blob_bytes;
 
     /* Per-frame caches. Shader sources are static per program; a texture's
        contents are static for the frame unless it is a render target. Reading
@@ -271,6 +299,22 @@ static void texture_cache_put(const char *key, const char *levels) {
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static const char *g_capture_failure_reason;
+
+/* Sealed-frame consumer registry.  It is deliberately separate from g_lock:
+ * the callback must run after the trace writer's mutex is released. */
+static pthread_mutex_t g_seal_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_seal_cond = PTHREAD_COND_INITIALIZER;
+static eu4_frame_sealed_callback g_seal_callback;
+static void *g_seal_context;
+static eu4_frame_capture_descriptor g_seal_pending_descriptor;
+static int g_seal_pending;
+static _Atomic int g_seal_pending_flag;
+static int g_seal_dispatching;
+static uint32_t g_seal_notifications;
+static uint32_t g_seal_reentrant;
+static int g_seal_last_status;
+static int g_seal_last_written;
+static _Thread_local int tls_seal_dispatch;
 static int emit_event(const char *json);
 static uint64_t now_ms(void);
 static uint64_t now_ns(void);
@@ -283,6 +327,9 @@ static int read_drawable_bgra(uint32_t *out_width, uint32_t *out_height,
                               uint8_t **out_pixels);
 static void sha256_hex(const void *data, size_t size, char out[65]);
 static int write_atomic(const char *path, const void *data, size_t size);
+static int write_frame_manifest(int complete, const char *reason);
+static void finish_capture_ex(const char *reason, int allow_reference);
+static int capture_timed_out_locked(void);
 
 static void fail_capture_locked(const char *reason) {
     g.capture_failed = 1;
@@ -447,6 +494,7 @@ int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event) {
         fail_capture_locked("copy_event_oversized");
     } else if (emit_event(body)) {
         g.event_count++;
+        g.copy_events++;
         accepted = 1;
     }
     pthread_mutex_unlock(&g_lock);
@@ -533,6 +581,152 @@ static int write_atomic(const char *path, const void *data, size_t size) {
     return rename(partial, path) == 0 ? 0 : -1;
 }
 
+/* ------------------------------------------------------------------------- */
+/* Sealed-frame handoff                                                       */
+/* ------------------------------------------------------------------------- */
+
+int eu4_gfx_frame_sealed_subscribe(eu4_frame_sealed_callback callback,
+                                   void *context) {
+    if (callback == NULL) {
+        return -1;
+    }
+    pthread_mutex_lock(&g_seal_lock);
+    if (g_seal_callback != NULL) {
+        pthread_mutex_unlock(&g_seal_lock);
+        return -1;
+    }
+    g_seal_callback = callback;
+    g_seal_context = context;
+    if (g_seal_pending) {
+        /* A frame was sealed while no consumer was registered. */
+        atomic_store_explicit(&g_seal_pending_flag, 1, memory_order_release);
+    }
+    pthread_mutex_unlock(&g_seal_lock);
+    return 0;
+}
+
+void eu4_gfx_frame_sealed_unsubscribe(void) {
+    pthread_mutex_lock(&g_seal_lock);
+    if (!tls_seal_dispatch) {
+        /* Do not clear the context while a delivery is using it. */
+        while (g_seal_dispatching) {
+            pthread_cond_wait(&g_seal_cond, &g_seal_lock);
+        }
+    }
+    g_seal_callback = NULL;
+    g_seal_context = NULL;
+    pthread_mutex_unlock(&g_seal_lock);
+}
+
+int eu4_gfx_frame_sealed_pending(void) {
+    pthread_mutex_lock(&g_seal_lock);
+    int pending = g_seal_pending;
+    pthread_mutex_unlock(&g_seal_lock);
+    return pending;
+}
+
+void eu4_gfx_frame_sealed_dispatch(void) {
+    if (tls_seal_dispatch) {
+        pthread_mutex_lock(&g_seal_lock);
+        g_seal_reentrant++;
+        pthread_mutex_unlock(&g_seal_lock);
+        return;
+    }
+    if (!atomic_load_explicit(&g_seal_pending_flag, memory_order_acquire)) {
+        return;
+    }
+    eu4_frame_capture_descriptor descriptor;
+    eu4_frame_sealed_callback callback;
+    void *context;
+    pthread_mutex_lock(&g_seal_lock);
+    while (g_seal_dispatching) {
+        pthread_cond_wait(&g_seal_cond, &g_seal_lock);
+    }
+    if (!g_seal_pending) {
+        pthread_mutex_unlock(&g_seal_lock);
+        return;
+    }
+    if (g_seal_callback == NULL) {
+        /* Keep the sealed frame pending for a consumer that registers later,
+           but stop the per-hook acquire load until it does. */
+        atomic_store_explicit(&g_seal_pending_flag, 0, memory_order_release);
+        pthread_mutex_unlock(&g_seal_lock);
+        return;
+    }
+    g_seal_dispatching = 1;
+    g_seal_pending = 0;
+    atomic_store_explicit(&g_seal_pending_flag, 0, memory_order_release);
+    descriptor = g_seal_pending_descriptor;
+    callback = g_seal_callback;
+    context = g_seal_context;
+    pthread_mutex_unlock(&g_seal_lock);
+
+    tls_seal_dispatch = 1;
+    int status = callback != NULL ? callback(&descriptor, context) : 0;
+    tls_seal_dispatch = 0;
+
+    pthread_mutex_lock(&g_seal_lock);
+    /* A delivery happened even when the consumer reports failure; the status
+     * distinguishes the two without re-notifying. */
+    g_seal_notifications++;
+    g_seal_last_status = status;
+    g_seal_dispatching = 0;
+    pthread_cond_broadcast(&g_seal_cond);
+    pthread_mutex_unlock(&g_seal_lock);
+}
+
+uint32_t eu4_gfx_frame_sealed_notifications(void) {
+    pthread_mutex_lock(&g_seal_lock);
+    uint32_t count = g_seal_notifications;
+    pthread_mutex_unlock(&g_seal_lock);
+    return count;
+}
+
+uint32_t eu4_gfx_frame_sealed_reentrant_rejections(void) {
+    pthread_mutex_lock(&g_seal_lock);
+    uint32_t count = g_seal_reentrant;
+    pthread_mutex_unlock(&g_seal_lock);
+    return count;
+}
+
+int eu4_gfx_frame_sealed_last_callback_status(void) {
+    pthread_mutex_lock(&g_seal_lock);
+    int status = g_seal_last_status;
+    pthread_mutex_unlock(&g_seal_lock);
+    return status;
+}
+
+int eu4_gfx_frame_sealed_last_seal_written(void) {
+    pthread_mutex_lock(&g_seal_lock);
+    int written = g_seal_last_written;
+    pthread_mutex_unlock(&g_seal_lock);
+    return written;
+}
+
+int eu4_gfx_frame_trace_lock_probe(void) {
+    if (pthread_mutex_trylock(&g_lock) != 0) {
+        return 0;
+    }
+    pthread_mutex_unlock(&g_lock);
+    return 1;
+}
+
+void eu4_gfx_frame_trace_test_reset_seal(void) {
+    pthread_mutex_lock(&g_seal_lock);
+    g_seal_callback = NULL;
+    g_seal_context = NULL;
+    g_seal_pending = 0;
+    atomic_store_explicit(&g_seal_pending_flag, 0, memory_order_release);
+    g_seal_dispatching = 0;
+    g_seal_notifications = 0;
+    g_seal_reentrant = 0;
+    g_seal_last_status = 0;
+    g_seal_last_written = 0;
+    memset(&g_seal_pending_descriptor, 0, sizeof(g_seal_pending_descriptor));
+    pthread_cond_broadcast(&g_seal_cond);
+    pthread_mutex_unlock(&g_seal_lock);
+}
+
 /* Writes a payload blob once and returns its content-addressed file name. */
 static int put_blob(const void *data, size_t size, const char *prefix,
                     char out_name[FTRACE_NAME], char out_sha[65]) {
@@ -546,6 +740,11 @@ static int put_blob(const void *data, size_t size, const char *prefix,
             snprintf(out_name, FTRACE_NAME, "%s", entry->name);
             return 0;
         }
+    }
+    if (size > FTRACE_MAX_BLOB_BYTES ||
+        g.blob_bytes > FTRACE_MAX_BLOB_BYTES - size) {
+        fail_capture_locked("artifact_size_limit");
+        return -1;
     }
     char name[FTRACE_NAME];
     snprintf(name, sizeof(name), "%s-%s.bin", prefix, sha);
@@ -563,6 +762,7 @@ static int put_blob(const void *data, size_t size, const char *prefix,
     entry->next = g.blobs;
     g.blobs = entry;
     g.blob_count++;
+    g.blob_bytes += size;
     snprintf(out_name, FTRACE_NAME, "%s", name);
     return 0;
 }
@@ -637,7 +837,20 @@ static int parse_u64(const char *text, uint64_t *out) {
 }
 
 int eu4_gfx_frame_trace_configure_from_env(void) {
+    /* Process identity and the one-shot gate survive a reconfigure: the
+       descriptor promises a process-monotonic id and at most one seal. */
+    uint64_t preserved_next_capture_id = g.next_capture_id;
+    uint64_t preserved_process_start_ns = g.process_start_ns;
+    int32_t preserved_process_pid = g.process_pid;
+    int preserved_captured = g.captured;
+    char preserved_session_id[64];
+    memcpy(preserved_session_id, g.session_id, sizeof(preserved_session_id));
     memset(&g, 0, sizeof(g));
+    g.next_capture_id = preserved_next_capture_id;
+    g.process_start_ns = preserved_process_start_ns;
+    g.process_pid = preserved_process_pid;
+    g.captured = preserved_captured;
+    memcpy(g.session_id, preserved_session_id, sizeof(g.session_id));
     g.at_frame = UINT64_MAX;
     g.boundary_fb = -1;
     const char *dir = getenv("EU4_GFX_FRAME_TRACE_DIR");
@@ -653,14 +866,43 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
     const char *max_draws = getenv("EU4_GFX_FRAME_TRACE_MAX_DRAWS");
     const char *max_frame_draws = getenv("EU4_GFX_FRAME_TRACE_MAX_FRAME_DRAWS");
     const char *timeline = getenv("EU4_GFX_FRAME_TRACE_TIMELINE");
+    const char *timeout_ms = getenv("EU4_GFX_FRAME_TRACE_TIMEOUT_MS");
+    const char *seal = getenv("EU4_GFX_FRAME_SEAL");
     const char *observe_dir = getenv("EU4_GFX_FRAME_OBSERVE_DIR");
     g.configured = 1;
     g.enabled = 0;
+    g.process_pid = (int32_t)getpid();
+    if (g.process_start_ns == 0) {
+        g.process_start_ns = now_ns();
+    }
+    g.seal_enabled = seal != NULL && strcmp(seal, "1") == 0;
+    const char *configured_session = getenv("EU4_GFX_FRAME_SESSION");
+    if (configured_session == NULL || configured_session[0] == 0) {
+        configured_session = getenv("EU4_GFX_STARTUP_ID");
+    }
+    if (configured_session != NULL && configured_session[0] != 0) {
+        snprintf(g.session_id, sizeof(g.session_id), "%s", configured_session);
+    } else if (g.session_id[0] == 0) {
+        snprintf(g.session_id, sizeof(g.session_id), "pid-%d-%llx", (int)getpid(),
+                 (unsigned long long)g.process_start_ns);
+    }
     g.test_only = test_only != NULL && strcmp(test_only, "1") == 0;
     if (g.test_only) {
         const char *fail_flush =
             getenv("EU4_GFX_FRAME_TRACE_TEST_FAIL_FLUSH");
         g.test_fail_flush = fail_flush != NULL && strcmp(fail_flush, "1") == 0;
+        const char *fail_reference =
+            getenv("EU4_GFX_FRAME_TRACE_TEST_FAIL_REFERENCE");
+        g.test_fail_reference =
+            fail_reference != NULL && strcmp(fail_reference, "1") == 0;
+        const char *fail_manifest =
+            getenv("EU4_GFX_FRAME_TRACE_TEST_FAIL_MANIFEST_HASH");
+        g.test_fail_manifest_hash =
+            fail_manifest != NULL && strcmp(fail_manifest, "1") == 0;
+        const char *fail_event_digest =
+            getenv("EU4_GFX_FRAME_TRACE_TEST_FAIL_EVENT_DIGEST");
+        g.test_fail_event_digest =
+            fail_event_digest != NULL && strcmp(fail_event_digest, "1") == 0;
     }
     if (observe_dir != NULL && observe_dir[0] == '/') {
         g.stream_only = (dir == NULL || dir[0] == 0);
@@ -760,6 +1002,13 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
             return -1;
         }
         g.max_frame_draws = (uint32_t)value; /* 0 means unlimited */
+    }
+    if (timeout_ms != NULL) {
+        uint64_t value = 0;
+        if (parse_u64(timeout_ms, &value) != 0) {
+            return -1;
+        }
+        g.timeout_ms = value; /* 0 means unbounded */
     }
     if (callers != NULL && callers[0] != 0) {
         char copy[512];
@@ -2245,12 +2494,41 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
 /* Frame manifest                                                             */
 /* ------------------------------------------------------------------------- */
 
-static void write_frame_manifest(int complete, const char *reason) {
+static int file_sha256(const char *path, char out[65]) {
+    out[0] = 0;
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) {
+        return -1;
+    }
+    CC_SHA256_CTX context;
+    CC_SHA256_Init(&context);
+    uint8_t buffer[64 * 1024];
+    size_t read_bytes = 0;
+    while ((read_bytes = fread(buffer, 1, sizeof(buffer), file)) > 0) {
+        CC_SHA256_Update(&context, buffer, (CC_LONG)read_bytes);
+    }
+    int failed = ferror(file) != 0;
+    fclose(file);
+    if (failed) {
+        return -1;
+    }
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256_Final(digest, &context);
+    static const char hex[] = "0123456789abcdef";
+    for (int i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) {
+        out[i * 2] = hex[digest[i] >> 4];
+        out[i * 2 + 1] = hex[digest[i] & 0xf];
+    }
+    out[64] = 0;
+    return 0;
+}
+
+static int write_frame_manifest(int complete, const char *reason) {
     char path[FTRACE_PATH];
     snprintf(path, sizeof(path), "%s/frame-trace.json.partial", g.dir);
     FILE *file = fopen(path, "w");
     if (file == NULL) {
-        return;
+        return -1;
     }
     const char *vendor = g.gl_vendor[0] ? g.gl_vendor : "";
     const char *renderer = g.gl_renderer[0] ? g.gl_renderer : "";
@@ -2301,40 +2579,253 @@ static void write_frame_manifest(int complete, const char *reason) {
     if (ferror(file) != 0 || fflush(file) != 0 || fsync(fileno(file)) != 0) {
         fclose(file);
         unlink(path);
-        return;
+        return -1;
     }
-    fclose(file);
+    if (fclose(file) != 0) {
+        unlink(path);
+        return -1;
+    }
     char final_path[FTRACE_PATH];
     snprintf(final_path, sizeof(final_path), "%s/frame-trace.json", g.dir);
-    rename(path, final_path);
+    return rename(path, final_path) == 0 ? 0 : -1;
+}
+
+static void capture_dimensions_only(uint32_t *out_width,
+                                    uint32_t *out_height) {
+    uint32_t width = 0, height = 0;
+    if (eu4_gfx_gl_drawable_extent(&width, &height) != 0 || width == 0 ||
+        height == 0) {
+        GLint viewport[4] = {0, 0, 0, 0};
+        glGetIntegerv(GL_VIEWPORT, viewport);
+        width = (uint32_t)(viewport[2] > 0 ? viewport[2] : 0);
+        height = (uint32_t)(viewport[3] > 0 ? viewport[3] : 0);
+    }
+    if (width > 8192) {
+        width = 0;
+    }
+    if (height > 8192) {
+        height = 0;
+    }
+    *out_width = width;
+    *out_height = height;
+}
+
+static void build_capture_descriptor(eu4_frame_capture_descriptor *out,
+                                     int complete, int stream_validated,
+                                     int readback_attempted, int readback_ok,
+                                     const char *reason) {
+    memset(out, 0, sizeof(*out));
+    out->struct_size = (uint32_t)sizeof(*out);
+    out->abi_version = EU4_FRAME_CAPTURE_ABI_VERSION;
+    out->capture_frame_id = g.capture_id;
+    snprintf(out->session_id, sizeof(out->session_id), "%s", g.session_id);
+    out->pid = g.process_pid;
+    out->process_start_ns = g.process_start_ns;
+    snprintf(out->boundary, sizeof(out->boundary), "%s",
+             g.boundary_scene ? "scene" : "present");
+    out->present_index = (uint32_t)g.capturing_frame;
+    out->scene_index =
+        (uint32_t)(g.boundary_scene ? g.capturing_frame : g.scene_index);
+    out->operation_count = (uint64_t)g.event_count;
+    out->draw_count = g.draw_events;
+    out->clear_count = g.clear_events;
+    out->copy_count = g.copy_events;
+    out->event_stream_bytes = g.events_bytes;
+    out->event_stream_verified = g.events_verified ? 1u : 0u;
+    snprintf(out->event_stream_file, sizeof(out->event_stream_file), "%s",
+             "frame-events.jsonl");
+    snprintf(out->event_stream_sha256, sizeof(out->event_stream_sha256), "%s",
+             g.events_sha);
+    out->width = g.reference_width;
+    out->height = g.reference_height;
+    snprintf(out->pixel_format, sizeof(out->pixel_format), "BGRA8");
+    out->complete = complete ? 1u : 0u;
+    out->trace_complete = complete ? 1u : 0u;
+    out->trace_integrity = stream_validated ? 1u : 0u;
+    out->readback_ok = readback_ok ? 1u : 0u;
+    out->reference_bytes = (uint64_t)g.reference_bytes;
+    snprintf(out->reference_file, sizeof(out->reference_file), "%s",
+             g.reference_file);
+    snprintf(out->reference_sha256, sizeof(out->reference_sha256), "%s",
+             g.reference_sha);
+    snprintf(out->manifest_file, sizeof(out->manifest_file), "%s",
+             "frame-trace.json");
+    snprintf(out->manifest_sha256, sizeof(out->manifest_sha256), "%s",
+             g.manifest_sha);
+    snprintf(out->capture_dir, sizeof(out->capture_dir), "%s", g.dir);
+    snprintf(out->gpu_status, sizeof(out->gpu_status), "%s",
+             !readback_attempted
+                 ? "readback_not_attempted"
+                 : (g.test_only
+                        ? "test_synthetic"
+                        : (readback_ok ? "gl_readpixels_synchronous"
+                                       : "readback_failed")));
+    if (!complete && reason != NULL &&
+        strncmp(reason, "unsupported_", 12) == 0) {
+        snprintf(out->unsupported_dependencies,
+                 sizeof(out->unsupported_dependencies), "%.*s",
+                 (int)sizeof(out->unsupported_dependencies) - 1, reason);
+    }
+    if (!complete) {
+        snprintf(out->failure_reason, sizeof(out->failure_reason), "%s",
+                 reason != NULL ? reason : "incomplete");
+    }
+    out->readback_ns = g.readback_ns;
+    out->finalize_ns = g.finalize_ns;
+    out->seal_ns = g.seal_ns;
+}
+
+/* Publishes the one immutable seal descriptor.  The consumer is notified only
+ * for a complete frame, after this file is durable. */
+static int write_seal_manifest(const eu4_frame_capture_descriptor *descriptor,
+                               int sealed) {
+    char path[FTRACE_PATH];
+    snprintf(path, sizeof(path), "%s/frame-seal.json.partial", g.dir);
+    FILE *file = fopen(path, "w");
+    if (file == NULL) {
+        return -1;
+    }
+    fprintf(file, "{\"schema\":\"%s\",", EU4_FRAME_SEAL_SCHEMA);
+    fprintf(file, "\"sealed\":%s,", bool_text(sealed));
+    fprintf(file, "\"complete\":%s,", bool_text(sealed));
+    fprintf(file, "\"struct_size\":%u,", descriptor->struct_size);
+    fprintf(file, "\"abi_version\":%u,", descriptor->abi_version);
+    fprintf(file, "\"capture_frame_id\":%llu,",
+            (unsigned long long)descriptor->capture_frame_id);
+    fprintf(file, "\"session_id\":\"%s\",", descriptor->session_id);
+    fprintf(file, "\"pid\":%d,", (int)descriptor->pid);
+    fprintf(file, "\"process_start_ns\":%llu,",
+            (unsigned long long)descriptor->process_start_ns);
+    fprintf(file, "\"boundary\":\"%s\",", descriptor->boundary);
+    fprintf(file, "\"present_index\":%u,", descriptor->present_index);
+    fprintf(file, "\"scene_index\":%u,", descriptor->scene_index);
+    fprintf(file, "\"operation_count\":%llu,",
+            (unsigned long long)descriptor->operation_count);
+    fprintf(file, "\"draw_count\":%llu,",
+            (unsigned long long)descriptor->draw_count);
+    fprintf(file, "\"clear_count\":%llu,",
+            (unsigned long long)descriptor->clear_count);
+    fprintf(file, "\"copy_count\":%llu,",
+            (unsigned long long)descriptor->copy_count);
+    fprintf(file, "\"event_stream_file\":\"%s\",",
+            descriptor->event_stream_file);
+    fprintf(file, "\"event_stream_bytes\":%llu,",
+            (unsigned long long)descriptor->event_stream_bytes);
+    fprintf(file, "\"event_stream_sha256\":\"%s\",",
+            descriptor->event_stream_sha256);
+    fprintf(file, "\"event_stream_verified\":%s,",
+            bool_text(descriptor->event_stream_verified));
+    fprintf(file, "\"width\":%u,", descriptor->width);
+    fprintf(file, "\"height\":%u,", descriptor->height);
+    fprintf(file, "\"pixel_format\":\"%s\",", descriptor->pixel_format);
+    fprintf(file, "\"trace_complete\":%s,",
+            bool_text(descriptor->trace_complete));
+    fprintf(file, "\"trace_integrity\":%s,",
+            bool_text(descriptor->trace_integrity));
+    fprintf(file, "\"readback_ok\":%s,", bool_text(descriptor->readback_ok));
+    fprintf(file, "\"reference_file\":\"%s\",", descriptor->reference_file);
+    fprintf(file, "\"reference_bytes\":%llu,",
+            (unsigned long long)descriptor->reference_bytes);
+    fprintf(file, "\"reference_sha256\":\"%s\",",
+            descriptor->reference_sha256);
+    fprintf(file, "\"manifest_file\":\"%s\",", descriptor->manifest_file);
+    fprintf(file, "\"manifest_sha256\":\"%s\",", descriptor->manifest_sha256);
+    fprintf(file, "\"capture_dir\":\"%s\",", descriptor->capture_dir);
+    fprintf(file, "\"gpu_status\":\"%s\",", descriptor->gpu_status);
+    fprintf(file, "\"unsupported_dependencies\":\"%s\",",
+            descriptor->unsupported_dependencies);
+    fprintf(file, "\"failure_reason\":\"%s\",", descriptor->failure_reason);
+    fprintf(file, "\"readback_ns\":%llu,",
+            (unsigned long long)descriptor->readback_ns);
+    fprintf(file, "\"finalize_ns\":%llu,",
+            (unsigned long long)descriptor->finalize_ns);
+    fprintf(file, "\"seal_ns\":%llu,",
+            (unsigned long long)descriptor->seal_ns);
+    fprintf(file, "\"sealed_monotonic_ns\":%llu}\n",
+            (unsigned long long)now_ns());
+    if (ferror(file) != 0 || fflush(file) != 0 || fsync(fileno(file)) != 0) {
+        fclose(file);
+        unlink(path);
+        return -1;
+    }
+    if (fclose(file) != 0) {
+        unlink(path);
+        return -1;
+    }
+    char final_path[FTRACE_PATH];
+    snprintf(final_path, sizeof(final_path), "%s/frame-seal.json", g.dir);
+    return rename(path, final_path) == 0 ? 0 : -1;
+}
+
+static void publish_sealed_descriptor(
+    const eu4_frame_capture_descriptor *descriptor) {
+    pthread_mutex_lock(&g_seal_lock);
+    g_seal_pending_descriptor = *descriptor;
+    g_seal_pending = 1;
+    atomic_store_explicit(&g_seal_pending_flag, 1, memory_order_release);
+    g_seal_last_written = g.seal_written;
+    pthread_mutex_unlock(&g_seal_lock);
 }
 
 /* ------------------------------------------------------------------------- */
 /* Event pumps                                                                */
 /* ------------------------------------------------------------------------- */
 
-static void finish_capture(const char *reason) {
-    if (!g.armed) {
+static void finish_capture_ex(const char *reason, int allow_reference) {
+    if (!g.armed || g.finishing) {
         return;
     }
+    g.finishing = 1;
+    uint64_t readback_started = now_ns();
     int have_reference = 0;
-    if (g.test_only) {
-        /* Offline writer host: exercise the real finalize/validation path
-           without an OpenGL context. */
-        uint8_t pixels[4 * 4 * 4];
-        for (size_t i = 0; i < sizeof(pixels); i++) {
-            pixels[i] = (uint8_t)(i * 37u);
+    if (allow_reference) {
+        if (g.test_only) {
+            if (!g.test_fail_reference) {
+                /* Offline writer host: exercise the real finalize/validation
+                   path without an OpenGL context. */
+                uint8_t pixels[4 * 4 * 4];
+                for (size_t i = 0; i < sizeof(pixels); i++) {
+                    pixels[i] = (uint8_t)(i * 37u);
+                }
+                have_reference = write_reference_pixels(pixels, 4, 4) == 0;
+            }
+        } else {
+            /* One passive readback implementation for both the probe and the
+               final reference; it never drains the engine's GL error queue. */
+            have_reference = capture_reference() == 0;
         }
-        have_reference = write_reference_pixels(pixels, 4, 4) == 0;
-    } else {
-        /* One passive readback implementation for both the probe and the
-           final reference; it never drains the engine's GL error queue. */
-        have_reference = capture_reference() == 0;
+    }
+    g.readback_ns = now_ns() - readback_started;
+    int readback_attempted = allow_reference;
+    if (!readback_attempted) {
+        /* A timeout still reports the original render extent, but explicitly
+           does not claim a reference image. */
+        capture_dimensions_only(&g.reference_width, &g.reference_height);
     }
     /* The manifest is published only after the event stream has been closed
        and validated.  A write/flush failure, malformed record, missing record
        or count mismatch therefore cannot produce complete=true. */
+    uint64_t finalize_started = now_ns();
     int stream_validated = finalize_event_stream();
+    g.events_verified = 0;
+    if (stream_validated) {
+        char events_path[FTRACE_PATH];
+        snprintf(events_path, sizeof(events_path), "%s/frame-events.jsonl",
+                 g.dir);
+        if (g.test_only && g.test_fail_event_digest) {
+            unlink(events_path);
+        }
+        struct stat events_stat;
+        if (stat(events_path, &events_stat) == 0 && events_stat.st_size > 0 &&
+            file_sha256(events_path, g.events_sha) == 0) {
+            g.events_bytes = (uint64_t)events_stat.st_size;
+            g.events_verified = 1;
+        } else {
+            fail_capture_locked("event_stream_digest");
+        }
+    }
+    stream_validated = stream_validated && g.events_verified;
+    g.stream_validated = stream_validated;
     const char *manifest_reason;
     if (g.capture_failed) {
         manifest_reason = g_capture_failure_reason != NULL
@@ -2349,11 +2840,83 @@ static void finish_capture(const char *reason) {
     } else {
         manifest_reason = reason;
     }
-    write_frame_manifest(
-        have_reference && !g.truncated && !g.capture_failed && stream_validated,
-        manifest_reason);
+    int complete = have_reference && !g.truncated && !g.capture_failed &&
+                   stream_validated;
+    int manifest_ok = write_frame_manifest(complete, manifest_reason) == 0;
+    if (manifest_ok) {
+        char manifest_path[FTRACE_PATH];
+        snprintf(manifest_path, sizeof(manifest_path), "%s/frame-trace.json",
+                 g.dir);
+        if (g.test_only && g.test_fail_manifest_hash) {
+            unlink(manifest_path);
+        }
+        if (file_sha256(manifest_path, g.manifest_sha) != 0) {
+            manifest_ok = 0;
+            g.manifest_sha[0] = 0;
+            /* Do not leave an on-disk manifest that claims completion when the
+               sealed digest could not be produced. */
+            (void)write_frame_manifest(0, "manifest_hash_failed");
+        }
+    }
+    complete = complete && manifest_ok;
+    if (!manifest_ok) {
+        manifest_reason = g.manifest_sha[0] ? "manifest_write_failed"
+                                            : "manifest_hash_failed";
+    }
+    g.finalize_ns = now_ns() - finalize_started;
+
+    eu4_frame_capture_descriptor descriptor;
+    build_capture_descriptor(&descriptor, complete, stream_validated,
+                             readback_attempted, have_reference,
+                             manifest_reason);
+    g.seal_written = 0;
+    if (g.seal_enabled) {
+        /* Includes readback, finalize and seal preparation.  The file is
+         * written after this measurement; the callback descriptor therefore
+         * carries the cost that was actually observable before publication. */
+        descriptor.seal_ns = now_ns() - readback_started;
+        g.seal_ns = descriptor.seal_ns;
+        if (write_seal_manifest(&descriptor, complete) == 0) {
+            g.seal_written = 1;
+        } else {
+            /* An unwritable seal cannot notify a consumer. */
+            complete = 0;
+            descriptor.complete = 0;
+            descriptor.failure_reason[0] = 0;
+            snprintf(descriptor.failure_reason,
+                     sizeof(descriptor.failure_reason), "%s",
+                     "seal_write_failed");
+            g.seal_written = 0;
+        }
+    }
     g.armed = 0;
     g.captured = 1;
+    g.finishing = 0;
+    if (complete && g.seal_enabled && g.seal_written) {
+        publish_sealed_descriptor(&descriptor);
+    } else {
+        pthread_mutex_lock(&g_seal_lock);
+        g_seal_last_written = g.seal_written;
+        pthread_mutex_unlock(&g_seal_lock);
+    }
+}
+
+static void finish_capture(const char *reason) {
+    finish_capture_ex(reason, 1);
+}
+
+/* A bounded capture that never reaches its boundary is finalized with an
+ * explicit incomplete result; no reference pixels are invented. */
+static int capture_timed_out_locked(void) {
+    if (!g.armed || g.timeout_ms == 0) {
+        return 0;
+    }
+    if (now_ms() - g.armed_ms < g.timeout_ms) {
+        return 0;
+    }
+    fail_capture_locked("capture_timeout");
+    finish_capture_ex("capture_timeout", 0);
+    return 1;
 }
 
 static void open_events(void) {
@@ -2366,11 +2929,24 @@ static void open_events(void) {
 static void start_capture_at_frame(int next_frame) {
     frame_caches_reset();
     g.armed = 1;
+    g.armed_ms = now_ms();
     g.capturing_frame = next_frame;
+    g.capture_id = ++g.next_capture_id;
     g.event_count = 0;
+    g.draw_events = 0;
+    g.clear_events = 0;
+    g.copy_events = 0;
     g.truncated = 0;
     g.capture_failed = 0;
     g.stream_validated = 0;
+    g.seal_written = 0;
+    g.manifest_sha[0] = 0;
+    g.events_bytes = 0;
+    g.events_sha[0] = 0;
+    g.events_verified = 0;
+    g.readback_ns = 0;
+    g.finalize_ns = 0;
+    g.seal_ns = 0;
     g_capture_failure_reason = NULL;
     g.have_seed = 0;
     g.seed_emitted = 0;
@@ -2589,12 +3165,24 @@ void eu4_gfx_frame_trace_boundary_entry(eu4_gfx_capture_frame *frame,
             fclose(log);
         }
     }
-    if (g.boundary_scene && g.armed &&
-        g.capturing_frame < g.scene_index) {
-        /* A capture whose scene exit was missed still ends at this boundary. */
+    if (g.armed && capture_timed_out_locked()) {
+        /* The bounded capture ended before its normal boundary. */
+    } else if (g.boundary_scene && g.armed &&
+               g.capturing_frame == g.scene_index) {
+        /* PresentScene entry is the frame-end boundary: the engine has issued
+           every draw of the selected frame and has not yet called _GfxPresent
+           (which may swap).  Read the reference here, never at exit. */
         finish_capture("scene_present");
+    } else if (g.boundary_scene && g.armed &&
+               g.capturing_frame < g.scene_index) {
+        /* The selected frame's entry was missed, so the current back buffer may
+           belong to a later frame.  Publish an explicit incomplete result
+           instead of attaching the wrong pixels. */
+        fail_capture_locked("scene_entry_missed");
+        finish_capture_ex("scene_entry_missed", 0);
     }
     pthread_mutex_unlock(&g_lock);
+    eu4_gfx_frame_sealed_dispatch();
 }
 
 void eu4_gfx_frame_trace_boundary_exit(eu4_gfx_capture_frame *frame,
@@ -2607,12 +3195,16 @@ void eu4_gfx_frame_trace_boundary_exit(eu4_gfx_capture_frame *frame,
     }
     pthread_mutex_lock(&g_lock);
     call->retain = 0;
+    (void)capture_timed_out_locked();
     if (g.boundary_scene && !g.stream_only) {
-        /* The scene selected at the previous exit is captured from that
-           boundary to this corresponding exit, so every draw between the two
-           scene boundaries is in the event stream. */
-        if (g.armed && g.capturing_frame == g.scene_index) {
-            finish_capture("scene_present");
+        /* Normal finalization happens at the next PresentScene entry, before
+           _GfxPresent.  Reaching this exit still armed means the entry hook was
+           missed; finalizing here would read after a possible swap. */
+        if (g.armed) {
+            /* No next entry finalized this capture, so the exit may follow a
+               swap.  Never read the back buffer here. */
+            fail_capture_locked("scene_entry_missed");
+            finish_capture_ex("scene_entry_missed", 0);
         }
         if (!g.captured && !g.armed) {
             int time_ready =
@@ -2717,6 +3309,7 @@ void eu4_gfx_frame_trace_boundary_exit(eu4_gfx_capture_frame *frame,
         (void)eu4_gfx_frame_observe_lockstep_wait((uint32_t)g.scene_index, 0);
     }
     free(stream_pixels);
+    eu4_gfx_frame_sealed_dispatch();
 }
 
 void eu4_gfx_frame_trace_present_entry(eu4_gfx_capture_frame *frame,
@@ -2726,11 +3319,13 @@ void eu4_gfx_frame_trace_present_entry(eu4_gfx_capture_frame *frame,
         return;
     }
     pthread_mutex_lock(&g_lock);
-    if (g.armed && g.boundary_fb < 0 && !g.boundary_scene) {
+    if (!capture_timed_out_locked() && g.armed && g.boundary_fb < 0 &&
+        !g.boundary_scene) {
         finish_capture("present");
     }
     call->retain = 0;
     pthread_mutex_unlock(&g_lock);
+    eu4_gfx_frame_sealed_dispatch();
 }
 
 void eu4_gfx_frame_trace_present_exit(eu4_gfx_capture_frame *frame,
@@ -2743,12 +3338,14 @@ void eu4_gfx_frame_trace_present_exit(eu4_gfx_capture_frame *frame,
     }
     pthread_mutex_lock(&g_lock);
     call->retain = 0;
+    (void)capture_timed_out_locked();
     g.present_index++;
     int candidate = 0;
     if (g.boundary_scene) {
         /* The scene boundary owns frame tracking; _GfxPresent may be invoked
            inside PresentScene and must not reset the draw count. */
         pthread_mutex_unlock(&g_lock);
+        eu4_gfx_frame_sealed_dispatch();
         return;
     }
     if (!g.captured && !g.armed) {
@@ -2773,6 +3370,7 @@ void eu4_gfx_frame_trace_present_exit(eu4_gfx_capture_frame *frame,
         start_capture_at_frame(g.present_index + 1);
     }
     pthread_mutex_unlock(&g_lock);
+    eu4_gfx_frame_sealed_dispatch();
 }
 
 /* _GfxResolve at 0x15ece13 (glCopyTexSubImage2D into the header's texture).
@@ -2842,6 +3440,11 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
     }
     pthread_mutex_lock(&g_lock);
     call->retain = 0;
+    if (capture_timed_out_locked()) {
+        pthread_mutex_unlock(&g_lock);
+        eu4_gfx_frame_sealed_dispatch();
+        return;
+    }
     if (g.boundary_fb >= 0) {
         GLint draw_framebuffer = 0;
         glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_framebuffer);
@@ -2864,6 +3467,24 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
     }
     if (g.armed && g.events != NULL && g.event_count >= (int)g.max_draws) {
         g.truncated = 1;
+    }
+    if (g.test_only && g.armed && g.events != NULL &&
+        g.event_count < (int)g.max_draws) {
+        /* The offline writer host has no GL context; keep the ordered stream
+           shape without querying the driver. */
+        char body[192];
+        int length = snprintf(
+            body, sizeof body,
+            "{\"kind\":\"clear\",\"before_first_draw\":%s,\"flags\":%d,"
+            "\"test\":true}",
+            bool_text(g.event_count == 0), (int)frame->rsi);
+        if (length > 0 && (size_t)length < sizeof body && emit_event(body)) {
+            g.event_count++;
+            g.clear_events++;
+        }
+        pthread_mutex_unlock(&g_lock);
+        eu4_gfx_frame_sealed_dispatch();
+        return;
     }
     if (g.armed && g.events != NULL && g.event_count < (int)g.max_draws) {
         GLfloat color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
@@ -2894,6 +3515,7 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
             if (!out.failed && buffer != NULL) {
                 emit_event(buffer);
                 g.event_count++;
+                g.clear_events++;
             } else {
                 g.capture_failed = 1;
             }
@@ -2901,6 +3523,7 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
         }
     }
     pthread_mutex_unlock(&g_lock);
+    eu4_gfx_frame_sealed_dispatch();
 }
 
 void eu4_gfx_frame_trace_clear_exit(eu4_gfx_capture_frame *frame,
@@ -2920,10 +3543,16 @@ static void draw_entry_common(eu4_gfx_capture_frame *frame,
         return;
     }
     pthread_mutex_lock(&g_lock);
+    if (capture_timed_out_locked()) {
+        pthread_mutex_unlock(&g_lock);
+        eu4_gfx_frame_sealed_dispatch();
+        return;
+    }
     if (g.test_only) {
         caller_add(call->caller_rva);
         g.frame_draws++;
         pthread_mutex_unlock(&g_lock);
+        eu4_gfx_frame_sealed_dispatch();
         return;
     }
     if (g.gl_vendor[0] == 0) {
@@ -3024,6 +3653,7 @@ static void draw_entry_common(eu4_gfx_capture_frame *frame,
         }
     }
     pthread_mutex_unlock(&g_lock);
+    eu4_gfx_frame_sealed_dispatch();
 }
 
 static void draw_exit_common(eu4_gfx_capture_frame *frame,
@@ -3037,6 +3667,11 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
     }
     pthread_mutex_lock(&g_lock);
     call->retain = 0;
+    if (capture_timed_out_locked()) {
+        pthread_mutex_unlock(&g_lock);
+        eu4_gfx_frame_sealed_dispatch();
+        return;
+    }
     if (g.test_only) {
         if (g.armed && g.events != NULL) {
             if (g.event_count >= (int)g.max_draws) {
@@ -3051,10 +3686,12 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
                 if (length > 0 && (size_t)length < sizeof body &&
                     emit_event(body)) {
                     g.event_count++;
+                    g.draw_events++;
                 }
             }
         }
         pthread_mutex_unlock(&g_lock);
+        eu4_gfx_frame_sealed_dispatch();
         return;
     }
     if (g.armed && g.events != NULL && g.event_count >= (int)g.max_draws) {
@@ -3101,6 +3738,7 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
             if (!out.failed && buffer != NULL) {
                 emit_event(buffer);
                 g.event_count++;
+                g.draw_events++;
             } else {
                 fail_capture_locked(g_capture_failure_reason != NULL
                                         ? g_capture_failure_reason
@@ -3110,6 +3748,7 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
         }
     }
     pthread_mutex_unlock(&g_lock);
+    eu4_gfx_frame_sealed_dispatch();
 }
 
 void eu4_gfx_frame_trace_draw_entry(eu4_gfx_capture_frame *frame,
@@ -3208,7 +3847,9 @@ int eu4_gfx_frame_trace_test_manifest(const char *directory) {
     g.seed_height = 0;
     g.blob_count = 0;
     g.truncated = 0;
-    write_frame_manifest(1, "test");
+    if (write_frame_manifest(1, "test") != 0) {
+        return -1;
+    }
     char path[FTRACE_PATH];
     snprintf(path, sizeof(path), "%s/frame-trace.json", g.dir);
     FILE *probe = fopen(path, "r");
