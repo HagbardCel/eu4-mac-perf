@@ -688,33 +688,199 @@ class PortableSequenceCaseTests(unittest.TestCase):
             (self.frames[1] / "frame-sequence.json").write_text(
                 json.dumps(original_mutated))
 
-    def test_artifact_budget_marks_the_reproduction_incomplete(self):
+    @staticmethod
+    def _case_bytes(root: Path) -> int:
+        return sum(path.stat().st_size for path in root.rglob("*")
+                   if path.is_file())
+
+    def _full_case(self, out, diagnosis, name="full-case"):
+        case = self.fixture.base / name
+        gfx_replay_case.package_sequence_diagnosis(
+            self.frames, out / "out-004", case, diagnosis,
+            shaders=self.shaders, case_id="budget", max_bytes=0)
+        return case, self._case_bytes(case)
+
+    def test_budget_below_the_minimum_summary_fails_explicitly(self):
         out, diagnosis = self.baseline()
-        case = self.fixture.base / "budget-case"
-        threshold = 1
-        no_graph = json.loads(json.dumps(diagnosis))
-        no_graph.pop("graph", None)
+        case = self.fixture.base / "budget-minimum"
+        with self.assertRaises(gfx_replay_case.CaseError) as caught:
+            gfx_replay_case.package_sequence_diagnosis(
+                self.frames, out / "out-004", case, diagnosis,
+                shaders=self.shaders, case_id="budget", max_bytes=1)
+        self.assertEqual(caught.exception.kind, "case_budget", caught.exception)
+        self.assertFalse(case.exists(), "an over-budget case must not be published")
+        self.assertEqual(
+            list(self.fixture.base.glob(f".{case.name}-staging-*")), [],
+            "staging output must be removed")
+
+    def test_budget_just_below_the_complete_package_is_incomplete(self):
+        out, diagnosis = self.baseline()
+        _, size = self._full_case(out, diagnosis)
+        case = self.fixture.base / "budget-below"
         manifest = gfx_replay_case.package_sequence_diagnosis(
-            self.frames, out / "out-004", case, no_graph,
-            shaders=self.shaders, case_id="budget", max_bytes=threshold)
-        self.assertIn(manifest["schema"],
-                      (gfx_replay_case.SCHEMA,
-                       gfx_replay_case.SEQUENCE_SCHEMA))
+            self.frames, out / "out-004", case, diagnosis,
+            shaders=self.shaders, case_id="budget", max_bytes=size - 1)
         self.assertFalse(manifest["reproduction"]["independently_reproducible"])
         self.assertEqual(manifest["reproduction"]["status"], "incomplete")
-        self.assertEqual(
-            manifest["reproduction"]["missing"][0]["kind"], "artifact_budget")
+        missing = manifest["reproduction"]["missing"][0]
+        self.assertEqual(missing["kind"], "artifact_budget")
+        self.assertEqual(missing["reason"], "artifact_budget")
+        self.assertEqual(missing["max_bytes"], size - 1)
+        self.assertGreater(missing["required_bytes"], size - 1)
+        self.assertEqual(manifest["replay_command"], [])
         self.assertTrue((case / "reproduction-incomplete.json").is_file())
+        self.assertLessEqual(self._case_bytes(case), size - 1)
         readme = (case / "README.md").read_text()
         self.assertIn("Reproduction incomplete", readme)
-        self.assertNotIn("uses the existing M6 Metal replay host", readme)
-        graph_text = (case / "dependency-graph.json").read_text()
-        report_text = (case / "diagnostic-report.json").read_text()
-        self.assertNotIn(str(self.fixture.base), graph_text)
-        self.assertNotIn(str(self.fixture.base), report_text)
+        self.assertNotIn("## Replay", readme)
+        self.assertNotIn("captured", readme.lower())
+        verified = gfx_replay_case.verify(case)
+        self.assertFalse(verified["ok"])
+        self.assertIn("reproduction is explicitly incomplete",
+                      verified["problems"])
         with self.assertRaises(gfx_replay_case.CaseError) as caught:
             gfx_replay_case.replay_case(case, self.fixture.base / "budget-out")
         self.assertEqual(caught.exception.kind, "verification")
+
+    def test_budget_at_the_complete_package_size_publishes_a_valid_case(self):
+        out, diagnosis = self.baseline()
+        _, size = self._full_case(out, diagnosis)
+        case = self.fixture.base / "budget-exact"
+        manifest = gfx_replay_case.package_sequence_diagnosis(
+            self.frames, out / "out-004", case, diagnosis,
+            shaders=self.shaders, case_id="budget", max_bytes=size)
+        self.assertTrue(manifest["reproduction"]["independently_reproducible"])
+        self.assertEqual(manifest["reproduction"]["status"], "complete")
+        self.assertGreater(len(manifest["replay_command"]), 0)
+        self.assertLessEqual(self._case_bytes(case), size)
+        self.assertTrue(gfx_replay_case.verify(case)["ok"])
+
+    def test_budget_does_not_modify_source_inputs(self):
+        out, diagnosis = self.baseline()
+        _, size = self._full_case(out, diagnosis)
+        before = {
+            path: (path.stat().st_size, sha(path.read_bytes()))
+            for frame in self.frames for path in frame.rglob("*")
+            if path.is_file()
+        }
+        case = self.fixture.base / "budget-sources"
+        gfx_replay_case.package_sequence_diagnosis(
+            self.frames, out / "out-004", case, diagnosis,
+            shaders=self.shaders, case_id="budget", max_bytes=size - 1)
+        after = {
+            path: (path.stat().st_size, sha(path.read_bytes()))
+            for frame in self.frames for path in frame.rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(before, after)
+        self.assertTrue(all(path.is_file() for path in before))
+
+    def _edit_manifest(self, case: Path, edit) -> dict:
+        manifest = json.loads((case / "case.json").read_text())
+        edit(manifest)
+        (case / "case.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        return manifest
+
+    def test_verifier_requires_every_required_payload_in_the_inventory(self):
+        out, diagnosis = self.baseline()
+        case, _ = self.package(out, diagnosis)
+        shaders = case / "shaders" / "shaders.json"
+        shaders.write_text(shaders.read_text().replace("program", "PROGRAM"))
+        def edit(manifest):
+            manifest["files"] = [item for item in manifest["files"]
+                                 if item["path"] != "shaders/shaders.json"]
+        self._edit_manifest(case, edit)
+        verified = gfx_replay_case.verify(case)
+        self.assertFalse(verified["ok"], verified)
+        self.assertIn("required payload is not declared: shaders/shaders.json",
+                      verified["problems"])
+        self.assertTrue(any("not declared in the inventory" in problem
+                            for problem in verified["problems"]), verified)
+
+    def test_verifier_requires_an_unlisted_checkpoint_request(self):
+        out, diagnosis = self.baseline()
+        case, _ = self.package(out, diagnosis)
+        relative = "checkpoints/frame-001/checkpoint-request.json"
+        self.assertTrue((case / relative).is_file())
+        def edit(manifest):
+            manifest["files"] = [item for item in manifest["files"]
+                                 if item["path"] != relative]
+        self._edit_manifest(case, edit)
+        verified = gfx_replay_case.verify(case)
+        self.assertFalse(verified["ok"], verified)
+        self.assertIn(f"required payload is not declared: {relative}",
+                      verified["problems"])
+
+    def test_verifier_rejects_duplicate_manifest_entries(self):
+        out, diagnosis = self.baseline()
+        case, _ = self.package(out, diagnosis)
+        def edit(manifest):
+            manifest["files"].append(dict(manifest["files"][0]))
+        self._edit_manifest(case, edit)
+        verified = gfx_replay_case.verify(case)
+        self.assertFalse(verified["ok"], verified)
+        self.assertTrue(any("duplicate manifest path" in problem
+                            for problem in verified["problems"]), verified)
+
+    def test_verifier_rejects_a_reference_escaping_the_case(self):
+        out, diagnosis = self.baseline()
+        case, _ = self.package(out, diagnosis)
+        outside = self.fixture.base / "outside.bin"
+        outside.write_bytes(b"outside")
+        payload = outside.read_bytes()
+        def edit(manifest):
+            manifest["files"].append({
+                "path": "../../outside.bin", "bytes": len(payload),
+                "sha256": sha(payload)})
+        self._edit_manifest(case, edit)
+        verified = gfx_replay_case.verify(case)
+        self.assertFalse(verified["ok"], verified)
+        self.assertTrue(any("nonportable manifest path" in problem
+                            for problem in verified["problems"]), verified)
+
+    def test_verifier_rejects_a_symlink_outside_the_case(self):
+        out, diagnosis = self.baseline()
+        case, _ = self.package(out, diagnosis)
+        outside = self.fixture.base / "outside-symlink.bin"
+        outside.write_bytes(b"outside")
+        link = case / "escape.bin"
+        link.symlink_to(outside)
+        payload = outside.read_bytes()
+        def edit(manifest):
+            manifest["files"].append({
+                "path": "escape.bin", "bytes": len(payload),
+                "sha256": sha(payload)})
+        self._edit_manifest(case, edit)
+        verified = gfx_replay_case.verify(case)
+        self.assertFalse(verified["ok"], verified)
+        self.assertTrue(any("escapes the case directory" in problem
+                            for problem in verified["problems"]), verified)
+
+    def test_verifier_detects_a_missing_predecessor_resource_blob(self):
+        out, diagnosis = self.baseline()
+        case, _ = self.package(out, diagnosis)
+        relative = "frames/000003/blobs/verts.bin"
+        self.assertTrue((case / relative).is_file())
+        (case / relative).unlink()
+        def edit(manifest):
+            manifest["files"] = [item for item in manifest["files"]
+                                 if item["path"] != relative]
+        self._edit_manifest(case, edit)
+        verified = gfx_replay_case.verify(case)
+        self.assertFalse(verified["ok"], verified)
+        self.assertTrue(any("missing blob" in problem
+                            for problem in verified["problems"]), verified)
+
+    def test_single_frame_budget_fails_below_the_minimum_summary(self):
+        out, diagnosis = self.baseline()
+        case = self.fixture.base / "single-budget"
+        with self.assertRaises(gfx_replay_case.CaseError) as caught:
+            gfx_replay_case.package_diagnosis(
+                self.frames[-1], out / "out-004", case, diagnosis,
+                shaders=self.shaders, case_id="budget", max_bytes=1)
+        self.assertEqual(caught.exception.kind, "case_budget", caught.exception)
+        self.assertFalse(case.exists())
+
 
 
 if __name__ == "__main__":

@@ -65,6 +65,65 @@ class CaseVerificationTests(unittest.TestCase):
         self.assertFalse(value["ok"])
         self.assertTrue(any("missing" in problem for problem in value["problems"]))
 
+    def _manifest(self) -> dict:
+        return json.loads((self.root / "case.json").read_text())
+
+    def _write_manifest(self, manifest: dict) -> None:
+        (self.root / "case.json").write_text(json.dumps(manifest))
+
+    def test_duplicate_manifest_entries_are_rejected(self):
+        manifest = self._manifest()
+        manifest["files"].append(dict(manifest["files"][0]))
+        self._write_manifest(manifest)
+        value = gfx_replay_case.verify(self.root)
+        self.assertFalse(value["ok"])
+        self.assertTrue(any("duplicate manifest path" in problem
+                            for problem in value["problems"]), value)
+
+    def test_absolute_manifest_path_is_rejected(self):
+        outside = self.root.parent / "outside.txt"
+        outside.write_text("outside")
+        payload = outside.read_bytes()
+        manifest = self._manifest()
+        manifest["files"].append({
+            "path": str(outside), "bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest()})
+        self._write_manifest(manifest)
+        value = gfx_replay_case.verify(self.root)
+        self.assertFalse(value["ok"])
+        self.assertTrue(any("nonportable manifest path" in problem
+                            for problem in value["problems"]), value)
+
+    def test_parent_traversal_manifest_path_is_rejected(self):
+        outside = self.root.parent / "outside.txt"
+        outside.write_text("outside")
+        payload = outside.read_bytes()
+        manifest = self._manifest()
+        manifest["files"].append({
+            "path": "../outside.txt", "bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest()})
+        self._write_manifest(manifest)
+        value = gfx_replay_case.verify(self.root)
+        self.assertFalse(value["ok"])
+        self.assertTrue(any("nonportable manifest path" in problem
+                            for problem in value["problems"]), value)
+
+    def test_symlink_escape_is_rejected(self):
+        outside = self.root.parent / "outside.txt"
+        outside.write_text("outside")
+        link = self.root / "escape.txt"
+        link.symlink_to(outside)
+        payload = outside.read_bytes()
+        manifest = self._manifest()
+        manifest["files"].append({
+            "path": "escape.txt", "bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest()})
+        self._write_manifest(manifest)
+        value = gfx_replay_case.verify(self.root)
+        self.assertFalse(value["ok"])
+        self.assertTrue(any("escapes the case directory" in problem
+                            for problem in value["problems"]), value)
+
     def test_replay_refuses_an_invalid_case(self):
         (self.root / "graph.json").write_text("not json")
         with self.assertRaises(gfx_replay_case.CaseError) as caught:
