@@ -1,8 +1,7 @@
 # M7 PR 2 — in-process Metal shadow renderer
 
 Status: implementation and one authentic same-process launch complete. This PR
-is stacked on PR 1 (`m7/pr1-frame-seal`, commit `2b6545c`, PR #199), which is
-still open for review. Do not merge PR 2 before PR 1.
+is stacked on PR 1 (`m7/pr1-frame-seal`, commit `5e8de12`, merged to `main` as `67bf7a1`). PR 2 is rebased and targets `main`.
 
 ## Architecture
 

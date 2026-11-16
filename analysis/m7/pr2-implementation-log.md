@@ -2,8 +2,8 @@
 
 ## Stack and base
 
-- PR 1 (`m7/pr1-frame-seal`, commit `2b6545c`, PR #199) is the base. PR 2 is an
-  explicitly documented stacked branch `m7/pr2-inprocess-metal`.
+- PR 1 (`m7/pr1-frame-seal`, commit `5e8de12`, PR #199) merged to `main` as
+  `67bf7a1`. PR 2 is rebased onto that `main`.
 - PR #198 is merged to `main` as `b4c3955`; PR 1 targets `main`.
 
 ## Replay-core extraction

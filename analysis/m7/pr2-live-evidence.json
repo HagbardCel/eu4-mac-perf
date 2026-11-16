@@ -77,8 +77,7 @@
     },
     "timed_out": false,
     "partial": false,
-    "report_fields_note": "timed_out=false and partial=false are the core result values; the live shadow-report artifact predates the bridge report-field addition.",
-    "verification_evidence": "The final run used the structured blob verifier, shader receipt validation and bounded deadline; bridge report stage=complete, timed_out=0, partial=0."
+    "verification_evidence": "The final run used library 7ce9101d built from code c8553f8, including structured blob verification, shader receipt validation and the bounded deadline; the shadow report has stage=complete, timed_out=false and partial=false."
   },
   "comparison": {
     "pixel_verdict": "fail",

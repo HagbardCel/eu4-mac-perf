@@ -93,8 +93,7 @@ but is not proven to be exclusively dithering; no A/B with dither/MSAA
 disabled exists. Report:
 [in-process Metal](../analysis/m7/pr2-inprocess-metal.md),
 [evidence](../analysis/m7/pr2-live-evidence.json),
-[implementation log](../analysis/m7/pr2-implementation-log.md). PR 2 is stacked on PR 1 (#199) and must
-not merge first.
+[implementation log](../analysis/m7/pr2-implementation-log.md). PR 2 is rebased onto `main` after PR 1 (#199) merged as `67bf7a1`.
 
 ## Strategy B — independent replay (2026-11-14)
 
