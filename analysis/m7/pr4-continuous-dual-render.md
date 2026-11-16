@@ -247,7 +247,7 @@ session was not reset between frames.
 
 ## Tests
 
-Focused PR4 set: 234 passed, 1 skipped (after the #202 merge and rebase) (frame-trace writer, interpose, continuous
+Focused PR4 set: 236 passed, 1 skipped (after the #202 merge and rebase) (frame-trace writer, interpose, continuous
 replay, supervisor, coordinator, PR3 diagnosis, Metal replay and canonical
 diagnosis).
 
@@ -389,3 +389,32 @@ through the new sequence-checkpoint path:
 ## Review
 
 Requesting independent review. Do not merge automatically.
+
+
+## Independent review remediation (`3d4bf475`)
+
+An independent review of `40132d5f` found two blocking lifecycle defects; both
+are fixed:
+
+1. **End-of-frame lifecycle entries were never applied.** `apply_due_lifecycle`
+   is now drained at `events.count` after the event loop, so a CPU mutation or
+   delete recorded after the last captured event fails the frame with
+   `history_mutation`. Regression:
+   `test_mutation_at_the_end_of_frame_event_count_fails_closed`.
+2. **Current-target delete/create/reset was skipped.** The transition is now
+   applied at its recorded event even when the name is a current frame target;
+   pre-frame entries apply before target pre-registration, and draw/clear
+   re-register the target after a transition. A retained target reused with an
+   incompatible size/format fails closed in `target_for`. Regression:
+   `test_delete_of_a_current_frame_target_is_applied_at_its_event`.
+
+A carried resource with an unreproduced mutation is now invalidated even when
+the current frame does not sample it. Additional hardening: digest memoization
+keys on inode/ctime, the translation cache key includes translator identity,
+decisions require a valid frame sequence, previous-frame name arrays are
+type-checked, a first frame with a previous link is rejected, the external
+capture stop file is honoured, an incomplete continuous frame stops the
+campaign, and queued frames are exposed separately.
+
+The authentic three-frame replay still completes with 3/3 `history_status=1`
+and 6/6 reconciled checkpoints per frame.

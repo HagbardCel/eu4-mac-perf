@@ -1288,10 +1288,10 @@
       ]
     },
     "focused_tests": {
-      "passed": 234,
+      "passed": 236,
       "skipped": 1
     },
-    "final_head": "40132d5f",
+    "final_head": "3d4bf475",
     "pr3_merge_commit": "399603c0",
     "stacking": "rebased onto merged main 399603c0; diff contains PR4-only changes",
     "full_suite": {
@@ -1301,6 +1301,32 @@
       "errors": 18,
       "note": "same pre-existing environment/oracle set as main/PR3; no M7 failure"
     },
-    "carried_snapshot": "in-frame delete keeps the frame-start carried snapshot; lifecycle event carries removal timing"
+    "carried_snapshot": "in-frame delete keeps the frame-start carried snapshot; lifecycle event carries removal timing",
+    "review_remediation": {
+      "reviewed_sha": "40132d5f",
+      "blocking": [
+        "end_of_frame_lifecycle_never_applied",
+        "frame_target_delete_skipped_and_resize_unchecked"
+      ],
+      "fixed": [
+        "drain lifecycle at events.count",
+        "apply current-target transitions",
+        "incompatible target resize fails closed",
+        "pre-frame lifecycle before pre-registration",
+        "re-register targets after transitions",
+        "carried mutation without consumer invalidates history"
+      ],
+      "non_blocking_fixed": [
+        "digest key inode/ctime",
+        "translator identity in cache key",
+        "decision sequence required",
+        "previous name arrays type-checked",
+        "first frame previous rejected",
+        "external stop file honoured",
+        "incomplete frame stops campaign",
+        "queued_frames exposed"
+      ],
+      "authentic_replay": "3/3 frames ok, 6/6 checkpoints, partial-state differences"
+    }
   }
 }
