@@ -199,7 +199,7 @@ Focused suites cover:
 - the canonical title and scene-75 fixtures through the real Metal host
   (`tests/test_m7_canonical_diagnosis.py`);
 - the existing graph, checkpoint, case, seal, coordinator, ABI and replay
-  suites (169 focused tests).
+  suites (174 focused tests).
 
 ## Known limitations
 

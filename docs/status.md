@@ -162,7 +162,7 @@ reports eight evidence axes and the disjoint classifications
 `invalid_provenance`, `unsupported_state`, `gpu_execution_failure` and
 `incomplete_diagnostics`.
 
-Focused verification: 169 tests in the graph/checkpoint/case/seal/coordinator/
+Focused verification: 174 tests in the graph/checkpoint/case/seal/coordinator/
 ABI/diagnosis/receipt set, plus the canonical title and scene-75 fixture tests
 through the real Metal host. The canonical title frame
 remains pixel-exact (0 mismatches) with no reported divergence; its historical
