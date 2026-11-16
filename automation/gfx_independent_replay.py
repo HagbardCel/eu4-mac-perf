@@ -25,9 +25,46 @@ from pathlib import Path
 from automation import gfx_frame_graph, m6_compare, m6_frame
 
 SCHEMA = "gfx-independent-replay/v1"
+DIAGNOSIS_SCHEMA = "gfx-frame-diagnosis/v1"
 DEFAULT_POLICY = Path(__file__).resolve().parents[1] / "analysis" / "m6" / "comparison-policy.json"
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_MARKER = ".gfx-replay-output.json"
+
+# Final classifications from the M7 PR3 qualification contract.  They are
+# deliberately disjoint: an incomplete diagnosis must never be reported as a
+# renderer difference, and a completed pixel difference is not a tool failure.
+CLASSIFICATIONS = (
+    "qualified_match",
+    "qualified_difference",
+    "difference_with_partial_state_coverage",
+    "incomplete_capture",
+    "invalid_provenance",
+    "unsupported_state",
+    "gpu_execution_failure",
+    "incomplete_diagnostics",
+)
+
+# What the Metal replay host actually implements.  ``implemented`` means the
+# captured value changes Metal encoding; ``unsupported`` means the value is
+# captured but has no Metal effect or is rejected by the host.  Anything not
+# listed is treated as unproven rather than silently equivalent.
+STATE_IMPLEMENTATION = {
+    "shader_bindings": "implemented",
+    "render_targets": "implemented",
+    "samplers": "implemented",
+    "viewport": "implemented",
+    "scissor": "implemented",
+    "blend": "implemented",
+    "depth": "implemented",
+    "color_mask": "implemented",
+    "cull": "implemented",
+    "gl_dither": "unsupported",
+    "multisample": "unsupported",
+    "stencil_test": "unsupported",
+    "polygon_mode": "unsupported",
+    "polygon_offset": "unsupported",
+    "alpha_test": "unsupported",
+}
 
 
 class ReplayError(RuntimeError):
@@ -494,8 +531,60 @@ def binding_audit(replay: dict) -> dict:
     }
 
 
+_FINAL_STATISTICS = (
+    "pixels", "mismatched_pixels", "mismatched_fraction",
+    "alpha_different_pixels", "max_channel_error", "mean_abs_error",
+    "mean_max_channel_error",
+)
+
+
+def final_comparison_report(frame_dir: Path, out_dir: Path,
+                            policy_path: Path | str | None = None) -> dict:
+    """Full-frame differential through the shared comparison engine.
+
+    The complete ``m6_compare`` report (statistics, worst region and draw
+    attribution) is retained under ``detail`` so the diagnostic does not
+    duplicate the comparison engine or discard region evidence.
+    """
+    policy_path = Path(policy_path or DEFAULT_POLICY)
+    try:
+        policy = json.loads(policy_path.read_text())
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return {"status": "invalid", "reason": f"comparison policy: {exc}"}
+    try:
+        report = m6_compare.compare(Path(frame_dir), Path(out_dir), policy)
+    except (m6_compare.CompareError, OSError, ValueError) as exc:
+        return {"status": "invalid", "reason": str(exc)}
+    statistics = report.get("statistics") or {}
+    value = {
+        "status": "match" if report.get("status") == "pass" else "divergent",
+        "width": report["reference"]["width"],
+        "height": report["reference"]["height"],
+        "reference_sha256": report["reference"]["sha256"],
+        "candidate_sha256": report["candidate"]["sha256"],
+        "statistics": {key: statistics[key] for key in _FINAL_STATISTICS
+                       if key in statistics},
+        "worst_regions": (statistics.get("regions") or [])[:4],
+        "worst_region": report.get("worst_region"),
+        "attribution": report.get("attribution"),
+        "normalization": report.get("normalization"),
+        "policy": str(policy_path),
+        "detail": report,
+    }
+    return value
+
+
 def final_comparison(frame_dir: Path, out_dir: Path,
                      policy_path: Path | str | None = None) -> dict:
+    """Backward-compatible exact final comparison.
+
+    The shared engine is used when the replay result is available; the direct
+    BGRA path remains as the offline fallback for synthetic result directories
+    that do not contain ``replay.json``.
+    """
+    report = final_comparison_report(frame_dir, out_dir, policy_path)
+    if report.get("status") in ("match", "divergent"):
+        return report
     manifest = json.loads((frame_dir / "frame-trace.json").read_text())
     frame = manifest.get("frame") or {}
     width = int(frame.get("width") or 0)
@@ -523,32 +612,103 @@ def final_comparison(frame_dir: Path, out_dir: Path,
         "height": height,
         "reference_sha256": _sha(reference),
         "candidate_sha256": _sha(candidate),
-        "statistics": {
-            key: statistics[key] for key in (
-                "pixels", "mismatched_pixels", "mismatched_fraction",
-                "alpha_different_pixels", "max_channel_error",
-                "mean_abs_error", "mean_max_channel_error",
-            )
-        },
+        "statistics": {key: statistics[key] for key in _FINAL_STATISTICS},
         "worst_regions": statistics["regions"][:4],
         "policy": str(policy_path or DEFAULT_POLICY),
+    }
+
+
+def _event_index(row: dict) -> int:
+    value = row.get("event")
+    if value is None:
+        value = row.get("index")
+    return -1 if value is None else int(value)
+
+
+def _event_context(graph: dict, event) -> dict:
+    if event is None:
+        return {}
+    for row in graph.get("events") or []:
+        if _event_index(row) == int(event):
+            return {
+                "event": int(event),
+                "kind": row.get("kind"),
+                "operation": row.get("operation"),
+                "entry": row.get("entry"),
+                "caller_rva": row.get("caller_rva"),
+                "program": row.get("program"),
+                "render_target": row.get("target"),
+                "writes": list(row.get("writes") or []),
+                "samples": list(row.get("samples") or []),
+                "state": row.get("state") or {},
+            }
+    return {"event": int(event)}
+
+
+def _dependent_consumers(graph: dict, resource_id: str,
+                         after_event: int) -> list[dict]:
+    resource = (graph.get("resources") or {}).get(resource_id) or {}
+    return [
+        {
+            "event": int(item.get("event")),
+            "unit": item.get("unit"),
+            "sampler": item.get("sampler"),
+            "operation": item.get("operation"),
+            "destination": item.get("destination"),
+        }
+        for item in resource.get("consumers") or []
+        if item.get("event") is not None
+        and int(item["event"]) > after_event
+    ]
+
+
+def _suggested_checkpoint(graph: dict, final: dict) -> dict | None:
+    """Propose one additional checkpoint when the final image differs alone."""
+    events = list(graph.get("events") or [])
+    if not events:
+        return None
+    last = max(events, key=_event_index)
+    event = _event_index(last)
+    if event < 0:
+        return None
+    resource = str(last.get("target") or "fb:0")
+    return {
+        "event": event,
+        "target": "0" if resource == "fb:0" else resource.split(":", 1)[-1],
+        "resource": resource,
+        "reason": (
+            "checkpoint the last captured target state immediately before the "
+            "final readback; the scene-graph frame trace records the effective "
+            "default framebuffer only after all passes"),
+        "final_statistics": final.get("statistics"),
     }
 
 
 def first_divergence(graph: dict, checkpoints: list[dict],
                      final: dict, *, binding_audit: dict | None = None,
                      fault: dict | None = None,
-                     checkpoint_validation: dict | None = None) -> dict:
-    """Earliest confirmed semantic, intermediate or final divergence."""
+                     checkpoint_validation: dict | None = None,
+                     frame_id=None, state_coverage_report: dict | None = None,
+                     event_count: int | None = None) -> dict:
+    """Earliest confirmed semantic, intermediate or final divergence.
+
+    This localizes the earliest *observed* difference.  It never claims that
+    the observed event is the root cause: the producer and its inputs are
+    reported so a later focused experiment can establish causality.
+    """
     validation = checkpoint_validation or {}
-    if validation.get("status") == "invalid":
+    if validation.get("status") in ("invalid", "incomplete"):
+        complete = validation.get("status") == "invalid"
         return {
             "schema": "gfx-first-divergence/v1",
-            "kind": "invalid_checkpoint",
+            "kind": "invalid_checkpoint" if complete else "incomplete_checkpoint",
+            "frame_id": frame_id,
             "event": None,
             "statistics": None,
             "semantic": None,
             "intermediate": None,
+            "confidence": "inconclusive",
+            "root_cause": "not_established",
             "reason": (
                 "required checkpoint evidence is missing or unusable; "
                 "this is an instrumentation failure, not a Metal difference"),
@@ -563,68 +723,212 @@ def first_divergence(graph: dict, checkpoints: list[dict],
     ]
     semantic_event = first_semantic.get("event") if first_semantic else None
     intermediate_event = divergent[0]["event"] if divergent else None
-    final_event = None
     candidates = [
         ("semantic", semantic_event if not audit.get("ok") else None),
         ("intermediate", intermediate_event),
-        ("final", final_event),
     ]
     candidates = [item for item in candidates if item[1] is not None]
     earliest = min(candidates, key=lambda item: item[1]) if candidates else None
+    unsupported = list((state_coverage_report or {}).get("unsupported") or [])
     if earliest and earliest[1] == semantic_event:
+        context = _event_context(graph, semantic_event)
         return {
             "schema": "gfx-first-divergence/v1",
+            "frame_id": frame_id,
             "kind": "semantic",
             "event": semantic_event,
+            "target": context.get("render_target"),
+            "operation": context.get("operation") or context.get("kind"),
+            "entry": context.get("entry"),
+            "caller_rva": context.get("caller_rva"),
+            "program": context.get("program"),
+            "inputs": context.get("samples") or [],
+            "render_target": context.get("render_target"),
+            "dependent_resources": [],
+            "state": context.get("state") or {},
             "semantic": first_semantic,
             "intermediate": (divergent[0] if divergent else None),
             "final": final.get("status"),
             "fault": fault,
+            "unsupported_state": unsupported,
+            "confidence": "confirmed",
+            "root_cause": "not_established",
+            "authoritative_because": (
+                "the replay's own binding provenance disagrees with the "
+                "captured shader/texture contract at this event"),
             "reason": (
                 "the earliest confirmed difference is a binding/state mismatch; "
                 "its pixel effect may be overdrawn later"),
         }
     if divergent:
         first = divergent[0]
+        event = first.get("event")
         resource = (graph.get("resources") or {}).get(first["resource"]) or {}
         producers = [item for item in resource.get("producers") or []
-                     if item.get("event", 0) < (first.get("event") or 0)]
-        upstream = [
-            {"event": row["event"],
-             "target": row["target"],
-             "status": next((item["status"] for item in checkpoints
-                             if item.get("event") == row["event"]
-                             and str(item.get("target")) == row["target"]),
-                            "not_checkpointed")}
-            for row in graph.get("events") or []
-            if row.get("event") is not None and row.get("event") < first["event"]
-            and row.get("samples") and row.get("target") == first["resource"]
+                     if item.get("event") is not None
+                     and int(item["event"]) < int(event or 0)]
+        producer = producers[-1] if producers else None
+        context = _event_context(graph, event)
+        producer_context = _event_context(
+            graph, producer.get("event") if producer else event)
+        matching = [
+            int(item["event"]) for item in checkpoints
+            if item.get("status") == "match"
+            and item.get("event") is not None
+            and int(item["event"]) < int(event or 0)
         ]
+        previous = matching[-1] if matching else None
+        event_kind = str(context.get("kind") or "")
+        event_is_transfer = event_kind in ("resolve", "copy")
+        limitations: list[str] = []
+        next_checkpoint = None
+        if producer and str(producer.get("kind")) in ("resolve", "copy"):
+            source = str(producer.get("source") or "")
+            source_fbo = producer.get("source_framebuffer")
+            source_resource = ("fb:0" if source in ("", "0")
+                               or source_fbo == 0 else f"tex:{source}")
+            if not resource.get("captured_versions"):
+                limitations.append(
+                    "the copy source has no independent captured checkpoint; "
+                    "the difference may originate before the copy")
+            next_checkpoint = {
+                "event": producer.get("event"),
+                "target": ("0" if source_resource == "fb:0"
+                           else source_resource.split(":", 1)[-1]),
+                "resource": source_resource,
+                "reason": (
+                    "checkpoint the copy source immediately before the "
+                    "transfer to separate source contents from copy execution"),
+            }
+        limitations.append(
+            "the earliest observed differing event is not a proven root "
+            "cause; earlier operations in the unresolved interval were not "
+            "checkpointed")
+        if unsupported:
+            limitations.append(
+                "captured state not implemented by Metal: "
+                + ", ".join(unsupported)
+                + "; no A/B experiment attributes the difference to it")
         return {
             "schema": "gfx-first-divergence/v1",
+            "frame_id": frame_id,
             "kind": "intermediate",
-            "event": first["event"],
-            "target": first["target"],
-            "resource": first["resource"],
-            "producer_event": producers[-1]["event"] if producers else None,
-            "producer": producers[-1] if producers else None,
+            "event": event,
+            "target": first.get("target"),
+            "resource": first.get("resource"),
+            "operation": (
+                (context.get("operation") or context.get("kind"))
+                if event_is_transfer else
+                ((producer_context.get("operation")
+                  or producer_context.get("kind")) if producer
+                 else (context.get("operation") or context.get("kind")))),
+            "entry": (context.get("entry") if event_is_transfer else
+                      (producer_context.get("entry") if producer
+                       else context.get("entry"))),
+            "caller_rva": (context.get("caller_rva") if event_is_transfer
+                           else (producer_context.get("caller_rva")
+                                 if producer else context.get("caller_rva"))),
+            "program": (context.get("program") if event_is_transfer else
+                        (producer_context.get("program") if producer
+                         else context.get("program"))),
+            "producer_program": producer_context.get("program"),
+            "producer_entry": producer_context.get("entry"),
+            "producer_caller_rva": producer_context.get("caller_rva"),
+            "producer_event": producer.get("event") if producer else None,
+            "producer": producer,
+            "prior_producers": [
+                {"event": item.get("event"), "kind": item.get("kind"),
+                 "operation": item.get("operation"),
+                 "program": item.get("program")}
+                for item in producers[-8:]
+            ],
+            "inputs": producer_context.get("samples") or [],
+            "render_target": first.get("resource"),
+            "dependent_resources": _dependent_consumers(
+                graph, first.get("resource"), int(event or 0)),
+            "state": producer_context.get("state") or {},
+            "gl_sha256": first.get("reference_sha256"),
+            "metal_sha256": first.get("metal_sha256"),
             "statistics": first.get("statistics"),
-            "upstream_checkpoints": upstream,
+            "upstream_checkpoints": [
+                {"event": row.get("event"), "target": row.get("target"),
+                 "status": next(
+                     (item["status"] for item in checkpoints
+                      if item.get("event") == row.get("event")
+                      and str(item.get("target")) == row.get("target")),
+                     "not_checkpointed")}
+                for row in graph.get("events") or []
+                if row.get("event") is not None
+                and int(row["event"]) < int(event or 0)
+                and row.get("samples")
+                and row.get("target") == first.get("resource")
+            ],
             "semantic": first_semantic,
             "final": final.get("status"),
+            "unresolved_interval": {
+                "start_event": previous,
+                "end_event": event,
+                "note": (
+                    "the first confirmed divergent checkpoint; earlier "
+                    "operations in this interval were not checkpointed"),
+            },
+            "next_checkpoint": next_checkpoint,
+            "diagnostic_checkpoints": [
+                {"event": item.get("event"), "target": item.get("target"),
+                 "statistics": item.get("statistics"),
+                 "reason": ("non-authoritative checkpoint format; useful as "
+                            "a diagnostic observation, not a confirmed "
+                            "divergence")}
+                for item in checkpoints
+                if item.get("status") == "divergent_diagnostic"
+                and item.get("event") is not None
+                and int(item["event"]) < int(event or 0)
+            ],
+            "earliest_observed_difference": (
+                min((item for item in checkpoints
+                     if item.get("status") in ("divergent",
+                                               "divergent_diagnostic")
+                     and item.get("event") is not None),
+                    key=lambda item: int(item["event"]), default=None)),
+            "limitations": limitations,
+            "unsupported_state": unsupported,
+            "confidence": "confirmed",
+            "root_cause": "not_established",
+            "authoritative_because": (
+                "this is a reconciled request/response checkpoint whose "
+                "captured reference digest and Metal output were verified; it "
+                "is the earliest such checkpoint before the final framebuffer"),
             "reason": (
                 "the earliest authoritative intermediate checkpoint differs; "
                 "its inputs are not necessarily the cause"),
             "fault": fault,
         }
     if final.get("status") == "divergent":
+        events = list(graph.get("events") or [])
+        last_event = max((_event_index(row) for row in events), default=-1)
         return {
             "schema": "gfx-first-divergence/v1",
+            "frame_id": frame_id,
             "kind": "final_only",
             "event": None,
+            "last_event": last_event if last_event >= 0 else event_count,
             "statistics": final.get("statistics"),
             "semantic": first_semantic,
             "intermediate": None,
+            "suggested_checkpoint": _suggested_checkpoint(graph, final),
+            "unresolved_interval": {
+                "start_event": max(
+                    [int(item["event"]) for item in checkpoints
+                     if item.get("status") == "match"
+                     and item.get("event") is not None] or [0]),
+                "end_event": last_event if last_event >= 0 else event_count,
+                "note": (
+                    "the final image differs but no authoritative intermediate "
+                    "checkpoint did; the responsible pass is unresolved"),
+            },
+            "unsupported_state": unsupported,
+            "confidence": "final_only",
+            "root_cause": "not_established",
             "reason": (
                 "no authoritative intermediate checkpoint diverged before the "
                 "final output; increase checkpoint detail around the last pass"),
@@ -634,6 +938,7 @@ def first_divergence(graph: dict, checkpoints: list[dict],
                   if item.get("status") == "divergent_diagnostic"]
     return {
         "schema": "gfx-first-divergence/v1",
+        "frame_id": frame_id,
         "kind": "none",
         "event": None,
         "diagnostic_checkpoints": [
@@ -642,45 +947,745 @@ def first_divergence(graph: dict, checkpoints: list[dict],
         ],
         "semantic": first_semantic,
         "intermediate": None,
+        "unsupported_state": unsupported,
+        "confidence": "none",
+        "root_cause": "none_observed",
         "reason": "all authoritative checkpoints and the final output match",
         "fault": fault,
     }
 
 
-def state_coverage(frame_dir: Path) -> dict:
-    """Classify captured render state that the Metal host implements.
+def _enabled(state: dict, name: str) -> bool:
+    value = state.get(name)
+    return isinstance(value, dict) and bool(value.get("enabled"))
 
-    The binding audit establishes shader-resource equivalence only.  GL state
-    that the replay intentionally does not implement is reported here rather
-    than folded into an exact semantic verdict.
+
+def _state_evidence(frame_dir: Path) -> dict:
+    """Optional focused-test evidence for a captured state.
+
+    A frame may carry ``state-equivalence.json`` (schema
+    ``m7-state-equivalence/v1``) naming states that a focused A/B test proved
+    equivalent.  This is evidence supplied by a test, never an assumption by
+    the diagnostic.
     """
-    unsupported: set[str] = set()
+    path = Path(frame_dir) / "state-equivalence.json"
+    if not path.is_file():
+        return {}
     try:
-        trace = m6_frame.load_trace(Path(frame_dir))
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(value, dict) or value.get(
+            "schema") != "m7-state-equivalence/v1":
+        return {}
+    evidence = {}
+    for item in value.get("states") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("state") or "")
+        if name and item.get("status") == "proven_equivalent":
+            evidence[name] = {
+                "state": name,
+                "status": "proven_equivalent",
+                "evidence": item.get("evidence"),
+            }
+    return evidence
+
+
+def state_coverage(frame_dir: Path, *, trace: dict | None = None,
+                   evidence: dict | None = None) -> dict:
+    """Classify captured render state by what Metal actually implements.
+
+    The report distinguishes four states explicitly:
+
+    * ``implemented`` — captured and used by the Metal encoder;
+    * ``unsupported`` — captured but not implemented (the known
+      ``gl_dither``/``multisample`` gaps and states the host rejects);
+    * ``unproven`` — captured or referenced without a focused equivalence test;
+    * ``proven_equivalent`` — supported by a focused online/offline test.
+
+    Unsupported state never explains a pixel difference by itself.  It narrows
+    what the qualification can claim, and the first-divergence report keeps the
+    difference unproven rather than attributing it to the state.
+    """
+    try:
+        if trace is None:
+            trace = m6_frame.load_trace(Path(frame_dir))
     except m6_frame.FrameError as exc:
         return {
             "schema": "gfx-state-coverage/v1",
             "status": "invalid",
             "supported": [],
             "unsupported": [],
+            "unproven": [],
+            "categories": [],
             "reason": str(exc),
         }
+    evidence = dict(evidence if evidence is not None
+                    else _state_evidence(Path(frame_dir)))
+    observations: dict[str, dict] = {}
+    draws = 0
     for event in trace.get("_events") or []:
         state = event.get("state") or {}
         if not isinstance(state, dict):
             continue
-        if state.get("dither") is True:
-            unsupported.add("gl_dither")
-        if state.get("multisample") is True:
-            unsupported.add("multisample")
+        if event.get("kind") == "draw":
+            draws += 1
+        stencil = state.get("stencil")
+        observed = {
+            "gl_dither": state.get("dither") is True,
+            "multisample": state.get("multisample") is True,
+            "stencil_test": (isinstance(stencil, dict)
+                             and bool(stencil.get("test"))),
+            "alpha_test": _enabled(state, "alpha_test"),
+        }
+        polygon = state.get("polygon")
+        if isinstance(polygon, dict):
+            modes = polygon.get("mode") or []
+            observed["polygon_mode"] = any(
+                str(mode).lower() not in
+                ("0x1b02", "0x1b00", "0x1b01", "fill", "gl_fill")
+                for mode in modes)
+            observed["polygon_offset"] = bool(
+                polygon.get("offset_fill") or polygon.get("offset_factor")
+                or polygon.get("offset_units"))
+        for name, active in observed.items():
+            if not active:
+                continue
+            row = observations.setdefault(
+                name, {"state": name, "draws": 0, "status": "unsupported"})
+            row["draws"] += 1
+    categories = []
+    for name in ("shader_bindings", "render_targets", "samplers", "viewport",
+                 "scissor", "blend", "depth", "color_mask", "cull"):
+        categories.append({
+            "state": name,
+            "status": "implemented",
+            "captured": True,
+            "evidence": "captured draw state is consumed by the Metal encoder",
+        })
+    for name, row in sorted(observations.items()):
+        if name in evidence:
+            row = dict(row, status="proven_equivalent",
+                       evidence=evidence[name].get("evidence"))
+        else:
+            row["status"] = STATE_IMPLEMENTATION.get(name, "unproven")
+            if row["status"] == "implemented":
+                row["status"] = "implemented"
+        categories.append(row)
+    unsupported = sorted(row["state"] for row in categories
+                         if row.get("status") == "unsupported")
+    unproven = sorted(row["state"] for row in categories
+                      if row.get("status") == "unproven")
+    proven = sorted(row["state"] for row in categories
+                    if row.get("status") == "proven_equivalent")
+    status = "partial" if (unsupported or unproven) else "complete"
     return {
         "schema": "gfx-state-coverage/v1",
-        "status": "partial" if unsupported else "complete",
-        "supported": ["shader_bindings", "render_targets", "samplers",
-                      "viewport", "scissor", "blend", "depth", "color_mask"],
-        "unsupported": sorted(unsupported),
+        "status": status,
+        "draws": draws,
+        "supported": sorted(row["state"] for row in categories
+                            if row.get("status") == "implemented"),
+        "unsupported": unsupported,
+        "unproven": unproven,
+        "proven_equivalent": proven,
+        "categories": categories,
         "scope": "captured draw state observed by the replay host",
+        "claim": (
+            "unsupported states prevent a full renderer-equivalence claim; "
+            "they are not evidence that they caused a particular difference"),
     }
+
+
+
+def _optional_json(path: Path) -> dict | None:
+    try:
+        value = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _load_policy(policy_path: Path | str | None) -> dict:
+    path = Path(policy_path or DEFAULT_POLICY)
+    value = _optional_json(path)
+    return value if value is not None else {}
+
+
+def _capture_error_class(message: str) -> str:
+    """Separate incomplete capture from evidence that actively disagrees."""
+    lowered = str(message).lower()
+    integrity = ("digest", "sha256", "size does not match", "does not match",
+                 "blob", "belongs to another")
+    return "invalid" if any(token in lowered for token in integrity) else "incomplete"
+
+
+def _identity_check(seal: dict | None, trace: dict, replay: dict,
+                    shadow: dict | None, *, require_seal: bool) -> dict:
+    checks: list[dict] = []
+    problems: list[str] = []
+
+    def check(name: str, expected, actual) -> None:
+        ok = expected == actual
+        checks.append({"check": name, "expected": expected, "actual": actual,
+                       "ok": ok})
+        if not ok:
+            problems.append(f"{name} mismatch")
+
+    if seal is None:
+        if require_seal:
+            problems.append("frame has no seal")
+        return {
+            "status": "missing" if require_seal else "unsealed",
+            "checks": checks,
+            "problems": problems,
+            "note": ("offline fixture: no same-process seal is attached"
+                     if not require_seal else ""),
+        }
+    check("capture_frame_id", seal.get("capture_frame_id"),
+          (shadow or {}).get("capture_frame_id", seal.get("capture_frame_id")))
+    check("pid", seal.get("pid"),
+          (shadow or {}).get("pid", seal.get("pid")))
+    check("session_id", seal.get("session_id"),
+          (shadow or {}).get("session_id", seal.get("session_id")))
+    check("trace_manifest_sha256", seal.get("manifest_sha256"),
+          (shadow or {}).get("trace_manifest_sha256",
+                             seal.get("manifest_sha256")))
+    check("gl_reference_sha256", seal.get("reference_sha256"),
+          (shadow or {}).get("gl_reference_sha256",
+                             seal.get("reference_sha256")))
+    check("operation_count", seal.get("operation_count"),
+          (shadow or {}).get("operation_count",
+                             seal.get("operation_count")))
+    check("trace_events", seal.get("operation_count"), trace.get("events"))
+    if replay.get("manifest_reference_sha256"):
+        check("replay_reference_sha256", seal.get("reference_sha256"),
+              replay.get("manifest_reference_sha256"))
+    if not replay.get("partial"):
+        check("replay_events", seal.get("operation_count"), replay.get("events"))
+    return {
+        "status": "verified" if not problems else "mismatch",
+        "checks": checks,
+        "problems": problems,
+        "capture_frame_id": seal.get("capture_frame_id"),
+        "session_id": seal.get("session_id"),
+        "pid": seal.get("pid"),
+    }
+
+
+def _checkpoint_request_state(graph: dict, metal_dir: Path
+                              ) -> tuple[dict, str, list[str]]:
+    published = _optional_json(Path(metal_dir) / "checkpoint-request.json")
+    if published is not None:
+        problems = []
+        if published.get("schema") != "gfx-frame-checkpoint-request/v1":
+            problems.append("checkpoint request schema is invalid")
+        checkpoints = published.get("checkpoints")
+        if checkpoints is not None and not isinstance(checkpoints, list):
+            problems.append("checkpoint request is not an array")
+        return published, "published", problems
+    return gfx_frame_graph.checkpoint_request(graph), "derived", []
+
+
+def _provenance_axis(evaluation: dict) -> dict:
+    consumer = evaluation.get("consumer_validation") or {}
+    transfer = evaluation.get("transfer_validation") or {}
+    seeded = evaluation.get("seeded_intermediates") or []
+    external = [item for item in seeded
+                if item.get("external_bindings")
+                or item.get("first_sample_before_any_write")]
+    problems = (consumer.get("problems") or []) + (transfer.get("problems") or [])
+    if problems or external:
+        status = "invalid"
+    elif seeded:
+        status = "incomplete"
+    else:
+        status = "verified"
+    return {
+        "status": status,
+        "evaluation": evaluation.get("status"),
+        "consumer_problems": consumer.get("problems") or [],
+        "consumer_problems_count": consumer.get("problems_count", 0),
+        "transfer_problems": transfer.get("problems") or [],
+        "transfer_problems_count": transfer.get("problems_count", 0),
+        "seeded_intermediates": seeded,
+        "bindings": (evaluation.get("provenance") or {}).get("bindings"),
+        "metal_render_target_bindings": (
+            evaluation.get("provenance") or {}).get(
+                "metal_render_target_bindings"),
+        "external_capture_bindings": (
+            evaluation.get("provenance") or {}).get(
+                "external_capture_bindings"),
+    }
+
+
+def classify_diagnosis(*, capture_validity: str, identity: str,
+                       execution: str, provenance: str,
+                       operation_coverage: str, state_cov: str,
+                       pixels: str, divergence: str,
+                       checkpoint_validation: dict) -> tuple[str, dict]:
+    """Apply the PR3 qualification contract to independent evidence axes.
+
+    Missing evidence fails closed into ``incomplete_*``; it is never promoted
+    to a renderer difference.  A completed comparison that finds a difference
+    is ``qualified_difference`` when every required axis is complete, and
+    ``difference_with_partial_state_coverage`` when captured state is not fully
+    implemented.
+    """
+    checkpoint_status = (checkpoint_validation or {}).get("status")
+    if execution == "failed":
+        classification = "gpu_execution_failure"
+    elif identity == "mismatch":
+        classification = "invalid_provenance"
+    elif capture_validity == "invalid" or provenance == "invalid":
+        classification = "invalid_provenance"
+    elif checkpoint_status == "invalid":
+        classification = "invalid_provenance"
+    elif execution == "missing" or pixels == "unavailable":
+        classification = "incomplete_diagnostics"
+    elif checkpoint_status == "incomplete" or divergence == "invalid_checkpoint":
+        classification = "incomplete_diagnostics"
+    elif capture_validity == "incomplete":
+        classification = "incomplete_capture"
+    elif operation_coverage in ("partial", "invalid"):
+        classification = "incomplete_capture"
+    elif provenance == "incomplete":
+        classification = "incomplete_diagnostics"
+    elif pixels == "divergent" or divergence in (
+            "semantic", "intermediate", "final_only", "confirmed"):
+        if state_cov != "complete":
+            classification = "difference_with_partial_state_coverage"
+        else:
+            classification = "qualified_difference"
+    elif state_cov != "complete":
+        classification = "unsupported_state"
+    else:
+        classification = "qualified_match"
+    axes = {
+        "capture_validity": capture_validity,
+        "frame_shader_identity": identity,
+        "gpu_execution": execution,
+        "resource_provenance": provenance,
+        "operation_coverage": operation_coverage,
+        "rendering_state_coverage": state_cov,
+        "pixel_comparison": pixels,
+        "first_divergence_confidence": divergence,
+    }
+    qualified_match = classification == "qualified_match"
+    return classification, {
+        "schema": "m7-qualification-contract/v1",
+        "axes": axes,
+        "classification": classification,
+        "qualified": qualified_match,
+        "diagnostic_qualified": classification in (
+            "qualified_match", "qualified_difference"),
+        "renderer_equivalence": qualified_match,
+        "claim": {
+            "qualified_match": "complete evidence, no observed difference",
+            "qualified_difference": "complete evidence, confirmed difference",
+            "difference_with_partial_state_coverage": (
+                "a difference is confirmed, but captured state is not fully "
+                "implemented; this does not prove unsupported state caused it"),
+            "incomplete_capture": "capture evidence is missing or incomplete",
+            "invalid_provenance": "evidence identity or integrity disagrees",
+            "unsupported_state": (
+                "no difference was observed, but state coverage prevents an "
+                "equivalence claim"),
+            "gpu_execution_failure": "Metal execution did not complete",
+            "incomplete_diagnostics": (
+                "required diagnostic evidence is missing; this is not a "
+                "renderer difference"),
+        }.get(classification, ""),
+    }
+
+
+def diagnosis_exit_code(report: dict) -> int:
+    """Stable CLI policy for a diagnostic report.
+
+    0  qualified match
+    2  a completed diagnostic that is not an equivalence claim
+    1  incomplete or invalid evidence, or GPU execution failure
+    """
+    classification = (report.get("qualification") or {}).get(
+        "classification") or report.get("classification")
+    if classification == "qualified_match":
+        return 0
+    if classification in ("qualified_difference",
+                          "difference_with_partial_state_coverage",
+                          "unsupported_state"):
+        return 2
+    return 1
+
+
+def _minimal_diagnosis(frame_dir: Path, metal_dir: Path, *, message: str,
+                       classification: str) -> dict:
+    value = {
+        "schema": DIAGNOSIS_SCHEMA,
+        "frame_dir": str(frame_dir),
+        "metal_result_dir": str(metal_dir),
+        "status": classification,
+        "capture": {"validity": "invalid", "error": message},
+        "identity": {"status": "unknown", "problems": [message]},
+        "execution": {"status": "missing"},
+        "provenance": {"status": "incomplete"},
+        "operation_coverage": {"status": "incomplete"},
+        "state_coverage": {"status": "invalid"},
+        "pixels": {"status": "unavailable"},
+        "checkpoints": [],
+        "checkpoint_validation": {"status": "incomplete",
+                                  "problems": [{"kind": "missing_capture"}]},
+        "first_divergence": {
+            "schema": "gfx-first-divergence/v1",
+            "kind": "incomplete",
+            "confidence": "inconclusive",
+            "root_cause": "not_established",
+            "reason": message,
+        },
+    }
+    if classification == "incomplete_diagnostics":
+        value["capture"] = {"validity": "valid",
+                            "error": message}
+        classification_value, qualification = classify_diagnosis(
+            capture_validity="valid",
+            identity="unknown",
+            execution="missing",
+            provenance="incomplete",
+            operation_coverage="incomplete",
+            state_cov="invalid",
+            pixels="unavailable",
+            divergence="inconclusive",
+            checkpoint_validation={"status": "incomplete"},
+        )
+    else:
+        classification_value, qualification = classify_diagnosis(
+            capture_validity="invalid",
+            identity="unknown",
+            execution="missing",
+            provenance="incomplete",
+            operation_coverage="incomplete",
+            state_cov="invalid",
+            pixels="unavailable",
+            divergence="inconclusive",
+            checkpoint_validation={"status": "incomplete"},
+        )
+    value["status"] = classification
+    value["classification"] = classification_value
+    value["qualification"] = qualification
+    return value
+
+
+def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
+                  policy: Path | str | None = None, *,
+                  trace: dict | None = None, seal: dict | None = None,
+                  graph: dict | None = None, request: dict | None = None,
+                  request_source: str | None = None,
+                  require_seal: bool = False,
+                  shaders: Path | str | None = None,
+                  faults: dict | None = None) -> dict:
+    """Diagnose already-produced Metal results without executing Metal again.
+
+    This is the reusable analysis half of :func:`replay`.  It validates the
+    frame seal and capture, verifies the replay's identity and resource
+    provenance, reconciles checkpoints, audits shader bindings, computes pixel
+    metrics, localizes the earliest confirmed difference and applies the
+    qualification contract.  It never launches a host, EU4 or a GPU replay.
+    """
+    frame_dir = Path(frame_dir).expanduser().resolve()
+    metal_dir = Path(metal_result_dir).expanduser().resolve()
+    policy_value = _load_policy(policy)
+    if require_seal:
+        policy_value = dict(policy_value, require_seal=True)
+    state_evidence = {}
+    configured = policy_value.get("state_equivalence")
+    if isinstance(configured, dict):
+        state_evidence.update(configured)
+    elif isinstance(configured, list):
+        for item in configured:
+            if isinstance(item, dict) and item.get("state"):
+                state_evidence[str(item["state"])] = item
+    state_evidence.update(_state_evidence(frame_dir))
+
+    if trace is None:
+        try:
+            trace = m6_frame.load_trace(frame_dir, verify_blobs=True)
+        except m6_frame.FrameError as exc:
+            classification = ("invalid_provenance"
+                              if _capture_error_class(str(exc)) == "invalid"
+                              else "incomplete_capture")
+            return _minimal_diagnosis(frame_dir, metal_dir, message=str(exc),
+                                      classification=classification)
+    seal_error = None
+    if seal is None:
+        seal_path = frame_dir / "frame-seal.json"
+        if seal_path.is_file():
+            try:
+                seal = m6_frame.load_seal(frame_dir, trace=trace)
+            except m6_frame.FrameError as exc:
+                seal_error = str(exc)
+    if graph is None:
+        graph = gfx_frame_graph.build(frame_dir, trace=trace)
+    replay = _optional_json(metal_dir / "replay.json")
+    if replay is None:
+        value = _minimal_diagnosis(
+            frame_dir, metal_dir,
+            message="Metal result directory has no replay.json",
+            classification="incomplete_diagnostics")
+        value["capture"] = {
+            "validity": "valid",
+            "graph_status": graph.get("status"),
+            "reasons": graph.get("reasons"),
+        }
+        return value
+    replay = dict(replay)
+    replay["_provenance_samples"] = _read_jsonl(
+        metal_dir / "replay-provenance.jsonl")
+    shadow = _optional_json(metal_dir / "shadow-report.json")
+    if request is None:
+        request, request_source, request_problems = _checkpoint_request_state(
+            graph, metal_dir)
+    else:
+        request_source = request_source or "provided"
+        request_problems = []
+    trace_events = len(trace.get("_events") or [])
+    identity = _identity_check(seal, trace, replay, shadow,
+                               require_seal=require_seal)
+    if seal_error:
+        identity = dict(identity, status="mismatch",
+                        problems=list(identity.get("problems") or [])
+                        + [f"frame seal: {seal_error}"])
+    evaluation = gfx_frame_graph.evaluate_replay(graph, replay)
+    checkpoints, validation = reconcile_checkpoints(
+        graph, request, replay, frame_dir, metal_dir)
+    validation = dict(validation)
+    validation["request_source"] = request_source
+    if request_problems:
+        validation["status"] = "invalid"
+        validation["problems"] = request_problems + list(
+            validation.get("problems") or [])
+    kinds = {str(item.get("kind")) for item in validation.get("problems") or []}
+    if validation.get("status") == "invalid" and kinds and kinds <= {
+            "missing_result"}:
+        # A requested checkpoint that never came back is missing evidence, not
+        # a renderer difference.
+        validation["status"] = "incomplete"
+        validation["note"] = (
+            "requested checkpoint results are missing; this is incomplete "
+            "evidence, not a difference")
+    if request_source == "derived" and request.get("checkpoints"):
+        # A request that was not published with the result cannot be bound to
+        # the replay.  Individual checkpoint files may still be useful, but
+        # the qualification cannot silently claim they belong to this run.
+        if validation.get("status") == "ok":
+            validation["status"] = "incomplete"
+        validation["problems"] = list(validation.get("problems") or []) + [
+            {"kind": "request_not_bound",
+             "detail": "checkpoint request was derived after the replay"}]
+        validation["note"] = (
+            "the replay did not publish the checkpoint request that produced "
+            "its results; qualification fails closed")
+    audit = binding_audit(replay)
+    states = state_coverage(frame_dir, trace=trace, evidence=state_evidence)
+    final = final_comparison_report(frame_dir, metal_dir, policy)
+    frame_info = trace.get("frame") or {}
+    frame_id = (seal or {}).get("capture_frame_id")
+    divergence = first_divergence(
+        graph, checkpoints, final, binding_audit=audit,
+        fault=faults or None, checkpoint_validation=validation,
+        frame_id=frame_id, state_coverage_report=states,
+        event_count=trace_events)
+    encoded = replay.get("encoded")
+    failed = replay.get("failed")
+    command_status = replay.get("command_status")
+    readback = bool(replay.get("readback"))
+    execution_ok = (
+        replay.get("status") == "ok"
+        and isinstance(encoded, int) and isinstance(replay.get("events"), int)
+        and encoded == replay.get("events")
+        and failed == 0
+        and command_status == 4
+        and readback
+        and not replay.get("timed_out")
+    )
+    execution = {
+        "status": "ok" if execution_ok else "failed",
+        "events": replay.get("events"),
+        "encoded": encoded,
+        "failed": failed,
+        "command_status": command_status,
+        "readback_ok": readback,
+        "partial": bool(replay.get("partial")),
+        "timed_out": bool(replay.get("timed_out")),
+        "stage": replay.get("stage"),
+        "error": replay.get("error"),
+        "failure": replay.get("failure"),
+        "failures": replay.get("failures"),
+    }
+    if replay.get("partial"):
+        operation_coverage = "partial"
+    elif not execution_ok:
+        operation_coverage = "invalid"
+    elif (isinstance(replay.get("events"), int)
+          and encoded == replay.get("events")
+          and failed == 0):
+        operation_coverage = "complete"
+    else:
+        operation_coverage = "partial"
+
+    graph_status = graph.get("status")
+    if graph_status == "invalid":
+        capture_validity = "invalid"
+    elif graph_status == "partial":
+        capture_validity = "incomplete"
+    else:
+        capture_validity = "valid"
+    if seal_error:
+        capture_validity = "invalid"
+    if identity.get("status") == "mismatch":
+        capture_validity = "invalid"
+    if final.get("status") not in ("match", "divergent"):
+        pixels = "unavailable"
+    else:
+        pixels = final["status"]
+    provenance = _provenance_axis(evaluation)
+    classification, qualification = classify_diagnosis(
+        capture_validity=capture_validity,
+        identity=str(identity.get("status")),
+        execution=str(execution.get("status")),
+        provenance=provenance["status"],
+        operation_coverage=operation_coverage,
+        state_cov=str(states.get("status") or "invalid"),
+        pixels=pixels,
+        divergence=str(divergence.get("kind")),
+        checkpoint_validation=validation,
+    )
+    report = {
+        "schema": DIAGNOSIS_SCHEMA,
+        "frame_dir": str(frame_dir),
+        "metal_result_dir": str(metal_dir),
+        "status": classification,
+        "classification": classification,
+        "frame": {
+            "capture_frame_id": frame_id,
+            "boundary": (seal or {}).get("boundary"),
+            "width": frame_info.get("width"),
+            "height": frame_info.get("height"),
+            "events": trace_events,
+            "manifest_sha256": (seal or {}).get("manifest_sha256"),
+            "reference_sha256": frame_info.get("reference_sha256"),
+            "sealed": seal is not None,
+        },
+        "capture": {
+            "validity": capture_validity,
+            "seal": {
+                "status": "verified" if seal is not None and not seal_error
+                else ("invalid" if seal_error else "absent"),
+                "error": seal_error,
+                "path": str(frame_dir / "frame-seal.json"),
+            },
+            "graph_status": graph_status,
+            "graph_reasons": graph.get("reasons") or [],
+            "counts": graph.get("counts") or {},
+        },
+        "identity": identity,
+        "execution": execution,
+        "provenance": provenance,
+        "evaluation": evaluation,
+        "operation_coverage": {
+            "status": operation_coverage,
+            "events": replay.get("events"),
+            "encoded": encoded,
+            "failed": failed,
+            "partial_mode": bool(replay.get("partial")),
+        },
+        "state_coverage": states,
+        "pixels": {
+            "status": pixels,
+            "final": final,
+            "statistics": final.get("statistics"),
+        },
+        "checkpoints": checkpoints,
+        "checkpoint_validation": validation,
+        "binding_audit": audit,
+        "first_divergence": divergence,
+        "qualification": qualification,
+        "graph": graph,
+        "artifacts": {
+            "replay_json": str(metal_dir / "replay.json"),
+            "provenance": str(metal_dir / "replay-provenance.jsonl"),
+            "metal_frame": str(metal_dir / "metal-frame.bgra"),
+            "checkpoint_request": str(metal_dir / "checkpoint-request.json"),
+            "shadow_report": str(metal_dir / "shadow-report.json"),
+            "shaders": str(shaders) if shaders is not None else None,
+            "policy": str(Path(policy or DEFAULT_POLICY)),
+        },
+        "faults": faults or {},
+    }
+    return report
+
+
+def _prepare_diagnosis_output(out_dir: Path, inputs: list[Path]) -> Path:
+    out_dir = out_dir.expanduser().resolve()
+    if _protected_output(out_dir):
+        raise ReplayError("output_protected",
+                          f"refusing to replace protected output {out_dir}")
+    frame_dir = inputs[0].expanduser().resolve() if inputs else None
+    metal_dir = inputs[1].expanduser().resolve() if len(inputs) > 1 else None
+    if frame_dir is not None and out_dir != metal_dir and (
+            out_dir == frame_dir or frame_dir in out_dir.parents):
+        raise ReplayError(
+            "output_overlap",
+            f"diagnostic output {out_dir} is inside the captured frame")
+    for source in inputs:
+        source = source.expanduser().resolve()
+        if out_dir == source:
+            continue
+        if out_dir in source.parents:
+            raise ReplayError(
+                "output_overlap",
+                f"diagnostic output {out_dir} contains input {source}")
+    if out_dir.exists() and not out_dir.is_dir():
+        raise ReplayError("output_conflict", f"{out_dir} is not a directory")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return out_dir
+
+
+def diagnose_frame(frame_dir: Path | str, metal_result_dir: Path | str,
+                   output_dir: Path | str,
+                   policy: Path | str | None = None, *,
+                   package: bool = False, case_dir: Path | str | None = None,
+                   case_id: str | None = None,
+                   require_seal: bool = False,
+                   shaders: Path | str | None = None,
+                   faults: dict | None = None) -> dict:
+    """Produce one structured diagnostic report for a completed Metal result.
+
+    The normal path never executes Metal or starts EU4.  ``package`` optionally
+    writes a portable, digest-verified case through ``gfx_replay_case``.
+    """
+    frame_dir = Path(frame_dir).expanduser().resolve()
+    metal_dir = Path(metal_result_dir).expanduser().resolve()
+    out_dir = _prepare_diagnosis_output(Path(output_dir), [frame_dir, metal_dir])
+    report = analyse_frame(frame_dir, metal_dir, policy,
+                           require_seal=require_seal, shaders=shaders,
+                           faults=faults)
+    report = dict(report)
+    report_path = out_dir / "diagnostic-report.json"
+    report["artifacts"] = dict(report.get("artifacts") or {})
+    report["artifacts"]["diagnostic_report"] = str(report_path)
+    report_path.write_text(json.dumps(report, indent=2) + "\n",
+                           encoding="utf-8")
+    if package:
+        from automation import gfx_replay_case
+
+        destination = Path(case_dir) if case_dir else out_dir / "case"
+        manifest = gfx_replay_case.package_diagnosis(
+            frame_dir, metal_dir, destination, report,
+            shaders=shaders,
+            case_id=case_id or f"diagnosis-{report.get('frame', {}).get('capture_frame_id') or 'frame'}")
+        report["case"] = manifest
+        report_path.write_text(json.dumps(report, indent=2) + "\n",
+                               encoding="utf-8")
+    return report
 
 
 def classify_replay(*, execution_ok: bool, coverage: str, semantic: str,
@@ -788,8 +1793,64 @@ def _parser():
     return parser
 
 
+def _diagnose_parser():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Diagnose an already-produced Metal result without re-executing it")
+    parser.add_argument("--frame", required=True, type=Path)
+    parser.add_argument("--metal", required=True, type=Path)
+    parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument("--policy", type=Path, default=None)
+    parser.add_argument("--shaders", type=Path, default=None)
+    parser.add_argument("--require-seal", action="store_true")
+    parser.add_argument("--package", action="store_true")
+    parser.add_argument("--case", type=Path, default=None)
+    parser.add_argument("--case-id", default=None)
+    return parser
+
+
+def diagnose_main(argv: list[str] | None = None) -> int:
+    args = _diagnose_parser().parse_args(argv)
+    try:
+        report = diagnose_frame(
+            args.frame, args.metal, args.out, args.policy,
+            package=args.package, case_dir=args.case, case_id=args.case_id,
+            require_seal=args.require_seal, shaders=args.shaders)
+    except ReplayError as exc:
+        print(json.dumps({"status": "error", "reason": str(exc)}, indent=2))
+        return 1
+    qualification = report.get("qualification") or {}
+    print(json.dumps({
+        "schema": report.get("schema"),
+        "status": report.get("status"),
+        "classification": report.get("classification"),
+        "axes": qualification.get("axes"),
+        "first_divergence": {
+            "kind": (report.get("first_divergence") or {}).get("kind"),
+            "event": (report.get("first_divergence") or {}).get("event"),
+            "confidence": (report.get("first_divergence") or {}).get("confidence"),
+        },
+        "pixels": (report.get("pixels") or {}).get("statistics"),
+        "state_coverage": (report.get("state_coverage") or {}).get("status"),
+        "checkpoint_validation": {
+            "status": (report.get("checkpoint_validation") or {}).get("status"),
+            "request_source": (report.get("checkpoint_validation") or {}).get(
+                "request_source"),
+        },
+        "report": str(Path(args.out) / "diagnostic-report.json"),
+    }, indent=2))
+    return diagnosis_exit_code(report)
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    values = list(argv) if argv is not None else None
+    if values is None:
+        import sys
+        values = sys.argv[1:]
+    if values and values[0] == "diagnose":
+        return diagnose_main(values[1:])
+    args = _parser().parse_args(values)
     faults: dict = {}
     if args.disable_render_target_vflip:
         faults["disable_render_target_vflip"] = True
@@ -871,7 +1932,10 @@ def replay(
     )
     result_path = out_dir / "replay.json"
     if ran.returncode != 0 or not result_path.is_file():
-        return {
+        diagnosis = analyse_frame(
+            frame_dir, out_dir, policy, graph=graph, request=request,
+            request_source="published", faults=faults)
+        report = {
             "schema": SCHEMA,
             "frame_dir": str(frame_dir),
             "out_dir": str(out_dir),
@@ -880,28 +1944,27 @@ def replay(
             "returncode": ran.returncode,
             "stderr": (ran.stderr or "")[-4000:],
             "graph": graph,
+            "diagnosis": diagnosis,
+            "classification": diagnosis.get("classification"),
+            "qualification": diagnosis.get("qualification"),
+            "first_divergence": diagnosis.get("first_divergence"),
+            "execution": diagnosis.get("execution"),
         }
-    replay_result = json.loads(result_path.read_text())
-    replay_result["_provenance_samples"] = _read_jsonl(
-        out_dir / "replay-provenance.jsonl")
-    replay_result["_checkpoint_plan"] = request.get("checkpoints") or []
-    evaluation = gfx_frame_graph.evaluate_replay(graph, replay_result)
-    checkpoints, checkpoint_validation = reconcile_checkpoints(
-        graph, request, replay_result, frame_dir, out_dir)
-    audit = binding_audit(replay_result)
-    states = state_coverage(frame_dir)
-    final = final_comparison(frame_dir, out_dir, policy)
-    divergence = first_divergence(
-        graph, checkpoints, final, binding_audit=audit,
-        fault=faults or None, checkpoint_validation=checkpoint_validation)
-    execution_ok = (
-        replay_result.get("status") == "ok"
-        and replay_result.get("encoded") == replay_result.get("events")
-        and replay_result.get("failed") == 0
-        and replay_result.get("command_status") == 4
-        and bool(replay_result.get("readback"))
-    )
-    coverage = evaluation["status"]
+        (out_dir / "replay-report.json").write_text(
+            json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        return report
+    diagnosis = analyse_frame(
+        frame_dir, out_dir, policy, graph=graph, request=request,
+        request_source="published", faults=faults)
+    replay_result = _optional_json(result_path) or {}
+    evaluation = diagnosis.get("evaluation") or {}
+    checkpoints = diagnosis.get("checkpoints") or []
+    checkpoint_validation = diagnosis.get("checkpoint_validation") or {}
+    audit = diagnosis.get("binding_audit") or {}
+    states = diagnosis.get("state_coverage") or {}
+    final = (diagnosis.get("pixels") or {}).get("final") or {}
+    execution_ok = (diagnosis.get("execution") or {}).get("status") == "ok"
+    coverage = str(evaluation.get("status") or "invalid")
     if execution_ok and coverage == "complete" and evaluation.get("seeded_intermediates"):
         coverage = "partial"
     semantic = "match" if audit.get("ok") else "divergent"
@@ -917,15 +1980,18 @@ def replay(
         "out_dir": str(out_dir),
         "status": status,
         "outcome": outcome,
+        "classification": diagnosis.get("classification"),
+        "qualification": diagnosis.get("qualification"),
         "faults": faults,
-        "graph": graph,
+        "graph": diagnosis.get("graph") or graph,
         "evaluation": evaluation,
         "checkpoints": checkpoints,
         "checkpoint_validation": checkpoint_validation,
         "binding_audit": audit,
         "state_coverage": states,
         "final": final,
-        "first_divergence": divergence,
+        "first_divergence": diagnosis.get("first_divergence"),
+        "diagnosis": diagnosis,
         "replay": {
             key: replay_result.get(key) for key in (
                 "status", "events", "encoded", "failed", "command_status",
@@ -937,6 +2003,7 @@ def replay(
             "provenance": str(out_dir / "replay-provenance.jsonl"),
             "final_readback": str(out_dir / "metal-frame.bgra"),
             "checkpoint_request": str(out_dir / "checkpoint-request.json"),
+            "diagnostic_report": str(out_dir / "replay-report.json"),
         },
     }
     (out_dir / "replay-report.json").write_text(

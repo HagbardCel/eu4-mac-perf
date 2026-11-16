@@ -1,0 +1,389 @@
+{
+  "schema": "m7-pr3-diagnosis-evidence/v1",
+  "status": "implementation_complete_offline_and_authentic_evidence",
+  "claim": "One already-produced in-process Metal result and one explicit offline checkpointed replay were diagnosed without launching EU4 again. Missing checkpoint evidence is classified as incomplete, not as a renderer defect.",
+  "base": {
+    "main_commit": "dac2ea922cb50933863e0c74000b8ad172e06be5",
+    "merged_prs": [
+      199,
+      200
+    ],
+    "native_diagnostics_cherry_pick": "e8974cb3535026572aa8d595a5d396df9b904fbc",
+    "note": "PR #201 native early-exit diagnostic hardening is included because PR3 must preserve the first native stage through the shadow report and diagnostic package."
+  },
+  "canonical_title": {
+    "status": "partial",
+    "classification": "incomplete_capture",
+    "axes": {
+      "capture_validity": "incomplete",
+      "frame_shader_identity": "unsealed",
+      "gpu_execution": "ok",
+      "resource_provenance": "incomplete",
+      "operation_coverage": "partial",
+      "rendering_state_coverage": "partial",
+      "pixel_comparison": "match",
+      "first_divergence_confidence": "none"
+    },
+    "pixels": {
+      "pixels": 1930176,
+      "mismatched_pixels": 0,
+      "mismatched_fraction": 0.0,
+      "max_channel_error": 0,
+      "mean_max_channel_error": 0.0,
+      "alpha_different_pixels": 0
+    },
+    "first_divergence": {
+      "kind": "none",
+      "event": null,
+      "target": null,
+      "resource": null,
+      "producer_event": null,
+      "operation": null,
+      "program": null,
+      "producer_program": null,
+      "confidence": "none",
+      "root_cause": "none_observed"
+    },
+    "state_coverage": {
+      "status": "partial",
+      "unsupported": [
+        "gl_dither",
+        "multisample"
+      ],
+      "unproven": [],
+      "proven_equivalent": []
+    },
+    "checkpoint_validation": {
+      "status": "ok",
+      "requested": 5,
+      "returned": 5,
+      "matched": 4,
+      "divergent": 0,
+      "diagnostic": 1,
+      "invalid": 0,
+      "request_source": "published"
+    },
+    "execution": {
+      "status": null,
+      "events": null,
+      "encoded": null,
+      "failed": null,
+      "command_status": null,
+      "readback_ok": null
+    },
+    "frame": "m6/frames/menu-occ300/frame",
+    "report_sha256": "1ba168cd43facbb29f95375093ec2c9682ddd140a81578f6a044d1b2d7064933",
+    "note": "Historical capture is partial for texture 442 (no captured producer); the pixel result is exact and no divergence is reported."
+  },
+  "scene75": {
+    "status": "confirmed_rendering_difference",
+    "classification": "difference_with_partial_state_coverage",
+    "axes": {
+      "capture_validity": "valid",
+      "frame_shader_identity": "unsealed",
+      "gpu_execution": "ok",
+      "resource_provenance": "verified",
+      "operation_coverage": "complete",
+      "rendering_state_coverage": "partial",
+      "pixel_comparison": "divergent",
+      "first_divergence_confidence": "intermediate"
+    },
+    "pixels": {
+      "pixels": 1930176,
+      "mismatched_pixels": 1792005,
+      "mismatched_fraction": 0.9284153362180444,
+      "max_channel_error": 23,
+      "mean_max_channel_error": 0.949824265,
+      "alpha_different_pixels": 1785844
+    },
+    "first_divergence": {
+      "kind": "intermediate",
+      "event": 271,
+      "target": "0",
+      "resource": "fb:0",
+      "producer_event": 270,
+      "operation": "glCopyTexSubImage2D",
+      "program": null,
+      "producer_program": 346,
+      "confidence": "confirmed",
+      "root_cause": "not_established"
+    },
+    "state_coverage": {
+      "status": "partial",
+      "unsupported": [
+        "gl_dither",
+        "multisample"
+      ],
+      "unproven": [],
+      "proven_equivalent": []
+    },
+    "checkpoint_validation": {
+      "status": "ok",
+      "requested": 7,
+      "returned": 7,
+      "matched": 2,
+      "divergent": 4,
+      "diagnostic": 1,
+      "invalid": 0,
+      "request_source": "published"
+    },
+    "execution": {
+      "status": null,
+      "events": null,
+      "encoded": null,
+      "failed": null,
+      "command_status": null,
+      "readback_ok": null
+    },
+    "frame": "infra/strategy-b/copy-source-442/frame",
+    "report_sha256": "71b2540e40a47623626efc7e15f73bd3b6f3f287b420fedb9309abcc5c5b90b4",
+    "note": "Copy source difference remains the earliest authoritative checkpoint; unsupported dither/MSAA keeps the classification partial."
+  },
+  "live_inprocess_without_checkpoints": {
+    "status": "incomplete_diagnostics",
+    "classification": "incomplete_diagnostics",
+    "axes": {
+      "capture_validity": "valid",
+      "frame_shader_identity": "verified",
+      "gpu_execution": "ok",
+      "resource_provenance": "verified",
+      "operation_coverage": "complete",
+      "rendering_state_coverage": "partial",
+      "pixel_comparison": "divergent",
+      "first_divergence_confidence": "incomplete_checkpoint"
+    },
+    "pixels": {
+      "pixels": 1930176,
+      "mismatched_pixels": 1162852,
+      "mismatched_fraction": 0.6024590503663915,
+      "max_channel_error": 66,
+      "mean_max_channel_error": 0.864247095,
+      "alpha_different_pixels": 0
+    },
+    "first_divergence": {
+      "kind": "incomplete_checkpoint",
+      "event": null,
+      "target": null,
+      "resource": null,
+      "producer_event": null,
+      "operation": null,
+      "program": null,
+      "producer_program": null,
+      "confidence": "inconclusive",
+      "root_cause": "not_established"
+    },
+    "state_coverage": {
+      "status": "partial",
+      "unsupported": [
+        "gl_dither",
+        "multisample"
+      ],
+      "unproven": [],
+      "proven_equivalent": []
+    },
+    "checkpoint_validation": {
+      "status": "incomplete",
+      "requested": 6,
+      "returned": 0,
+      "matched": 0,
+      "divergent": 0,
+      "diagnostic": 0,
+      "invalid": 6,
+      "request_source": "derived"
+    },
+    "execution": {
+      "status": "ok",
+      "events": 325,
+      "encoded": 325,
+      "failed": 0,
+      "command_status": 4,
+      "readback_ok": true
+    },
+    "source": "wt_infra/.local/m7/pr2-shadow-live-7/shadow",
+    "note": "Original in-process result was produced without a checkpoint request. The diagnosis reports incomplete_diagnostics and preserves the 60.2% final difference without inventing an intermediate root cause."
+  },
+  "live_offline_checkpointed": {
+    "status": "difference_with_partial_state_coverage",
+    "classification": "difference_with_partial_state_coverage",
+    "axes": {
+      "capture_validity": "valid",
+      "frame_shader_identity": "verified",
+      "gpu_execution": "ok",
+      "resource_provenance": "verified",
+      "operation_coverage": "complete",
+      "rendering_state_coverage": "partial",
+      "pixel_comparison": "divergent",
+      "first_divergence_confidence": "intermediate"
+    },
+    "pixels": {
+      "pixels": 1930176,
+      "mismatched_pixels": 1162852,
+      "mismatched_fraction": 0.6024590503663915,
+      "max_channel_error": 66,
+      "mean_max_channel_error": 0.864247095,
+      "alpha_different_pixels": 0
+    },
+    "first_divergence": {
+      "kind": "intermediate",
+      "event": 286,
+      "target": "442",
+      "resource": "tex:442",
+      "producer_event": 284,
+      "operation": "glCopyTexSubImage2D",
+      "program": null,
+      "producer_program": null,
+      "confidence": "confirmed",
+      "root_cause": "not_established"
+    },
+    "state_coverage": {
+      "status": "partial",
+      "unsupported": [
+        "gl_dither",
+        "multisample"
+      ],
+      "unproven": [],
+      "proven_equivalent": []
+    },
+    "checkpoint_validation": {
+      "status": "ok",
+      "requested": 6,
+      "returned": 6,
+      "matched": 2,
+      "divergent": 3,
+      "diagnostic": 1,
+      "invalid": 0,
+      "request_source": "published"
+    },
+    "execution": {
+      "status": "ok",
+      "events": 325,
+      "encoded": 325,
+      "failed": 0,
+      "command_status": 4,
+      "readback_ok": true
+    },
+    "source_frame": "wt_infra/.local/m7/pr2-shadow-live-7/frame",
+    "replay_dir": ".local/m7/pr3-live-offline",
+    "report_sha256": "5d704c86056d2435976e1f27c98fef551cbe6406b237744218e9ecf3cf328264",
+    "checkpoints": [
+      {
+        "event": 11,
+        "target": "431",
+        "status": "match",
+        "mismatched_pixels": 0,
+        "max_channel_error": 0,
+        "authoritative": true
+      },
+      {
+        "event": 13,
+        "target": "432",
+        "status": "match",
+        "mismatched_pixels": 0,
+        "max_channel_error": 0,
+        "authoritative": true
+      },
+      {
+        "event": 270,
+        "target": "433",
+        "status": "divergent_diagnostic",
+        "mismatched_pixels": 798027,
+        "max_channel_error": 255,
+        "authoritative": false
+      },
+      {
+        "event": 286,
+        "target": "442",
+        "status": "divergent",
+        "mismatched_pixels": 1237771,
+        "max_channel_error": 95,
+        "authoritative": true
+      },
+      {
+        "event": 288,
+        "target": "447",
+        "status": "divergent",
+        "mismatched_pixels": 304029,
+        "max_channel_error": 87,
+        "authoritative": true
+      },
+      {
+        "event": 290,
+        "target": "443",
+        "status": "divergent",
+        "mismatched_pixels": 315784,
+        "max_channel_error": 29,
+        "authoritative": true
+      }
+    ],
+    "earliest_observed_difference": {
+      "event": 270,
+      "target": "433",
+      "status": "divergent_diagnostic"
+    },
+    "limitations": [
+      "the earliest observed differing event is not a proven root cause; earlier operations in the unresolved interval were not checkpointed",
+      "captured state not implemented by Metal: gl_dither, multisample; no A/B experiment attributes the difference to it"
+    ],
+    "next_checkpoint": {
+      "event": 284,
+      "target": "0",
+      "resource": "fb:0",
+      "reason": "checkpoint the copy source immediately before the transfer to separate source contents from copy execution"
+    },
+    "note": "Explicit offline replay with the derived checkpoint request (allowed by PR3). The earliest authoritative divergence is the copy destination texture 442 at its first consumer; the copy source was not captured, so the source/copy split remains unresolved."
+  },
+  "live_case": {
+    "case_id": "m7-pr3-live-603",
+    "classification": "difference_with_partial_state_coverage",
+    "files": 1243,
+    "bytes": 492675783,
+    "case_json_sha256": "ebbf277b11d3a1392d1bf54721188a612ae696bfb87da5b19afdf916d5483cb4",
+    "verified": true,
+    "note": "Portable case under .local (gitignored); case.json carries a SHA-256 for every payload and gfx_replay_case verify passes."
+  },
+  "native_receipt_contract": {
+    "schema": "m7-shadow-shader-receipt/v1",
+    "bound_fields": [
+      "capture_frame_id",
+      "pid",
+      "session_id",
+      "trace_manifest_sha256",
+      "event_stream_sha256",
+      "event_stream_bytes",
+      "shaders_json_sha256",
+      "artifacts_sha256",
+      "checkpoint_request_file",
+      "checkpoint_request_sha256",
+      "checkpoint_count"
+    ],
+    "tests": "tests/test_m7_shadow_receipt.py covers valid binding, stale receipt, identity mismatch, request digest mismatch, missing request, count mismatch, path traversal and corrupt shader artifact."
+  },
+  "qualification_statuses": {
+    "axes": [
+      "capture_validity",
+      "frame_shader_identity",
+      "gpu_execution",
+      "resource_provenance",
+      "operation_coverage",
+      "rendering_state_coverage",
+      "pixel_comparison",
+      "first_divergence_confidence"
+    ],
+    "classifications": [
+      "qualified_match",
+      "qualified_difference",
+      "difference_with_partial_state_coverage",
+      "incomplete_capture",
+      "invalid_provenance",
+      "unsupported_state",
+      "gpu_execution_failure",
+      "incomplete_diagnostics"
+    ]
+  },
+  "limitations": [
+    "The live copy source (fb:0 at event 284) has no captured checkpoint because that launch did not enable --copy-source; source-vs-copy attribution remains open.",
+    "gl_dither and multisample are captured but unsupported; no A/B experiment establishes them as the cause.",
+    "The canonical title capture is known-partial for texture 442, so the diagnosis is honest about capture validity rather than claiming qualified_match.",
+    "The portable live case is 473 MiB because the sealed capture includes every referenced texture and vertex blob; it is stored under .local and not committed."
+  ]
+}

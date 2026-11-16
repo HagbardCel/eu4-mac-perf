@@ -779,7 +779,7 @@ class MetalReplayLibraryTests(unittest.TestCase):
                 nonlocal counter
                 counter += 1
                 run = Path(temporary) / f"run-{counter}"
-                _write_frame(run / "frame")
+                _write_frame(run / "frame", operation_count=2)
                 seal = json.loads(
                     (run / "frame" / "frame-seal.json").read_text()
                 )
@@ -790,8 +790,22 @@ class MetalReplayLibraryTests(unittest.TestCase):
                 )
                 coordinator_report = report_factory(seal)
 
+                from automation import gfx_frame_graph
+
+                request_path = shadow / "checkpoint-request.json"
+                gfx_frame_graph.write_checkpoint_request(
+                    gfx_frame_graph.build(run / "frame"), request_path)
+
                 def fake_run(command, **kwargs):
                     self.assertIn("translate", command)
+                    if coordinator_report.get("status") == "ok":
+                        request = json.loads(request_path.read_text())
+                        coordinator_report.update({
+                            "checkpoint_request_file": request_path.name,
+                            "checkpoint_request_sha256": _sha(request_path),
+                            "checkpoint_count": len(
+                                request.get("checkpoints") or []),
+                        })
                     (shadow / "shadow-report.json").write_text(
                         json.dumps(coordinator_report)
                     )
@@ -806,7 +820,6 @@ class MetalReplayLibraryTests(unittest.TestCase):
                     replay_timeout=5.0,
                     compare_timeout=5.0,
                     policy=None,
-                    no_compare=True,
                 )
                 with mock.patch.object(m6_frame.subprocess, "run",
                                        side_effect=fake_run):
