@@ -69,6 +69,28 @@ matches the frame's location inside a v2 case, and
 `gfx_frame_graph.load_frame_history` resolves a relative predecessor against
 the owning frame.
 
+### Per-frame shader provenance
+
+A live continuous capture can translate a program set per frame.  Packaging no
+longer copies one shared shader directory for every frame: for each selected
+frame it resolves the effective translation directory (`<frame>/shaders` first,
+matching the sequence CLI's per-frame override; an explicitly supplied
+directory, sibling `translated/` or the Metal result directory as fallbacks),
+copies it to `frames/NNNNNN/shaders`, and records `shader_dir`, the report
+digest and the captured program list in `sequence.json`.  No shader is
+translated again and no union cache is introduced.  The case-level `shaders/`
+directory remains the CLI fallback and is the target frame's own translation; it
+is never a merged report.
+
+`verify` requires each frame's shader report and every referenced MSL/GLSL/SPV
+payload to be declared and intact, requires every program referenced by that
+frame's draw events to be present and `ok`, and checks the captured stage
+identity (`source_sha256`) against the frame's translation.  A missing or
+mismatched translation fails before Metal replay.  If a selected frame has no
+available translation, packaging publishes an incomplete summary with
+`reason=shader_artifact_unavailable` instead of claiming independent
+reproducibility.
+
 ### Verification and replay
 
 `verify` for a v2 case detects:
@@ -126,9 +148,12 @@ directory.
 `verify` now requires the v2 inventory to be complete, not merely internally
 consistent:
 
-- every structurally required payload (sequence manifest, shader report,
-  diagnostics, dependency graph, each frame's sequence/trace/events/reference,
-  each checkpoint request and receipt) must be listed in `case.json.files`;
+- every structurally required payload (sequence manifest, per-frame shader
+  reports and their MSL/GLSL/SPV files, diagnostics, dependency graph, each
+  frame's sequence/trace/events/reference, each checkpoint request and receipt)
+  must be listed in `case.json.files`;
+- each frame's declared programs must match the programs its draw events
+  reference, including the captured stage digests;
 - within the authoritative payload directories (`frames/`, `shaders/`,
   `checkpoints/`) any file absent from the inventory is rejected, so a
   substituted shader, checkpoint or resource blob cannot hide outside the
@@ -159,8 +184,8 @@ renumbered 3).
 
 - Prefix source: 10,763 bytes; complete four-frame source: 13,684 bytes;
   excluded: 2,921 bytes (21.4%).
-- Relocated case on disk: 59,485 bytes (55 files) including shaders, checkpoints
-  and replay artifacts.  Immutable payloads are hard-linked before relocation.
+- Relocated case on disk: 70,528 bytes (70 files) including the per-frame
+  copies of the shared translation, checkpoints and replay artifacts.  Immutable payloads are hard-linked before relocation.
   The case digest is independent of the case/capture directory path.
 - The original campaign directory is removed before verification and replay.
 - Unfaulted relocated replay: final classification `qualified_match`.
@@ -185,7 +210,7 @@ renumbered 3).
   resource.  A further test runs the documented replay command into the case
   and re-verifies it, so scratch output cannot invalidate the package.
 - Budget tests cover `max_bytes=1` (explicit `case_budget`, nothing published),
-  a complete package measured at N=59,477 bytes and repackaged at N-1 (a
+  a complete package measured at N=70,520 bytes and repackaged at N-1 (a
   30,196-byte incomplete summary, no replay command, `verify` fails) and at N
   (complete and verifiable), a single-frame budget below its summary, and an
   over-budget run that leaves every source frame byte-identical.
@@ -197,8 +222,8 @@ to the target frame.  It is conservative, not provably minimal:
 
 | fixture | selected original frames | carrying resources | producing frames | prefix / full bytes | excluded |
 | --- | --- | --- | --- | --- | --- |
-| four-frame | 2, 3, 4 (target renumbered 3) | 500 | 2 | 10,763 / 13,684 (78.7%) | 1 frame, 2,921 bytes (21.4%); 55 files, 59,485 host bytes |
-| transitive five-frame | 2, 3, 4, 5 (target renumbered 4) | 500, 600 | 2, 3 | 15,025 / 17,946 (83.7%) | 1 frame, 2,921 bytes (16.3%); 68 files, 67,640 host bytes |
+| four-frame | 2, 3, 4 (target renumbered 3) | 500 | 2 | 10,763 / 13,684 (78.7%) | 1 frame, 2,921 bytes (21.4%); 70 files, 70,528 host bytes |
+| transitive five-frame | 2, 3, 4, 5 (target renumbered 4) | 500, 600 | 2, 3 | 15,025 / 17,946 (83.7%) | 1 frame, 2,921 bytes (16.3%); 88 files, 82,154 host bytes |
 
 In the transitive fixture only frames 2 and 3 actually produce the carried
 resources; frames 4 and 5 are the cleanup frame and the target.  Frame 4 is
@@ -218,9 +243,10 @@ verified and replayed with the original campaign removed.
 | item | value |
 | --- | --- |
 | Case schema | `gfx-strategy-b-case/v2` |
-| `sequence.json` SHA-256 | `00f937be…` |
-| Case manifest SHA-256 | `1cf2d71d…` |
-| Case size | 1,318,071,915 bytes, 3,508 files |
+| `sequence.json` SHA-256 | `c3dcbb7d…` |
+| Case manifest SHA-256 | `791c20bc…` |
+| Case size | 1,322,029,913 bytes, 3,814 files |
+| Shader layout | per-frame `frames/NNNNNN/shaders`, target fallback |
 | Verification | ok, no problems |
 | Replay target | sequence 3 |
 | Campaign | complete |
@@ -259,6 +285,10 @@ Receipt: [followup-b-relocation-receipt.json](followup-b-relocation-receipt.json
 - A target-frame cleanup delete of a carried resource is refused at packaging
   instead of being advertised as reproducible: replay would remove the resource
   from the final Metal history before the carried-sample provenance check.
+- Per-frame shader provenance assumes the frame's declared translation covers
+  its captured programs; it does not merge arbitrary program sets into a
+  synthetic union.  Frames without a usable translation are explicitly
+  incomplete rather than silently reusing another frame's shader report.
 - Portable Linux CI skips the macOS-only native/Metal tests.  A green portable
   check is not macOS runtime evidence.
 - The three-frame canonical prefix is larger than the 512 MiB default budget.

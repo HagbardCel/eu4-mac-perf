@@ -302,7 +302,12 @@ hard-linked and mutable sequence/seal metadata is copied.  Each selected frame's
 effective translation directory is copied into `frames/NNNNNN/shaders` (the
 sequence CLI's per-frame override), so frames that use different programs replay
 without a shared union; `sequence.json` records each frame's shader directory,
-report digest and captured programs.
+report digest and captured programs.  A deterministic three-frame fixture whose
+frames require programs 1, 3 and 2 respectively packages per-frame translations
+at `frames/00000{1,2,3}/shaders` (case fallback: program 2), relocates after
+deleting the originals, and replays through one persistent Metal session to
+`qualified_match` with 0/16 pixel difference, one carried binding and no
+external-capture binding.
 
 The verifier detects missing/reordered predecessors, corrupt payloads, wrong
 session identity, missing lifecycle/mutation records, wrong generations,
@@ -327,15 +332,15 @@ A deterministic four-frame fixture (producer, carried, target) relocates and
 reproduces a controlled cross-frame divergence at the target's draw after the
 original campaign directory is removed.  The required contiguous prefix is
 10,763 source bytes versus 13,684 for the full four-frame sequence (21.4%
-excluded, 55 files, 59,485 bytes).  Prefix selection is conservative rather than provably minimal:
+excluded, 70 files, 70,528 bytes).  Prefix selection is conservative rather than provably minimal:
 it keeps the contiguous run from the earliest transitive producer because the
 predecessor digest chain and frame-start carried snapshots bind the sequence.
 A three-frame prefix
 built from the canonical authentic capture relocates with
 `carried_bindings=1`, `history=ok`, 273 Metal render-target bindings and 0 final
 pixel differences; it remains `incomplete_diagnostics` because the historical
-capture has no same-process seal.  Case manifest `1cf2d71d…`, 3,508 files /
-1,318,071,915 bytes, with a case digest independent of the capture/case
+capture has no same-process seal.  Case manifest `791c20bc…`, 3,814 files /
+1,322,029,913 bytes, with a case digest independent of the capture/case
 directory path (copied shader translation metadata retains its own provenance
 paths).  Report:
 [follow-up B](../analysis/m7/followup-b-portable-reproduction.md),

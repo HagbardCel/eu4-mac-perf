@@ -2,12 +2,12 @@
   "schema": "m7-followup-b-relocation-receipt/v1",
   "kind": "authentic_captured_frames_with_synthetic_ordered_packaging",
   "fixture": "canonical menu-occ300 captured frame content",
-  "tested_head": "ec2a6c9a",
+  "tested_head": "8f8fe031",
   "case": {
     "schema": "gfx-strategy-b-case/v2",
     "case_id": "canonical-prefix",
-    "sequence_file_sha256": "00f937be84864ac2a527042857974362570b2b1342230885f70a9d116049353c",
-    "case_json_sha256": "1cf2d71d07b01532d2c39c9b184cbe9652a3120fc9a2da9534b8bfbe94ff0381",
+    "sequence_file_sha256": "c3dcbb7d650ec1d91639abbb0062402981315f3258910b9651e1a558b9f9f71d",
+    "case_json_sha256": "791c20bc450785f1d080d05219dc4329691874e39163719cb81ab0f06e739bac",
     "frames": [
       {
         "index": 1,
@@ -35,15 +35,16 @@
       }
     ],
     "frame_count": 3,
-    "file_count": 3508,
+    "file_count": 3814,
     "minimal_prefix": false,
     "prefix_semantics": "conservative contiguous transitive producer closure; not graph-minimal",
     "excluded_frames": 0,
     "source_prefix_bytes": 1279168625,
     "full_source_bytes": 1279168625,
     "excluded_source_bytes": 0,
-    "bytes_on_disk": 1318071915,
+    "bytes_on_disk": 1322029913,
     "case_digest_path_independent": true,
+    "shader_layout": "one translated directory copied per selected frame into frames/NNNNNN/shaders; case/shaders is the target frame's fallback",
     "digest_note": "Source-byte metrics are measured with capture-path metadata normalized; copied replay JSON/JSONL artifacts are scrubbed of capture roots. Two captures at different path lengths produce the same case digest."
   },
   "relocation": {
@@ -137,8 +138,9 @@
       "source_prefix_bytes": 10763,
       "full_source_bytes": 13684,
       "excluded_source_bytes": 2921,
-      "case_file_count": 55,
-      "case_bytes": 59485
+      "case_file_count": 70,
+      "case_bytes": 70528,
+      "shader_layout": "shared explicit translation copied per frame"
     },
     "transitive_five_frame": {
       "selected_original_frames": [
@@ -160,15 +162,48 @@
       "source_prefix_bytes": 15025,
       "full_source_bytes": 17946,
       "excluded_source_bytes": 2921,
-      "case_file_count": 68,
-      "case_bytes": 67640,
+      "case_file_count": 88,
+      "case_bytes": 82154,
       "conservative_note": "Interior cleanup/target frames are retained because the predecessor digest chain and cumulative carried snapshots bind the ordered sequence; selection is not claimed minimal. A target-frame cleanup delete of a carried resource is refused."
+    },
+    "heterogeneous_shader_frames": {
+      "frames": 3,
+      "programs_per_frame": [
+        [
+          1
+        ],
+        [
+          3
+        ],
+        [
+          2
+        ]
+      ],
+      "shader_dirs": [
+        "frames/000001/shaders",
+        "frames/000002/shaders",
+        "frames/000003/shaders"
+      ],
+      "case_fallback_programs": [
+        2
+      ],
+      "case_file_count": 54,
+      "case_bytes": 62745,
+      "case_json_sha256": "f869601397e9b8bf0260323a45e46f2f3d84d6ee6e0cc54a5de93cebcb453e36",
+      "relocated_verify": "ok",
+      "replay": "qualified_match, one persistent session, target sequence 3, 0/16 mismatched pixels, history ok, carried_bindings 1, metal_render_target_bindings 1, sampled 600 source=metal_render_target and no external_capture binding",
+      "negative_cases": [
+        "missing MSL file",
+        "dropped captured program",
+        "tampered captured stage identity",
+        "unavailable frame translation -> shader_artifact_unavailable incomplete summary"
+      ]
     }
   },
   "budget": {
     "probe_case_id": "budget",
-    "complete_package_bytes": 59477,
-    "complete_package_files": 55,
+    "complete_package_bytes": 70520,
+    "complete_package_files": 70,
     "at_budget": "complete and verifiable",
     "one_byte_below": "incomplete summary of 30,196 bytes, no replay command, verify fails",
     "one_byte_budget": "explicit case_budget error, destination and staging absent",
@@ -176,8 +211,8 @@
   },
   "canonical_determinism": {
     "capture_paths_tested": 2,
-    "case_json_sha256_reproduced": "1cf2d71d07b01532d2c39c9b184cbe9652a3120fc9a2da9534b8bfbe94ff0381",
-    "note": "The same captured content packaged at two different capture/case path lengths produces the same case.json digest; a synthetic regression asserts this explicitly."
+    "case_json_sha256_reproduced": "791c20bc450785f1d080d05219dc4329691874e39163719cb81ab0f06e739bac",
+    "note": "The same captured content packaged at two different capture/case path lengths produces the same case.json digest; a synthetic regression also varies the capture path."
   },
-  "tested_head_note": "Measurements were produced from this code commit.  A documentation-only commit updates the report, status and this receipt; replay-critical code is unchanged."
+  "tested_head_note": "Measurements were produced from this code commit (rebased onto main after PR #204).  Documentation-only commits update the report, status and this receipt; replay-critical code is unchanged."
 }
