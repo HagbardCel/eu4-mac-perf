@@ -111,9 +111,13 @@ shader-receipt/session-creation failures and Objective-C exceptions all build
 from one identity base (`shadow_report_base`), so every report carries the same
 `capture_frame_id`, `pid`, `session_id`, `capture_dir`, reference/manifest
 digests and operation count. A successful report has `status=ok`,
-`stage=complete`, an empty `error` and an empty `failure` object; no fallback
-failure text is synthesized on success. A caught exception keeps its original
-description under `stage=internal_exception`.
+`stage=complete`, an empty `error`, an empty `failure` object and
+`timed_out=false`; no fallback failure text is synthesized on success. The
+shared non-replay failure builder takes an explicit timeout classification:
+the shader-ready wait reports `stage=shader_wait`, `timed_out=true` at both the
+top level and in `failure`, while shader-receipt, session-creation and
+Objective-C exception reports are explicitly non-timeouts. A caught exception
+keeps its original description under `stage=internal_exception`.
 
 `automation/m6_frame.py` uses one `shadow_failure_detail()` helper for
 `coordinator.json` and `capture-report.json`, so the native stage and underlying
@@ -168,18 +172,19 @@ The native ABI host gained `--only-event`, `--stop-after`, `--checkpoints`,
 `--seed-marked`, `--capture-pre`, `--capture-post`, `--depth-from-prefix` and
 structured `stage`/`failure` output; it still exercises the v2 C ABI only.
 
-Focused final evidence: run `20261116T092007Z-fc0178fd`, 124 tests across the
-required replay, resolve, seal, m6-frame, checkpoint and output-safety modules
-— passed. `tests/test_m7_metal_replay.py` alone is 20 tests
-(`20261116T091951Z-c35a9c0b`), including the native shadow-report host, the
-success/failure/exception semantics, first-failure and stale-artifact cases. A
+Focused final evidence: run `20261116T094000Z-4084c7fd`, 112 tests across the
+required replay, resolve, seal, m6-frame and checkpoint modules — passed.
+`tests/test_m7_metal_replay.py` alone is 20 tests
+(`20261116T093941Z-0ea7ce53`), including the native shadow-report host, the
+success/failure/exception/shader-wait-timeout semantics, first-failure and
+stale-artifact cases. A
 base-worktree comparison at `dac2ea92` (`20261116T080832Z-6dd0c6ce`) shows the
 one `test_agent_tools` failure found during a broader run is pre-existing, not
 introduced here.
 
 Portable CI was executed on the tracked base plus this change in a Linux
 Python 3.14 container as a non-root CI user with clang, NumPy 2.5.4 and Pillow
-12.3.0: `Ran 3098 tests in 124.400s`, `OK (skipped=292)`, exit 0. Skipped tests
+12.3.0: `Ran 3098 tests in 125.777s`, `OK (skipped=292)`, exit 0. Skipped tests
 are platform-specific native/macOS or absent-evidence cases, matching the
 portable GitHub Actions selection. Structured evidence is recorded in
 [pr3-replay-diagnostics-evidence.json](pr3-replay-diagnostics-evidence.json).

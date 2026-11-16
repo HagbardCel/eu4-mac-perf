@@ -116,8 +116,11 @@ generic message. Every report path (normal replay, receipt/session failure and
 Objective-C exception) shares the sealed capture identity; a successful report
 has `status=ok`, `stage=complete`, an empty error and no failure object, while a
 caught exception keeps its original description under `internal_exception`.
-The earliest meaningful replay failure remains primary when a later boundary
-wait or artifact write fails, and a failed replay does not advertise artifacts
+The shader-ready wait is reported as `shader_wait`/`timed_out=true` at both the
+report top level and in the structured failure; shader-receipt,
+session-creation and exception reports are explicitly non-timeouts. The
+earliest meaningful replay failure remains primary when a later boundary wait
+or artifact write fails, and a failed replay does not advertise artifacts
 left by an earlier run in the same output directory. Requested checkpoint
 readback failures and `metal-frame.bgra` write failures are now failures rather
 than silent success.

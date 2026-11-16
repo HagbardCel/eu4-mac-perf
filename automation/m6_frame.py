@@ -1340,6 +1340,7 @@ def apply_shadow_report(result: dict, shadow_report: dict) -> str | None:
     """
     result["shadow"] = shadow_report
     result["shadow_stage"] = shadow_report.get("stage")
+    result["shadow_timed_out"] = bool(shadow_report.get("timed_out", False))
     failure = shadow_report.get("failure")
     if isinstance(failure, dict) and failure:
         result["shadow_failure"] = failure
@@ -1519,6 +1520,7 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
         return 1
     result["metal"] = report
     result["stage"] = report.get("stage")
+    result["timed_out"] = bool(report.get("timed_out", False))
     if isinstance(report.get("failure"), dict) and report.get("failure"):
         result["failure"] = report.get("failure")
     provenance_error = None

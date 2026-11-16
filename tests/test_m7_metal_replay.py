@@ -634,6 +634,7 @@ class MetalReplayLibraryTests(unittest.TestCase):
                 self.assertIn(report["status"], ("ok", "failed"))
                 self.assertTrue(report["stage"])
                 self.assertIsInstance(report["error"], str)
+                self.assertIn(report["timed_out"], (0, 1))
 
         success = reports["success"]
         self.assertEqual(success["status"], "ok")
@@ -644,6 +645,8 @@ class MetalReplayLibraryTests(unittest.TestCase):
         self.assertEqual(success["metal"]["failure"], {})
         self.assertEqual(success["metal"]["stage"], "complete")
         self.assertEqual(success["metal"]["ok"], 1)
+        self.assertEqual(success["timed_out"], 0)
+        self.assertEqual(success["metal"]["timed_out"], 0)
 
         failed = reports["replay_failure"]
         self.assertEqual(failed["status"], "failed")
@@ -662,18 +665,32 @@ class MetalReplayLibraryTests(unittest.TestCase):
         self.assertEqual(no_json["failure"]["operation"], 3)
         self.assertEqual(no_json["failure"]["event"], 3)
 
+        wait_timeout = reports["shader_wait_timeout"]
+        self.assertEqual(wait_timeout["status"], "failed")
+        self.assertEqual(wait_timeout["stage"], "shader_wait")
+        self.assertEqual(wait_timeout["timed_out"], 1)
+        self.assertEqual(wait_timeout["failure"]["timed_out"], True)
+        self.assertEqual(wait_timeout["error"],
+                         "shader_translation_timeout")
+        self.assertEqual(wait_timeout["failure"]["error"],
+                         "shader_translation_timeout")
+
         receipt = reports["shader_receipt"]
         self.assertEqual(receipt["status"], "failed")
         self.assertEqual(receipt["stage"], "shader_receipt")
         self.assertEqual(receipt["error"],
                          "shader receipt identity mismatch")
         self.assertEqual(receipt["failure"]["stage"], "shader_receipt")
+        self.assertEqual(receipt["timed_out"], 0)
+        self.assertEqual(receipt["failure"]["timed_out"], False)
 
         create = reports["metal_create"]
         self.assertEqual(create["status"], "failed")
         self.assertEqual(create["stage"], "metal_create")
         self.assertEqual(create["error"], "no Metal device")
         self.assertEqual(create["failure"]["stage"], "metal_create")
+        self.assertEqual(create["timed_out"], 0)
+        self.assertEqual(create["failure"]["timed_out"], False)
 
         exception = reports["internal_exception"]
         self.assertEqual(exception["status"], "failed")
@@ -682,6 +699,8 @@ class MetalReplayLibraryTests(unittest.TestCase):
         self.assertEqual(exception["failure"]["stage"], "internal_exception")
         self.assertEqual(exception["failure"]["error"],
                          "controlled bridge exception")
+        self.assertEqual(exception["timed_out"], 0)
+        self.assertEqual(exception["failure"]["timed_out"], False)
 
     def test_shadow_and_coordinator_preserve_native_failure(self):
         from tests.test_m7_frame_seal import _write_frame
@@ -846,6 +865,61 @@ class MetalReplayLibraryTests(unittest.TestCase):
             self.assertFalse(coordinator["execution_failed"])
             self.assertNotIn("provenance_error", coordinator)
             self.assertNotIn("error", coordinator)
+
+            def timeout_report_for(seal):
+                return {
+                    "schema": "m7-shadow-report/v1",
+                    "mode": "single-frame",
+                    "status": "failed",
+                    "stage": "shader_wait",
+                    "error": "shader_translation_timeout",
+                    "timed_out": True,
+                    "failure": {
+                        "stage": "shader_wait",
+                        "operation": -1,
+                        "event": -1,
+                        "kind": "frame",
+                        "error": "shader_translation_timeout",
+                        "timed_out": True,
+                        "command_status": 0,
+                    },
+                    "capture_frame_id": seal["capture_frame_id"],
+                    "pid": seal["pid"],
+                    "session_id": seal["session_id"],
+                    "capture_dir": seal["capture_dir"],
+                    "gl_reference_sha256": seal["reference_sha256"],
+                    "trace_manifest_sha256": seal["manifest_sha256"],
+                    "operation_count": seal["operation_count"],
+                    "metal": {"status": "failed", "stage": "shader_wait"},
+                }
+
+            timeout_summary: dict = {}
+            timeout_detail = m6_frame.apply_shadow_report(
+                timeout_summary, timeout_report_for({
+                    "capture_frame_id": 1,
+                    "pid": 2,
+                    "session_id": "s",
+                    "capture_dir": "/c",
+                    "reference_sha256": "r",
+                    "manifest_sha256": "m",
+                    "operation_count": 3,
+                })
+            )
+            self.assertEqual(timeout_summary["shadow_stage"], "shader_wait")
+            self.assertTrue(timeout_summary["shadow_timed_out"])
+            self.assertTrue(timeout_summary["shadow_failure"]["timed_out"])
+            self.assertIn("shader_translation_timeout", timeout_detail)
+
+            status, coordinator, _ = run_coordinator(timeout_report_for)
+            self.assertEqual(status, 1)
+            self.assertEqual(coordinator["status"], "failed")
+            self.assertEqual(coordinator["stage"], "shader_wait")
+            self.assertTrue(coordinator["timed_out"])
+            self.assertTrue(coordinator["failure"]["timed_out"])
+            self.assertIn("shader_translation_timeout", coordinator["error"])
+            self.assertTrue(coordinator["provenance_ok"])
+            self.assertTrue(coordinator["execution_failed"])
+            self.assertNotIn("provenance_error", coordinator)
 
             def mismatched_report(seal):
                 value = failed_report(seal)

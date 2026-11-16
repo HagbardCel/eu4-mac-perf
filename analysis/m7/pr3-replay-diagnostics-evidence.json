@@ -120,24 +120,41 @@
       "shadow_stage": "event_encode",
       "shadow_error_contains_native_detail": true,
       "structured_failure_preserved": true
+    },
+    "shader_wait_timeout": {
+      "shadow_report": {
+        "stage": "shader_wait",
+        "timed_out": true,
+        "failure_timed_out": true
+      },
+      "coordinator_json": {
+        "stage": "shader_wait",
+        "timed_out": true,
+        "provenance_ok": true,
+        "error_contains_timeout": true
+      },
+      "capture_report": {
+        "shadow_stage": "shader_wait",
+        "shadow_timed_out": true,
+        "shadow_failure_timed_out": true
+      }
     }
   },
   "tests": {
     "focused_final": {
-      "id": "20261116T092007Z-fc0178fd",
+      "id": "20261116T094000Z-4084c7fd",
       "status": "passed",
-      "tests": 124,
+      "tests": 112,
       "modules": [
         "tests.test_m7_metal_replay",
         "tests.test_resolve_replay",
         "tests.test_m7_frame_seal",
         "tests.test_m6_frame",
-        "tests.test_gfx_replay_checkpoints",
-        "tests.test_gfx_output_safety"
+        "tests.test_gfx_replay_checkpoints"
       ]
     },
     "replay_module": {
-      "id": "20261116T091951Z-c35a9c0b",
+      "id": "20261116T093941Z-0ea7ce53",
       "status": "passed",
       "tests": 20
     },
@@ -179,7 +196,8 @@
       "status": "ok",
       "stage": "complete",
       "error": "",
-      "failure": {}
+      "failure": {},
+      "timed_out": false
     },
     "internal_exception": {
       "stage": "internal_exception",
@@ -191,6 +209,25 @@
       "execution_failed": true,
       "mismatch_provenance_ok": false,
       "mismatch_error_kept_native": true
+    },
+    "shader_wait_timeout": {
+      "status": "failed",
+      "stage": "shader_wait",
+      "timed_out": true,
+      "failure_timed_out": true,
+      "error": "shader_translation_timeout",
+      "identity_preserved": true
+    },
+    "non_timeout_failures": {
+      "shader_receipt": {
+        "timed_out": false
+      },
+      "metal_create": {
+        "timed_out": false
+      },
+      "internal_exception": {
+        "timed_out": false
+      }
     }
   },
   "first_failure_contract": {

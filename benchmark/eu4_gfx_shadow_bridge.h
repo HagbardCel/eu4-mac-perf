@@ -27,12 +27,13 @@ int eu4_gfx_shadow_enabled(void);
  * subscribing to a live frame, waiting for shaders or creating a Metal
  * device.  `exception_reason` selects the internal_exception path; otherwise
  * `result` selects the normal success/failure path; otherwise
- * `failure_stage`/`failure_error` select a non-replay bridge failure.  Returns
- * a malloc'ed JSON string (caller frees) or NULL on allocation failure. */
+ * `failure_stage`/`failure_error` select a non-replay bridge failure and
+ * `timed_out` supplies its explicit timeout classification.  Returns a
+ * malloc'ed JSON string (caller frees) or NULL on allocation failure. */
 char *eu4_gfx_shadow_test_report_json(
     const eu4_frame_capture_descriptor *capture,
     const eu4_metal_replay_result *result, int code,
-    const char *failure_stage, const char *failure_error,
+    const char *failure_stage, const char *failure_error, int timed_out,
     const char *exception_reason);
 
 #ifdef __cplusplus

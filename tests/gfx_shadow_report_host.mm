@@ -95,7 +95,7 @@ int main(int argc, const char *argv[]) {
                  sizeof(success.metal_frame_sha256), "%s", "frame-sha");
         print_report(@"success",
                      eu4_gfx_shadow_test_report_json(
-                         &capture, &success, 0, NULL, NULL, NULL));
+                         &capture, &success, 0, NULL, NULL, 0, NULL));
 
         eu4_metal_replay_result failure;
         memset(&failure, 0, sizeof(failure));
@@ -117,27 +117,32 @@ int main(int argc, const char *argv[]) {
         }
         print_report(@"replay_failure",
                      eu4_gfx_shadow_test_report_json(
-                         &capture, &failure, 1, NULL, NULL, NULL));
+                         &capture, &failure, 1, NULL, NULL, 0, NULL));
 
         eu4_metal_replay_result failure_no_json = failure;
         failure_no_json.result_json[0] = 0;
         print_report(@"replay_failure_no_json",
                      eu4_gfx_shadow_test_report_json(
-                         &capture, &failure_no_json, 1, NULL, NULL, NULL));
+                         &capture, &failure_no_json, 1, NULL, NULL, 0, NULL));
+
+        print_report(@"shader_wait_timeout",
+                     eu4_gfx_shadow_test_report_json(
+                         &capture, NULL, 0, "shader_wait",
+                         "shader_translation_timeout", 1, NULL));
 
         print_report(@"shader_receipt",
                      eu4_gfx_shadow_test_report_json(
                          &capture, NULL, 0, "shader_receipt",
-                         "shader receipt identity mismatch", NULL));
+                         "shader receipt identity mismatch", 0, NULL));
 
         print_report(@"metal_create",
                      eu4_gfx_shadow_test_report_json(
                          &capture, NULL, 0, "metal_create",
-                         "no Metal device", NULL));
+                         "no Metal device", 0, NULL));
 
         print_report(@"internal_exception",
                      eu4_gfx_shadow_test_report_json(
-                         &capture, NULL, 0, NULL, NULL,
+                         &capture, NULL, 0, NULL, NULL, 0,
                          "controlled bridge exception"));
     }
     return 0;

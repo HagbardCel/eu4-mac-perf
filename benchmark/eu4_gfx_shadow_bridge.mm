@@ -233,15 +233,16 @@ static NSMutableDictionary *shadow_report_base(
 
 static NSDictionary *shadow_report_for_failure(
     const eu4_frame_capture_descriptor *capture, NSString *shader_path,
-    NSString *stage, NSString *error, uint64_t started_ns) {
+    NSString *stage, NSString *error, BOOL timed_out, uint64_t started_ns) {
     NSMutableDictionary *report = shadow_report_base(capture, shader_path);
     NSString *stage_text = stage.length > 0 ? stage : @"metal_replay";
     NSString *error_text = error.length > 0 ? error : @"Metal replay failed";
     report[@"status"] = @"failed";
     report[@"stage"] = stage_text;
     report[@"error"] = error_text;
+    report[@"timed_out"] = @(timed_out);
     report[@"failure"] = shadow_failure_object(stage_text, error_text, -1,
-                                               @"frame", NO, 0);
+                                               @"frame", timed_out, 0);
     report[@"total_duration_ns"] = @(shadow_now_ns() - started_ns);
     return report;
 }
@@ -253,7 +254,7 @@ static NSDictionary *shadow_report_for_exception(
         ? reason
         : @"unknown Objective-C exception";
     return shadow_report_for_failure(capture, shader_path,
-                                     @"internal_exception", description,
+                                     @"internal_exception", description, NO,
                                      started_ns);
 }
 
@@ -410,6 +411,7 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
     BOOL detailed_report_written = NO;
     NSString *report_stage = @"shader_wait";
     NSString *report_error = @"";
+    BOOL report_timed_out = NO;
     @autoreleasepool {
         char output[PATH_MAX];
         char shaders[PATH_MAX];
@@ -437,6 +439,7 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
             if (!wait_for_file(ready, wait_ms)) {
                 report_stage = @"shader_wait";
                 report_error = @"shader_translation_timeout";
+                report_timed_out = YES;
             } else {
                 char shader_json_sha[65] = {0};
                 NSString *receipt_failure = @"";
@@ -446,6 +449,7 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
                     report_error = receipt_failure.length > 0
                         ? receipt_failure
                         : @"shader receipt verification failed";
+                    report_timed_out = NO;
                 } else {
                     eu4_metal_replay_config config;
                     memset(&config, 0, sizeof(config));
@@ -476,6 +480,7 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
                         report_error = create_error[0] != 0
                             ? @(create_error)
                             : @"Metal replay session creation failed";
+                        report_timed_out = NO;
                     } else {
                         eu4_metal_replay_result result;
                         int code = eu4_metal_replay_frame(active_session,
@@ -485,6 +490,8 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
                             g_started_ns);
                         report_stage = report[@"stage"] ?: @"metal_replay";
                         report_error = report[@"error"] ?: @"";
+                        report_timed_out =
+                            [report[@"timed_out"] boolValue];
                         BOOL report_written = write_report(report_path, report);
                         detailed_report_written = report_written;
                         if (result.ok && report_written) {
@@ -493,6 +500,7 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
                             status = 1;
                             report_stage = @"report_write";
                             report_error = @"shadow-report.json write failed";
+                            report_timed_out = NO;
                         }
                     }
                 }
@@ -500,7 +508,7 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
             if (status != 0 && !detailed_report_written) {
                 NSDictionary *report = shadow_report_for_failure(
                     capture, shader_path, report_stage, report_error,
-                    g_started_ns);
+                    report_timed_out, g_started_ns);
                 detailed_report_written = write_report(report_path, report);
             }
         } @catch (NSException *exception) {
@@ -514,6 +522,7 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
             }
             report_stage = @"internal_exception";
             report_error = reason;
+            report_timed_out = NO;
             NSDictionary *report = shadow_report_for_exception(
                 capture, shader_path, reason, g_started_ns);
             detailed_report_written = write_report(report_path, report);
@@ -532,7 +541,7 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
 char *eu4_gfx_shadow_test_report_json(
     const eu4_frame_capture_descriptor *capture,
     const eu4_metal_replay_result *result, int code,
-    const char *failure_stage, const char *failure_error,
+    const char *failure_stage, const char *failure_error, int timed_out,
     const char *exception_reason) {
     if (capture == NULL) {
         return NULL;
@@ -552,7 +561,7 @@ char *eu4_gfx_shadow_test_report_json(
                 capture, nil,
                 failure_stage != NULL ? @(failure_stage) : @"shader_wait",
                 failure_error != NULL ? @(failure_error) : @"",
-                shadow_now_ns());
+                timed_out != 0, shadow_now_ns());
         }
         NSData *json = [NSJSONSerialization dataWithJSONObject:report
                                                        options:0
