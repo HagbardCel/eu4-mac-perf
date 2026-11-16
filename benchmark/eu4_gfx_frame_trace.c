@@ -3150,6 +3150,9 @@ static int continuous_write_frame_sequence(
         i = j;
     }
     for (int i = 0; i < g.pending_mutation_count; i++) {
+        if (used + 160 >= sizeof(lifecycle)) {
+            break;
+        }
         used += (size_t)snprintf(
             lifecycle + used, sizeof(lifecycle) - used,
             "%s{\"kind\":\"mutation\",\"operation\":\"%s\","
