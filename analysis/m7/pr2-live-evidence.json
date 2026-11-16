@@ -8,7 +8,7 @@
     "pr1_pr": "https://github.com/HagbardCel/eu4-mac-perf/pull/199",
     "pr2_branch": "m7/pr2-inprocess-metal",
     "stacked": true,
-    "pr2_commit": "f824b8e"
+    "pr2_commit": "7eae228"
   },
   "launch": {
     "command": "python3.14 -m automation.m6_frame capture --output .local/m7/pr2-shadow-live-6 --callers 0x103b3c8 --min-draws 1 --occurrence 300 --boundary scene --seal --shadow --shadow-timeout-ms 120000 --shadow-wait-ms 180000 --max-draws 1024 --duration 90 --timeout 600 --background --timeline",
