@@ -113,6 +113,7 @@ static void reset_env(void) {
     unsetenv("EU4_GFX_FRAME_TRACE_TEST_ONLY");
     unsetenv("EU4_GFX_FRAME_TRACE_TEST_FAIL_REFERENCE");
     unsetenv("EU4_GFX_FRAME_TRACE_TEST_FAIL_MANIFEST_HASH");
+    unsetenv("EU4_GFX_FRAME_TRACE_TEST_FAIL_EVENT_DIGEST");
     unsetenv("EU4_GFX_FRAME_TRACE_TIMEOUT_MS");
     unsetenv("EU4_GFX_FRAME_SEAL");
     unsetenv("EU4_GFX_FRAME_OBSERVE_DIR");
@@ -398,6 +399,9 @@ static int scenario_seal(const char *directory, const char *mode) {
     }
     if (strcmp(mode, "manifest-hash") == 0) {
         setenv("EU4_GFX_FRAME_TRACE_TEST_FAIL_MANIFEST_HASH", "1", 1);
+    }
+    if (strcmp(mode, "event-digest") == 0) {
+        setenv("EU4_GFX_FRAME_TRACE_TEST_FAIL_EVENT_DIGEST", "1", 1);
     }
     if (strcmp(mode, "timeout") == 0) {
         setenv("EU4_GFX_FRAME_TRACE_TIMEOUT_MS", "1", 1);

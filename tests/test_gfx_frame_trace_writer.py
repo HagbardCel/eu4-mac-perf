@@ -246,6 +246,23 @@ class FrameTraceWriterTests(unittest.TestCase):
             self.assertFalse(seal["readback_ok"])
             self.assertEqual(seal["failure_reason"], "reference_read")
 
+    def test_event_digest_failure_invalidates_stream_and_never_notifies(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            result = self._run("seal-event-digest", directory)
+            self.assertIn("callback_calls=0", result.stdout)
+            self.assertIn("notifications=0", result.stdout)
+            manifest = json.loads(
+                (directory / "frame-trace.json").read_text()
+            )
+            self.assertFalse(manifest["complete"])
+            self.assertFalse(manifest["stream_validated"])
+            self.assertEqual(manifest["reason"], "event_stream_digest")
+            seal = self._seal(directory)
+            self.assertFalse(seal["sealed"])
+            self.assertFalse(seal["event_stream_verified"])
+            self.assertEqual(seal["failure_reason"], "event_stream_digest")
+
     def test_manifest_digest_failure_is_explicit_and_not_notified(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary) / "capture"

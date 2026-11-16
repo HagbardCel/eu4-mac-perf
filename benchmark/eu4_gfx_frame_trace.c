@@ -135,6 +135,7 @@ static struct {
     int test_fail_flush;
     int test_fail_reference;
     int test_fail_manifest_hash;
+    int test_fail_event_digest;
     int have_seed;
 
     /* Authoritative same-process identity and one-shot handoff. */
@@ -898,6 +899,10 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
             getenv("EU4_GFX_FRAME_TRACE_TEST_FAIL_MANIFEST_HASH");
         g.test_fail_manifest_hash =
             fail_manifest != NULL && strcmp(fail_manifest, "1") == 0;
+        const char *fail_event_digest =
+            getenv("EU4_GFX_FRAME_TRACE_TEST_FAIL_EVENT_DIGEST");
+        g.test_fail_event_digest =
+            fail_event_digest != NULL && strcmp(fail_event_digest, "1") == 0;
     }
     if (observe_dir != NULL && observe_dir[0] == '/') {
         g.stream_only = (dir == NULL || dir[0] == 0);
@@ -2807,6 +2812,9 @@ static void finish_capture_ex(const char *reason, int allow_reference) {
         char events_path[FTRACE_PATH];
         snprintf(events_path, sizeof(events_path), "%s/frame-events.jsonl",
                  g.dir);
+        if (g.test_only && g.test_fail_event_digest) {
+            unlink(events_path);
+        }
         struct stat events_stat;
         if (stat(events_path, &events_stat) == 0 && events_stat.st_size > 0 &&
             file_sha256(events_path, g.events_sha) == 0) {
@@ -2817,6 +2825,7 @@ static void finish_capture_ex(const char *reason, int allow_reference) {
         }
     }
     stream_validated = stream_validated && g.events_verified;
+    g.stream_validated = stream_validated;
     const char *manifest_reason;
     if (g.capture_failed) {
         manifest_reason = g_capture_failure_reason != NULL

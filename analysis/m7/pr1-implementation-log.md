@@ -56,8 +56,11 @@
    `PresentScene` exit (after a possible swap). Moved it to entry, added the
    `scene_entry_missed` incomplete path, and reordered the native scene
    scenarios to model draws-then-entry-then-exit.
-4. Final run (pid 7100) sealed capture id 1 with 325 events and one verified
-   notification, then terminated normally through the launcher.
+4. Run 4 (pid 7100) established the entry boundary but used ABI-1 seals without
+   an event-stream digest; it is historical evidence only.
+5. Final run (pid 16791) sealed capture id 1 with 325 events, event stream
+   `31d03c73…` / 6,392,559 bytes, and one verified notification, then terminated
+   normally through the launcher.
 
 ## Known limits
 

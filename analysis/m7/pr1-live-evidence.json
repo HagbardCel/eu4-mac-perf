@@ -10,7 +10,7 @@
     "pr1_base": "main (retargeted after #198 merged); 271cd04 is an ancestor"
   },
   "launch": {
-    "command": "python3.14 -m automation.m6_frame capture --output .local/m7/pr1-live-seal-4 --callers 0x103b3c8 --min-draws 1 --occurrence 300 --boundary scene --seal --seal-log --seal-timeout-ms 600000 --max-draws 1024 --duration 90 --timeout 600 --background --timeline",
+    "command": "python3.14 -m automation.m6_frame capture --output .local/m7/pr1-live-seal-5 --callers 0x103b3c8 --min-draws 1 --occurrence 300 --boundary scene --seal --seal-log --seal-timeout-ms 600000 --max-draws 1024 --duration 90 --timeout 600 --background --timeline",
     "selection": {
       "callers": [
         "0x103b3c8"
@@ -49,7 +49,7 @@
       "tool_recorded_terminated": true,
       "note": "The sealed frame and notification completed before termination. The generic ops observer recorded events=0 because retention=state and no target draw was requested, so launcher-report accepted=false; this is unrelated to the frame seal."
     },
-    "eu4_processes_evidence": "launcher-report records one pid (7100); the launch tool starts exactly one process and the host lease was free after termination. No second EU4 process is started by the seal path."
+    "eu4_processes_evidence": "launcher-report records one pid (16791); the launch tool starts exactly one process and the host lease was free after termination. No second EU4 process is started by the seal path."
   },
   "frame": {
     "capture_frame_id": 1,
@@ -64,14 +64,6 @@
     "draw_count": 315,
     "clear_count": 9,
     "copy_count": 1,
-    "event_kinds": [
-      "clear",
-      "draw",
-      "...",
-      "resolve",
-      "...",
-      "draw"
-    ],
     "manifest_file": "frame-trace.json",
     "manifest_sha256": "b9de8e336880752af05cac5a87f95117658aaa745e317f2d2edde30db4e3e22f",
     "manifest_events": 325,
@@ -98,14 +90,15 @@
     "event_stream_verified": true
   },
   "notification": {
-    "consumer": "in-process logging sink registered with eu4_gfx_frame_sealed_subscribe",
+    "consumer": "in-process logging sink registered with eu4_gfx_frame_sealed_subscribe; it verifies the manifest and reference digests and operation counters. Event-stream and referenced-blob verification is performed by the Python load_seal/load_trace consumer path.",
     "notification_index": 1,
     "count": 1,
     "verified_manifest": true,
     "verified_reference": true,
     "callback_outside_trace_mutex": "proven by the native lock-probe test; the live artifact records the callback but does not probe the mutex",
     "notification_duration_ns": 18583000,
-    "notified_since_process_start_ns": 27759788000
+    "notified_since_process_start_ns": 27759788000,
+    "verification_scope": "The native sink does not hash the event stream or every blob; that is the Python validator responsibility."
   },
   "performance": {
     "readback_ns": 23947000,
@@ -151,12 +144,16 @@
     },
     {
       "run": 3,
-      "reason": "Captured a complete 325-event menu frame at PresentScene exit before the entry-boundary correction. It was valid because the menu skips _GfxPresent (no swap), but final evidence uses the entry-boundary run 4."
+      "reason": "Captured a complete 325-event menu frame at PresentScene exit before the entry-boundary correction. It was valid because the menu skips _GfxPresent (no swap), but final evidence uses the entry-boundary event-digest run."
+    },
+    {
+      "run": 4,
+      "reason": "Entry-boundary run (pid 7100, scene 595) used ABI-1 seals without the event-stream digest. Superseded by run 5, which carries ABI-2 and the event-stream digest; preserved as historical evidence only."
     }
   ],
   "limitations": [
     "The seal is logical immutability: atomic publication and a one-shot writer, not a read-only directory.",
-    "The built-in consumer verifies artifact digests but full event accounting is validated in Python.",
+    "The built-in consumer verifies manifest/reference digests and counters only; event-stream and blob verification is performed by the Python validator.",
     "The owned process was stopped externally after sealing; normal presentation was not re-qualified with a screenshot in this run.",
     "No Metal execution, no second EU4 process and no simulation pause occurred."
   ]
