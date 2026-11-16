@@ -527,6 +527,21 @@ static int scenario_mutation_target(const char *directory) {
     return 0;
 }
 
+static int scenario_mutation_cube(const char *directory) {
+    if (configure_continuous_test(directory, 1) != 1) {
+        return 1;
+    }
+    arm_continuous_by_scene();
+    draw(true, 0x2000);
+    draw(false, 0x2000);
+    eu4_gfx_frame_trace_test_register_target("443");
+    /* A cube face is the same object as the cube map; a reallocation is
+       glTexImage2D, not glCopyTexImage2D. */
+    eu4_gfx_frame_trace_texture_mutated(443, 0, 0, 0x8515u);
+    finish_continuous_by_scene();
+    return 0;
+}
+
 static int scenario_capacity(const char *directory, const char *kind,
                              int count) {
     if (configure_continuous_test(directory, 1) != 1) {
@@ -801,6 +816,9 @@ int main(int argc, char **argv) {
     }
     if (strcmp(scenario, "mutation-target") == 0) {
         return scenario_mutation_target(directory);
+    }
+    if (strcmp(scenario, "mutation-cube") == 0) {
+        return scenario_mutation_cube(directory);
     }
     if (strcmp(scenario, "capacity-carried") == 0) {
         return scenario_carried_capacity(directory);

@@ -123,6 +123,18 @@ class FrameTraceWriterTests(unittest.TestCase):
             self.assertEqual(mutations[0]["target"], "0xde1")
             self.assertEqual(mutations[0]["operation"], "glTexSubImage2D")
 
+    def test_cube_face_reallocation_uses_the_cube_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "campaign"
+            self._run("mutation-cube", directory)
+            sequence = json.loads(
+                (directory / "frame-000001" / "frame-sequence.json").read_text())
+            mutations = [entry for entry in sequence["lifecycle"]
+                         if entry["kind"] == "mutation"]
+            self.assertEqual(len(mutations), 1, sequence["lifecycle"])
+            self.assertEqual(mutations[0]["target"], "0x8513")
+            self.assertEqual(mutations[0]["operation"], "glTexImage2D")
+
     def test_capacity_exact_and_one_beyond(self):
         expected = {
             "targets": ("capacity_limit", "render_targets(64)"),

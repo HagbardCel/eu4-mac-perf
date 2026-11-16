@@ -543,10 +543,11 @@ void eu4_gfx_frame_trace_texture_mutated(unsigned name, int level,
         } else {
             snprintf(g.pending_mutations[g.pending_mutation_count], 64, "%s",
                      text);
+            /* Only glTexImage2D and glTexSubImage2D are interposed; a
+               sub_image == 0 observation is always a reallocation, including
+               a cube face. */
             snprintf(g.pending_mutation_ops[g.pending_mutation_count], 32,
-                     "%s", sub_image ? "glTexSubImage2D"
-                                     : (target == 0x0DE1u ? "glTexImage2D"
-                                                          : "glCopyTexImage2D"));
+                     "%s", sub_image ? "glTexSubImage2D" : "glTexImage2D");
             g.pending_mutation_events[g.pending_mutation_count] =
                 g.armed ? g.event_count : -1;
             g.pending_mutation_levels[g.pending_mutation_count] = level;

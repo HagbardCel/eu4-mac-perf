@@ -34,6 +34,10 @@ an unchanged version is still a cache hit.
 
 ### Repeated lifecycle transitions
 
+Cube faces are normalised to `GL_TEXTURE_CUBE_MAP` for both cache identity and
+lifecycle records; a reallocation is labelled `glTexImage2D` regardless of
+target (only `glTexImage2D`/`glTexSubImage2D` are interposed).
+
 Delete records are appended per observed transition.  Only duplicate names
 inside one `glDeleteTextures` call are collapsed.  A `delete → recreate/render
 → delete` sequence now survives with both event indices.
