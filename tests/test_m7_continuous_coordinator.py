@@ -129,6 +129,72 @@ class ContinuousCoordinatorTests(unittest.TestCase):
                          "qualified_difference")
         self.assertEqual(report["frames"][1]["carried_bindings"], 1)
 
+    def test_coordinator_signals_stop_before_returning_on_frame_one(self):
+        def fake_translate(command, **kwargs):
+            self.assertNotIn("--force", command)
+            self.assertIn("--cache-dir", command)
+            output = Path(command[command.index("--out") + 1])
+            output.mkdir(parents=True, exist_ok=True)
+            (output / "shaders.json").write_text(json.dumps({
+                "schema": "gfx-shader-translation/v1", "programs": []}))
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        diagnosis = {
+            "classification": "qualified_difference",
+            "qualification": {"axes": {"gpu_execution": "ok"}},
+            "pixels": {"statistics": {"mismatched_pixels": 1}},
+            "state_coverage": {"status": "complete"},
+            "checkpoint_validation": {"status": "ok"},
+            "first_divergence": {"kind": "final_only"},
+        }
+        args = Namespace(
+            run=str(self.run), shadow_dir=str(self.shadow),
+            timeout=10.0, seal_timeout=5.0, translation_timeout=5.0,
+            replay_timeout=5.0, compare_timeout=5.0, policy=None,
+            continuous=True, max_frames=2, continue_on_difference=False,
+        )
+
+        def bridge_once():
+            output = self.shadow / "frame-000001"
+            ready = output / "shaders" / "ready"
+            deadline = time.monotonic() + 5
+            while not ready.is_file() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(ready.is_file())
+            frame = self.frames[0]
+            seal = json.loads((frame / "frame-seal.json").read_text())
+            request = output / "checkpoint-request.json"
+            (output / "shadow-report.json").write_text(json.dumps({
+                "schema": "m7-shadow-report/v1", "mode": "continuous",
+                "status": "ok", "stage": "complete",
+                "capture_frame_id": seal["capture_frame_id"],
+                "pid": seal["pid"], "session_id": seal["session_id"],
+                "gl_reference_sha256": seal["reference_sha256"],
+                "trace_manifest_sha256": seal["manifest_sha256"],
+                "operation_count": seal["operation_count"],
+                "checkpoint_request_file": request.name,
+                "checkpoint_request_sha256": _sha(request),
+                "history_status": 1,
+            }))
+
+        thread = threading.Thread(target=bridge_once)
+        thread.start()
+        with mock.patch.object(m6_frame.subprocess, "run",
+                               side_effect=fake_translate), \
+             mock.patch.object(gfx_independent_replay, "diagnose_frame",
+                               return_value=diagnosis) as diagnose:
+            status = m6_frame.shadow_coordinator(args)
+        thread.join(timeout=10)
+        self.assertEqual(status, 0)
+        self.assertEqual(diagnose.call_count, 1)
+        decision = json.loads(
+            (self.shadow / "frame-000001" / "decision.json").read_text())
+        self.assertFalse(decision["continue"])
+        self.assertEqual(decision["sequence"], 1)
+        report = json.loads((self.shadow / "coordinator.json").read_text())
+        self.assertEqual(report["stopped_at"], 1)
+        self.assertFalse((self.shadow / "frame-000002").exists())
+
     def test_translation_failure_is_a_tool_failure_not_a_difference(self):
         args = Namespace(
             run=str(self.run), shadow_dir=str(self.shadow),
