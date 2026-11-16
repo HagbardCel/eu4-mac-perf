@@ -125,6 +125,10 @@ def validate_sequence(frames: list[Path], *, max_frames: int = 64,
         sequence = _read_json(sequence_path)
         if sequence.get("schema") != "gfx-frame-sequence/v1":
             raise ContinuousError("sequence_schema", str(sequence_path))
+        if index == 1 and sequence.get("previous") is not None:
+            raise ContinuousError(
+                "first_frame_previous",
+                f"the first frame declares a previous identity: {frame}")
         if int(sequence.get("sequence_index") or 0) != index:
             raise ContinuousError(
                 "sequence_index",
@@ -631,10 +635,12 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
             process.stderr.close()
         unexecuted = max(0, len(frames) - len(result["frames"]))
         if unexecuted:
-            result["unexecuted_frames"] = [
+            pending = [
                 {"sequence": index + 1, "frame_dir": str(frames[index])}
                 for index in range(len(result["frames"]), len(frames))
             ]
+            result["unexecuted_frames"] = pending
+            result["queued_frames"] = pending
         result["queue"] = {
             "depth": 0,
             "high_water": 1,

@@ -766,9 +766,10 @@ static BOOL apply_lifecycle_entry(NSDictionary *item) {
            ordering for that case is not captured with per-event identity yet;
            removing it here would delete a live checkpointed target.  The
            current frame's later write updates its generation. */
-        if ([g_frame_targets containsObject:name]) {
-            continue;
-        }
+        /* Apply the transition at its recorded event even when the name is
+           also a target in this frame: the write/clear that recreates it is
+           ordered after this deletion by the event stream.  Skipping it would
+           silently reuse the old Metal identity. */
         [g_resource_history removeObjectForKey:name];
         [g_render_targets removeObjectForKey:name];
         [g_frame_written removeObject:name];
@@ -1240,6 +1241,28 @@ static NSMutableDictionary *target_for(NSDictionary *target, NSError **error) {
     NSNumber *key = @(number(target[@"framebuffer"], 0));
     NSMutableDictionary *existing = g_targets[key];
     if (existing != nil) {
+        NSUInteger requested_width = number(target[@"width"], 0);
+        NSUInteger requested_height = number(target[@"height"], 0);
+        NSDictionary *requested_attachment = target[@"color_attachment"];
+        NSString *requested_format = requested_attachment
+            ? string_value(requested_attachment[@"internal_format"]) : nil;
+        BOOL incompatible =
+            (requested_width != 0 &&
+             requested_width != number(existing[@"width"], 0)) ||
+            (requested_height != 0 &&
+             requested_height != number(existing[@"height"], 0)) ||
+            (requested_format.length != 0 &&
+             ![requested_format isEqualToString:string_value(existing[@"format"])]);
+        if (incompatible) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:31
+                    userInfo:@{NSLocalizedDescriptionKey:
+                        @"render target was recreated with incompatible "
+                        @"size or format; the retained Metal identity cannot "
+                        @"be reused"}];
+            }
+            return nil;
+        }
         return existing;
     }
     NSUInteger framebuffer = [key unsignedIntegerValue];
@@ -1595,6 +1618,7 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             target_resource_name(event[@"target"] ?: @{});
         if (draw_target_name.length != 0) {
             [g_frame_written addObject:draw_target_name];
+            g_render_targets[draw_target_name] = target_info;
             history_note_target(draw_target_name, target_info);
         }
         MTLTextureDescriptor *color_descriptor = [MTLTextureDescriptor new];
@@ -2725,6 +2749,7 @@ static BOOL encode_clear(NSDictionary *event, NSString *frameDir,
             target_resource_name(event[@"target"] ?: @{});
         if (clear_target_name.length != 0) {
             [g_frame_written addObject:clear_target_name];
+            g_render_targets[clear_target_name] = target_info;
             history_note_target(clear_target_name, target_info);
         }
     }
@@ -3897,6 +3922,14 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                                       nil);
             }
         }
+        /* Lifecycle entries recorded before the frame's first event apply
+           before targets are pre-registered, so a deleted session resource can
+           be recreated with this frame's captured size/format instead of
+           leaving a stale Metal identity behind. */
+        if (!apply_due_lifecycle(-1)) {
+            return record_failure(@"history_mutation", -1, @"frame", nil,
+                                  @(g_history_error), 12, nil);
+        }
         /* Register render-target textures under the GL names that sample them,
            so composition inside the frame uses the rendered contents. */
         for (NSUInteger index = 0; index < events.count; index++) {
@@ -4011,10 +4044,6 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
             }
         }
 
-        if (!apply_due_lifecycle(-1)) {
-            return record_failure(@"history_mutation", -1, @"frame", nil,
-                                  @(g_history_error), 12, nil);
-        }
         for (NSUInteger index = 0; index < events.count; index++) {
             if (config != NULL && config->test_inject_failure == 1 && index == 1) {
                 g_deadline_ns = replay_now_ns() - 1;
@@ -4270,6 +4299,14 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
             encoded++;
             g_encoded_count = encoded;
             g_failed_count = failed;
+        }
+        /* Drain lifecycle entries recorded at the end-of-frame event count.
+           A delete or unreproduced CPU mutation after the last captured event
+           must still invalidate the frame instead of being ignored forever. */
+        if (!apply_due_lifecycle((NSInteger)events.count)) {
+            return record_failure(@"history_mutation", (NSInteger)events.count,
+                                  @"frame", nil, @(g_history_error), 12,
+                                  command);
         }
         [command commit];
         if (config != NULL && config->test_inject_failure == 2) {

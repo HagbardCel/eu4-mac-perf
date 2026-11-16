@@ -3349,6 +3349,13 @@ static void finish_capture_ex(const char *reason, int allow_reference) {
         manifest_reason = g.manifest_sha[0] ? "manifest_write_failed"
                                             : "manifest_hash_failed";
     }
+    if (g.continuous && !complete) {
+        /* A frame that cannot be sealed must stop the campaign explicitly.
+           Re-arming the same frame index would rewrite the same directory
+           until an external timeout and hide the real reason. */
+        continuous_set_stopped("frame_incomplete");
+        continuous_write_campaign("incomplete", "frame_incomplete");
+    }
     g.finalize_ns = now_ns() - finalize_started;
 
     eu4_frame_capture_descriptor descriptor;
@@ -3447,6 +3454,15 @@ static void open_events(void) {
 static void start_capture_at_frame(int next_frame) {
     if (g.continuous) {
         if (g.continuous_stopped) {
+            return;
+        }
+        const char *stop_file = getenv("EU4_GFX_FRAME_TRACE_STOP_FILE");
+        if (stop_file != NULL && stop_file[0] != 0 &&
+            access(stop_file, F_OK) == 0) {
+            /* An explicit external stop must stop capture at the next frame
+               boundary instead of relying only on the frame/byte budget. */
+            continuous_set_stopped("external_stop");
+            continuous_write_campaign("complete", "external_stop");
             return;
         }
         if (g.continuous_frames_completed >= g.continuous_max_frames) {

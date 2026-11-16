@@ -336,18 +336,17 @@ int main(int argc, const char *argv[]) {
                                 [value[@"continue"] isKindOfClass:
                                     [NSNumber class]]) {
                                 id decided_sequence = value[@"sequence"];
-                                if (decided_sequence != nil &&
+                                if (decided_sequence == nil ||
                                     ![decided_sequence isKindOfClass:
                                         [NSNumber class]]) {
                                     fprintf(stderr,
-                                            "control decision sequence is "
-                                            "invalid\n");
+                                            "control decision has no valid "
+                                            "sequence\n");
                                     result = 4;
                                     decided = -1;
                                     break;
                                 }
-                                if (decided_sequence != nil &&
-                                    [decided_sequence intValue] != index) {
+                                if ([decided_sequence intValue] != index) {
                                     fprintf(stderr,
                                             "control decision belongs to "
                                             "frame %d, not %d\n",

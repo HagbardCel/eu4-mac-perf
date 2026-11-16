@@ -247,7 +247,7 @@ session was not reset between frames.
 
 ## Tests
 
-Focused PR4 set: 224 passed, 1 skipped (frame-trace writer, interpose, continuous
+Focused PR4 set: 234 passed, 1 skipped (after the #202 merge and rebase) (frame-trace writer, interpose, continuous
 replay, supervisor, coordinator, PR3 diagnosis, Metal replay and canonical
 diagnosis).
 

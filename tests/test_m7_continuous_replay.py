@@ -246,6 +246,43 @@ class ContinuousReplayHistoryTests(unittest.TestCase):
         self.assertIn("mutated", rows[1]["error"])
         self.assertIn("not reproduced", rows[1]["error"])
 
+    def test_mutation_at_the_end_of_frame_event_count_fails_closed(self):
+        frame1 = self.make_frame("end-mutation-1")
+        frame2 = self.make_frame("end-mutation-2", remove_events=(288, 289))
+        count = json.loads(
+            (frame2 / "frame-trace.json").read_text())["events"]
+        self.write_sequence(frame1, 1, render_targets=("443",))
+        self.write_sequence(
+            frame2, 2, previous=frame1, carried=("443",),
+            lifecycle=({"kind": "mutation", "event": count,
+                        "operation": "glTexSubImage2D",
+                        "names": ("443",)},))
+        ran, rows, _ = self.run_sequence([frame1, frame2])
+        self.assertNotEqual(ran.returncode, 0)
+        self.assertEqual(len(rows), 2, rows)
+        self.assert_ok(rows[0])
+        self.assertFalse(rows[1]["ok"])
+        self.assertEqual(rows[1]["history_status"], 2)
+        self.assertEqual(rows[1]["stage"], "history_mutation")
+        self.assertIn("mutated", rows[1]["error"])
+
+    def test_delete_of_a_current_frame_target_is_applied_at_its_event(self):
+        frame1 = self.make_frame("target-delete-1")
+        frame2 = self.make_frame("target-delete-2")
+        self.write_sequence(frame1, 1, render_targets=("443",))
+        # 443 is written at events 288/289 and sampled at 291.  Deleting it at
+        # event 290 must remove the target before the sample; the old skip for
+        # current frame targets would silently reuse it.
+        self.write_sequence(
+            frame2, 2, previous=frame1, carried=("443",),
+            lifecycle=({"kind": "delete", "event": 290,
+                        "names": ("443",)},))
+        ran, rows, _ = self.run_sequence([frame1, frame2])
+        self.assertNotEqual(ran.returncode, 0)
+        self.assertEqual(len(rows), 2, rows)
+        self.assertFalse(rows[1]["ok"])
+        self.assertEqual(rows[1]["history_status"], 2)
+
     def test_missing_previous_producer_fails_closed(self):
         frame1 = self.make_frame("missing-1", remove_events=(288, 289))
         frame2 = self.make_frame("missing-2", remove_events=(288, 289))

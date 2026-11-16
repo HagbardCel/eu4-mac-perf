@@ -61,12 +61,15 @@ def _sha256(path: Path) -> str:
 # Immutable capture payloads are verified once per process.  The key includes
 # size and nanosecond mtime, so a replaced artifact is re-hashed; repeated
 # graph builds over the same ten-frame campaign avoid re-reading gigabytes.
-_BLOB_DIGESTS: dict[tuple[str, int, int], str] = {}
+_BLOB_DIGESTS: dict[tuple[str, int, int, int, int], str] = {}
 
 
 def _verified_blob_sha256(path: Path) -> str:
     stat = path.stat()
-    key = (str(path), stat.st_size, stat.st_mtime_ns)
+    # inode and ctime change on replacement even when a caller preserves size
+    # and mtime (cp -p / os.utime); mtime alone would return a stale digest.
+    key = (str(path), stat.st_size, stat.st_mtime_ns, stat.st_ino,
+           stat.st_ctime_ns)
     cached = _BLOB_DIGESTS.get(key)
     if cached is not None:
         return cached
@@ -958,12 +961,26 @@ def build_replay_host(force: bool = False) -> Path:
     return REPLAY_HOST
 
 
+def _translator_identity() -> dict:
+    from automation import gfx_shader_translate
+
+    path = Path(gfx_shader_translate.__file__)
+    try:
+        stat = path.stat()
+        return {"path": path.name, "bytes": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns}
+    except OSError:
+        return {"path": path.name, "bytes": 0, "mtime_ns": 0}
+
+
 def _shader_source_identity(trace: dict) -> dict:
     """Content identity of the translated shader sources for one frame.
 
     Translation is deterministic in the source program/stage digests; a cache
     keyed by these digests can never reuse a translation for different source
-    content.  The key deliberately excludes frame/event identity.
+    content.  The key deliberately excludes frame/event identity but includes
+    the translator identity, so an older translator's cached output is never
+    reused after the translator changes.
     """
     programs = {}
     for event in trace.get("_events") or []:
@@ -978,6 +995,7 @@ def _shader_source_identity(trace: dict) -> dict:
                 programs.setdefault(name, {})[stage] = digest
     identity = {
         "schema": "gfx-shader-source-identity/v1",
+        "translator": _translator_identity(),
         "programs": {name: dict(sorted(stages.items()))
                      for name, stages in sorted(programs.items())},
     }

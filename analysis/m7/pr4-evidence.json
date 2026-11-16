@@ -1288,9 +1288,19 @@
       ]
     },
     "focused_tests": {
-      "passed": 224,
+      "passed": 234,
       "skipped": 1
     },
-    "final_head": "a893b118"
+    "final_head": "40132d5f",
+    "pr3_merge_commit": "399603c0",
+    "stacking": "rebased onto merged main 399603c0; diff contains PR4-only changes",
+    "full_suite": {
+      "tests": 3069,
+      "skipped": 133,
+      "failures": 39,
+      "errors": 18,
+      "note": "same pre-existing environment/oracle set as main/PR3; no M7 failure"
+    },
+    "carried_snapshot": "in-frame delete keeps the frame-start carried snapshot; lifecycle event carries removal timing"
   }
 }

@@ -608,13 +608,12 @@ static int shadow_execute_capture(
                                         status = 1;
                                         report_stage = @"decision_wait";
                                         report_error = @"decision_invalid";
-                                    } else if (value[@"sequence"] != nil &&
-                                               (![value[@"sequence"]
+                                    } else if (![value[@"sequence"]
                                                     isKindOfClass:
                                                         [NSNumber class]] ||
                                                 [value[@"sequence"]
                                                     intValue] !=
-                                                    (int)sequence)) {
+                                                    (int)sequence) {
                                         status = 1;
                                         report_stage = @"decision_wait";
                                         report_error =

@@ -405,9 +405,16 @@ def load_frame_history(frame_dir: Path | str, trace: dict) -> dict:
                     problems.append(
                         "previous frame manifest digest does not match the "
                         "captured file")
-                previous_owned = set(
-                    previous_document.get("render_targets") or []) | set(
-                    previous_document.get("carried_renderer_outputs") or [])
+                previous_owned: set[str] = set()
+                for field in ("render_targets",
+                              "carried_renderer_outputs"):
+                    value = previous_document.get(field) or []
+                    if not isinstance(value, list) or any(
+                            not isinstance(name, str) for name in value):
+                        problems.append(
+                            f"previous frame {field} is not a string array")
+                        continue
+                    previous_owned.update(value)
                 for name in carried:
                     if name not in previous_owned:
                         problems.append(
@@ -777,6 +784,15 @@ def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
         reasons.append(
             "frame-sequence history is invalid: "
             + "; ".join(history.get("reasons") or ["unknown"]))
+    carried_names = set(history.get("carried_renderer_outputs") or [])
+    for name in sorted(history.get("mutation_events") or {}):
+        if name in carried_names:
+            # A carried renderer output mutated by a CPU texture write has no
+            # reproducible Metal history for later frames, whether or not this
+            # frame samples it.  The frame cannot qualify as a verified carry.
+            reasons.append(
+                f"tex:{name} is carried but has an unreproduced CPU texture "
+                "mutation; its persistent Metal history is not proven")
     if not manifest.get("complete"):
         reasons.append("frame manifest is not complete")
     if unknown_events:
