@@ -210,6 +210,11 @@ def _normalized_frame_bytes(frames: list[Path]) -> int:
         for path in frame.rglob("*"):
             if not path.is_file():
                 continue
+            relative = path.relative_to(frame)
+            if relative.parts and relative.parts[0] == "shaders":
+                # The effective translation directory is counted once below;
+                # frame-local shader copies must not be double-counted.
+                continue
             if path.name in ("frame-sequence.json", "frame-seal.json"):
                 try:
                     document = json.loads(path.read_text(encoding="utf-8"))
@@ -271,6 +276,7 @@ def _incomplete_case(
     schema: str,
     case_id: str,
     title: str,
+    inputs: list[Path] | None = None,
     reason: str = "artifact_budget",
     required_bytes: int = 0,
     max_bytes: int = 0,
@@ -284,7 +290,7 @@ def _incomplete_case(
     budget, packaging fails with an explicit ``case_budget`` error instead of
     writing an oversized case.
     """
-    staged = _StagedCase(destination, [metal_dir])
+    staged = _StagedCase(destination, [metal_dir, *(inputs or [])])
     work = staged.path
     try:
         reproduction = {
@@ -606,6 +612,120 @@ def _frame_shader_dir(frame_dir: Path, metal_dir: Path,
     return None
 
 
+def _frame_shader_problems(frame_dir: Path, shader_dir: Path,
+                          index: int) -> list[dict]:
+    """Packaging-time validation of one frame's translated shader report."""
+    problems: list[dict] = []
+    try:
+        report = _json(shader_dir / "shaders.json")
+    except (OSError, UnicodeError, json.JSONDecodeError, CaseError) as exc:
+        return [{
+            "kind": "shader_artifact",
+            "frame": index,
+            "detail": f"shader report is unreadable: {exc}",
+        }]
+    programs = {
+        int(program.get("program")): program
+        for program in report.get("programs") or []
+        if isinstance(program, dict)
+        and isinstance(program.get("program"), int)
+    }
+    event_shaders: dict[int, list[dict]] = {}
+    events_path = frame_dir / "frame-events.jsonl"
+    try:
+        event_lines = events_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        event_lines = []
+    for line in event_lines:
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or event.get("kind") != "draw":
+            continue
+        program = event.get("program")
+        if not isinstance(program, dict):
+            continue
+        try:
+            name = int(program.get("name"))
+        except (TypeError, ValueError):
+            continue
+        event_shaders.setdefault(name, []).extend(
+            item for item in program.get("shaders") or []
+            if isinstance(item, dict))
+    for name in _frame_programs(frame_dir):
+        program = programs.get(name)
+        if program is None:
+            problems.append({
+                "kind": "shader_artifact", "frame": index,
+                "detail": f"program {name} has no translated shader entry",
+            })
+            continue
+        if program.get("status") != "ok":
+            problems.append({
+                "kind": "shader_artifact", "frame": index,
+                "detail": f"program {name} translation status is "
+                          f"{program.get('status')!r}",
+            })
+            continue
+        stages = program.get("stages")
+        if not isinstance(stages, dict):
+            problems.append({
+                "kind": "shader_artifact", "frame": index,
+                "detail": f"program {name} has no stages",
+            })
+            continue
+        for stage_name in ("vertex", "pixel"):
+            stage = stages.get(stage_name)
+            if not isinstance(stage, dict):
+                problems.append({
+                    "kind": "shader_artifact", "frame": index,
+                    "detail": f"program {name} has no {stage_name} stage",
+                })
+                continue
+            msl_file = stage.get("msl_file")
+            if not isinstance(msl_file, str) or not msl_file:
+                problems.append({
+                    "kind": "shader_artifact", "frame": index,
+                    "detail": f"program {name} {stage_name} has no MSL file",
+                })
+            elif not (shader_dir / msl_file).is_file():
+                problems.append({
+                    "kind": "shader_artifact", "frame": index,
+                    "detail": f"program {name} {stage_name} MSL file is "
+                              f"missing: {msl_file}",
+                })
+            source_sha = stage.get("source_sha256")
+            if source_sha is None or not isinstance(source_sha, str):
+                problems.append({
+                    "kind": "shader_artifact", "frame": index,
+                    "detail": f"program {name} {stage_name} does not declare "
+                              "the captured stage identity",
+                })
+        for item in event_shaders.get(name, []):
+            stage_name = str(item.get("stage") or "")
+            captured_sha = item.get("sha256")
+            stage = stages.get(stage_name)
+            if not isinstance(stage, dict):
+                problems.append({
+                    "kind": "shader_artifact", "frame": index,
+                    "detail": f"program {name} captured stage "
+                              f"{stage_name!r} has no translation",
+                })
+                continue
+            source_sha = stage.get("source_sha256")
+            if captured_sha and source_sha and str(captured_sha) != str(
+                    source_sha):
+                problems.append({
+                    "kind": "shader_artifact", "frame": index,
+                    "detail": f"program {name} {stage_name} captured identity "
+                              "disagrees with the translation",
+                })
+    return problems
+
+
 def _frame_programs(frame_dir: Path) -> list[int]:
     """Programs referenced by draw events, in stable numeric order."""
     programs: set[int] = set()
@@ -664,6 +784,7 @@ def package_diagnosis(frame_dir: Path | str, metal_dir: Path | str,
     if max_bytes > 0 and required_bytes > max_bytes:
         return _incomplete_case(
             destination, metal_dir=metal_dir, report=report,
+            inputs=[frame_dir, shader_source],
             required_bytes=required_bytes, max_bytes=max_bytes,
             missing=_budget_missing(
                 required_bytes, max_bytes,
@@ -755,6 +876,7 @@ def package_diagnosis(frame_dir: Path | str, metal_dir: Path | str,
             staged.discard()
             return _incomplete_case(
                 destination, metal_dir=metal_dir, report=report,
+                inputs=[frame_dir, shader_source],
                 required_bytes=total, max_bytes=max_bytes,
                 missing=_budget_missing(
                     total, max_bytes,
@@ -1140,7 +1262,20 @@ def package_sequence_diagnosis(
     if missing_shaders:
         return _incomplete_case(
             destination, metal_dir=metal_dir, report=report,
+            inputs=[*selected, *shader_dirs],
             missing=missing_shaders,
+            reason="shader_artifact_unavailable",
+            schema=SEQUENCE_SCHEMA, case_id=case_id, title=title)
+    shader_problems: list[dict] = []
+    for index, (frame, directory) in enumerate(
+            zip(selected, shader_dirs), start=1):
+        shader_problems.extend(
+            _frame_shader_problems(frame, directory, index))
+    if shader_problems:
+        return _incomplete_case(
+            destination, metal_dir=metal_dir, report=report,
+            inputs=[*selected, *shader_dirs],
+            missing=shader_problems,
             reason="shader_artifact_unavailable",
             schema=SEQUENCE_SCHEMA, case_id=case_id, title=title)
     shader_source = shader_dirs[-1]
@@ -1152,6 +1287,7 @@ def package_sequence_diagnosis(
     if max_bytes > 0 and required_bytes > max_bytes:
         return _incomplete_case(
             destination, metal_dir=metal_dir, report=report,
+            inputs=[*selected, *unique_shader_dirs],
             required_bytes=required_bytes, max_bytes=max_bytes,
             missing=_budget_missing(
                 required_bytes, max_bytes,
@@ -1346,6 +1482,7 @@ def package_sequence_diagnosis(
             staged.discard()
             return _incomplete_case(
                 destination, metal_dir=metal_dir, report=report,
+                inputs=[*selected, *unique_shader_dirs],
                 required_bytes=total, max_bytes=max_bytes,
                 missing=_budget_missing(
                     total, max_bytes,
@@ -1547,10 +1684,17 @@ def _verify_sequence(case_dir: Path, manifest: dict) -> tuple[list[str], dict]:
                                 f"{stage_name!r} has no translation")
                             continue
                         source_sha = stage.get("source_sha256")
-                        if sha and source_sha and str(sha) != str(source_sha):
-                            problems.append(
-                                f"frame {index} program {name} {stage_name} "
-                                "shader identity disagrees with the capture")
+                        if sha:
+                            if not source_sha:
+                                problems.append(
+                                    f"frame {index} program {name} "
+                                    f"{stage_name} translation does not "
+                                    "declare the captured stage identity")
+                            elif str(sha) != str(source_sha):
+                                problems.append(
+                                    f"frame {index} program {name} "
+                                    f"{stage_name} shader identity disagrees "
+                                    "with the capture")
         if history.get("status") != "verified":
             problems.append(
                 f"frame {index} history is invalid: " +

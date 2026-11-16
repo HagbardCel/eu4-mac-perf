@@ -141,6 +141,7 @@ class SequenceFixture:
             "msl_file": "v.metal", "msl_entry": "vmain",
             "msl_uniform_buffer": None, "msl_samplers": [],
             "attributes": [], "uniforms": [],
+            "source_sha256": sha(b"vertex"),
         }
 
         def pixel(file, entry, samplers=()):
@@ -149,6 +150,11 @@ class SequenceFixture:
                 "msl_uniform_buffer": None,
                 "msl_samplers": list(samplers),
                 "attributes": [], "uniforms": [],
+                "source_sha256": sha({
+                    "f_pattern.metal": b"pattern",
+                    "f_sample.metal": b"sample",
+                    "f_black.metal": b"black",
+                }[file]),
             }
 
         programs = [
@@ -1300,6 +1306,95 @@ class HeterogeneousShaderSequenceTests(unittest.TestCase):
         self.assertFalse(verified["ok"], verified)
         self.assertTrue(any("shader identity disagrees" in problem
                             for problem in verified["problems"]), verified)
+
+    def test_unusable_frame_translation_never_claims_complete(self):
+        report_path = (self.fixture.base / "campaign" / "frame-1" /
+                       "shaders" / "shaders.json")
+        original = report_path.read_bytes()
+        variants = {
+            "corrupt": b"{not-json",
+            "status": json.dumps({
+                "schema": "gfx-shader-report/v1",
+                "programs": [{"program": 1, "status": "error",
+                              "stages": {}}]}).encode(),
+        }
+        for name, payload in variants.items():
+            with self.subTest(variant=name):
+                report_path.write_bytes(payload)
+                try:
+                    case = self.fixture.base / f"unusable-{name}"
+                    manifest = self.package(case)
+                    self.assertFalse(
+                        manifest["reproduction"]["independently_reproducible"])
+                    self.assertEqual(manifest["reproduction"]["status"],
+                                     "incomplete")
+                    self.assertEqual(
+                        manifest["reproduction"]["reason"],
+                        "shader_artifact_unavailable")
+                    self.assertEqual(manifest["replay_command"], [])
+                finally:
+                    report_path.write_bytes(original)
+        # A missing MSL payload is also unusable at packaging time.
+        msl = (self.fixture.base / "campaign" / "frame-1" / "shaders" /
+               "f_pattern.metal")
+        original_msl = msl.read_bytes()
+        msl.unlink()
+        try:
+            case = self.fixture.base / "unusable-msl"
+            manifest = self.package(case)
+            self.assertEqual(manifest["reproduction"]["status"], "incomplete")
+            self.assertEqual(manifest["reproduction"]["reason"],
+                             "shader_artifact_unavailable")
+            self.assertFalse(
+                manifest["reproduction"]["independently_reproducible"])
+        finally:
+            msl.write_bytes(original_msl)
+
+    def test_identity_must_be_declared(self):
+        case = self.fixture.base / "case-no-identity"
+        self.package(case)
+        relative = "frames/000001/shaders/shaders.json"
+        report = json.loads((case / relative).read_text())
+        report["programs"][0]["stages"]["pixel"].pop("source_sha256", None)
+        (case / relative).write_text(json.dumps(report))
+        self.refresh(case, relative, update_sequence_entry=True)
+        verified = gfx_replay_case.verify(case)
+        self.assertFalse(verified["ok"], verified)
+        self.assertTrue(any("does not declare the captured stage identity"
+                            in problem for problem in verified["problems"]),
+                        verified)
+
+    def test_budget_at_actual_size_with_per_frame_shaders(self):
+        unlimited = self.fixture.base / "case-size"
+        self.package(unlimited)
+        size = sum(path.stat().st_size for path in unlimited.rglob("*")
+                   if path.is_file())
+        case = self.fixture.base / "case-exact-budget"
+        manifest = gfx_replay_case.package_sequence_diagnosis(
+            self.frames, self.out / "out-003", case, self.diagnosis,
+            shaders=None, case_id="heterogeneous-shaders", max_bytes=size)
+        self.assertEqual(manifest["reproduction"]["status"], "complete",
+                         manifest["reproduction"])
+        self.assertLessEqual(
+            sum(path.stat().st_size for path in case.rglob("*")
+                if path.is_file()), size)
+        self.assertTrue(gfx_replay_case.verify(case)["ok"])
+
+    def test_incomplete_summary_cannot_write_inside_a_source_frame(self):
+        frame = self.frames[0]
+        before = {path: sha(path.read_bytes()) for path in frame.rglob("*")
+                  if path.is_file()}
+        destination = frame / "summary-inside-source"
+        with self.assertRaises(gfx_replay_case.CaseError) as caught:
+            gfx_replay_case.package_sequence_diagnosis(
+                self.frames, self.out / "out-003", destination,
+                self.diagnosis, shaders=None,
+                case_id="heterogeneous-shaders", max_bytes=1)
+        self.assertEqual(caught.exception.kind, "output_overlap")
+        self.assertFalse(destination.exists())
+        after = {path: sha(path.read_bytes()) for path in frame.rglob("*")
+                 if path.is_file()}
+        self.assertEqual(before, after)
 
     def test_unavailable_frame_translation_is_incomplete(self):
         shutil.rmtree(self.fixture.base / "campaign" / "frame-2" / "shaders")
