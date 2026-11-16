@@ -142,7 +142,7 @@ static int run_reuse(const char *frame, const char *shaders, const char *out,
 
 
 static int run_sequence(const char *frames, const char *shaders,
-                        const char *out_base) {
+                        const char *out_base, const char *checkpoints) {
     char *copy = strdup(frames);
     if (copy == NULL) {
         return 2;
@@ -171,6 +171,7 @@ static int run_sequence(const char *frames, const char *shaders,
         config.only_event = -1;
         config.frame_sequence = (uint64_t)sequence;
         config.persistent_history = 1;
+        config.checkpoint_path = checkpoints;
         char error[512] = {0};
         if (session == NULL) {
             session = eu4_metal_replay_create(&config, error, sizeof(error));
@@ -323,7 +324,7 @@ int main(int argc, const char *argv[]) {
             if (shaders == NULL || out == NULL) {
                 return 2;
             }
-            return run_sequence(sequence, shaders, out);
+            return run_sequence(sequence, shaders, out, checkpoints);
         }
         if (frame == NULL || shaders == NULL || out == NULL || loops < 1) {
             fprintf(stderr,

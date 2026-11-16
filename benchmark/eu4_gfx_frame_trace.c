@@ -78,6 +78,8 @@ static void load_sampler_queries(void) {
 #define FTRACE_MAX_CALLERS 32
 #define FTRACE_MAX_LEVELS 16
 #define FTRACE_MAX_EVENTS 16384
+#define FTRACE_MAX_RESOURCES 64
+#define FTRACE_MAX_LIFECYCLE 64
 #define FTRACE_MAX_TEX_BYTES (256u * 1024u * 1024u)
 #define FTRACE_MAX_BLOB_BYTES (512u * 1024u * 1024u)
 #define FTRACE_NAME 96
@@ -197,8 +199,14 @@ static struct {
        frame unaffordable. */
     struct shader_cache_entry *shader_cache;
     struct texture_cache_entry *texture_cache;
-    char render_targets[64][64];
+    char render_targets[FTRACE_MAX_RESOURCES][64];
     int render_target_count;
+    uint64_t texture_cache_reads;
+    uint64_t texture_cache_hits;
+    uint64_t texture_cache_invalidations;
+    int capacity_exceeded;
+    char capacity_limit[32];
+    char capacity_reason[64];
 
     /* Bounded continuous capture.  The single-frame path leaves every field
        below zero/empty and keeps its one-shot gate unchanged. */
@@ -216,23 +224,30 @@ static struct {
     char previous_manifest_sha[65];
     char previous_events_sha[65];
     uint64_t previous_capture_id;
-    char previous_render_targets[64][64];
+    char previous_render_targets[FTRACE_MAX_RESOURCES][64];
     int previous_render_target_count;
     /* Renderer-generated resources that remain valid across frame boundaries.
        Unlike render_targets (this frame's writes) this set is only mutated by
        a write or an evidenced lifecycle transition (delete/reset). */
-    char carried_targets[64][64];
+    char carried_targets[FTRACE_MAX_RESOURCES][64];
     int carried_target_count;
-    char campaign_records[64][768];
+    char campaign_records[FTRACE_MAX_RESOURCES][768];
     int campaign_record_count;
-    char pending_deletes[64][64];
-    int pending_delete_events[64];
+    char pending_deletes[FTRACE_MAX_LIFECYCLE][64];
+    int pending_delete_events[FTRACE_MAX_LIFECYCLE];
+    unsigned long long pending_delete_sequences[FTRACE_MAX_LIFECYCLE];
     int pending_delete_count;
-    char pending_mutations[64][64];
-    char pending_mutation_ops[64][32];
-    int pending_mutation_events[64];
-    int pending_mutation_levels[64];
+    char pending_mutations[FTRACE_MAX_LIFECYCLE][64];
+    char pending_mutation_ops[FTRACE_MAX_LIFECYCLE][32];
+    int pending_mutation_events[FTRACE_MAX_LIFECYCLE];
+    unsigned long long pending_mutation_sequences[FTRACE_MAX_LIFECYCLE];
+    int pending_mutation_levels[FTRACE_MAX_LIFECYCLE];
+    unsigned pending_mutation_targets[FTRACE_MAX_LIFECYCLE];
     int pending_mutation_count;
+    /* Monotonic intra-frame order of lifecycle transitions.  Several distinct
+       GL calls can share one captured event index; the sequence keeps them
+       distinguishable and ordered. */
+    unsigned long long lifecycle_sequence;
 } g;
 
 typedef struct blob_entry {
@@ -248,10 +263,25 @@ typedef struct shader_cache_entry {
 } shader_cache_entry;
 
 typedef struct texture_cache_entry {
-    char key[96];
+    unsigned target;
+    unsigned name;
     char *levels_json;
     struct texture_cache_entry *next;
 } texture_cache_entry;
+
+static void fail_capture_locked(const char *reason);
+
+/* A bounded collection that would silently omit a resource or lifecycle
+   transition is a hard capture failure.  The affected frame is published as
+   incomplete with an explicit resource_limit reason and can never qualify a
+   renderer-equivalence result. */
+static void capacity_exceeded(const char *what) {
+    if (!g.capacity_exceeded) {
+        g.capacity_exceeded = 1;
+        snprintf(g.capacity_limit, sizeof(g.capacity_limit), "%s", what);
+    }
+    fail_capture_locked("resource_limit");
+}
 
 static int render_target_known(const char *name) {
     for (int i = 0; i < g.render_target_count; i++) {
@@ -266,10 +296,14 @@ static void render_target_add(const char *name) {
     if (name == NULL || name[0] == 0 || render_target_known(name)) {
         return;
     }
-    if (g.render_target_count < 64) {
-        snprintf(g.render_targets[g.render_target_count], 64, "%s", name);
-        g.render_target_count++;
+    if (g.render_target_count >= FTRACE_MAX_RESOURCES) {
+        snprintf(g.capacity_reason, sizeof(g.capacity_reason),
+                 "render_targets(%d)", g.render_target_count);
+        capacity_exceeded(g.capacity_reason);
+        return;
     }
+    snprintf(g.render_targets[g.render_target_count], 64, "%s", name);
+    g.render_target_count++;
 }
 
 static void render_target_remove(const char *name) {
@@ -299,10 +333,14 @@ static void carried_target_add(const char *name) {
     if (name == NULL || name[0] == 0 || carried_target_known(name)) {
         return;
     }
-    if (g.carried_target_count < 64) {
-        snprintf(g.carried_targets[g.carried_target_count], 64, "%s", name);
-        g.carried_target_count++;
+    if (g.carried_target_count >= FTRACE_MAX_RESOURCES) {
+        snprintf(g.capacity_reason, sizeof(g.capacity_reason),
+                 "carried_targets(%d)", g.carried_target_count);
+        capacity_exceeded(g.capacity_reason);
+        return;
     }
+    snprintf(g.carried_targets[g.carried_target_count], 64, "%s", name);
+    g.carried_target_count++;
 }
 
 static void carried_target_remove(const char *name) {
@@ -315,22 +353,6 @@ static void carried_target_remove(const char *name) {
                     g.carried_targets[g.carried_target_count - 1],
                     sizeof(g.carried_targets[0]));
             g.carried_target_count--;
-            return;
-        }
-    }
-}
-
-static void previous_target_remove(const char *name) {
-    if (name == NULL || name[0] == 0) {
-        return;
-    }
-    for (int i = 0; i < g.previous_render_target_count; i++) {
-        if (strcmp(g.previous_render_targets[i], name) == 0) {
-            memmove(g.previous_render_targets[i],
-                    g.previous_render_targets[
-                        g.previous_render_target_count - 1],
-                    sizeof(g.previous_render_targets[0]));
-            g.previous_render_target_count--;
             return;
         }
     }
@@ -385,34 +407,80 @@ static void shader_cache_put(uint64_t program, const char *json) {
     g.shader_cache = entry;
 }
 
-static const char *texture_cache_get(const char *key) {
+/* The cache is keyed by the actual texture identity (target and name), not by
+   a formatted string.  A mutation or deletion invalidates exactly that entry,
+   so an unchanged resource keeps its single readback while a changed version
+   is captured again. */
+static const char *texture_cache_get(GLenum target, unsigned name) {
+    g.texture_cache_reads++;
     for (texture_cache_entry *entry = g.texture_cache; entry != NULL;
          entry = entry->next) {
-        if (strcmp(entry->key, key) == 0) {
+        if (entry->target == (unsigned)target && entry->name == name) {
+            g.texture_cache_hits++;
             return entry->levels_json;
         }
     }
     return NULL;
 }
 
-static void texture_cache_put(const char *key, const char *levels) {
+static void texture_cache_put(GLenum target, unsigned name,
+                              const char *levels) {
     texture_cache_entry *entry = calloc(1, sizeof(*entry));
     if (entry == NULL) {
         return;
     }
-    snprintf(entry->key, sizeof(entry->key), "%s", key);
+    entry->target = (unsigned)target;
+    entry->name = name;
     entry->levels_json = strdup(levels);
     entry->next = g.texture_cache;
     g.texture_cache = entry;
 }
 
+static void texture_cache_invalidate(GLenum target, unsigned name) {
+    for (texture_cache_entry **link = &g.texture_cache; *link != NULL;) {
+        texture_cache_entry *entry = *link;
+        if (entry->target == (unsigned)target && entry->name == name) {
+            *link = entry->next;
+            free(entry->levels_json);
+            free(entry);
+            g.texture_cache_invalidations++;
+            continue;
+        }
+        link = &entry->next;
+    }
+}
+
+static void texture_cache_invalidate_name(unsigned name) {
+    for (texture_cache_entry **link = &g.texture_cache; *link != NULL;) {
+        texture_cache_entry *entry = *link;
+        if (entry->name == name) {
+            *link = entry->next;
+            free(entry->levels_json);
+            free(entry);
+            g.texture_cache_invalidations++;
+            continue;
+        }
+        link = &entry->next;
+    }
+}
+
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* A cube face is the same texture object as the cube map.  The cache and the
+   lifecycle identity must use the target that sampling sees. */
+static unsigned texture_identity_target(unsigned target) {
+    if (target >= 0x8515u && target <= 0x851Au) { /* GL_TEXTURE_CUBE_MAP_* */
+        return 0x8513u; /* GL_TEXTURE_CUBE_MAP */
+    }
+    return target != 0 ? target : 0x0DE1u; /* GL_TEXTURE_2D */
+}
 
 void eu4_gfx_frame_trace_texture_deleted(int count, const unsigned *names) {
     if (count <= 0 || names == NULL) {
         return;
     }
     pthread_mutex_lock(&g_lock);
+    unsigned long long sequence = ++g.lifecycle_sequence;
     for (int i = 0; i < count; i++) {
         char name[64];
         snprintf(name, sizeof(name), "%u", names[i]);
@@ -422,20 +490,30 @@ void eu4_gfx_frame_trace_texture_deleted(int count, const unsigned *names) {
            sample before that event may still use the carried image.  Only the
            persistent set is removed immediately (for the next frame). */
         carried_target_remove(name);
-        int known = 0;
-        for (int j = 0; j < g.pending_delete_count; j++) {
-            if (strcmp(g.pending_deletes[j], name) == 0) {
-                known = 1;
+        texture_cache_invalidate_name(names[i]);
+        /* A numeric GL name can be deleted, recreated and deleted again in one
+           frame.  Those are distinct transitions and each deletion must keep
+           its own event index; only the duplicate names inside one
+           glDeleteTextures call are the same transition. */
+        int duplicate_in_call = 0;
+        for (int j = 0; j < i; j++) {
+            if (names[j] == names[i]) {
+                duplicate_in_call = 1;
                 break;
             }
         }
-        if (!known && g.pending_delete_count < 64) {
-            snprintf(g.pending_deletes[g.pending_delete_count], 64, "%s",
-                     name);
-            g.pending_delete_events[g.pending_delete_count] =
-                g.armed ? g.event_count : -1;
-            g.pending_delete_count++;
+        if (duplicate_in_call) {
+            continue;
         }
+        if (g.pending_delete_count >= FTRACE_MAX_LIFECYCLE) {
+            capacity_exceeded("delete_records");
+            continue;
+        }
+        snprintf(g.pending_deletes[g.pending_delete_count], 64, "%s", name);
+        g.pending_delete_events[g.pending_delete_count] =
+            g.armed ? g.event_count : -1;
+        g.pending_delete_sequences[g.pending_delete_count] = sequence;
+        g.pending_delete_count++;
     }
     pthread_mutex_unlock(&g_lock);
 }
@@ -449,37 +527,54 @@ void eu4_gfx_frame_trace_test_register_target(const char *name) {
     pthread_mutex_unlock(&g_lock);
 }
 
+/* A name deleted earlier in this frame can be reallocated by a later
+   glTexImage2D.  That recreation is part of the lifecycle timeline even though
+   the name is no longer a live render target when the write is observed. */
+static int texture_deleted_this_frame(const char *name) {
+    for (int i = 0; i < g.pending_delete_count; i++) {
+        if (strcmp(g.pending_deletes[i], name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 void eu4_gfx_frame_trace_texture_mutated(unsigned name, int level,
-                                         int sub_image, int texture_target) {
+                                         int sub_image, unsigned target_enum) {
     if (name == 0) {
         return;
     }
+    unsigned target = texture_identity_target(target_enum);
     pthread_mutex_lock(&g_lock);
     char text[64];
     snprintf(text, sizeof(text), "%u", name);
-    /* Only renderer-owned resources are unsafe: an external CPU-supplied
-       texture is captured at each sample, so its contents are authoritative
-       even when they change. */
-    int relevant = render_target_known(text) || carried_target_known(text);
+    /* Any observed CPU-originated write invalidates the cached contents of
+       exactly this (target, name), including external textures that were
+       already sampled earlier in the frame.  Unchanged textures keep their
+       cached readback. */
+    texture_cache_invalidate((GLenum)target, name);
+    /* Only renderer-owned resources have persistent Metal history.  An
+       external CPU-supplied texture is captured at each sample, so its new
+       contents are authoritative without a lifecycle record. */
+    int relevant = render_target_known(text) || carried_target_known(text) ||
+                   texture_deleted_this_frame(text);
     if (relevant) {
-        int known = 0;
-        for (int j = 0; j < g.pending_mutation_count; j++) {
-            if (strcmp(g.pending_mutations[j], text) == 0 &&
-                g.pending_mutation_levels[j] == level) {
-                known = 1;
-                break;
-            }
-        }
-        if (!known && g.pending_mutation_count < 64) {
+        if (g.pending_mutation_count >= FTRACE_MAX_LIFECYCLE) {
+            capacity_exceeded("mutation_records");
+        } else {
             snprintf(g.pending_mutations[g.pending_mutation_count], 64, "%s",
                      text);
+            /* Only glTexImage2D and glTexSubImage2D are interposed; a
+               sub_image == 0 observation is always a reallocation, including
+               a cube face. */
             snprintf(g.pending_mutation_ops[g.pending_mutation_count], 32,
-                     "%s", sub_image ? "glTexSubImage2D"
-                                     : (texture_target ? "glTexImage2D"
-                                                       : "glCopyTexImage2D"));
+                     "%s", sub_image ? "glTexSubImage2D" : "glTexImage2D");
             g.pending_mutation_events[g.pending_mutation_count] =
                 g.armed ? g.event_count : -1;
+            g.pending_mutation_sequences[g.pending_mutation_count] =
+                ++g.lifecycle_sequence;
             g.pending_mutation_levels[g.pending_mutation_count] = level;
+            g.pending_mutation_targets[g.pending_mutation_count] = target;
             g.pending_mutation_count++;
         }
     }
@@ -2683,14 +2778,12 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
                 (double)anisotropy);
         json_out tex = *out;
         jprintf(&tex, ",");
-        char texture_key[96];
         char texture_name[64];
         snprintf(texture_name, sizeof(texture_name), "%d", binding);
-        snprintf(texture_key, sizeof(texture_key), "%s-%s",
-                 texture_target_name(target), texture_name);
         const char *cached_levels =
-            render_target_known(texture_name) ? NULL
-                                              : texture_cache_get(texture_key);
+            render_target_known(texture_name)
+                ? NULL
+                : texture_cache_get(target, (unsigned)binding);
         if (cached_levels != NULL) {
             jprintf(&tex, "%s", cached_levels);
         } else {
@@ -2703,7 +2796,8 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
                 fclose(levels_stream);
                 if (!levels_out.failed && levels_json != NULL) {
                     if (!render_target_known(texture_name)) {
-                        texture_cache_put(texture_key, levels_json);
+                        texture_cache_put(target, (unsigned)binding,
+                                          levels_json);
                     }
                     jprintf(&tex, "%s", levels_json);
                 }
@@ -2796,6 +2890,13 @@ static int write_frame_manifest(int complete, const char *reason) {
     fprintf(file, "\"scene_index\":%d,",
             g.boundary_scene ? g.capturing_frame : g.scene_index);
     fprintf(file, "\"events\":%d,", g.event_count);
+    fprintf(file, "\"capacity_exceeded\":%s,", bool_text(g.capacity_exceeded));
+    fprintf(file, "\"capacity_limit\":\"%s\",", g.capacity_limit);
+    fprintf(file, "\"texture_cache\":{\"reads\":%llu,\"hits\":%llu,"
+                  "\"invalidations\":%llu},",
+            (unsigned long long)g.texture_cache_reads,
+            (unsigned long long)g.texture_cache_hits,
+            (unsigned long long)g.texture_cache_invalidations);
     fputs("\"gl\":{", file);
     fprintf(file, "\"vendor\":\"%s\",", vendor != NULL ? vendor : "");
     fprintf(file, "\"renderer\":\"%s\",", renderer != NULL ? renderer : "");
@@ -3086,6 +3187,12 @@ static void continuous_write_campaign(const char *status,
     }
 }
 
+static void write_name_array(FILE *stream, char names[][64], int count) {
+    for (int i = 0; i < count; i++) {
+        fprintf(stream, "%s\"%s\"", i > 0 ? "," : "", names[i]);
+    }
+}
+
 static int continuous_write_frame_sequence(
     const eu4_frame_capture_descriptor *descriptor, const char *reason,
     int complete) {
@@ -3096,78 +3203,167 @@ static int continuous_write_frame_sequence(
     if (snprintf(path, sizeof(path), "%s/frame-sequence.json", g.dir) <= 0) {
         return -1;
     }
-    char previous[1200];
+    char *previous = NULL;
+    size_t previous_size = 0;
+    FILE *previous_stream = open_memstream(&previous, &previous_size);
+    if (previous_stream == NULL) {
+        return -1;
+    }
     if (g.previous_capture_id != 0) {
-        snprintf(previous, sizeof(previous),
-                 "{\"capture_frame_id\":%llu,\"dir\":\"%s\","
-                 "\"manifest_sha256\":\"%s\",\"event_stream_sha256\":\"%s\"}",
-                 (unsigned long long)g.previous_capture_id, g.previous_dir,
-                 g.previous_manifest_sha, g.previous_events_sha);
+        fprintf(previous_stream,
+                "{\"capture_frame_id\":%llu,\"dir\":\"%s\","
+                "\"manifest_sha256\":\"%s\",\"event_stream_sha256\":\"%s\"}",
+                (unsigned long long)g.previous_capture_id, g.previous_dir,
+                g.previous_manifest_sha, g.previous_events_sha);
     } else {
-        snprintf(previous, sizeof(previous), "null");
+        fputs("null", previous_stream);
     }
-    char targets[4096];
-    size_t used = 0;
-    targets[0] = 0;
-    for (int i = 0; i < g.render_target_count; i++) {
-        if (used + strlen(g.render_targets[i]) + 4 >= sizeof(targets)) {
-            break;
-        }
-        used += (size_t)snprintf(targets + used, sizeof(targets) - used,
-                                 "%s\"%s\"", i > 0 ? "," : "",
-                                 g.render_targets[i]);
+    fclose(previous_stream);
+    if (previous == NULL) {
+        return -1;
     }
-    char carried[4096];
-    used = 0;
-    carried[0] = 0;
-    for (int i = 0; i < g.previous_render_target_count; i++) {
-        if (used + strlen(g.previous_render_targets[i]) + 4 >=
-            sizeof(carried)) {
-            break;
-        }
-        used += (size_t)snprintf(carried + used, sizeof(carried) - used,
-                                 "%s\"%s\"", i > 0 ? "," : "",
-                                 g.previous_render_targets[i]);
+    char *targets = NULL;
+    size_t targets_size = 0;
+    FILE *targets_stream = open_memstream(&targets, &targets_size);
+    if (targets_stream == NULL) {
+        free(previous);
+        return -1;
     }
-    char lifecycle[4096];
-    used = 0;
-    lifecycle[0] = 0;
-    for (int i = 0; i < g.pending_delete_count;) {
+    write_name_array(targets_stream, g.render_targets,
+                     g.render_target_count);
+    fclose(targets_stream);
+    char *carried = NULL;
+    size_t carried_size = 0;
+    FILE *carried_stream = open_memstream(&carried, &carried_size);
+    if (carried_stream == NULL) {
+        free(previous);
+        free(targets);
+        return -1;
+    }
+    write_name_array(carried_stream, g.previous_render_targets,
+                     g.previous_render_target_count);
+    fclose(carried_stream);
+    char *lifecycle = NULL;
+    size_t lifecycle_size = 0;
+    FILE *lifecycle_stream = open_memstream(&lifecycle, &lifecycle_size);
+    if (lifecycle_stream == NULL) {
+        free(previous);
+        free(targets);
+        free(carried);
+        return -1;
+    }
+    /* Deletes and mutations share one monotonic sequence, so the recorded
+       call order survives even when several transitions land on the same
+       captured event index.  Emitting all deletes before all mutations (the
+       old behaviour) folded a distinct delete/recreate/delete sequence into a
+       single transition and let replay reuse the wrong resource generation. */
+    enum { kLifecycleDelete = 0, kLifecycleMutation = 1 };
+    typedef struct {
+        int kind;
+        int event;
+        unsigned long long sequence;
+        int start;
+        int count;
+    } lifecycle_record;
+    lifecycle_record records[FTRACE_MAX_LIFECYCLE * 2];
+    int record_count = 0;
+    for (int i = 0; i < g.pending_delete_count; i++) {
         int event_index = g.pending_delete_events[i];
-        used += (size_t)snprintf(
-            lifecycle + used, sizeof(lifecycle) - used,
-            "%s{\"kind\":\"delete\",\"event\":%d,\"names\":[",
-            lifecycle[0] != 0 ? "," : "", event_index);
-        int first = 1;
-        int j = i;
-        while (j < g.pending_delete_count &&
-               g.pending_delete_events[j] == event_index) {
-            used += (size_t)snprintf(
-                lifecycle + used, sizeof(lifecycle) - used, "%s\"%s\"",
-                first ? "" : ",", g.pending_deletes[j]);
-            first = 0;
-            j++;
+        unsigned long long sequence = g.pending_delete_sequences[i];
+        if (i > 0 &&
+            g.pending_delete_events[i - 1] == event_index &&
+            g.pending_delete_sequences[i - 1] == sequence) {
+            /* Duplicate names inside one glDeleteTextures call are the same
+               transition; a second independent call always has a new
+               sequence even at the same event index. */
+            records[record_count - 1].count++;
+            continue;
         }
-        used += (size_t)snprintf(lifecycle + used,
-                                 sizeof(lifecycle) - used, "]}");
-        i = j;
+        if (record_count >= (int)(sizeof(records) / sizeof(records[0]))) {
+            capacity_exceeded("lifecycle_records");
+            break;
+        }
+        records[record_count].kind = kLifecycleDelete;
+        records[record_count].event = event_index;
+        records[record_count].sequence = sequence;
+        records[record_count].start = i;
+        records[record_count].count = 1;
+        record_count++;
     }
     for (int i = 0; i < g.pending_mutation_count; i++) {
-        if (used + 160 >= sizeof(lifecycle)) {
+        if (record_count >= (int)(sizeof(records) / sizeof(records[0]))) {
+            capacity_exceeded("lifecycle_records");
             break;
         }
-        used += (size_t)snprintf(
-            lifecycle + used, sizeof(lifecycle) - used,
-            "%s{\"kind\":\"mutation\",\"operation\":\"%s\","
-            "\"event\":%d,\"level\":%d,\"names\":[\"%s\"]}",
-            lifecycle[0] != 0 ? "," : "",
-            g.pending_mutation_ops[i], g.pending_mutation_events[i],
-            g.pending_mutation_levels[i], g.pending_mutations[i]);
+        records[record_count].kind = kLifecycleMutation;
+        records[record_count].event = g.pending_mutation_events[i];
+        records[record_count].sequence = g.pending_mutation_sequences[i];
+        records[record_count].start = i;
+        records[record_count].count = 1;
+        record_count++;
+    }
+    for (int i = 1; i < record_count; i++) {
+        lifecycle_record value = records[i];
+        int j = i - 1;
+        while (j >= 0 &&
+               (records[j].event > value.event ||
+                (records[j].event == value.event &&
+                 records[j].sequence > value.sequence))) {
+            records[j + 1] = records[j];
+            j--;
+        }
+        records[j + 1] = value;
+    }
+    int lifecycle_first = 1;
+    for (int i = 0; i < record_count; i++) {
+        lifecycle_record *record = &records[i];
+        if (record->kind == kLifecycleDelete) {
+            fprintf(lifecycle_stream,
+                    "%s{\"kind\":\"delete\",\"event\":%d,"
+                    "\"lifecycle_sequence\":%llu,\"names\":[",
+                    lifecycle_first ? "" : ",", record->event,
+                    record->sequence);
+            lifecycle_first = 0;
+            int first = 1;
+            for (int j = record->start;
+                 j < record->start + record->count; j++) {
+                fprintf(lifecycle_stream, "%s\"%s\"", first ? "" : ",",
+                        g.pending_deletes[j]);
+                first = 0;
+            }
+            fputs("]}", lifecycle_stream);
+            continue;
+        }
+        int index = record->start;
+        fprintf(lifecycle_stream,
+                "%s{\"kind\":\"mutation\",\"operation\":\"%s\","
+                "\"target\":\"0x%x\",\"event\":%d,"
+                "\"lifecycle_sequence\":%llu,\"level\":%d,"
+                "\"names\":[\"%s\"]}",
+                lifecycle_first ? "" : ",", g.pending_mutation_ops[index],
+                g.pending_mutation_targets[index],
+                g.pending_mutation_events[index],
+                g.pending_mutation_sequences[index],
+                g.pending_mutation_levels[index],
+                g.pending_mutations[index]);
+        lifecycle_first = 0;
+    }
+    fclose(lifecycle_stream);
+    if (targets == NULL || carried == NULL || lifecycle == NULL) {
+        free(previous);
+        free(targets);
+        free(carried);
+        free(lifecycle);
+        return -1;
     }
     char *buffer = NULL;
     size_t size = 0;
     FILE *stream = open_memstream(&buffer, &size);
     if (stream == NULL) {
+        free(previous);
+        free(targets);
+        free(carried);
+        free(lifecycle);
         return -1;
     }
     fprintf(stream,
@@ -3180,6 +3376,8 @@ static int continuous_write_frame_sequence(
             "\"render_targets\":[%s],"
             "\"carried_renderer_outputs\":[%s],"
             "\"lifecycle\":[%s],"
+            "\"texture_cache\":{\"reads\":%llu,\"hits\":%llu,"
+            "\"invalidations\":%llu},"
             "\"reference_sha256\":\"%s\","
             "\"manifest_sha256\":\"%s\","
             "\"event_stream_sha256\":\"%s\","
@@ -3190,6 +3388,9 @@ static int continuous_write_frame_sequence(
             (unsigned long long)descriptor->capture_frame_id,
             complete ? "true" : "false", descriptor->boundary,
             reason ? reason : "", previous, targets, carried, lifecycle,
+            (unsigned long long)g.texture_cache_reads,
+            (unsigned long long)g.texture_cache_hits,
+            (unsigned long long)g.texture_cache_invalidations,
             descriptor->reference_sha256, descriptor->manifest_sha256,
             descriptor->event_stream_sha256,
             (unsigned long long)descriptor->operation_count,
@@ -3197,6 +3398,10 @@ static int continuous_write_frame_sequence(
             (unsigned long long)descriptor->clear_count,
             (unsigned long long)descriptor->copy_count);
     fclose(stream);
+    free(previous);
+    free(targets);
+    free(carried);
+    free(lifecycle);
     int result = -1;
     if (buffer != NULL) {
         result = write_atomic(path, buffer, size);
@@ -3205,6 +3410,7 @@ static int continuous_write_frame_sequence(
     if (result == 0) {
         g.pending_delete_count = 0;
         g.pending_mutation_count = 0;
+        g.lifecycle_sequence = 0;
     }
     return result;
 }
@@ -3214,8 +3420,12 @@ static void continuous_record_frame(
     if (!g.continuous || descriptor == NULL) {
         return;
     }
-    if (g.campaign_record_count <
+    if (g.campaign_record_count >=
         (int)(sizeof(g.campaign_records) / sizeof(g.campaign_records[0]))) {
+        capacity_exceeded("campaign_records");
+        return;
+    }
+    {
         snprintf(g.campaign_records[g.campaign_record_count],
                  sizeof(g.campaign_records[0]),
                  "{\"sequence\":%u,\"capture_frame_id\":%llu,"
@@ -3353,8 +3563,10 @@ static void finish_capture_ex(const char *reason, int allow_reference) {
         /* A frame that cannot be sealed must stop the campaign explicitly.
            Re-arming the same frame index would rewrite the same directory
            until an external timeout and hide the real reason. */
-        continuous_set_stopped("frame_incomplete");
-        continuous_write_campaign("incomplete", "frame_incomplete");
+        const char *stop = g.capacity_exceeded ? "resource_limit"
+                                               : "frame_incomplete";
+        continuous_set_stopped(stop);
+        continuous_write_campaign("incomplete", stop);
     }
     g.finalize_ns = now_ns() - finalize_started;
 
@@ -3408,8 +3620,8 @@ static void finish_capture_ex(const char *reason, int allow_reference) {
             snprintf(g.previous_events_sha, sizeof(g.previous_events_sha),
                      "%s", g.events_sha);
             g.previous_capture_id = g.capture_id;
-            continuous_copy_targets();
-            if (g.continuous_frames_completed >= g.continuous_max_frames) {
+            if (g.continuous_frames_completed >=
+                       g.continuous_max_frames) {
                 continuous_set_stopped("frame_limit");
                 continuous_write_campaign("complete", "frame_limit");
             } else {
@@ -3490,7 +3702,6 @@ static void start_capture_at_frame(int next_frame) {
             continuous_write_campaign("incomplete", "frame_directory");
             return;
         }
-        continuous_snapshot_carried();
         snprintf(g.partial_path, sizeof(g.partial_path),
                  "%s/frame-events.jsonl.partial", g.dir);
         snprintf(g.final_path, sizeof(g.final_path),
@@ -3507,7 +3718,25 @@ static void start_capture_at_frame(int next_frame) {
            counter stays cumulative. */
         blobs_reset();
     }
+    int carry_overflow = 0;
+    char carry_limit[32] = "";
+    if (g.continuous) {
+        /* Merge the preceding frame's writes into the persistent carried set
+           before this frame's per-frame target list is discarded.  An
+           overflow here fails this frame closed instead of dropping a
+           resource from its carried declaration. */
+        g.capacity_exceeded = 0;
+        g.capacity_limit[0] = 0;
+        continuous_copy_targets();
+        carry_overflow = g.capacity_exceeded;
+        snprintf(carry_limit, sizeof(carry_limit), "%s", g.capacity_limit);
+    }
     frame_caches_reset();
+    g.texture_cache_reads = 0;
+    g.texture_cache_hits = 0;
+    g.texture_cache_invalidations = 0;
+    g.capacity_exceeded = 0;
+    g.capacity_limit[0] = 0;
     g.captured = 0;
     g.armed = 1;
     g.armed_ms = now_ms();
@@ -3529,6 +3758,15 @@ static void start_capture_at_frame(int next_frame) {
     g.finalize_ns = 0;
     g.seal_ns = 0;
     g_capture_failure_reason = NULL;
+    if (carry_overflow) {
+        g.capacity_exceeded = 1;
+        snprintf(g.capacity_limit, sizeof(g.capacity_limit), "%s",
+                 carry_limit);
+        fail_capture_locked("resource_limit");
+    }
+    if (g.continuous) {
+        continuous_snapshot_carried();
+    }
     g.have_seed = 0;
     g.seed_emitted = 0;
     g.seed_json[0] = 0;

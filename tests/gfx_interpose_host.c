@@ -29,8 +29,8 @@ void eu4_gfx_frame_trace_texture_deleted(int count, const unsigned *names) {
     (void)names;
 }
 void eu4_gfx_frame_trace_texture_mutated(unsigned name, int level,
-                                         int sub_image, int texture_target) {
-    (void)name; (void)level; (void)sub_image; (void)texture_target;
+                                         int sub_image, unsigned target) {
+    (void)name; (void)level; (void)sub_image; (void)target;
 }
 int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event) {
     (void)event;

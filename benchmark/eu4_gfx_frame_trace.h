@@ -115,13 +115,16 @@ int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event);
    name cannot silently reuse a previous Metal image. */
 void eu4_gfx_frame_trace_texture_deleted(int count, const unsigned *names);
 
-/* GL CPU-write notification from the texture interposer.  Ordered
-   glTexImage2D/glTexSubImage2D semantics are not reconstructed by the replay,
-   so a mutation of a renderer-generated/carried resource must invalidate that
-   frame's resource-history qualification instead of silently reusing a stale
-   Metal texture.  The engine call is always forwarded unchanged. */
+/* GL CPU-write notification from the texture interposer.  ``target`` is the
+   actual GL texture target (a cube face is normalised to GL_TEXTURE_CUBE_MAP)
+   so the cached captured contents of exactly that (target, name) are
+   invalidated.  Ordered glTexImage2D/glTexSubImage2D semantics are not
+   reconstructed by the replay, so a mutation of a renderer-generated/carried
+   resource additionally invalidates that frame's resource history instead of
+   silently reusing a stale Metal texture.  The engine call is always forwarded
+   unchanged. */
 void eu4_gfx_frame_trace_texture_mutated(unsigned name, int level,
-                                         int sub_image, int texture_target);
+                                         int sub_image, unsigned target);
 
 /* Test-only analogue of a renderer write for the offline continuous-writer
    host.  It is ignored unless TEST_ONLY capture is active, so production
