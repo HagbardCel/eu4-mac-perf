@@ -2,7 +2,7 @@
   "schema": "m7-followup-b-relocation-receipt/v1",
   "kind": "authentic_captured_frames_with_synthetic_ordered_packaging",
   "fixture": "canonical menu-occ300 captured frame content",
-  "tested_head": "4dcc8a57",
+  "tested_head": "e8568640",
   "case": {
     "schema": "gfx-strategy-b-case/v2",
     "case_id": "canonical-prefix",
@@ -45,7 +45,15 @@
     "bytes_on_disk": 1322029913,
     "case_digest_path_independent": true,
     "shader_layout": "one translated directory copied per selected frame into frames/NNNNNN/shaders; case/shaders is the target frame's fallback",
-    "digest_note": "Source-byte metrics are measured with capture-path metadata normalized; copied replay JSON/JSONL artifacts are scrubbed of capture roots. Two captures at different path lengths produce the same case digest."
+    "digest_note": "Source-byte metrics are measured with capture-path metadata normalized; copied replay JSON/JSONL artifacts are scrubbed of capture roots. Two captures at different path lengths produce the same case digest.  The recorded digest is for the packaging parameters above (case_id and title are part of case.json and therefore the digest).",
+    "title": "M7 cross-frame differential diagnosis",
+    "packaging_parameters": {
+      "function": "package_sequence_diagnosis",
+      "case_id": "canonical-prefix",
+      "title": "M7 cross-frame differential diagnosis",
+      "shaders": "canonical menu-occ300 translated directory (explicit fallback)",
+      "max_bytes": 0
+    }
   },
   "relocation": {
     "verified": true,
@@ -140,7 +148,10 @@
       "excluded_source_bytes": 2921,
       "case_file_count": 70,
       "case_bytes": 72568,
-      "shader_layout": "shared explicit translation copied per frame"
+      "shader_layout": "shared explicit translation copied per frame",
+      "case_id": "four-frame",
+      "title": "M7 cross-frame differential diagnosis",
+      "size_note": "case bytes depend on case_id/title (case.json content); 72,568 is for case_id four-frame"
     },
     "transitive_five_frame": {
       "selected_original_frames": [
@@ -164,7 +175,9 @@
       "excluded_source_bytes": 2921,
       "case_file_count": 88,
       "case_bytes": 84704,
-      "conservative_note": "Interior cleanup/target frames are retained because the predecessor digest chain and cumulative carried snapshots bind the ordered sequence; selection is not claimed minimal. A target-frame cleanup delete of a carried resource is refused."
+      "conservative_note": "Interior cleanup/target frames are retained because the predecessor digest chain and cumulative carried snapshots bind the ordered sequence; selection is not claimed minimal. A target-frame cleanup delete of a carried resource is refused.",
+      "case_id": "transitive",
+      "title": "M7 cross-frame differential diagnosis"
     },
     "heterogeneous_shader_frames": {
       "frames": 3,
@@ -200,7 +213,9 @@
         "tampered captured stage identity (verify failure)",
         "omitted source_sha256 identity (verify failure)",
         "unavailable frame translation (packaging -> shader_artifact_unavailable)"
-      ]
+      ],
+      "case_id": "heterogeneous-shaders",
+      "title": "M7 cross-frame differential diagnosis"
     }
   },
   "budget": {
