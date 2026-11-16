@@ -424,6 +424,13 @@ static int scenario_continuous_carried(const char *directory, int max_frames,
     for (int scene = 0; scene < max_frames + 2; scene++) {
         draw(true, 0x2000);
         draw(false, 0x2000);
+        if (lifecycle == 2 && scene == 3) {
+            /* Delete while the second captured frame is armed but before its
+               end boundary.  The frame-start snapshot must still advertise
+               the carried image for samples before this event. */
+            unsigned deleted = 443;
+            eu4_gfx_frame_trace_texture_deleted(1, &deleted);
+        }
         eu4_gfx_frame_trace_boundary_entry(&frame, &call);
         eu4_gfx_frame_trace_boundary_exit(&frame, &call, NULL);
         /* Capture starts at the scene exit.  Writing the target on scene 1
@@ -432,7 +439,7 @@ static int scenario_continuous_carried(const char *directory, int max_frames,
         if (scene == 0) {
             eu4_gfx_frame_trace_test_register_target("443");
         }
-        if (lifecycle && scene == 1) {
+        if (lifecycle == 1 && scene == 1) {
             /* Delete and recreate the same numeric name.  The delete must be
                published in this frame's lifecycle and the target must be
                re-carried by its new write. */
@@ -634,6 +641,11 @@ int main(int argc, char **argv) {
         int frames = argc > 3 ? atoi(argv[3]) : 3;
         int bytes = argc > 4 ? atoi(argv[4]) : 64 * 1024 * 1024;
         return scenario_continuous_carried(directory, frames, bytes, 1);
+    }
+    if (strcmp(scenario, "continuous-carried-delete") == 0) {
+        int frames = argc > 3 ? atoi(argv[3]) : 3;
+        int bytes = argc > 4 ? atoi(argv[4]) : 64 * 1024 * 1024;
+        return scenario_continuous_carried(directory, frames, bytes, 2);
     }
     if (strcmp(scenario, "continuous-byte-budget") == 0) {
         return scenario_continuous(directory, 8, 1);

@@ -417,7 +417,10 @@ void eu4_gfx_frame_trace_texture_deleted(int count, const unsigned *names) {
         char name[64];
         snprintf(name, sizeof(name), "%u", names[i]);
         render_target_remove(name);
-        previous_target_remove(name);
+        /* The frame-start snapshot must keep a name that is deleted later in
+           the same frame: the lifecycle record carries the delete event, so a
+           sample before that event may still use the carried image.  Only the
+           persistent set is removed immediately (for the next frame). */
         carried_target_remove(name);
         int known = 0;
         for (int j = 0; j < g.pending_delete_count; j++) {

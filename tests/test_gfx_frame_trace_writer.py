@@ -163,6 +163,22 @@ class FrameTraceWriterTests(unittest.TestCase):
             self.assertEqual(third["render_targets"], [])
             self.assertIn("443", third["carried_renderer_outputs"])
 
+    def test_in_frame_delete_keeps_the_frame_start_carried_snapshot(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "campaign"
+            self._run("continuous-carried-delete", directory, 3,
+                      64 * 1024 * 1024)
+            third = self._sequence(directory, 3)
+            # 443 was carried into this frame and deleted at event 1.  A
+            # sample before that event may still use it, so the frame-start
+            # snapshot must advertise it alongside the lifecycle delete.
+            self.assertIn("443", third["carried_renderer_outputs"])
+            deletes = [item for item in third["lifecycle"]
+                       if item.get("kind") == "delete"]
+            self.assertEqual(len(deletes), 1, third["lifecycle"])
+            self.assertEqual(deletes[0]["event"], 1)
+            self.assertIn("443", deletes[0]["names"])
+
     def test_delete_recreate_publishes_lifecycle_and_recarries_the_name(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary) / "campaign"
