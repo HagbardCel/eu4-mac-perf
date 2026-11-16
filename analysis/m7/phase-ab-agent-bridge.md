@@ -260,8 +260,10 @@ The complete relocated case remains under `.local/m7/phase-b-authentic-relocated
 The full `unittest discover` suite was started but stopped when it reached
 `tests.test_trace_tr3`, which prompts for an interactive live-EU4
 authorization ("enter yes"). Phase A/B did not authorize or perform an EU4
-launch. The focused suite above is the applicable native/offline gate; no
-full-suite failure was observed before the interactive prompt.
+launch. The suite therefore did not complete and is not evidence of a clean
+full-suite run; the focused native/offline suite above is the applicable gate
+for this phase. A full run belongs at the later qualification gate, after the
+live-test authorization policy is handled deliberately.
 
 ## Reproducing a packaged case
 
