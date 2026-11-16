@@ -719,19 +719,10 @@ def capture(args: argparse.Namespace) -> int:
             if not coordinator_path.is_file():
                 raise FrameError("in-process shadow coordinator produced no report")
             shadow_report = _read_json(coordinator_path)
-            result["shadow"] = shadow_report
-            result["pixel_verdict"] = shadow_report.get("pixel_verdict")
-            result["qualified"] = False
-            result["diagnostic"] = {
-                "metal": "complete"
-                if shadow_report.get("status") == "ok"
-                else "failed",
-                "pixel": shadow_report.get("pixel_verdict"),
-            }
-            if shadow_report.get("status") != "ok":
+            native_failure = apply_shadow_report(result, shadow_report)
+            if native_failure is not None:
                 raise FrameError(
-                    "in-process shadow failed: "
-                    + str(shadow_report.get("error") or "unknown")
+                    "in-process shadow failed: " + native_failure
                 )
         except (FrameError, OSError, subprocess.TimeoutExpired) as exc:
             result["shadow_error"] = str(exc)
@@ -1312,6 +1303,58 @@ def isolate_command(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
+def shadow_failure_detail(report: dict) -> str:
+    """Return the native shadow failure without degrading it to a generic text.
+
+    The bridge keeps the native stage and error in both the top-level report and
+    ``metal``; replay.json additionally carries a structured ``failure`` object.
+    Prefer those over any coordinator fallback so a specific manifest, shader,
+    event or GPU failure survives into coordinator.json and capture-report.json.
+    """
+    if not isinstance(report, dict):
+        return "Metal replay failed"
+    metal = report.get("metal")
+    if not isinstance(metal, dict):
+        metal = {}
+    failure = report.get("failure")
+    if not isinstance(failure, dict):
+        failure = {}
+    error = report.get("error")
+    stage = failure.get("stage") or metal.get("stage") or report.get("stage")
+    if not error or (stage and not str(error).startswith(str(stage))):
+        error = metal.get("error") or failure.get("error") or error
+    if not error:
+        error = "Metal replay failed"
+    error = str(error)
+    if stage and not error.startswith(str(stage)):
+        return f"{stage}: {error}"
+    return error
+
+
+def apply_shadow_report(result: dict, shadow_report: dict) -> str | None:
+    """Copy the coordinator report into the final capture summary.
+
+    Returns the native failure text when the shadow run failed, otherwise None.
+    The capture summary therefore carries the same stage, error and structured
+    failure object as shadow-report.json and coordinator.json.
+    """
+    result["shadow"] = shadow_report
+    result["shadow_stage"] = shadow_report.get("stage")
+    result["shadow_timed_out"] = bool(shadow_report.get("timed_out", False))
+    failure = shadow_report.get("failure")
+    if isinstance(failure, dict) and failure:
+        result["shadow_failure"] = failure
+    result["pixel_verdict"] = shadow_report.get("pixel_verdict")
+    result["qualified"] = False
+    result["diagnostic"] = {
+        "metal": "complete" if shadow_report.get("status") == "ok" else "failed",
+        "pixel": shadow_report.get("pixel_verdict"),
+    }
+    if shadow_report.get("status") == "ok":
+        return None
+    return shadow_failure_detail(shadow_report)
+
+
 def shadow_coordinator(args: argparse.Namespace) -> int:
     """Coordinates the one external translator step for a sealed live frame.
 
@@ -1352,6 +1395,7 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
     while not seal_path.is_file() and time.monotonic() < seal_deadline:
         time.sleep(0.1)
     if not seal_path.is_file():
+        result["status"] = "failed"
         result["error"] = "frame seal did not appear"
         (shadow / "coordinator.json").parent.mkdir(parents=True, exist_ok=True)
         (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")
@@ -1359,6 +1403,7 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
     try:
         seal = load_seal(frame_dir)
     except FrameError as exc:
+        result["status"] = "failed"
         result["error"] = f"frame seal is not usable: {exc}"
         (shadow / "coordinator.json").parent.mkdir(parents=True, exist_ok=True)
         (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")
@@ -1378,6 +1423,7 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
         shadow / "comparison.json",
     ):
         if stale.exists():
+            result["status"] = "failed"
             result["error"] = f"stale shadow artifact: {stale}"
             (shadow / "coordinator.json").write_text(
                 json.dumps(result, indent=2) + "\n"
@@ -1406,10 +1452,12 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
             check=False,
         )
     except subprocess.TimeoutExpired:
+        result["status"] = "failed"
         result["error"] = "shader translation timed out"
         (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")
         return 1
     if translated.returncode != 0:
+        result["status"] = "failed"
         result["error"] = "shader translation failed"
         (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")
         return 1
@@ -1459,16 +1507,22 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
     while not report_path.is_file() and time.monotonic() < report_deadline:
         time.sleep(0.1)
     if not report_path.is_file():
+        result["status"] = "failed"
         result["error"] = "in-process Metal replay report did not appear"
         (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")
         return 1
     try:
         report = _read_json(report_path)
     except FrameError as exc:
+        result["status"] = "failed"
         result["error"] = str(exc)
         (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")
         return 1
     result["metal"] = report
+    result["stage"] = report.get("stage")
+    result["timed_out"] = bool(report.get("timed_out", False))
+    if isinstance(report.get("failure"), dict) and report.get("failure"):
+        result["failure"] = report.get("failure")
     provenance_error = None
     for report_field, seal_field in (
         ("capture_frame_id", "capture_frame_id"),
@@ -1482,10 +1536,16 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
                 f"shadow report {report_field} does not match the sealed frame"
             )
             break
+    execution_failed = report.get("status") != "ok"
+    result["provenance_ok"] = provenance_error is None
+    result["execution_failed"] = execution_failed
     if provenance_error is not None:
+        result["status"] = "failed"
         result["provenance_error"] = provenance_error
-        if report.get("status") != "ok":
-            result["error"] = report.get("error") or provenance_error
+        if execution_failed:
+            # Keep the native execution failure as the actionable error while
+            # recording the independent identity mismatch.
+            result["error"] = shadow_failure_detail(report)
         else:
             result["error"] = provenance_error
         (shadow / "coordinator.json").write_text(
@@ -1527,8 +1587,9 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
         )
     except (OSError, ValueError) as exc:
         result["state_coverage_error"] = str(exc)
-    if report.get("status") != "ok":
-        result["error"] = report.get("error") or "Metal replay failed"
+    if execution_failed:
+        result["status"] = "failed"
+        result["error"] = shadow_failure_detail(report)
         (shadow / "coordinator.json").write_text(json.dumps(result, indent=2) + "\n")
         return 1
     if not args.no_compare:
@@ -1575,6 +1636,7 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
                 json.dumps(comparison, indent=2) + "\n"
             )
         except (OSError, ValueError, Exception) as exc:  # noqa: BLE001
+            result["status"] = "failed"
             result["error"] = f"comparison failed: {exc}"
             (shadow / "coordinator.json").write_text(
                 json.dumps(result, indent=2) + "\n"

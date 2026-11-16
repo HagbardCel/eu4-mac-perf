@@ -115,6 +115,201 @@ static BOOL shadow_sha256_file(const char *path, char out[65]) {
     return YES;
 }
 
+/* The C ABI keeps its v2 layout; replay.json carries the structured failure
+   and the error string starts with the same stage.  Read both so the shadow
+   report never degrades a specific native failure to "metal_replay". */
+static NSDictionary *shadow_native_failure(const eu4_metal_replay_result *result,
+                                           NSString **stage_out) {
+    NSDictionary *document = nil;
+    if (result->result_json[0] != 0) {
+        NSData *data = [NSData dataWithContentsOfFile:@(result->result_json)];
+        id value = data != nil
+            ? [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL]
+            : nil;
+        if ([value isKindOfClass:[NSDictionary class]]) {
+            document = value;
+        }
+    }
+    NSMutableDictionary *failure = [NSMutableDictionary dictionary];
+    id structured = document[@"failure"];
+    if ([structured isKindOfClass:[NSDictionary class]]) {
+        [failure addEntriesFromDictionary:structured];
+    }
+    NSString *stage = document[@"stage"];
+    if (stage.length == 0) {
+        stage = failure[@"stage"];
+    }
+    NSString *error_text = @(result->error);
+    NSInteger operation_index = -1;
+    if (stage.length == 0 && error_text.length > 0) {
+        NSRange colon = [error_text rangeOfString:@":"];
+        NSString *prefix = colon.location != NSNotFound
+            ? [error_text substringToIndex:colon.location]
+            : error_text;
+        NSRange operation = [prefix rangeOfString:@" (operation "];
+        if (operation.location != NSNotFound) {
+            stage = [prefix substringToIndex:operation.location];
+            NSString *tail = [prefix substringFromIndex:NSMaxRange(operation)];
+            NSRange close = [tail rangeOfString:@")"];
+            if (close.location != NSNotFound) {
+                NSString *digits = [tail substringToIndex:close.location];
+                NSScanner *scanner = [NSScanner scannerWithString:digits];
+                NSInteger parsed = -1;
+                if ([scanner scanInteger:&parsed] && scanner.isAtEnd &&
+                    parsed >= 0) {
+                    operation_index = parsed;
+                }
+            }
+        } else {
+            stage = prefix;
+        }
+    }
+    if (stage.length == 0) {
+        stage = @"metal_replay";
+    }
+    if (failure.count == 0) {
+        failure[@"stage"] = stage;
+        failure[@"operation"] = @(operation_index);
+        failure[@"event"] = @(operation_index);
+        failure[@"kind"] = @"frame";
+        failure[@"timed_out"] = @(result->timed_out != 0);
+        failure[@"command_status"] = @(result->command_status);
+        failure[@"error"] = error_text.length > 0
+            ? error_text
+            : @"Metal replay failed";
+    }
+    if (stage_out != NULL) {
+        *stage_out = stage;
+    }
+    return failure;
+}
+
+static NSDictionary *shadow_failure_object(NSString *stage, NSString *error,
+                                           NSInteger operation, NSString *kind,
+                                           BOOL timed_out,
+                                           NSInteger command_status) {
+    return @{
+        @"stage": stage.length > 0 ? stage : @"metal_replay",
+        @"operation": @(operation),
+        @"event": @(operation),
+        @"kind": kind.length > 0 ? kind : @"frame",
+        @"caller": @"",
+        @"error": error.length > 0 ? error : @"Metal replay failed",
+        @"timed_out": @(timed_out),
+        @"command_status": @(command_status),
+    };
+}
+
+/* Authoritative capture identity shared by every report path.  Normal replay,
+   shader-receipt/session-creation failures and Objective-C exceptions must all
+   carry the same sealed identity so the coordinator can distinguish a genuine
+   provenance mismatch from an execution failure. */
+static NSMutableDictionary *shadow_report_base(
+    const eu4_frame_capture_descriptor *capture, NSString *shader_path) {
+    return [@{
+        @"schema": @"m7-shadow-report/v1",
+        @"mode": @"single-frame",
+        @"capture_frame_id": @(capture->capture_frame_id),
+        @"pid": @(capture->pid),
+        @"session_id": @(capture->session_id),
+        @"boundary": @(capture->boundary),
+        @"capture_dir": @(capture->capture_dir),
+        @"shader_dir": shader_path.length > 0 ? shader_path : @"",
+        @"gl_reference_sha256": @(capture->reference_sha256),
+        @"trace_manifest_sha256": @(capture->manifest_sha256),
+        @"operation_count": @(capture->operation_count),
+        @"draw_count": @(capture->draw_count),
+        @"clear_count": @(capture->clear_count),
+        @"copy_count": @(capture->copy_count),
+        @"width": @(capture->width),
+        @"height": @(capture->height),
+        @"qualified": @NO,
+        @"status": @"failed",
+        @"stage": @"shader_wait",
+        @"error": @"",
+        @"failure": @{},
+    } mutableCopy];
+}
+
+static NSDictionary *shadow_report_for_failure(
+    const eu4_frame_capture_descriptor *capture, NSString *shader_path,
+    NSString *stage, NSString *error, BOOL timed_out, uint64_t started_ns) {
+    NSMutableDictionary *report = shadow_report_base(capture, shader_path);
+    NSString *stage_text = stage.length > 0 ? stage : @"metal_replay";
+    NSString *error_text = error.length > 0 ? error : @"Metal replay failed";
+    report[@"status"] = @"failed";
+    report[@"stage"] = stage_text;
+    report[@"error"] = error_text;
+    report[@"timed_out"] = @(timed_out);
+    report[@"failure"] = shadow_failure_object(stage_text, error_text, -1,
+                                               @"frame", timed_out, 0);
+    report[@"total_duration_ns"] = @(shadow_now_ns() - started_ns);
+    return report;
+}
+
+static NSDictionary *shadow_report_for_exception(
+    const eu4_frame_capture_descriptor *capture, NSString *shader_path,
+    NSString *reason, uint64_t started_ns) {
+    NSString *description = reason.length > 0
+        ? reason
+        : @"unknown Objective-C exception";
+    return shadow_report_for_failure(capture, shader_path,
+                                     @"internal_exception", description, NO,
+                                     started_ns);
+}
+
+static NSDictionary *shadow_report_for_replay(
+    const eu4_frame_capture_descriptor *capture, NSString *shader_path,
+    const eu4_metal_replay_result *result, int code, uint64_t started_ns) {
+    NSString *native_stage = @"complete";
+    NSDictionary *native_failure = @{};
+    NSString *native_error = @"";
+    if (!result->ok) {
+        native_failure = shadow_native_failure(result, &native_stage);
+        /* Prefer the C ABI's stage-prefixed error; replay.json still carries
+           the structured operation/detail. */
+        native_error = result->error[0] != 0
+            ? @(result->error)
+            : native_failure[@"error"];
+        if (native_error.length == 0) {
+            native_error = @"Metal replay failed";
+        }
+        if (native_stage.length == 0) {
+            native_stage = @"metal_replay";
+        }
+    }
+    NSMutableDictionary *report = shadow_report_base(capture, shader_path);
+    report[@"status"] = result->ok ? @"ok" : @"failed";
+    report[@"stage"] = result->ok ? @"complete" : native_stage;
+    report[@"error"] = result->ok ? @"" : native_error;
+    report[@"failure"] = result->ok ? @{} : native_failure;
+    report[@"timed_out"] = @(result->timed_out);
+    report[@"command_status"] = @(result->command_status);
+    report[@"duration_ns"] = @(result->duration_ns);
+    report[@"total_duration_ns"] = @(shadow_now_ns() - started_ns);
+    report[@"metal"] = @{
+        @"ok": @(result->ok),
+        @"code": @(code),
+        @"events": @(result->events),
+        @"encoded": @(result->encoded),
+        @"failed": @(result->failed),
+        @"timed_out": @(result->timed_out),
+        @"partial": @(result->partial),
+        @"readback_ok": @(result->readback_ok),
+        @"command_status": @(result->command_status),
+        @"duration_ns": @(result->duration_ns),
+        @"metal_frame_sha256": @(result->metal_frame_sha256),
+        @"manifest_reference_sha256": @(result->manifest_reference_sha256),
+        @"result_json": @(result->result_json),
+        @"metal_frame": @(result->metal_frame),
+        @"provenance_jsonl": @(result->provenance_jsonl),
+        @"error": result->ok ? @"" : native_error,
+        @"stage": result->ok ? @"complete" : native_stage,
+        @"failure": result->ok ? @{} : native_failure,
+    };
+    return report;
+}
+
 static NSString *shadow_artifact_digest(NSString *directory) {
     NSFileManager *manager = [NSFileManager defaultManager];
     NSArray<NSString *> *paths =
@@ -211,18 +406,22 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
     }
     g_running = 1;
     g_started_ns = shadow_now_ns();
-    __block int status = 1;
-    __block NSString *failure = @"";
-    __block eu4_metal_replay_session *active_session = NULL;
-    __block BOOL detailed_report_written = NO;
+    int status = 1;
+    eu4_metal_replay_session *active_session = NULL;
+    BOOL detailed_report_written = NO;
+    NSString *report_stage = @"shader_wait";
+    NSString *report_error = @"";
+    BOOL report_timed_out = NO;
     @autoreleasepool {
+        char output[PATH_MAX];
+        char shaders[PATH_MAX];
+        default_paths(capture, output, sizeof(output), shaders,
+                      sizeof(shaders));
+        NSString *output_path = @(output);
+        NSString *shader_path = @(shaders);
+        NSString *report_path =
+            [output_path stringByAppendingPathComponent:@"shadow-report.json"];
         @try {
-            char output[PATH_MAX];
-            char shaders[PATH_MAX];
-            default_paths(capture, output, sizeof(output), shaders,
-                          sizeof(shaders));
-            NSString *output_path = @(output);
-            NSString *shader_path = @(shaders);
             [[NSFileManager defaultManager]
                 createDirectoryAtPath:output_path
           withIntermediateDirectories:YES
@@ -238,167 +437,95 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
             uint64_t wait_ms =
                 env_u64("EU4_GFX_SHADOW_WAIT_MS", 120000);
             if (!wait_for_file(ready, wait_ms)) {
-                failure = @"shader_translation_timeout";
+                report_stage = @"shader_wait";
+                report_error = @"shader_translation_timeout";
+                report_timed_out = YES;
             } else {
                 char shader_json_sha[65] = {0};
+                NSString *receipt_failure = @"";
                 if (!shadow_verify_receipt(capture, output_path, shader_path,
-                                           shader_json_sha, &failure)) {
-                    failure = [NSString stringWithFormat:
-                                            @"shader_receipt_failed: %@",
-                                            failure];
+                                           shader_json_sha, &receipt_failure)) {
+                    report_stage = @"shader_receipt";
+                    report_error = receipt_failure.length > 0
+                        ? receipt_failure
+                        : @"shader receipt verification failed";
+                    report_timed_out = NO;
                 } else {
-                eu4_metal_replay_config config;
-                memset(&config, 0, sizeof(config));
-                config.struct_size = (uint32_t)sizeof(config);
-                config.abi_version = EU4_METAL_REPLAY_ABI_VERSION;
-                config.frame_dir = capture->capture_dir;
-                config.shader_dir = shaders;
-                config.output_dir = output;
-                config.stop_after = -1;
-                config.only_event = -1;
-                config.timeout_ms =
-                    env_u64("EU4_GFX_SHADOW_TIMEOUT_MS", 120000);
-                config.capture_frame_id = capture->capture_frame_id;
-                config.session_id = capture->session_id;
-                config.expected_event_stream_sha256 =
-                    capture->event_stream_sha256;
-                config.expected_event_stream_bytes =
-                    capture->event_stream_bytes;
-                config.expected_manifest_sha256 = capture->manifest_sha256;
-                config.expected_reference_sha256 = capture->reference_sha256;
-                config.expected_shader_json_sha256 = shader_json_sha;
-                char create_error[512] = {0};
-                active_session = eu4_metal_replay_create(
-                    &config, create_error, sizeof(create_error));
-                if (active_session == NULL) {
-                    failure = [NSString stringWithFormat:
-                                            @"metal_create_failed: %s",
-                                            create_error];
-                } else {
-                    eu4_metal_replay_result result;
-                    int code = eu4_metal_replay_frame(active_session, &config,
-                                                      &result);
-                    NSMutableDictionary *report = [@{
-                        @"schema": @"m7-shadow-report/v1",
-                        @"mode": @"single-frame",
-                        @"capture_frame_id":
-                            @(capture->capture_frame_id),
-                        @"pid": @(capture->pid),
-                        @"session_id": @(capture->session_id),
-                        @"boundary": @(capture->boundary),
-                        @"capture_dir": @(capture->capture_dir),
-                        @"shader_dir": shader_path,
-                        @"gl_reference_sha256":
-                            @(capture->reference_sha256),
-                        @"trace_manifest_sha256":
-                            @(capture->manifest_sha256),
-                        @"operation_count":
-                            @(capture->operation_count),
-                        @"draw_count": @(capture->draw_count),
-                        @"clear_count": @(capture->clear_count),
-                        @"copy_count": @(capture->copy_count),
-                        @"width": @(capture->width),
-                        @"height": @(capture->height),
-                        @"metal": @{
-                            @"ok": @(result.ok),
-                            @"code": @(code),
-                            @"events": @(result.events),
-                            @"encoded": @(result.encoded),
-                            @"failed": @(result.failed),
-                            @"timed_out": @(result.timed_out),
-                            @"partial": @(result.partial),
-                            @"readback_ok": @(result.readback_ok),
-                            @"command_status": @(result.command_status),
-                            @"duration_ns": @(result.duration_ns),
-                            @"metal_frame_sha256":
-                                @(result.metal_frame_sha256),
-                            @"manifest_reference_sha256":
-                                @(result.manifest_reference_sha256),
-                            @"result_json": @(result.result_json),
-                            @"metal_frame": @(result.metal_frame),
-                            @"provenance_jsonl":
-                                @(result.provenance_jsonl),
-                            @"error": @(result.error),
-                        },
-                        @"status": result.ok ? @"ok" : @"failed",
-                        @"stage": result.ok ? @"complete" : @"metal_replay",
-                        @"qualified": @NO,
-                        @"error": @(result.error),
-                        @"duration_ns": @(result.duration_ns),
-                        @"total_duration_ns":
-                            @(shadow_now_ns() - g_started_ns),
-                    } mutableCopy];
-                    if (!result.ok) {
-                        failure = [NSString stringWithFormat:
-                                                @"metal_replay_failed: %s",
-                                                result.error];
+                    eu4_metal_replay_config config;
+                    memset(&config, 0, sizeof(config));
+                    config.struct_size = (uint32_t)sizeof(config);
+                    config.abi_version = EU4_METAL_REPLAY_ABI_VERSION;
+                    config.frame_dir = capture->capture_dir;
+                    config.shader_dir = shaders;
+                    config.output_dir = output;
+                    config.stop_after = -1;
+                    config.only_event = -1;
+                    config.timeout_ms =
+                        env_u64("EU4_GFX_SHADOW_TIMEOUT_MS", 120000);
+                    config.capture_frame_id = capture->capture_frame_id;
+                    config.session_id = capture->session_id;
+                    config.expected_event_stream_sha256 =
+                        capture->event_stream_sha256;
+                    config.expected_event_stream_bytes =
+                        capture->event_stream_bytes;
+                    config.expected_manifest_sha256 = capture->manifest_sha256;
+                    config.expected_reference_sha256 =
+                        capture->reference_sha256;
+                    config.expected_shader_json_sha256 = shader_json_sha;
+                    char create_error[512] = {0};
+                    active_session = eu4_metal_replay_create(
+                        &config, create_error, sizeof(create_error));
+                    if (active_session == NULL) {
+                        report_stage = @"metal_create";
+                        report_error = create_error[0] != 0
+                            ? @(create_error)
+                            : @"Metal replay session creation failed";
+                        report_timed_out = NO;
+                    } else {
+                        eu4_metal_replay_result result;
+                        int code = eu4_metal_replay_frame(active_session,
+                                                          &config, &result);
+                        NSDictionary *report = shadow_report_for_replay(
+                            capture, shader_path, &result, code,
+                            g_started_ns);
+                        report_stage = report[@"stage"] ?: @"metal_replay";
+                        report_error = report[@"error"] ?: @"";
+                        report_timed_out =
+                            [report[@"timed_out"] boolValue];
+                        BOOL report_written = write_report(report_path, report);
+                        detailed_report_written = report_written;
+                        if (result.ok && report_written) {
+                            status = 0;
+                        } else if (result.ok) {
+                            status = 1;
+                            report_stage = @"report_write";
+                            report_error = @"shadow-report.json write failed";
+                            report_timed_out = NO;
+                        }
                     }
-                    BOOL report_written = write_report(
-                        [output_path stringByAppendingPathComponent:
-                                        @"shadow-report.json"],
-                        report);
-                    detailed_report_written = report_written;
-                    if (result.ok && report_written) {
-                        status = 0;
-                    } else if (result.ok) {
-                        status = 1;
-                        failure = @"shadow_report_write_failed";
-                    }
-                }
                 }
             }
             if (status != 0 && !detailed_report_written) {
-                NSDictionary *report = @{
-                    @"schema": @"m7-shadow-report/v1",
-                    @"mode": @"single-frame",
-                    @"capture_frame_id": @(capture->capture_frame_id),
-                    @"pid": @(capture->pid),
-                    @"session_id": @(capture->session_id),
-                    @"capture_dir": @(capture->capture_dir),
-                    @"gl_reference_sha256": @(capture->reference_sha256),
-                    @"trace_manifest_sha256": @(capture->manifest_sha256),
-                    @"status": @"failed",
-                    @"stage": ({
-                        NSString *stage = @"shader_wait";
-                        if (status == 2) {
-                            stage = @"objective_c_exception";
-                        } else if ([failure hasPrefix:@"shader_receipt_failed"]) {
-                            stage = @"shader_receipt";
-                        } else if ([failure hasPrefix:@"metal_create_failed"]) {
-                            stage = @"metal_create";
-                        } else if ([failure hasPrefix:@"metal_replay_failed"]) {
-                            stage = @"metal_replay";
-                        } else if ([failure isEqualToString:@"shadow_report_write_failed"]) {
-                            stage = @"report_write";
-                        }
-                        stage;
-                    }),
-                    @"error": failure,
-                    @"total_duration_ns":
-                        @(shadow_now_ns() - g_started_ns),
-                };
-                write_report(
-                    [output_path stringByAppendingPathComponent:
-                                    @"shadow-report.json"],
-                    report);
+                NSDictionary *report = shadow_report_for_failure(
+                    capture, shader_path, report_stage, report_error,
+                    report_timed_out, g_started_ns);
+                detailed_report_written = write_report(report_path, report);
             }
         } @catch (NSException *exception) {
             status = 2;
-            failure = [NSString stringWithFormat:@"objective_c_exception: %@",
-                                                 exception.reason ?: exception.name];
-            const char *configured_output =
-                getenv("EU4_GFX_SHADOW_OUTPUT_DIR");
-            if (configured_output != NULL && configured_output[0] == '/') {
-                NSString *path = [@(configured_output)
-                    stringByAppendingPathComponent:@"shadow-report.json"];
-                write_report(path, @{
-                    @"schema": @"m7-shadow-report/v1",
-                    @"mode": @"single-frame",
-                    @"status": @"failed",
-                    @"error": failure,
-                    @"capture_frame_id": @(capture->capture_frame_id),
-                });
+            NSString *reason = exception.reason;
+            if (reason.length == 0) {
+                reason = exception.name;
             }
+            if (reason.length == 0) {
+                reason = @"unknown Objective-C exception";
+            }
+            report_stage = @"internal_exception";
+            report_error = reason;
+            report_timed_out = NO;
+            NSDictionary *report = shadow_report_for_exception(
+                capture, shader_path, reason, g_started_ns);
+            detailed_report_written = write_report(report_path, report);
         } @finally {
             if (active_session != NULL) {
                 eu4_metal_replay_destroy(active_session);
@@ -409,6 +536,47 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
     g_running = 0;
     g_done = 1;
     return status;
+}
+
+char *eu4_gfx_shadow_test_report_json(
+    const eu4_frame_capture_descriptor *capture,
+    const eu4_metal_replay_result *result, int code,
+    const char *failure_stage, const char *failure_error, int timed_out,
+    const char *exception_reason) {
+    if (capture == NULL) {
+        return NULL;
+    }
+    @autoreleasepool {
+        NSDictionary *report = nil;
+        if (exception_reason != NULL) {
+            report = shadow_report_for_exception(
+                capture, nil, exception_reason != NULL ? @(exception_reason)
+                                                       : nil,
+                shadow_now_ns());
+        } else if (result != NULL) {
+            report = shadow_report_for_replay(capture, nil, result, code,
+                                              shadow_now_ns());
+        } else {
+            report = shadow_report_for_failure(
+                capture, nil,
+                failure_stage != NULL ? @(failure_stage) : @"shader_wait",
+                failure_error != NULL ? @(failure_error) : @"",
+                timed_out != 0, shadow_now_ns());
+        }
+        NSData *json = [NSJSONSerialization dataWithJSONObject:report
+                                                       options:0
+                                                         error:NULL];
+        if (json == nil) {
+            return NULL;
+        }
+        char *text = (char *)malloc(json.length + 1);
+        if (text == NULL) {
+            return NULL;
+        }
+        memcpy(text, json.bytes, json.length);
+        text[json.length] = 0;
+        return text;
+    }
 }
 
 int eu4_gfx_shadow_configure_from_env(void) {
