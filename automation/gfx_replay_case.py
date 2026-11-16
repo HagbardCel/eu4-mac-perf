@@ -89,6 +89,30 @@ def prepare_case_output(case_dir: Path, inputs: list[Path]) -> Path:
     return case_dir
 
 
+def _relocate_capture_seal(case_dir: Path) -> None:
+    """Make the copied seal valid for the portable, relocatable capture path.
+
+    The seal's authoritative identity and every content digest are unchanged;
+    only the location field is rewritten, with the original retained for
+    provenance.  ``load_seal`` accepts the marker only when the case manifest
+    declares the ``capture`` directory at this location.
+    """
+    seal_path = case_dir / "capture" / "frame-seal.json"
+    if not seal_path.is_file():
+        return
+    try:
+        seal = json.loads(seal_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return
+    if not isinstance(seal, dict):
+        return
+    original = seal.get("capture_dir")
+    seal["capture_dir"] = "capture"
+    if original and original != "capture":
+        seal["portable_original_capture_dir"] = original
+    _write_json(seal_path, seal)
+
+
 def package(
     frame_dir: Path | str,
     replay_dir: Path | str,
@@ -109,6 +133,7 @@ def package(
     shader_source = gfx_independent_replay._shader_dir(frame_dir, shaders)
     prepare_case_output(case_dir, [frame_dir, replay_dir, shader_source])
     shutil.copytree(frame_dir, case_dir / "capture")
+    _relocate_capture_seal(case_dir)
     shutil.copytree(shader_source, case_dir / "shaders")
     (case_dir / "replay").mkdir(parents=True)
     for name in ("replay.json", "replay-provenance.jsonl", "metal-frame.bgra",
@@ -278,6 +303,7 @@ def package_diagnosis(frame_dir: Path | str, metal_dir: Path | str,
             f"capture exceeds the {max_bytes}-byte case budget")
     prepare_case_output(case_dir, [frame_dir, metal_dir, shader_source])
     shutil.copytree(frame_dir, case_dir / "capture")
+    _relocate_capture_seal(case_dir)
     shutil.copytree(shader_source, case_dir / "shaders")
     (case_dir / "replay").mkdir(parents=True)
     replay_names = (

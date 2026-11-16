@@ -405,6 +405,25 @@
     "focused_tests": {
       "passed": 162,
       "skipped": 11
+    },
+    "review_remediation": {
+      "reviewed_sha": "b526d773",
+      "blocking": [
+        "packaged_case_seal_relocation",
+        "empty_plan_unbound_qualification"
+      ],
+      "fixed": [
+        "portable_capture_seal_marker",
+        "derived_request_always_incomplete",
+        "unsealed_shadow_unverified",
+        "malformed_metadata_fail_closed",
+        "exact_output_file_plan",
+        "request_name_traversal"
+      ],
+      "focused_tests": {
+        "passed": 168,
+        "skipped": 11
+      }
     }
   }
 }

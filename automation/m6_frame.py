@@ -201,7 +201,20 @@ def load_seal(
     if capture_id <= 0 or pid <= 0 or not seal.get("session_id"):
         raise FrameError("frame seal identity is invalid")
     declared_dir = Path(str(seal.get("capture_dir") or ""))
-    if not declared_dir.is_absolute() or declared_dir.resolve() != frame_dir.resolve():
+    portable_capture = False
+    if frame_dir.name == "capture":
+        case_path = frame_dir.parent / "case.json"
+        try:
+            case = json.loads(case_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            case = None
+        portable_capture = (
+            isinstance(case, dict)
+            and case.get("schema") == "gfx-strategy-b-case/v1"
+            and case.get("capture") == "capture")
+    if not portable_capture and (
+            not declared_dir.is_absolute()
+            or declared_dir.resolve() != frame_dir.resolve()):
         raise FrameError("frame seal capture directory does not match")
 
     def member(name: object, label: str) -> Path:

@@ -206,8 +206,7 @@ def _normalize_format(value) -> str:
 
 
 def _checkpoint_key(item: dict) -> tuple[int, str]:
-    return (int(item.get("event") if item.get("event") is not None else -1),
-            str(item.get("target")))
+    return (_as_int(item.get("event"), -1), str(item.get("target")))
 
 
 def _invalid_checkpoint(item: dict, graph: dict, reason: str,
@@ -220,10 +219,10 @@ def _invalid_checkpoint(item: dict, graph: dict, reason: str,
         "event": event,
         "target": target,
         "resource": resource_id,
-        "width": int(item.get("reference_width")
-                     or item.get("width") or 0),
-        "height": int(item.get("reference_height")
-                      or item.get("height") or 0),
+        "width": _as_int(item.get("reference_width")
+                         or item.get("width"), 0),
+        "height": _as_int(item.get("reference_height")
+                          or item.get("height"), 0),
         "format": item.get("format") or resource.get("format"),
         "producer_events": list(item.get("producer_events") or []),
         "metal_file": str(item.get("_metal_path") or ""),
@@ -316,12 +315,12 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
                 "checkpoint result names a different resource identity",
                 requested=True))
             continue
-        requested_width = int(wanted.get("reference_width")
-                              or wanted.get("width") or 0)
-        requested_height = int(wanted.get("reference_height")
-                               or wanted.get("height") or 0)
-        actual_width = int(item.get("width") or 0)
-        actual_height = int(item.get("height") or 0)
+        requested_width = _as_int(wanted.get("reference_width")
+                                  or wanted.get("width"), 0)
+        requested_height = _as_int(wanted.get("reference_height")
+                                   or wanted.get("height"), 0)
+        actual_width = _as_int(item.get("width"), 0)
+        actual_height = _as_int(item.get("height"), 0)
         file_name = str(wanted.get("file") or item.get("file") or "")
         reference_name = str(wanted.get("reference_file")
                              or item.get("reference_file") or "")
@@ -1209,8 +1208,14 @@ def _identity_check(seal: dict | None, trace: dict, replay: dict,
     if seal is None:
         if require_seal:
             problems.append("frame has no seal")
+        status = "missing" if require_seal else "unsealed"
+        if not require_seal and shadow is not None:
+            # A shadow report claims an in-process identity, but without the
+            # seal there is nothing authoritative to check it against.
+            problems.append("shadow report has no frame seal to verify")
+            status = "unverified_session"
         return {
-            "status": "missing" if require_seal else "unsealed",
+            "status": status,
             "checks": checks,
             "problems": problems,
             "note": ("offline fixture: no same-process seal is attached"
@@ -1288,6 +1293,24 @@ def _identity_check(seal: dict | None, trace: dict, replay: dict,
     }
 
 
+def _as_int(value, default: int = 0) -> int:
+    try:
+        if isinstance(value, bool):
+            return default
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def _safe_member_name(value) -> str | None:
+    text = str(value or "")
+    path = Path(text)
+    if (not text or path.is_absolute() or path.name != text
+            or "/" in text or "\\" in text):
+        return None
+    return text
+
+
 def _checkpoint_problem(kind: str, detail: str, *, severity: str) -> dict:
     """One request/provenance problem with fail-closed severity.
 
@@ -1338,7 +1361,7 @@ def _checkpoint_request_plan_problems(graph: dict,
                 f"but the graph requires {expected_resource}",
                 severity="invalid"))
             continue
-        for field in ("reference_file", "reference_sha256",
+        for field in ("file", "reference_file", "reference_sha256",
                       "reference_width", "reference_height"):
             if item.get(field) != wanted.get(field):
                 problems.append(_checkpoint_problem(
@@ -1347,10 +1370,11 @@ def _checkpoint_request_plan_problems(graph: dict,
                     "the validated capture graph",
                     severity="invalid"))
                 break
-        if [int(value) for value in item.get("producer_events") or [] if
-                isinstance(value, int)] != [
-                int(value) for value in wanted.get("producer_events") or [] if
-                isinstance(value, int)]:
+        published_producers = item.get("producer_events") or []
+        if (not isinstance(published_producers, list)
+                or any(not isinstance(value, int)
+                       for value in published_producers)
+                or published_producers != (wanted.get("producer_events") or [])):
             problems.append(_checkpoint_problem(
                 "substituted_request",
                 f"checkpoint ({key[0]}, {key[1]}) producer history disagrees "
@@ -1410,13 +1434,13 @@ def _checkpoint_binding_problems(metal_dir: Path, request: dict,
                     "unbound_request",
                     "shadow report has no checkpoint request file name",
                     severity="incomplete"))
-            elif Path(str(name)).name != path.name:
+            elif _safe_member_name(name) != path.name:
                 problems.append(_checkpoint_problem(
                     "request_name_mismatch",
                     "checkpoint request file name disagrees with the shadow "
                     "report",
                     severity="invalid"))
-            if reported_count is not None and int(reported_count) != count:
+            if reported_count is not None and _as_int(reported_count, -1) != count:
                 problems.append(_checkpoint_problem(
                     "request_count_mismatch",
                     "shadow report checkpoint count disagrees with the "
@@ -1445,13 +1469,13 @@ def _checkpoint_binding_problems(metal_dir: Path, request: dict,
                     "checkpoint request sha256 disagrees with the shader "
                     "receipt",
                     severity="invalid"))
-            if Path(str(receipt_name)).name != path.name:
+            if _safe_member_name(receipt_name) != path.name:
                 problems.append(_checkpoint_problem(
                     "request_name_mismatch",
                     "checkpoint request file name disagrees with the shader "
                     "receipt",
                     severity="invalid"))
-            if receipt_count is None or int(receipt_count) != count:
+            if receipt_count is None or _as_int(receipt_count, -1) != count:
                 problems.append(_checkpoint_problem(
                     "request_count_mismatch",
                     "shader receipt checkpoint count disagrees with the "
@@ -1858,13 +1882,13 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
         validation["note"] = (
             "requested checkpoint results are missing; this is incomplete "
             "evidence, not a difference")
-    if request_source == "derived" and request.get("checkpoints"):
+    if request_source == "derived":
         validation["request_binding"] = request_binding
         # A request that was not published with the result cannot be bound to
-        # the replay.  Individual checkpoint files may still be useful, but
-        # the qualification cannot silently claim they belong to this run.
-        if validation.get("status") == "ok":
-            validation["status"] = "incomplete"
+        # the replay.  This is true even when the derived plan is empty: the
+        # qualification cannot otherwise prove which request the replay
+        # executed.  Individual checkpoint files may still be useful.
+        validation["status"] = "incomplete"
         validation["problems"] = list(validation.get("problems") or []) + [
             {"kind": "request_not_bound",
              "detail": "checkpoint request was derived after the replay"}]

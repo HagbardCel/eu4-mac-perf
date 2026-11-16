@@ -243,7 +243,7 @@ directory (`<metal-dir>-case`) outside both the captured frame and the Metal
 result directory. Re-running replaces only an owned case; a non-owned output
 conflict is reported as an explicit error instead of deleting user data.
 
-Regressions (final focused set: 162 passed, 11 skipped):
+Regressions (final focused set: 168 passed, 11 skipped):
 
 - stale empty request, same-count different-event request, wrong digest,
   missing binding, duplicate/extra/substituted entries, receipt from another
@@ -251,3 +251,33 @@ Regressions (final focused set: 162 passed, 11 skipped):
 - the real `python -m automation.m6_frame diagnose --package` CLI with no
   `--out`, repeated invocation and a non-owned conflict;
 - canonical title and scene-75 Metal diagnoses are unchanged.
+
+## Independent review remediation
+
+An independent review of `b526d773` found two blocking defects plus hardening
+gaps; all are fixed on the final head:
+
+- **Packaged cases were not self-diagnosable.** The copied seal retained the
+  original absolute `capture_dir`, so a relocated case failed seal validation.
+  `gfx_replay_case` now rewrites only that location field to the portable
+  `capture` marker (retaining the original for provenance), and `load_seal`
+  accepts it only when the case manifest declares that capture directory.
+  Content identity/digests are unchanged. Regression:
+  `test_packaged_case_is_self_diagnosable_after_relocation` packages, relocates
+  and diagnoses with `--require-seal`, asserting `qualified_match` and a
+  verified seal. The existing real case now reports its true capture limits
+  (missing request binding/session) instead of a false seal mismatch.
+- **An unbound fixture with an empty checkpoint plan could qualify.**
+  `request_source == "derived"` is now unconditionally
+  `incomplete_diagnostics`, even when zero checkpoints are required.
+  Regression: `test_unbound_fixture_with_empty_plan_does_not_qualify`.
+
+Additional hardening: an absent seal plus a shadow report is
+`unverified_session`; malformed checkpoint metadata (non-scalar event/count)
+fails closed without a traceback; the plan comparison includes the output file
+name and requires integer producer events; request/receipt names with path
+separators are rejected; the diagnosis fixture's seal counts are derived from
+its events.
+
+Final focused set: **168 passed, 11 skipped** (environmental NumPy/evidence
+gates only).

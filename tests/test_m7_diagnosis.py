@@ -169,7 +169,12 @@ class DiagnosisFixture:
             "process_start_ns": 100, "boundary": "scene",
             "present_index": 2, "scene_index": 2,
             "operation_count": len(self.events),
-            "draw_count": 3, "clear_count": 2, "copy_count": 0,
+            "draw_count": sum(1 for event in self.events
+                              if event.get("kind") == "draw"),
+            "clear_count": sum(1 for event in self.events
+                               if event.get("kind") == "clear"),
+            "copy_count": sum(1 for event in self.events
+                              if event.get("kind") == "copy"),
             "event_stream_file": "frame-events.jsonl",
             "event_stream_bytes": len(events_bytes),
             "event_stream_sha256": sha(events_bytes),
@@ -474,6 +479,65 @@ class DiagnosisContractTests(unittest.TestCase):
                  report["checkpoint_validation"]["problems"]]
         self.assertIn("substituted_request", kinds)
 
+    def test_unbound_fixture_with_empty_plan_does_not_qualify(self):
+        self.fixture.events = [
+            _clear(None, 7),
+            _draw(1, None, [self.fixture.asset], program=1),
+        ]
+        self.fixture.write_frame()
+        self.fixture.write_metal()
+        (self.fixture.metal / "checkpoint-request.json").unlink()
+        shadow_path = self.fixture.metal / "shadow-report.json"
+        shadow = json.loads(shadow_path.read_text())
+        for field in ("checkpoint_request_file", "checkpoint_request_sha256",
+                      "checkpoint_count"):
+            shadow.pop(field, None)
+        shadow_path.write_text(json.dumps(shadow))
+        report = self.fixture.diagnose()
+        self.assertEqual(report["classification"],
+                         "incomplete_diagnostics", report)
+        self.assertEqual(report["checkpoint_validation"]["status"],
+                         "incomplete")
+        self.assertEqual(report["checkpoint_validation"]["requested"], 0)
+        self.assertFalse(report["qualification"]["qualified"])
+
+    def test_malformed_checkpoint_event_fails_closed_without_traceback(self):
+        def mutate(request):
+            request["checkpoints"][0]["event"] = {"not": "an-int"}
+        self._rewrite_request(mutate)
+        report = self.fixture.diagnose()
+        self.assertEqual(report["classification"], "invalid_provenance")
+        self.assertFalse(report["qualification"]["qualified"])
+
+    def test_request_output_file_deviation_fails_closed(self):
+        def mutate(request):
+            request["checkpoints"][0]["file"] = "substituted.bgra"
+        self._rewrite_request(mutate)
+        report = self.fixture.diagnose()
+        self.assertEqual(report["classification"], "invalid_provenance")
+        kinds = [problem["kind"] for problem in
+                 report["checkpoint_validation"]["problems"]]
+        self.assertIn("substituted_request", kinds)
+
+    def test_request_name_path_traversal_is_rejected(self):
+        shadow_path = self.fixture.metal / "shadow-report.json"
+        shadow = json.loads(shadow_path.read_text())
+        shadow["checkpoint_request_file"] = "../checkpoint-request.json"
+        shadow_path.write_text(json.dumps(shadow))
+        report = self.fixture.diagnose()
+        self.assertEqual(report["classification"], "invalid_provenance")
+        kinds = [problem["kind"] for problem in
+                 report["checkpoint_validation"]["problems"]]
+        self.assertIn("request_name_mismatch", kinds)
+
+    def test_unsealed_frame_with_shadow_report_does_not_qualify(self):
+        (self.fixture.frame / "frame-seal.json").unlink()
+        report = self.fixture.diagnose()
+        self.assertEqual(report["identity"]["status"],
+                         "unverified_session")
+        self.assertEqual(report["classification"],
+                         "incomplete_diagnostics")
+
     def test_shader_receipt_for_another_frame_fails_closed(self):
         request_path = self.fixture.metal / "checkpoint-request.json"
         (self.fixture.metal / "shader-receipt.json").write_text(json.dumps({
@@ -733,6 +797,27 @@ class DiagnosisPackageTests(unittest.TestCase):
         self.assertFalse(tampered["ok"])
         self.assertTrue(any("digest drift" in item
                             for item in tampered["problems"]))
+
+    def test_packaged_case_is_self_diagnosable_after_relocation(self):
+        report = self.fixture.diagnose(package=True)
+        case_dir = self.fixture.root / "metal-case"
+        relocated = self.fixture.root / "relocated-case"
+        import shutil
+        shutil.copytree(case_dir, relocated)
+        reopened = gfx_independent_replay.diagnose_frame(
+            relocated / "capture", relocated / "replay",
+            self.fixture.root / "relocated-diagnosis", require_seal=True)
+        self.assertEqual(reopened["classification"], "qualified_match",
+                         reopened)
+        self.assertEqual(reopened["capture"]["seal"]["status"], "verified")
+        self.assertEqual(reopened["identity"]["status"], "verified")
+        manifest = json.loads((relocated / "case.json").read_text())
+        seal = json.loads(
+            (relocated / "capture" / "frame-seal.json").read_text())
+        self.assertEqual(seal["capture_dir"], "capture")
+        self.assertEqual(seal["portable_original_capture_dir"],
+                         str(self.fixture.frame))
+        self.assertTrue(report.get("case"))
 
     def test_diagnose_package_flag_publishes_case(self):
         report = self.fixture.diagnose(package=True)
