@@ -134,6 +134,39 @@
   "notes": [
     "The authentic title frame recorded no CPU texture mutation, so A1 versioning is proven by the native GL capture regression, not by this campaign.",
     "No carried renderer output was sampled in the authentic campaign; carry/mutation fail-closed branches remain synthetic evidence.",
-    "Readback/sealing cost is unchanged from PR4 within measurement noise."
-  ]
+    "Readback/sealing cost is unchanged from PR4 within measurement noise.",
+    "Attachment-lifetime and intra-event ordering fixes are native/synthetic Metal evidence; the authentic three-frame campaign did not exercise them."
+  ],
+  "regressions": {
+    "target_attachment_lifetime": {
+      "test": "tests.test_m7_target_lifetime",
+      "fixture": "synthetic frame replayed through the production Metal core on a real MTLDevice",
+      "colour_delete": {
+        "reference_end_pixels": "green (retained depth 0.5 blocks the 0.25 draw)",
+        "colour_deleted_end_pixels": "green (matches reference)",
+        "recreated_colour_pixels": "zero (deleted red contents not reused)",
+        "colour_generation": 4,
+        "depth_generation": 5,
+        "reference_colour_generation": 6
+      },
+      "depth_delete": {
+        "end_pixels": "black (depth contents invalidated)",
+        "colour_generation": 6,
+        "depth_generation": 3,
+        "reference_depth_generation": 5
+      },
+      "pre_fix_result": "both tests fail on 72a11af1"
+    },
+    "lifecycle_sequence": {
+      "test": "tests.test_gfx_frame_trace_writer + tests.test_m7_continuous_replay",
+      "scenarios": [
+        "delete-recreate-delete at one event index",
+        "mutation then delete",
+        "delete then mutation",
+        "two independent delete calls",
+        "duplicate names in one call"
+      ],
+      "bounded": "2 x 64 stack records, no allocation and no extra GPU readback"
+    }
+  }
 }

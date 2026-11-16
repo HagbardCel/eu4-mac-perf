@@ -259,16 +259,26 @@ Captured texture contents are now invalidated by the real `(target, name)` when
 `glTexImage2D`/`glTexSubImage2D` observes a write, so a draw after a mutation
 references the new payload while an unchanged texture keeps its cached readback.
 Deletes are recorded per transition (a numeric name may be deleted, recreated
-and deleted again), and the Metal registry drops the framebuffer allocation so a
-recreated target starts a fresh generation.  Every 64-entry resource/lifecycle
-collection now fails closed with `resource_limit` instead of silently dropping
-an entry; lifecycle JSON is dynamically sized.
+and deleted again) with a monotonic `lifecycle_sequence` in addition to the
+captured event index, so several GL calls between the same draws replay in their
+real order.  Colour and depth/stencil attachments have independent lifetimes: a
+colour delete invalidates only the colour texture and its generation while a
+live depth attachment keeps its contents and generation, and an independent
+depth delete invalidates only the depth attachment.  Every 64-entry
+resource/lifecycle collection now fails closed with `resource_limit` instead of
+silently dropping an entry; lifecycle JSON is dynamically sized.
 
 Native regressions cover subimage mutation, reallocation, name reuse, update
-before first sample, unchanged caching, repeated deletes, exact/over-capacity
-collections, carried-set overflow and 64-frame campaign records.  The production
-Metal host renders two payload versions of one texture name in one frame and
-reads back distinct checkpoints; renderer-owned mutations still fail closed.
+before first sample, unchanged caching, repeated deletes, intra-event
+delete/recreate/delete ordering, exact/over-capacity collections, carried-set
+overflow and 64-frame campaign records.  The production Metal host renders two
+payload versions of one texture name in one frame and reads back distinct
+checkpoints; renderer-owned mutations still fail closed.  A real-Metal
+attachment fixture shows that colour deletion preserves live depth contents
+(matching a correctly ordered reference execution), does not reuse deleted
+colour contents, resets the colour generation and leaves the depth generation
+unchanged; deleting only the depth attachment resets the depth generation
+without touching colour.
 
 One authentic three-frame EU4 campaign (pid 27780, session
 `c66b3625…`, instrumentation `e8f683c9…`) completed with valid seals, ordered
