@@ -101,6 +101,10 @@ typedef struct {
 @property (nonatomic, strong) NSMutableDictionary<NSString *, id> *samplers;
 @property (nonatomic, strong) NSMutableDictionary<NSNumber *, NSMutableDictionary *> *targets;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSMutableDictionary *> *render_targets;
+/* Depth/stencil attachment identity, kept separate from the colour name map so
+   an independent depth deletion invalidates only its own attachment.  A name
+   resolves to at most one owning framebuffer; ambiguity fails closed. */
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSMutableDictionary *> *depth_targets;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, id> *alpha_textures;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, id> *orientation_textures;
 @property (nonatomic, strong) id<MTLComputePipelineState> orientation_pipeline;
@@ -164,6 +168,7 @@ static thread_local FrameTarget *g_default_target_ptr;
 #define g_samplers (g_state.samplers)
 #define g_targets (g_state.targets)
 #define g_render_targets (g_state.render_targets)
+#define g_depth_targets (g_state.depth_targets)
 #define g_alpha_textures (g_state.alpha_textures)
 #define g_orientation_textures (g_state.orientation_textures)
 #define g_orientation_pipeline (g_state.orientation_pipeline)
@@ -644,6 +649,16 @@ static NSString *target_texture_name(NSDictionary *target) {
     return nil;
 }
 
+/* The depth/stencil attachment is an independently owned Metal resource in
+   OpenGL.  Its GL name is the identity a lifecycle delete resolves against. */
+static NSString *target_depth_name(NSDictionary *target) {
+    NSDictionary *attachment = target[@"depth_attachment"];
+    if ([attachment isKindOfClass:[NSDictionary class]]) {
+        return texture_key(attachment[@"name"]);
+    }
+    return nil;
+}
+
 static NSString *target_resource_name(NSDictionary *target) {
     NSString *name = target_texture_name(target);
     if (name.length != 0) {
@@ -770,17 +785,59 @@ static BOOL apply_lifecycle_entry(NSDictionary *item) {
            also a target in this frame: the write/clear that recreates it is
            ordered after this deletion by the event stream.  Skipping it would
            silently reuse the old Metal identity. */
-        NSMutableDictionary *existing = g_render_targets[name];
-        NSNumber *framebuffer = existing[@"framebuffer"];
-        if ([framebuffer isKindOfClass:[NSNumber class]] &&
-            [framebuffer unsignedIntegerValue] != 0) {
-            /* The framebuffer-keyed allocation is the Metal identity behind
-               the texture name.  Dropping only the name would let a later
-               recreation continue the deleted target's generation. */
-            [g_targets removeObjectForKey:framebuffer];
+        NSMutableDictionary *color_target = g_render_targets[name];
+        NSMutableDictionary *depth_target = g_depth_targets[name];
+        if (color_target != nil && depth_target != nil) {
+            /* The same numeric name cannot be both the colour attachment of
+               one target and the depth attachment of another in a replay that
+               owns those identities separately. */
+            g_history_status = 2;
+            g_missing_history++;
+            snprintf(g_history_error, sizeof(g_history_error),
+                     "%s is both a colour and a depth attachment identity; "
+                     "the attachment lifetime is ambiguous",
+                     safe_utf8(name, "?"));
+            return NO;
+        }
+        if (color_target != nil) {
+            NSNumber *framebuffer = color_target[@"framebuffer"];
+            NSString *known_color = string_value(color_target[@"color_name"]);
+            if (![framebuffer isKindOfClass:[NSNumber class]] ||
+                (color_target[@"color"] != nil && known_color.length != 0 &&
+                 ![known_color isEqualToString:name])) {
+                g_history_status = 2;
+                g_missing_history++;
+                snprintf(g_history_error, sizeof(g_history_error),
+                         "%s could not be resolved to its colour attachment "
+                         "identity; the replay fails closed",
+                         safe_utf8(name, "?"));
+                return NO;
+            }
+            /* Invalidate the colour resource and its generation only.  A live
+               depth/stencil attachment keeps its Metal texture and generation
+               so a colour-only clear or depth-tested draw still observes the
+               original OpenGL depth contents. */
+            [color_target removeObjectForKey:@"color"];
+            [color_target removeObjectForKey:@"color_name"];
+            color_target[@"generation"] = @0;
+            if (color_target[@"depth"] == nil) {
+                [g_targets removeObjectForKey:framebuffer];
+            }
+            [g_render_targets removeObjectForKey:name];
+            [g_frame_written removeObject:name];
+        }
+        if (depth_target != nil) {
+            /* An actual depth/stencil deletion is independent of the colour
+               attachment: drop only the depth texture and its generation. */
+            [depth_target removeObjectForKey:@"depth"];
+            [depth_target removeObjectForKey:@"depth_name"];
+            depth_target[@"depth_generation"] = @0;
+            [g_depth_targets removeObjectForKey:name];
         }
         [g_resource_history removeObjectForKey:name];
-        [g_render_targets removeObjectForKey:name];
+        if (color_target == nil && depth_target == nil) {
+            [g_render_targets removeObjectForKey:name];
+        }
         [g_frame_written removeObject:name];
     }
     return YES;
@@ -862,6 +919,7 @@ static BOOL apply_frame_sequence(NSString *frame_dir, uint64_t expected,
         return sequence_error(error, @"frame lifecycle is not an array");
     }
     NSMutableArray *pending = [NSMutableArray array];
+    NSUInteger sequenced = 0;
     for (NSDictionary *item in lifecycle) {
         if (![item isKindOfClass:[NSDictionary class]]) {
             return sequence_error(error, @"frame lifecycle entry is invalid");
@@ -879,14 +937,68 @@ static BOOL apply_frame_sequence(NSString *frame_dir, uint64_t expected,
                 error, [NSString stringWithFormat:
                             @"unsupported lifecycle operation %@", kind]);
         }
+        id sequence_field = item[@"lifecycle_sequence"];
+        if (sequence_field != nil) {
+            if (![sequence_field isKindOfClass:[NSNumber class]] ||
+                [sequence_field longLongValue] < 0) {
+                return sequence_error(
+                    error, @"frame lifecycle sequence is invalid");
+            }
+            sequenced++;
+        }
         [pending addObject:item];
     }
-    [pending sortUsingComparator:^NSComparisonResult(
+    if (sequenced != 0 && sequenced != pending.count) {
+        /* Mixing sequenced and unsequenced transitions leaves the order of
+           the unsequenced entries ambiguous. */
+        return sequence_error(
+            error, @"frame lifecycle mixes sequenced and unsequenced entries");
+    }
+    if (sequenced == pending.count && pending.count > 0) {
+        NSMutableSet *identities = [NSMutableSet set];
+        for (NSDictionary *item in pending) {
+            NSString *identity = [NSString stringWithFormat:@"%lld:%lld",
+                (long long)number(item[@"event"], 0),
+                [item[@"lifecycle_sequence"] longLongValue]];
+            if ([identities containsObject:identity]) {
+                return sequence_error(
+                    error, @"frame lifecycle repeats an ordering identity");
+            }
+            [identities addObject:identity];
+        }
+    }
+    /* Stable ordering: the captured event boundary first, then the monotonic
+       intra-event lifecycle sequence.  Legacy frames without a sequence keep
+       their recorded order. */
+    NSMutableArray *indexed = [NSMutableArray array];
+    for (NSUInteger index = 0; index < pending.count; index++) {
+        [indexed addObject:@{@"item": pending[index], @"index": @(index)}];
+    }
+    [indexed sortUsingComparator:^NSComparisonResult(
             NSDictionary *left, NSDictionary *right) {
-        return [@(number(left[@"event"], 0))
-            compare:@(number(right[@"event"], 0))];
+        NSInteger left_event = number(left[@"item"][@"event"], 0);
+        NSInteger right_event = number(right[@"item"][@"event"], 0);
+        if (left_event != right_event) {
+            return left_event < right_event ? NSOrderedAscending
+                                            : NSOrderedDescending;
+        }
+        if (sequenced != 0) {
+            long long left_sequence =
+                [left[@"item"][@"lifecycle_sequence"] longLongValue];
+            long long right_sequence =
+                [right[@"item"][@"lifecycle_sequence"] longLongValue];
+            if (left_sequence != right_sequence) {
+                return left_sequence < right_sequence ? NSOrderedAscending
+                                                      : NSOrderedDescending;
+            }
+        }
+        return [left[@"index"] compare:right[@"index"]];
     }];
-    g_pending_lifecycle = pending;
+    NSMutableArray *ordered = [NSMutableArray arrayWithCapacity:pending.count];
+    for (NSDictionary *entry in indexed) {
+        [ordered addObject:entry[@"item"]];
+    }
+    g_pending_lifecycle = ordered;
     g_sequence_record = document;
     g_frame_sequence = sequence;
     return YES;
@@ -909,6 +1021,37 @@ static NSDictionary *history_document(void) {
         @"stale_history": @(g_stale_history),
         @"previous": g_last_frame_identity ?: @{},
         @"resources": resources,
+    };
+}
+
+/* Attachment identity of every live Metal target.  Colour and depth keep
+   separate generations so a colour-only recreation is observable without
+   implying that the retained depth contents changed. */
+static NSDictionary *target_registry_document(void) {
+    NSMutableArray *entries = [NSMutableArray array];
+    NSArray *keys = [[g_targets allKeys]
+        sortedArrayUsingComparator:^NSComparisonResult(NSNumber *left,
+                                                        NSNumber *right) {
+            return [left compare:right];
+        }];
+    for (NSNumber *key in keys) {
+        NSDictionary *info = g_targets[key];
+        [entries addObject:@{
+            @"framebuffer": key,
+            @"width": info[@"width"] ?: @0,
+            @"height": info[@"height"] ?: @0,
+            @"format": info[@"format"] ?: @"",
+            @"color_live": @(info[@"color"] != nil),
+            @"color_name": info[@"color_name"] ?: @"",
+            @"color_generation": info[@"generation"] ?: @0,
+            @"depth_live": @(info[@"depth"] != nil),
+            @"depth_name": info[@"depth_name"] ?: @"",
+            @"depth_generation": info[@"depth_generation"] ?: @0,
+        }];
+    }
+    return @{
+        @"schema": @"gfx-metal-target-registry/v1",
+        @"targets": entries,
     };
 }
 
@@ -1246,22 +1389,76 @@ static NSString *texture_cache_key(NSDictionary *texture) {
 /* Render targets                                                             */
 /* ------------------------------------------------------------------------- */
 
+static MTLPixelFormat pixel_format_for_name(NSString *format_name) {
+    if (format_name != nil) {
+        if ([format_name isEqualToString:@"RGBA8"] ||
+            [format_name isEqualToString:@"other"]) {
+            return MTLPixelFormatRGBA8Unorm;
+        }
+        if ([format_name isEqualToString:@"RGB8"] ||
+            [format_name isEqualToString:@"SRGB8_ALPHA8"]) {
+            return MTLPixelFormatBGRA8Unorm;
+        }
+    }
+    return MTLPixelFormatBGRA8Unorm;
+}
+
+static id<MTLTexture> allocate_color_texture(NSUInteger width, NSUInteger height,
+                                             MTLPixelFormat pixel_format) {
+    MTLTextureDescriptor *descriptor = [MTLTextureDescriptor new];
+    descriptor.textureType = MTLTextureType2D;
+    descriptor.pixelFormat = pixel_format;
+    descriptor.width = width;
+    descriptor.height = height;
+    descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    descriptor.storageMode = MTLStorageModePrivate;
+    return [g_device newTextureWithDescriptor:descriptor];
+}
+
+static id<MTLTexture> allocate_depth_texture(NSUInteger width, NSUInteger height) {
+    MTLTextureDescriptor *descriptor = [MTLTextureDescriptor new];
+    descriptor.textureType = MTLTextureType2D;
+    descriptor.pixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+    descriptor.width = width;
+    descriptor.height = height;
+    descriptor.usage = MTLTextureUsageRenderTarget;
+    descriptor.storageMode = MTLStorageModePrivate;
+    return [g_device newTextureWithDescriptor:descriptor];
+}
+
+/* Look up or allocate the Metal allocation behind one captured framebuffer.
+   Colour and depth/stencil are separate attachments with separate lifetimes:
+   deleting a colour texture invalidates only the colour identity, while an
+   independently deleted depth attachment reallocates only the depth texture.
+   A request that names a different attachment identity for an existing
+   framebuffer is an incompatible change and fails closed. */
 static NSMutableDictionary *target_for(NSDictionary *target, NSError **error) {
     NSNumber *key = @(number(target[@"framebuffer"], 0));
+    NSUInteger framebuffer = [key unsignedIntegerValue];
+    NSUInteger requested_width = number(target[@"width"], 0);
+    NSUInteger requested_height = number(target[@"height"], 0);
+    NSDictionary *requested_attachment = target[@"color_attachment"];
+    NSString *requested_format = requested_attachment
+        ? string_value(requested_attachment[@"internal_format"]) : nil;
+    NSString *requested_depth_name = target_depth_name(target);
+    id requested_depth_field = target[@"depth_attachment"];
+    /* A depth attachment may be declared without a GL name (for example a
+       renderbuffer attached directly to an FBO).  It still owns a Metal
+       allocation, but no lifecycle delete can address it independently. */
+    BOOL has_depth_attachment =
+        [requested_depth_field isKindOfClass:[NSDictionary class]];
     NSMutableDictionary *existing = g_targets[key];
     if (existing != nil) {
-        NSUInteger requested_width = number(target[@"width"], 0);
-        NSUInteger requested_height = number(target[@"height"], 0);
-        NSDictionary *requested_attachment = target[@"color_attachment"];
-        NSString *requested_format = requested_attachment
-            ? string_value(requested_attachment[@"internal_format"]) : nil;
+        NSUInteger existing_width = number(existing[@"width"], 0);
+        NSUInteger existing_height = number(existing[@"height"], 0);
         BOOL incompatible =
-            (requested_width != 0 &&
-             requested_width != number(existing[@"width"], 0)) ||
-            (requested_height != 0 &&
-             requested_height != number(existing[@"height"], 0)) ||
-            (requested_format.length != 0 &&
-             ![requested_format isEqualToString:string_value(existing[@"format"])]);
+            (requested_width != 0 && requested_width != existing_width) ||
+            (requested_height != 0 && requested_height != existing_height);
+        if (!incompatible && existing[@"color"] != nil &&
+            requested_format.length != 0 &&
+            ![requested_format isEqualToString:string_value(existing[@"format"])]) {
+            incompatible = YES;
+        }
         if (incompatible) {
             if (error != NULL) {
                 *error = [NSError errorWithDomain:kErrorDomain code:31
@@ -1272,45 +1469,97 @@ static NSMutableDictionary *target_for(NSDictionary *target, NSError **error) {
             }
             return nil;
         }
+        BOOL want_depth = has_depth_attachment || framebuffer == 0;
+        if (requested_depth_name.length != 0) {
+            NSMutableDictionary *owner = g_depth_targets[requested_depth_name];
+            if (owner != nil && owner != existing) {
+                if (error != NULL) {
+                    *error = [NSError errorWithDomain:kErrorDomain code:32
+                        userInfo:@{NSLocalizedDescriptionKey:
+                            @"depth attachment is shared with another "
+                            @"framebuffer; the replay cannot preserve both "
+                            @"Metal identities"}];
+                }
+                return nil;
+            }
+            NSString *known_depth = string_value(existing[@"depth_name"]);
+            if (existing[@"depth"] != nil && known_depth.length != 0 &&
+                ![known_depth isEqualToString:requested_depth_name]) {
+                if (error != NULL) {
+                    *error = [NSError errorWithDomain:kErrorDomain code:32
+                        userInfo:@{NSLocalizedDescriptionKey:
+                            @"render target changed its depth attachment "
+                            @"identity; the retained Metal depth contents "
+                            @"cannot be reused"}];
+                }
+                return nil;
+            }
+        }
+        if (want_depth && existing[@"depth"] == nil) {
+            id<MTLTexture> depth =
+                allocate_depth_texture(existing_width, existing_height);
+            if (depth == nil) {
+                if (error != NULL) {
+                    *error = [NSError errorWithDomain:kErrorDomain code:30
+                        userInfo:@{NSLocalizedDescriptionKey:
+                            @"render target depth allocation failed"}];
+                }
+                return nil;
+            }
+            existing[@"depth"] = depth;
+            existing[@"depth_generation"] = @0;
+            existing[@"depth_name"] =
+                requested_depth_name.length != 0 ? requested_depth_name : @"";
+            if (framebuffer == 0) {
+                g_default_target.depth = depth;
+            }
+        }
+        if (requested_depth_name.length != 0) {
+            /* The first explicit name for an anonymous attachment becomes its
+               identity; a later different name then fails closed. */
+            if (string_value(existing[@"depth_name"]).length == 0) {
+                existing[@"depth_name"] = requested_depth_name;
+            }
+            g_depth_targets[requested_depth_name] = existing;
+        }
+        if (existing[@"color"] != nil) {
+            return existing;
+        }
+        /* The colour identity was invalidated by a lifecycle delete.  Allocate
+           a fresh colour texture so the recreated GL name never observes the
+           deleted contents, but keep the live depth attachment in place. */
+        id<MTLTexture> color = allocate_color_texture(
+            existing_width, existing_height,
+            pixel_format_for_name(string_value(existing[@"format"])));
+        if (color == nil) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:30
+                    userInfo:@{NSLocalizedDescriptionKey:
+                        @"render target allocation failed"}];
+            }
+            return nil;
+        }
+        existing[@"color"] = color;
+        existing[@"generation"] = @0;
+        if (framebuffer == 0) {
+            g_default_target.color = color;
+            g_default_target.width = existing_width;
+            g_default_target.height = existing_height;
+        }
         return existing;
     }
-    NSUInteger framebuffer = [key unsignedIntegerValue];
-    NSUInteger width = number(target[@"width"], 0);
-    NSUInteger height = number(target[@"height"], 0);
-    NSDictionary *attachment = target[@"color_attachment"];
-    NSString *format_name = attachment ? string_value(attachment[@"internal_format"]) : nil;
-    MTLPixelFormat pixel_format = MTLPixelFormatBGRA8Unorm;
-    if (format_name != nil) {
-        if ([format_name isEqualToString:@"RGBA8"] ||
-            [format_name isEqualToString:@"other"]) {
-            pixel_format = MTLPixelFormatRGBA8Unorm;
-        } else if ([format_name isEqualToString:@"RGB8"] ||
-                   [format_name isEqualToString:@"SRGB8_ALPHA8"]) {
-            pixel_format = MTLPixelFormatBGRA8Unorm;
-        }
-    }
+    NSUInteger width = requested_width;
+    NSUInteger height = requested_height;
+    NSString *format_name = requested_format;
+    MTLPixelFormat pixel_format = pixel_format_for_name(format_name);
     if (width == 0 || height == 0) {
         width = g_default_target.width;
         height = g_default_target.height;
     }
-    MTLTextureDescriptor *color_descriptor = [MTLTextureDescriptor new];
-    color_descriptor.textureType = MTLTextureType2D;
-    color_descriptor.pixelFormat = pixel_format;
-    color_descriptor.width = width;
-    color_descriptor.height = height;
-    color_descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
-    color_descriptor.storageMode = MTLStorageModePrivate;
-    id<MTLTexture> color = [g_device newTextureWithDescriptor:color_descriptor];
+    id<MTLTexture> color = allocate_color_texture(width, height, pixel_format);
     id<MTLTexture> depth = nil;
-    if (target[@"depth_attachment"] != nil || framebuffer == 0) {
-        MTLTextureDescriptor *depth_descriptor = [MTLTextureDescriptor new];
-        depth_descriptor.textureType = MTLTextureType2D;
-        depth_descriptor.pixelFormat = MTLPixelFormatDepth32Float_Stencil8;
-        depth_descriptor.width = width;
-        depth_descriptor.height = height;
-        depth_descriptor.usage = MTLTextureUsageRenderTarget;
-        depth_descriptor.storageMode = MTLStorageModePrivate;
-        depth = [g_device newTextureWithDescriptor:depth_descriptor];
+    if (has_depth_attachment || framebuffer == 0) {
+        depth = allocate_depth_texture(width, height);
     }
     if (color == nil) {
         if (error != NULL) {
@@ -1330,8 +1579,14 @@ static NSMutableDictionary *target_for(NSDictionary *target, NSError **error) {
     } mutableCopy];
     if (depth != nil) {
         value[@"depth"] = depth;
+        value[@"depth_generation"] = @0;
+        value[@"depth_name"] = requested_depth_name.length != 0
+            ? requested_depth_name : @"";
     }
     g_targets[key] = value;
+    if (requested_depth_name.length != 0) {
+        g_depth_targets[requested_depth_name] = value;
+    }
     if (framebuffer == 0) {
         g_default_target.color = color;
         g_default_target.depth = depth;
@@ -1623,9 +1878,14 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             return NO;
         }
         target_info[@"generation"] = @(number(target_info[@"generation"], 0) + 1);
+        if (depth_test && depth_write && target_info[@"depth"] != nil) {
+            target_info[@"depth_generation"] =
+                @(number(target_info[@"depth_generation"], 0) + 1);
+        }
         NSString *draw_target_name =
             target_resource_name(event[@"target"] ?: @{});
         if (draw_target_name.length != 0) {
+            target_info[@"color_name"] = draw_target_name;
             [g_frame_written addObject:draw_target_name];
             g_render_targets[draw_target_name] = target_info;
             history_note_target(draw_target_name, target_info);
@@ -2757,10 +3017,15 @@ static BOOL encode_clear(NSDictionary *event, NSString *frameDir,
         NSString *clear_target_name =
             target_resource_name(event[@"target"] ?: @{});
         if (clear_target_name.length != 0) {
+            target_info[@"color_name"] = clear_target_name;
             [g_frame_written addObject:clear_target_name];
             g_render_targets[clear_target_name] = target_info;
             history_note_target(clear_target_name, target_info);
         }
+    }
+    if ((clear_depth || clear_stencil) && target_info[@"depth"] != nil) {
+        target_info[@"depth_generation"] =
+            @(number(target_info[@"depth_generation"], 0) + 1);
     }
     NSArray *color = event[@"color"];
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -3961,6 +4226,7 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                 continue;
             }
             if (g_render_targets[attachment_name] == nil) {
+                info[@"color_name"] = attachment_name;
                 g_render_targets[attachment_name] = info;
             }
             [g_frame_targets addObject:attachment_name];
@@ -3997,6 +4263,7 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                                       @"copy destination allocation failed", 7,
                                       nil);
             }
+            info[@"color_name"] = destination;
             g_render_targets[destination] = info;
             [g_frame_targets addObject:destination];
             history_note_target(destination, info);
@@ -4508,6 +4775,7 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
         }
         result[@"transfers"] = g_transfer_records;
         result[@"history"] = history_document();
+        result[@"targets"] = target_registry_document();
         result[@"readback"] = @(readback_ok);
         BOOL partial_mode = stop_after >= 0 || only_event >= 0;
         if (!provenance_written) {
@@ -4734,6 +5002,7 @@ extern "C" eu4_metal_replay_session *eu4_metal_replay_create(
         state.samplers = [NSMutableDictionary dictionary];
         state.targets = [NSMutableDictionary dictionary];
         state.render_targets = [NSMutableDictionary dictionary];
+        state.depth_targets = [NSMutableDictionary dictionary];
         state.alpha_textures = [NSMutableDictionary dictionary];
         state.orientation_textures = [NSMutableDictionary dictionary];
         state.resource_history = [NSMutableDictionary dictionary];
