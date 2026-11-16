@@ -2,12 +2,12 @@
   "schema": "m7-followup-b-relocation-receipt/v1",
   "kind": "authentic_captured_frames_with_synthetic_ordered_packaging",
   "fixture": "canonical menu-occ300 captured frame content",
-  "tested_head": "d9a632ca",
+  "tested_head": "eab365e6",
   "case": {
     "schema": "gfx-strategy-b-case/v2",
     "case_id": "canonical-prefix",
     "sequence_file_sha256": "2671bf0bd3162e2359c82ba7eff451424de2ebed6e2fac87613f27691f5ea8e0",
-    "case_json_sha256": "48cdf60eb10013aab8c5def279c6bfcec6557504f98b340f5632df4a80c13f2f",
+    "case_json_sha256": "0da703bb8b7db95070818c1369367796e0f12279047d158f07f8186023fae9ef",
     "frames": [
       {
         "index": 1,
@@ -37,11 +37,13 @@
     "frame_count": 3,
     "file_count": 3508,
     "minimal_prefix": false,
+    "prefix_semantics": "conservative contiguous transitive producer closure; not graph-minimal",
     "excluded_frames": 0,
     "source_prefix_bytes": 1279168602,
     "full_source_bytes": 1279168602,
     "excluded_source_bytes": 0,
-    "bytes_on_disk": 1317991340
+    "bytes_on_disk": 1317991012,
+    "case_digest_path_independent": true
   },
   "relocation": {
     "verified": true,
@@ -135,7 +137,7 @@
       "full_source_bytes": 13797,
       "excluded_source_bytes": 2908,
       "case_file_count": 55,
-      "case_bytes": 60312
+      "case_bytes": 59651
     },
     "transitive_five_frame": {
       "selected_original_frames": [
@@ -158,16 +160,23 @@
       "full_source_bytes": 18041,
       "excluded_source_bytes": 2908,
       "case_file_count": 68,
-      "case_bytes": 68634,
-      "conservative_note": "Interior cleanup/target frames are retained because the predecessor digest chain and cumulative carried snapshots bind the ordered sequence; selection is not claimed minimal."
+      "case_bytes": 67806,
+      "conservative_note": "Interior cleanup/target frames are retained because the predecessor digest chain and cumulative carried snapshots bind the ordered sequence; selection is not claimed minimal. A target-frame cleanup delete of a carried resource is refused."
     }
   },
   "budget": {
-    "complete_package_bytes": 60312,
+    "probe_case_id": "budget",
+    "complete_package_bytes": 59643,
+    "complete_package_files": 55,
     "at_budget": "complete and verifiable",
-    "one_byte_below": "incomplete summary, no replay command, verify fails",
-    "one_byte_budget": "explicit case_budget error, nothing published",
+    "one_byte_below": "incomplete summary of 30,196 bytes, no replay command, verify fails",
+    "one_byte_budget": "explicit case_budget error, destination and staging absent",
     "source_inputs_unchanged": true
   },
-  "tested_head_note": "The relocation, verification and replay measurements above were produced from this code commit.  A documentation-only commit updates this receipt; the replay-critical code is unchanged."
+  "canonical_determinism": {
+    "runs": 2,
+    "case_json_sha256_reproduced": "0da703bb8b7db95070818c1369367796e0f12279047d158f07f8186023fae9ef",
+    "note": "Packaged twice from the same captured content into different case directories; case digest identical. Shader translation metadata is copied verbatim and retains its own provenance paths."
+  },
+  "tested_head_note": "Measurements were produced from this code commit.  A documentation-only commit updates the report, status and this receipt; replay-critical code is unchanged."
 }

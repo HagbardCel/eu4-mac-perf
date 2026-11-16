@@ -17,21 +17,33 @@ its Metal history.  A single-frame case could also retain an absolute
 
 ## Changes
 
-### Minimal ordered prefix
+### Required contiguous prefix (conservative, not minimal)
 
 `automation/gfx_replay_case.py` adds `package_sequence_diagnosis`.  When the
 target frame declares no carried renderer output it delegates to the existing
 single-frame API.  Otherwise it walks the ordered `gfx-frame-sequence/v1`
-records and computes the smallest contiguous prefix that is **transitively
-closed** over carried resources: a predecessor that carries a resource produced
-even earlier pulls that earlier producer into the prefix.  A missing producer, a
-delete before the last carry without a later producer, or a CPU mutation of a
-carried resource without a later producer stops packaging with an explicit
-`missing_predecessor` / `missing_mutation_record` failure.  A delete in the
-frame that last carries a resource is normal end-of-life cleanup and is allowed;
-native capture snapshots the cumulative carried set at frame start, so that
-frame may still list the resource.  The first selected frame must therefore
-declare no carried output.
+records and computes the contiguous prefix that is **transitively closed** over
+carried resources: a predecessor that carries a resource produced even earlier
+pulls that earlier producer into the prefix.  A missing producer, a delete
+before the last carry without a later producer, or a CPU mutation of a carried
+resource without a later producer stops packaging with an explicit
+`missing_predecessor` / `missing_mutation_record` failure.
+
+The prefix is conservative rather than provably minimal: once the earliest
+transitive producer is selected, every intermediate frame up to the target is
+copied because the predecessor digest chain and the frame-start carried
+snapshots bind the ordered sequence.  The manifest field is still named
+`minimal_prefix` for schema compatibility; it means "shorter than the full
+campaign", not "graph-minimal".
+
+A delete in an intermediate frame that last carries a resource is normal
+end-of-life cleanup and is allowed; native capture snapshots the cumulative
+carried set at frame start, so that frame may still list the resource.  A delete
+in the **target** frame of a resource it carries is refused: replay removes the
+resource from the final Metal history, so the target's carried-sample
+provenance and the verifier's carried-resource check can no longer reconcile
+even when the pixels match.  The first selected frame must declare no carried
+output.
 
 Only that prefix is copied.  Unrelated successful frames are excluded.
 Immutable payloads (blobs, event streams, manifests, references) are hard-linked
@@ -115,9 +127,14 @@ consistent:
 - every structurally required payload (sequence manifest, shader report,
   diagnostics, dependency graph, each frame's sequence/trace/events/reference,
   each checkpoint request and receipt) must be listed in `case.json.files`;
-- any file present under the case directory but absent from the inventory is
-  rejected, so a substituted shader, checkpoint or resource blob cannot hide
-  outside the inventory;
+- within the authoritative payload directories (`frames/`, `shaders/`,
+  `checkpoints/`) any file absent from the inventory is rejected, so a
+  substituted shader, checkpoint or resource blob cannot hide outside the
+  inventory.  Scratch output written by the documented replay command
+  (`replay-rerun/`) is not reproduction evidence and does not invalidate the
+  package;
+- `case.json.sequence` must resolve to the in-case `sequence.json`; verifying an
+  external/heuristic sequence path that replay never reads is refused;
 - duplicate manifest paths are rejected;
 - absolute paths, `..` traversal and symlink escapes are rejected by resolving
   every declared path and requiring it to stay inside the case directory;
@@ -135,18 +152,22 @@ path-safety and duplicate-entry checks apply to every schema.
 
 Four synthetic Metal frames: frame 1 is unrelated and successful; frame 2
 renders texture 500; frame 3 leaves it unchanged; frame 4 samples it.  The
-minimal prefix excludes frame 1 and packages frames 2–4 (target renumbered 3).
+required contiguous prefix excludes frame 1 and packages frames 2–4 (target
+renumbered 3).
 
-- Prefix source: 10,817 bytes; complete four-frame source: 13,713 bytes;
-  excluded: 2,896 bytes (21.1%).
-- Relocated case on disk: 60,540 bytes including shaders, checkpoints and replay
-  artifacts.  Immutable payloads are hard-linked before relocation.
+- Prefix source: 10,889 bytes; complete four-frame source: 13,797 bytes;
+  excluded: 2,908 bytes (21.1%).
+- Relocated case on disk: 59,651 bytes (55 files) including shaders, checkpoints
+  and replay artifacts.  Immutable payloads are hard-linked before relocation.
+  The case digest is independent of the case/capture directory path.
 - The original campaign directory is removed before verification and replay.
 - Unfaulted relocated replay: final classification `qualified_match`.
 - Controlled fault (`EU4_FRAME_REPLAY_DISABLE_RT_FLIP=1`, first observable when
   frame 4 samples the carried target): final classification is divergent,
   mismatched pixels > 0, earliest affected frame is the renumbered target
-  (sequence 3), operation `draw`.
+  (sequence 3).  The captured first-divergence record does not attribute an
+  event or operation to this fault, so `earliest_affected_operation` is `null`
+  rather than an invented `draw`.
 - A five-frame transitive fixture (frame 2 produces 600; frame 3 carries 600
   while producing 500; frame 4 carries 500/600 and deletes 600; frame 5 samples
   500) packages frames 2–5, not 3–5, verifies, and replays to
@@ -157,7 +178,10 @@ minimal prefix excludes frame 1 and packages frames 2–4 (target renumbered 3).
   resource, wrong generation, stale checkpoint request, packaging-time missing
   producer/mutation refusal, an undeclared required shader, an undeclared
   checkpoint request, duplicate manifest entries, `..` traversal, a symlink
-  outside the case and a missing predecessor resource blob.
+  outside the case, an external `case.json.sequence` reference, a missing
+  predecessor resource blob and a target-frame cleanup delete of a carried
+  resource.  A further test runs the documented replay command into the case
+  and re-verifies it, so scratch output cannot invalidate the package.
 - Budget tests cover `max_bytes=1` (explicit `case_budget`, nothing published),
   a complete package measured at N bytes and repackaged at N-1 (incomplete
   summary no larger than N-1, no replay command, `verify` fails) and at N
@@ -171,8 +195,8 @@ to the target frame.  It is conservative, not provably minimal:
 
 | fixture | selected original frames | carrying resources | producing frames | prefix / full bytes | excluded |
 | --- | --- | --- | --- | --- | --- |
-| four-frame | 2, 3, 4 (target renumbered 3) | 500 | 2 | 10,889 / 13,797 (78.9%) | 1 frame, 2,908 bytes (21.1%) |
-| transitive five-frame | 2, 3, 4, 5 (target renumbered 4) | 500, 600 | 2, 3 | 15,133 / 18,041 (83.9%) | 1 frame, 2,908 bytes (16.1%) |
+| four-frame | 2, 3, 4 (target renumbered 3) | 500 | 2 | 10,889 / 13,797 (78.9%) | 1 frame, 2,908 bytes (21.1%); 55 files, 59,651 host bytes |
+| transitive five-frame | 2, 3, 4, 5 (target renumbered 4) | 500, 600 | 2, 3 | 15,133 / 18,041 (83.9%) | 1 frame, 2,908 bytes (16.1%); 68 files, 67,806 host bytes |
 
 In the transitive fixture only frames 2 and 3 actually produce the carried
 resources; frames 4 and 5 are the cleanup frame and the target.  Frame 4 is
@@ -192,8 +216,9 @@ verified and replayed with the original campaign removed.
 | item | value |
 | --- | --- |
 | Case schema | `gfx-strategy-b-case/v2` |
-| `sequence.json` SHA-256 | `6221c9fe…` |
-| Case manifest SHA-256 | `ad796119…` |
+| `sequence.json` SHA-256 | `2671bf0b…` |
+| Case manifest SHA-256 | `0da703bb…` |
+| Case size | 1,317,991,012 bytes, 3,508 files |
 | Verification | ok, no problems |
 | Replay target | sequence 3 |
 | Campaign | complete |
@@ -224,6 +249,14 @@ Receipt: [followup-b-relocation-receipt.json](followup-b-relocation-receipt.json
   and state explicitly that they are not independently reproducible.
 - The replay reuses the existing Metal core and diagnosis contract; there is no
   second comparison engine or renderer implementation.
+- Copied shader translation metadata (`shaders/translation.json`,
+  `shaders/shaders.json`) is verbatim digest-addressed source evidence and may
+  retain the translation tool's own provenance paths.  It is not rewritten;
+  case digests remain deterministic because the same captured shader source is
+  packaged.
+- A target-frame cleanup delete of a carried resource is refused at packaging
+  instead of being advertised as reproducible: replay would remove the resource
+  from the final Metal history before the carried-sample provenance check.
 - Portable Linux CI skips the macOS-only native/Metal tests.  A green portable
   check is not macOS runtime evidence.
 - The three-frame canonical prefix is larger than the 512 MiB default budget.
