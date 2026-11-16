@@ -134,7 +134,7 @@ class SupervisorTests(unittest.TestCase):
              mock.patch.object(gfx_independent_replay, "diagnose_frame",
                                side_effect=diagnoses) as diagnose, \
              mock.patch.object(m7_continuous.gfx_replay_case,
-                               "package_diagnosis",
+                               "package_sequence_diagnosis",
                                return_value={"case_id": "case",
                                              "files": [{"bytes": 1}]}):
             report = m7_continuous.run_campaign(
@@ -186,7 +186,7 @@ class SupervisorTests(unittest.TestCase):
              mock.patch.object(gfx_independent_replay, "diagnose_frame",
                                return_value=diagnosis), \
              mock.patch.object(m7_continuous.gfx_replay_case,
-                               "package_diagnosis",
+                               "package_sequence_diagnosis",
                                return_value={"case_id": "case",
                                              "files": [{"bytes": 1}]}):
             report = m7_continuous.run_campaign(
@@ -267,7 +267,7 @@ class SupervisorTests(unittest.TestCase):
              mock.patch.object(gfx_independent_replay, "diagnose_frame",
                                side_effect=diagnosis), \
              mock.patch.object(m7_continuous.gfx_replay_case,
-                               "package_diagnosis",
+                               "package_sequence_diagnosis",
                                return_value={"case_id": "case",
                                              "files": [{"bytes": 1}]}):
             report = m7_continuous.run_campaign(
@@ -402,7 +402,7 @@ class BoundedWorkerTests(unittest.TestCase):
         with mock.patch.object(gfx_independent_replay, "diagnose_frame",
                                return_value=diagnosis), \
              mock.patch.object(m7_continuous.gfx_replay_case,
-                               "package_diagnosis",
+                               "package_sequence_diagnosis",
                                return_value={"case_id": "case",
                                              "files": [{"bytes": 1}]}):
             return m7_continuous.run_campaign(

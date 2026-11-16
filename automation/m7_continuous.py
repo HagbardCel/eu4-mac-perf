@@ -489,8 +489,8 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
             result["stopped_at"] = sequence
             try:
                 case = Path(package_dir) if package_dir else (out_dir / "case")
-                manifest = gfx_replay_case.package_diagnosis(
-                    frame, output, case, diagnosis,
+                manifest = gfx_replay_case.package_sequence_diagnosis(
+                    frames[:sequence], output, case, diagnosis,
                     shaders=Path(shaders).expanduser().resolve(),
                     case_id=f"m7-continuous-frame-{sequence:06d}")
                 entry["case"] = {

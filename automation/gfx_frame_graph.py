@@ -365,6 +365,10 @@ def load_frame_history(frame_dir: Path | str, trace: dict) -> dict:
         else:
             previous_info = previous
             previous_dir = Path(str(previous.get("dir") or ""))
+            if not previous_dir.is_absolute():
+                # Portable cases keep the predecessor link relative to the
+                # owning frame, never to the process working directory.
+                previous_dir = (frame_dir / previous_dir).resolve()
             previous_path = previous_dir / "frame-sequence.json"
             previous_document = (
                 _optional_document(previous_path)

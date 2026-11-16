@@ -1,0 +1,109 @@
+{
+  "schema": "m7-followup-b-relocation-receipt/v1",
+  "kind": "authentic_captured_frames_with_synthetic_ordered_packaging",
+  "fixture": "canonical menu-occ300 captured frame content",
+  "case": {
+    "schema": "gfx-strategy-b-case/v2",
+    "case_id": "canonical-prefix",
+    "sequence_file_sha256": "6221c9feb832a2872594d094ce3054ffb434cd52d173f2e134b5db2a6332e583",
+    "case_json_sha256": "ad796119153d01e566092939311c7b612c7c1c5d59864ae48e74a959a63b1ed7",
+    "frames": [
+      {
+        "index": 1,
+        "capture_frame_id": 1,
+        "original_sequence_index": 1,
+        "manifest_sha256": "c935b3c3391d92b048b8a3a58efaeda0d5e4f9a3e11715e9251ddcdcbd0f2da3",
+        "event_stream_sha256": "47bda04c18194365d9cce66f3ffbe0901f40d0e1e2c81839e387cee016618b30",
+        "reference_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15"
+      },
+      {
+        "index": 2,
+        "capture_frame_id": 2,
+        "original_sequence_index": 2,
+        "manifest_sha256": "760e7e0b8727ae663f5b011b4d469abbd340ba42dc7b272e1d3e3a59cbcac8ff",
+        "event_stream_sha256": "b6415ae6d6749adf24908413586d53083a6d0f23b2e771f54d8d54b9501292c9",
+        "reference_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15"
+      },
+      {
+        "index": 3,
+        "capture_frame_id": 3,
+        "original_sequence_index": 3,
+        "manifest_sha256": "760e7e0b8727ae663f5b011b4d469abbd340ba42dc7b272e1d3e3a59cbcac8ff",
+        "event_stream_sha256": "b6415ae6d6749adf24908413586d53083a6d0f23b2e771f54d8d54b9501292c9",
+        "reference_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15"
+      }
+    ],
+    "minimal_prefix": false,
+    "excluded_frames": 0,
+    "source_prefix_bytes": 1279168572,
+    "full_source_bytes": 1279168572,
+    "excluded_source_bytes": 0,
+    "bytes_on_disk": 1317991621
+  },
+  "relocation": {
+    "verified": true,
+    "problems": [],
+    "original_campaign_removed": true,
+    "independently_reproducible": true
+  },
+  "replay": {
+    "classification": "incomplete_diagnostics",
+    "target_sequence": 3,
+    "campaign_status": "complete",
+    "history_status": "ok",
+    "carried_bindings": 1,
+    "missing_history": 0,
+    "stale_history": 0,
+    "metal_render_target_bindings": 273,
+    "pixels": {
+      "pixels": 1930176,
+      "mismatched_pixels": 0,
+      "mismatched_fraction": 0.0,
+      "alpha_different_pixels": 0,
+      "max_channel_error": 0,
+      "mean_abs_error": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "mean_max_channel_error": 0.0
+    },
+    "first_divergence": {
+      "schema": "gfx-first-divergence/v1",
+      "frame_id": null,
+      "kind": "none",
+      "event": null,
+      "diagnostic_checkpoints": [
+        {
+          "event": 272,
+          "target": "433",
+          "statistics": {
+            "pixels": 1930176,
+            "mismatched_pixels": 797545,
+            "mismatched_fraction": 0.4131980710567327,
+            "alpha_different_pixels": 224169,
+            "max_channel_error": 255,
+            "mean_abs_error": [
+              0.067393336,
+              0.153155464,
+              0.154367788,
+              29.615483251
+            ],
+            "mean_max_channel_error": 29.914925375
+          }
+        }
+      ],
+      "semantic": null,
+      "intermediate": null,
+      "unsupported_state": [
+        "gl_dither",
+        "multisample"
+      ],
+      "confidence": "none",
+      "root_cause": "none_observed",
+      "reason": "all authoritative checkpoints and the final output match",
+      "fault": null
+    }
+  }
+}
