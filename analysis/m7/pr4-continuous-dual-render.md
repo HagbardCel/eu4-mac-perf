@@ -281,11 +281,12 @@ diagnosis).
   frame is not applied immediately: applying it would remove a target that the
   same frame's checkpoint plan requests. Full per-event delete/recreate identity
   for that case remains future work.
-- The synchronous bridge has at most one in-flight frame. `MAX_PENDING` is
-  validated and reported, but the live asynchronous queue that would exercise a
-  deeper pending bound is not implemented.
-- The authentic campaign is bounded to 3 frames for Stage 1. Stages 2/3
-  (async, 10–20+ frames, gameplay) are not run unless Stage 1 passes.
+- The asynchronous pipeline is a single serialized in-process worker; it is not
+  a multi-worker or cross-process queue. The 10-frame campaign reached the
+  `MAX_PENDING=3` bound without dropping frames.
+- Stage 3 (a longer gameplay campaign) was not run. Stage 2 covered 10
+  successive animated title frames; the pipeline is bounded and stable but has
+  not been exercised on gameplay for an extended period.
 - Package retention is bounded by the per-frame case already produced by PR 3;
   successful intermediate replay directories are retained for now rather than
   deduplicated.
