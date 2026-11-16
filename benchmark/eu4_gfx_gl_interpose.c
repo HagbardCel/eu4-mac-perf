@@ -23,6 +23,7 @@
 
 typedef void (*copy_fn)(GLenum, GLint, GLint, GLint, GLint, GLint, GLsizei,
                         GLsizei);
+typedef void (*delete_fn)(GLsizei, const GLuint *);
 
 static copy_fn g_real;
 static uint64_t g_sequence;
@@ -434,6 +435,60 @@ void eu4_gfx_interpose_test_invoke(GLenum target, GLint level, GLint xoffset,
                                          width, height);
 }
 #endif
+
+
+/* glDeleteTextures is observed only to invalidate carried renderer outputs.
+   The call is always forwarded unchanged; a lifecycle notification never
+   replaces or suppresses the engine's deletion. */
+static delete_fn g_real_delete;
+
+static void eu4_gfx_interposed_delete_textures(GLsizei count,
+                                                const GLuint *names);
+static void *interpose_delete_replacee(void);
+
+static delete_fn resolve_real_delete(void) {
+    void *replacee = interpose_delete_replacee();
+    if (replacee != NULL &&
+        replacee != (void *)eu4_gfx_interposed_delete_textures) {
+        return (delete_fn)replacee;
+    }
+    if (g_opengl_handle == NULL) {
+        g_opengl_handle = dlopen(
+            "/System/Library/Frameworks/OpenGL.framework/OpenGL",
+            RTLD_LAZY | RTLD_LOCAL | RTLD_FIRST);
+    }
+    void *framework = g_opengl_handle != NULL
+        ? dlsym(g_opengl_handle, "glDeleteTextures") : NULL;
+    if (framework == (void *)eu4_gfx_interposed_delete_textures) {
+        framework = NULL;
+    }
+    return (delete_fn)framework;
+}
+
+static void eu4_gfx_interposed_delete_textures(GLsizei count,
+                                                const GLuint *names) {
+    if (g_real_delete == NULL) {
+        g_real_delete = resolve_real_delete();
+        if (g_real_delete == NULL) {
+            interpose_fatal("cannot resolve the original glDeleteTextures");
+        }
+    }
+    eu4_gfx_frame_trace_texture_deleted((int)count,
+                                        (const unsigned *)names);
+    g_real_delete(count, names);
+}
+
+__attribute__((used)) static struct {
+    const void *replacement;
+    const void *replacee;
+} eu4_gfx_delete_interpose __attribute__((section("__DATA,__interpose"))) = {
+    (const void *)eu4_gfx_interposed_delete_textures,
+    (const void *)glDeleteTextures,
+};
+
+static void *interpose_delete_replacee(void) {
+    return (void *)eu4_gfx_delete_interpose.replacee;
+}
 
 __attribute__((used)) static struct {
     const void *replacement;

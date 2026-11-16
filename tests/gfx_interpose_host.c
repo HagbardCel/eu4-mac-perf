@@ -24,6 +24,10 @@ int eu4_gfx_gl_drawable_extent(uint32_t *width, uint32_t *height) {
 }
 
 int eu4_gfx_frame_trace_copy_mode(void) { return 0; }
+void eu4_gfx_frame_trace_texture_deleted(int count, const unsigned *names) {
+    (void)count;
+    (void)names;
+}
 int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event) {
     (void)event;
     return 0;

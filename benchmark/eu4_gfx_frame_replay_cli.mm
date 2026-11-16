@@ -19,6 +19,7 @@ int main(int argc, const char *argv[]) {
         const char *shader_path = NULL;
         const char *output_path = NULL;
         const char *checkpoint_path = NULL;
+        const char *sequence = NULL;
         int stop_after = -1;
         int only_event = -1;
         int seed_marked = 0;
@@ -50,7 +51,109 @@ int main(int argc, const char *argv[]) {
             } else if (strcmp(argv[index], "--checkpoints") == 0 &&
                        index + 1 < argc) {
                 checkpoint_path = argv[++index];
+            } else if (strcmp(argv[index], "--sequence") == 0 &&
+                       index + 1 < argc) {
+                sequence = argv[++index];
             }
+        }
+        if (sequence != NULL) {
+            if (shader_path == NULL || output_path == NULL) {
+                fprintf(stderr, "sequence requires --shaders and --out\n");
+                return 2;
+            }
+            char *frames = strdup(sequence);
+            if (frames == NULL) {
+                return 2;
+            }
+            eu4_metal_replay_session *session = NULL;
+            int result = 0;
+            int index = 0;
+            char *save = NULL;
+            for (char *frame = strtok_r(frames, ",", &save); frame != NULL;
+                 frame = strtok_r(NULL, ",", &save)) {
+                index++;
+                char output[1024];
+                snprintf(output, sizeof(output), "%s/out-%03d",
+                         output_path, index);
+                [[NSFileManager defaultManager]
+                    createDirectoryAtPath:@(output)
+              withIntermediateDirectories:YES
+                               attributes:nil
+                                    error:NULL];
+                eu4_metal_replay_config config;
+                memset(&config, 0, sizeof(config));
+                config.struct_size = (uint32_t)sizeof(config);
+                config.abi_version = EU4_METAL_REPLAY_ABI_VERSION;
+                config.frame_dir = frame;
+                config.shader_dir = shader_path;
+                config.output_dir = output;
+                config.stop_after = -1;
+                config.only_event = -1;
+                config.frame_sequence = (uint64_t)index;
+                config.persistent_history = 1;
+                char create_error[512] = {0};
+                if (session == NULL) {
+                    session = eu4_metal_replay_create(
+                        &config, create_error, sizeof(create_error));
+                    if (session == NULL) {
+                        fprintf(stderr, "create: %s\n", create_error);
+                        result = 3;
+                        break;
+                    }
+                }
+                eu4_metal_replay_result frame_result;
+                int code = eu4_metal_replay_frame(session, &config,
+                                                  &frame_result);
+                NSMutableDictionary *document = [@{
+                    @"sequence": @(index),
+                    @"frame_dir": @(frame),
+                    @"output_dir": @(output),
+                    @"code": @(code),
+                    @"ok": @(frame_result.ok),
+                    @"events": @(frame_result.events),
+                    @"encoded": @(frame_result.encoded),
+                    @"failed": @(frame_result.failed),
+                    @"history_status": @(frame_result.history_status),
+                    @"carried_bindings": @(frame_result.carried_bindings),
+                    @"missing_history": @(frame_result.missing_history),
+                    @"stale_history": @(frame_result.stale_history),
+                    @"duration_ns": @(frame_result.duration_ns),
+                    @"error": @(frame_result.error),
+                    @"result_json": @(frame_result.result_json),
+                    @"metal_frame_sha256":
+                        @(frame_result.metal_frame_sha256),
+                } mutableCopy];
+                if (frame_result.result_json[0] != 0) {
+                    NSData *data = [NSData dataWithContentsOfFile:
+                                        @(frame_result.result_json)];
+                    id report = data != nil
+                        ? [NSJSONSerialization JSONObjectWithData:data
+                                                           options:0
+                                                             error:NULL]
+                        : nil;
+                    if ([report isKindOfClass:[NSDictionary class]]) {
+                        document[@"stage"] = report[@"stage"] ?: @"";
+                        document[@"failure"] = report[@"failure"] ?: @{};
+                        document[@"history"] = report[@"history"] ?: @{};
+                    }
+                }
+                NSData *json = [NSJSONSerialization dataWithJSONObject:document
+                                                               options:0
+                                                                 error:NULL];
+                if (json != nil) {
+                    printf("%s\n", [[[NSString alloc]
+                        initWithData:json encoding:NSUTF8StringEncoding]
+                        UTF8String]);
+                }
+                fflush(stdout);
+                if (!frame_result.ok && result == 0) {
+                    result = code != 0 ? code : 1;
+                    break;
+                }
+            }
+            eu4_metal_replay_destroy(session);
+            free(frames);
+            return result;
         }
         if (frame_path == NULL || shader_path == NULL || output_path == NULL) {
             fprintf(stderr,

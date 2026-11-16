@@ -182,6 +182,54 @@ PR #201 remains open; this branch includes its native early-exit diagnostic
 hardening as a cherry-pick because PR 3 must preserve the first native stage
 through the shadow report and the diagnostic package.
 
+## M7 PR 4 — continuous same-process dual rendering (2026-11-16)
+
+The tracer now has an opt-in bounded continuous mode
+(`EU4_GFX_FRAME_TRACE_CONTINUOUS`, `MAX_FRAMES`, `MAX_PENDING`,
+`MAX_BYTES`). Each successive scene boundary seals one immutable frame into
+`frame-NNNNNN/` with a process-monotonic capture id, a campaign
+`sequence.json` and a per-frame `frame-sequence.json` carrying the previous
+identity, render-target names, carried renderer outputs and lifecycle records.
+The one-shot single-frame path is unchanged. `glDeleteTextures` is observed by
+the existing interposer and invalidates carried names before forwarding.
+
+The Metal C ABI is v3 and adds `frame_sequence`/`persistent_history` plus
+history counters. One session is retained across the sequence:
+`gfx-frame-sequence/v1` is validated against the retained previous identity;
+lifecycle deletes/resets invalidate resources; a renderer-generated resource is
+carried only when the capture declares it and a matching Metal target exists.
+A renderer-generated texture that is neither reproduced nor carried fails
+closed instead of importing the captured OpenGL image. `replay.json` publishes
+`gfx-metal-resource-history/v1` with generations, last frame/event and
+carried/missing/stale counters.
+
+The bridge keeps one session in `EU4_GFX_SHADOW_MODE=continuous`; the
+coordinator translates/publishes/verifies each frame's receipt and checkpoint
+request, waits for that frame's report, diagnoses it with PR 3 and stops on the
+first non-qualified frame (or continues only under an explicit policy).
+`automation/m7_continuous.py` adds the bounded supervisor: ordered-sequence
+validation, one-session execution, stop-at-K, case preservation and
+replay/diagnosis metrics.
+
+Authentic Stage 1: one EU4 process (pid 85776) captured and replayed three
+consecutive title frames (325 operations each) through one session, with no
+second launch. All three are `difference_with_partial_state_coverage` with
+resource provenance verified and history status ok; retained generations
+(433: 7→14→21, 442: 1→2→3) prove the session was not reset. The title scene
+re-renders every target before sampling, so authentic carried bindings were 0;
+the canonical two-frame fixture proves the carried path
+(`carried_bindings=1`, `source=metal_render_target`, no GL upload). Capture
+readback/seal was ~21–25 ms / ~39–42 ms per frame; Metal replay was
+2.10/1.44/1.52 s and callback time 5.57/6.40/6.36 s. The three sealed captures occupy 1.41 GB on disk and the campaign stopped at
+the configured frame limit.
+Report: [PR 4 continuous](../analysis/m7/pr4-continuous-dual-render.md),
+[evidence](../analysis/m7/pr4-evidence.json).
+
+The live asynchronous capture/replay queue is not implemented; Stage 1 is the
+synchronous bridge. Shader translation is still per frame, and ordered
+`glTexImage2D`/`glTexSubImage2D` CPU-write records are not captured (an explicit
+delete/reset is the supported resynchronization). Stages 2/3 were not run.
+
 ## Strategy B — independent replay (2026-11-14)
 
 Capture once, replay independently. A canonical authentic OpenGL title frame

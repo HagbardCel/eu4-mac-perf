@@ -109,6 +109,12 @@ typedef struct {
 
 int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event);
 
+/* GL lifecycle notification from the copy/texture interposer.  Deleted GL
+   names are removed from the carried render-target set immediately and are
+   published in the next continuous frame's lifecycle record, so a recycled
+   name cannot silently reuse a previous Metal image. */
+void eu4_gfx_frame_trace_texture_deleted(int count, const unsigned *names);
+
 /* Cheap per-call probe for the GL interposer.  Returns 1 when the caller must
    collect the full effective state (an armed capture or the first copy of a
    scene).  Returns 0 after counting the copy without any GL queries. */

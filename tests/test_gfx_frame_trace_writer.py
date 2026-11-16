@@ -50,8 +50,8 @@ class FrameTraceWriterTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.temporary.cleanup()
 
-    def _run(self, scenario: str, directory: Path):
-        command = [str(self.binary), scenario, str(directory)]
+    def _run(self, scenario: str, directory: Path, *args):
+        command = [str(self.binary), scenario, str(directory), *map(str, args)]
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
         return result
@@ -92,6 +92,67 @@ class FrameTraceWriterTests(unittest.TestCase):
             self.assertTrue(manifest["truncated"])
             self.assertEqual(manifest["reason"], "draw_cap")
             self.assertEqual(manifest["events"], 1)
+
+    def test_continuous_capture_publishes_ordered_sealed_frames(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "campaign"
+            self._run("continuous", directory, 3, 64 * 1024 * 1024)
+            campaign = json.loads((directory / "sequence.json").read_text())
+            self.assertEqual(campaign["schema"],
+                             "gfx-frame-sequence-campaign/v1")
+            self.assertEqual(campaign["status"], "complete")
+            self.assertEqual(campaign["reason"], "frame_limit")
+            self.assertEqual(campaign["frames_completed"], 3)
+            self.assertEqual(len(campaign["frames"]), 3)
+            self.assertGreater(campaign["bytes_written"], 0)
+            previous = None
+            lifecycle_seen = []
+            for sequence in range(1, 4):
+                path = directory / f"frame-{sequence:06d}"
+                manifest = self._manifest(path)
+                self.assertTrue(manifest["complete"], manifest)
+                seal = json.loads((path / "frame-seal.json").read_text())
+                self.assertTrue(seal["sealed"])
+                self.assertEqual(seal["capture_frame_id"], sequence)
+                sequence_record = json.loads(
+                    (path / "frame-sequence.json").read_text())
+                self.assertEqual(sequence_record["schema"],
+                                 "gfx-frame-sequence/v1")
+                self.assertEqual(sequence_record["sequence_index"], sequence)
+                self.assertEqual(sequence_record["campaign_frames"], 3)
+                self.assertEqual(
+                    sequence_record["event_stream_sha256"],
+                    hashlib.sha256(
+                        (path / "frame-events.jsonl").read_bytes()
+                    ).hexdigest())
+                if previous is None:
+                    self.assertIsNone(sequence_record["previous"])
+                else:
+                    self.assertEqual(
+                        sequence_record["previous"]["capture_frame_id"],
+                        previous)
+                    names = [
+                        name
+                        for item in sequence_record["lifecycle"]
+                        if item.get("kind") == "delete"
+                        for name in item.get("names") or []
+                    ]
+                    lifecycle_seen.extend(names)
+                previous = sequence
+            self.assertIn("443", lifecycle_seen)
+            self.assertFalse((directory / "frame-000004").exists())
+
+    def test_continuous_byte_budget_stops_incomplete_without_dropping_frames(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "campaign"
+            self._run("continuous-byte-budget", directory)
+            campaign = json.loads((directory / "sequence.json").read_text())
+            self.assertEqual(campaign["status"], "incomplete")
+            self.assertEqual(campaign["reason"], "byte_budget")
+            self.assertEqual(campaign["frames_completed"], 1)
+            self.assertEqual(len(campaign["frames"]), 1)
+            self.assertTrue((directory / "frame-000001" / "frame-trace.json").is_file())
+            self.assertFalse((directory / "frame-000002").exists())
 
     def test_event_stream_flush_failure_invalidates_frame(self):
         with tempfile.TemporaryDirectory() as temporary:

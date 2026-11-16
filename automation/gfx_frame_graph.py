@@ -724,6 +724,11 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
         reasons.append("final Metal readback is missing")
         status = "invalid"
     provenance = replay.get("provenance") or {}
+    history = replay.get("history") or {}
+    continuous = (
+        isinstance(history, dict)
+        and history.get("status") == "ok"
+        and int(history.get("sequence") or 0) > 0)
     samples = replay.get("_provenance_samples")
     if samples is None:
         samples = []
@@ -795,13 +800,20 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
                             "resource": key,
                             "kind": "captured_intermediate_substitution"})
                     required = required_by_event.get(event)
-                    if required is not None and int(
-                            row.get("generation") or 0) != required:
+                    actual_generation = int(row.get("generation") or 0)
+                    generation_ok = actual_generation == required
+                    if continuous and required is not None:
+                        # In a persistent sequence the session generation is
+                        # cumulative across frames.  A carried or rewritten
+                        # target must be at least as new as the frame-local
+                        # producer count.
+                        generation_ok = actual_generation >= required
+                    if required is not None and not generation_ok:
                         consumer_problems.append({
                             "event": event, "sampler": sampler,
                             "resource": key, "kind": "stale_generation",
                             "expected_generation": required,
-                            "actual_generation": int(row.get("generation") or 0)})
+                            "actual_generation": actual_generation})
                 elif resource.get("origin") == EXTERNAL:
                     if source != "external_capture":
                         consumer_problems.append({
@@ -898,7 +910,9 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
                     if event_index(producer.get("event")) <= event)
                 before = int(transfer.get("destination_generation_before") or 0)
                 after = int(transfer.get("destination_generation_after") or 0)
-                if after != expected_after or after != before + 1:
+                if (after != before + 1 or
+                        (not continuous and after != expected_after) or
+                        (continuous and after < expected_after)):
                     transfer_problems.append({
                         "event": event, "resource": destination,
                         "kind": "destination_generation",
@@ -946,6 +960,8 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
             if expected is None:
                 continue
             generation = int(item.get("generation") or 0)
+            if continuous and generation >= expected:
+                continue
             if generation != expected:
                 stale.append({
                     "event": item.get("event"),

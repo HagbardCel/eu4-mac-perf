@@ -1,0 +1,653 @@
+{
+  "schema": "m7-pr4-continuous-evidence/v1",
+  "status": "stage1_authentic_continuous_campaign_complete",
+  "claim": "One genuine EU4 process captured, sealed and replayed three consecutive title frames through one persistent Metal session. No second EU4 process was launched. Every frame was diagnosed; all three are observed differences with partial state coverage, not proven Metal defects.",
+  "base": {
+    "pr3_branch": "m7/pr3-differential-diagnosis",
+    "pr3_commit": "0d95df70",
+    "stacked": true
+  },
+  "authentic": {
+    "launch_command": "python3 -m automation.m6_frame capture --output .local/m7/pr4-continuous-live-3 --callers 0x103b3c8 --min-draws 1 --occurrence 300 --boundary scene --continuous --max-frames 3 --max-pending 2 --max-bytes 2147483648 --shadow --seal --max-draws 1024 --duration 180 --timeout 600 --shadow-timeout-ms 180000 --shadow-wait-ms 240000 --continue-on-difference --background",
+    "pid": 85776,
+    "session": "c84e7651-301d-434a-978d-738ff238585c",
+    "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "instrumentation_library_sha256": "feddb2d589efa19ddb0d62115afd5d87d56f90c3dfce107a9b900e27819068ea",
+    "eu4_processes": 1,
+    "termination": {
+      "pid": 85776,
+      "terminated": true,
+      "killed": false,
+      "executable": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4"
+    },
+    "display_restore": {
+      "restored": true,
+      "reason": "already_original",
+      "path": "/Users/fabian/Documents/Paradox Interactive/Europa Universalis IV GOG/settings.txt",
+      "sha256": "62b4902a3a999ad3e623dd92800c3406359b44e60497491393e6b191836dd496"
+    },
+    "campaign": {
+      "schema": "gfx-frame-sequence-campaign/v1",
+      "session_id": "c84e7651-301d-434a-978d-738ff238585c",
+      "pid": 85776,
+      "status": "complete",
+      "reason": "frame_limit",
+      "max_frames": 3,
+      "max_pending": 2,
+      "max_bytes": 2147483648,
+      "frames_completed": 3,
+      "bytes_written": 2483916807,
+      "frames": [
+        {
+          "sequence": 1,
+          "capture_frame_id": 1,
+          "dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/wt_m7_pr4/.local/m7/pr4-continuous-live-3/frames/frame-000001",
+          "manifest_sha256": "9b984165395355586d469fecb0812380ba7c8caf7ef5de1dd00057563ba31522",
+          "event_stream_sha256": "1f4c00ee1f82eff63e96bd5914b15dc370a6f33c81bbbbc0754c95416139ee57",
+          "reference_sha256": "d06fbdbe46f5654624b6152de4af226bb0c945d50693512acb084fb4dc6afe95",
+          "operations": 325,
+          "draws": 315,
+          "clears": 9,
+          "copies": 1
+        },
+        {
+          "sequence": 2,
+          "capture_frame_id": 2,
+          "dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/wt_m7_pr4/.local/m7/pr4-continuous-live-3/frames/frame-000002",
+          "manifest_sha256": "b5954b6fe15d307368c780e64652f2a2f2f2f828174af1e83207b0cefe7d7037",
+          "event_stream_sha256": "d15d3433bbf54d7cf1a90499de1acf1a89da3ab81fe6d480549ae6a4594c42f5",
+          "reference_sha256": "aa020baebe52a8e6d26a5aee6fd880725ce00761e8ad26783db716c025ea76e3",
+          "operations": 325,
+          "draws": 315,
+          "clears": 9,
+          "copies": 1
+        },
+        {
+          "sequence": 3,
+          "capture_frame_id": 3,
+          "dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/wt_m7_pr4/.local/m7/pr4-continuous-live-3/frames/frame-000003",
+          "manifest_sha256": "e0e5d1e8745d86f5a56c0e50c9196695749cb2b640bd69d47992f2044bbabebf",
+          "event_stream_sha256": "a20fdb70a047fe59176e518c4c9b5e6b9649787b8359f4c3298963bd94e3c6a4",
+          "reference_sha256": "85fefc69721862983a767b3196790983074ad11707148c1522624aba019a915f",
+          "operations": 325,
+          "draws": 315,
+          "clears": 9,
+          "copies": 1
+        }
+      ]
+    },
+    "frames": [
+      {
+        "sequence": 1,
+        "capture_frame_id": 1,
+        "frame_dir": ".local/m7/pr4-continuous-live-3/frames/frame-000001",
+        "shadow_dir": ".local/m7/pr4-continuous-live-3/shadow/frame-000001",
+        "manifest_sha256": "9b984165395355586d469fecb0812380ba7c8caf7ef5de1dd00057563ba31522",
+        "event_stream_sha256": "1f4c00ee1f82eff63e96bd5914b15dc370a6f33c81bbbbc0754c95416139ee57",
+        "reference_sha256": "d06fbdbe46f5654624b6152de4af226bb0c945d50693512acb084fb4dc6afe95",
+        "operations": 325,
+        "draws": 315,
+        "clears": 9,
+        "copies": 1,
+        "previous_capture_frame_id": null,
+        "render_targets": [
+          "433",
+          "430",
+          "431",
+          "432",
+          "447",
+          "443"
+        ],
+        "carried_renderer_outputs": [],
+        "lifecycle": [
+          {
+            "kind": "delete",
+            "names": [
+              "1",
+              "2",
+              "434",
+              "508",
+              "509",
+              "510",
+              "511",
+              "512",
+              "513",
+              "514",
+              "515",
+              "516",
+              "517",
+              "518",
+              "520",
+              "521",
+              "522",
+              "523",
+              "524",
+              "525",
+              "526",
+              "527",
+              "528",
+              "529",
+              "530",
+              "531",
+              "532",
+              "533",
+              "534",
+              "356",
+              "433",
+              "438",
+              "441",
+              "442",
+              "445",
+              "446",
+              "449",
+              "450",
+              "447",
+              "448",
+              "452",
+              "453",
+              "454",
+              "443",
+              "444",
+              "439",
+              "440",
+              "455",
+              "456",
+              "457",
+              "458",
+              "459",
+              "460",
+              "519",
+              "461",
+              "462",
+              "463",
+              "464",
+              "465",
+              "466",
+              "467",
+              "470",
+              "471",
+              "473"
+            ]
+          }
+        ],
+        "readback_ns": 24488000,
+        "seal_ns": 41811000,
+        "metal": {
+          "status": "ok",
+          "events": 325,
+          "encoded": 325,
+          "failed": 0,
+          "command_status": 4,
+          "readback": true,
+          "duration_ns": 2101732000,
+          "total_callback_ns": 5574687000,
+          "metal_frame_sha256": "4b5f7cb58f25295ad309fe2c1b9b59b58b15db0ea99d22b661c11224442606ea",
+          "history_status": 1,
+          "carried_bindings": 0,
+          "missing_history": 0,
+          "stale_history": 0
+        },
+        "history": {
+          "status": "ok",
+          "sequence": 1,
+          "renderer_generated": [
+            {
+              "name": "0",
+              "generation": 307,
+              "last_frame": 1
+            },
+            {
+              "name": "430",
+              "generation": 1,
+              "last_frame": 1
+            },
+            {
+              "name": "431",
+              "generation": 3,
+              "last_frame": 1
+            },
+            {
+              "name": "432",
+              "generation": 2,
+              "last_frame": 1
+            },
+            {
+              "name": "433",
+              "generation": 7,
+              "last_frame": 1
+            },
+            {
+              "name": "442",
+              "generation": 1,
+              "last_frame": 1
+            },
+            {
+              "name": "443",
+              "generation": 2,
+              "last_frame": 1
+            },
+            {
+              "name": "447",
+              "generation": 2,
+              "last_frame": 1
+            }
+          ]
+        },
+        "classification": "difference_with_partial_state_coverage",
+        "axes": {
+          "capture_validity": "valid",
+          "frame_shader_identity": "verified",
+          "gpu_execution": "ok",
+          "resource_provenance": "verified",
+          "operation_coverage": "complete",
+          "rendering_state_coverage": "partial",
+          "pixel_comparison": "divergent",
+          "first_divergence_confidence": "intermediate"
+        },
+        "pixels": {
+          "pixels": 1930176,
+          "mismatched_pixels": 1162779,
+          "mismatched_fraction": 0.6024212299811001,
+          "alpha_different_pixels": 0,
+          "max_channel_error": 73,
+          "mean_abs_error": [
+            0.398694212,
+            0.517298941,
+            0.653208308,
+            0.0
+          ],
+          "mean_max_channel_error": 0.865424707
+        },
+        "first_divergence": {
+          "kind": "intermediate",
+          "event": 286,
+          "target": "442",
+          "resource": "tex:442",
+          "producer_event": 284,
+          "operation": "glCopyTexSubImage2D",
+          "confidence": "confirmed",
+          "root_cause": "not_established"
+        },
+        "checkpoint_validation": {
+          "status": "ok",
+          "requested": 6,
+          "returned": 6,
+          "matched": 2,
+          "divergent": 3,
+          "diagnostic": 1,
+          "invalid": 0,
+          "request_source": "published"
+        }
+      },
+      {
+        "sequence": 2,
+        "capture_frame_id": 2,
+        "frame_dir": ".local/m7/pr4-continuous-live-3/frames/frame-000002",
+        "shadow_dir": ".local/m7/pr4-continuous-live-3/shadow/frame-000002",
+        "manifest_sha256": "b5954b6fe15d307368c780e64652f2a2f2f2f828174af1e83207b0cefe7d7037",
+        "event_stream_sha256": "d15d3433bbf54d7cf1a90499de1acf1a89da3ab81fe6d480549ae6a4594c42f5",
+        "reference_sha256": "aa020baebe52a8e6d26a5aee6fd880725ce00761e8ad26783db716c025ea76e3",
+        "operations": 325,
+        "draws": 315,
+        "clears": 9,
+        "copies": 1,
+        "previous_capture_frame_id": 1,
+        "render_targets": [
+          "433",
+          "430",
+          "431",
+          "432",
+          "447",
+          "443"
+        ],
+        "carried_renderer_outputs": [
+          "433",
+          "430",
+          "431",
+          "432",
+          "447",
+          "443"
+        ],
+        "lifecycle": [],
+        "readback_ns": 23032000,
+        "seal_ns": 40686000,
+        "metal": {
+          "status": "ok",
+          "events": 325,
+          "encoded": 325,
+          "failed": 0,
+          "command_status": 4,
+          "readback": true,
+          "duration_ns": 1443284000,
+          "total_callback_ns": 6400845000,
+          "metal_frame_sha256": "e5a403db20c83ea934703a0747a43b2c8a7ad34ee4fb9cbe9f4960aeecea2db3",
+          "history_status": 1,
+          "carried_bindings": 0,
+          "missing_history": 0,
+          "stale_history": 0
+        },
+        "history": {
+          "status": "ok",
+          "sequence": 2,
+          "renderer_generated": [
+            {
+              "name": "0",
+              "generation": 614,
+              "last_frame": 2
+            },
+            {
+              "name": "430",
+              "generation": 2,
+              "last_frame": 2
+            },
+            {
+              "name": "431",
+              "generation": 6,
+              "last_frame": 2
+            },
+            {
+              "name": "432",
+              "generation": 4,
+              "last_frame": 2
+            },
+            {
+              "name": "433",
+              "generation": 14,
+              "last_frame": 2
+            },
+            {
+              "name": "442",
+              "generation": 2,
+              "last_frame": 2
+            },
+            {
+              "name": "443",
+              "generation": 4,
+              "last_frame": 2
+            },
+            {
+              "name": "447",
+              "generation": 4,
+              "last_frame": 2
+            }
+          ]
+        },
+        "classification": "difference_with_partial_state_coverage",
+        "axes": {
+          "capture_validity": "valid",
+          "frame_shader_identity": "verified",
+          "gpu_execution": "ok",
+          "resource_provenance": "verified",
+          "operation_coverage": "complete",
+          "rendering_state_coverage": "partial",
+          "pixel_comparison": "divergent",
+          "first_divergence_confidence": "intermediate"
+        },
+        "pixels": {
+          "pixels": 1930176,
+          "mismatched_pixels": 1164094,
+          "mismatched_fraction": 0.6031025150038132,
+          "alpha_different_pixels": 0,
+          "max_channel_error": 66,
+          "mean_abs_error": [
+            0.400686259,
+            0.521085642,
+            0.657243174,
+            0.0
+          ],
+          "mean_max_channel_error": 0.869105201
+        },
+        "first_divergence": {
+          "kind": "intermediate",
+          "event": 286,
+          "target": "442",
+          "resource": "tex:442",
+          "producer_event": 284,
+          "operation": "glCopyTexSubImage2D",
+          "confidence": "confirmed",
+          "root_cause": "not_established"
+        },
+        "checkpoint_validation": {
+          "status": "ok",
+          "requested": 6,
+          "returned": 6,
+          "matched": 2,
+          "divergent": 3,
+          "diagnostic": 1,
+          "invalid": 0,
+          "request_source": "published"
+        }
+      },
+      {
+        "sequence": 3,
+        "capture_frame_id": 3,
+        "frame_dir": ".local/m7/pr4-continuous-live-3/frames/frame-000003",
+        "shadow_dir": ".local/m7/pr4-continuous-live-3/shadow/frame-000003",
+        "manifest_sha256": "e0e5d1e8745d86f5a56c0e50c9196695749cb2b640bd69d47992f2044bbabebf",
+        "event_stream_sha256": "a20fdb70a047fe59176e518c4c9b5e6b9649787b8359f4c3298963bd94e3c6a4",
+        "reference_sha256": "85fefc69721862983a767b3196790983074ad11707148c1522624aba019a915f",
+        "operations": 325,
+        "draws": 315,
+        "clears": 9,
+        "copies": 1,
+        "previous_capture_frame_id": 2,
+        "render_targets": [
+          "433",
+          "430",
+          "431",
+          "432",
+          "447",
+          "443"
+        ],
+        "carried_renderer_outputs": [
+          "433",
+          "430",
+          "431",
+          "432",
+          "447",
+          "443"
+        ],
+        "lifecycle": [],
+        "readback_ns": 21444000,
+        "seal_ns": 39183000,
+        "metal": {
+          "status": "ok",
+          "events": 325,
+          "encoded": 325,
+          "failed": 0,
+          "command_status": 4,
+          "readback": true,
+          "duration_ns": 1524147000,
+          "total_callback_ns": 6364058000,
+          "metal_frame_sha256": "221e60c77db2035d7be02a9fbb2a88423c4c833e44a9f40b4b8752572c4e85eb",
+          "history_status": 1,
+          "carried_bindings": 0,
+          "missing_history": 0,
+          "stale_history": 0
+        },
+        "history": {
+          "status": "ok",
+          "sequence": 3,
+          "renderer_generated": [
+            {
+              "name": "0",
+              "generation": 921,
+              "last_frame": 3
+            },
+            {
+              "name": "430",
+              "generation": 3,
+              "last_frame": 3
+            },
+            {
+              "name": "431",
+              "generation": 9,
+              "last_frame": 3
+            },
+            {
+              "name": "432",
+              "generation": 6,
+              "last_frame": 3
+            },
+            {
+              "name": "433",
+              "generation": 21,
+              "last_frame": 3
+            },
+            {
+              "name": "442",
+              "generation": 3,
+              "last_frame": 3
+            },
+            {
+              "name": "443",
+              "generation": 6,
+              "last_frame": 3
+            },
+            {
+              "name": "447",
+              "generation": 6,
+              "last_frame": 3
+            }
+          ]
+        },
+        "classification": "difference_with_partial_state_coverage",
+        "axes": {
+          "capture_validity": "valid",
+          "frame_shader_identity": "verified",
+          "gpu_execution": "ok",
+          "resource_provenance": "verified",
+          "operation_coverage": "complete",
+          "rendering_state_coverage": "partial",
+          "pixel_comparison": "divergent",
+          "first_divergence_confidence": "intermediate"
+        },
+        "pixels": {
+          "pixels": 1930176,
+          "mismatched_pixels": 1163950,
+          "mismatched_fraction": 0.60302791040817,
+          "alpha_different_pixels": 0,
+          "max_channel_error": 84,
+          "mean_abs_error": [
+            0.399291567,
+            0.518984279,
+            0.65438074,
+            0.0
+          ],
+          "mean_max_channel_error": 0.867049948
+        },
+        "first_divergence": {
+          "kind": "intermediate",
+          "event": 286,
+          "target": "442",
+          "resource": "tex:442",
+          "producer_event": 284,
+          "operation": "glCopyTexSubImage2D",
+          "confidence": "confirmed",
+          "root_cause": "not_established"
+        },
+        "checkpoint_validation": {
+          "status": "ok",
+          "requested": 6,
+          "returned": 6,
+          "matched": 2,
+          "divergent": 3,
+          "diagnostic": 1,
+          "invalid": 0,
+          "request_source": "published"
+        }
+      }
+    ],
+    "classification": "difference_with_partial_state_coverage",
+    "pixel_verdict": "difference_with_partial_state_coverage",
+    "qualified": false,
+    "stop_reason": "frame_limit",
+    "policy": "continue-on-difference for the Stage-1 resource-history campaign; differences are recorded, not treated as passes"
+  },
+  "metrics": {
+    "frames": 3,
+    "replay_seconds": {
+      "values": [
+        2.101732,
+        1.443284,
+        1.524147
+      ],
+      "mean": 1.689721,
+      "median": 1.524147,
+      "worst": 2.101732
+    },
+    "callback_seconds": {
+      "values": [
+        5.574687,
+        6.400845,
+        6.364058
+      ],
+      "mean": 6.113196666666667,
+      "median": 6.364058,
+      "worst": 6.400845
+    },
+    "capture_readback_ns": [
+      24488000,
+      23032000,
+      21444000
+    ],
+    "capture_seal_ns": [
+      41811000,
+      40686000,
+      39183000
+    ],
+    "bytes_written": 1406084375,
+    "queue_high_water": 1,
+    "max_pending": 2,
+    "note": "Replay duration is the native command/readback duration; callback duration additionally includes bounded shader-translation wait. No original-EU4-without-instrumentation or capture-only pacing measurement was taken in this bounded Stage-1 campaign.",
+    "bytes_written_campaign_accounted": 2483916807,
+    "bytes_accounting_note": "The Stage-1 run used a cumulative blob counter (2,483,916,807 accounted bytes). The per-frame slice counter is fixed in this branch; this entry reports the actual on-disk bytes for the same capture."
+  },
+  "offline": {
+    "carried_renderer_output": {
+      "carried_bindings": 1,
+      "source": "metal_render_target",
+      "history_frame": 1,
+      "note": "canonical frame 2 samples texture 443 produced by frame 1; no captured GL intermediate uploaded"
+    },
+    "missing_previous_producer": {
+      "history_status": 2,
+      "missing_history": 1,
+      "error": "443 is carried but no Metal producer exists"
+    },
+    "unrecorded_renderer_output": {
+      "history_status": 2,
+      "error": "443 has renderer history but is not carried by this frame"
+    },
+    "lifecycle_reset_cpu_update": {
+      "source": "external_capture",
+      "history_kind": "external"
+    },
+    "previous_identity_mismatch": {
+      "stage": "history_sequence",
+      "encoded": 0
+    },
+    "campaign_integration": {
+      "frames": 2,
+      "status": "complete",
+      "one_session": true
+    },
+    "tests": {
+      "test_gfx_frame_trace_writer": "24 passed (ordered frames, seals, previous links, frame limit, byte budget, lifecycle delete)",
+      "test_m7_continuous_replay": "6 passed",
+      "test_m7_continuous_supervisor": "5 passed",
+      "test_m7_continuous_coordinator": "2 passed",
+      "test_gfx_interpose": "1 passed",
+      "pr4_focused_set": "73 passed, 1 skipped"
+    }
+  },
+  "limitations": [
+    "The live asynchronous capture/replay pipeline is not implemented; this campaign is the synchronous Stage 1.",
+    "Shader translation is performed per frame with --force; cross-frame translation caching by source identity is not implemented.",
+    "Lifecycle capture covers glDeleteTextures. Ordered glTexImage2D/glTexSubImage2D CPU-write records are not captured; an explicit delete/reset is the supported resynchronization.",
+    "The authentic title frame re-renders all targets every frame, so carried_bindings is 0; the carried path is proven by the canonical two-frame fixture.",
+    "Stages 2/3 (10-20 frames, gameplay, async) were not run.",
+    "Performance comparison against uninstrumented EU4 and capture-only mode was not measured in this bounded campaign.",
+    "The authentic Stage-1 run predates the per-frame blob-budget accounting fix; its campaign manifest overcounts bytes. The reported disk bytes are authoritative for that run."
+  ]
+}

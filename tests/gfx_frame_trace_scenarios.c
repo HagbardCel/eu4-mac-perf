@@ -118,6 +118,10 @@ static void reset_env(void) {
     unsetenv("EU4_GFX_FRAME_SEAL");
     unsetenv("EU4_GFX_FRAME_OBSERVE_DIR");
     unsetenv("EU4_GFX_FRAME_TRACE_TEST_FAIL_FLUSH");
+    unsetenv("EU4_GFX_FRAME_TRACE_CONTINUOUS");
+    unsetenv("EU4_GFX_FRAME_TRACE_MAX_FRAMES");
+    unsetenv("EU4_GFX_FRAME_TRACE_MAX_PENDING");
+    unsetenv("EU4_GFX_FRAME_TRACE_MAX_BYTES");
 }
 
 static int configure(const char *directory) {
@@ -357,6 +361,43 @@ static void clear_one(void) {
     eu4_gfx_frame_trace_clear_exit(&frame, &call, NULL);
 }
 
+
+static int scenario_continuous(const char *directory, int max_frames,
+                               int max_bytes) {
+    reset_env();
+    setenv("EU4_GFX_FRAME_TRACE_DIR", directory, 1);
+    setenv("EU4_GFX_FRAME_TRACE_TEST_ONLY", "1", 1);
+    setenv("EU4_GFX_FRAME_TRACE_CONTINUOUS", "1", 1);
+    setenv("EU4_GFX_FRAME_TRACE_BOUNDARY", "scene", 1);
+    setenv("EU4_GFX_FRAME_TRACE_MIN_DRAWS", "1", 1);
+    setenv("EU4_GFX_FRAME_SEAL", "1", 1);
+    char frames[32];
+    snprintf(frames, sizeof(frames), "%d", max_frames);
+    setenv("EU4_GFX_FRAME_TRACE_MAX_FRAMES", frames, 1);
+    setenv("EU4_GFX_FRAME_TRACE_MAX_PENDING", "2", 1);
+    char bytes[64];
+    snprintf(bytes, sizeof(bytes), "%d", max_bytes);
+    setenv("EU4_GFX_FRAME_TRACE_MAX_BYTES", bytes, 1);
+    if (eu4_gfx_frame_trace_configure_from_env() != 1) {
+        return 1;
+    }
+    eu4_gfx_capture_frame frame;
+    eu4_gfx_observe_call call;
+    memset(&frame, 0, sizeof(frame));
+    make_call(&call, 0x2000);
+    for (int scene = 0; scene < max_frames + 2; scene++) {
+        draw(true, 0x2000);
+        draw(false, 0x2000);
+        eu4_gfx_frame_trace_boundary_entry(&frame, &call);
+        eu4_gfx_frame_trace_boundary_exit(&frame, &call, NULL);
+        if (scene == 1) {
+            unsigned deleted = 443;
+            eu4_gfx_frame_trace_texture_deleted(1, &deleted);
+        }
+    }
+    return 0;
+}
+
 static void report_seal(const char *scenario, const seal_state *state) {
     printf("scenario=%s callback_calls=%d lock_free=%d files_ready=%d abi_ok=%d reentrant=%u "
            "notifications=%u callback_status=%d seal_written=%d complete=%u "
@@ -532,6 +573,14 @@ int main(int argc, char **argv) {
     }
     if (strcmp(scenario, "count-mismatch") == 0) {
         return scenario_stream_corruption(directory, "{\"kind\":\"draw\"}\n");
+    }
+    if (strcmp(scenario, "continuous") == 0) {
+        int frames = argc > 3 ? atoi(argv[3]) : 3;
+        int bytes = argc > 4 ? atoi(argv[4]) : 67108864;
+        return scenario_continuous(directory, frames, bytes);
+    }
+    if (strcmp(scenario, "continuous-byte-budget") == 0) {
+        return scenario_continuous(directory, 8, 1);
     }
     if (strcmp(scenario, "scene-sequence") == 0) {
         return scenario_scene(directory, 0);
