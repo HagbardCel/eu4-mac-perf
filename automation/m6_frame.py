@@ -735,7 +735,7 @@ def capture(args: argparse.Namespace) -> int:
                 )
         except (FrameError, OSError, subprocess.TimeoutExpired) as exc:
             result["shadow_error"] = str(exc)
-            status = 7
+            status = 7 if status == 0 else status
     if seal_enabled:
         try:
             seal = load_seal(frame_dir)
@@ -1320,14 +1320,23 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
     marker the in-process bridge waits for, then waits for the Metal report and
     runs the existing differential comparison.
     """
-    if args.timeout <= 0 or args.seal_timeout <= 0 or             args.translation_timeout <= 0 or args.replay_timeout <= 0 or             args.compare_timeout <= 0:
-        return 1
     run = Path(args.run).expanduser().resolve()
     shadow = (
         Path(args.shadow_dir).expanduser().resolve()
         if args.shadow_dir
         else run / "shadow"
     )
+    if args.timeout <= 0 or args.seal_timeout <= 0 or             args.translation_timeout <= 0 or args.replay_timeout <= 0 or             args.compare_timeout <= 0:
+        shadow.mkdir(parents=True, exist_ok=True)
+        (shadow / "coordinator.json").write_text(
+            json.dumps(
+                {"schema": "m7-shadow-coordinator/v1", "status": "failed",
+                 "error": "invalid phase budget"},
+                indent=2,
+            )
+            + "\n"
+        )
+        return 1
     frame_dir = run / "frame"
     shader_dir = shadow / "shaders"
     report_path = shadow / "shadow-report.json"
@@ -1392,7 +1401,7 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
             text=True,
             timeout=min(
                 args.translation_timeout,
-                max(1.0, overall_deadline - time.monotonic()),
+                max(0.0, overall_deadline - time.monotonic()),
             ),
             check=False,
         )
@@ -1542,8 +1551,10 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
             previous = signal.signal(signal.SIGALRM, _compare_alarm)
             compare_budget = min(
                 args.compare_timeout,
-                max(1.0, overall_deadline - time.monotonic()),
+                max(0.0, overall_deadline - time.monotonic()),
             )
+            if compare_budget <= 0:
+                raise _CompareTimeout("overall coordinator deadline expired")
             signal.setitimer(signal.ITIMER_REAL, compare_budget)
             try:
                 comparison = m6_compare.compare(frame_dir, shadow, policy)

@@ -2616,7 +2616,8 @@ static BOOL verify_reference_object(id object, NSString *frame_dir,
     }
     NSDictionary *dictionary = (NSDictionary *)object;
     id file_value = dictionary[@"file"];
-    if (file_value == nil) {
+    if (file_value == nil && [dictionary[@"name"] isKindOfClass:[NSString class]]) {
+        /* Attribute payloads use "data"; arbitrary nested data is not a blob. */
         file_value = dictionary[@"data"];
     }
     if (file_value != nil) {
@@ -3554,10 +3555,14 @@ extern "C" int eu4_metal_replay_frame(eu4_metal_replay_session *session,
         if (result->encoded == 0 && g_encoded_count > 0) {
             result->encoded = (uint32_t)g_encoded_count;
         }
-        if (result->failed == 0 && g_failed_count > 0) {
-            result->failed = (uint32_t)g_failed_count;
+        if (result->failed == 0) {
+            result->failed = g_failed_count > 0 ? (uint32_t)g_failed_count : 1;
         }
         result->timed_out = g_deadline_expired ? 1 : 0;
+        if (result->result_json[0] != 0 &&
+            access(result->result_json, R_OK) != 0) {
+            result->result_json[0] = 0;
+        }
         if (result->duration_ns == 0) {
             result->duration_ns = replay_now_ns() - state.started_ns;
         }

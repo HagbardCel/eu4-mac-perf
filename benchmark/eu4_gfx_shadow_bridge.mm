@@ -358,8 +358,21 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
                     @"gl_reference_sha256": @(capture->reference_sha256),
                     @"trace_manifest_sha256": @(capture->manifest_sha256),
                     @"status": @"failed",
-                    @"stage": status == 2 ? @"objective_c_exception"
-                                         : (failure != nil ? failure : @"unknown"),
+                    @"stage": ({
+                        NSString *stage = @"shader_wait";
+                        if (status == 2) {
+                            stage = @"objective_c_exception";
+                        } else if ([failure hasPrefix:@"shader_receipt_failed"]) {
+                            stage = @"shader_receipt";
+                        } else if ([failure hasPrefix:@"metal_create_failed"]) {
+                            stage = @"metal_create";
+                        } else if ([failure hasPrefix:@"metal_replay_failed"]) {
+                            stage = @"metal_replay";
+                        } else if ([failure isEqualToString:@"shadow_report_write_failed"]) {
+                            stage = @"report_write";
+                        }
+                        stage;
+                    }),
                     @"error": failure,
                     @"total_duration_ns":
                         @(shadow_now_ns() - g_started_ns),

@@ -54,8 +54,10 @@
 - Copy-bearing scene 75: 283/283, one transfer, known divergence preserved
   (1,792,005 / 1,930,176, max 23).
 - Invalid trace/config rejected; timeout bounded; core has no OpenGL linkage.
-- One live launch (pid 41754): one sealed frame, 325/325 Metal operations,
+- Final live launch (pid 92781): one sealed frame, 325/325 Metal operations,
   readback ok, one GL reference and one Metal output. Pixel verdict `fail`
-  (1,159,832 / 1,930,176, max 76) with `state_coverage=partial` for dither and
+  (1,162,852 / 1,930,176, max 66) with `state_coverage=partial` for dither and
   multisampling; the difference is low-amplitude, not proven exclusively
-  dithering, and the canonical fixture remains exact.
+  dithering, and the canonical fixture remains exact. Earlier run 6
+  (pid 41754, library 3e400851…) is historical and predates the final
+  structured-verification/failure-report fixes.

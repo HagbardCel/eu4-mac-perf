@@ -4,7 +4,7 @@
   "claim": "One authentic EU4 process produced one GL reference and one independent Metal result from exactly one sealed frame, without a second EU4 launch. Pixel equivalence is reported separately and is not claimed for this live frame.",
   "base": {
     "pr1_branch": "m7/pr1-frame-seal",
-    "pr1_commit": "2b6545c",
+    "pr1_commit": "5e8de12",
     "pr1_pr": "https://github.com/HagbardCel/eu4-mac-perf/pull/199",
     "pr2_branch": "m7/pr2-inprocess-metal",
     "stacked": true,
@@ -36,7 +36,7 @@
     },
     "game_stdout_bytes": 0,
     "game_stderr_bytes": 0,
-    "binary_identity_note": "Live run used instrumentation library 3e400851\u2026 built from the B2/B3 code; the later bridge change only adds timed_out/partial fields to the report, not execution behavior."
+    "binary_identity_note": "The final live run used instrumentation library 7ce9101d\u2026 built from code c8553f8, which includes the structured verifier, shader receipt, bounded deadline and detailed failure report. Earlier run 6 (library 3e400851\u2026) is historical and does not test these later fixes."
   },
   "frame": {
     "capture_frame_id": 1,
