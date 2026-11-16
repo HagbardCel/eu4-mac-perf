@@ -110,6 +110,8 @@ STATE = {
     "viewport": [0, 0, WIDTH, HEIGHT],
 }
 
+DEFAULT_TARGET = {**TARGET, "framebuffer": 0}
+
 CLEAR_COLOR_DEPTH = {
     "kind": "clear",
     "flags": 3,
@@ -129,7 +131,7 @@ CLEAR_COLOR_ONLY = {
 }
 
 
-def _draw(program: int, count: int = 6) -> dict:
+def _draw_on(target: dict, program: int, count: int = 6) -> dict:
     return {
         "kind": "draw",
         "state": STATE,
@@ -153,8 +155,12 @@ def _draw(program: int, count: int = 6) -> dict:
             "instance_count": 1,
         },
         "textures": [],
-        "target": TARGET,
+        "target": target,
     }
+
+
+def _draw(program: int, count: int = 6) -> dict:
+    return _draw_on(TARGET, program, count)
 
 
 # 0 clear colour+depth (depth = 1)
@@ -171,6 +177,21 @@ EVENTS = [
     _draw(8),
     _draw(9, count=0),
 ]
+
+# Same stream on the default framebuffer, with a final no-op so the last
+# lifecycle event lands at the end-of-frame drain.
+DEFAULT_EVENTS = [
+    {**CLEAR_COLOR_DEPTH, "target": DEFAULT_TARGET},
+    _draw_on(DEFAULT_TARGET, 7),
+    _draw_on(DEFAULT_TARGET, 9, count=0),
+    _draw_on(DEFAULT_TARGET, 9, count=0),
+]
+DEFAULT_COLOR_DELETE = {
+    "kind": "delete",
+    "event": len(DEFAULT_EVENTS),
+    "lifecycle_sequence": 1,
+    "names": ["433"],
+}
 
 COLOR_DELETE = {
     "kind": "delete",
@@ -288,7 +309,7 @@ class TargetAttachmentLifetimeTests(unittest.TestCase):
             )
         (directory / "shaders.json").write_text(json.dumps(report))
 
-    def _make_frame(self, name: str, lifecycle) -> Path:
+    def _make_frame(self, name: str, lifecycle, events=None) -> Path:
         frame = self.base / name
         if frame.exists():
             shutil.rmtree(frame)
@@ -297,8 +318,9 @@ class TargetAttachmentLifetimeTests(unittest.TestCase):
         (frame / "blobs" / "quad.bin").write_bytes(
             b"".join(struct.pack("<ff", x, y) for x, y in vertices)
         )
+        events = EVENTS if events is None else events
         (frame / "frame-events.jsonl").write_text(
-            "\n".join(json.dumps(event) for event in EVENTS) + "\n"
+            "\n".join(json.dumps(event) for event in events) + "\n"
         )
         reference = bytes(WIDTH * HEIGHT * 4)
         (frame / "frame-reference.bgra").write_bytes(reference)
@@ -307,7 +329,7 @@ class TargetAttachmentLifetimeTests(unittest.TestCase):
             "complete": True,
             "reason": "",
             "truncated": False,
-            "events": len(EVENTS),
+            "events": len(events),
             "frame": {
                 "width": WIDTH,
                 "height": HEIGHT,
@@ -338,7 +360,7 @@ class TargetAttachmentLifetimeTests(unittest.TestCase):
             "reference_sha256": _sha(frame / "frame-reference.bgra"),
             "manifest_sha256": _sha(frame / "frame-trace.json"),
             "event_stream_sha256": _sha(frame / "frame-events.jsonl"),
-            "operations": len(EVENTS),
+            "operations": len(events),
             "draws": 1,
             "clears": 2,
             "copies": 0,
@@ -346,31 +368,31 @@ class TargetAttachmentLifetimeTests(unittest.TestCase):
         (frame / "frame-sequence.json").write_text(json.dumps(sequence))
         return frame
 
-    def _replay(self, frame: Path, name: str) -> tuple[dict, Path]:
+    def _run_frame(self, frame: Path, name: str, *, checkpoints=True):
         output = self.base / "out" / name
         if output.exists():
             shutil.rmtree(output)
+        command = [
+            str(self.binary),
+            "--sequence",
+            str(frame),
+            "--shaders",
+            str(self.shaders),
+            "--out",
+            str(output),
+        ]
+        if checkpoints:
+            command.extend(["--checkpoints", str(self.checkpoints)])
         ran = subprocess.run(
-            [
-                str(self.binary),
-                "--sequence",
-                str(frame),
-                "--shaders",
-                str(self.shaders),
-                "--out",
-                str(output),
-                "--checkpoints",
-                str(self.checkpoints),
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=300,
-        )
+            command, capture_output=True, text=True, check=False, timeout=300)
+        return ran, output / "out-001"
+
+    def _replay(self, frame: Path, name: str) -> tuple[dict, Path]:
+        ran, out = self._run_frame(frame, name)
         self.assertEqual(ran.returncode, 0, ran.stderr[-2000:] or ran.stdout[-2000:])
-        result = json.loads((output / "out-001" / "replay.json").read_text())
+        result = json.loads((out / "replay.json").read_text())
         self.assertEqual(result.get("status"), "ok", result)
-        return result, output / "out-001"
+        return result, out
 
     @staticmethod
     def _pixels(path: Path) -> set[tuple[int, int, int, int]]:
@@ -441,6 +463,24 @@ class TargetAttachmentLifetimeTests(unittest.TestCase):
         self.assertEqual(target["depth_generation"], 3)
         self.assertTrue(target["depth_live"])
         self.assertEqual(target["depth_name"], "3")
+
+
+    def test_default_colour_delete_at_the_end_fails_closed(self):
+        # The session's readback pointer is unretained.  Deleting the default
+        # target's colour texture at the end-of-frame lifecycle drain must not
+        # leave a dangling pointer or silently read back a deleted resource.
+        frame = self._make_frame("default-delete", [DEFAULT_COLOR_DELETE],
+                                 events=DEFAULT_EVENTS)
+        ran, out = self._run_frame(frame, "default-delete", checkpoints=False)
+        self.assertNotEqual(ran.returncode, 0,
+                            ran.stdout[-2000:] or ran.stderr[-2000:])
+        self.assertNotIn("Segmentation", ran.stderr)
+        result = json.loads((out / "replay.json").read_text())
+        self.assertNotEqual(result.get("status"), "ok", result)
+        self.assertTrue(any(
+            failure.get("stage") == "frame_readback" and
+            "missing" in str(failure.get("error", ""))
+            for failure in result.get("failures") or []), result)
 
 
 if __name__ == "__main__":

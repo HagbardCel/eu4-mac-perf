@@ -820,6 +820,12 @@ static BOOL apply_lifecycle_entry(NSDictionary *item) {
             [color_target removeObjectForKey:@"color"];
             [color_target removeObjectForKey:@"color_name"];
             color_target[@"generation"] = @0;
+            if ([framebuffer unsignedIntegerValue] == 0) {
+                /* The session's readback pointer is unretained; it must not
+                   outlive the removed texture.  The next target_for() fills it
+                   again, or the frame fails closed with a missing target. */
+                g_default_target.color = nil;
+            }
             if (color_target[@"depth"] == nil) {
                 [g_targets removeObjectForKey:framebuffer];
             }
@@ -832,6 +838,9 @@ static BOOL apply_lifecycle_entry(NSDictionary *item) {
             [depth_target removeObjectForKey:@"depth"];
             [depth_target removeObjectForKey:@"depth_name"];
             depth_target[@"depth_generation"] = @0;
+            if ([depth_target[@"framebuffer"] unsignedIntegerValue] == 0) {
+                g_default_target.depth = nil;
+            }
             [g_depth_targets removeObjectForKey:name];
         }
         [g_resource_history removeObjectForKey:name];
