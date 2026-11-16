@@ -108,6 +108,7 @@ def validate_sequence(frames: list[Path], *, max_frames: int = 64,
         raise ContinuousError(
             "too_many_frames", f"{len(frames)} > {max_frames}")
     records = []
+    sealed_frames: list[bool] = []
     previous_identity = None
     session_id = None
     pid = None
@@ -152,6 +153,7 @@ def validate_sequence(frames: list[Path], *, max_frames: int = 64,
         if sequence.get("reference_sha256") != _sha(reference):
             raise ContinuousError("reference_digest", str(frame))
         seal_path = frame / "frame-seal.json"
+        sealed_frames.append(seal_path.is_file())
         if seal_path.is_file():
             try:
                 seal = m6_frame.load_seal(frame)
@@ -197,6 +199,11 @@ def validate_sequence(frames: list[Path], *, max_frames: int = 64,
             "manifest_sha256": manifest_sha,
             "event_stream_sha256": events_sha,
         }
+    if any(sealed_frames) and not all(sealed_frames):
+        raise ContinuousError(
+            "mixed_seals",
+            "some frames are sealed and others are not; a continuous "
+            "campaign must be uniformly sealed or explicitly synthetic")
     if max_bytes > 0 and total_bytes > max_bytes:
         raise ContinuousError(
             "byte_budget", f"{total_bytes} > {max_bytes}")
@@ -207,6 +214,7 @@ def validate_sequence(frames: list[Path], *, max_frames: int = 64,
         "pid": pid,
         "frames": records,
         "bytes": total_bytes,
+        "sealed": bool(sealed_frames) and all(sealed_frames),
     }
 
 
@@ -433,7 +441,8 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
         else:
             diagnosis = gfx_independent_replay.diagnose_frame(
                 frame, output, output, policy,
-                shaders=Path(shaders).expanduser().resolve())
+                shaders=Path(shaders).expanduser().resolve(),
+                require_seal=bool(validation.get("sealed")))
         diagnosis_seconds = time.monotonic() - diagnosis_started
         diagnosis_times.append(diagnosis_seconds)
         replay_times.append(float(row.get("duration_ns") or 0) / 1e9)
