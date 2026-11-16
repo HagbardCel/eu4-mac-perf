@@ -168,10 +168,10 @@ The native ABI host gained `--only-event`, `--stop-after`, `--checkpoints`,
 `--seed-marked`, `--capture-pre`, `--capture-post`, `--depth-from-prefix` and
 structured `stage`/`failure` output; it still exercises the v2 C ABI only.
 
-Focused final evidence: run `20261116T091007Z-b49c37f7`, 124 tests across the
+Focused final evidence: run `20261116T092007Z-fc0178fd`, 124 tests across the
 required replay, resolve, seal, m6-frame, checkpoint and output-safety modules
 — passed. `tests/test_m7_metal_replay.py` alone is 20 tests
-(`20261116T090953Z-eccca51e`), including the native shadow-report host, the
+(`20261116T091951Z-c35a9c0b`), including the native shadow-report host, the
 success/failure/exception semantics, first-failure and stale-artifact cases. A
 base-worktree comparison at `dac2ea92` (`20261116T080832Z-6dd0c6ce`) shows the
 one `test_agent_tools` failure found during a broader run is pre-existing, not

@@ -124,7 +124,7 @@
   },
   "tests": {
     "focused_final": {
-      "id": "20261116T091007Z-b49c37f7",
+      "id": "20261116T092007Z-fc0178fd",
       "status": "passed",
       "tests": 124,
       "modules": [
@@ -137,7 +137,7 @@
       ]
     },
     "replay_module": {
-      "id": "20261116T090953Z-eccca51e",
+      "id": "20261116T091951Z-c35a9c0b",
       "status": "passed",
       "tests": 20
     },
@@ -212,6 +212,7 @@
   },
   "review_fixes": {
     "checkpoint_readback_timeout": "failure entry now carries the readback wait's real timeout flag and blit command status",
-    "artifact_failure_operation_recovery": "bridge fallback parses and preserves the operation index from the ABI error prefix when replay.json is unavailable"
+    "artifact_failure_operation_recovery": "bridge fallback parses and preserves the operation index from the ABI error prefix when replay.json is unavailable",
+    "pre_image_readback_status": "pre-image readback now propagates the readback command-buffer status like checkpoint and post-image readback"
   }
 }

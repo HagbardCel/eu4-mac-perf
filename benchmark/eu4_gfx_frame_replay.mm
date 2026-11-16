@@ -3232,13 +3232,11 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
         /* One early-exit path for failures outside the event loop.  It records
            stage, operation, underlying error, timeout classification, counters,
            duration and command status in both replay.json and the C ABI. */
-        auto record_failure = [&](NSString *stage, NSInteger operation,
-                                  NSString *kind, NSError *error,
-                                  NSString *fallback, int code,
-                                  id<MTLCommandBuffer> command) -> int {
+        auto record_failure_status = [&](NSString *stage, NSInteger operation,
+                                         NSString *kind, NSError *error,
+                                         NSString *fallback, int code,
+                                         NSInteger command_status) -> int {
             NSString *message = failure_text(error, fallback);
-            NSInteger command_status =
-                command != nil ? (NSInteger)command.status : 0;
             BOOL timed_out = g_deadline_expired != 0;
             failed += 1;
             g_failed_count = failed;
@@ -3302,6 +3300,14 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
             }
             fprintf(stderr, "%s\n", safe_utf8(full, "replay failed"));
             return code;
+        };
+        auto record_failure = [&](NSString *stage, NSInteger operation,
+                                  NSString *kind, NSError *error,
+                                  NSString *fallback, int code,
+                                  id<MTLCommandBuffer> command) -> int {
+            return record_failure_status(
+                stage, operation, kind, error, fallback, code,
+                command != nil ? (NSInteger)command.status : 0);
         };
         @try {
         NSError *verify_error = nil;
@@ -3682,13 +3688,13 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                     NSString *path =
                         [output_path stringByAppendingPathComponent:name];
                     NSError *pre_error = nil;
+                    NSInteger pre_status = 0;
                     if (!capture_target_to_file(isolated_target_info, path,
-                                                &pre_error, NULL)) {
-                        return record_failure(@"pre_image_readback",
-                                              (NSInteger)index, @"draw",
-                                              pre_error,
-                                              @"pre-image readback failed", 7,
-                                              nil);
+                                                &pre_error, &pre_status)) {
+                        return record_failure_status(
+                            @"pre_image_readback", (NSInteger)index, @"draw",
+                            pre_error, @"pre-image readback failed", 7,
+                            pre_status);
                     }
                     isolated_pre_capture_ok = YES;
                     isolated_pre_capture = name;
