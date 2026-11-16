@@ -824,6 +824,18 @@ def package_diagnosis(frame_dir: Path | str, metal_dir: Path | str,
     metal_dir = Path(metal_dir).expanduser().resolve()
     destination = Path(case_dir).expanduser().resolve()
     shader_source = _diagnosis_shaders(frame_dir, metal_dir, shaders)
+    shader_problems = _frame_shader_identity_problems(
+        frame_dir, shader_source, 1)
+    if shader_problems:
+        reason = ("shader_identity_unavailable"
+                  if any(problem.get("kind") == "shader_identity"
+                         for problem in shader_problems)
+                  else "shader_artifact_unavailable")
+        return _incomplete_case(
+            destination, metal_dir=metal_dir, report=report,
+            inputs=[frame_dir, shader_source],
+            missing=shader_problems, reason=reason,
+            schema=SCHEMA, case_id=case_id, title=title)
     required_bytes = (
         _tree_bytes(frame_dir) + _tree_bytes(shader_source) +
         _replay_artifact_bytes(metal_dir, report) +
@@ -1672,6 +1684,13 @@ def _verify_sequence(case_dir: Path, manifest: dict) -> tuple[list[str], dict]:
                         frame, shader_path, index):
                     problems.append(
                         f"frame {index} {problem['detail']}")
+        declared_programs = entry.get("shader_programs")
+        actual_programs = _frame_programs(frame)
+        if (declared_programs is not None
+                and list(declared_programs) != actual_programs):
+            problems.append(
+                f"frame {index} declared shader programs do not match its "
+                f"draw events: {declared_programs} != {actual_programs}")
         if history.get("status") != "verified":
             problems.append(
                 f"frame {index} history is invalid: " +
@@ -1949,15 +1968,17 @@ def _declared_inventory(
     return declared, problems
 
 
-def _shader_report_payloads(case_dir: Path, shader_dir: str) -> list[str]:
-    """Required translated payloads for one frame's shader directory."""
+def _shader_report_payloads(case_dir: Path, shader_dir: str,
+                            referenced: set[int]) -> list[str]:
+    """Required translated payloads for one frame's referenced programs."""
     required = [f"{shader_dir}/shaders.json"]
     try:
         report = _json(case_dir / shader_dir / "shaders.json")
     except (OSError, UnicodeError, json.JSONDecodeError, CaseError):
         return required
     for program in report.get("programs") or []:
-        if not isinstance(program, dict):
+        if (not isinstance(program, dict)
+                or program.get("program") not in referenced):
             continue
         stages = program.get("stages")
         if not isinstance(stages, dict):
@@ -1985,7 +2006,9 @@ def _sequence_inventory(sequence: dict, case_dir: Path) -> list[str]:
             required.append(f"{relative}/{name}")
         shader_dir = entry.get("shader_dir")
         if isinstance(shader_dir, str) and shader_dir:
-            required.extend(_shader_report_payloads(case_dir, shader_dir))
+            required.extend(_shader_report_payloads(
+                case_dir, shader_dir,
+                set(_frame_programs(case_dir / relative))))
         if entry.get("checkpoint_request_sha256"):
             index = entry.get("index")
             if isinstance(index, int):
@@ -2062,6 +2085,16 @@ def verify(case_dir: Path | str) -> dict:
                 on_disk.add(relative)
         for name in sorted(on_disk - set(declared)):
             problems.append(f"payload is not declared in the inventory: {name}")
+    if not is_sequence:
+        shader_relative = str(manifest.get("shaders") or "shaders")
+        shader_path, shader_problem = _case_relative_path(
+            case_dir, shader_relative)
+        if shader_problem is not None:
+            problems.append(f"shader directory is invalid: {shader_problem}")
+        elif (case_dir / "capture" / "frame-trace.json").is_file():
+            for problem in _frame_shader_identity_problems(
+                    case_dir / "capture", shader_path, 1):
+                problems.append(problem["detail"])
     graph: dict = {}
     try:
         graph = json.loads((case_dir / "graph.json").read_text())

@@ -966,6 +966,62 @@ class PortableSequenceCaseTests(unittest.TestCase):
         (case / "case.json").write_text(json.dumps(manifest, indent=2) + "\n")
         return manifest
 
+    def refresh(self, case: Path, relative: str, *,
+                update_sequence_entry: bool = False):
+        path = case / relative
+        if update_sequence_entry:
+            entry_index = int(Path(relative).parts[1]) - 1
+            sequence = json.loads((case / "sequence.json").read_text())
+            sequence["frames"][entry_index]["shader_report_sha256"] = sha(
+                path.read_bytes())
+            (case / "sequence.json").write_text(json.dumps(sequence))
+        manifest = json.loads((case / "case.json").read_text())
+        changed = {relative}
+        if update_sequence_entry:
+            changed.add("sequence.json")
+        manifest["files"] = [item for item in manifest["files"]
+                             if item["path"] not in changed]
+        for name in sorted(changed):
+            changed_path = case / name
+            manifest["files"].append({
+                "path": name,
+                "bytes": changed_path.stat().st_size,
+                "sha256": sha(changed_path.read_bytes()),
+            })
+        (case / "case.json").write_text(json.dumps(manifest, indent=2) + "\n")
+
+    def test_unreferenced_program_payloads_are_not_required(self):
+        out, diagnosis = self.baseline()
+        case, _ = self.package(out, diagnosis)
+        relative = "frames/000001/shaders/shaders.json"
+        report = json.loads((case / relative).read_text())
+        extra = json.loads(json.dumps(report["programs"][0]))
+        extra["program"] = 99
+        extra["stages"]["pixel"]["glsl_file"] = "missing-extra.glsl"
+        report["programs"].append(extra)
+        (case / relative).write_text(json.dumps(report))
+        self.refresh(case, relative, update_sequence_entry=True)
+        verified = gfx_replay_case.verify(case)
+        self.assertTrue(verified["ok"], verified["problems"])
+
+    def test_verifier_binds_declared_shader_programs(self):
+        out, diagnosis = self.baseline()
+        case, _ = self.package(out, diagnosis)
+        sequence = json.loads((case / "sequence.json").read_text())
+        sequence["frames"][0]["shader_programs"] = [99]
+        (case / "sequence.json").write_text(json.dumps(sequence))
+        manifest = json.loads((case / "case.json").read_text())
+        for item in manifest["files"]:
+            if item["path"] == "sequence.json":
+                item["bytes"] = (case / "sequence.json").stat().st_size
+                item["sha256"] = sha((case / "sequence.json").read_bytes())
+                break
+        (case / "case.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        verified = gfx_replay_case.verify(case)
+        self.assertFalse(verified["ok"], verified)
+        self.assertTrue(any("declared shader programs do not match" in problem
+                            for problem in verified["problems"]), verified)
+
     def test_verifier_requires_every_required_payload_in_the_inventory(self):
         out, diagnosis = self.baseline()
         case, _ = self.package(out, diagnosis)
