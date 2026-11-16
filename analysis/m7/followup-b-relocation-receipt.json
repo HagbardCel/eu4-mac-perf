@@ -2,7 +2,7 @@
   "schema": "m7-followup-b-relocation-receipt/v1",
   "kind": "authentic_captured_frames_with_synthetic_ordered_packaging",
   "fixture": "canonical menu-occ300 captured frame content",
-  "tested_head": "8f8fe031",
+  "tested_head": "4dcc8a57",
   "case": {
     "schema": "gfx-strategy-b-case/v2",
     "case_id": "canonical-prefix",
@@ -139,7 +139,7 @@
       "full_source_bytes": 13684,
       "excluded_source_bytes": 2921,
       "case_file_count": 70,
-      "case_bytes": 70528,
+      "case_bytes": 72568,
       "shader_layout": "shared explicit translation copied per frame"
     },
     "transitive_five_frame": {
@@ -163,7 +163,7 @@
       "full_source_bytes": 17946,
       "excluded_source_bytes": 2921,
       "case_file_count": 88,
-      "case_bytes": 82154,
+      "case_bytes": 84704,
       "conservative_note": "Interior cleanup/target frames are retained because the predecessor digest chain and cumulative carried snapshots bind the ordered sequence; selection is not claimed minimal. A target-frame cleanup delete of a carried resource is refused."
     },
     "heterogeneous_shader_frames": {
@@ -188,21 +188,24 @@
         2
       ],
       "case_file_count": 54,
-      "case_bytes": 62745,
-      "case_json_sha256": "f869601397e9b8bf0260323a45e46f2f3d84d6ee6e0cc54a5de93cebcb453e36",
+      "case_bytes": 62743,
+      "case_json_sha256": "987966a1466be048dd93b2d9ec63525a0279acd7afc367c25971076d1d59b6ec",
       "relocated_verify": "ok",
       "replay": "qualified_match, one persistent session, target sequence 3, 0/16 mismatched pixels, history ok, carried_bindings 1, metal_render_target_bindings 1, sampled 600 source=metal_render_target and no external_capture binding",
       "negative_cases": [
-        "missing MSL file",
-        "dropped captured program",
-        "tampered captured stage identity",
-        "unavailable frame translation -> shader_artifact_unavailable incomplete summary"
+        "missing MSL file (packaging -> shader_artifact_unavailable)",
+        "corrupt shader report (packaging -> shader_artifact_unavailable)",
+        "program status error (packaging -> shader_artifact_unavailable)",
+        "dropped captured program (verify failure)",
+        "tampered captured stage identity (verify failure)",
+        "omitted source_sha256 identity (verify failure)",
+        "unavailable frame translation (packaging -> shader_artifact_unavailable)"
       ]
     }
   },
   "budget": {
     "probe_case_id": "budget",
-    "complete_package_bytes": 70520,
+    "complete_package_bytes": 72560,
     "complete_package_files": 70,
     "at_budget": "complete and verifiable",
     "one_byte_below": "incomplete summary of 30,196 bytes, no replay command, verify fails",
@@ -214,5 +217,5 @@
     "case_json_sha256_reproduced": "791c20bc450785f1d080d05219dc4329691874e39163719cb81ab0f06e739bac",
     "note": "The same captured content packaged at two different capture/case path lengths produces the same case.json digest; a synthetic regression also varies the capture path."
   },
-  "tested_head_note": "Measurements were produced from this code commit (rebased onto main after PR #204).  Documentation-only commits update the report, status and this receipt; replay-critical code is unchanged."
+  "tested_head_note": "Measurements were produced from this code commit.  A documentation-only commit updates the report, status and this receipt; replay-critical code is unchanged."
 }

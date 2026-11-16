@@ -82,13 +82,16 @@ translated again and no union cache is introduced.  The case-level `shaders/`
 directory remains the CLI fallback and is the target frame's own translation; it
 is never a merged report.
 
-`verify` requires each frame's shader report and every referenced MSL/GLSL/SPV
-payload to be declared and intact, requires every program referenced by that
-frame's draw events to be present and `ok`, and checks the captured stage
-identity (`source_sha256`) against the frame's translation.  A missing or
-mismatched translation fails before Metal replay.  If a selected frame has no
-available translation, packaging publishes an incomplete summary with
-`reason=shader_artifact_unavailable` instead of claiming independent
+Packaging validates every resolved frame report before claiming completeness:
+the report must be parseable, every program referenced by that frame's draws
+must be present with `status="ok"`, and each vertex/pixel stage must declare its
+MSL payload and captured stage identity (a missing MSL file is rejected).  An
+unusable report is routed to the incomplete path even when the directory and
+`shaders.json` exist.  `verify` repeats the same checks on the relocated case and
+requires the captured `source_sha256` identity to match the translation; a
+missing declaration is a verification failure, not a silent pass.  If a selected
+frame has no available or usable translation, packaging publishes an incomplete
+summary with `reason=shader_artifact_unavailable` instead of claiming independent
 reproducibility.
 
 ### Verification and replay
@@ -124,7 +127,8 @@ the published case could exceed the configured budget by orders of magnitude.
 
 Packaging is staged in a temporary sibling directory, measured after it is
 complete and published only when the total size fits.  A pre-write estimate
-(frames + shaders + replay/checkpoint bytes; the single-frame estimate also
+(frame bytes excluding the shader subtree, each effective shader directory
+counted once, plus replay/checkpoint bytes; the single-frame estimate also
 charges its difference image) skips the work
 entirely when the payload alone already exceeds the budget.  When the required
 history does not fit, a bounded summary is published instead:
@@ -184,7 +188,7 @@ renumbered 3).
 
 - Prefix source: 10,763 bytes; complete four-frame source: 13,684 bytes;
   excluded: 2,921 bytes (21.4%).
-- Relocated case on disk: 70,528 bytes (70 files) including the per-frame
+- Relocated case on disk: 72,568 bytes (70 files) including the per-frame
   copies of the shared translation, checkpoints and replay artifacts.  Immutable payloads are hard-linked before relocation.
   The case digest is independent of the case/capture directory path.
 - The original campaign directory is removed before verification and replay.
@@ -210,7 +214,7 @@ renumbered 3).
   resource.  A further test runs the documented replay command into the case
   and re-verifies it, so scratch output cannot invalidate the package.
 - Budget tests cover `max_bytes=1` (explicit `case_budget`, nothing published),
-  a complete package measured at N=70,520 bytes and repackaged at N-1 (a
+  a complete package measured at N=72,560 bytes and repackaged at N-1 (a
   30,196-byte incomplete summary, no replay command, `verify` fails) and at N
   (complete and verifiable), a single-frame budget below its summary, and an
   over-budget run that leaves every source frame byte-identical.
@@ -222,8 +226,8 @@ to the target frame.  It is conservative, not provably minimal:
 
 | fixture | selected original frames | carrying resources | producing frames | prefix / full bytes | excluded |
 | --- | --- | --- | --- | --- | --- |
-| four-frame | 2, 3, 4 (target renumbered 3) | 500 | 2 | 10,763 / 13,684 (78.7%) | 1 frame, 2,921 bytes (21.4%); 70 files, 70,528 host bytes |
-| transitive five-frame | 2, 3, 4, 5 (target renumbered 4) | 500, 600 | 2, 3 | 15,025 / 17,946 (83.7%) | 1 frame, 2,921 bytes (16.3%); 88 files, 82,154 host bytes |
+| four-frame | 2, 3, 4 (target renumbered 3) | 500 | 2 | 10,763 / 13,684 (78.7%) | 1 frame, 2,921 bytes (21.4%); 70 files, 72,568 host bytes |
+| transitive five-frame | 2, 3, 4, 5 (target renumbered 4) | 500, 600 | 2, 3 | 15,025 / 17,946 (83.7%) | 1 frame, 2,921 bytes (16.3%); 88 files, 84,704 host bytes |
 
 In the transitive fixture only frames 2 and 3 actually produce the carried
 resources; frames 4 and 5 are the cleanup frame and the target.  Frame 4 is

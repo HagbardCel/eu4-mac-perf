@@ -332,7 +332,7 @@ A deterministic four-frame fixture (producer, carried, target) relocates and
 reproduces a controlled cross-frame divergence at the target's draw after the
 original campaign directory is removed.  The required contiguous prefix is
 10,763 source bytes versus 13,684 for the full four-frame sequence (21.4%
-excluded, 70 files, 70,528 bytes).  Prefix selection is conservative rather than provably minimal:
+excluded, 70 files, 72,568 bytes).  Prefix selection is conservative rather than provably minimal:
 it keeps the contiguous run from the earliest transitive producer because the
 predecessor digest chain and frame-start carried snapshots bind the sequence.
 A three-frame prefix
