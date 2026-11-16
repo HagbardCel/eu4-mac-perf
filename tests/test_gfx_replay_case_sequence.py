@@ -692,8 +692,10 @@ class PortableSequenceCaseTests(unittest.TestCase):
         out, diagnosis = self.baseline()
         case = self.fixture.base / "budget-case"
         threshold = 1
+        no_graph = json.loads(json.dumps(diagnosis))
+        no_graph.pop("graph", None)
         manifest = gfx_replay_case.package_sequence_diagnosis(
-            self.frames, out / "out-004", case, diagnosis,
+            self.frames, out / "out-004", case, no_graph,
             shaders=self.shaders, case_id="budget", max_bytes=threshold)
         self.assertIn(manifest["schema"],
                       (gfx_replay_case.SCHEMA,
@@ -705,7 +707,7 @@ class PortableSequenceCaseTests(unittest.TestCase):
         self.assertTrue((case / "reproduction-incomplete.json").is_file())
         readme = (case / "README.md").read_text()
         self.assertIn("Reproduction incomplete", readme)
-        self.assertNotIn("captured OpenGL frame", readme)
+        self.assertNotIn("uses the existing M6 Metal replay host", readme)
         graph_text = (case / "dependency-graph.json").read_text()
         report_text = (case / "diagnostic-report.json").read_text()
         self.assertNotIn(str(self.fixture.base), graph_text)

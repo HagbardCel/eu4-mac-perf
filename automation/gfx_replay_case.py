@@ -708,6 +708,20 @@ def _checkpoint_setup(frames: list[Path], case_dir: Path) -> list[dict]:
     return records
 
 
+def _scrub_paths(value, replacements: dict[str, str]):
+    """Replace known absolute roots inside free-form report strings."""
+    if isinstance(value, dict):
+        return {key: _scrub_paths(item, replacements)
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [_scrub_paths(item, replacements) for item in value]
+    if isinstance(value, str):
+        for old, new in replacements.items():
+            if old and old in value:
+                value = value.replace(old, new)
+    return value
+
+
 def _diagnostic_only_case(case_dir: Path, metal_dir: Path, report: dict,
                           shader_source: Path, missing: list[dict]) -> dict:
     """Preserve diagnostics when a reproducible prefix cannot be packaged."""
@@ -726,12 +740,15 @@ def _diagnostic_only_case(case_dir: Path, metal_dir: Path, report: dict,
         source = metal_dir / name
         if source.is_file():
             shutil.copy2(source, case_dir / "replay" / name)
-    _write_json(case_dir / "diagnostic-report.json",
-                _portable_diagnosis(report, case_dir, "replay"))
+    replacements = {str(metal_dir): "replay", str(case_dir): "."}
+    portable_report = _scrub_paths(
+        _portable_diagnosis(report, case_dir, "replay"), replacements)
+    _write_json(case_dir / "diagnostic-report.json", portable_report)
     graph = json.loads(json.dumps(
         report.get("graph") or gfx_frame_graph.build(metal_dir)))
     graph["frame_dir"] = "replay"
     _portable_paths(graph, replay_dir="replay", capture_dir="replay")
+    graph = _scrub_paths(graph, replacements)
     _write_json(case_dir / "dependency-graph.json", graph)
     reproduction = {
         "status": "incomplete",
@@ -1285,7 +1302,7 @@ def _readme(manifest: dict) -> str:
             "reference checkpoints only.",
             "",
         ]
-    elif not sequence:
+    elif not sequence and reproduction.get("status") != "incomplete":
         lines += [
             "The replay uses the existing M6 Metal replay host and the captured",
             "OpenGL frame. Renderer-generated intermediates are produced by Metal;",
