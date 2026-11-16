@@ -93,7 +93,7 @@ class ContinuousReplayHistoryTests(unittest.TestCase):
 
     def write_sequence(self, frame: Path, index: int, *,
                        previous: Path | None = None,
-                       carried=(), lifecycle=()):
+                       carried=(), lifecycle=(), render_targets=()):
         manifest = json.loads((frame / "frame-trace.json").read_text())
         value = {
             "schema": "gfx-frame-sequence/v1",
@@ -106,7 +106,7 @@ class ContinuousReplayHistoryTests(unittest.TestCase):
             "boundary": "scene",
             "reason": "scene_present",
             "previous": None,
-            "render_targets": [],
+            "render_targets": list(render_targets),
             "carried_renderer_outputs": list(carried),
             "lifecycle": list(lifecycle),
             "reference_sha256": _sha(frame / "frame-reference.bgra"),
@@ -150,7 +150,7 @@ class ContinuousReplayHistoryTests(unittest.TestCase):
     def test_frame_n_output_is_sampled_from_metal_in_frame_n_plus_one(self):
         frame1 = self.make_frame("carry-1")
         frame2 = self.make_frame("carry-2", remove_events=(288, 289))
-        self.write_sequence(frame1, 1)
+        self.write_sequence(frame1, 1, render_targets=("443",))
         self.write_sequence(frame2, 2, previous=frame1, carried=("443",))
         ran, rows, out = self.run_sequence([frame1, frame2])
         self.assertEqual(ran.returncode, 0, ran.stderr[-1000:])
@@ -182,7 +182,7 @@ class ContinuousReplayHistoryTests(unittest.TestCase):
     def test_campaign_processes_ordered_frames_with_one_session(self):
         frame1 = self.make_frame("campaign-1")
         frame2 = self.make_frame("campaign-2", remove_events=(288, 289))
-        self.write_sequence(frame1, 1)
+        self.write_sequence(frame1, 1, render_targets=("443",))
         self.write_sequence(frame2, 2, previous=frame1, carried=("443",))
         out = self.base / "campaign"
         report = m7_continuous.run_campaign(
@@ -193,6 +193,9 @@ class ContinuousReplayHistoryTests(unittest.TestCase):
         self.assertEqual(report["frames"][1]["sequence"], 2)
         self.assertGreaterEqual(report["frames"][1]["carried_bindings"], 1)
         self.assertEqual(report["frames"][1]["history_status"], 1)
+        self.assertEqual(
+            (report["frames"][1]["checkpoint_validation"] or {}).get("status"),
+            "ok")
         self.assertFalse(report["qualified"])
         self.assertEqual(report["metrics"]["frames"], 2)
         self.assertGreater(report["metrics"]["replay_seconds"]["worst"], 0)
@@ -203,7 +206,7 @@ class ContinuousReplayHistoryTests(unittest.TestCase):
     def test_lifecycle_delete_is_applied_at_its_event_not_retroactively(self):
         frame1 = self.make_frame("ordered-1")
         frame2 = self.make_frame("ordered-2", remove_events=(288, 289))
-        self.write_sequence(frame1, 1)
+        self.write_sequence(frame1, 1, render_targets=("443",))
         # 443 is sampled at event 286 and deleted at event 291.  Applying the
         # delete at frame start would incorrectly remove the carried producer
         # before its legitimate sample.
@@ -227,7 +230,7 @@ class ContinuousReplayHistoryTests(unittest.TestCase):
     def test_cpu_mutation_of_a_carried_output_fails_closed(self):
         frame1 = self.make_frame("mutation-1")
         frame2 = self.make_frame("mutation-2", remove_events=(288, 289))
-        self.write_sequence(frame1, 1)
+        self.write_sequence(frame1, 1, render_targets=("443",))
         self.write_sequence(
             frame2, 2, previous=frame1, carried=("443",),
             lifecycle=({"kind": "mutation", "event": 0, "level": 0,
@@ -246,7 +249,7 @@ class ContinuousReplayHistoryTests(unittest.TestCase):
     def test_missing_previous_producer_fails_closed(self):
         frame1 = self.make_frame("missing-1", remove_events=(288, 289))
         frame2 = self.make_frame("missing-2", remove_events=(288, 289))
-        self.write_sequence(frame1, 1)
+        self.write_sequence(frame1, 1, render_targets=("443",))
         self.write_sequence(frame2, 2, previous=frame1, carried=("443",))
         ran, rows, _ = self.run_sequence([frame1, frame2])
         self.assertNotEqual(ran.returncode, 0)
@@ -261,7 +264,7 @@ class ContinuousReplayHistoryTests(unittest.TestCase):
     def test_unrecorded_renderer_output_is_not_imported_as_opengl(self):
         frame1 = self.make_frame("unrecorded-1")
         frame2 = self.make_frame("unrecorded-2", remove_events=(288, 289))
-        self.write_sequence(frame1, 1)
+        self.write_sequence(frame1, 1, render_targets=("443",))
         # Frame 1 generated 443, but frame 2 neither reproduces it nor declares
         # it carried: importing the captured OpenGL image would hide the gap.
         self.write_sequence(frame2, 2, previous=frame1)
@@ -274,7 +277,7 @@ class ContinuousReplayHistoryTests(unittest.TestCase):
     def test_explicit_lifecycle_reset_allows_a_cpu_origin_update(self):
         frame1 = self.make_frame("reset-1")
         frame2 = self.make_frame("reset-2", remove_events=(288, 289))
-        self.write_sequence(frame1, 1)
+        self.write_sequence(frame1, 1, render_targets=("443",))
         self.write_sequence(
             frame2, 2, previous=frame1,
             lifecycle=({"kind": "delete", "names": ("443",)},))
