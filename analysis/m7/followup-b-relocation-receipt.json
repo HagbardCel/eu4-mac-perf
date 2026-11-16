@@ -2,12 +2,12 @@
   "schema": "m7-followup-b-relocation-receipt/v1",
   "kind": "authentic_captured_frames_with_synthetic_ordered_packaging",
   "fixture": "canonical menu-occ300 captured frame content",
-  "tested_head": "eab365e6",
+  "tested_head": "ec2a6c9a",
   "case": {
     "schema": "gfx-strategy-b-case/v2",
     "case_id": "canonical-prefix",
-    "sequence_file_sha256": "2671bf0bd3162e2359c82ba7eff451424de2ebed6e2fac87613f27691f5ea8e0",
-    "case_json_sha256": "0da703bb8b7db95070818c1369367796e0f12279047d158f07f8186023fae9ef",
+    "sequence_file_sha256": "00f937be84864ac2a527042857974362570b2b1342230885f70a9d116049353c",
+    "case_json_sha256": "1cf2d71d07b01532d2c39c9b184cbe9652a3120fc9a2da9534b8bfbe94ff0381",
     "frames": [
       {
         "index": 1,
@@ -39,11 +39,12 @@
     "minimal_prefix": false,
     "prefix_semantics": "conservative contiguous transitive producer closure; not graph-minimal",
     "excluded_frames": 0,
-    "source_prefix_bytes": 1279168602,
-    "full_source_bytes": 1279168602,
+    "source_prefix_bytes": 1279168625,
+    "full_source_bytes": 1279168625,
     "excluded_source_bytes": 0,
-    "bytes_on_disk": 1317991012,
-    "case_digest_path_independent": true
+    "bytes_on_disk": 1318071915,
+    "case_digest_path_independent": true,
+    "digest_note": "Source-byte metrics are measured with capture-path metadata normalized; copied replay JSON/JSONL artifacts are scrubbed of capture roots. Two captures at different path lengths produce the same case digest."
   },
   "relocation": {
     "verified": true,
@@ -133,11 +134,11 @@
       "producing_frames": [
         2
       ],
-      "source_prefix_bytes": 10889,
-      "full_source_bytes": 13797,
-      "excluded_source_bytes": 2908,
+      "source_prefix_bytes": 10763,
+      "full_source_bytes": 13684,
+      "excluded_source_bytes": 2921,
       "case_file_count": 55,
-      "case_bytes": 59651
+      "case_bytes": 59485
     },
     "transitive_five_frame": {
       "selected_original_frames": [
@@ -156,17 +157,17 @@
         2,
         3
       ],
-      "source_prefix_bytes": 15133,
-      "full_source_bytes": 18041,
-      "excluded_source_bytes": 2908,
+      "source_prefix_bytes": 15025,
+      "full_source_bytes": 17946,
+      "excluded_source_bytes": 2921,
       "case_file_count": 68,
-      "case_bytes": 67806,
+      "case_bytes": 67640,
       "conservative_note": "Interior cleanup/target frames are retained because the predecessor digest chain and cumulative carried snapshots bind the ordered sequence; selection is not claimed minimal. A target-frame cleanup delete of a carried resource is refused."
     }
   },
   "budget": {
     "probe_case_id": "budget",
-    "complete_package_bytes": 59643,
+    "complete_package_bytes": 59477,
     "complete_package_files": 55,
     "at_budget": "complete and verifiable",
     "one_byte_below": "incomplete summary of 30,196 bytes, no replay command, verify fails",
@@ -174,9 +175,9 @@
     "source_inputs_unchanged": true
   },
   "canonical_determinism": {
-    "runs": 2,
-    "case_json_sha256_reproduced": "0da703bb8b7db95070818c1369367796e0f12279047d158f07f8186023fae9ef",
-    "note": "Packaged twice from the same captured content into different case directories; case digest identical. Shader translation metadata is copied verbatim and retains its own provenance paths."
+    "capture_paths_tested": 2,
+    "case_json_sha256_reproduced": "1cf2d71d07b01532d2c39c9b184cbe9652a3120fc9a2da9534b8bfbe94ff0381",
+    "note": "The same captured content packaged at two different capture/case path lengths produces the same case.json digest; a synthetic regression asserts this explicitly."
   },
   "tested_head_note": "Measurements were produced from this code commit.  A documentation-only commit updates the report, status and this receipt; replay-critical code is unchanged."
 }

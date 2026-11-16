@@ -94,14 +94,16 @@ process.
 
 Both `package_sequence_diagnosis` and `package_diagnosis` now enforce
 `max_bytes` against the **whole generated package**: captured frame payloads,
-shader artifacts, replay/checkpoint readbacks, manifests, diagnostics and the
-generated difference image.  The reviewed head instead fell back to an
+shader artifacts, replay/checkpoint readbacks, manifests and diagnostics.  The
+single-frame path additionally budgets its generated difference image; the
+sequence path never writes one.  The reviewed head instead fell back to an
 unlimited (`max_bytes=0`) single-frame package when the prefix did not fit, so
 the published case could exceed the configured budget by orders of magnitude.
 
 Packaging is staged in a temporary sibling directory, measured after it is
 complete and published only when the total size fits.  A pre-write estimate
-(frames + shaders + replay/checkpoint bytes + difference image) skips the work
+(frames + shaders + replay/checkpoint bytes; the single-frame estimate also
+charges its difference image) skips the work
 entirely when the payload alone already exceeds the budget.  When the required
 history does not fit, a bounded summary is published instead:
 
@@ -155,9 +157,9 @@ renders texture 500; frame 3 leaves it unchanged; frame 4 samples it.  The
 required contiguous prefix excludes frame 1 and packages frames 2–4 (target
 renumbered 3).
 
-- Prefix source: 10,889 bytes; complete four-frame source: 13,797 bytes;
-  excluded: 2,908 bytes (21.1%).
-- Relocated case on disk: 59,651 bytes (55 files) including shaders, checkpoints
+- Prefix source: 10,763 bytes; complete four-frame source: 13,684 bytes;
+  excluded: 2,921 bytes (21.4%).
+- Relocated case on disk: 59,485 bytes (55 files) including shaders, checkpoints
   and replay artifacts.  Immutable payloads are hard-linked before relocation.
   The case digest is independent of the case/capture directory path.
 - The original campaign directory is removed before verification and replay.
@@ -183,8 +185,8 @@ renumbered 3).
   resource.  A further test runs the documented replay command into the case
   and re-verifies it, so scratch output cannot invalidate the package.
 - Budget tests cover `max_bytes=1` (explicit `case_budget`, nothing published),
-  a complete package measured at N bytes and repackaged at N-1 (incomplete
-  summary no larger than N-1, no replay command, `verify` fails) and at N
+  a complete package measured at N=59,477 bytes and repackaged at N-1 (a
+  30,196-byte incomplete summary, no replay command, `verify` fails) and at N
   (complete and verifiable), a single-frame budget below its summary, and an
   over-budget run that leaves every source frame byte-identical.
 
@@ -195,8 +197,8 @@ to the target frame.  It is conservative, not provably minimal:
 
 | fixture | selected original frames | carrying resources | producing frames | prefix / full bytes | excluded |
 | --- | --- | --- | --- | --- | --- |
-| four-frame | 2, 3, 4 (target renumbered 3) | 500 | 2 | 10,889 / 13,797 (78.9%) | 1 frame, 2,908 bytes (21.1%); 55 files, 59,651 host bytes |
-| transitive five-frame | 2, 3, 4, 5 (target renumbered 4) | 500, 600 | 2, 3 | 15,133 / 18,041 (83.9%) | 1 frame, 2,908 bytes (16.1%); 68 files, 67,806 host bytes |
+| four-frame | 2, 3, 4 (target renumbered 3) | 500 | 2 | 10,763 / 13,684 (78.7%) | 1 frame, 2,921 bytes (21.4%); 55 files, 59,485 host bytes |
+| transitive five-frame | 2, 3, 4, 5 (target renumbered 4) | 500, 600 | 2, 3 | 15,025 / 17,946 (83.7%) | 1 frame, 2,921 bytes (16.3%); 68 files, 67,640 host bytes |
 
 In the transitive fixture only frames 2 and 3 actually produce the carried
 resources; frames 4 and 5 are the cleanup frame and the target.  Frame 4 is
@@ -216,9 +218,9 @@ verified and replayed with the original campaign removed.
 | item | value |
 | --- | --- |
 | Case schema | `gfx-strategy-b-case/v2` |
-| `sequence.json` SHA-256 | `2671bf0b…` |
-| Case manifest SHA-256 | `0da703bb…` |
-| Case size | 1,317,991,012 bytes, 3,508 files |
+| `sequence.json` SHA-256 | `00f937be…` |
+| Case manifest SHA-256 | `1cf2d71d…` |
+| Case size | 1,318,071,915 bytes, 3,508 files |
 | Verification | ok, no problems |
 | Replay target | sequence 3 |
 | Campaign | complete |
