@@ -235,13 +235,19 @@ static struct {
     int campaign_record_count;
     char pending_deletes[FTRACE_MAX_LIFECYCLE][64];
     int pending_delete_events[FTRACE_MAX_LIFECYCLE];
+    unsigned long long pending_delete_sequences[FTRACE_MAX_LIFECYCLE];
     int pending_delete_count;
     char pending_mutations[FTRACE_MAX_LIFECYCLE][64];
     char pending_mutation_ops[FTRACE_MAX_LIFECYCLE][32];
     int pending_mutation_events[FTRACE_MAX_LIFECYCLE];
+    unsigned long long pending_mutation_sequences[FTRACE_MAX_LIFECYCLE];
     int pending_mutation_levels[FTRACE_MAX_LIFECYCLE];
     unsigned pending_mutation_targets[FTRACE_MAX_LIFECYCLE];
     int pending_mutation_count;
+    /* Monotonic intra-frame order of lifecycle transitions.  Several distinct
+       GL calls can share one captured event index; the sequence keeps them
+       distinguishable and ordered. */
+    unsigned long long lifecycle_sequence;
 } g;
 
 typedef struct blob_entry {
@@ -474,6 +480,7 @@ void eu4_gfx_frame_trace_texture_deleted(int count, const unsigned *names) {
         return;
     }
     pthread_mutex_lock(&g_lock);
+    unsigned long long sequence = ++g.lifecycle_sequence;
     for (int i = 0; i < count; i++) {
         char name[64];
         snprintf(name, sizeof(name), "%u", names[i]);
@@ -505,6 +512,7 @@ void eu4_gfx_frame_trace_texture_deleted(int count, const unsigned *names) {
         snprintf(g.pending_deletes[g.pending_delete_count], 64, "%s", name);
         g.pending_delete_events[g.pending_delete_count] =
             g.armed ? g.event_count : -1;
+        g.pending_delete_sequences[g.pending_delete_count] = sequence;
         g.pending_delete_count++;
     }
     pthread_mutex_unlock(&g_lock);
@@ -517,6 +525,18 @@ void eu4_gfx_frame_trace_test_register_target(const char *name) {
     pthread_mutex_lock(&g_lock);
     render_target_add(name);
     pthread_mutex_unlock(&g_lock);
+}
+
+/* A name deleted earlier in this frame can be reallocated by a later
+   glTexImage2D.  That recreation is part of the lifecycle timeline even though
+   the name is no longer a live render target when the write is observed. */
+static int texture_deleted_this_frame(const char *name) {
+    for (int i = 0; i < g.pending_delete_count; i++) {
+        if (strcmp(g.pending_deletes[i], name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 void eu4_gfx_frame_trace_texture_mutated(unsigned name, int level,
@@ -536,7 +556,8 @@ void eu4_gfx_frame_trace_texture_mutated(unsigned name, int level,
     /* Only renderer-owned resources have persistent Metal history.  An
        external CPU-supplied texture is captured at each sample, so its new
        contents are authoritative without a lifecycle record. */
-    int relevant = render_target_known(text) || carried_target_known(text);
+    int relevant = render_target_known(text) || carried_target_known(text) ||
+                   texture_deleted_this_frame(text);
     if (relevant) {
         if (g.pending_mutation_count >= FTRACE_MAX_LIFECYCLE) {
             capacity_exceeded("mutation_records");
@@ -550,6 +571,8 @@ void eu4_gfx_frame_trace_texture_mutated(unsigned name, int level,
                      "%s", sub_image ? "glTexSubImage2D" : "glTexImage2D");
             g.pending_mutation_events[g.pending_mutation_count] =
                 g.armed ? g.event_count : -1;
+            g.pending_mutation_sequences[g.pending_mutation_count] =
+                ++g.lifecycle_sequence;
             g.pending_mutation_levels[g.pending_mutation_count] = level;
             g.pending_mutation_targets[g.pending_mutation_count] = target;
             g.pending_mutation_count++;
@@ -3229,35 +3252,100 @@ static int continuous_write_frame_sequence(
         free(carried);
         return -1;
     }
-    int lifecycle_first = 1;
+    /* Deletes and mutations share one monotonic sequence, so the recorded
+       call order survives even when several transitions land on the same
+       captured event index.  Emitting all deletes before all mutations (the
+       old behaviour) folded a distinct delete/recreate/delete sequence into a
+       single transition and let replay reuse the wrong resource generation. */
+    enum { kLifecycleDelete = 0, kLifecycleMutation = 1 };
+    typedef struct {
+        int kind;
+        int event;
+        unsigned long long sequence;
+        int start;
+        int count;
+    } lifecycle_record;
+    lifecycle_record records[FTRACE_MAX_LIFECYCLE * 2];
+    int record_count = 0;
     for (int i = 0; i < g.pending_delete_count; i++) {
         int event_index = g.pending_delete_events[i];
-        if (i > 0 && g.pending_delete_events[i - 1] == event_index) {
-            /* One glDeleteTextures call: extend the previous entry. */
+        unsigned long long sequence = g.pending_delete_sequences[i];
+        if (i > 0 &&
+            g.pending_delete_events[i - 1] == event_index &&
+            g.pending_delete_sequences[i - 1] == sequence) {
+            /* Duplicate names inside one glDeleteTextures call are the same
+               transition; a second independent call always has a new
+               sequence even at the same event index. */
+            records[record_count - 1].count++;
             continue;
         }
-        fprintf(lifecycle_stream,
-                "%s{\"kind\":\"delete\",\"event\":%d,\"names\":[",
-                lifecycle_first ? "" : ",", event_index);
-        lifecycle_first = 0;
-        int first = 1;
-        for (int j = i; j < g.pending_delete_count &&
-                        g.pending_delete_events[j] == event_index; j++) {
-            fprintf(lifecycle_stream, "%s\"%s\"", first ? "" : ",",
-                    g.pending_deletes[j]);
-            first = 0;
+        if (record_count >= (int)(sizeof(records) / sizeof(records[0]))) {
+            capacity_exceeded("lifecycle_records");
+            break;
         }
-        fputs("]}", lifecycle_stream);
+        records[record_count].kind = kLifecycleDelete;
+        records[record_count].event = event_index;
+        records[record_count].sequence = sequence;
+        records[record_count].start = i;
+        records[record_count].count = 1;
+        record_count++;
     }
     for (int i = 0; i < g.pending_mutation_count; i++) {
+        if (record_count >= (int)(sizeof(records) / sizeof(records[0]))) {
+            capacity_exceeded("lifecycle_records");
+            break;
+        }
+        records[record_count].kind = kLifecycleMutation;
+        records[record_count].event = g.pending_mutation_events[i];
+        records[record_count].sequence = g.pending_mutation_sequences[i];
+        records[record_count].start = i;
+        records[record_count].count = 1;
+        record_count++;
+    }
+    for (int i = 1; i < record_count; i++) {
+        lifecycle_record value = records[i];
+        int j = i - 1;
+        while (j >= 0 &&
+               (records[j].event > value.event ||
+                (records[j].event == value.event &&
+                 records[j].sequence > value.sequence))) {
+            records[j + 1] = records[j];
+            j--;
+        }
+        records[j + 1] = value;
+    }
+    int lifecycle_first = 1;
+    for (int i = 0; i < record_count; i++) {
+        lifecycle_record *record = &records[i];
+        if (record->kind == kLifecycleDelete) {
+            fprintf(lifecycle_stream,
+                    "%s{\"kind\":\"delete\",\"event\":%d,"
+                    "\"lifecycle_sequence\":%llu,\"names\":[",
+                    lifecycle_first ? "" : ",", record->event,
+                    record->sequence);
+            lifecycle_first = 0;
+            int first = 1;
+            for (int j = record->start;
+                 j < record->start + record->count; j++) {
+                fprintf(lifecycle_stream, "%s\"%s\"", first ? "" : ",",
+                        g.pending_deletes[j]);
+                first = 0;
+            }
+            fputs("]}", lifecycle_stream);
+            continue;
+        }
+        int index = record->start;
         fprintf(lifecycle_stream,
                 "%s{\"kind\":\"mutation\",\"operation\":\"%s\","
-                "\"target\":\"0x%x\",\"event\":%d,\"level\":%d,"
+                "\"target\":\"0x%x\",\"event\":%d,"
+                "\"lifecycle_sequence\":%llu,\"level\":%d,"
                 "\"names\":[\"%s\"]}",
-                lifecycle_first ? "" : ",", g.pending_mutation_ops[i],
-                g.pending_mutation_targets[i],
-                g.pending_mutation_events[i],
-                g.pending_mutation_levels[i], g.pending_mutations[i]);
+                lifecycle_first ? "" : ",", g.pending_mutation_ops[index],
+                g.pending_mutation_targets[index],
+                g.pending_mutation_events[index],
+                g.pending_mutation_sequences[index],
+                g.pending_mutation_levels[index],
+                g.pending_mutations[index]);
         lifecycle_first = 0;
     }
     fclose(lifecycle_stream);
@@ -3322,6 +3410,7 @@ static int continuous_write_frame_sequence(
     if (result == 0) {
         g.pending_delete_count = 0;
         g.pending_mutation_count = 0;
+        g.lifecycle_sequence = 0;
     }
     return result;
 }

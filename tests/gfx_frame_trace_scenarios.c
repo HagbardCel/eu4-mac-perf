@@ -542,6 +542,42 @@ static int scenario_mutation_cube(const char *directory) {
     return 0;
 }
 
+/* Lifecycle transitions that share one captured event boundary.  No draw is
+   recorded between them, so only the per-transition sequence can preserve the
+   real call order. */
+static int scenario_lifecycle_order(const char *directory, const char *mode) {
+    if (configure_continuous_test(directory, 1) != 1) {
+        return 1;
+    }
+    arm_continuous_by_scene();
+    /* Draws precede the transitions; no draw may sit between them. */
+    draw(true, 0x2000);
+    draw(false, 0x2000);
+    unsigned name = 443;
+    if (strcmp(mode, "delete-mutate-delete") == 0) {
+        eu4_gfx_frame_trace_texture_deleted(1, &name);
+        eu4_gfx_frame_trace_texture_mutated(443, 0, 0, 0x0DE1u);
+        eu4_gfx_frame_trace_texture_deleted(1, &name);
+    } else if (strcmp(mode, "delete-mutate") == 0) {
+        eu4_gfx_frame_trace_texture_deleted(1, &name);
+        eu4_gfx_frame_trace_texture_mutated(443, 0, 0, 0x0DE1u);
+    } else if (strcmp(mode, "mutate-delete") == 0) {
+        eu4_gfx_frame_trace_test_register_target("443");
+        eu4_gfx_frame_trace_texture_mutated(443, 0, 0, 0x0DE1u);
+        eu4_gfx_frame_trace_texture_deleted(1, &name);
+    } else if (strcmp(mode, "two-calls") == 0) {
+        eu4_gfx_frame_trace_texture_deleted(1, &name);
+        eu4_gfx_frame_trace_texture_deleted(1, &name);
+    } else if (strcmp(mode, "duplicate-call") == 0) {
+        unsigned names[2] = {443, 443};
+        eu4_gfx_frame_trace_texture_deleted(2, names);
+    } else {
+        return 2;
+    }
+    finish_continuous_by_scene();
+    return 0;
+}
+
 static int scenario_capacity(const char *directory, const char *kind,
                              int count) {
     if (configure_continuous_test(directory, 1) != 1) {
@@ -819,6 +855,10 @@ int main(int argc, char **argv) {
     }
     if (strcmp(scenario, "mutation-cube") == 0) {
         return scenario_mutation_cube(directory);
+    }
+    if (strcmp(scenario, "lifecycle-order") == 0) {
+        return scenario_lifecycle_order(directory,
+                                        argc > 3 ? argv[3] : "two-calls");
     }
     if (strcmp(scenario, "capacity-carried") == 0) {
         return scenario_carried_capacity(directory);

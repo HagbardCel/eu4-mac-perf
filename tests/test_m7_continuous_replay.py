@@ -269,6 +269,82 @@ class ContinuousReplayHistoryTests(unittest.TestCase):
         names = [item["name"] for item in history["resources"]]
         self.assertNotIn("443", names)
 
+    def test_same_event_delete_sequences_reset_the_generation(self):
+        frame1 = self.make_frame("seq-1")
+        frame2 = self.make_frame("seq-2")
+        self.write_sequence(frame1, 1, render_targets=("443",))
+        # Both deletions share event 0 and are distinct transitions.  The frame
+        # rewrites 443 twice, so a reset identity ends at generation 2 (without
+        # either deletion it would continue at 4).
+        self.write_sequence(
+            frame2, 2, previous=frame1,
+            lifecycle=({"kind": "delete", "event": 0,
+                        "lifecycle_sequence": 1, "names": ("443",)},
+                       {"kind": "delete", "event": 0,
+                        "lifecycle_sequence": 2, "names": ("443",)}))
+        ran, rows, out = self.run_sequence([frame1, frame2])
+        self.assertEqual(ran.returncode, 0, ran.stderr[-1000:])
+        self.assert_ok(rows[1])
+        history = json.loads(
+            (out / "out-002" / "replay.json").read_text())["history"]
+        resource = next(item for item in history["resources"]
+                        if item["name"] == "443")
+        self.assertEqual(resource["generation"], 2, resource)
+
+    def test_duplicate_lifecycle_ordering_identity_is_rejected(self):
+        frame1 = self.make_frame("dupid-1")
+        frame2 = self.make_frame("dupid-2", remove_events=(288, 289))
+        self.write_sequence(frame1, 1, render_targets=("443",))
+        self.write_sequence(
+            frame2, 2, previous=frame1, carried=("443",),
+            lifecycle=({"kind": "delete", "event": 0,
+                        "lifecycle_sequence": 1, "names": ("443",)},
+                       {"kind": "delete", "event": 0,
+                        "lifecycle_sequence": 1, "names": ("443",)}))
+        ran, rows, _ = self.run_sequence([frame1, frame2])
+        self.assertNotEqual(ran.returncode, 0)
+        self.assertEqual(len(rows), 2, rows)
+        self.assert_ok(rows[0])
+        self.assertFalse(rows[1]["ok"])
+        self.assertEqual(rows[1]["stage"], "history_sequence")
+        self.assertIn("ordering identity", rows[1]["error"])
+
+    def test_mixed_sequenced_and_unsequenced_lifecycle_is_rejected(self):
+        frame1 = self.make_frame("mixseq-1")
+        frame2 = self.make_frame("mixseq-2", remove_events=(288, 289))
+        self.write_sequence(frame1, 1, render_targets=("443",))
+        self.write_sequence(
+            frame2, 2, previous=frame1, carried=("443",),
+            lifecycle=({"kind": "delete", "event": 0,
+                        "lifecycle_sequence": 1, "names": ("443",)},
+                       {"kind": "delete", "event": 1,
+                        "names": ("443",)}))
+        ran, rows, _ = self.run_sequence([frame1, frame2])
+        self.assertNotEqual(ran.returncode, 0)
+        self.assertFalse(rows[1]["ok"])
+        self.assertEqual(rows[1]["stage"], "history_sequence")
+        self.assertIn("mixes sequenced and unsequenced", rows[1]["error"])
+
+    def test_delete_then_mutation_at_one_event_fails_closed(self):
+        frame1 = self.make_frame("delmut-1")
+        frame2 = self.make_frame("delmut-2", remove_events=(288, 289))
+        self.write_sequence(frame1, 1, render_targets=("443",))
+        self.write_sequence(
+            frame2, 2, previous=frame1, carried=("443",),
+            lifecycle=({"kind": "delete", "event": 0,
+                        "lifecycle_sequence": 1, "names": ("443",)},
+                       {"kind": "mutation", "event": 0,
+                        "lifecycle_sequence": 2,
+                        "operation": "glTexImage2D", "names": ("443",)}))
+        ran, rows, _ = self.run_sequence([frame1, frame2])
+        self.assertNotEqual(ran.returncode, 0)
+        self.assertEqual(len(rows), 2, rows)
+        self.assert_ok(rows[0])
+        self.assertFalse(rows[1]["ok"])
+        self.assertEqual(rows[1]["history_status"], 2)
+        self.assertEqual(rows[1]["stage"], "history_mutation")
+        self.assertIn("not reproduced", rows[1]["error"])
+
     def test_cpu_mutation_of_a_carried_output_fails_closed(self):
         frame1 = self.make_frame("mutation-1")
         frame2 = self.make_frame("mutation-2", remove_events=(288, 289))

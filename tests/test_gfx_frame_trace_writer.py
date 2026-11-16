@@ -135,6 +135,56 @@ class FrameTraceWriterTests(unittest.TestCase):
             self.assertEqual(mutations[0]["target"], "0x8513")
             self.assertEqual(mutations[0]["operation"], "glTexImage2D")
 
+    def _lifecycle(self, scenario: str, mode: str) -> list[dict]:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "campaign"
+            self._run(scenario, directory, mode)
+            sequence = json.loads(
+                (directory / "frame-000001" / "frame-sequence.json").read_text())
+            return sequence["lifecycle"]
+
+    def test_delete_recreate_delete_keeps_intra_event_order(self):
+        lifecycle = self._lifecycle("lifecycle-order", "delete-mutate-delete")
+        self.assertEqual([item["kind"] for item in lifecycle],
+                         ["delete", "mutation", "delete"], lifecycle)
+        self.assertEqual([item["event"] for item in lifecycle], [1, 1, 1])
+        sequences = [item["lifecycle_sequence"] for item in lifecycle]
+        self.assertEqual(sequences, sorted(sequences))
+        self.assertEqual(len(set(sequences)), len(sequences), lifecycle)
+        # The two deletions must remain distinct transitions, not one folded
+        # record, even though they share the captured event index.
+        self.assertEqual([item["names"] for item in lifecycle],
+                         [["443"], ["443"], ["443"]])
+
+    def test_mutation_and_delete_at_one_event_keep_call_order(self):
+        for mode, expected in (
+                ("mutate-delete", ["mutation", "delete"]),
+                ("delete-mutate", ["delete", "mutation"])):
+            with self.subTest(mode=mode):
+                lifecycle = self._lifecycle("lifecycle-order", mode)
+                self.assertEqual([item["kind"] for item in lifecycle],
+                                 expected, lifecycle)
+                self.assertEqual({item["event"] for item in lifecycle}, {1})
+                sequences = [item["lifecycle_sequence"] for item in lifecycle]
+                self.assertEqual(sequences, sorted(sequences))
+                self.assertEqual(len(set(sequences)), len(sequences))
+
+    def test_two_independent_delete_calls_at_one_event_stay_distinct(self):
+        lifecycle = self._lifecycle("lifecycle-order", "two-calls")
+        self.assertEqual(len(lifecycle), 2, lifecycle)
+        self.assertEqual([item["kind"] for item in lifecycle],
+                         ["delete", "delete"])
+        self.assertEqual([item["names"] for item in lifecycle],
+                         [["443"], ["443"]])
+        sequences = [item["lifecycle_sequence"] for item in lifecycle]
+        self.assertEqual(len(set(sequences)), 2, lifecycle)
+
+    def test_duplicate_names_in_one_delete_call_are_one_transition(self):
+        lifecycle = self._lifecycle("lifecycle-order", "duplicate-call")
+        self.assertEqual(len(lifecycle), 1, lifecycle)
+        self.assertEqual(lifecycle[0]["kind"], "delete")
+        self.assertEqual(lifecycle[0]["names"], ["443"], lifecycle)
+
     def test_capacity_exact_and_one_beyond(self):
         expected = {
             "targets": ("capacity_limit", "render_targets(64)"),
