@@ -101,9 +101,14 @@ missing or conflicting captured identities as
 `reproduction.status=incomplete`, `independently_reproducible=false`, publish no
 replay command, and fail `verify` before Metal.
 
-An older capture that lacks captured stage identities can still be preserved as
-diagnostic evidence, but it is not marked fully verified or independently
-reproducible: the missing identities are reported, not reconstructed.
+The same validator runs for single-frame (v1) packaging and verification, so a
+single-frame reproduction cannot bypass the identity requirement: v1 packaging
+publishes an incomplete case with `shader_identity_unavailable`/
+`shader_artifact_unavailable`, and v1 verification rejects such a case before
+replay.  An older capture that lacks captured stage identities can still be
+preserved as diagnostic evidence, but it is not marked fully verified or
+independently reproducible: the missing identities are reported, not
+reconstructed.
 
 ### Verification and replay
 
@@ -167,9 +172,10 @@ consistent:
   reports and their MSL/GLSL/SPV files, diagnostics, dependency graph, each
   frame's sequence/trace/events/reference, each checkpoint request and receipt)
   must be listed in `case.json.files`;
-- each frame's declared programs must match the programs its draw events
-  reference, including a captured vertex/pixel identity and a matching
-  translated `source_sha256` for every stage;
+- each frame's declared `shader_programs` must match the programs its draw
+  events reference (v2), including a captured vertex/pixel identity and a
+  matching translated `source_sha256` for every stage; v1 single-frame cases
+  use the same validator;
 - within the authoritative payload directories (`frames/`, `shaders/`,
   `checkpoints/`) any file absent from the inventory is rejected, so a
   substituted shader, checkpoint or resource blob cannot hide outside the
@@ -307,9 +313,9 @@ Receipt: [followup-b-relocation-receipt.json](followup-b-relocation-receipt.json
   captured stage identities are explicitly incomplete rather than silently
   reusing another frame's shader report.
 - Historical captures that never recorded captured stage identities cannot be
-  qualified as independently reproducible under this contract.  Their evidence
-  is preserved as a diagnostic incomplete case; the identities are not
-  reconstructed.
+  qualified as independently reproducible under this contract, for v1 or v2.
+  Their evidence is preserved as a diagnostic incomplete case; the identities
+  are not reconstructed.
 - Portable Linux CI skips the macOS-only native/Metal tests.  A green portable
   check is not macOS runtime evidence.
 - The three-frame canonical prefix is larger than the 512 MiB default budget.

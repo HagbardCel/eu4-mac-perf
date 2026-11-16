@@ -316,7 +316,8 @@ package must also declare every required payload (per-frame shader reports and
 MSL files, checkpoints, frame data) in its SHA-256 inventory; it requires every
 program a frame's draws reference, a captured 64-hex identity for each vertex
 and pixel stage, and a matching translated `source_sha256`; missing, malformed,
-conflicting or mismatched identities are refused before replay; undeclared files, duplicate entries, absolute
+conflicting or mismatched identities are refused before replay; single-frame (v1) packaging and
+verification apply the same validator, so a one-frame case cannot bypass it; undeclared files, duplicate entries, absolute
 paths, `..` traversal and symlink escapes are rejected before replay.
 
 The artifact budget now bounds the whole generated package on every packaging
@@ -330,6 +331,8 @@ untouched.  A frame whose required translation is unavailable is published as
 incomplete with reason `shader_artifact_unavailable`; a frame without complete
 captured stage identities is published as incomplete with reason
 `shader_identity_unavailable` and is not claimed independently reproducible.
+Unreferenced translated programs do not require payloads, and a forged
+`shader_programs` list fails verification.
 
 A deterministic four-frame fixture (producer, carried, target) relocates and
 reproduces a controlled cross-frame divergence at the target's draw after the

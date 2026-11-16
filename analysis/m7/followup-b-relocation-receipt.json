@@ -2,7 +2,7 @@
   "schema": "m7-followup-b-relocation-receipt/v1",
   "kind": "authentic_captured_frames_with_synthetic_ordered_packaging",
   "fixture": "canonical menu-occ300 captured frame content",
-  "tested_head": "84c9aff8",
+  "tested_head": "2d15252c",
   "case": {
     "schema": "gfx-strategy-b-case/v2",
     "case_id": "canonical-prefix",
@@ -218,7 +218,14 @@
         "missing captured stage entry -> shader_identity_unavailable",
         "conflicting captured hashes -> shader_identity_unavailable",
         "missing captured identity in a packaged case -> verify failure before replay",
-        "unavailable frame translation -> shader_artifact_unavailable"
+        "unavailable frame translation -> shader_artifact_unavailable",
+        "v1 single-frame: missing captured vertex identity -> incomplete/shader_identity_unavailable",
+        "v1 single-frame: missing captured pixel identity -> incomplete/shader_identity_unavailable",
+        "v1 single-frame: empty translated report -> incomplete/shader_artifact_unavailable",
+        "v1 single-frame: translated mismatch -> incomplete/shader_identity_unavailable",
+        "v1 packaged case with a removed captured identity -> verify failure before replay",
+        "unreferenced program with a missing declared payload -> verify still ok",
+        "forged shader_programs list -> verify failure"
       ],
       "case_id": "heterogeneous-shaders",
       "title": "M7 cross-frame differential diagnosis",
@@ -230,7 +237,9 @@
           "shader_artifact_unavailable": "missing/corrupt translation, MSL/GLSL/SPV payload, status error",
           "shader_identity_unavailable": "missing/malformed/conflicting captured identity or translated mismatch"
         },
-        "historical_missing_identity": "preserved as diagnostic-only incomplete evidence; not reconstructed or independently reproducible"
+        "historical_missing_identity": "preserved as diagnostic-only incomplete evidence; not reconstructed or independently reproducible",
+        "schemas": "v1 single-frame and v2 sequence packaging/verification use the same validator",
+        "parity": "inventory requires payloads only for draw-referenced programs; sequence.json shader_programs is bound to the frame draw programs"
       }
     }
   },
@@ -248,5 +257,9 @@
     "case_json_sha256_reproduced": "791c20bc450785f1d080d05219dc4329691874e39163719cb81ab0f06e739bac",
     "note": "The same captured content packaged at two different capture/case path lengths produces the same case.json digest; a synthetic regression also varies the capture path."
   },
-  "tested_head_note": "Measurements were produced from this code commit.  A documentation-only commit updates the report, status and this receipt; replay-critical code is unchanged."
+  "tested_head_note": "Measurements were produced from this code commit.  A documentation-only commit updates the report, status and this receipt; replay-critical code is unchanged.",
+  "limitations": [
+    "Historical captures without captured stage identities remain diagnostic-only; identities are not reconstructed.",
+    "Case digests are independent of capture/case paths; copied policy/shader provenance may retain checkout paths."
+  ]
 }
