@@ -239,6 +239,20 @@ request/receipt were preserved.
 - Packaging took 2.73 s; the case manifest is portable and contains no
   absolute capture path.
 
+The agent surface was run against the relocated authentic case:
+
+```sh
+python3 -m automation.agent_tools eu4_case_inspect \
+  --case .local/m7/phase-b-authentic-relocated
+python3 -m automation.agent_tools eu4_replay verify \
+  --case .local/m7/phase-b-authentic-relocated
+```
+
+Both returned `eu4-agent-tool/v2` envelopes with `ok=true`; the v2 schema,
+three-frame sequence and target index were reported, verification was `ok` and
+independently reproducible, and `outcome.qualified` remained `false` because
+inspection/verification alone is not a rendering qualification.
+
 Receipt: [phase-ab-authentic-receipt.json](phase-ab-authentic-receipt.json).
 The complete relocated case remains under `.local/m7/phase-b-authentic-relocated`
 (gitignored) for inspection and replay.
