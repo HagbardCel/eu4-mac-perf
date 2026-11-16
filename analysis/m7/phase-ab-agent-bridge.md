@@ -205,6 +205,44 @@ Live coordinator regression
 - proves a stop on the first qualified difference publishes the case before
   the coordinator report is written.
 
+### Authentic sealed three-frame capture
+
+The existing follow-up A capture
+(`.local/m7/followup-a-live-3`, session
+`c66b3625-e06f-43f2-b957-61f2f14f66c2`, pid 27780, three sealed scene frames)
+was cloned to a disposable directory and packaged without launching EU4. The
+same transitive prefix closure selected all three frames because the target
+carries six renderer-owned targets that the predecessors produce. Each frame's
+own `shadow/frame-NNNNNN/shaders` translation and published checkpoint
+request/receipt were preserved.
+
+- 512 MiB budget: explicit `reproduction.status=incomplete`,
+  `reason=artifact_budget`, required 1,310,375,043 bytes, max 536,870,912, no
+  replay command.
+- Complete case at 2 GiB budget: 1,317,958,286 bytes, 3,810 files,
+  `case.json` SHA-256 `d7f648339e93593032e17d407fada4a047c824b1494b9fb3c7c9182cc3593929`,
+  `reproduction.status=complete`, `independently_reproducible=true`.
+- The case was relocated with hard links, the disposable original capture
+  directory was deleted, and both the original and relocated directories
+  verified with no problems.
+- The relocated replay used one persistent Metal session for all three frames:
+  15.2 s, campaign `complete`, `history.status=ok`, zero missing/stale history,
+  274 Metal render-target bindings, 2,465 external-capture bindings and no
+  seeded OpenGL intermediates.
+- Live target and replay both classify as
+  `difference_with_partial_state_coverage` with **identical statistics**:
+  1,163,584 / 1,930,176 mismatched pixels, max channel error 72, mean absolute
+  error `[0.400848, 0.520239, 0.656648, 0.0]`.
+- The first authoritative divergence remains event 286 / texture 442
+  (`glCopyTexSubImage2D`), with the unresolved interval 13–286 and the next
+  checkpoint at the copy source (event 284).
+- Packaging took 2.73 s; the case manifest is portable and contains no
+  absolute capture path.
+
+Receipt: [phase-ab-authentic-receipt.json](phase-ab-authentic-receipt.json).
+The complete relocated case remains under `.local/m7/phase-b-authentic-relocated`
+(gitignored) for inspection and replay.
+
 The full `unittest discover` suite was started but stopped when it reached
 `tests.test_trace_tr3`, which prompts for an interactive live-EU4
 authorization ("enter yes"). Phase A/B did not authorize or perform an EU4
@@ -226,12 +264,19 @@ original capture directory.
 
 ## Limitations and unresolved cases
 
-- No authentic multi-frame EU4 capture was produced in this phase. The live
-  coordinator wiring is covered by the synthetic live-layout and coordinator
-  unit regressions; the end-to-end bridge case uses deterministic Metal frames.
-- The authentic canonical prefix from the existing local capture still remains
-  `incomplete_diagnostics` because that historical capture has no
-  same-process frame seal. This phase does not synthesize a seal.
+- No new EU4 process was launched in this phase. The authentic case above was
+  built from an existing sealed follow-up A capture; the live coordinator
+  wiring itself is covered by the synthetic live-layout and coordinator unit
+  regressions, and the end-to-end bridge case uses deterministic Metal frames.
+- The authentic target remains `difference_with_partial_state_coverage`
+  because `gl_dither` and `multisample` are not implemented/proven. The
+  acceptance here is an **unchanged differential verdict** after packaging,
+  relocation and replay, not a qualified match. No threshold was changed and
+  no A/B experiment attributes the difference to those states; Phase C owns
+  that qualification.
+- The older canonical prefix from the historical M6 capture still remains
+  `incomplete_diagnostics` because that capture has no same-process frame seal.
+  This phase does not synthesize a seal.
 - The task premise said PR #205 was corrected and merged into `main`; in the
   checked-out remote it is open at `9c645d79`, and `origin/main` is
   `096c76ae`. This branch includes the PR head and the Phase A correction, so a

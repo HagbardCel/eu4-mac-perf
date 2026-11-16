@@ -375,9 +375,17 @@ command.
 
 Focused validation: 272 native/offline tests passed, the DSH plugin's 9 tests
 passed, and a real v2 case was inspected, verified and replayed through the
-JavaScript bridge after relocation and deletion of the original campaign. No
-EU4 launch was made in this phase. Report:
-[Phase A/B](../analysis/m7/phase-ab-agent-bridge.md).
+JavaScript bridge after relocation and deletion of the original campaign. The
+existing authentic sealed follow-up A capture (three frames, session
+`c66b3625…`, pid 27780) was also cloned, packaged under a 2 GiB budget,
+relocated, deleted at the source, verified and replayed: the
+`difference_with_partial_state_coverage` verdict and all final pixel
+statistics were unchanged (1,163,584 / 1,930,176 mismatched, max 72), with
+history ok and 274 Metal render-target bindings. A 512 MiB budget published a
+bounded `artifact_budget` incomplete summary instead. No new EU4 launch was
+made. Report:
+[Phase A/B](../analysis/m7/phase-ab-agent-bridge.md),
+[authentic receipt](../analysis/m7/phase-ab-authentic-receipt.json).
 
 ## Strategy B — independent replay (2026-11-14)
 
