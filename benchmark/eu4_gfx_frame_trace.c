@@ -189,6 +189,7 @@ static struct {
     struct blob_entry *blobs;
     int blob_count;
     size_t blob_bytes;
+    uint64_t frame_blob_bytes; /* continuous: reset per frame */
 
     /* Per-frame caches. Shader sources are static per program; a texture's
        contents are static for the frame unless it is a render target. Reading
@@ -198,6 +199,40 @@ static struct {
     struct texture_cache_entry *texture_cache;
     char render_targets[64][64];
     int render_target_count;
+
+    /* Bounded continuous capture.  The single-frame path leaves every field
+       below zero/empty and keeps its one-shot gate unchanged. */
+    int continuous;
+    uint32_t continuous_max_frames;
+    uint32_t continuous_max_pending;
+    uint64_t continuous_max_bytes;
+    uint32_t continuous_frames_completed;
+    uint64_t continuous_bytes_written;
+    uint64_t continuous_dedup_bytes;
+    int continuous_stopped;
+    char continuous_reason[64];
+    char continuous_base[FTRACE_PATH];
+    char previous_dir[FTRACE_PATH];
+    char previous_manifest_sha[65];
+    char previous_events_sha[65];
+    uint64_t previous_capture_id;
+    char previous_render_targets[64][64];
+    int previous_render_target_count;
+    /* Renderer-generated resources that remain valid across frame boundaries.
+       Unlike render_targets (this frame's writes) this set is only mutated by
+       a write or an evidenced lifecycle transition (delete/reset). */
+    char carried_targets[64][64];
+    int carried_target_count;
+    char campaign_records[64][768];
+    int campaign_record_count;
+    char pending_deletes[64][64];
+    int pending_delete_events[64];
+    int pending_delete_count;
+    char pending_mutations[64][64];
+    char pending_mutation_ops[64][32];
+    int pending_mutation_events[64];
+    int pending_mutation_levels[64];
+    int pending_mutation_count;
 } g;
 
 typedef struct blob_entry {
@@ -235,6 +270,80 @@ static void render_target_add(const char *name) {
         snprintf(g.render_targets[g.render_target_count], 64, "%s", name);
         g.render_target_count++;
     }
+}
+
+static void render_target_remove(const char *name) {
+    if (name == NULL || name[0] == 0) {
+        return;
+    }
+    for (int i = 0; i < g.render_target_count; i++) {
+        if (strcmp(g.render_targets[i], name) == 0) {
+            memmove(g.render_targets[i], g.render_targets[g.render_target_count - 1],
+                    sizeof(g.render_targets[0]));
+            g.render_target_count--;
+            return;
+        }
+    }
+}
+
+static int carried_target_known(const char *name) {
+    for (int i = 0; i < g.carried_target_count; i++) {
+        if (strcmp(g.carried_targets[i], name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void carried_target_add(const char *name) {
+    if (name == NULL || name[0] == 0 || carried_target_known(name)) {
+        return;
+    }
+    if (g.carried_target_count < 64) {
+        snprintf(g.carried_targets[g.carried_target_count], 64, "%s", name);
+        g.carried_target_count++;
+    }
+}
+
+static void carried_target_remove(const char *name) {
+    if (name == NULL || name[0] == 0) {
+        return;
+    }
+    for (int i = 0; i < g.carried_target_count; i++) {
+        if (strcmp(g.carried_targets[i], name) == 0) {
+            memmove(g.carried_targets[i],
+                    g.carried_targets[g.carried_target_count - 1],
+                    sizeof(g.carried_targets[0]));
+            g.carried_target_count--;
+            return;
+        }
+    }
+}
+
+static void previous_target_remove(const char *name) {
+    if (name == NULL || name[0] == 0) {
+        return;
+    }
+    for (int i = 0; i < g.previous_render_target_count; i++) {
+        if (strcmp(g.previous_render_targets[i], name) == 0) {
+            memmove(g.previous_render_targets[i],
+                    g.previous_render_targets[
+                        g.previous_render_target_count - 1],
+                    sizeof(g.previous_render_targets[0]));
+            g.previous_render_target_count--;
+            return;
+        }
+    }
+}
+
+static void blobs_reset(void) {
+    for (blob_entry *entry = g.blobs; entry != NULL;) {
+        blob_entry *next = entry->next;
+        free(entry);
+        entry = next;
+    }
+    g.blobs = NULL;
+    g.blob_count = 0;
 }
 
 static void frame_caches_reset(void) {
@@ -298,6 +407,85 @@ static void texture_cache_put(const char *key, const char *levels) {
 }
 
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
+
+void eu4_gfx_frame_trace_texture_deleted(int count, const unsigned *names) {
+    if (count <= 0 || names == NULL) {
+        return;
+    }
+    pthread_mutex_lock(&g_lock);
+    for (int i = 0; i < count; i++) {
+        char name[64];
+        snprintf(name, sizeof(name), "%u", names[i]);
+        render_target_remove(name);
+        /* The frame-start snapshot must keep a name that is deleted later in
+           the same frame: the lifecycle record carries the delete event, so a
+           sample before that event may still use the carried image.  Only the
+           persistent set is removed immediately (for the next frame). */
+        carried_target_remove(name);
+        int known = 0;
+        for (int j = 0; j < g.pending_delete_count; j++) {
+            if (strcmp(g.pending_deletes[j], name) == 0) {
+                known = 1;
+                break;
+            }
+        }
+        if (!known && g.pending_delete_count < 64) {
+            snprintf(g.pending_deletes[g.pending_delete_count], 64, "%s",
+                     name);
+            g.pending_delete_events[g.pending_delete_count] =
+                g.armed ? g.event_count : -1;
+            g.pending_delete_count++;
+        }
+    }
+    pthread_mutex_unlock(&g_lock);
+}
+
+void eu4_gfx_frame_trace_test_register_target(const char *name) {
+    if (!g.test_only || name == NULL || name[0] == 0) {
+        return;
+    }
+    pthread_mutex_lock(&g_lock);
+    render_target_add(name);
+    pthread_mutex_unlock(&g_lock);
+}
+
+void eu4_gfx_frame_trace_texture_mutated(unsigned name, int level,
+                                         int sub_image, int texture_target) {
+    if (name == 0) {
+        return;
+    }
+    pthread_mutex_lock(&g_lock);
+    char text[64];
+    snprintf(text, sizeof(text), "%u", name);
+    /* Only renderer-owned resources are unsafe: an external CPU-supplied
+       texture is captured at each sample, so its contents are authoritative
+       even when they change. */
+    int relevant = render_target_known(text) || carried_target_known(text);
+    if (relevant) {
+        int known = 0;
+        for (int j = 0; j < g.pending_mutation_count; j++) {
+            if (strcmp(g.pending_mutations[j], text) == 0 &&
+                g.pending_mutation_levels[j] == level) {
+                known = 1;
+                break;
+            }
+        }
+        if (!known && g.pending_mutation_count < 64) {
+            snprintf(g.pending_mutations[g.pending_mutation_count], 64, "%s",
+                     text);
+            snprintf(g.pending_mutation_ops[g.pending_mutation_count], 32,
+                     "%s", sub_image ? "glTexSubImage2D"
+                                     : (texture_target ? "glTexImage2D"
+                                                       : "glCopyTexImage2D"));
+            g.pending_mutation_events[g.pending_mutation_count] =
+                g.armed ? g.event_count : -1;
+            g.pending_mutation_levels[g.pending_mutation_count] = level;
+            g.pending_mutation_count++;
+        }
+    }
+    pthread_mutex_unlock(&g_lock);
+}
+
 static const char *g_capture_failure_reason;
 
 /* Sealed-frame consumer registry.  It is deliberately separate from g_lock:
@@ -330,6 +518,8 @@ static int write_atomic(const char *path, const void *data, size_t size);
 static int write_frame_manifest(int complete, const char *reason);
 static void finish_capture_ex(const char *reason, int allow_reference);
 static int capture_timed_out_locked(void);
+static void continuous_write_campaign(const char *status,
+                                      const char *reason);
 
 static void fail_capture_locked(const char *reason) {
     g.capture_failed = 1;
@@ -741,8 +931,10 @@ static int put_blob(const void *data, size_t size, const char *prefix,
             return 0;
         }
     }
-    if (size > FTRACE_MAX_BLOB_BYTES ||
-        g.blob_bytes > FTRACE_MAX_BLOB_BYTES - size) {
+    uint64_t blob_cap = g.continuous
+        ? (4ull * 1024ull * 1024ull * 1024ull)
+        : (uint64_t)FTRACE_MAX_BLOB_BYTES;
+    if (size > blob_cap || g.blob_bytes > blob_cap - size) {
         fail_capture_locked("artifact_size_limit");
         return -1;
     }
@@ -750,7 +942,19 @@ static int put_blob(const void *data, size_t size, const char *prefix,
     snprintf(name, sizeof(name), "%s-%s.bin", prefix, sha);
     char path[FTRACE_PATH];
     snprintf(path, sizeof(path), "%s/blobs/%s", g.dir, name);
-    if (write_atomic(path, data, size) != 0) {
+    int linked = 0;
+    if (g.continuous && g.previous_dir[0] != 0) {
+        /* Immutable payloads are content-addressed.  Reusing the previous
+           frame's inode preserves provenance and portable replay while
+           avoiding another full copy of an unchanged multi-megabyte blob. */
+        char source[FTRACE_PATH];
+        snprintf(source, sizeof(source), "%s/blobs/%s", g.previous_dir, name);
+        if (link(source, path) == 0) {
+            linked = 1;
+            g.continuous_dedup_bytes += (uint64_t)size;
+        }
+    }
+    if (!linked && write_atomic(path, data, size) != 0) {
         return -1;
     }
     blob_entry *entry = calloc(1, sizeof(*entry));
@@ -763,6 +967,9 @@ static int put_blob(const void *data, size_t size, const char *prefix,
     g.blobs = entry;
     g.blob_count++;
     g.blob_bytes += size;
+    if (!linked) {
+        g.frame_blob_bytes += size;
+    }
     snprintf(out_name, FTRACE_NAME, "%s", name);
     return 0;
 }
@@ -1026,6 +1233,49 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
             g.callers[g.caller_count++] = value;
         }
     }
+    const char *continuous = getenv("EU4_GFX_FRAME_TRACE_CONTINUOUS");
+    if (continuous != NULL && continuous[0] != 0) {
+        if (strcmp(continuous, "1") == 0) {
+            g.continuous = 1;
+            g.seal_enabled = 1;
+            g.continuous_max_frames = 5;
+            g.continuous_max_pending = 4;
+            g.continuous_max_bytes = 512ull * 1024ull * 1024ull;
+            const char *max_frames =
+                getenv("EU4_GFX_FRAME_TRACE_MAX_FRAMES");
+            const char *max_pending =
+                getenv("EU4_GFX_FRAME_TRACE_MAX_PENDING");
+            const char *max_bytes =
+                getenv("EU4_GFX_FRAME_TRACE_MAX_BYTES");
+            if (max_frames != NULL) {
+                uint64_t value = 0;
+                if (parse_u64(max_frames, &value) != 0 || value == 0 ||
+                    value > 64) {
+                    return -1;
+                }
+                g.continuous_max_frames = (uint32_t)value;
+            }
+            if (max_pending != NULL) {
+                uint64_t value = 0;
+                if (parse_u64(max_pending, &value) != 0 || value == 0 ||
+                    value > 64) {
+                    return -1;
+                }
+                g.continuous_max_pending = (uint32_t)value;
+            }
+            if (max_bytes != NULL) {
+                uint64_t value = 0;
+                if (parse_u64(max_bytes, &value) != 0 || value == 0) {
+                    return -1;
+                }
+                g.continuous_max_bytes = value;
+            }
+            snprintf(g.continuous_base, sizeof(g.continuous_base), "%s",
+                     g.dir);
+        } else if (strcmp(continuous, "0") != 0) {
+            return -1;
+        }
+    }
     if (mkdir_p(g.dir) != 0) {
         return -1;
     }
@@ -1040,6 +1290,9 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
     if (timeline != NULL && strcmp(timeline, "1") == 0) {
         snprintf(g.timeline_path, sizeof(g.timeline_path), "%s/timeline.jsonl",
                  g.dir);
+    }
+    if (g.continuous) {
+        continuous_write_campaign("running", "");
     }
     load_sampler_queries();
     g.enabled = 1;
@@ -2757,6 +3010,232 @@ static int write_seal_manifest(const eu4_frame_capture_descriptor *descriptor,
     return rename(path, final_path) == 0 ? 0 : -1;
 }
 
+
+/* ------------------------------------------------------------------------- */
+/* Bounded continuous capture                                                */
+/* ------------------------------------------------------------------------- */
+
+static void continuous_set_stopped(const char *reason) {
+    g.continuous_stopped = 1;
+    if (reason != NULL) {
+        snprintf(g.continuous_reason, sizeof(g.continuous_reason), "%s",
+                 reason);
+    }
+}
+
+static void continuous_snapshot_carried(void) {
+    g.previous_render_target_count = 0;
+    for (int i = 0; i < g.carried_target_count &&
+                    i < (int)(sizeof(g.previous_render_targets) /
+                              sizeof(g.previous_render_targets[0])); i++) {
+        snprintf(g.previous_render_targets[g.previous_render_target_count],
+                 sizeof(g.previous_render_targets[0]), "%s",
+                 g.carried_targets[i]);
+        g.previous_render_target_count++;
+    }
+}
+
+/* Merge this frame's writes into the persistent carried set.  Entries that
+   were not written are deliberately preserved: a renderer resource remains
+   valid across any number of frames in which it is neither written nor
+   sampled.  Deletion removes an entry immediately. */
+static void continuous_copy_targets(void) {
+    for (int i = 0; i < g.render_target_count; i++) {
+        carried_target_add(g.render_targets[i]);
+    }
+}
+
+static void continuous_write_campaign(const char *status,
+                                      const char *reason) {
+    if (!g.continuous || g.continuous_base[0] == 0) {
+        return;
+    }
+    char path[FTRACE_PATH];
+    if (snprintf(path, sizeof(path), "%s/sequence.json",
+                 g.continuous_base) <= 0) {
+        return;
+    }
+    char *buffer = NULL;
+    size_t size = 0;
+    FILE *stream = open_memstream(&buffer, &size);
+    if (stream == NULL) {
+        return;
+    }
+    fprintf(stream,
+            "{\"schema\":\"gfx-frame-sequence-campaign/v1\","
+            "\"session_id\":\"%s\",\"pid\":%d,"
+            "\"status\":\"%s\",\"reason\":\"%s\","
+            "\"max_frames\":%u,\"max_pending\":%u,"
+            "\"max_bytes\":%llu,\"frames_completed\":%u,"
+            "\"bytes_written\":%llu,\"deduplicated_bytes\":%llu,"
+            "\"frames\":[",
+            g.session_id, (int)getpid(), status, reason ? reason : "",
+            g.continuous_max_frames, g.continuous_max_pending,
+            (unsigned long long)g.continuous_max_bytes,
+            g.continuous_frames_completed,
+            (unsigned long long)g.continuous_bytes_written,
+            (unsigned long long)g.continuous_dedup_bytes);
+    for (int i = 0; i < g.campaign_record_count; i++) {
+        fprintf(stream, "%s%s", i > 0 ? "," : "", g.campaign_records[i]);
+    }
+    fprintf(stream, "]}\n");
+    fclose(stream);
+    if (buffer != NULL) {
+        (void)write_atomic(path, buffer, size);
+        free(buffer);
+    }
+}
+
+static int continuous_write_frame_sequence(
+    const eu4_frame_capture_descriptor *descriptor, const char *reason,
+    int complete) {
+    if (!g.continuous || descriptor == NULL) {
+        return 0;
+    }
+    char path[FTRACE_PATH];
+    if (snprintf(path, sizeof(path), "%s/frame-sequence.json", g.dir) <= 0) {
+        return -1;
+    }
+    char previous[1200];
+    if (g.previous_capture_id != 0) {
+        snprintf(previous, sizeof(previous),
+                 "{\"capture_frame_id\":%llu,\"dir\":\"%s\","
+                 "\"manifest_sha256\":\"%s\",\"event_stream_sha256\":\"%s\"}",
+                 (unsigned long long)g.previous_capture_id, g.previous_dir,
+                 g.previous_manifest_sha, g.previous_events_sha);
+    } else {
+        snprintf(previous, sizeof(previous), "null");
+    }
+    char targets[4096];
+    size_t used = 0;
+    targets[0] = 0;
+    for (int i = 0; i < g.render_target_count; i++) {
+        if (used + strlen(g.render_targets[i]) + 4 >= sizeof(targets)) {
+            break;
+        }
+        used += (size_t)snprintf(targets + used, sizeof(targets) - used,
+                                 "%s\"%s\"", i > 0 ? "," : "",
+                                 g.render_targets[i]);
+    }
+    char carried[4096];
+    used = 0;
+    carried[0] = 0;
+    for (int i = 0; i < g.previous_render_target_count; i++) {
+        if (used + strlen(g.previous_render_targets[i]) + 4 >=
+            sizeof(carried)) {
+            break;
+        }
+        used += (size_t)snprintf(carried + used, sizeof(carried) - used,
+                                 "%s\"%s\"", i > 0 ? "," : "",
+                                 g.previous_render_targets[i]);
+    }
+    char lifecycle[4096];
+    used = 0;
+    lifecycle[0] = 0;
+    for (int i = 0; i < g.pending_delete_count;) {
+        int event_index = g.pending_delete_events[i];
+        used += (size_t)snprintf(
+            lifecycle + used, sizeof(lifecycle) - used,
+            "%s{\"kind\":\"delete\",\"event\":%d,\"names\":[",
+            lifecycle[0] != 0 ? "," : "", event_index);
+        int first = 1;
+        int j = i;
+        while (j < g.pending_delete_count &&
+               g.pending_delete_events[j] == event_index) {
+            used += (size_t)snprintf(
+                lifecycle + used, sizeof(lifecycle) - used, "%s\"%s\"",
+                first ? "" : ",", g.pending_deletes[j]);
+            first = 0;
+            j++;
+        }
+        used += (size_t)snprintf(lifecycle + used,
+                                 sizeof(lifecycle) - used, "]}");
+        i = j;
+    }
+    for (int i = 0; i < g.pending_mutation_count; i++) {
+        if (used + 160 >= sizeof(lifecycle)) {
+            break;
+        }
+        used += (size_t)snprintf(
+            lifecycle + used, sizeof(lifecycle) - used,
+            "%s{\"kind\":\"mutation\",\"operation\":\"%s\","
+            "\"event\":%d,\"level\":%d,\"names\":[\"%s\"]}",
+            lifecycle[0] != 0 ? "," : "",
+            g.pending_mutation_ops[i], g.pending_mutation_events[i],
+            g.pending_mutation_levels[i], g.pending_mutations[i]);
+    }
+    char *buffer = NULL;
+    size_t size = 0;
+    FILE *stream = open_memstream(&buffer, &size);
+    if (stream == NULL) {
+        return -1;
+    }
+    fprintf(stream,
+            "{\"schema\":\"gfx-frame-sequence/v1\","
+            "\"session_id\":\"%s\",\"pid\":%d,"
+            "\"sequence_index\":%u,\"campaign_frames\":%u,"
+            "\"capture_frame_id\":%llu,\"complete\":%s,"
+            "\"boundary\":\"%s\",\"reason\":\"%s\","
+            "\"previous\":%s,"
+            "\"render_targets\":[%s],"
+            "\"carried_renderer_outputs\":[%s],"
+            "\"lifecycle\":[%s],"
+            "\"reference_sha256\":\"%s\","
+            "\"manifest_sha256\":\"%s\","
+            "\"event_stream_sha256\":\"%s\","
+            "\"operations\":%llu,\"draws\":%llu,\"clears\":%llu,"
+            "\"copies\":%llu}\n",
+            g.session_id, (int)getpid(), g.continuous_frames_completed + 1,
+            g.continuous_max_frames,
+            (unsigned long long)descriptor->capture_frame_id,
+            complete ? "true" : "false", descriptor->boundary,
+            reason ? reason : "", previous, targets, carried, lifecycle,
+            descriptor->reference_sha256, descriptor->manifest_sha256,
+            descriptor->event_stream_sha256,
+            (unsigned long long)descriptor->operation_count,
+            (unsigned long long)descriptor->draw_count,
+            (unsigned long long)descriptor->clear_count,
+            (unsigned long long)descriptor->copy_count);
+    fclose(stream);
+    int result = -1;
+    if (buffer != NULL) {
+        result = write_atomic(path, buffer, size);
+        free(buffer);
+    }
+    if (result == 0) {
+        g.pending_delete_count = 0;
+        g.pending_mutation_count = 0;
+    }
+    return result;
+}
+
+static void continuous_record_frame(
+    const eu4_frame_capture_descriptor *descriptor) {
+    if (!g.continuous || descriptor == NULL) {
+        return;
+    }
+    if (g.campaign_record_count <
+        (int)(sizeof(g.campaign_records) / sizeof(g.campaign_records[0]))) {
+        snprintf(g.campaign_records[g.campaign_record_count],
+                 sizeof(g.campaign_records[0]),
+                 "{\"sequence\":%u,\"capture_frame_id\":%llu,"
+                 "\"dir\":\"%s\",\"manifest_sha256\":\"%s\","
+                 "\"event_stream_sha256\":\"%s\","
+                 "\"reference_sha256\":\"%s\",\"operations\":%llu,"
+                 "\"draws\":%llu,\"clears\":%llu,\"copies\":%llu}",
+                 g.continuous_frames_completed + 1,
+                 (unsigned long long)descriptor->capture_frame_id, g.dir,
+                 descriptor->manifest_sha256,
+                 descriptor->event_stream_sha256,
+                 descriptor->reference_sha256,
+                 (unsigned long long)descriptor->operation_count,
+                 (unsigned long long)descriptor->draw_count,
+                 (unsigned long long)descriptor->clear_count,
+                 (unsigned long long)descriptor->copy_count);
+        g.campaign_record_count++;
+    }
+}
+
 static void publish_sealed_descriptor(
     const eu4_frame_capture_descriptor *descriptor) {
     pthread_mutex_lock(&g_seal_lock);
@@ -2807,6 +3286,13 @@ static void finish_capture_ex(const char *reason, int allow_reference) {
        or count mismatch therefore cannot produce complete=true. */
     uint64_t finalize_started = now_ns();
     int stream_validated = finalize_event_stream();
+    if (stream_validated &&
+        strcmp(g.partial_path, g.final_path) != 0) {
+        if (rename(g.partial_path, g.final_path) != 0) {
+            fail_capture_locked("event_rename_failed");
+            stream_validated = 0;
+        }
+    }
     g.events_verified = 0;
     if (stream_validated) {
         char events_path[FTRACE_PATH];
@@ -2863,6 +3349,13 @@ static void finish_capture_ex(const char *reason, int allow_reference) {
         manifest_reason = g.manifest_sha[0] ? "manifest_write_failed"
                                             : "manifest_hash_failed";
     }
+    if (g.continuous && !complete) {
+        /* A frame that cannot be sealed must stop the campaign explicitly.
+           Re-arming the same frame index would rewrite the same directory
+           until an external timeout and hide the real reason. */
+        continuous_set_stopped("frame_incomplete");
+        continuous_write_campaign("incomplete", "frame_incomplete");
+    }
     g.finalize_ns = now_ns() - finalize_started;
 
     eu4_frame_capture_descriptor descriptor;
@@ -2892,6 +3385,38 @@ static void finish_capture_ex(const char *reason, int allow_reference) {
     g.armed = 0;
     g.captured = 1;
     g.finishing = 0;
+    if (complete && g.continuous) {
+        if (continuous_write_frame_sequence(&descriptor, manifest_reason, 1) !=
+            0) {
+            continuous_set_stopped("sequence_write");
+            continuous_write_campaign("incomplete", "sequence_write");
+            complete = 0;
+            descriptor.complete = 0;
+            snprintf(descriptor.failure_reason,
+                     sizeof(descriptor.failure_reason), "%s",
+                     "sequence_write_failed");
+            g.seal_written = 0;
+        } else {
+            continuous_record_frame(&descriptor);
+            g.continuous_frames_completed++;
+            g.continuous_bytes_written += g.reference_bytes + g.events_bytes +
+                                           g.frame_blob_bytes;
+            snprintf(g.previous_dir, sizeof(g.previous_dir), "%s", g.dir);
+            snprintf(g.previous_manifest_sha,
+                     sizeof(g.previous_manifest_sha), "%s",
+                     g.manifest_sha);
+            snprintf(g.previous_events_sha, sizeof(g.previous_events_sha),
+                     "%s", g.events_sha);
+            g.previous_capture_id = g.capture_id;
+            continuous_copy_targets();
+            if (g.continuous_frames_completed >= g.continuous_max_frames) {
+                continuous_set_stopped("frame_limit");
+                continuous_write_campaign("complete", "frame_limit");
+            } else {
+                continuous_write_campaign("running", "");
+            }
+        }
+    }
     if (complete && g.seal_enabled && g.seal_written) {
         publish_sealed_descriptor(&descriptor);
     } else {
@@ -2927,7 +3452,63 @@ static void open_events(void) {
 }
 
 static void start_capture_at_frame(int next_frame) {
+    if (g.continuous) {
+        if (g.continuous_stopped) {
+            return;
+        }
+        const char *stop_file = getenv("EU4_GFX_FRAME_TRACE_STOP_FILE");
+        if (stop_file != NULL && stop_file[0] != 0 &&
+            access(stop_file, F_OK) == 0) {
+            /* An explicit external stop must stop capture at the next frame
+               boundary instead of relying only on the frame/byte budget. */
+            continuous_set_stopped("external_stop");
+            continuous_write_campaign("complete", "external_stop");
+            return;
+        }
+        if (g.continuous_frames_completed >= g.continuous_max_frames) {
+            continuous_set_stopped("frame_limit");
+            continuous_write_campaign("complete", "frame_limit");
+            return;
+        }
+        if (g.continuous_max_bytes != 0 &&
+            g.continuous_bytes_written >= g.continuous_max_bytes) {
+            continuous_set_stopped("byte_budget");
+            continuous_write_campaign("incomplete", "byte_budget");
+            return;
+        }
+        snprintf(g.dir, sizeof(g.dir), "%s/frame-%06u", g.continuous_base,
+                 g.continuous_frames_completed + 1);
+        if (mkdir_p(g.dir) != 0) {
+            continuous_set_stopped("frame_directory");
+            continuous_write_campaign("incomplete", "frame_directory");
+            return;
+        }
+        char frame_blobs[FTRACE_PATH];
+        snprintf(frame_blobs, sizeof(frame_blobs), "%s/blobs", g.dir);
+        if (mkdir_p(frame_blobs) != 0) {
+            continuous_set_stopped("frame_directory");
+            continuous_write_campaign("incomplete", "frame_directory");
+            return;
+        }
+        continuous_snapshot_carried();
+        snprintf(g.partial_path, sizeof(g.partial_path),
+                 "%s/frame-events.jsonl.partial", g.dir);
+        snprintf(g.final_path, sizeof(g.final_path),
+                 "%s/frame-events.jsonl", g.dir);
+        g.reference_file[0] = 0;
+        g.reference_sha[0] = 0;
+        g.reference_bytes = 0;
+        g.reference_width = 0;
+        g.reference_height = 0;
+        g.frame_blob_bytes = 0;
+        /* Blob names are content-addressed.  A blob written for the previous
+           frame is not present in this frame's blobs/ directory, so the
+           per-frame dedup table must start empty while the campaign byte
+           counter stays cumulative. */
+        blobs_reset();
+    }
     frame_caches_reset();
+    g.captured = 0;
     g.armed = 1;
     g.armed_ms = now_ms();
     g.capturing_frame = next_frame;
@@ -2954,6 +3535,17 @@ static void start_capture_at_frame(int next_frame) {
     g.seed_width = 0;
     g.seed_height = 0;
     open_events();
+}
+
+static void continuous_rearm_after_frame(void) {
+    if (!g.continuous || g.stream_only || g.continuous_stopped ||
+        !g.captured || g.armed) {
+        return;
+    }
+    int next = g.boundary_scene ? g.scene_index + 1 : g.present_index + 1;
+    if (next > 0) {
+        start_capture_at_frame(next);
+    }
 }
 
 static uint64_t stream_caller_signature(void) {
@@ -3290,6 +3882,7 @@ void eu4_gfx_frame_trace_boundary_exit(eu4_gfx_capture_frame *frame,
         }
     }
     frame_reset();
+    continuous_rearm_after_frame();
     pthread_mutex_unlock(&g_lock);
     if (g.stream_only && metadata_only &&
         eu4_gfx_frame_observe_emit_metadata != NULL) {
@@ -3369,6 +3962,7 @@ void eu4_gfx_frame_trace_present_exit(eu4_gfx_capture_frame *frame,
     if (candidate) {
         start_capture_at_frame(g.present_index + 1);
     }
+    continuous_rearm_after_frame();
     pthread_mutex_unlock(&g_lock);
     eu4_gfx_frame_sealed_dispatch();
 }

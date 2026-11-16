@@ -58,6 +58,28 @@ def _sha256(path: Path) -> str:
             digest.update(block)
     return digest.hexdigest()
 
+# Immutable capture payloads are verified once per process.  The key includes
+# size and nanosecond mtime, so a replaced artifact is re-hashed; repeated
+# graph builds over the same ten-frame campaign avoid re-reading gigabytes.
+_BLOB_DIGESTS: dict[tuple[str, int, int, int, int], str] = {}
+
+
+def _verified_blob_sha256(path: Path) -> str:
+    stat = path.stat()
+    # inode and ctime change on replacement even when a caller preserves size
+    # and mtime (cp -p / os.utime); mtime alone would return a stale digest.
+    key = (str(path), stat.st_size, stat.st_mtime_ns, stat.st_ino,
+           stat.st_ctime_ns)
+    cached = _BLOB_DIGESTS.get(key)
+    if cached is not None:
+        return cached
+    digest = _sha256(path)
+    if len(_BLOB_DIGESTS) > 8192:
+        _BLOB_DIGESTS.clear()
+    _BLOB_DIGESTS[key] = digest
+    return digest
+
+
 
 def _read_json(path: Path) -> dict:
     try:
@@ -133,7 +155,7 @@ def load_trace(frame_dir: Path, *, verify_blobs: bool = True) -> dict:
                 path = frame_dir / "blobs" / str(name)
                 if not path.is_file():
                     raise FrameError(f"missing blob: {name}")
-                digest = _sha256(path)
+                digest = _verified_blob_sha256(path)
                 if member.get("sha256") and member["sha256"] != digest:
                     raise FrameError(f"blob digest mismatch: {name}")
                 blobs[name] = digest
@@ -578,7 +600,29 @@ def capture(args: argparse.Namespace) -> int:
     if getattr(args, "copy_source", False):
         env_extra["EU4_GFX_FRAME_TRACE_CAPTURE_COPY_SOURCE"] = "1"
     shadow_enabled = bool(getattr(args, "shadow", False))
+    continuous = bool(getattr(args, "continuous", False))
+    asynchronous = bool(getattr(args, "async", False))
     seal_enabled = bool(getattr(args, "seal", False)) or shadow_enabled
+    if asynchronous and not continuous:
+        print("capture refused: --async requires --continuous",
+              file=sys.stderr)
+        return 2
+    if continuous:
+        if not shadow_enabled:
+            print("capture refused: --continuous requires --shadow",
+                  file=sys.stderr)
+            return 2
+        if not 1 <= args.max_frames <= 64:
+            print("capture refused: invalid --max-frames", file=sys.stderr)
+            return 2
+        if not 1 <= args.max_pending <= 64:
+            print("capture refused: invalid --max-pending", file=sys.stderr)
+            return 2
+        if args.max_bytes <= 0:
+            print("capture refused: invalid --max-bytes", file=sys.stderr)
+            return 2
+        frame_dir = output / "frames"
+        env_extra["EU4_GFX_FRAME_TRACE_DIR"] = str(frame_dir)
     if getattr(args, "seal_log", False) and not seal_enabled:
         print("capture refused: --seal-log requires --seal", file=sys.stderr)
         return 2
@@ -603,9 +647,27 @@ def capture(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 2
-        env_extra["EU4_GFX_SHADOW_MODE"] = "single-frame"
+        if continuous:
+            env_extra["EU4_GFX_SHADOW_MODE"] = "continuous"
+            env_extra["EU4_GFX_FRAME_TRACE_CONTINUOUS"] = "1"
+            env_extra["EU4_GFX_FRAME_TRACE_MAX_FRAMES"] = str(
+                args.max_frames)
+            env_extra["EU4_GFX_FRAME_TRACE_MAX_PENDING"] = str(
+                args.max_pending)
+            env_extra["EU4_GFX_FRAME_TRACE_MAX_BYTES"] = str(
+                args.max_bytes)
+            env_extra["EU4_GFX_SHADOW_MAX_FRAMES"] = str(args.max_frames)
+            env_extra["EU4_GFX_SHADOW_MAX_PENDING"] = str(args.max_pending)
+            env_extra["EU4_GFX_SHADOW_MAX_BYTES"] = str(args.max_bytes)
+            env_extra["EU4_GFX_FRAME_TRACE_STOP_FILE"] = str(
+                shadow_dir / "stop")
+            if asynchronous:
+                env_extra["EU4_GFX_SHADOW_ASYNC"] = "1"
+        else:
+            env_extra["EU4_GFX_SHADOW_MODE"] = "single-frame"
+            env_extra["EU4_GFX_SHADOW_SHADER_DIR"] = str(
+                shadow_dir / "shaders")
         env_extra["EU4_GFX_SHADOW_OUTPUT_DIR"] = str(shadow_dir)
-        env_extra["EU4_GFX_SHADOW_SHADER_DIR"] = str(shadow_dir / "shaders")
         env_extra["EU4_GFX_SHADOW_TIMEOUT_MS"] = str(args.shadow_timeout_ms)
         env_extra["EU4_GFX_SHADOW_WAIT_MS"] = str(args.shadow_wait_ms)
     if seal_enabled:
@@ -634,10 +696,11 @@ def capture(args: argparse.Namespace) -> int:
                 str(
                     max(
                         300.0,
-                        args.duration
-                        + args.shadow_wait_ms / 1000.0
-                        + args.shadow_timeout_ms / 1000.0
-                        + 120.0,
+                        (args.duration
+                         + args.shadow_wait_ms / 1000.0
+                         + args.shadow_timeout_ms / 1000.0
+                         + 120.0)
+                        * (args.max_frames if continuous else 1),
                     )
                 ),
                 "--seal-timeout",
@@ -646,6 +709,11 @@ def capture(args: argparse.Namespace) -> int:
                 str(args.shadow_wait_ms / 1000.0 + 30.0),
                 "--replay-timeout",
                 str(args.shadow_timeout_ms / 1000.0 + 60.0),
+                *(["--continuous", "--max-frames",
+                   str(args.max_frames)]
+                  if continuous else []),
+                *(["--continue-on-difference"]
+                  if getattr(args, "continue_on_difference", False) else []),
             ],
             cwd=str(ROOT),
             stdout=subprocess.PIPE,
@@ -702,21 +770,46 @@ def capture(args: argparse.Namespace) -> int:
     }
     status = 0
     trace = None
-    try:
-        trace = load_trace(frame_dir)
-        coverage = coverage_report(trace)
-        result["trace"] = {
-            "schema": trace.get("schema"),
-            "present_index": trace.get("present_index"),
-            "events": trace.get("events"),
-            "frame": trace.get("frame"),
-            "gl": trace.get("gl"),
-            "selection": trace.get("selection"),
-            "blobs_verified": trace.get("_blob_count_verified"),
-        }
-        result["coverage"] = coverage
-        if not coverage["ok"]:
+    if continuous:
+        try:
+            campaign = _read_json(frame_dir / "sequence.json")
+            result["campaign"] = campaign
+            result["trace"] = {
+                "schema": campaign.get("schema"),
+                "mode": "continuous",
+                "frames_completed": campaign.get("frames_completed"),
+                "status": campaign.get("status"),
+                "reason": campaign.get("reason"),
+            }
+            result["coverage"] = {
+                "ok": campaign.get("status") == "complete" and
+                      campaign.get("frames_completed") == args.max_frames,
+                "frames_completed": campaign.get("frames_completed"),
+                "status": campaign.get("status"),
+                "reason": campaign.get("reason"),
+            }
+            if not result["coverage"]["ok"]:
+                status = 5
+            trace = None
+        except (FrameError, OSError) as exc:
+            result["error"] = str(exc)
             status = 5
+    try:
+        if not continuous:
+            trace = load_trace(frame_dir)
+            coverage = coverage_report(trace)
+            result["trace"] = {
+                "schema": trace.get("schema"),
+                "present_index": trace.get("present_index"),
+                "events": trace.get("events"),
+                "frame": trace.get("frame"),
+                "gl": trace.get("gl"),
+                "selection": trace.get("selection"),
+                "blobs_verified": trace.get("_blob_count_verified"),
+            }
+            result["coverage"] = coverage
+            if not coverage["ok"]:
+                status = 5
     except FrameError as exc:
         result["error"] = str(exc)
         status = 5
@@ -740,7 +833,7 @@ def capture(args: argparse.Namespace) -> int:
         except (FrameError, OSError, subprocess.TimeoutExpired) as exc:
             result["shadow_error"] = str(exc)
             status = 7 if status == 0 else status
-    if seal_enabled:
+    if seal_enabled and not continuous:
         try:
             seal = load_seal(frame_dir)
             notification = None
@@ -798,6 +891,19 @@ def capture(args: argparse.Namespace) -> int:
         except FrameError as exc:
             result["seal_error"] = str(exc)
             status = 6
+    if continuous:
+        result["seal"] = {
+            "mode": "continuous",
+            "frames": [
+                {
+                    "sequence": item.get("sequence"),
+                    "capture_frame_id": item.get("capture_frame_id"),
+                    "manifest_sha256": item.get("manifest_sha256"),
+                    "reference_sha256": item.get("reference_sha256"),
+                }
+                for item in (result.get("campaign") or {}).get("frames") or []
+            ],
+        }
     (output / "capture-report.json").write_text(json.dumps(result, indent=2) + "\n")
     if token is not None:
         live_gfx._finish_launch(
@@ -855,6 +961,55 @@ def build_replay_host(force: bool = False) -> Path:
     return REPLAY_HOST
 
 
+def _translator_identity() -> dict:
+    from automation import gfx_shader_translate
+
+    path = Path(gfx_shader_translate.__file__)
+    try:
+        stat = path.stat()
+        return {"path": path.name, "bytes": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns}
+    except OSError:
+        return {"path": path.name, "bytes": 0, "mtime_ns": 0}
+
+
+def _shader_source_identity(trace: dict) -> dict:
+    """Content identity of the translated shader sources for one frame.
+
+    Translation is deterministic in the source program/stage digests; a cache
+    keyed by these digests can never reuse a translation for different source
+    content.  The key deliberately excludes frame/event identity but includes
+    the translator identity, so an older translator's cached output is never
+    reused after the translator changes.
+    """
+    programs = {}
+    for event in trace.get("_events") or []:
+        if event.get("kind") != "draw":
+            continue
+        program = event.get("program") or {}
+        name = str(program.get("name") or "")
+        for shader in program.get("shaders") or []:
+            stage = str(shader.get("stage") or "")
+            digest = str(shader.get("sha256") or "")
+            if name and stage and digest:
+                programs.setdefault(name, {})[stage] = digest
+    identity = {
+        "schema": "gfx-shader-source-identity/v1",
+        "translator": _translator_identity(),
+        "programs": {name: dict(sorted(stages.items()))
+                     for name, stages in sorted(programs.items())},
+    }
+    canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    identity["sha256"] = _bytes_sha256(canonical.encode("utf-8"))
+    return identity
+
+
+def _copy_translation_cache(source: Path, destination: Path) -> None:
+    if destination.exists():
+        shutil.rmtree(destination)
+    shutil.copytree(source, destination)
+
+
 def translate_command(args: argparse.Namespace) -> int:
     from automation import gfx_shader_translate
 
@@ -864,6 +1019,8 @@ def translate_command(args: argparse.Namespace) -> int:
         if args.out
         else frame_dir / "shaders"
     )
+    cache_dir = (Path(args.cache_dir).expanduser().resolve()
+                 if getattr(args, "cache_dir", None) else None)
     if out_dir.exists() and args.force:
         shutil.rmtree(out_dir)
     try:
@@ -871,7 +1028,35 @@ def translate_command(args: argparse.Namespace) -> int:
     except FrameError as exc:
         print(json.dumps({"status": "invalid", "reason": str(exc)}, indent=2))
         return 1
-    report = gfx_shader_translate.translate_trace(frame_dir, out_dir)
+    identity = _shader_source_identity(trace)
+    cache_root = cache_dir / identity["sha256"] if cache_dir else None
+    cache_hit = False
+    report = None
+    if (cache_root is not None and not args.force
+            and (cache_root / "shaders.json").is_file()):
+        _copy_translation_cache(cache_root, out_dir)
+        cache_hit = True
+    if not cache_hit:
+        report = gfx_shader_translate.translate_trace(frame_dir, out_dir)
+        if cache_root is not None and report.get("ok"):
+            cache_root.parent.mkdir(parents=True, exist_ok=True)
+            partial = cache_root.with_name(cache_root.name + ".partial")
+            if partial.exists():
+                shutil.rmtree(partial)
+            shutil.copytree(out_dir, partial)
+            os.replace(partial, cache_root)
+    if report is None:
+        try:
+            report = json.loads((out_dir / "shaders.json").read_text())
+            report = {"ok": True, "programs": report.get("programs") or []}
+        except (OSError, json.JSONDecodeError):
+            report = {"ok": False, "programs": []}
+    (out_dir / "translation-cache.json").write_text(json.dumps({
+        "schema": "gfx-shader-translation-cache/v1",
+        "identity": identity,
+        "cache_dir": str(cache_dir) if cache_dir else None,
+        "hit": cache_hit,
+    }, indent=2) + "\n")
     summary = {
         "status": "ok" if report["ok"] else "partial",
         "programs": len(report["programs"]),
@@ -882,6 +1067,11 @@ def translate_command(args: argparse.Namespace) -> int:
         ],
         "out": str(out_dir),
         "draws": len(trace.get("_draws") or []),
+        "translation_cache": {
+            "hit": cache_hit,
+            "key": identity["sha256"],
+            "dir": str(cache_dir) if cache_dir else None,
+        },
     }
     print(json.dumps(summary, indent=2))
     return 0 if report["ok"] else 2
@@ -1354,6 +1544,27 @@ def apply_shadow_report(result: dict, shadow_report: dict) -> str | None:
     result["shadow"] = shadow_report
     result["shadow_stage"] = shadow_report.get("stage")
     result["shadow_timed_out"] = bool(shadow_report.get("timed_out", False))
+    if shadow_report.get("mode") == "continuous":
+        frames = list(shadow_report.get("frames") or [])
+        last = frames[-1] if frames else {}
+        result["continuous"] = shadow_report
+        result["pixel_verdict"] = last.get("classification")
+        result["classification"] = last.get("classification")
+        result["first_divergence"] = last.get("first_divergence")
+        result["qualified"] = bool(
+            frames and all(item.get("classification") == "qualified_match"
+                           for item in frames))
+        result["diagnostic"] = {
+            "mode": "continuous",
+            "frames": len(frames),
+            "stop_reason": shadow_report.get("stop_reason"),
+            "last_classification": last.get("classification"),
+            "diagnostic_reports": [item.get("diagnostic_report")
+                                   for item in frames],
+        }
+        if shadow_report.get("status") == "ok":
+            return None
+        return shadow_failure_detail(shadow_report)
     failure = shadow_report.get("failure")
     if isinstance(failure, dict) and failure:
         result["shadow_failure"] = failure
@@ -1388,6 +1599,8 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
     marker the in-process bridge waits for, then waits for the Metal report and
     runs the existing differential comparison.
     """
+    if getattr(args, "continuous", False):
+        return shadow_coordinator_continuous(args)
     run = Path(args.run).expanduser().resolve()
     shadow = (
         Path(args.shadow_dir).expanduser().resolve()
@@ -1746,6 +1959,219 @@ def diagnose_command(args: argparse.Namespace) -> int:
     return gfx_independent_replay.diagnosis_exit_code(report)
 
 
+
+def _wait_for_path(path: Path, deadline: float) -> bool:
+    while time.monotonic() < deadline:
+        if path.is_file():
+            return True
+        time.sleep(0.1)
+    return path.is_file()
+
+
+def _artifact_digest(directory: Path) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    count = 0
+    for path in sorted(directory.rglob("*")):
+        if not path.is_file() or path.name in ("ready", "shader-receipt.json"):
+            continue
+        digest.update(str(path.relative_to(directory)).encode())
+        digest.update(b"\0")
+        digest.update(_sha256(path).encode())
+        digest.update(b"\n")
+        count += 1
+    return digest.hexdigest(), count
+
+
+def _continuous_frame_coordinator(
+    run: Path, shadow: Path, frame_index: int, args,
+    overall_deadline: float,
+) -> tuple[dict, dict | None]:
+    """Prepare, verify and diagnose one continuous frame.
+
+    Returns ``(summary, diagnosis)``.  A failed preparation raises FrameError;
+    the caller records it without conflating it with a rendering difference.
+    """
+    from automation import gfx_frame_graph, gfx_independent_replay
+
+    frame_dir = run / "frames" / f"frame-{frame_index:06d}"
+    output = shadow / f"frame-{frame_index:06d}"
+    shader_dir = output / "shaders"
+    output.mkdir(parents=True, exist_ok=True)
+    shader_dir.mkdir(parents=True, exist_ok=True)
+    seal_path = frame_dir / "frame-seal.json"
+    seal_deadline = min(overall_deadline,
+                        time.monotonic() + args.seal_timeout)
+    if not _wait_for_path(seal_path, seal_deadline):
+        raise FrameError(f"frame {frame_index} seal did not appear")
+    seal = load_seal(frame_dir)
+    cache_dir = shadow / "translation-cache"
+    translated = subprocess.run(
+        [sys.executable, "-m", "automation.m6_frame", "translate",
+         "--frame", str(frame_dir), "--out", str(shader_dir),
+         "--cache-dir", str(cache_dir)],
+        cwd=str(ROOT), capture_output=True, text=True,
+        timeout=max(0.0, min(args.translation_timeout,
+                             overall_deadline - time.monotonic())),
+        check=False)
+    if translated.returncode != 0:
+        raise FrameError(f"frame {frame_index} shader translation failed")
+    graph = gfx_frame_graph.build(frame_dir)
+    if graph.get("status") == "invalid":
+        raise FrameError(
+            f"frame {frame_index} graph is invalid: "
+            + "; ".join(graph.get("reasons") or ["unknown"]))
+    request_path = output / "checkpoint-request.json"
+    request = gfx_frame_graph.write_checkpoint_request(graph, request_path)
+    request_sha256 = _sha256(request_path)
+    artifacts_sha256, artifact_count = _artifact_digest(shader_dir)
+    receipt = {
+        "schema": "m7-shadow-shader-receipt/v1",
+        "capture_frame_id": seal.get("capture_frame_id"),
+        "pid": seal.get("pid"),
+        "session_id": seal.get("session_id"),
+        "trace_manifest_sha256": seal.get("manifest_sha256"),
+        "event_stream_sha256": seal.get("event_stream_sha256"),
+        "event_stream_bytes": seal.get("event_stream_bytes"),
+        "shaders_json_sha256": _sha256(shader_dir / "shaders.json"),
+        "artifacts_sha256": artifacts_sha256,
+        "artifact_count": artifact_count,
+        "checkpoint_request_file": request_path.name,
+        "checkpoint_request_sha256": request_sha256,
+        "checkpoint_count": len(request.get("checkpoints") or []),
+    }
+    receipt_path = output / "shader-receipt.json"
+    receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+    (shader_dir / "ready").write_text(json.dumps({
+        "status": "ready",
+        "capture_frame_id": seal.get("capture_frame_id"),
+        "shader_receipt_sha256": _sha256(receipt_path),
+        "sequence_index": frame_index,
+    }) + "\n")
+    report_path = output / "shadow-report.json"
+    replay_deadline = min(overall_deadline,
+                          time.monotonic() + args.replay_timeout)
+    if not _wait_for_path(report_path, replay_deadline):
+        raise FrameError(
+            f"frame {frame_index} in-process Metal report did not appear")
+    report = _read_json(report_path)
+    if report.get("checkpoint_request_sha256") != request_sha256:
+        raise FrameError(
+            f"frame {frame_index} checkpoint request digest mismatch")
+    for report_field, seal_field in (
+        ("capture_frame_id", "capture_frame_id"),
+        ("pid", "pid"),
+        ("gl_reference_sha256", "reference_sha256"),
+        ("trace_manifest_sha256", "manifest_sha256"),
+        ("operation_count", "operation_count"),
+    ):
+        if report.get(report_field) != seal.get(seal_field):
+            raise FrameError(
+                f"frame {frame_index} shadow report {report_field} does not "
+                "match the seal")
+    if report.get("status") != "ok":
+        raise FrameError(
+            f"frame {frame_index} Metal replay failed: "
+            + shadow_failure_detail(report))
+    diagnosis = gfx_independent_replay.diagnose_frame(
+        frame_dir, output, output, args.policy,
+        shaders=shader_dir)
+    classification = diagnosis.get("classification")
+    hard_stop = report.get("history_status") not in (1, None)
+    stop = hard_stop or (classification != "qualified_match" and
+                         not args.continue_on_difference)
+    temp = output / "decision.json.tmp"
+    temp.write_text(json.dumps({
+        "continue": not stop,
+        "classification": classification,
+        "sequence": frame_index,
+    }) + "\n")
+    os.replace(temp, output / "decision.json")
+    qualification = diagnosis.get("qualification") or {}
+    summary = {
+        "sequence": frame_index,
+        "capture_frame_id": seal.get("capture_frame_id"),
+        "frame_dir": str(frame_dir),
+        "output_dir": str(output),
+        "operation_count": seal.get("operation_count"),
+        "classification": diagnosis.get("classification"),
+        "axes": qualification.get("axes"),
+        "first_divergence": diagnosis.get("first_divergence"),
+        "pixels": (diagnosis.get("pixels") or {}).get("statistics"),
+        "state_coverage": (diagnosis.get("state_coverage") or {}).get("status"),
+        "checkpoint_validation": diagnosis.get("checkpoint_validation"),
+        "history": report.get("history_status"),
+        "carried_bindings": report.get("carried_bindings"),
+        "missing_history": report.get("missing_history"),
+        "stale_history": report.get("stale_history"),
+        "async": bool(report.get("async", False)),
+        "queue_high_water": report.get("queue_high_water"),
+        "queue_depth": report.get("queue_depth"),
+        "diagnostic_report": str(output / "diagnostic-report.json"),
+    }
+    return summary, diagnosis
+
+
+def shadow_coordinator_continuous(args: argparse.Namespace) -> int:
+    """Coordinate a bounded ordered sequence through one persistent session."""
+    run = Path(args.run).expanduser().resolve()
+    shadow = (Path(args.shadow_dir).expanduser().resolve()
+              if args.shadow_dir else run / "shadow")
+    shadow.mkdir(parents=True, exist_ok=True)
+    result: dict = {
+        "schema": "m7-shadow-coordinator/v1",
+        "mode": "continuous",
+        "run": str(run),
+        "shadow_dir": str(shadow),
+        "max_frames": args.max_frames,
+        "status": "running",
+        "frames": [],
+    }
+    overall_deadline = time.monotonic() + args.timeout
+    stop_reason = "frame_limit"
+    for frame_index in range(1, args.max_frames + 1):
+        try:
+            summary, diagnosis = _continuous_frame_coordinator(
+                run, shadow, frame_index, args, overall_deadline)
+        except (FrameError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+            # The bridge may be waiting for this frame's decision; release it
+            # with an explicit stop before recording the tool failure.
+            output = shadow / f"frame-{frame_index:06d}"
+            try:
+                output.mkdir(parents=True, exist_ok=True)
+                (output / "decision.json").write_text(json.dumps({
+                    "continue": False,
+                    "reason": "tool_failure",
+                    "sequence": frame_index,
+                }) + "\n")
+            except OSError:
+                pass
+            result["status"] = "failed"
+            result["error"] = str(exc)
+            result["stop_reason"] = "tool_failure"
+            (shadow / "coordinator.json").write_text(
+                json.dumps(result, indent=2) + "\n")
+            return 1
+        result["frames"].append(summary)
+        classification = summary.get("classification")
+        if (not args.continue_on_difference and
+                classification != "qualified_match"):
+            result["status"] = "ok"
+            result["stop_reason"] = (
+                "first_qualified_difference"
+                if classification == "qualified_difference"
+                else f"stop_{classification}")
+            result["stopped_at"] = frame_index
+            (shadow / "coordinator.json").write_text(
+                json.dumps(result, indent=2) + "\n")
+            return 0
+    result["status"] = "ok"
+    result["stop_reason"] = "frame_limit"
+    (shadow / "coordinator.json").write_text(
+        json.dumps(result, indent=2) + "\n")
+    print(json.dumps(result, indent=2))
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Inspection
 # ---------------------------------------------------------------------------
@@ -1822,6 +2248,14 @@ def _parser() -> argparse.ArgumentParser:
                      help="publish the authoritative frame-seal/v1 handoff")
     cap.add_argument("--shadow", action="store_true",
                      help="execute the sealed frame through the in-process Metal bridge")
+    cap.add_argument("--continuous", action="store_true",
+                     help="capture an ordered bounded sequence from one process")
+    cap.add_argument("--max-frames", type=int, default=3)
+    cap.add_argument("--max-pending", type=int, default=4)
+    cap.add_argument("--max-bytes", type=int, default=512 * 1024 * 1024)
+    cap.add_argument("--continue-on-difference", action="store_true")
+    cap.add_argument("--async", action="store_true",
+                     help="use the bounded asynchronous Metal worker queue")
     cap.add_argument("--shadow-dir", default="",
                      help="shadow output directory (default: <output>/shadow)")
     cap.add_argument("--shadow-timeout-ms", type=int, default=120000)
@@ -1849,6 +2283,9 @@ def _parser() -> argparse.ArgumentParser:
     coord.add_argument("--replay-timeout", type=float, default=180.0)
     coord.add_argument("--compare-timeout", type=float, default=60.0)
     coord.add_argument("--policy")
+    coord.add_argument("--continuous", action="store_true")
+    coord.add_argument("--max-frames", type=int, default=3)
+    coord.add_argument("--continue-on-difference", action="store_true")
     # The PR3 diagnosis always includes the shared comparison.  The old
     # --no-compare switch could not skip it without discarding qualification
     # evidence, so it is removed rather than silently ignored.
@@ -1874,6 +2311,7 @@ def _parser() -> argparse.ArgumentParser:
     tr.add_argument("--frame", required=True)
     tr.add_argument("--out")
     tr.add_argument("--force", action="store_true")
+    tr.add_argument("--cache-dir", default="")
     tr.set_defaults(handler=translate_command)
 
     rep = sub.add_parser("replay", help="execute a traced frame through Metal")

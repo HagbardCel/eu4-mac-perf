@@ -2009,6 +2009,7 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
         "execution": execution,
         "provenance": provenance,
         "evaluation": evaluation,
+        "history": replay.get("history") or {},
         "operation_coverage": {
             "status": operation_coverage,
             "events": replay.get("events"),

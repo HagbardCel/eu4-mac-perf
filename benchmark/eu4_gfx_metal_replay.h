@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define EU4_METAL_REPLAY_ABI_VERSION 2u
+#define EU4_METAL_REPLAY_ABI_VERSION 3u
 #define EU4_METAL_REPLAY_PATH_MAX 1024u
 #define EU4_METAL_REPLAY_SHA_MAX 65u
 
@@ -48,6 +48,13 @@ typedef struct {
     const char *expected_reference_sha256;
     const char *expected_shader_json_sha256;
     uint32_t test_inject_failure; /* test-only: 1 event, 2 final, 3 readback, 4 command */
+    /* Continuous same-process execution.  ``frame_sequence`` is 1-based and
+       must match the frame's ``gfx-frame-sequence/v1`` record.
+       ``persistent_history`` requires renderer-generated resources to come
+       from the same session's previous frame rather than captured GL input. */
+    uint64_t frame_sequence;
+    uint32_t persistent_history;
+    uint32_t reserved_history;
 } eu4_metal_replay_config;
 
 typedef struct {
@@ -68,6 +75,11 @@ typedef struct {
     char provenance_jsonl[EU4_METAL_REPLAY_PATH_MAX];
     char manifest_reference_sha256[EU4_METAL_REPLAY_SHA_MAX];
     char metal_frame_sha256[EU4_METAL_REPLAY_SHA_MAX];
+    /* Cross-frame history outcome.  0 disabled, 1 ok, 2 invalid. */
+    uint32_t history_status;
+    uint32_t carried_bindings;
+    uint32_t missing_history;
+    uint32_t stale_history;
 } eu4_metal_replay_result;
 
 /* Creates a session.  Returns NULL on failure and fills ``error`` when given. */

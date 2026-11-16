@@ -116,6 +116,19 @@ typedef struct {
 @property (nonatomic, strong) NSDictionary *checkpoints_by_event;
 @property (nonatomic, strong) NSMutableArray *checkpoint_results;
 @property (nonatomic, strong) NSMutableArray *transfer_records;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, NSMutableDictionary *> *resource_history;
+@property (nonatomic, strong) NSMutableSet<NSString *> *frame_written;
+@property (nonatomic, strong) NSMutableSet<NSString *> *frame_targets;
+@property (nonatomic, strong) NSSet<NSString *> *current_carried;
+@property (nonatomic, strong) NSMutableArray<NSDictionary *> *pending_lifecycle;
+@property (nonatomic, strong) NSDictionary *sequence_record;
+@property (nonatomic, strong) NSMutableDictionary *last_frame_identity;
+@property (nonatomic, assign) uint64_t frame_sequence;
+@property (nonatomic, assign) uint32_t persistent_history;
+@property (nonatomic, assign) NSUInteger carried_bindings;
+@property (nonatomic, assign) NSUInteger missing_history;
+@property (nonatomic, assign) NSUInteger stale_history;
+@property (nonatomic, assign) uint32_t history_status;
 @property (nonatomic, assign) NSUInteger virtual_target_id;
 @property (nonatomic, assign) NSUInteger current_event;
 @property (nonatomic, assign) uint64_t timeout_ms;
@@ -136,6 +149,10 @@ typedef struct {
 @end
 
 static thread_local EU4MetalReplayState *__unsafe_unretained g_state;
+/* Consumed by run_replay after encode_draw returns; see the history failure
+   paths below.  Creating the NSError inside encode_draw's autorelease pool
+   made its ARC writeback unsafe on this path. */
+static _Thread_local char g_history_error[512];
 static const NSUInteger kVertexBufferBase = 8;
 static thread_local FrameTarget *g_default_target_ptr;
 
@@ -163,6 +180,19 @@ static thread_local FrameTarget *g_default_target_ptr;
 #define g_checkpoints_by_event (g_state.checkpoints_by_event)
 #define g_checkpoint_results (g_state.checkpoint_results)
 #define g_transfer_records (g_state.transfer_records)
+#define g_resource_history (g_state.resource_history)
+#define g_frame_written (g_state.frame_written)
+#define g_frame_targets (g_state.frame_targets)
+#define g_current_carried (g_state.current_carried)
+#define g_pending_lifecycle (g_state.pending_lifecycle)
+#define g_sequence_record (g_state.sequence_record)
+#define g_last_frame_identity (g_state.last_frame_identity)
+#define g_frame_sequence (g_state.frame_sequence)
+#define g_persistent_history (g_state.persistent_history)
+#define g_carried_bindings (g_state.carried_bindings)
+#define g_missing_history (g_state.missing_history)
+#define g_stale_history (g_state.stale_history)
+#define g_history_status (g_state.history_status)
 #define g_current_event (g_state.current_event)
 #define g_timeout_ms (g_state.timeout_ms)
 #define g_deadline_ns (g_state.deadline_ns)
@@ -601,6 +631,278 @@ static NSString *texture_key(id value) {
     return nil;
 }
 
+
+/* ------------------------------------------------------------------------- */
+/* Persistent cross-frame resource history                                    */
+/* ------------------------------------------------------------------------- */
+
+static NSString *target_texture_name(NSDictionary *target) {
+    NSDictionary *attachment = target[@"color_attachment"];
+    if ([attachment isKindOfClass:[NSDictionary class]]) {
+        return texture_key(attachment[@"name"]);
+    }
+    return nil;
+}
+
+static NSString *target_resource_name(NSDictionary *target) {
+    NSString *name = target_texture_name(target);
+    if (name.length != 0) {
+        return name;
+    }
+    NSNumber *framebuffer = target[@"framebuffer"];
+    if ([framebuffer isKindOfClass:[NSNumber class]] &&
+        [framebuffer integerValue] == 0) {
+        return @"0";
+    }
+    return nil;
+}
+
+static NSMutableDictionary *history_entry(NSString *name) {
+    if (name.length == 0) {
+        return nil;
+    }
+    NSMutableDictionary *entry = g_resource_history[name];
+    if (entry == nil) {
+        entry = [@{
+            @"name": name,
+            @"kind": @"unknown",
+            @"width": @0,
+            @"height": @0,
+            @"format": @"",
+            @"generation": @0,
+            @"last_frame": @0,
+            @"last_event": @(-1),
+            @"content_sha256": @"",
+        } mutableCopy];
+        g_resource_history[name] = entry;
+    }
+    return entry;
+}
+
+static void history_note_target(NSString *name, NSDictionary *info) {
+    if (name.length == 0 || info == nil) {
+        return;
+    }
+    NSMutableDictionary *entry = history_entry(name);
+    entry[@"kind"] = @"renderer_generated";
+    entry[@"width"] = info[@"width"] ?: @0;
+    entry[@"height"] = info[@"height"] ?: @0;
+    entry[@"format"] = info[@"format"] ?: @"";
+    entry[@"generation"] = info[@"generation"] ?: @0;
+    entry[@"last_frame"] = @(g_frame_sequence);
+    entry[@"last_event"] = @(g_current_event);
+}
+
+static void history_note_external(NSString *name, NSDictionary *texture) {
+    if (name.length == 0) {
+        return;
+    }
+    NSMutableDictionary *entry = history_entry(name);
+    NSArray *levels_for_first = texture[@"levels"];
+    NSDictionary *first = [levels_for_first isKindOfClass:[NSArray class]]
+        ? levels_for_first.firstObject : nil;
+    entry[@"kind"] = @"external";
+    entry[@"width"] = texture[@"width"] ?: first[@"width"] ?: @0;
+    entry[@"height"] = texture[@"height"] ?: first[@"height"] ?: @0;
+    entry[@"format"] = texture[@"internal_format"] ?: @"";
+    entry[@"content_sha256"] = first[@"sha256"] ?: @"";
+    entry[@"last_frame"] = @(g_frame_sequence);
+    entry[@"last_event"] = @(g_current_event);
+}
+
+static BOOL sequence_error(NSError **error, NSString *message) {
+    if (error != NULL) {
+        *error = [NSError errorWithDomain:kErrorDomain code:90
+                                 userInfo:@{NSLocalizedDescriptionKey: message}];
+    }
+    return NO;
+}
+
+static BOOL apply_lifecycle_entry(NSDictionary *item) {
+    NSString *kind = string_value(item[@"kind"]);
+    NSArray *names = item[@"names"] ?: @[];
+    if ([kind isEqualToString:@"mutation"]) {
+        for (id raw in names) {
+            NSString *name = texture_key(raw);
+            if (name.length == 0) {
+                continue;
+            }
+            NSDictionary *history = g_resource_history[name];
+            BOOL renderer_owned =
+                [history[@"kind"] isEqualToString:@"renderer_generated"] ||
+                [g_current_carried containsObject:name] ||
+                [g_frame_targets containsObject:name];
+            if (!renderer_owned) {
+                /* External CPU content is captured at each sample; no
+                   persistent Metal identity depends on the mutation. */
+                continue;
+            }
+            g_history_status = 2;
+            g_missing_history++;
+            snprintf(g_history_error, sizeof(g_history_error),
+                     "%s was mutated by %s at event %ld; ordered CPU texture "
+                     "writes are not reproduced, so this frame cannot claim "
+                     "persistent resource equivalence",
+                     safe_utf8(name, "?"),
+                     safe_utf8(string_value(item[@"operation"]) ?: @"?",
+                               "?"),
+                     (long)number(item[@"event"], -1));
+            return NO;
+        }
+        return YES;
+    }
+    if (![kind isEqualToString:@"delete"] &&
+        ![kind isEqualToString:@"create"] &&
+        ![kind isEqualToString:@"reset"]) {
+        return YES;
+    }
+    for (id raw in names) {
+        NSString *name = texture_key(raw);
+        if (name.length == 0) {
+            continue;
+        }
+        /* A name that is a colour attachment in this frame is still owned by
+           the current frame's producer graph.  Upload/delete/recreate
+           ordering for that case is not captured with per-event identity yet;
+           removing it here would delete a live checkpointed target.  The
+           current frame's later write updates its generation. */
+        /* Apply the transition at its recorded event even when the name is
+           also a target in this frame: the write/clear that recreates it is
+           ordered after this deletion by the event stream.  Skipping it would
+           silently reuse the old Metal identity. */
+        [g_resource_history removeObjectForKey:name];
+        [g_render_targets removeObjectForKey:name];
+        [g_frame_written removeObject:name];
+    }
+    return YES;
+}
+
+static BOOL apply_due_lifecycle(NSInteger event) {
+    NSMutableArray *remaining = [NSMutableArray array];
+    for (NSDictionary *item in g_pending_lifecycle) {
+        NSInteger at = number(item[@"event"], 0);
+        if (at <= event) {
+            if (!apply_lifecycle_entry(item)) {
+                return NO;
+            }
+        } else {
+            [remaining addObject:item];
+        }
+    }
+    g_pending_lifecycle = remaining;
+    return YES;
+}
+
+/* Reads and validates one continuous-frame record.  A missing record is a
+   first-class failure when persistent history is requested: importing the
+   captured OpenGL image instead would hide an earlier Metal error. */
+static BOOL apply_frame_sequence(NSString *frame_dir, uint64_t expected,
+                                 NSError **error) {
+    NSString *path =
+        [frame_dir stringByAppendingPathComponent:@"frame-sequence.json"];
+    NSDictionary *document = nil;
+    if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
+        document = read_json(path, error);
+        if (document == nil) {
+            return NO;
+        }
+    } else if (expected > 1 || g_persistent_history) {
+        return sequence_error(
+            error, @"continuous frame is missing frame-sequence.json");
+    } else {
+        return YES;
+    }
+    if (![document[@"schema"] isEqualToString:@"gfx-frame-sequence/v1"]) {
+        return sequence_error(error, @"continuous frame sequence schema is invalid");
+    }
+    NSUInteger sequence = number(document[@"sequence_index"], 0);
+    if (sequence == 0 || (expected != 0 && sequence != expected)) {
+        return sequence_error(
+            error, [NSString stringWithFormat:
+                        @"frame sequence %lu does not match expected %llu",
+                        (unsigned long)sequence,
+                        (unsigned long long)expected]);
+    }
+    NSDictionary *previous = document[@"previous"];
+    if (sequence > 1) {
+        if (![previous isKindOfClass:[NSDictionary class]]) {
+            return sequence_error(
+                error, @"continuous frame has no previous-frame identity");
+        }
+        if (g_last_frame_identity.count == 0) {
+            return sequence_error(
+                error, @"continuous session has no retained previous frame");
+        }
+        for (NSString *field in @[@"capture_frame_id", @"manifest_sha256",
+                                  @"event_stream_sha256"]) {
+            if (![previous[field] isEqual:g_last_frame_identity[field]]) {
+                return sequence_error(
+                    error, [NSString stringWithFormat:
+                                @"previous-frame %@ does not match the session",
+                                field]);
+            }
+        }
+    } else if (g_last_frame_identity.count != 0) {
+        return sequence_error(
+            error, @"frame sequence restarted without destroying the session");
+    }
+    g_current_carried = [NSSet setWithArray:
+                             document[@"carried_renderer_outputs"] ?: @[]];
+    id lifecycle = document[@"lifecycle"] ?: @[];
+    if (![lifecycle isKindOfClass:[NSArray class]]) {
+        return sequence_error(error, @"frame lifecycle is not an array");
+    }
+    NSMutableArray *pending = [NSMutableArray array];
+    for (NSDictionary *item in lifecycle) {
+        if (![item isKindOfClass:[NSDictionary class]]) {
+            return sequence_error(error, @"frame lifecycle entry is invalid");
+        }
+        NSString *kind = string_value(item[@"kind"]);
+        NSArray *names = item[@"names"] ?: @[];
+        if (![names isKindOfClass:[NSArray class]]) {
+            return sequence_error(error, @"frame lifecycle names are invalid");
+        }
+        if (![kind isEqualToString:@"delete"] &&
+            ![kind isEqualToString:@"create"] &&
+            ![kind isEqualToString:@"reset"] &&
+            ![kind isEqualToString:@"mutation"]) {
+            return sequence_error(
+                error, [NSString stringWithFormat:
+                            @"unsupported lifecycle operation %@", kind]);
+        }
+        [pending addObject:item];
+    }
+    [pending sortUsingComparator:^NSComparisonResult(
+            NSDictionary *left, NSDictionary *right) {
+        return [@(number(left[@"event"], 0))
+            compare:@(number(right[@"event"], 0))];
+    }];
+    g_pending_lifecycle = pending;
+    g_sequence_record = document;
+    g_frame_sequence = sequence;
+    return YES;
+}
+
+static NSDictionary *history_document(void) {
+    NSMutableArray *resources = [NSMutableArray array];
+    NSArray *keys = [[g_resource_history allKeys]
+        sortedArrayUsingSelector:@selector(compare:)];
+    for (NSString *name in keys) {
+        [resources addObject:g_resource_history[name]];
+    }
+    return @{
+        @"schema": @"gfx-metal-resource-history/v1",
+        @"status": g_history_status == 2 ? @"invalid" :
+                   (g_history_status == 0 ? @"disabled" : @"ok"),
+        @"sequence": @(g_frame_sequence),
+        @"carried_bindings": @(g_carried_bindings),
+        @"missing_history": @(g_missing_history),
+        @"stale_history": @(g_stale_history),
+        @"previous": g_last_frame_identity ?: @{},
+        @"resources": resources,
+    };
+}
+
 /* ------------------------------------------------------------------------- */
 /* Format mapping                                                             */
 /* ------------------------------------------------------------------------- */
@@ -939,6 +1241,28 @@ static NSMutableDictionary *target_for(NSDictionary *target, NSError **error) {
     NSNumber *key = @(number(target[@"framebuffer"], 0));
     NSMutableDictionary *existing = g_targets[key];
     if (existing != nil) {
+        NSUInteger requested_width = number(target[@"width"], 0);
+        NSUInteger requested_height = number(target[@"height"], 0);
+        NSDictionary *requested_attachment = target[@"color_attachment"];
+        NSString *requested_format = requested_attachment
+            ? string_value(requested_attachment[@"internal_format"]) : nil;
+        BOOL incompatible =
+            (requested_width != 0 &&
+             requested_width != number(existing[@"width"], 0)) ||
+            (requested_height != 0 &&
+             requested_height != number(existing[@"height"], 0)) ||
+            (requested_format.length != 0 &&
+             ![requested_format isEqualToString:string_value(existing[@"format"])]);
+        if (incompatible) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:31
+                    userInfo:@{NSLocalizedDescriptionKey:
+                        @"render target was recreated with incompatible "
+                        @"size or format; the retained Metal identity cannot "
+                        @"be reused"}];
+            }
+            return nil;
+        }
         return existing;
     }
     NSUInteger framebuffer = [key unsignedIntegerValue];
@@ -1290,6 +1614,13 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             return NO;
         }
         target_info[@"generation"] = @(number(target_info[@"generation"], 0) + 1);
+        NSString *draw_target_name =
+            target_resource_name(event[@"target"] ?: @{});
+        if (draw_target_name.length != 0) {
+            [g_frame_written addObject:draw_target_name];
+            g_render_targets[draw_target_name] = target_info;
+            history_note_target(draw_target_name, target_info);
+        }
         MTLTextureDescriptor *color_descriptor = [MTLTextureDescriptor new];
         color_descriptor.pixelFormat =
             ((id<MTLTexture>)target_info[@"color"]).pixelFormat;
@@ -1796,7 +2127,102 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                 }
                 id<MTLTexture> metal_texture = nil;
                 NSString *cache_name = texture_key(texture[@"name"]);
-                NSMutableDictionary *render_target = g_render_targets[cache_name];
+                NSMutableDictionary *render_target = nil;
+                NSMutableDictionary *persistent_target =
+                    g_render_targets[cache_name];
+                NSDictionary *history = g_resource_history[cache_name];
+                BOOL carried = NO;
+                /* Only a write executed earlier in this frame counts as a
+                   producer.  Merely being declared as a colour attachment is
+                   not a producer: sampling it before its draw/clear must use
+                   the carried previous-frame output or fail closed. */
+                BOOL current_target =
+                    [g_frame_written containsObject:cache_name];
+                if (persistent_target != nil &&
+                    (!g_persistent_history || current_target)) {
+                    render_target = persistent_target;
+                } else if (persistent_target != nil &&
+                           g_persistent_history &&
+                           [g_current_carried containsObject:cache_name]) {
+                    if (![history[@"kind"] isEqualToString:
+                            @"renderer_generated"]) {
+                        g_history_status = 2;
+                        g_missing_history++;
+                        snprintf(g_history_error, sizeof(g_history_error),
+                                 "%s is carried but was not generated by Metal",
+                                 safe_utf8(cache_name, "?"));
+                        [encoder endEncoding];
+                        return NO;
+                    }
+                    NSArray *levels_for_first = texture[@"levels"];
+                    NSDictionary *first =
+                        [levels_for_first isKindOfClass:[NSArray class]]
+                            ? levels_for_first.firstObject : nil;
+                    NSUInteger width = number(texture[@"width"],
+                                              number(first[@"width"], 0));
+                    NSUInteger height = number(texture[@"height"],
+                                               number(first[@"height"], 0));
+                    NSString *captured_format =
+                        string_value(texture[@"internal_format"]) ?: @"";
+                    NSString *history_format =
+                        string_value(history[@"format"]) ?: @"";
+                    BOOL rgb_captured =
+                        [captured_format isEqualToString:@"RGB8"] ||
+                        [captured_format isEqualToString:@"SRGB8_ALPHA8"];
+                    BOOL rgb_history =
+                        [history_format isEqualToString:@"RGB8"] ||
+                        [history_format isEqualToString:@"SRGB8_ALPHA8"];
+                    if ((width != number(history[@"width"], 0)) ||
+                        (height != number(history[@"height"], 0)) ||
+                        (rgb_captured != rgb_history)) {
+                        g_history_status = 2;
+                        g_stale_history++;
+                        snprintf(g_history_error, sizeof(g_history_error),
+                                 "%s carried history is stale (size/format)",
+                                 safe_utf8(cache_name, "?"));
+                        [encoder endEncoding];
+                        return NO;
+                    }
+                    render_target = persistent_target;
+                    carried = YES;
+                    g_carried_bindings++;
+                } else if (persistent_target != nil &&
+                           g_persistent_history &&
+                           ![g_current_carried containsObject:cache_name] &&
+                           history != nil &&
+                           [history[@"kind"] isEqualToString:
+                               @"renderer_generated"]) {
+                    g_history_status = 2;
+                    g_missing_history++;
+                    snprintf(g_history_error, sizeof(g_history_error),
+                             "%s has renderer history but is not carried by this frame",
+                             safe_utf8(cache_name, "?"));
+                    [encoder endEncoding];
+                    return NO;
+                } else if (persistent_target == nil &&
+                           g_persistent_history &&
+                           ![g_current_carried containsObject:cache_name] &&
+                           history != nil &&
+                           [history[@"kind"] isEqualToString:
+                               @"renderer_generated"]) {
+                    g_history_status = 2;
+                    g_missing_history++;
+                    snprintf(g_history_error, sizeof(g_history_error),
+                             "%s has renderer history but no producer or carry record",
+                             safe_utf8(cache_name, "?"));
+                    [encoder endEncoding];
+                    return NO;
+                } else if (persistent_target == nil &&
+                           g_persistent_history &&
+                           [g_current_carried containsObject:cache_name]) {
+                    snprintf(g_history_error, sizeof(g_history_error),
+                             "%s is carried but no Metal producer exists",
+                             safe_utf8(cache_name, "?"));
+                    g_history_status = 2;
+                    g_missing_history++;
+                    [encoder endEncoding];
+                    return NO;
+                }
                 if (render_target != nil) {
                     NSString *format = string_value(render_target[@"format"]) ?: @"";
                     BOOL rgb_source = [format isEqualToString:@"RGB8"] ||
@@ -1833,6 +2259,7 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                         }
                         g_textures[key] = metal_texture;
                     }
+                    history_note_external(cache_name, texture);
                 }
                 NSUInteger texture_index =
                     number(binding[@"texture_index"], 0);
@@ -1858,6 +2285,12 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                     @"fault_missing_engine_unit": @(replacement_missing
                         ? selected_engine_unit : -1),
                 } mutableCopy];
+                sample[@"carried"] = @(carried);
+                if (carried) {
+                    sample[@"history_frame"] = history[@"last_frame"] ?: @0;
+                    sample[@"history_generation"] =
+                        history[@"generation"] ?: @0;
+                }
                 if (render_target != nil) {
                     sample[@"width"] = render_target[@"width"] ?: @0;
                     sample[@"height"] = render_target[@"height"] ?: @0;
@@ -2267,6 +2700,10 @@ static BOOL encode_copy_event(NSDictionary *event, NSString *frameDir,
     }
     destination_info[@"generation"] =
         @(number(destination_info[@"generation"], 0) + 1);
+    if (destination.length != 0) {
+        [g_frame_written addObject:destination];
+        history_note_target(destination, destination_info);
+    }
     NSInteger destination_generation_after =
         number(destination_info[@"generation"], 0);
     [g_transfer_records addObject:@{
@@ -2308,6 +2745,13 @@ static BOOL encode_clear(NSDictionary *event, NSString *frameDir,
     if (clear_color) {
         target_info[@"generation"] =
             @(number(target_info[@"generation"], 0) + 1);
+        NSString *clear_target_name =
+            target_resource_name(event[@"target"] ?: @{});
+        if (clear_target_name.length != 0) {
+            [g_frame_written addObject:clear_target_name];
+            g_render_targets[clear_target_name] = target_info;
+            history_note_target(clear_target_name, target_info);
+        }
     }
     NSArray *color = event[@"color"];
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -3261,6 +3705,12 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                 out_result->timed_out = timed_out ? 1 : 0;
                 out_result->partial =
                     (stop_after >= 0 || only_event >= 0) ? 1 : 0;
+                out_result->history_status = g_history_status;
+                out_result->carried_bindings =
+                    (uint32_t)g_carried_bindings;
+                out_result->missing_history =
+                    (uint32_t)g_missing_history;
+                out_result->stale_history = (uint32_t)g_stale_history;
                 out_result->duration_ns = replay_now_ns() - started_ns;
                 snprintf(out_result->error, sizeof(out_result->error), "%s",
                          safe_utf8(full, "unknown replay failure"));
@@ -3280,6 +3730,7 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                 @"partial": @((stop_after >= 0 || only_event >= 0)),
                 @"duration_ns": @(replay_now_ns() - started_ns),
                 @"readback": @NO,
+                @"history": history_document(),
             } mutableCopy];
             NSData *json = [NSJSONSerialization dataWithJSONObject:report
                                                            options:
@@ -3328,9 +3779,29 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
         g_transfer_records = [NSMutableArray array];
         g_checkpoints_by_event = nil;
         g_current_event = 0;
+        g_frame_written = [NSMutableSet set];
+        g_frame_targets = [NSMutableSet set];
+        g_carried_bindings = 0;
+        g_missing_history = 0;
+        g_stale_history = 0;
+        g_persistent_history = config->persistent_history != 0;
+        g_frame_sequence = config->frame_sequence;
+        g_history_status = g_persistent_history ? 1 : 0;
+        g_current_carried = [NSSet set];
+        g_pending_lifecycle = [NSMutableArray array];
+        g_sequence_record = nil;
         memset(g_default_target_ptr, 0, sizeof(*g_default_target_ptr));
 
         NSError *error = nil;
+        if (g_persistent_history || config->frame_sequence > 0) {
+            if (!apply_frame_sequence(frame_path, config->frame_sequence,
+                                      &error)) {
+                g_history_status = 2;
+                return record_failure(
+                    @"history_sequence", -1, @"frame", error,
+                    @"continuous frame sequence validation failed", 12, nil);
+            }
+        }
         NSDictionary *manifest = read_json(
             [frame_path stringByAppendingPathComponent:@"frame-trace.json"], &error);
         if (manifest == nil) {
@@ -3425,6 +3896,8 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
         g_default_target.width = number(default_info[@"width"], 0);
         g_default_target.height = number(default_info[@"height"], 0);
         g_render_targets[@"0"] = default_info;
+        [g_frame_targets addObject:@"0"];
+        history_note_target(@"0", default_info);
 
         NSDictionary *first_draw = nil;
         NSUInteger first_draw_index = 0;
@@ -3448,6 +3921,14 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                                       error, @"frame seed upload failed", 6,
                                       nil);
             }
+        }
+        /* Lifecycle entries recorded before the frame's first event apply
+           before targets are pre-registered, so a deleted session resource can
+           be recreated with this frame's captured size/format instead of
+           leaving a stale Metal identity behind. */
+        if (!apply_due_lifecycle(-1)) {
+            return record_failure(@"history_mutation", -1, @"frame", nil,
+                                  @(g_history_error), 12, nil);
         }
         /* Register render-target textures under the GL names that sample them,
            so composition inside the frame uses the rendered contents. */
@@ -3473,6 +3954,7 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
             if (g_render_targets[attachment_name] == nil) {
                 g_render_targets[attachment_name] = info;
             }
+            [g_frame_targets addObject:attachment_name];
         }
         /* Resolve/copy destinations are not framebuffer colour attachments in
            a draw event, so allocate their Metal targets from the captured
@@ -3507,6 +3989,8 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                                       nil);
             }
             g_render_targets[destination] = info;
+            [g_frame_targets addObject:destination];
+            history_note_target(destination, info);
         }
         id<MTLCommandBuffer> command = [g_queue commandBuffer];
         NSDictionary *first_target = first_draw[@"target"];
@@ -3568,6 +4052,11 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                 break;
             }
             g_current_event = index;
+            if (!apply_due_lifecycle((NSInteger)index)) {
+                return record_failure(@"history_mutation", (NSInteger)index,
+                                      @"frame", nil, @(g_history_error), 12,
+                                      nil);
+            }
             /* Execute one event per submission.  Render-target sampling may
                need a compute pass in its own command buffer; that pass must
                observe every prior event as completed or it reads stale
@@ -3740,6 +4229,14 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                     if (ok) {
                         ok = encode_draw(event, entry, frame_path, shader_path,
                                          command, &event_error);
+                        if (!ok && event_error == nil &&
+                            g_history_error[0] != 0) {
+                            event_error = [NSError errorWithDomain:kErrorDomain
+                                code:95
+                                userInfo:@{NSLocalizedDescriptionKey:
+                                    @(g_history_error)}];
+                            g_history_error[0] = 0;
+                        }
                     }
                     if (ok && capture_post_images && event[@"post_image"] != nil &&
                         (!isolated || is_selected)) {
@@ -3802,6 +4299,14 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
             encoded++;
             g_encoded_count = encoded;
             g_failed_count = failed;
+        }
+        /* Drain lifecycle entries recorded at the end-of-frame event count.
+           A delete or unreproduced CPU mutation after the last captured event
+           must still invalidate the frame instead of being ignored forever. */
+        if (!apply_due_lifecycle((NSInteger)events.count)) {
+            return record_failure(@"history_mutation", (NSInteger)events.count,
+                                  @"frame", nil, @(g_history_error), 12,
+                                  command);
         }
         [command commit];
         if (config != NULL && config->test_inject_failure == 2) {
@@ -3993,6 +4498,7 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
             result[@"checkpoints"] = g_checkpoint_results;
         }
         result[@"transfers"] = g_transfer_records;
+        result[@"history"] = history_document();
         result[@"readback"] = @(readback_ok);
         BOOL partial_mode = stop_after >= 0 || only_event >= 0;
         if (!provenance_written) {
@@ -4008,8 +4514,21 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
         result[@"failures"] = failures;
         result[@"partial"] = @(partial_mode);
         result[@"timed_out"] = @(g_deadline_expired ? YES : NO);
+        if (status_ok && g_persistent_history && g_sequence_record != nil) {
+            g_last_frame_identity = [@{
+                @"capture_frame_id":
+                    g_sequence_record[@"capture_frame_id"] ?: @0,
+                @"manifest_sha256":
+                    g_sequence_record[@"manifest_sha256"] ?: @"",
+                @"event_stream_sha256":
+                    g_sequence_record[@"event_stream_sha256"] ?: @"",
+            } mutableCopy];
+        }
         if (status_ok) {
             result[@"status"] = @"ok";
+            if (g_persistent_history && g_history_status == 0) {
+                g_history_status = 1;
+            }
         } else if (g_deadline_expired) {
             result[@"status"] = @"timeout";
         } else {
@@ -4080,6 +4599,10 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
             out_result->failed = (uint32_t)failed;
             out_result->timed_out = g_deadline_expired ? 1 : 0;
             out_result->partial = partial_mode ? 1 : 0;
+            out_result->history_status = g_history_status;
+            out_result->carried_bindings = (uint32_t)g_carried_bindings;
+            out_result->missing_history = (uint32_t)g_missing_history;
+            out_result->stale_history = (uint32_t)g_stale_history;
             out_result->ok = (status_ok && provenance_written && json_written &&
                               failed == 0 && readback_ok &&
                               (partial_mode || encoded == events.count) &&
@@ -4204,6 +4727,11 @@ extern "C" eu4_metal_replay_session *eu4_metal_replay_create(
         state.render_targets = [NSMutableDictionary dictionary];
         state.alpha_textures = [NSMutableDictionary dictionary];
         state.orientation_textures = [NSMutableDictionary dictionary];
+        state.resource_history = [NSMutableDictionary dictionary];
+        state.frame_written = [NSMutableSet set];
+        state.frame_targets = [NSMutableSet set];
+        state.current_carried = [NSSet set];
+        state.last_frame_identity = [NSMutableDictionary dictionary];
         state.virtual_target_id = 100000;
         eu4_metal_replay_session *session =
             (eu4_metal_replay_session *)calloc(1, sizeof(*session));

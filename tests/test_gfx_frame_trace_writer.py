@@ -50,8 +50,8 @@ class FrameTraceWriterTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.temporary.cleanup()
 
-    def _run(self, scenario: str, directory: Path):
-        command = [str(self.binary), scenario, str(directory)]
+    def _run(self, scenario: str, directory: Path, *args):
+        command = [str(self.binary), scenario, str(directory), *map(str, args)]
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
         return result
@@ -92,6 +92,123 @@ class FrameTraceWriterTests(unittest.TestCase):
             self.assertTrue(manifest["truncated"])
             self.assertEqual(manifest["reason"], "draw_cap")
             self.assertEqual(manifest["events"], 1)
+
+    def test_continuous_capture_publishes_ordered_sealed_frames(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "campaign"
+            self._run("continuous", directory, 3, 64 * 1024 * 1024)
+            campaign = json.loads((directory / "sequence.json").read_text())
+            self.assertEqual(campaign["schema"],
+                             "gfx-frame-sequence-campaign/v1")
+            self.assertEqual(campaign["status"], "complete")
+            self.assertEqual(campaign["reason"], "frame_limit")
+            self.assertEqual(campaign["frames_completed"], 3)
+            self.assertEqual(len(campaign["frames"]), 3)
+            self.assertGreater(campaign["bytes_written"], 0)
+            previous = None
+            lifecycle_seen = []
+            for sequence in range(1, 4):
+                path = directory / f"frame-{sequence:06d}"
+                manifest = self._manifest(path)
+                self.assertTrue(manifest["complete"], manifest)
+                seal = json.loads((path / "frame-seal.json").read_text())
+                self.assertTrue(seal["sealed"])
+                self.assertEqual(seal["capture_frame_id"], sequence)
+                sequence_record = json.loads(
+                    (path / "frame-sequence.json").read_text())
+                self.assertEqual(sequence_record["schema"],
+                                 "gfx-frame-sequence/v1")
+                self.assertEqual(sequence_record["sequence_index"], sequence)
+                self.assertEqual(sequence_record["campaign_frames"], 3)
+                self.assertEqual(
+                    sequence_record["event_stream_sha256"],
+                    hashlib.sha256(
+                        (path / "frame-events.jsonl").read_bytes()
+                    ).hexdigest())
+                if previous is None:
+                    self.assertIsNone(sequence_record["previous"])
+                else:
+                    self.assertEqual(
+                        sequence_record["previous"]["capture_frame_id"],
+                        previous)
+                    names = [
+                        name
+                        for item in sequence_record["lifecycle"]
+                        if item.get("kind") == "delete"
+                        for name in item.get("names") or []
+                    ]
+                    lifecycle_seen.extend(names)
+                previous = sequence
+            self.assertIn("443", lifecycle_seen)
+            self.assertFalse((directory / "frame-000004").exists())
+
+    def _sequence(self, directory: Path, index: int) -> dict:
+        return json.loads(
+            (directory / f"frame-{index:06d}" / "frame-sequence.json").read_text())
+
+    def test_carried_set_persists_across_an_unwritten_unused_frame(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "campaign"
+            self._run("continuous-carried", directory, 3, 64 * 1024 * 1024)
+            first = self._sequence(directory, 1)
+            second = self._sequence(directory, 2)
+            third = self._sequence(directory, 3)
+            self.assertIn("443", first["render_targets"])
+            self.assertEqual(first["carried_renderer_outputs"], [])
+            # Frame 2 neither writes nor samples the target.
+            self.assertEqual(second["render_targets"], [])
+            self.assertIn("443", second["carried_renderer_outputs"])
+            # Frame 3 still sees the frame-1 resource; replacing the set with
+            # the preceding frame's writes would have dropped it here.
+            self.assertEqual(third["render_targets"], [])
+            self.assertIn("443", third["carried_renderer_outputs"])
+
+    def test_in_frame_delete_keeps_the_frame_start_carried_snapshot(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "campaign"
+            self._run("continuous-carried-delete", directory, 3,
+                      64 * 1024 * 1024)
+            third = self._sequence(directory, 3)
+            # 443 was carried into this frame and deleted at event 1.  A
+            # sample before that event may still use it, so the frame-start
+            # snapshot must advertise it alongside the lifecycle delete.
+            self.assertIn("443", third["carried_renderer_outputs"])
+            deletes = [item for item in third["lifecycle"]
+                       if item.get("kind") == "delete"]
+            self.assertEqual(len(deletes), 1, third["lifecycle"])
+            self.assertEqual(deletes[0]["event"], 1)
+            self.assertIn("443", deletes[0]["names"])
+
+    def test_delete_recreate_publishes_lifecycle_and_recarries_the_name(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "campaign"
+            self._run("continuous-carried-lifecycle", directory, 3,
+                      64 * 1024 * 1024)
+            first = self._sequence(directory, 1)
+            second = self._sequence(directory, 2)
+            third = self._sequence(directory, 3)
+            self.assertIn("443", first["render_targets"])
+            self.assertIn("443", second["render_targets"])
+            deletes = [item for item in second["lifecycle"]
+                       if item.get("kind") == "delete"]
+            self.assertEqual(len(deletes), 1, second["lifecycle"])
+            self.assertIn("443", deletes[0]["names"])
+            self.assertIsInstance(deletes[0]["event"], int)
+            # The recreated name is carried by its new write; the delete did
+            # not permanently remove the resource identity.
+            self.assertIn("443", third["carried_renderer_outputs"])
+
+    def test_continuous_byte_budget_stops_incomplete_without_dropping_frames(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "campaign"
+            self._run("continuous-byte-budget", directory)
+            campaign = json.loads((directory / "sequence.json").read_text())
+            self.assertEqual(campaign["status"], "incomplete")
+            self.assertEqual(campaign["reason"], "byte_budget")
+            self.assertEqual(campaign["frames_completed"], 1)
+            self.assertEqual(len(campaign["frames"]), 1)
+            self.assertTrue((directory / "frame-000001" / "frame-trace.json").is_file())
+            self.assertFalse((directory / "frame-000002").exists())
 
     def test_event_stream_flush_failure_invalidates_frame(self):
         with tempfile.TemporaryDirectory() as temporary:

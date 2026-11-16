@@ -8,6 +8,7 @@
 
 #include <CommonCrypto/CommonDigest.h>
 #include <limits.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,9 +16,23 @@
 #include <unistd.h>
 
 static int g_enabled;
+static int g_continuous;
+static int g_async;
 static int g_running;
 static int g_done;
+static int g_stop_requested;
+static uint32_t g_max_frames;
+static uint32_t g_max_pending;
+static uint32_t g_frame_index;
+static eu4_metal_replay_session *g_session;
+static char g_output_base[PATH_MAX];
 static uint64_t g_started_ns;
+static NSMutableArray *g_jobs;
+static NSCondition *g_jobs_condition;
+static uint32_t g_queue_high_water;
+static int g_worker_started;
+static int g_worker_stop;
+static pthread_t g_worker_thread;
 
 static uint64_t shadow_now_ns(void) {
     struct timespec spec;
@@ -440,19 +455,10 @@ static BOOL shadow_verify_receipt(
     return YES;
 }
 
-static int shadow_callback(const eu4_frame_capture_descriptor *capture,
-                           void *context) {
-    (void)context;
-    if (g_done) {
-        return 0;
-    }
-    if (g_running) {
-        return 9;
-    }
-    g_running = 1;
+static int shadow_execute_capture(
+    const eu4_frame_capture_descriptor *capture, uint32_t sequence) {
     g_started_ns = shadow_now_ns();
     int status = 1;
-    eu4_metal_replay_session *active_session = NULL;
     BOOL detailed_report_written = NO;
     NSString *report_stage = @"shader_wait";
     char checkpoint_request_name[256] = {0};
@@ -462,8 +468,14 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
     @autoreleasepool {
         char output[PATH_MAX];
         char shaders[PATH_MAX];
-        default_paths(capture, output, sizeof(output), shaders,
-                      sizeof(shaders));
+        if (g_continuous) {
+            snprintf(output, sizeof(output), "%s/frame-%06u", g_output_base,
+                     sequence);
+            snprintf(shaders, sizeof(shaders), "%s/shaders", output);
+        } else {
+            default_paths(capture, output, sizeof(output), shaders,
+                          sizeof(shaders));
+        }
         NSString *output_path = @(output);
         NSString *shader_path = @(shaders);
         NSString *report_path =
@@ -522,15 +534,20 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
                     config.expected_reference_sha256 =
                         capture->reference_sha256;
                     config.expected_shader_json_sha256 = shader_json_sha;
+                    config.frame_sequence =
+                        g_continuous ? (uint64_t)sequence : 0;
+                    config.persistent_history = g_continuous ? 1u : 0u;
                     char checkpoint_request_path[PATH_MAX];
                     snprintf(checkpoint_request_path,
                              sizeof(checkpoint_request_path), "%s/%s", output,
                              checkpoint_request_name);
                     config.checkpoint_path = checkpoint_request_path;
                     char create_error[512] = {0};
-                    active_session = eu4_metal_replay_create(
-                        &config, create_error, sizeof(create_error));
-                    if (active_session == NULL) {
+                    if (g_session == NULL) {
+                        g_session = eu4_metal_replay_create(
+                            &config, create_error, sizeof(create_error));
+                    }
+                    if (g_session == NULL) {
                         report_stage = @"metal_create";
                         report_error = create_error[0] != 0
                             ? @(create_error)
@@ -538,12 +555,24 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
                         report_timed_out = NO;
                     } else {
                         eu4_metal_replay_result result;
-                        int code = eu4_metal_replay_frame(active_session,
-                                                          &config, &result);
-                        NSDictionary *report = shadow_report_for_replay(
+                        int code = eu4_metal_replay_frame(g_session, &config,
+                                                          &result);
+                        NSMutableDictionary *report = [shadow_report_for_replay(
                             capture, shader_path, &result, code,
                             g_started_ns, @(checkpoint_request_name),
-                            @(checkpoint_request_sha));
+                            @(checkpoint_request_sha)) mutableCopy];
+                        report[@"mode"] = g_continuous ? @"continuous"
+                                                       : @"single-frame";
+                        report[@"sequence"] = @(sequence);
+                        report[@"history_status"] = @(result.history_status);
+                        report[@"carried_bindings"] =
+                            @(result.carried_bindings);
+                        report[@"missing_history"] = @(result.missing_history);
+                        report[@"stale_history"] = @(result.stale_history);
+                        report[@"async"] = @(g_async ? YES : NO);
+                        report[@"queue_high_water"] =
+                            @(g_queue_high_water);
+                        report[@"queue_depth"] = @(g_jobs.count);
                         report_stage = report[@"stage"] ?: @"metal_replay";
                         report_error = report[@"error"] ?: @"";
                         report_timed_out =
@@ -552,6 +581,50 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
                         detailed_report_written = report_written;
                         if (result.ok && report_written) {
                             status = 0;
+                            if (g_continuous) {
+                                char decision_path[PATH_MAX];
+                                snprintf(decision_path, sizeof(decision_path),
+                                         "%s/decision.json", output);
+                                uint64_t decision_wait = env_u64(
+                                    "EU4_GFX_SHADOW_WAIT_MS", 120000);
+                                if (!wait_for_file(decision_path,
+                                                   decision_wait)) {
+                                    status = 1;
+                                    report_stage = @"decision_wait";
+                                    report_error = @"decision_timeout";
+                                } else {
+                                    NSData *data = [NSData
+                                        dataWithContentsOfFile:
+                                            @(decision_path)];
+                                    id value = data != nil
+                                        ? [NSJSONSerialization
+                                              JSONObjectWithData:data
+                                                         options:0 error:NULL]
+                                        : nil;
+                                    if (![value isKindOfClass:
+                                            [NSDictionary class]] ||
+                                        ![value[@"continue"] isKindOfClass:
+                                            [NSNumber class]]) {
+                                        status = 1;
+                                        report_stage = @"decision_wait";
+                                        report_error = @"decision_invalid";
+                                    } else if (![value[@"sequence"]
+                                                    isKindOfClass:
+                                                        [NSNumber class]] ||
+                                                [value[@"sequence"]
+                                                    intValue] !=
+                                                    (int)sequence) {
+                                        status = 1;
+                                        report_stage = @"decision_wait";
+                                        report_error =
+                                            @"decision_for_another_frame";
+                                    } else if (![value[@"continue"]
+                                                     boolValue]) {
+                                        g_stop_requested = 1;
+                                        g_done = 1;
+                                    }
+                                }
+                            }
                         } else if (result.ok) {
                             status = 1;
                             report_stage = @"report_write";
@@ -584,16 +657,196 @@ static int shadow_callback(const eu4_frame_capture_descriptor *capture,
                 capture, shader_path, reason, g_started_ns);
             detailed_report_written = write_report(report_path, report);
         } @finally {
-            if (active_session != NULL) {
-                eu4_metal_replay_destroy(active_session);
-                active_session = NULL;
+            if (g_session != NULL &&
+                (!g_continuous || status != 0 || g_stop_requested ||
+                 sequence >= g_max_frames)) {
+                eu4_metal_replay_destroy(g_session);
+                g_session = NULL;
             }
         }
     }
-    g_running = 0;
-    g_done = 1;
     return status;
 }
+
+
+static void shadow_job_paths(const eu4_frame_capture_descriptor *capture,
+                             uint32_t sequence, char *output,
+                             size_t output_size, char *shaders,
+                             size_t shaders_size) {
+    if (g_continuous) {
+        snprintf(output, output_size, "%s/frame-%06u", g_output_base,
+                 sequence);
+        snprintf(shaders, shaders_size, "%s/shaders", output);
+    } else {
+        default_paths(capture, output, output_size, shaders, shaders_size);
+    }
+}
+
+static void shadow_drop_job(const eu4_frame_capture_descriptor *capture,
+                            uint32_t sequence, NSString *stage,
+                            NSString *error) {
+    char output[PATH_MAX];
+    char shaders[PATH_MAX];
+    shadow_job_paths(capture, sequence, output, sizeof(output), shaders,
+                     sizeof(shaders));
+    [[NSFileManager defaultManager]
+        createDirectoryAtPath:@(output)
+  withIntermediateDirectories:YES
+                   attributes:nil
+                        error:NULL];
+    NSDictionary *report = shadow_report_for_failure(
+        capture, @(shaders), stage, error, NO, shadow_now_ns(), @"", @"");
+    write_report([@(output) stringByAppendingPathComponent:
+                             @"shadow-report.json"], report);
+}
+
+static void *shadow_worker_main(void *context) {
+    (void)context;
+    @autoreleasepool {
+        for (;;) {
+            [g_jobs_condition lock];
+            while (g_jobs.count == 0 && !g_worker_stop) {
+                [g_jobs_condition wait];
+            }
+            if (g_worker_stop && g_jobs.count == 0) {
+                [g_jobs_condition unlock];
+                break;
+            }
+            NSDictionary *job = g_jobs.firstObject;
+            [g_jobs removeObjectAtIndex:0];
+            [g_jobs_condition broadcast];
+            [g_jobs_condition unlock];
+
+            NSData *data = job[@"capture"];
+            const eu4_frame_capture_descriptor *capture =
+                (const eu4_frame_capture_descriptor *)data.bytes;
+            uint32_t sequence = [job[@"sequence"] unsignedIntValue];
+            char stop_path[PATH_MAX];
+            int stopped = 0;
+            if (g_output_base[0] != 0) {
+                snprintf(stop_path, sizeof(stop_path), "%s/stop",
+                         g_output_base);
+                stopped = access(stop_path, F_OK) == 0;
+            }
+            if (g_worker_stop || g_stop_requested || stopped) {
+                shadow_drop_job(capture, sequence, @"campaign_stopped",
+                                @"capture/replay campaign was stopped");
+                continue;
+            }
+            int status = shadow_execute_capture(capture, sequence);
+            [g_jobs_condition lock];
+            if (status != 0) {
+                g_stop_requested = 1;
+            }
+            if (sequence >= g_max_frames || status != 0 ||
+                g_stop_requested) {
+                g_done = 1;
+            }
+            [g_jobs_condition broadcast];
+            [g_jobs_condition unlock];
+        }
+    }
+    return NULL;
+}
+
+static int shadow_callback(const eu4_frame_capture_descriptor *capture,
+                           void *context) {
+    (void)context;
+    if (g_done) {
+        return 0;
+    }
+    if (g_running) {
+        return 9;
+    }
+    g_running = 1;
+    uint32_t sequence = 0;
+    if (g_continuous) {
+        char stop_path[PATH_MAX];
+        int stopped = 0;
+        if (g_output_base[0] != 0) {
+            snprintf(stop_path, sizeof(stop_path), "%s/stop", g_output_base);
+            stopped = access(stop_path, F_OK) == 0;
+        }
+        if (stopped || g_frame_index >= g_max_frames) {
+            g_done = 1;
+            g_running = 0;
+            return 0;
+        }
+        sequence = ++g_frame_index;
+    }
+    if (g_async && g_continuous) {
+        NSData *descriptor = [NSData dataWithBytes:capture
+                                            length:sizeof(*capture)];
+        NSDictionary *job = @{
+            @"capture": descriptor,
+            @"sequence": @(sequence),
+        };
+        [g_jobs_condition lock];
+        BOOL queued = NO;
+        while (g_jobs.count >= g_max_pending && !g_worker_stop) {
+            NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:
+                                             (NSTimeInterval)(
+                                                 env_u64("EU4_GFX_SHADOW_WAIT_MS",
+                                                         120000) / 1000.0)];
+            if (![g_jobs_condition waitUntilDate:deadline]) {
+                break;
+            }
+        }
+        if (g_jobs.count < g_max_pending && !g_worker_stop) {
+            [g_jobs addObject:job];
+            if ((uint32_t)g_jobs.count > g_queue_high_water) {
+                g_queue_high_water = (uint32_t)g_jobs.count;
+            }
+            [g_jobs_condition broadcast];
+            queued = YES;
+        }
+        [g_jobs_condition unlock];
+        if (!queued) {
+            char output[PATH_MAX];
+            char shaders[PATH_MAX];
+            snprintf(output, sizeof(output), "%s/frame-%06u", g_output_base,
+                     sequence);
+            snprintf(shaders, sizeof(shaders), "%s/shaders", output);
+            [[NSFileManager defaultManager]
+                createDirectoryAtPath:@(output)
+          withIntermediateDirectories:YES
+                           attributes:nil
+                                error:NULL];
+            NSDictionary *report = shadow_report_for_failure(
+                capture, @(shaders), @"queue_full",
+                @"bounded capture queue is full", NO, shadow_now_ns(),
+                @"", @"");
+            write_report([@(output)
+                             stringByAppendingPathComponent:
+                                 @"shadow-report.json"], report);
+            g_stop_requested = 1;
+            g_done = 1;
+            if (g_output_base[0] != 0) {
+                char stop_path[PATH_MAX];
+                snprintf(stop_path, sizeof(stop_path), "%s/stop",
+                         g_output_base);
+                const char *text = "{\"reason\":\"queue_full\"}\n";
+                FILE *stop = fopen(stop_path, "w");
+                if (stop != NULL) {
+                    fputs(text, stop);
+                    fclose(stop);
+                }
+            }
+        }
+        g_running = 0;
+        return 0;
+    }
+    int status = shadow_execute_capture(capture, sequence);
+    g_running = 0;
+    if (g_continuous) {
+        g_done = (status != 0 || g_stop_requested ||
+                  sequence >= g_max_frames) ? 1 : 0;
+    } else {
+        g_done = 1;
+    }
+    return status;
+}
+
 
 char *eu4_gfx_shadow_test_report_json(
     const eu4_frame_capture_descriptor *capture,
@@ -638,11 +891,70 @@ char *eu4_gfx_shadow_test_report_json(
 
 int eu4_gfx_shadow_configure_from_env(void) {
     const char *mode = getenv("EU4_GFX_SHADOW_MODE");
-    g_enabled = mode != NULL && strcmp(mode, "single-frame") == 0;
+    g_continuous = mode != NULL && strcmp(mode, "continuous") == 0;
+    g_enabled = g_continuous ||
+                (mode != NULL && strcmp(mode, "single-frame") == 0);
     g_running = 0;
     g_done = 0;
+    g_stop_requested = 0;
+    g_async = 0;
+    g_worker_stop = 0;
+    g_worker_started = 0;
+    g_frame_index = 0;
+    g_max_frames = 1;
+    g_max_pending = 4;
+    g_session = NULL;
+    g_jobs = nil;
+    g_jobs_condition = nil;
+    g_queue_high_water = 0;
+    g_output_base[0] = 0;
     if (!g_enabled) {
         return 0;
+    }
+    if (g_continuous) {
+        const char *max_frames = getenv("EU4_GFX_SHADOW_MAX_FRAMES");
+        const char *max_pending = getenv("EU4_GFX_SHADOW_MAX_PENDING");
+        const char *max_bytes = getenv("EU4_GFX_SHADOW_MAX_BYTES");
+        uint64_t value = 3;
+        if (max_frames != NULL) {
+            char *end = NULL;
+            value = strtoull(max_frames, &end, 10);
+            if (end == max_frames || *end != 0 || value == 0 || value > 64) {
+                return -1;
+            }
+        }
+        g_max_frames = (uint32_t)value;
+        value = 4;
+        if (max_pending != NULL) {
+            char *end = NULL;
+            value = strtoull(max_pending, &end, 10);
+            if (end == max_pending || *end != 0 || value == 0 || value > 64) {
+                return -1;
+            }
+            g_max_pending = (uint32_t)value;
+        }
+        value = 512ull * 1024ull * 1024ull;
+        if (max_bytes != NULL) {
+            char *end = NULL;
+            value = strtoull(max_bytes, &end, 10);
+            if (end == max_bytes || *end != 0 || value == 0) {
+                return -1;
+            }
+        }
+        const char *async = getenv("EU4_GFX_SHADOW_ASYNC");
+        if (async != NULL && async[0] != 0) {
+            if (strcmp(async, "1") != 0) {
+                return -1;
+            }
+            g_async = 1;
+        }
+        const char *base = getenv("EU4_GFX_SHADOW_OUTPUT_DIR");
+        if (base != NULL && base[0] != 0) {
+            if (base[0] != '/') {
+                return -1;
+            }
+            snprintf(g_output_base, sizeof(g_output_base), "%s", base);
+        }
     }
     const char *wait = getenv("EU4_GFX_SHADOW_WAIT_MS");
     const char *timeout = getenv("EU4_GFX_SHADOW_TIMEOUT_MS");
@@ -660,6 +972,18 @@ int eu4_gfx_shadow_configure_from_env(void) {
     if (wait_value == 0 || wait_value > 3600000ull || timeout_value == 0 ||
         timeout_value > 3600000ull) {
         return -1;
+    }
+    if (g_async) {
+        if (!g_continuous) {
+            return -1;
+        }
+        g_jobs = [NSMutableArray array];
+        g_jobs_condition = [NSCondition new];
+        if (pthread_create(&g_worker_thread, NULL, shadow_worker_main,
+                           NULL) != 0) {
+            return -1;
+        }
+        g_worker_started = 1;
     }
     if (eu4_gfx_frame_sealed_subscribe(shadow_callback, NULL) != 0) {
         return -1;
