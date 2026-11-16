@@ -1,0 +1,162 @@
+{
+  "schema": "m7-replay-diagnostics-evidence/v1",
+  "base": "dac2ea92",
+  "base_description": "PR #200 merge (PR #199 merged at 67bf7a12)",
+  "branch": "m7/followup-replay-diagnostics",
+  "abi_version": 2,
+  "success_unchanged": {
+    "fixture": "m6/frames/menu-occ300",
+    "events": 326,
+    "encoded": 326,
+    "failed": 0,
+    "command_status": 4,
+    "readback": true,
+    "metal_frame_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15",
+    "replay_json_failure_field": null,
+    "replay_json_error_field": null
+  },
+  "failure_detail_samples": [
+    {
+      "stage": "sealed_input_verification",
+      "operation": -1,
+      "error": "sealed_input_verification: sealed input verification failed: size mismatch for .../blobs/attr.bin"
+    },
+    {
+      "stage": "manifest_load",
+      "operation": -1,
+      "error": "manifest_load: missing /nonexistent/frame-trace.json"
+    },
+    {
+      "stage": "event_stream_load",
+      "operation": -1,
+      "error": "event_stream_load: The data couldn’t be read because it isn’t in the correct format."
+    },
+    {
+      "stage": "input_validation",
+      "operation": 0,
+      "error": "input_validation (operation 0): event 0 field target is not a JSON object"
+    },
+    {
+      "stage": "frame_structure",
+      "operation": -1,
+      "error": "frame_structure: frame has no draw events"
+    },
+    {
+      "stage": "shader_load",
+      "operation": -1,
+      "error": "shader_load: missing .../shaders/shaders.json"
+    },
+    {
+      "stage": "seed_upload",
+      "operation": 1,
+      "error": "seed_upload (operation 1): frame seed blob missing"
+    },
+    {
+      "stage": "isolated_preparation",
+      "operation": 999,
+      "error": "isolated_preparation (operation 999): only-event 999 is outside the frame (326 events)"
+    },
+    {
+      "stage": "pre_image_upload",
+      "operation": 1,
+      "error": "pre_image_upload (operation 1): captured image size mismatch"
+    },
+    {
+      "stage": "event_encode",
+      "operation": 1,
+      "error": "event_encode (operation 1): program 999999 has no translated stages"
+    },
+    {
+      "stage": "checkpoint_readback",
+      "operation": 1,
+      "error": "checkpoint_readback (operation 1): target was not created"
+    },
+    {
+      "stage": "event_boundary",
+      "operation": 1,
+      "error": "event_boundary (operation 1): event boundary exceeded the replay deadline",
+      "timed_out": true
+    },
+    {
+      "stage": "frame_completion",
+      "operation": 326,
+      "error": "frame_completion (operation 326): frame completion exceeded the replay deadline",
+      "timed_out": true
+    },
+    {
+      "stage": "frame_readback",
+      "operation": 326,
+      "error": "frame_readback (operation 326): frame readback exceeded the replay deadline",
+      "timed_out": true
+    },
+    {
+      "stage": "frame_completion",
+      "operation": 326,
+      "error": "frame_completion (operation 326): injected command failure",
+      "timed_out": false
+    },
+    {
+      "stage": "artifact_write",
+      "operation": 326,
+      "error": "artifact_write (operation 326): replay.json write failed"
+    }
+  ],
+  "propagation": {
+    "shadow_report": {
+      "top_level_stage": "event_encode",
+      "top_level_error": "event_encode (operation 1): program 999999 has no translated stages",
+      "metal_stage": "event_encode",
+      "structured_failure_preserved": true
+    },
+    "coordinator_json": {
+      "status": "failed",
+      "stage": "event_encode",
+      "error": "event_encode (operation 1): program 999999 has no translated stages",
+      "failure_operation": 1,
+      "metal_stage": "event_encode"
+    },
+    "capture_report": {
+      "helper": "automation.m6_frame.apply_shadow_report",
+      "shadow_stage": "event_encode",
+      "shadow_error_contains_native_detail": true,
+      "structured_failure_preserved": true
+    }
+  },
+  "tests": {
+    "focused_final": {
+      "id": "20261116T082856Z-292dd1ca",
+      "status": "passed",
+      "tests": 201,
+      "modules": [
+        "tests.test_m7_metal_replay",
+        "tests.test_resolve_replay",
+        "tests.test_m7_frame_seal",
+        "tests.test_oracle_replay_frame",
+        "tests.test_m6_frame",
+        "tests.test_gfx_replay_case",
+        "tests.test_gfx_replay_checkpoints",
+        "tests.test_gfx_frame_graph",
+        "tests.test_gfx_output_safety"
+      ]
+    },
+    "replay_module": {
+      "id": "20261116T081052Z-2ecffb26",
+      "status": "passed",
+      "tests": 15
+    },
+    "pre_existing_comparison": {
+      "base_id": "20261116T080832Z-6dd0c6ce",
+      "base_cwd": "/tmp/eu4-m7-base-wt (dac2ea92)",
+      "candidate_id": "20261116T080815Z-d5eaf391",
+      "finding": "test_agent_tools.DiagnosticSurfaceTests.test_empty_roles_account_for_every_requested_comparison fails identically on the base commit; not introduced by this change."
+    },
+    "portable_ci": {
+      "runtime": "python:3.14 (Debian Linux container), non-root CI user, clang, numpy 2.5.4, Pillow 12.3.0",
+      "command": "python -m compileall -q ... && PYTHONPATH=benchmark:. python -m unittest discover -s tests",
+      "status": "passed",
+      "tests": 3093,
+      "skipped": 287,
+      "exit_code": 0
+    }
+  }
+}

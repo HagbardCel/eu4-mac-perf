@@ -19,6 +19,7 @@
 #include <CommonCrypto/CommonDigest.h>
 #include <time.h>
 #include <sys/stat.h>
+#include <stdint.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -28,6 +29,59 @@ static NSString *const kErrorDomain = @"eu4.frame.replay";
 static uint64_t replay_now_ns(void);
 static BOOL wait_for_transfer(id<MTLCommandBuffer> buffer, NSString *operation,
                               NSError **error);
+
+/* Every diagnostic string that reaches printf/snprintf goes through these
+   helpers.  A nil NSError or a failed UTF-8 conversion must never turn into a
+   null %s argument, in the replay result or on stderr. */
+static const char *safe_utf8(NSString *text, const char *fallback) {
+    if (text == nil) {
+        return fallback;
+    }
+    const char *value = text.UTF8String;
+    return value != NULL ? value : fallback;
+}
+
+static NSString *failure_text(NSError *error, NSString *fallback) {
+    NSString *text = error.localizedDescription;
+    if (text.length == 0) {
+        text = fallback;
+    }
+    if (text.length == 0) {
+        text = @"unknown replay failure";
+    }
+    return text;
+}
+
+/* One stable textual channel for the C ABI: "<stage> (operation N): <detail>".
+   replay.json additionally carries the same fields structurally. */
+static NSString *failure_message(NSString *stage, NSInteger operation,
+                                 NSString *message) {
+    NSString *text = message.length > 0 ? message : @"unknown replay failure";
+    if (stage.length == 0) {
+        stage = @"replay";
+    }
+    if (operation >= 0) {
+        return [NSString stringWithFormat:@"%@ (operation %ld): %@",
+                                          stage, (long)operation, text];
+    }
+    return [NSString stringWithFormat:@"%@: %@", stage, text];
+}
+
+static NSDictionary *failure_entry(NSString *stage, NSInteger operation,
+                                   NSString *kind, NSString *message,
+                                   BOOL timed_out, NSInteger command_status,
+                                   NSString *caller) {
+    return @{
+        @"stage": stage.length > 0 ? stage : @"replay",
+        @"operation": @(operation),
+        @"event": @(operation),
+        @"kind": kind.length > 0 ? kind : @"frame",
+        @"caller": caller.length > 0 ? caller : @"",
+        @"error": message.length > 0 ? message : @"unknown replay failure",
+        @"timed_out": @(timed_out),
+        @"command_status": @(command_status),
+    };
+}
 
 typedef struct {
     __unsafe_unretained id<MTLTexture> color;
@@ -435,6 +489,11 @@ static NSArray *read_json_lines(NSString *path, NSError **error) {
                                               encoding:NSUTF8StringEncoding
                                                  error:error];
     if (text == nil) {
+        if (error != NULL && *error == nil) {
+            *error = [NSError errorWithDomain:kErrorDomain code:1
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    [@"unreadable event stream " stringByAppendingString:path]}];
+        }
         return nil;
     }
     NSMutableArray *rows = [NSMutableArray array];
@@ -443,12 +502,16 @@ static NSArray *read_json_lines(NSString *path, NSError **error) {
             continue;
         }
         NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
-        id value = [NSJSONSerialization JSONObjectWithData:data options:0 error:error];
+        NSError *line_error = nil;
+        id value = [NSJSONSerialization JSONObjectWithData:data options:0
+                                                     error:&line_error];
         if (![value isKindOfClass:[NSDictionary class]]) {
-            if (error != NULL && *error == nil) {
-                *error = [NSError errorWithDomain:kErrorDomain code:1
-                                         userInfo:@{NSLocalizedDescriptionKey:
-                                                        @"frame event is not an object"}];
+            if (error != NULL) {
+                *error = line_error ?: [NSError errorWithDomain:kErrorDomain
+                                                           code:1
+                                                       userInfo:@{NSLocalizedDescriptionKey:
+                                                                      [@"frame event is not an object in "
+                                                                          stringByAppendingString:path]}];
             }
             return nil;
         }
@@ -467,8 +530,19 @@ static NSDictionary *read_json(NSString *path, NSError **error) {
         }
         return nil;
     }
-    id value = [NSJSONSerialization JSONObjectWithData:data options:0 error:error];
-    return [value isKindOfClass:[NSDictionary class]] ? value : nil;
+    NSError *json_error = nil;
+    id value = [NSJSONSerialization JSONObjectWithData:data options:0
+                                                 error:&json_error];
+    if (![value isKindOfClass:[NSDictionary class]]) {
+        if (error != NULL) {
+            *error = json_error ?: [NSError errorWithDomain:kErrorDomain code:2
+                                                   userInfo:@{NSLocalizedDescriptionKey:
+                                                                  [@"not a JSON object: "
+                                                                      stringByAppendingString:path]}];
+        }
+        return nil;
+    }
+    return value;
 }
 
 static NSUInteger number(id value, NSUInteger fallback) {
@@ -1436,7 +1510,7 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             program[@"name"], vs[@"msl_file"], fs[@"msl_file"]];
         if (getenv("EU4_FRAME_REPLAY_DEBUG_DESCRIPTOR") != NULL) {
             fprintf(stderr, "debug descriptor program %s:\n",
-                    [[program[@"name"] description] UTF8String]);
+                    safe_utf8([program[@"name"] description], ""));
             for (NSNumber *location in buffers) {
                 NSUInteger loc = [location unsignedIntegerValue];
                 MTLVertexAttributeDescriptor *descriptor =
@@ -2379,6 +2453,11 @@ static BOOL upload_seed(NSString *frameDir, NSDictionary *seed,
         uint8_t *flipped = (uint8_t *)malloc(pixels.length);
         if (staging == nil || flipped == NULL) {
             free(flipped);
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:80
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        @"frame seed staging allocation failed"}];
+            }
             return NO;
         }
         flip_rows((const uint8_t *)pixels.bytes, flipped, width, height, 4);
@@ -2407,6 +2486,11 @@ static BOOL upload_seed(NSString *frameDir, NSDictionary *seed,
     }
     uint8_t *flipped = (uint8_t *)malloc(pixels.length);
     if (flipped == NULL) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:80
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"frame seed conversion allocation failed"}];
+        }
         return NO;
     }
     flip_rows((const uint8_t *)pixels.bytes, flipped, width, height, 4);
@@ -2439,6 +2523,11 @@ static BOOL upload_image_to_target(NSString *frameDir, NSDictionary *image,
     }
     uint8_t *flipped = (uint8_t *)malloc(pixels.length);
     if (flipped == NULL) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:100
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"pre-image conversion allocation failed"}];
+        }
         return NO;
     }
     flip_rows((const uint8_t *)pixels.bytes, flipped, width, height, 4);
@@ -2452,6 +2541,11 @@ static BOOL upload_image_to_target(NSString *frameDir, NSDictionary *image,
     id<MTLTexture> staging = [g_device newTextureWithDescriptor:staging_descriptor];
     if (staging == nil) {
         free(flipped);
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:100
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"pre-image staging allocation failed"}];
+        }
         return NO;
     }
     [staging replaceRegion:MTLRegionMake2D(0, 0, width, height)
@@ -2481,13 +2575,39 @@ static BOOL upload_image_to_target(NSString *frameDir, NSDictionary *image,
 }
 
 /* Reads a target back and writes it in the captured GL origin convention. */
-static BOOL capture_target_to_file(NSDictionary *target_info, NSString *path) {
+static BOOL capture_target_to_file(NSDictionary *target_info, NSString *path,
+                                   NSError **error) {
     id<MTLTexture> color = target_info[@"color"];
+    if (color == nil) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:101
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"readback target has no color texture"}];
+        }
+        return NO;
+    }
     NSUInteger width = color.width;
     NSUInteger height = color.height;
+    if (width == 0 || height == 0 ||
+        width > SIZE_MAX / 4 / MAX((NSUInteger)1, height)) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:101
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"readback target dimensions are invalid"}];
+        }
+        return NO;
+    }
     NSUInteger bytes_per_row = width * 4;
     id<MTLBuffer> buffer = [g_device newBufferWithLength:bytes_per_row * height
                                                  options:MTLResourceStorageModeShared];
+    if (buffer == nil) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:101
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"readback buffer allocation failed"}];
+        }
+        return NO;
+    }
     id<MTLCommandBuffer> blit = [g_queue commandBuffer];
     id<MTLBlitCommandEncoder> encoder = [blit blitCommandEncoder];
     [encoder copyFromTexture:color
@@ -2501,17 +2621,31 @@ static BOOL capture_target_to_file(NSDictionary *target_info, NSString *path) {
     destinationBytesPerImage:bytes_per_row * height];
     [encoder endEncoding];
     [blit commit];
-    if (!wait_for_transfer(blit, @"checkpoint readback", NULL)) {
+    if (!wait_for_transfer(blit, @"checkpoint readback", error)) {
         return NO;
     }
     uint8_t *flipped = (uint8_t *)malloc(bytes_per_row * height);
     if (flipped == NULL) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:101
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    @"readback conversion allocation failed"}];
+        }
         return NO;
     }
     flip_rows((const uint8_t *)buffer.contents, flipped, width, height, 4);
     NSData *data = [NSData dataWithBytes:flipped length:bytes_per_row * height];
     free(flipped);
-    return [data writeToFile:path atomically:YES];
+    if (![data writeToFile:path atomically:YES]) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:102
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    [NSString stringWithFormat:
+                                                         @"could not write readback %@", path]}];
+        }
+        return NO;
+    }
+    return YES;
 }
 
 /* GL_NEVER and GL_ALWAYS make the depth buffer irrelevant to the result: the
@@ -2622,6 +2756,11 @@ static BOOL verify_reference_object(id object, NSString *frame_dir,
     }
     if (file_value != nil) {
         if (![file_value isKindOfClass:[NSString class]]) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:113
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        @"blob file reference is not a string"}];
+            }
             return NO;
         }
         NSString *name = (NSString *)file_value;
@@ -2666,6 +2805,12 @@ static BOOL verify_reference_object(id object, NSString *frame_dir,
         if (bytes_value != nil) {
             if (![bytes_value isKindOfClass:[NSNumber class]] ||
                 [bytes_value longLongValue] < 0) {
+                if (error != NULL) {
+                    *error = [NSError errorWithDomain:kErrorDomain code:113
+                                             userInfo:@{NSLocalizedDescriptionKey:
+                                                            [NSString stringWithFormat:
+                                                                 @"blob %@ has an invalid size", name]}];
+                }
                 return NO;
             }
             expected_size = (uint64_t)[bytes_value unsignedLongLongValue];
@@ -2705,10 +2850,21 @@ static BOOL verify_blob_references(NSString *frame_dir, NSError **error) {
         [frame_dir stringByAppendingPathComponent:@"frame-events.jsonl"];
     NSData *data = [NSData dataWithContentsOfFile:events_path];
     if (data == nil) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:116
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    [@"missing event stream " stringByAppendingString:events_path]}];
+        }
         return NO;
     }
     NSString *text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     if (text == nil) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:116
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    [@"event stream is not valid UTF-8: "
+                                                        stringByAppendingString:events_path]}];
+        }
         return NO;
     }
     NSMutableDictionary<NSString *, NSDictionary *> *seen =
@@ -2718,14 +2874,16 @@ static BOOL verify_blob_references(NSString *frame_dir, NSError **error) {
             continue;
         }
         NSData *line_data = [line dataUsingEncoding:NSUTF8StringEncoding];
+        NSError *line_error = nil;
         id object = [NSJSONSerialization JSONObjectWithData:line_data
                                                     options:0
-                                                      error:NULL];
+                                                      error:&line_error];
         if (object == nil) {
             if (error != NULL) {
-                *error = [NSError errorWithDomain:kErrorDomain code:116
-                                         userInfo:@{NSLocalizedDescriptionKey:
-                                                        @"malformed frame event"}];
+                *error = line_error ?: [NSError errorWithDomain:kErrorDomain
+                                                           code:116
+                                                       userInfo:@{NSLocalizedDescriptionKey:
+                                                                      @"malformed frame event"}];
             }
             return NO;
         }
@@ -2766,6 +2924,262 @@ static BOOL verify_sealed_inputs(NSString *frame_dir, NSString *shader_dir,
     return verify_blob_references(frame_dir, error);
 }
 
+/* ------------------------------------------------------------------------- */
+/* Malformed-input validation                                                 */
+/* ------------------------------------------------------------------------- */
+
+/* Valid JSON is not necessarily a usable frame.  Type confusion in a nested
+   field currently reaches Objective-C subscripts and raises; rejecting it as
+   input_validation keeps the failure structured and attributable. */
+static BOOL validation_error(NSInteger operation, NSString *message,
+                             NSError **error) {
+    if (error != NULL) {
+        *error = [NSError errorWithDomain:kErrorDomain code:120
+                                 userInfo:@{NSLocalizedDescriptionKey:
+                                                message.length > 0
+                                                    ? message
+                                                    : @"invalid replay input"}];
+    }
+    (void)operation;
+    return NO;
+}
+
+static BOOL validate_dictionary_field(NSDictionary *object, NSString *field,
+                                      NSInteger operation, NSError **error) {
+    id value = object[field];
+    if (value == nil || [value isKindOfClass:[NSDictionary class]]) {
+        return YES;
+    }
+    return validation_error(operation,
+                            [NSString stringWithFormat:
+                                 @"event %ld field %@ is not a JSON object",
+                                 (long)operation, field],
+                            error);
+}
+
+static BOOL validate_array_field(NSDictionary *object, NSString *field,
+                                 NSInteger operation, NSError **error) {
+    id value = object[field];
+    if (value == nil || [value isKindOfClass:[NSArray class]]) {
+        return YES;
+    }
+    return validation_error(operation,
+                            [NSString stringWithFormat:
+                                 @"event %ld field %@ is not a JSON array",
+                                 (long)operation, field],
+                            error);
+}
+
+static BOOL validate_dictionary_array(NSDictionary *object, NSString *field,
+                                      NSInteger operation, NSError **error) {
+    id value = object[field];
+    if (value == nil) {
+        return YES;
+    }
+    if (![value isKindOfClass:[NSArray class]]) {
+        return validation_error(operation,
+                                [NSString stringWithFormat:
+                                     @"event %ld field %@ is not a JSON array",
+                                     (long)operation, field],
+                                error);
+    }
+    for (id item in (NSArray *)value) {
+        if (![item isKindOfClass:[NSDictionary class]]) {
+            return validation_error(operation,
+                                    [NSString stringWithFormat:
+                                         @"event %ld field %@ contains a non-object",
+                                         (long)operation, field],
+                                    error);
+        }
+    }
+    return YES;
+}
+
+static BOOL validate_event_shape(NSDictionary *event, NSInteger index,
+                                 NSError **error) {
+    NSString *kind = string_value(event[@"kind"]);
+    if (kind.length == 0) {
+        return validation_error(index, @"frame event has no kind", error);
+    }
+    if (![kind isEqualToString:@"draw"] && ![kind isEqualToString:@"clear"] &&
+        ![kind isEqualToString:@"resolve"] && ![kind isEqualToString:@"copy"]) {
+        return validation_error(index,
+                                [NSString stringWithFormat:
+                                     @"unsupported frame event kind %@", kind],
+                                error);
+    }
+    for (NSString *field in @[@"target", @"state", @"program", @"draw",
+                              @"seed", @"pre_image", @"post_image",
+                              @"indices"]) {
+        if (!validate_dictionary_field(event, field, index, error)) {
+            return NO;
+        }
+    }
+    for (NSString *field in @[@"attributes", @"textures", @"source_rect",
+                              @"destination_offset"]) {
+        if (!validate_array_field(event, field, index, error)) {
+            return NO;
+        }
+    }
+    if (!validate_dictionary_array(event, @"attributes", index, error) ||
+        !validate_dictionary_array(event, @"textures", index, error)) {
+        return NO;
+    }
+    NSDictionary *state = event[@"state"];
+    if ([state isKindOfClass:[NSDictionary class]]) {
+        for (NSString *field in @[@"blend", @"depth", @"cull", @"stencil",
+                                  @"polygon", @"scissor"]) {
+            if (!validate_dictionary_field(state, field, index, error)) {
+                return NO;
+            }
+        }
+        for (NSString *field in @[@"color_mask", @"viewport"]) {
+            if (!validate_array_field(state, field, index, error)) {
+                return NO;
+            }
+        }
+    }
+    NSDictionary *target = event[@"target"];
+    if ([target isKindOfClass:[NSDictionary class]]) {
+        for (NSString *field in @[@"color_attachment", @"depth_attachment"]) {
+            if (!validate_dictionary_field(target, field, index, error)) {
+                return NO;
+            }
+        }
+    }
+    NSDictionary *program = event[@"program"];
+    if ([program isKindOfClass:[NSDictionary class]]) {
+        if (event[@"kind"] && [kind isEqualToString:@"draw"] &&
+            ![program[@"name"] isKindOfClass:[NSNumber class]]) {
+            return validation_error(index,
+                                    @"draw event program has no numeric name",
+                                    error);
+        }
+        if (!validate_dictionary_array(program, @"uniforms", index, error)) {
+            return NO;
+        }
+    }
+    for (id texture in (event[@"textures"] ?: @[])) {
+        for (NSString *field in @[@"levels", @"faces"]) {
+            if (!validate_dictionary_array(texture, field, index, error)) {
+                return NO;
+            }
+        }
+        if (!validate_dictionary_field(texture, @"sampler", index, error)) {
+            return NO;
+        }
+    }
+    for (id attribute in (event[@"attributes"] ?: @[])) {
+        if (!validate_array_field(attribute, @"constant_value", index, error)) {
+            return NO;
+        }
+    }
+    return YES;
+}
+
+static BOOL validate_manifest(NSDictionary *manifest, NSError **error) {
+    id frame = manifest[@"frame"];
+    if (frame != nil && ![frame isKindOfClass:[NSDictionary class]]) {
+        return validation_error(-1, @"manifest frame is not a JSON object",
+                                error);
+    }
+    NSDictionary *frame_info = frame ?: @{};
+    NSUInteger width = number(frame_info[@"width"], 0);
+    NSUInteger height = number(frame_info[@"height"], 0);
+    if (width == 0 || height == 0) {
+        return validation_error(-1, @"manifest frame dimensions are missing",
+                                error);
+    }
+    if (width > 65536 || height > 65536) {
+        return validation_error(-1, @"manifest frame dimensions are invalid",
+                                error);
+    }
+    id reference_sha = frame_info[@"reference_sha256"];
+    if (reference_sha != nil &&
+        ![reference_sha isKindOfClass:[NSString class]]) {
+        return validation_error(-1,
+                                @"manifest reference digest is not a string",
+                                error);
+    }
+    return YES;
+}
+
+static BOOL validate_shader_report(NSDictionary *report, NSError **error) {
+    id programs = report[@"programs"];
+    if (programs != nil && ![programs isKindOfClass:[NSArray class]]) {
+        return validation_error(-1, @"shaders.json programs is not an array",
+                                error);
+    }
+    for (id entry in (NSArray *)programs) {
+        if (![entry isKindOfClass:[NSDictionary class]]) {
+            return validation_error(-1,
+                                    @"shaders.json contains a non-object program",
+                                    error);
+        }
+        if (!validate_dictionary_field(entry, @"stages", -1, error)) {
+            return NO;
+        }
+        NSDictionary *stages = entry[@"stages"];
+        if ([stages isKindOfClass:[NSDictionary class]]) {
+            for (NSString *stage_name in @[@"vertex", @"pixel"]) {
+                if (!validate_dictionary_field(stages, stage_name, -1, error)) {
+                    return NO;
+                }
+                NSDictionary *stage = stages[stage_name];
+                if (![stage isKindOfClass:[NSDictionary class]]) {
+                    continue;
+                }
+                for (NSString *field in @[@"attributes", @"msl_samplers",
+                                          @"uniforms"]) {
+                    if (!validate_dictionary_array(stage, field, -1, error)) {
+                        return NO;
+                    }
+                }
+                if (!validate_dictionary_field(stage, @"attribute_locations",
+                                               -1, error)) {
+                    return NO;
+                }
+            }
+        }
+    }
+    return YES;
+}
+
+static BOOL validate_checkpoints(NSDictionary *document, NSError **error) {
+    id checkpoints = document[@"checkpoints"];
+    if (checkpoints == nil) {
+        return YES;
+    }
+    if (![checkpoints isKindOfClass:[NSArray class]]) {
+        return validation_error(-1, @"checkpoint document is not an array",
+                                error);
+    }
+    for (id item in (NSArray *)checkpoints) {
+        if (![item isKindOfClass:[NSDictionary class]]) {
+            return validation_error(-1,
+                                    @"checkpoint document contains a non-object",
+                                    error);
+        }
+        id event = item[@"event"];
+        if (event != nil && ![event isKindOfClass:[NSNumber class]]) {
+            return validation_error(-1,
+                                    @"checkpoint event index is not a number",
+                                    error);
+        }
+        for (NSString *field in @[@"target", @"file"]) {
+            id value = item[field];
+            if (value != nil && ![value isKindOfClass:[NSString class]]) {
+                return validation_error(-1,
+                                        [NSString stringWithFormat:
+                                             @"checkpoint %@ is not a string",
+                                             field],
+                                        error);
+            }
+        }
+    }
+    return YES;
+}
+
 static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                       NSString *frame_path, NSString *shader_path,
                       NSString *output_path, NSString *checkpoint_path,
@@ -2787,22 +3201,95 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
     g_failed_count = 0;
     uint64_t started_ns = replay_now_ns();
     g_started_ns = started_ns;
+    /* Shared by the early-exit recorder and the event loop so a fatal stage
+       after an encoded-event failure does not discard the earlier detail. */
+    NSMutableArray *failures = [NSMutableArray array];
+    NSUInteger encoded = 0;
+    NSUInteger failed = 0;
     @autoreleasepool {
-        NSError *verify_error = nil;
-        if (!verify_sealed_inputs(frame_path, shader_path, config, &verify_error)) {
-            fprintf(stderr, "sealed input verification: %s\n",
-                    verify_error.localizedDescription.UTF8String);
-            if (out_result != NULL) {
-                snprintf(out_result->error, sizeof(out_result->error),
-                         "sealed input verification failed: %s",
-                         verify_error.localizedDescription.UTF8String ?: "unknown");
-            }
-            return 11;
-        }
+        /* The output directory is created first so every later failure can
+           publish the same structured report the successful path uses. */
         [[NSFileManager defaultManager] createDirectoryAtPath:output_path
                                   withIntermediateDirectories:YES
                                                    attributes:nil
                                                         error:NULL];
+        /* One early-exit path for failures outside the event loop.  It records
+           stage, operation, underlying error, timeout classification, counters,
+           duration and command status in both replay.json and the C ABI. */
+        auto record_failure = [&](NSString *stage, NSInteger operation,
+                                  NSString *kind, NSError *error,
+                                  NSString *fallback, int code,
+                                  id<MTLCommandBuffer> command) -> int {
+            NSString *message = failure_text(error, fallback);
+            NSInteger command_status =
+                command != nil ? (NSInteger)command.status : 0;
+            BOOL timed_out = g_deadline_expired != 0;
+            failed += 1;
+            g_failed_count = failed;
+            NSDictionary *entry = failure_entry(stage, operation, kind, message,
+                                                timed_out, command_status, @"");
+            [failures addObject:entry];
+            NSString *full = failure_message(stage, operation, message);
+            if (out_result != NULL) {
+                out_result->ok = 0;
+                out_result->readback_ok = 0;
+                out_result->events = (uint32_t)g_events_count;
+                out_result->encoded = (uint32_t)g_encoded_count;
+                out_result->failed = (uint32_t)g_failed_count;
+                out_result->command_status = (int32_t)command_status;
+                out_result->timed_out = timed_out ? 1 : 0;
+                out_result->partial =
+                    (stop_after >= 0 || only_event >= 0) ? 1 : 0;
+                out_result->duration_ns = replay_now_ns() - started_ns;
+                snprintf(out_result->error, sizeof(out_result->error), "%s",
+                         safe_utf8(full, "unknown replay failure"));
+            }
+            NSMutableDictionary *report = [@{
+                @"schema": @"gfx-metal-frame-replay/v1",
+                @"status": timed_out ? @"timeout" : @"failed",
+                @"events": @(g_events_count),
+                @"encoded": @(g_encoded_count),
+                @"failed": @(failed),
+                @"failures": failures,
+                @"failure": entry,
+                @"error": full,
+                @"stage": stage.length > 0 ? stage : @"replay",
+                @"timed_out": @(timed_out),
+                @"command_status": @(command_status),
+                @"partial": @((stop_after >= 0 || only_event >= 0)),
+                @"duration_ns": @(replay_now_ns() - started_ns),
+                @"readback": @NO,
+            } mutableCopy];
+            NSData *json = [NSJSONSerialization dataWithJSONObject:report
+                                                           options:
+                                                               NSJSONWritingPrettyPrinted
+                                                             error:NULL];
+            BOOL written =
+                json != nil &&
+                [json writeToFile:[output_path stringByAppendingPathComponent:
+                                            @"replay.json"]
+                       atomically:YES];
+            if (out_result != NULL && written) {
+                snprintf(out_result->result_json,
+                         sizeof(out_result->result_json), "%s/replay.json",
+                         safe_utf8(output_path, ""));
+            }
+            fprintf(stderr, "%s\n", safe_utf8(full, "replay failed"));
+            return code;
+        };
+        @try {
+        NSError *verify_error = nil;
+        if (!verify_sealed_inputs(frame_path, shader_path, config, &verify_error)) {
+            NSString *verify_detail = failure_text(
+                verify_error, @"sealed input verification failed");
+            NSString *message =
+                [verify_detail hasPrefix:@"sealed input verification"]
+                    ? verify_detail
+                    : [@"sealed input verification failed: "
+                          stringByAppendingString:verify_detail];
+            return record_failure(@"sealed_input_verification", -1,
+                                  @"frame", nil, message, 11, nil);
+        }
         g_provenance = [NSMutableArray array];
         g_provenance_seen = [NSMutableDictionary dictionary];
         g_checkpoint_results = [NSMutableArray array];
@@ -2815,31 +3302,51 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
         NSDictionary *manifest = read_json(
             [frame_path stringByAppendingPathComponent:@"frame-trace.json"], &error);
         if (manifest == nil) {
-            fprintf(stderr, "manifest: %s\n", error.localizedDescription.UTF8String);
-            return 4;
+            return record_failure(@"manifest_load", -1, @"frame", error,
+                                  @"frame manifest load failed", 4, nil);
+        }
+        if (!validate_manifest(manifest, &error)) {
+            return record_failure(@"input_validation", -1, @"frame", error,
+                                  @"frame manifest validation failed", 4, nil);
         }
         NSArray *events = read_json_lines(
             [frame_path stringByAppendingPathComponent:@"frame-events.jsonl"], &error);
+        if (events == nil) {
+            return record_failure(@"event_stream_load", -1, @"frame", error,
+                                  @"frame event stream load failed", 4, nil);
+        }
         g_events_count = events.count;
         if (out_result != NULL) {
             out_result->events = (uint32_t)events.count;
         }
-        if (events == nil) {
-            fprintf(stderr, "events: %s\n", error.localizedDescription.UTF8String);
-            return 4;
+        for (NSUInteger index = 0; index < events.count; index++) {
+            if (!validate_event_shape(events[index], (NSInteger)index, &error)) {
+                return record_failure(@"input_validation", (NSInteger)index,
+                                      @"frame", error,
+                                      @"frame event validation failed", 4, nil);
+            }
         }
         NSDictionary *shader_report = read_json(
             [shader_path stringByAppendingPathComponent:@"shaders.json"], &error);
         if (shader_report == nil) {
-            fprintf(stderr, "shaders: %s\n", error.localizedDescription.UTF8String);
-            return 4;
+            return record_failure(@"shader_load", -1, @"frame", error,
+                                  @"shader report load failed", 4, nil);
+        }
+        if (!validate_shader_report(shader_report, &error)) {
+            return record_failure(@"shader_load", -1, @"frame", error,
+                                  @"shader report validation failed", 4, nil);
         }
         if (checkpoint_path.length > 0) {
             NSDictionary *document = read_json(checkpoint_path, &error);
             if (document == nil) {
-                fprintf(stderr, "checkpoints: %s\n",
-                        error.localizedDescription.UTF8String);
-                return 4;
+                return record_failure(@"checkpoint_load", -1, @"frame", error,
+                                      @"checkpoint document load failed", 4,
+                                      nil);
+            }
+            if (!validate_checkpoints(document, &error)) {
+                return record_failure(@"checkpoint_load", -1, @"frame", error,
+                                      @"checkpoint document validation failed",
+                                      4, nil);
             }
             NSMutableDictionary *by_event = [NSMutableDictionary dictionary];
             for (NSDictionary *item in document[@"checkpoints"] ?: @[]) {
@@ -2874,37 +3381,46 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                          @"width": @(g_default_target.width),
                          @"height": @(g_default_target.height)},
                        &error);
-        if (default_info != nil) {
-            /* target_for() may return the cached FB0 entry without repopulating
-               the session default target (session reuse). */
-            g_default_target.color = default_info[@"color"];
-            g_default_target.depth = default_info[@"depth"];
-            g_default_target.width = number(default_info[@"width"], 0);
-            g_default_target.height = number(default_info[@"height"], 0);
-            g_render_targets[@"0"] = default_info;
+        if (default_info == nil) {
+            return record_failure(@"attachment_initialization", -1, @"frame",
+                                  error, @"default target allocation failed", 7,
+                                  nil);
         }
+        /* target_for() may return the cached FB0 entry without repopulating
+           the session default target (session reuse). */
+        g_default_target.color = default_info[@"color"];
+        g_default_target.depth = default_info[@"depth"];
+        g_default_target.width = number(default_info[@"width"], 0);
+        g_default_target.height = number(default_info[@"height"], 0);
+        g_render_targets[@"0"] = default_info;
 
         NSDictionary *first_draw = nil;
-        for (NSDictionary *event in events) {
+        NSUInteger first_draw_index = 0;
+        for (NSUInteger index = 0; index < events.count; index++) {
+            NSDictionary *event = events[index];
             if ([event[@"kind"] isEqualToString:@"draw"]) {
                 first_draw = event;
+                first_draw_index = index;
                 break;
             }
         }
         if (first_draw == nil) {
-            fprintf(stderr, "frame has no draws\n");
-            return 5;
+            return record_failure(@"frame_structure", -1, @"frame", nil,
+                                  @"frame has no draw events", 5, nil);
         }
         NSDictionary *seed = first_draw[@"seed"];
         if (seed != nil) {
             if (!upload_seed(frame_path, seed, first_draw[@"target"], &error)) {
-                fprintf(stderr, "seed: %s\n", error.localizedDescription.UTF8String);
-                return 6;
+                return record_failure(@"seed_upload",
+                                      (NSInteger)first_draw_index, @"draw",
+                                      error, @"frame seed upload failed", 6,
+                                      nil);
             }
         }
         /* Register render-target textures under the GL names that sample them,
            so composition inside the frame uses the rendered contents. */
-        for (NSDictionary *event in events) {
+        for (NSUInteger index = 0; index < events.count; index++) {
+            NSDictionary *event = events[index];
             NSDictionary *target = event[@"target"] ?: @{};
             NSDictionary *attachment = target[@"color_attachment"];
             if (![attachment isKindOfClass:[NSDictionary class]]) {
@@ -2912,7 +3428,11 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
             }
             NSMutableDictionary *info = target_for(target, &error);
             if (info == nil) {
-                continue;
+                return record_failure(@"attachment_initialization",
+                                      (NSInteger)index,
+                                      string_value(event[@"kind"]) ?: @"frame",
+                                      error,
+                                      @"attachment allocation failed", 7, nil);
             }
             NSString *attachment_name = texture_key(attachment[@"name"]);
             if (attachment_name.length == 0) {
@@ -2925,7 +3445,8 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
         /* Resolve/copy destinations are not framebuffer colour attachments in
            a draw event, so allocate their Metal targets from the captured
            destination metadata before execution. */
-        for (NSDictionary *event in events) {
+        for (NSUInteger index = 0; index < events.count; index++) {
+            NSDictionary *event = events[index];
             NSString *kind = event[@"kind"];
             if (![kind isEqualToString:@"resolve"] &&
                 ![kind isEqualToString:@"copy"]) {
@@ -2946,15 +3467,16 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
             NSMutableDictionary *info = target_for_texture(
                 destination, width, height,
                 target_format_name((int)number(event[@"internal_format"], 0)),
-                NULL);
-            if (info != nil) {
-                g_render_targets[destination] = info;
+                &error);
+            if (info == nil) {
+                return record_failure(@"attachment_initialization",
+                                      (NSInteger)index, kind, error,
+                                      @"copy destination allocation failed", 7,
+                                      nil);
             }
+            g_render_targets[destination] = info;
         }
         id<MTLCommandBuffer> command = [g_queue commandBuffer];
-        NSUInteger encoded = 0;
-        NSUInteger failed = 0;
-        NSMutableArray *failures = [NSMutableArray array];
         NSDictionary *first_target = first_draw[@"target"];
 
         /* Isolated mode consumes the authentic GL pre-image as the color
@@ -2973,16 +3495,22 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
         NSUInteger isolated_prefix_events = 0;
         if (isolated) {
             if (only_event >= (NSInteger)events.count) {
-                fprintf(stderr, "only-event %ld is outside the frame (%lu events)\n",
-                        (long)only_event, (unsigned long)events.count);
-                return 7;
+                return record_failure(
+                    @"isolated_preparation", only_event, @"frame", nil,
+                    [NSString stringWithFormat:
+                         @"only-event %ld is outside the frame (%lu events)",
+                         (long)only_event, (unsigned long)events.count],
+                    7, nil);
             }
             isolated_event = events[(NSUInteger)only_event];
             isolated_target_info = target_for(isolated_event[@"target"] ?: @{}, &error);
             if (isolated_target_info == nil) {
-                fprintf(stderr, "isolated target: %s\n",
-                        error.localizedDescription.UTF8String);
-                return 7;
+                return record_failure(@"isolated_preparation", only_event,
+                                      string_value(isolated_event[@"kind"])
+                                          ?: @"frame",
+                                      error,
+                                      @"isolated target allocation failed", 7,
+                                      nil);
             }
             isolated_pre_supplied = seed_marked && isolated_event[@"pre_image"] != nil;
             isolated_depth_matters = draw_depth_matters(isolated_event);
@@ -3015,9 +3543,12 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
             if (encoded > 0) {
                 [command commit];
                 if (!wait_for_transfer(command, @"event boundary", &error)) {
-                    fprintf(stderr, "event boundary: %s\n",
-                            error.localizedDescription.UTF8String);
-                    return 7;
+                    return record_failure(@"event_boundary", (NSInteger)index,
+                                          string_value(events[index][@"kind"])
+                                              ?: @"frame",
+                                          error,
+                                          @"event boundary wait failed", 7,
+                                          command);
                 }
                 command = [g_queue commandBuffer];
             }
@@ -3039,8 +3570,14 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                         @"ok": @NO,
                     } mutableCopy];
                     if (info == nil) {
+                        checkpoint[@"stage"] = @"checkpoint_readback";
                         checkpoint[@"error"] = @"target was not created";
                         [g_checkpoint_results addObject:checkpoint];
+                        failed++;
+                        [failures addObject:failure_entry(
+                            @"checkpoint_readback", (NSInteger)index,
+                            @"checkpoint", checkpoint[@"error"], NO,
+                            command.status, @"")];
                         continue;
                     }
                     checkpoint[@"width"] = info[@"width"] ?: @0;
@@ -3049,10 +3586,19 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                     checkpoint[@"generation"] = info[@"generation"] ?: @0;
                     NSString *path = [output_path stringByAppendingPathComponent:
                                           item[@"file"]];
-                    if (capture_target_to_file(info, path)) {
+                    NSError *checkpoint_error = nil;
+                    if (capture_target_to_file(info, path, &checkpoint_error)) {
                         checkpoint[@"ok"] = @YES;
                     } else {
-                        checkpoint[@"error"] = @"checkpoint readback failed";
+                        checkpoint[@"stage"] = @"checkpoint_readback";
+                        checkpoint[@"error"] =
+                            failure_text(checkpoint_error,
+                                         @"checkpoint readback failed");
+                        failed++;
+                        [failures addObject:failure_entry(
+                            @"checkpoint_readback", (NSInteger)index,
+                            @"checkpoint", checkpoint[@"error"], NO,
+                            command.status, @"")];
                     }
                     [g_checkpoint_results addObject:checkpoint];
                 }
@@ -3078,9 +3624,10 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                         @"target": event[@"target"] ?: @{},
                     };
                     if (!encode_clear(depth_event, frame_path, command, &error)) {
-                        fprintf(stderr, "depth initialization: %s\n",
-                                error.localizedDescription.UTF8String);
-                        return 7;
+                        return record_failure(@"attachment_initialization",
+                                              (NSInteger)index, @"draw", error,
+                                              @"depth initialization failed", 7,
+                                              command);
                     }
                 }
                 /* Drain every prior command before the upload: an uncommitted
@@ -3088,16 +3635,17 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                 [command commit];
                 if (!wait_for_transfer(command, @"attachment initialization",
                                        &error)) {
-                    fprintf(stderr, "attachment initialization: %s\n",
-                            error.localizedDescription.UTF8String);
-                    return 7;
+                    return record_failure(@"attachment_initialization",
+                                          (NSInteger)index, @"draw", error,
+                                          @"attachment wait failed", 7,
+                                          command);
                 }
                 command = [g_queue commandBuffer];
                 if (!upload_image_to_target(frame_path, event[@"pre_image"],
                                             isolated_target_info, &error)) {
-                    fprintf(stderr, "pre-image upload: %s\n",
-                            error.localizedDescription.UTF8String);
-                    return 7;
+                    return record_failure(@"pre_image_upload", (NSInteger)index,
+                                          @"draw", error,
+                                          @"pre-image upload failed", 7, nil);
                 }
                 if (capture_pre_images) {
                     NSString *name = [NSString stringWithFormat:
@@ -3105,9 +3653,14 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                                           (unsigned long)index];
                     NSString *path =
                         [output_path stringByAppendingPathComponent:name];
-                    if (!capture_target_to_file(isolated_target_info, path)) {
-                        fprintf(stderr, "pre-image readback failed\n");
-                        return 7;
+                    NSError *pre_error = nil;
+                    if (!capture_target_to_file(isolated_target_info, path,
+                                                &pre_error)) {
+                        return record_failure(@"pre_image_readback",
+                                              (NSInteger)index, @"draw",
+                                              pre_error,
+                                              @"pre-image readback failed", 7,
+                                              nil);
                     }
                     isolated_pre_capture_ok = YES;
                     isolated_pre_capture = name;
@@ -3125,6 +3678,7 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                 (void)encode_clear(clear_event, frame_path, command, NULL);
             }
             NSString *kind = event[@"kind"];
+            NSString *event_stage = @"event_encode";
             NSError *event_error = nil;
             BOOL ok = YES;
             if ([kind isEqualToString:@"clear"]) {
@@ -3133,7 +3687,10 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                        [kind isEqualToString:@"copy"]) {
                 ok = encode_copy_event(event, frame_path, &event_error);
             } else if ([kind isEqualToString:@"draw"]) {
-                NSNumber *program = event[@"program"][@"name"];
+                NSDictionary *program_object = event[@"program"];
+                NSNumber *program = [program_object isKindOfClass:
+                                         [NSDictionary class]]
+                                        ? program_object[@"name"] : nil;
                 NSDictionary *entry = programs[program];
                 if (entry == nil) {
                     ok = NO;
@@ -3141,21 +3698,34 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                                                  userInfo:@{NSLocalizedDescriptionKey:
                                                                 [NSString stringWithFormat:
                                                                      @"program %@ has no translated stages",
-                                                                     program]}];
+                                                                     program ?: @0]}];
                 } else {
-                    NSDictionary *target_info = target_for(event[@"target"] ?: @{}, NULL);
+                    NSDictionary *target_info = target_for(event[@"target"] ?: @{},
+                                                           &event_error);
                     if (ok) {
                         ok = encode_draw(event, entry, frame_path, shader_path,
                                          command, &event_error);
                     }
                     if (ok && capture_post_images && event[@"post_image"] != nil &&
-                        target_info != nil && (!isolated || is_selected)) {
+                        (!isolated || is_selected)) {
+                        if (target_info == nil) {
+                            event_stage = @"post_image_readback";
+                            ok = NO;
+                            if (event_error == nil) {
+                                event_error = [NSError errorWithDomain:
+                                                       kErrorDomain
+                                                               code:101
+                                                           userInfo:@{NSLocalizedDescriptionKey:
+                                                                          @"post-image target is missing"}];
+                            }
+                        } else {
                         /* The draw was encoded into the frame command buffer; commit
                            and drain it so the isolated post-image includes this draw
                            and no later event. */
                         [command commit];
                         if (!wait_for_transfer(command, @"post-draw completion",
                                                &event_error)) {
+                            event_stage = @"post_draw_completion";
                             ok = NO;
                         }
                         command = [g_queue commandBuffer];
@@ -3165,25 +3735,30 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                                                   (unsigned long)index];
                             NSString *path =
                                 [output_path stringByAppendingPathComponent:name];
-                            if (!capture_target_to_file(target_info, path)) {
+                            NSError *post_error = nil;
+                            if (!capture_target_to_file(target_info, path,
+                                                        &post_error)) {
                                 ok = NO;
-                                event_error = [NSError errorWithDomain:kErrorDomain
-                                                                  code:101
-                                                              userInfo:@{NSLocalizedDescriptionKey:
-                                                                             @"post readback failed"}];
+                                event_stage = @"post_image_readback";
+                                event_error = post_error ?:
+                                    [NSError errorWithDomain:kErrorDomain
+                                                        code:101
+                                                    userInfo:@{NSLocalizedDescriptionKey:
+                                                                   @"post readback failed"}];
                             }
+                        }
                         }
                     }
                 }
             }
             if (!ok) {
                 failed++;
-                [failures addObject:@{
-                    @"event": @(index),
-                    @"kind": kind ?: @"unknown",
-                    @"caller": event[@"draw"][@"caller_rva"] ?: @"",
-                    @"error": event_error.localizedDescription ?: @"unknown",
-                }];
+                NSString *message = failure_text(event_error,
+                                                 @"event encoding failed");
+                [failures addObject:failure_entry(
+                    event_stage, (NSInteger)index, kind ?: @"unknown",
+                    message, g_deadline_expired != 0, command.status,
+                    string_value(event[@"draw"][@"caller_rva"]) ?: @"")];
             }
             encoded++;
             g_encoded_count = encoded;
@@ -3205,12 +3780,10 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
         }
         if (!final_completed) {
             failed++;
-            [failures addObject:@{
-                @"event": @(events.count),
-                @"kind": @"frame",
-                @"caller": @"",
-                @"error": error.localizedDescription ?: @"frame did not complete",
-            }];
+            [failures addObject:failure_entry(
+                @"frame_completion", (NSInteger)events.count, @"frame",
+                failure_text(error, @"frame did not complete"),
+                g_deadline_expired != 0, command.status, @"")];
         }
         NSMutableDictionary *result = [@{
             @"schema": @"gfx-metal-frame-replay/v1",
@@ -3249,51 +3822,80 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
             NSUInteger width = g_default_target.width;
             NSUInteger height = g_default_target.height;
             NSUInteger bytes_per_row = width * 4;
-            id<MTLBuffer> buffer =
-                [g_device newBufferWithLength:bytes_per_row * height
-                                      options:MTLResourceStorageModeShared];
-            id<MTLCommandBuffer> blit = [g_queue commandBuffer];
-            id<MTLBlitCommandEncoder> encoder = [blit blitCommandEncoder];
-            [encoder copyFromTexture:g_default_target.color
-                         sourceSlice:0
-                         sourceLevel:0
-                        sourceOrigin:MTLOriginMake(0, 0, 0)
-                          sourceSize:MTLSizeMake(width, height, 1)
-                            toBuffer:buffer
-                   destinationOffset:0
-              destinationBytesPerRow:bytes_per_row
-            destinationBytesPerImage:bytes_per_row * height];
-            [encoder endEncoding];
-            [blit commit];
-            BOOL readback_completed =
-                wait_for_transfer(blit, @"frame readback", &error);
-            if (!readback_completed) {
+            BOOL valid_dimensions =
+                width > 0 && height > 0 &&
+                width <= SIZE_MAX / 4 / MAX((NSUInteger)1, height);
+            id<MTLBuffer> buffer = valid_dimensions
+                ? [g_device newBufferWithLength:bytes_per_row * height
+                                        options:MTLResourceStorageModeShared]
+                : nil;
+            if (buffer == nil || g_default_target.color == nil) {
                 failed++;
-                [failures addObject:@{
-                    @"event": @(events.count),
-                    @"kind": @"readback",
-                    @"caller": @"",
-                    @"error": error.localizedDescription ?: @"readback did not complete",
-                }];
-            }
-            uint8_t *readback = readback_completed
-                                    ? (uint8_t *)malloc(bytes_per_row * height)
-                                    : NULL;
-            if (readback != NULL) {
-                flip_rows((const uint8_t *)buffer.contents, readback, width, height, 4);
-                NSString *path = [output_path stringByAppendingPathComponent:@"metal-frame.bgra"];
-                NSData *data = [NSData dataWithBytes:readback length:bytes_per_row * height];
-                readback_ok = [data writeToFile:path atomically:YES];
-                result[@"frame"] = @{
-                    @"width": @(width),
-                    @"height": @(height),
-                    @"origin": @"lower_left",
-                    @"pixel_format": @"BGRA8",
-                    @"row_stride": @(bytes_per_row),
-                    @"raw_file": @"metal-frame.bgra",
-                    @"raw_bytes": @(data.length),
-                };
-                free(readback);
+                [failures addObject:failure_entry(
+                    @"frame_readback", (NSInteger)events.count, @"readback",
+                    buffer == nil ? @"readback buffer allocation failed"
+                                  : @"readback target is missing",
+                    NO, 0, @"")];
+            } else {
+                id<MTLCommandBuffer> blit = [g_queue commandBuffer];
+                id<MTLBlitCommandEncoder> encoder = [blit blitCommandEncoder];
+                [encoder copyFromTexture:g_default_target.color
+                             sourceSlice:0
+                             sourceLevel:0
+                            sourceOrigin:MTLOriginMake(0, 0, 0)
+                              sourceSize:MTLSizeMake(width, height, 1)
+                                toBuffer:buffer
+                       destinationOffset:0
+                  destinationBytesPerRow:bytes_per_row
+                destinationBytesPerImage:bytes_per_row * height];
+                [encoder endEncoding];
+                [blit commit];
+                BOOL readback_completed =
+                    wait_for_transfer(blit, @"frame readback", &error);
+                if (!readback_completed) {
+                    failed++;
+                    [failures addObject:failure_entry(
+                        @"frame_readback", (NSInteger)events.count,
+                        @"readback",
+                        failure_text(error, @"readback did not complete"),
+                        g_deadline_expired != 0, blit.status, @"")];
+                }
+                uint8_t *readback = readback_completed
+                                        ? (uint8_t *)malloc(bytes_per_row * height)
+                                        : NULL;
+                if (readback_completed && readback == NULL) {
+                    failed++;
+                    [failures addObject:failure_entry(
+                        @"frame_readback", (NSInteger)events.count,
+                        @"readback",
+                        @"readback conversion allocation failed",
+                        g_deadline_expired != 0, blit.status, @"")];
+                }
+                if (readback != NULL) {
+                    flip_rows((const uint8_t *)buffer.contents, readback,
+                              width, height, 4);
+                    NSString *path = [output_path stringByAppendingPathComponent:@"metal-frame.bgra"];
+                    NSData *data = [NSData dataWithBytes:readback length:bytes_per_row * height];
+                    readback_ok = [data writeToFile:path atomically:YES];
+                    result[@"frame"] = @{
+                        @"width": @(width),
+                        @"height": @(height),
+                        @"origin": @"lower_left",
+                        @"pixel_format": @"BGRA8",
+                        @"row_stride": @(bytes_per_row),
+                        @"raw_file": @"metal-frame.bgra",
+                        @"raw_bytes": @(data.length),
+                    };
+                    free(readback);
+                    if (!readback_ok) {
+                        failed++;
+                        [failures addObject:failure_entry(
+                            @"frame_readback", (NSInteger)events.count,
+                            @"artifact",
+                            @"metal-frame.bgra write failed",
+                            g_deadline_expired != 0, blit.status, @"")];
+                    }
+                }
             }
         }
         NSUInteger external_bindings = 0, target_bindings = 0;
@@ -3356,12 +3958,10 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
         BOOL partial_mode = stop_after >= 0 || only_event >= 0;
         if (!provenance_written) {
             failed++;
-            [failures addObject:@{
-                @"event": @(events.count),
-                @"kind": @"artifact",
-                @"caller": @"",
-                @"error": @"replay-provenance.jsonl write failed",
-            }];
+            [failures addObject:failure_entry(
+                @"artifact_write", (NSInteger)events.count, @"artifact",
+                @"replay-provenance.jsonl write failed",
+                g_deadline_expired != 0, command.status, @"")];
         }
         BOOL status_ok = readback_ok && failed == 0 &&
                          (partial_mode || encoded == events.count);
@@ -3376,6 +3976,23 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
         } else {
             result[@"status"] = @"failed";
         }
+        NSString *primary_error = nil;
+        if (failures.count > 0) {
+            NSDictionary *primary = failures.firstObject;
+            result[@"failure"] = primary;
+            result[@"stage"] = primary[@"stage"] ?: @"replay";
+            primary_error = failure_message(primary[@"stage"],
+                                            [primary[@"operation"] integerValue],
+                                            primary[@"error"]);
+            result[@"error"] = primary_error;
+        } else if (!status_ok) {
+            result[@"stage"] = @"replay";
+            primary_error = readback_ok ? @"replay did not complete"
+                                        : @"metal readback failed";
+            result[@"error"] = primary_error;
+        } else {
+            result[@"stage"] = @"complete";
+        }
         NSData *json = [NSJSONSerialization dataWithJSONObject:result
                                                        options:NSJSONWritingPrettyPrinted
                                                          error:NULL];
@@ -3385,12 +4002,19 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                    atomically:YES];
         if (!json_written) {
             failed++;
-            [failures addObject:@{
-                @"event": @(events.count),
-                @"kind": @"artifact",
-                @"caller": @"",
-                @"error": @"replay.json write failed",
-            }];
+            NSString *artifact_error = @"replay.json write failed";
+            NSDictionary *artifact_failure = failure_entry(
+                @"artifact_write", (NSInteger)events.count, @"artifact",
+                artifact_error, g_deadline_expired != 0, command.status, @"");
+            [failures addObject:artifact_failure];
+            result[@"failed"] = @(failed);
+            result[@"failures"] = failures;
+            result[@"failure"] = artifact_failure;
+            result[@"stage"] = @"artifact_write";
+            primary_error = failure_message(@"artifact_write",
+                                            (NSInteger)events.count,
+                                            artifact_error);
+            result[@"error"] = primary_error;
             status_ok = NO;
         }
         if (out_result != NULL) {
@@ -3412,34 +4036,50 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                                  : 0;
             out_result->duration_ns = replay_now_ns() - started_ns;
             snprintf(out_result->result_json, sizeof(out_result->result_json),
-                     "%s/replay.json", output_path.UTF8String);
-            snprintf(out_result->provenance_jsonl,
-                     sizeof(out_result->provenance_jsonl), "%s/%s",
-                     output_path.UTF8String, "replay-provenance.jsonl");
-            NSString *metal_frame_path =
-                [output_path stringByAppendingPathComponent:@"metal-frame.bgra"];
-            snprintf(out_result->metal_frame, sizeof(out_result->metal_frame),
-                     "%s", metal_frame_path.UTF8String);
+                     "%s/replay.json", safe_utf8(output_path, ""));
+            if (provenance_written) {
+                snprintf(out_result->provenance_jsonl,
+                         sizeof(out_result->provenance_jsonl), "%s/%s",
+                         safe_utf8(output_path, ""), "replay-provenance.jsonl");
+            }
+            if (readback_ok) {
+                NSString *metal_frame_path =
+                    [output_path stringByAppendingPathComponent:@"metal-frame.bgra"];
+                snprintf(out_result->metal_frame,
+                         sizeof(out_result->metal_frame), "%s",
+                         safe_utf8(metal_frame_path, ""));
+            }
             NSString *manifest_reference =
                 (manifest[@"frame"] ?: @{})[@"reference_sha256"] ?: @"";
             snprintf(out_result->manifest_reference_sha256,
                      sizeof(out_result->manifest_reference_sha256), "%s",
-                     manifest_reference.UTF8String);
-            (void)replay_sha256_file(out_result->metal_frame,
-                                     out_result->metal_frame_sha256);
+                     safe_utf8(manifest_reference, ""));
+            if (readback_ok) {
+                (void)replay_sha256_file(out_result->metal_frame,
+                                         out_result->metal_frame_sha256);
+            }
             if (!out_result->ok) {
-                if (failed > 0 && failures.count > 0) {
-                    snprintf(out_result->error, sizeof(out_result->error),
-                             "%s", [[failures.firstObject[@"error"] ?: @"replay failed"
-                                     description] UTF8String]);
-                } else {
-                    snprintf(out_result->error, sizeof(out_result->error),
-                             "%s", readback_ok ? "replay did not complete"
-                                               : "metal readback failed");
+                NSString *message = primary_error;
+                if (message.length == 0) {
+                    message = readback_ok ? @"replay did not complete"
+                                          : @"metal readback failed";
                 }
+                snprintf(out_result->error, sizeof(out_result->error), "%s",
+                         safe_utf8(message, "unknown replay failure"));
             }
         }
         return failed == 0 && readback_ok ? 0 : 1;
+        } @catch (NSException *exception) {
+            NSString *reason = exception.reason;
+            if (reason.length == 0) {
+                reason = exception.name;
+            }
+            if (reason.length == 0) {
+                reason = @"Objective-C exception during replay";
+            }
+            return record_failure(@"internal_exception", -1, @"frame", nil,
+                                  reason, 13, nil);
+        }
     }
 }
 
@@ -3472,7 +4112,25 @@ extern "C" eu4_metal_replay_session *eu4_metal_replay_create(
         config->frame_dir == NULL || config->shader_dir == NULL ||
         config->output_dir == NULL) {
         if (error != NULL && error_size > 0) {
-            snprintf(error, error_size, "invalid replay config");
+            if (config == NULL) {
+                snprintf(error, error_size,
+                         "invalid replay config: null config");
+            } else if (config->struct_size <
+                           sizeof(eu4_metal_replay_config) ||
+                       config->abi_version != EU4_METAL_REPLAY_ABI_VERSION) {
+                snprintf(error, error_size,
+                         "invalid replay config: struct_size=%u "
+                         "abi_version=%u",
+                         (unsigned)config->struct_size,
+                         (unsigned)config->abi_version);
+            } else {
+                snprintf(error, error_size,
+                         "invalid replay config: frame_dir=%s shader_dir=%s "
+                         "output_dir=%s",
+                         config->frame_dir != NULL ? "set" : "null",
+                         config->shader_dir != NULL ? "set" : "null",
+                         config->output_dir != NULL ? "set" : "null");
+            }
         }
         return NULL;
     }
@@ -3517,13 +4175,28 @@ extern "C" int eu4_metal_replay_frame(eu4_metal_replay_session *session,
     memset(result, 0, sizeof(*result));
     result->struct_size = (uint32_t)sizeof(*result);
     result->abi_version = EU4_METAL_REPLAY_ABI_VERSION;
-    if (session == NULL || config == NULL ||
-        config->struct_size < sizeof(eu4_metal_replay_config) ||
-        config->abi_version != EU4_METAL_REPLAY_ABI_VERSION ||
-        config->frame_dir == NULL || config->shader_dir == NULL ||
+    if (session == NULL || config == NULL) {
+        snprintf(result->error, sizeof(result->error),
+                 "invalid replay session or config: %s",
+                 session == NULL ? "null session" : "null config");
+        return -1;
+    }
+    if (config->struct_size < sizeof(eu4_metal_replay_config) ||
+        config->abi_version != EU4_METAL_REPLAY_ABI_VERSION) {
+        snprintf(result->error, sizeof(result->error),
+                 "invalid replay config: struct_size=%u abi_version=%u",
+                 (unsigned)config->struct_size,
+                 (unsigned)config->abi_version);
+        return -1;
+    }
+    if (config->frame_dir == NULL || config->shader_dir == NULL ||
         config->output_dir == NULL) {
         snprintf(result->error, sizeof(result->error),
-                 "invalid replay session or config");
+                 "invalid replay config: frame_dir=%s shader_dir=%s "
+                 "output_dir=%s",
+                 config->frame_dir != NULL ? "set" : "null",
+                 config->shader_dir != NULL ? "set" : "null",
+                 config->output_dir != NULL ? "set" : "null");
         return -1;
     }
     snprintf(result->result_json, sizeof(result->result_json), "%s/replay.json",
@@ -3562,6 +4235,15 @@ extern "C" int eu4_metal_replay_frame(eu4_metal_replay_session *session,
         if (result->result_json[0] != 0 &&
             access(result->result_json, R_OK) != 0) {
             result->result_json[0] = 0;
+        }
+        if (result->metal_frame[0] != 0 &&
+            access(result->metal_frame, R_OK) != 0) {
+            result->metal_frame[0] = 0;
+            result->metal_frame_sha256[0] = 0;
+        }
+        if (result->provenance_jsonl[0] != 0 &&
+            access(result->provenance_jsonl, R_OK) != 0) {
+            result->provenance_jsonl[0] = 0;
         }
         if (result->duration_ns == 0) {
             result->duration_ns = replay_now_ns() - state.started_ns;

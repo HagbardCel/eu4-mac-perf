@@ -95,6 +95,32 @@ disabled exists. Report:
 [evidence](../analysis/m7/pr2-live-evidence.json),
 [implementation log](../analysis/m7/pr2-implementation-log.md). PR 2 is rebased onto `main` after PR 1 (#199) merged as `67bf7a1`.
 
+## M7 follow-up — native replay failure diagnostics (2026-11-16)
+
+Every early `run_replay()` failure now publishes one structured result instead
+of a generic `replay failed (code N)`. The C ABI remains v2; `error` starts with
+a stable stage token (`manifest_load`, `event_stream_load`, `input_validation`,
+`shader_load`, `attachment_initialization`, `event_boundary`,
+`pre_image_upload`, `event_encode`, `checkpoint_readback`,
+`frame_completion`, `frame_readback`, `artifact_write`, ...) and includes the
+operation index, underlying error, real timeout classification and command
+status. `replay.json` carries the same fields under `failure`/`failures`.
+
+Malformed JSON and type-confused nested objects fail as `input_validation` (or
+`internal_exception` in the defensive catch) rather than raising. Missing-error
+paths in sealed verification now populate an `NSError`, and no diagnostic passes
+a possibly null error string to `%s`. The shadow bridge reads the structured
+failure and writes the native stage to `shadow-report.json`; the coordinator and
+`capture-report.json` preserve the same stage/error instead of substituting a
+generic message. Requested checkpoint readback failures and `metal-frame.bgra`
+write failures are now failures rather than silent success.
+
+Successful replay output is unchanged: canonical title frame 326/326, 0 failed,
+command status 4, `ff2f4e2b…`. Focused native tests cover missing/malformed
+inputs and stage injection; no EU4 launch or in-process callback behaviour
+change is involved. Report:
+[native replay diagnostics](../analysis/m7/pr3-replay-diagnostics.md).
+
 ## Strategy B — independent replay (2026-11-14)
 
 Capture once, replay independently. A canonical authentic OpenGL title frame

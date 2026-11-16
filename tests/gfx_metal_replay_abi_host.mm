@@ -15,7 +15,10 @@ static int run_once(const char *frame, const char *shaders, const char *out,
                     int iteration, uint64_t timeout_ms,
                     const char *event_sha, uint64_t event_bytes,
                     const char *manifest_sha, const char *reference_sha,
-                    const char *shader_sha, uint32_t inject_failure) {
+                    const char *shader_sha, uint32_t inject_failure,
+                    int stop_after, int only_event, uint32_t seed_marked,
+                    uint32_t capture_post_images, uint32_t capture_pre_images,
+                    uint32_t depth_from_prefix, const char *checkpoints) {
     eu4_metal_replay_config config;
     memset(&config, 0, sizeof(config));
     config.struct_size = (uint32_t)sizeof(config);
@@ -23,9 +26,14 @@ static int run_once(const char *frame, const char *shaders, const char *out,
     config.frame_dir = frame;
     config.shader_dir = shaders;
     config.output_dir = out;
-    config.stop_after = -1;
-    config.only_event = -1;
+    config.checkpoint_path = checkpoints;
+    config.stop_after = stop_after;
+    config.only_event = only_event;
     config.timeout_ms = timeout_ms;
+    config.seed_marked = seed_marked;
+    config.capture_post_images = capture_post_images;
+    config.capture_pre_images = capture_pre_images;
+    config.depth_from_prefix = depth_from_prefix;
     config.expected_event_stream_sha256 = event_sha;
     config.expected_event_stream_bytes = event_bytes;
     config.expected_manifest_sha256 = manifest_sha;
@@ -41,7 +49,7 @@ static int run_once(const char *frame, const char *shaders, const char *out,
     }
     eu4_metal_replay_result result;
     int code = eu4_metal_replay_frame(session, &config, &result);
-    NSDictionary *document = @{
+    NSMutableDictionary *document = [@{
         @"iteration": @(iteration),
         @"code": @(code),
         @"ok": @(result.ok),
@@ -60,7 +68,23 @@ static int run_once(const char *frame, const char *shaders, const char *out,
         @"manifest_reference_sha256": @(result.manifest_reference_sha256),
         @"metal_frame_sha256": @(result.metal_frame_sha256),
         @"last_error": @(eu4_metal_replay_last_error(session)),
-    };
+    } mutableCopy];
+    /* Surface the native structured failure (stage, operation, counters) when
+       the core published replay.json.  The error string alone is not enough
+       for the stage-specific ABI tests. */
+    if (result.result_json[0] != 0) {
+        NSData *data = [NSData dataWithContentsOfFile:@(result.result_json)];
+        id report = data != nil
+            ? [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL]
+            : nil;
+        if ([report isKindOfClass:[NSDictionary class]]) {
+            document[@"replay_status"] = report[@"status"] ?: @"";
+            document[@"stage"] = report[@"stage"] ?: @"";
+            document[@"failure"] = report[@"failure"] ?: @{};
+            document[@"failures"] = report[@"failures"] ?: @[];
+            document[@"replay_error"] = report[@"error"] ?: @"";
+        }
+    }
     NSData *json = [NSJSONSerialization dataWithJSONObject:document
                                                    options:0
                                                      error:NULL];
@@ -130,7 +154,14 @@ int main(int argc, const char *argv[]) {
         const char *manifest_sha = NULL;
         const char *reference_sha = NULL;
         const char *shader_sha = NULL;
+        const char *checkpoints = NULL;
         uint32_t inject_failure = 0;
+        int stop_after = -1;
+        int only_event = -1;
+        uint32_t seed_marked = 0;
+        uint32_t capture_post_images = 0;
+        uint32_t capture_pre_images = 0;
+        uint32_t depth_from_prefix = 0;
         for (int index = 1; index < argc; index++) {
             if (strcmp(argv[index], "--frame") == 0 && index + 1 < argc) {
                 frame = argv[++index];
@@ -149,6 +180,23 @@ int main(int argc, const char *argv[]) {
             } else if (strcmp(argv[index], "--timeout-ms") == 0 &&
                        index + 1 < argc) {
                 timeout_ms = (uint64_t)strtoull(argv[++index], NULL, 10);
+            } else if (strcmp(argv[index], "--stop-after") == 0 &&
+                       index + 1 < argc) {
+                stop_after = atoi(argv[++index]);
+            } else if (strcmp(argv[index], "--only-event") == 0 &&
+                       index + 1 < argc) {
+                only_event = atoi(argv[++index]);
+            } else if (strcmp(argv[index], "--seed-marked") == 0) {
+                seed_marked = 1;
+            } else if (strcmp(argv[index], "--capture-post") == 0) {
+                capture_post_images = 1;
+            } else if (strcmp(argv[index], "--capture-pre") == 0) {
+                capture_pre_images = 1;
+            } else if (strcmp(argv[index], "--depth-from-prefix") == 0) {
+                depth_from_prefix = 1;
+            } else if (strcmp(argv[index], "--checkpoints") == 0 &&
+                       index + 1 < argc) {
+                checkpoints = argv[++index];
             } else if (strcmp(argv[index], "--event-sha") == 0 &&
                        index + 1 < argc) {
                 event_sha = argv[++index];
@@ -195,7 +243,10 @@ int main(int argc, const char *argv[]) {
         for (int iteration = 0; iteration < loops; iteration++) {
             int code = run_once(frame, shaders, out, iteration, timeout_ms,
                                 event_sha, event_bytes, manifest_sha,
-                                reference_sha, shader_sha, inject_failure);
+                                reference_sha, shader_sha, inject_failure,
+                                stop_after, only_event, seed_marked,
+                                capture_post_images, capture_pre_images,
+                                depth_from_prefix, checkpoints);
             if (code != 0 && result == 0) {
                 result = code;
             }
