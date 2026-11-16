@@ -111,9 +111,19 @@ stops on:
 
 It preserves a portable case for the offending frame, reports per-frame and
 cumulative provenance, and records replay/diagnosis average/median/p95/worst,
-queue high-water, bytes written and wall time. The current implementation is
-the synchronous stage: all captured frames are on disk before the Metal worker
-starts. A live asynchronous capture/replay pipeline is **not** claimed.
+queue high-water, bytes written and wall time.
+
+The supervisor now streams one JSON result per frame from the worker and writes
+a per-frame `continue`/`stop` decision. The CLI waits at each frame boundary for
+that decision, so a stop/cancel/time budget is enforced **during** execution,
+not post-hoc. Hard failures (GPU execution failure or invalid resource history)
+always stop, regardless of `stop_on_difference`; the policy flag applies only to
+rendering-difference classifications. An early stop is also propagated to the
+tracer (`EU4_GFX_FRAME_TRACE_STOP_FILE`) and the bridge (`shadow/stop`).
+
+The current implementation is the synchronous stage: all captured frames are on
+disk before the Metal worker starts. A live asynchronous capture/replay pipeline
+is **not** claimed.
 
 ## Evidence
 
@@ -146,8 +156,8 @@ hard-linked, mutable files copied):
 
 ### Authentic EU4 campaign (Stage 1)
 
-One genuine x86_64 EU4 process, **pid 85776**, session
-`c84e7651-301d-434a-978d-738ff238585c`, executable
+One genuine x86_64 EU4 process, **pid 12009**, session
+`4b1de013-bfdc-40d1-b3e6-8bbef4a52cbc`, executable
 `b3d38876…`, instrumentation dylib `feddb2d5…`:
 
 - `EU4_GFX_FRAME_TRACE_CONTINUOUS=1`, 3 frames, max pending 2, 2 GiB byte
@@ -165,36 +175,41 @@ All three frames were replayed through the **same** Metal session and diagnosed:
 
 | frame | classification | history | carried | missing/stale | replay | callback |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | difference_with_partial_state_coverage | ok | 0 | 0/0 | 2.10 s | 5.57 s |
-| 2 | difference_with_partial_state_coverage | ok | 0 | 0/0 | 1.44 s | 6.40 s |
-| 3 | difference_with_partial_state_coverage | ok | 0 | 0/0 | 1.52 s | 6.36 s |
+| 1 | difference_with_partial_state_coverage | ok | 0 | 0/0 | 2.07 s | 5.45 s |
+| 2 | difference_with_partial_state_coverage | ok | 0 | 0/0 | 1.43 s | 4.92 s |
+| 3 | difference_with_partial_state_coverage | ok | 0 | 0/0 | 1.43 s | 4.90 s |
 
 Persistent renderer-owned state is visible in the retained generations:
 texture 433 went `7 → 14 → 21`, 431 `3 → 6 → 9`, 442 `1 → 2 → 3`, 443
-`2 → 4 → 6`. The session was not reset or reseeded between frames. The title
-scene re-renders every target before sampling it, so `carried_bindings` is 0 in
-this authentic frame set; the carried path is proven by the canonical two-frame
-fixture.
+`2 → 4 → 6`. The session was not reset or reseeded between frames.
+
+**Scope of this evidence:** the authentic campaign proves persistent session
+state and ordered multi-frame execution. It does **not** exercise a carried
+renderer output: the title scene re-renders every target before sampling it, so
+`carried_bindings` is 0 in all three frames. The carried-output, missing
+producer, stale history and delete→CPU-reimport branches are proven by the
+canonical two-frame synthetic fixture, not by this authentic run. The report
+does not upgrade those fixture proofs to authentic claims.
 
 Each frame's earliest authoritative divergence is the same copy/composite
 region as PR 3 (event 286, texture 442; copy producer 284). All three are
 `difference_with_partial_state_coverage` because `gl_dither` and `multisample`
 remain unsupported; they are not labelled proven Metal defects.
 
-Capture cost was 24.5/23.0/21.4 ms readback and 41.8/40.7/39.2 ms sealing per
-frame. The three sealed captures occupy 1,406,084,375 bytes on disk. The Stage-1 run
-predates a per-frame blob-slice fix, so its `sequence.json` reported a
-cumulative 2,483,916,807; the current branch accounts only the frame's own blob
-bytes. The byte budget is checked at frame boundaries, so the third frame
-completes and the campaign stops at the frame limit. Queue high-water is 1 with
-`max_pending=2` in the synchronous bridge.
+Capture cost was 23.5/22.1/20.8 ms readback and 40.7/38.9/37.7 ms sealing per
+frame. The campaign accounts 1,263,128,298 bytes of frame payload; the three
+sealed capture directories occupy 1,406,082,344 bytes on disk (manifest, seal,
+sequence and shadow artifacts add the difference). The byte budget is checked
+at frame boundaries, so the third frame completes and the campaign stops at the
+frame limit. Queue high-water is 1 with `max_pending=2` in the synchronous
+bridge.
 
 Report package: [pr4-evidence.json](pr4-evidence.json). Raw captures remain
 under `.local` (gitignored).
 
 ## Tests
 
-Focused PR4 set: 73 passed, 1 skipped (frame-trace writer, interpose, continuous
+Focused PR4 set: 91 passed, 1 skipped (frame-trace writer, interpose, continuous
 replay, supervisor, coordinator, PR3 diagnosis, Metal replay and canonical
 diagnosis).
 
@@ -215,6 +230,9 @@ diagnosis).
   worker replays) is not implemented. The synchronous bridge blocks the engine
   at each frame boundary; that is the Stage 1 design. A bounded file-queue
   worker is the next architectural step.
+- The capture byte budget is checked at frame boundaries, so one frame may
+  overshoot the configured budget before the campaign stops. It is a bounded
+  campaign guard, not a hard per-frame allocation limit.
 - Shader translation is still done per frame by the coordinator with `--force`.
   Cross-frame translation caching by authoritative source identity is not yet
   implemented.

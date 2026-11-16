@@ -102,15 +102,32 @@ class SupervisorTests(unittest.TestCase):
 
     def run_with(self, rows, diagnoses, *, stop=True, cancel=None,
                  max_frames=64):
-        completed = mock.Mock()
-        completed.returncode = 0
-        completed.stdout = "\n".join(json.dumps(row) for row in rows)
-        completed.stderr = ""
+        import io
+
+        class FakeProcess:
+            def __init__(self):
+                self.stdout = iter(
+                    json.dumps(row) + "\n" for row in rows)
+                self.stderr = io.StringIO("")
+                self.returncode = 0
+
+            def poll(self):
+                return self.returncode
+
+            def wait(self, timeout=None):
+                return self.returncode
+
+            def terminate(self):
+                self.returncode = 0
+
+            def kill(self):
+                self.returncode = 0
+
         with mock.patch.object(m7_continuous.m6_frame,
                                "build_replay_host",
                                return_value=Path("/bin/true")), \
-             mock.patch.object(m7_continuous.subprocess, "run",
-                               return_value=completed), \
+             mock.patch.object(m7_continuous.subprocess, "Popen",
+                               return_value=FakeProcess()), \
              mock.patch.object(gfx_independent_replay, "diagnose_frame",
                                side_effect=diagnoses) as diagnose, \
              mock.patch.object(m7_continuous.gfx_replay_case,
@@ -147,6 +164,18 @@ class SupervisorTests(unittest.TestCase):
                           "error": "event_encode: failure"})),
             [{"classification": "qualified_match",
               "qualification": {"axes": {}}}])
+        self.assertEqual(report["status"], "stopped")
+        self.assertEqual(report["stop_reason"], "gpu_execution_failure")
+        self.assertEqual(report["stopped_at"], 2)
+        self.assertEqual(diagnose.call_count, 1)
+
+    def test_hard_failure_stops_even_when_differences_continue(self):
+        report, diagnose = self.run_with(
+            self.rows((2, {"ok": False, "failed": 1,
+                          "stage": "event_encode",
+                          "error": "event_encode: failure"})),
+            [{"classification": "qualified_match",
+              "qualification": {"axes": {}}}], stop=False)
         self.assertEqual(report["status"], "stopped")
         self.assertEqual(report["stop_reason"], "gpu_execution_failure")
         self.assertEqual(report["stopped_at"], 2)

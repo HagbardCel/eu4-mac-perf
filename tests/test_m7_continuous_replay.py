@@ -200,6 +200,30 @@ class ContinuousReplayHistoryTests(unittest.TestCase):
         self.assertTrue((out / "campaign-report.json").is_file())
         self.assertTrue((out / "metrics.json").is_file())
 
+    def test_lifecycle_delete_is_applied_at_its_event_not_retroactively(self):
+        frame1 = self.make_frame("ordered-1")
+        frame2 = self.make_frame("ordered-2", remove_events=(288, 289))
+        self.write_sequence(frame1, 1)
+        # 443 is sampled at event 286 and deleted at event 291.  Applying the
+        # delete at frame start would incorrectly remove the carried producer
+        # before its legitimate sample.
+        self.write_sequence(
+            frame2, 2, previous=frame1, carried=("443",),
+            lifecycle=({"kind": "delete", "event": 291,
+                        "names": ("443",)},))
+        ran, rows, out = self.run_sequence([frame1, frame2])
+        self.assertEqual(ran.returncode, 0, ran.stderr[-1000:])
+        self.assert_ok(rows[1])
+        self.assertGreaterEqual(rows[1]["carried_bindings"], 1)
+        provenance = [
+            json.loads(line)
+            for line in (out / "out-002" / "replay-provenance.jsonl"
+                         ).read_text().splitlines()
+            if line.strip()
+        ]
+        row = next(item for item in provenance if item.get("texture") == "443")
+        self.assertTrue(row.get("carried"))
+
     def test_missing_previous_producer_fails_closed(self):
         frame1 = self.make_frame("missing-1", remove_events=(288, 289))
         frame2 = self.make_frame("missing-2", remove_events=(288, 289))

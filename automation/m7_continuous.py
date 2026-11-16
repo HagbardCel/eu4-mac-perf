@@ -144,6 +144,25 @@ def validate_sequence(frames: list[Path], *, max_frames: int = 64,
         capture_id = sequence.get("capture_frame_id")
         if not isinstance(capture_id, int) or capture_id <= 0:
             raise ContinuousError("capture_id", str(frame))
+        reference = frame / "frame-reference.bgra"
+        if not reference.is_file():
+            raise ContinuousError("missing_reference", str(frame))
+        if sequence.get("reference_sha256") != _sha(reference):
+            raise ContinuousError("reference_digest", str(frame))
+        seal_path = frame / "frame-seal.json"
+        if seal_path.is_file():
+            try:
+                seal = m6_frame.load_seal(frame)
+            except m6_frame.FrameError as exc:
+                raise ContinuousError(
+                    "invalid_seal", f"{frame}: {exc}") from exc
+            if seal.get("capture_frame_id") != capture_id:
+                raise ContinuousError("seal_capture_id", str(frame))
+            if seal.get("manifest_sha256") != manifest_sha:
+                raise ContinuousError("seal_manifest", str(frame))
+            if seal.get("reference_sha256") != sequence.get(
+                    "reference_sha256"):
+                raise ContinuousError("seal_reference", str(frame))
         if previous_identity is not None:
             previous = sequence.get("previous")
             if not isinstance(previous, dict):
@@ -211,27 +230,22 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
                  cancel=None,
                  timeout: float = 3600.0) -> dict:
     """Execute, diagnose and supervise one bounded ordered frame sequence."""
+    if max_pending < 1:
+        raise ContinuousError("max_pending", "must be positive")
     started = time.monotonic()
     frames = [Path(frame).expanduser().resolve() for frame in frames]
     out_dir = prepare_output(Path(out_dir), frames)
     validation = validate_sequence(frames, max_frames=max_frames,
                                    max_bytes=max_bytes)
     host_path = Path(host).expanduser() if host else m6_frame.build_replay_host()
+    control_dir = out_dir / "control"
+    control_dir.mkdir(parents=True, exist_ok=True)
     command = [
         str(host_path), "--sequence", ",".join(map(str, frames)),
         "--shaders", str(Path(shaders).expanduser().resolve()),
-        "--out", str(out_dir),
+        "--out", str(out_dir), "--control-dir", str(control_dir),
+        "--control-timeout-ms", "120000",
     ]
-    ran = subprocess.run(
-        command, capture_output=True, text=True, check=False, timeout=timeout)
-    rows = []
-    for line in ran.stdout.splitlines():
-        line = line.strip()
-        if line.startswith("{"):
-            try:
-                rows.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
     result: dict = {
         "schema": SCHEMA,
         "status": "running",
@@ -245,34 +259,46 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
         "validation": validation,
         "frames": [],
         "stop_reason": None,
-        "returncode": ran.returncode,
-        "stderr": (ran.stderr or "")[-4000:],
+        "returncode": None,
+        "stderr": "",
     }
-    if ran.returncode != 0 and not rows:
-        result["status"] = "failed"
-        result["stop_reason"] = "host_failure"
-        (out_dir / "campaign-report.json").write_text(
-            json.dumps(result, indent=2) + "\n")
-        return result
-    if len(rows) != len(frames):
-        result["status"] = "incomplete"
-        result["stop_reason"] = "frame_count"
-        result["missing_frames"] = len(frames) - len(rows)
     replay_times = []
     diagnosis_times = []
-    for row in rows:
+    process = subprocess.Popen(
+        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    stopped_during_execution = False
+
+    def decide(continue_running: bool, reason: str, sequence: int) -> None:
+        (control_dir / "decision.tmp").write_text(json.dumps({
+            "continue": continue_running,
+            "reason": reason,
+            "sequence": sequence,
+        }) + "\n")
+        os.replace(control_dir / "decision.tmp", control_dir / "decision")
+
+    def process_row(row: dict) -> bool:
+        nonlocal stopped_during_execution
+        if cancel is not None and cancel.is_set():
+            result["status"] = "cancelled"
+            result["stop_reason"] = "cancelled"
+            stopped_during_execution = True
+            return False
+        if max_seconds > 0 and time.monotonic() - started > max_seconds:
+            result["status"] = "incomplete"
+            result["stop_reason"] = "time_budget"
+            stopped_during_execution = True
+            return False
         sequence = int(row.get("sequence") or 0)
         if sequence < 1 or sequence > len(frames):
             result["status"] = "failed"
             result["stop_reason"] = "frame_identity"
-            break
+            stopped_during_execution = True
+            return False
         frame = frames[sequence - 1]
         output = Path(str(row.get("output_dir") or
                           out_dir / f"out-{sequence:03d}")).resolve()
         diagnosis_started = time.monotonic()
         if not row.get("ok"):
-            # The native worker has already stopped; do not invent a
-            # diagnostic package from a result directory that has no frame.
             diagnosis = {
                 "classification": "gpu_execution_failure",
                 "qualification": {"axes": {"gpu_execution": "failed"}},
@@ -314,13 +340,12 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
             "diagnosis_seconds": diagnosis_seconds,
         }
         result["frames"].append(entry)
-        stop = (
-            not row.get("ok")
-            or row.get("history_status") not in (1, None)
-            or classification in STOP_CLASSIFICATIONS
-            or classification != "qualified_match"
-        )
-        if stop and stop_on_difference:
+        hard_stop = (not row.get("ok")
+                     or row.get("history_status") not in (1, None))
+        soft_stop = (classification in STOP_CLASSIFICATIONS
+                     or classification != "qualified_match")
+        stop = hard_stop or (stop_on_difference and soft_stop)
+        if stop:
             result["status"] = "stopped"
             result["stop_reason"] = (
                 "gpu_execution_failure" if not row.get("ok")
@@ -329,8 +354,7 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
                 else classification)
             result["stopped_at"] = sequence
             try:
-                case = Path(package_dir) if package_dir else (
-                    out_dir / "case")
+                case = Path(package_dir) if package_dir else (out_dir / "case")
                 manifest = gfx_replay_case.package_diagnosis(
                     frame, output, case, diagnosis,
                     shaders=Path(shaders).expanduser().resolve(),
@@ -343,20 +367,64 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
                 }
             except (gfx_replay_case.CaseError, OSError) as exc:
                 entry["case_error"] = str(exc)
-            break
-        if cancel is not None and cancel.is_set():
-            result["status"] = "cancelled"
-            result["stop_reason"] = "cancelled"
-            result["stopped_at"] = sequence
-            break
-        if max_seconds > 0 and time.monotonic() - started > max_seconds:
-            result["status"] = "incomplete"
-            result["stop_reason"] = "time_budget"
-            result["stopped_at"] = sequence
-            break
+            stopped_during_execution = True
+            return False
+        return True
+
+    try:
+        for line in process.stdout:
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            keep_going = process_row(row)
+            decide(keep_going, result.get("stop_reason") or "continue",
+                   int(row.get("sequence") or 0))
+            if not keep_going:
+                break
+    finally:
+        if stopped_during_execution and process.poll() is None:
+            try:
+                process.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+        else:
+            try:
+                process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+                result["status"] = "failed"
+                result["stop_reason"] = "timeout"
+        result["returncode"] = process.returncode
+        result["stderr"] = (process.stderr.read() or "")[-4000:] if process.stderr else ""
+        if process.stdout is not None:
+            process.stdout.close()
+        if process.stderr is not None:
+            process.stderr.close()
     if result["status"] == "running":
-        result["status"] = "complete"
-        result["stop_reason"] = "frame_limit"
+        if result["returncode"] not in (0, None):
+            result["status"] = "failed"
+            result["stop_reason"] = "host_failure"
+        elif len(result["frames"]) != len(frames):
+            result["status"] = "incomplete"
+            result["stop_reason"] = "frame_count"
+            result["missing_frames"] = len(frames) - len(result["frames"])
+        else:
+            result["status"] = "complete"
+            result["stop_reason"] = "frame_limit"
     result["qualified"] = bool(
         result["status"] == "complete"
         and all(item.get("classification") == "qualified_match"
@@ -384,6 +452,13 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
             if path.is_file()),
         "wall_seconds": time.monotonic() - started,
     }
+    (out_dir / "campaign-report.json").write_text(
+        json.dumps(result, indent=2) + "\n")
+    (out_dir / "metrics.json").write_text(
+        json.dumps(result["metrics"], indent=2) + "\n")
+    result["metrics"]["bytes_written"] = sum(
+        path.stat().st_size for path in out_dir.rglob("*")
+        if path.is_file())
     (out_dir / "campaign-report.json").write_text(
         json.dumps(result, indent=2) + "\n")
     (out_dir / "metrics.json").write_text(

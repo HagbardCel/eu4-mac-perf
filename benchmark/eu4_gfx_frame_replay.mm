@@ -120,6 +120,7 @@ typedef struct {
 @property (nonatomic, strong) NSMutableSet<NSString *> *frame_written;
 @property (nonatomic, strong) NSMutableSet<NSString *> *frame_targets;
 @property (nonatomic, strong) NSSet<NSString *> *current_carried;
+@property (nonatomic, strong) NSMutableArray<NSDictionary *> *pending_lifecycle;
 @property (nonatomic, strong) NSDictionary *sequence_record;
 @property (nonatomic, strong) NSMutableDictionary *last_frame_identity;
 @property (nonatomic, assign) uint64_t frame_sequence;
@@ -183,6 +184,7 @@ static thread_local FrameTarget *g_default_target_ptr;
 #define g_frame_written (g_state.frame_written)
 #define g_frame_targets (g_state.frame_targets)
 #define g_current_carried (g_state.current_carried)
+#define g_pending_lifecycle (g_state.pending_lifecycle)
 #define g_sequence_record (g_state.sequence_record)
 #define g_last_frame_identity (g_state.last_frame_identity)
 #define g_frame_sequence (g_state.frame_sequence)
@@ -716,6 +718,46 @@ static BOOL sequence_error(NSError **error, NSString *message) {
     return NO;
 }
 
+static void apply_lifecycle_entry(NSDictionary *item) {
+    NSString *kind = string_value(item[@"kind"]);
+    NSArray *names = item[@"names"] ?: @[];
+    if (![kind isEqualToString:@"delete"] &&
+        ![kind isEqualToString:@"create"] &&
+        ![kind isEqualToString:@"reset"]) {
+        return;
+    }
+    for (id raw in names) {
+        NSString *name = texture_key(raw);
+        if (name.length == 0) {
+            continue;
+        }
+        /* A name that is a colour attachment in this frame is still owned by
+           the current frame's producer graph.  Upload/delete/recreate
+           ordering for that case is not captured with per-event identity yet;
+           removing it here would delete a live checkpointed target.  The
+           current frame's later write updates its generation. */
+        if ([g_frame_targets containsObject:name]) {
+            continue;
+        }
+        [g_resource_history removeObjectForKey:name];
+        [g_render_targets removeObjectForKey:name];
+        [g_frame_written removeObject:name];
+    }
+}
+
+static void apply_due_lifecycle(NSInteger event) {
+    NSMutableArray *remaining = [NSMutableArray array];
+    for (NSDictionary *item in g_pending_lifecycle) {
+        NSInteger at = number(item[@"event"], 0);
+        if (at <= event) {
+            apply_lifecycle_entry(item);
+        } else {
+            [remaining addObject:item];
+        }
+    }
+    g_pending_lifecycle = remaining;
+}
+
 /* Reads and validates one continuous-frame record.  A missing record is a
    first-class failure when persistent history is requested: importing the
    captured OpenGL image instead would hide an earlier Metal error. */
@@ -775,6 +817,7 @@ static BOOL apply_frame_sequence(NSString *frame_dir, uint64_t expected,
     if (![lifecycle isKindOfClass:[NSArray class]]) {
         return sequence_error(error, @"frame lifecycle is not an array");
     }
+    NSMutableArray *pending = [NSMutableArray array];
     for (NSDictionary *item in lifecycle) {
         if (![item isKindOfClass:[NSDictionary class]]) {
             return sequence_error(error, @"frame lifecycle entry is invalid");
@@ -791,16 +834,14 @@ static BOOL apply_frame_sequence(NSString *frame_dir, uint64_t expected,
                 error, [NSString stringWithFormat:
                             @"unsupported lifecycle operation %@", kind]);
         }
-        for (id raw in names) {
-            NSString *name = texture_key(raw);
-            if (name.length == 0) {
-                continue;
-            }
-            [g_resource_history removeObjectForKey:name];
-            [g_render_targets removeObjectForKey:name];
-            [g_frame_written removeObject:name];
-        }
+        [pending addObject:item];
     }
+    [pending sortUsingComparator:^NSComparisonResult(
+            NSDictionary *left, NSDictionary *right) {
+        return [@(number(left[@"event"], 0))
+            compare:@(number(right[@"event"], 0))];
+    }];
+    g_pending_lifecycle = pending;
     g_sequence_record = document;
     g_frame_sequence = sequence;
     return YES;
@@ -2032,8 +2073,11 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                     g_render_targets[cache_name];
                 NSDictionary *history = g_resource_history[cache_name];
                 BOOL carried = NO;
+                /* Only a write executed earlier in this frame counts as a
+                   producer.  Merely being declared as a colour attachment is
+                   not a producer: sampling it before its draw/clear must use
+                   the carried previous-frame output or fail closed. */
                 BOOL current_target =
-                    [g_frame_targets containsObject:cache_name] ||
                     [g_frame_written containsObject:cache_name];
                 if (persistent_target != nil &&
                     (!g_persistent_history || current_target)) {
@@ -3684,6 +3728,7 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
         g_frame_sequence = config->frame_sequence;
         g_history_status = g_persistent_history ? 1 : 0;
         g_current_carried = [NSSet set];
+        g_pending_lifecycle = [NSMutableArray array];
         g_sequence_record = nil;
         memset(g_default_target_ptr, 0, sizeof(*g_default_target_ptr));
 
@@ -3931,6 +3976,7 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
             }
         }
 
+        apply_due_lifecycle(-1);
         for (NSUInteger index = 0; index < events.count; index++) {
             if (config != NULL && config->test_inject_failure == 1 && index == 1) {
                 g_deadline_ns = replay_now_ns() - 1;
@@ -3939,6 +3985,7 @@ static int run_replay(EU4MetalReplayState *state, FrameTarget *default_target,
                 break;
             }
             g_current_event = index;
+            apply_due_lifecycle((NSInteger)index);
             /* Execute one event per submission.  Render-target sampling may
                need a compute pass in its own command buffer; that pass must
                observe every prior event as completed or it reads stale

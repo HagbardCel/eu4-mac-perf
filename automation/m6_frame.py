@@ -1958,6 +1958,17 @@ def _continuous_frame_coordinator(
     diagnosis = gfx_independent_replay.diagnose_frame(
         frame_dir, output, output, args.policy,
         shaders=shader_dir)
+    classification = diagnosis.get("classification")
+    hard_stop = report.get("history_status") not in (1, None)
+    stop = hard_stop or (classification != "qualified_match" and
+                         not args.continue_on_difference)
+    temp = output / "decision.json.tmp"
+    temp.write_text(json.dumps({
+        "continue": not stop,
+        "classification": classification,
+        "sequence": frame_index,
+    }) + "\n")
+    os.replace(temp, output / "decision.json")
     qualification = diagnosis.get("qualification") or {}
     summary = {
         "sequence": frame_index,
@@ -2002,6 +2013,18 @@ def shadow_coordinator_continuous(args: argparse.Namespace) -> int:
             summary, diagnosis = _continuous_frame_coordinator(
                 run, shadow, frame_index, args, overall_deadline)
         except (FrameError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+            # The bridge may be waiting for this frame's decision; release it
+            # with an explicit stop before recording the tool failure.
+            output = shadow / f"frame-{frame_index:06d}"
+            try:
+                output.mkdir(parents=True, exist_ok=True)
+                (output / "decision.json").write_text(json.dumps({
+                    "continue": False,
+                    "reason": "tool_failure",
+                    "sequence": frame_index,
+                }) + "\n")
+            except OSError:
+                pass
             result["status"] = "failed"
             result["error"] = str(exc)
             result["stop_reason"] = "tool_failure"

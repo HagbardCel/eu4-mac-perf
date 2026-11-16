@@ -220,6 +220,7 @@ static struct {
     char campaign_records[64][768];
     int campaign_record_count;
     char pending_deletes[64][64];
+    int pending_delete_events[64];
     int pending_delete_count;
 } g;
 
@@ -382,6 +383,8 @@ void eu4_gfx_frame_trace_texture_deleted(int count, const unsigned *names) {
         if (!known && g.pending_delete_count < 64) {
             snprintf(g.pending_deletes[g.pending_delete_count], 64, "%s",
                      name);
+            g.pending_delete_events[g.pending_delete_count] =
+                g.armed ? g.event_count : -1;
             g.pending_delete_count++;
         }
     }
@@ -3008,15 +3011,25 @@ static int continuous_write_frame_sequence(
     char lifecycle[4096];
     used = 0;
     lifecycle[0] = 0;
-    if (g.pending_delete_count > 0) {
-        used += (size_t)snprintf(lifecycle + used, sizeof(lifecycle) - used,
-                                 "{\"kind\":\"delete\",\"names\":[");
-        for (int i = 0; i < g.pending_delete_count; i++) {
+    for (int i = 0; i < g.pending_delete_count;) {
+        int event_index = g.pending_delete_events[i];
+        used += (size_t)snprintf(
+            lifecycle + used, sizeof(lifecycle) - used,
+            "%s{\"kind\":\"delete\",\"event\":%d,\"names\":[",
+            lifecycle[0] != 0 ? "," : "", event_index);
+        int first = 1;
+        int j = i;
+        while (j < g.pending_delete_count &&
+               g.pending_delete_events[j] == event_index) {
             used += (size_t)snprintf(
                 lifecycle + used, sizeof(lifecycle) - used, "%s\"%s\"",
-                i > 0 ? "," : "", g.pending_deletes[i]);
+                first ? "" : ",", g.pending_deletes[j]);
+            first = 0;
+            j++;
         }
-        snprintf(lifecycle + used, sizeof(lifecycle) - used, "]}");
+        used += (size_t)snprintf(lifecycle + used,
+                                 sizeof(lifecycle) - used, "]}");
+        i = j;
     }
     char *buffer = NULL;
     size_t size = 0;

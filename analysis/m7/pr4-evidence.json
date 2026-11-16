@@ -9,13 +9,13 @@
   },
   "authentic": {
     "launch_command": "python3 -m automation.m6_frame capture --output .local/m7/pr4-continuous-live-3 --callers 0x103b3c8 --min-draws 1 --occurrence 300 --boundary scene --continuous --max-frames 3 --max-pending 2 --max-bytes 2147483648 --shadow --seal --max-draws 1024 --duration 180 --timeout 600 --shadow-timeout-ms 180000 --shadow-wait-ms 240000 --continue-on-difference --background",
-    "pid": 85776,
-    "session": "c84e7651-301d-434a-978d-738ff238585c",
+    "pid": 12009,
+    "session": "4b1de013-bfdc-40d1-b3e6-8bbef4a52cbc",
     "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
-    "instrumentation_library_sha256": "feddb2d589efa19ddb0d62115afd5d87d56f90c3dfce107a9b900e27819068ea",
+    "instrumentation_library_sha256": "c02a471ca8ad15a900f942721991bf65c806aed032f55ff219258618d3f8b689",
     "eu4_processes": 1,
     "termination": {
-      "pid": 85776,
+      "pid": 12009,
       "terminated": true,
       "killed": false,
       "executable": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4"
@@ -28,23 +28,23 @@
     },
     "campaign": {
       "schema": "gfx-frame-sequence-campaign/v1",
-      "session_id": "c84e7651-301d-434a-978d-738ff238585c",
-      "pid": 85776,
+      "session_id": "4b1de013-bfdc-40d1-b3e6-8bbef4a52cbc",
+      "pid": 12009,
       "status": "complete",
       "reason": "frame_limit",
       "max_frames": 3,
       "max_pending": 2,
       "max_bytes": 2147483648,
       "frames_completed": 3,
-      "bytes_written": 2483916807,
+      "bytes_written": 1263128298,
       "frames": [
         {
           "sequence": 1,
           "capture_frame_id": 1,
-          "dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/wt_m7_pr4/.local/m7/pr4-continuous-live-3/frames/frame-000001",
-          "manifest_sha256": "9b984165395355586d469fecb0812380ba7c8caf7ef5de1dd00057563ba31522",
-          "event_stream_sha256": "1f4c00ee1f82eff63e96bd5914b15dc370a6f33c81bbbbc0754c95416139ee57",
-          "reference_sha256": "d06fbdbe46f5654624b6152de4af226bb0c945d50693512acb084fb4dc6afe95",
+          "dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/wt_m7_pr4/.local/m7/pr4-continuous-live-5/frames/frame-000001",
+          "manifest_sha256": "1be94caabbf91af6282e7ab4dce97e007a42c9b3865f2c6177fffeab6c0d49e3",
+          "event_stream_sha256": "faeae7e0c8734ff17bdc92346f072d764fddd27a0f2fa0c4c6e6c381b2e3157c",
+          "reference_sha256": "0ad88407187b6ae577a3667a9b1bb5fb3d0c42c14b4c33d44f87fb3fdfcb919e",
           "operations": 325,
           "draws": 315,
           "clears": 9,
@@ -53,10 +53,10 @@
         {
           "sequence": 2,
           "capture_frame_id": 2,
-          "dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/wt_m7_pr4/.local/m7/pr4-continuous-live-3/frames/frame-000002",
-          "manifest_sha256": "b5954b6fe15d307368c780e64652f2a2f2f2f828174af1e83207b0cefe7d7037",
-          "event_stream_sha256": "d15d3433bbf54d7cf1a90499de1acf1a89da3ab81fe6d480549ae6a4594c42f5",
-          "reference_sha256": "aa020baebe52a8e6d26a5aee6fd880725ce00761e8ad26783db716c025ea76e3",
+          "dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/wt_m7_pr4/.local/m7/pr4-continuous-live-5/frames/frame-000002",
+          "manifest_sha256": "f3f95f0ceab7a67f9b7c978d78a719e09faea910c9f6e95e362a289c157f3587",
+          "event_stream_sha256": "765981c67e0e2c254d5383187ab98b9753963d39b04530985de3d8115e80e4fb",
+          "reference_sha256": "6c065b4244e16bfcf2c195a13fcc49fb71b0067d8e35a886bfe1111d6fb0ea26",
           "operations": 325,
           "draws": 315,
           "clears": 9,
@@ -65,10 +65,10 @@
         {
           "sequence": 3,
           "capture_frame_id": 3,
-          "dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/wt_m7_pr4/.local/m7/pr4-continuous-live-3/frames/frame-000003",
-          "manifest_sha256": "e0e5d1e8745d86f5a56c0e50c9196695749cb2b640bd69d47992f2044bbabebf",
-          "event_stream_sha256": "a20fdb70a047fe59176e518c4c9b5e6b9649787b8359f4c3298963bd94e3c6a4",
-          "reference_sha256": "85fefc69721862983a767b3196790983074ad11707148c1522624aba019a915f",
+          "dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/wt_m7_pr4/.local/m7/pr4-continuous-live-5/frames/frame-000003",
+          "manifest_sha256": "80e334f3b5e30960eaaca9676a018c9d2e4bff73bbc04270bd6bdbd8cc1ba933",
+          "event_stream_sha256": "29897128b0e4645c69c075456bce2a3cd1a61eb76e07cbe152c575e8bed1c889",
+          "reference_sha256": "8794dc5012e43f3f23873313cdbdc61f5d19e064305942821361e046ad38fce7",
           "operations": 325,
           "draws": 315,
           "clears": 9,
@@ -80,11 +80,11 @@
       {
         "sequence": 1,
         "capture_frame_id": 1,
-        "frame_dir": ".local/m7/pr4-continuous-live-3/frames/frame-000001",
-        "shadow_dir": ".local/m7/pr4-continuous-live-3/shadow/frame-000001",
-        "manifest_sha256": "9b984165395355586d469fecb0812380ba7c8caf7ef5de1dd00057563ba31522",
-        "event_stream_sha256": "1f4c00ee1f82eff63e96bd5914b15dc370a6f33c81bbbbc0754c95416139ee57",
-        "reference_sha256": "d06fbdbe46f5654624b6152de4af226bb0c945d50693512acb084fb4dc6afe95",
+        "frame_dir": ".local/m7/pr4-continuous-live-5/frames/frame-000001",
+        "shadow_dir": ".local/m7/pr4-continuous-live-5/shadow/frame-000001",
+        "manifest_sha256": "1be94caabbf91af6282e7ab4dce97e007a42c9b3865f2c6177fffeab6c0d49e3",
+        "event_stream_sha256": "faeae7e0c8734ff17bdc92346f072d764fddd27a0f2fa0c4c6e6c381b2e3157c",
+        "reference_sha256": "0ad88407187b6ae577a3667a9b1bb5fb3d0c42c14b4c33d44f87fb3fdfcb919e",
         "operations": 325,
         "draws": 315,
         "clears": 9,
@@ -102,6 +102,7 @@
         "lifecycle": [
           {
             "kind": "delete",
+            "event": -1,
             "names": [
               "1",
               "2",
@@ -170,8 +171,8 @@
             ]
           }
         ],
-        "readback_ns": 24488000,
-        "seal_ns": 41811000,
+        "readback_ns": 23505000,
+        "seal_ns": 40671000,
         "metal": {
           "status": "ok",
           "events": 325,
@@ -179,9 +180,9 @@
           "failed": 0,
           "command_status": 4,
           "readback": true,
-          "duration_ns": 2101732000,
-          "total_callback_ns": 5574687000,
-          "metal_frame_sha256": "4b5f7cb58f25295ad309fe2c1b9b59b58b15db0ea99d22b661c11224442606ea",
+          "duration_ns": 2072571000,
+          "total_callback_ns": 5447114000,
+          "metal_frame_sha256": "c8fbd6942c6157b45f4d2475c673f6daccfdb0418c9a7b36955103916f4a3089",
           "history_status": 1,
           "carried_bindings": 0,
           "missing_history": 0,
@@ -246,17 +247,17 @@
         },
         "pixels": {
           "pixels": 1930176,
-          "mismatched_pixels": 1162779,
-          "mismatched_fraction": 0.6024212299811001,
+          "mismatched_pixels": 1160538,
+          "mismatched_fraction": 0.6012601959614046,
           "alpha_different_pixels": 0,
-          "max_channel_error": 73,
+          "max_channel_error": 81,
           "mean_abs_error": [
-            0.398694212,
-            0.517298941,
-            0.653208308,
+            0.395201785,
+            0.51333868,
+            0.648801456,
             0.0
           ],
-          "mean_max_channel_error": 0.865424707
+          "mean_max_channel_error": 0.861174836
         },
         "first_divergence": {
           "kind": "intermediate",
@@ -282,11 +283,11 @@
       {
         "sequence": 2,
         "capture_frame_id": 2,
-        "frame_dir": ".local/m7/pr4-continuous-live-3/frames/frame-000002",
-        "shadow_dir": ".local/m7/pr4-continuous-live-3/shadow/frame-000002",
-        "manifest_sha256": "b5954b6fe15d307368c780e64652f2a2f2f2f828174af1e83207b0cefe7d7037",
-        "event_stream_sha256": "d15d3433bbf54d7cf1a90499de1acf1a89da3ab81fe6d480549ae6a4594c42f5",
-        "reference_sha256": "aa020baebe52a8e6d26a5aee6fd880725ce00761e8ad26783db716c025ea76e3",
+        "frame_dir": ".local/m7/pr4-continuous-live-5/frames/frame-000002",
+        "shadow_dir": ".local/m7/pr4-continuous-live-5/shadow/frame-000002",
+        "manifest_sha256": "f3f95f0ceab7a67f9b7c978d78a719e09faea910c9f6e95e362a289c157f3587",
+        "event_stream_sha256": "765981c67e0e2c254d5383187ab98b9753963d39b04530985de3d8115e80e4fb",
+        "reference_sha256": "6c065b4244e16bfcf2c195a13fcc49fb71b0067d8e35a886bfe1111d6fb0ea26",
         "operations": 325,
         "draws": 315,
         "clears": 9,
@@ -309,8 +310,8 @@
           "443"
         ],
         "lifecycle": [],
-        "readback_ns": 23032000,
-        "seal_ns": 40686000,
+        "readback_ns": 22114000,
+        "seal_ns": 38926000,
         "metal": {
           "status": "ok",
           "events": 325,
@@ -318,9 +319,9 @@
           "failed": 0,
           "command_status": 4,
           "readback": true,
-          "duration_ns": 1443284000,
-          "total_callback_ns": 6400845000,
-          "metal_frame_sha256": "e5a403db20c83ea934703a0747a43b2c8a7ad34ee4fb9cbe9f4960aeecea2db3",
+          "duration_ns": 1427921000,
+          "total_callback_ns": 4915965000,
+          "metal_frame_sha256": "49fc4321d4eebe7b7d09850050f7c4120b81143ca3c70e211d230fb30f6bdc74",
           "history_status": 1,
           "carried_bindings": 0,
           "missing_history": 0,
@@ -385,17 +386,17 @@
         },
         "pixels": {
           "pixels": 1930176,
-          "mismatched_pixels": 1164094,
-          "mismatched_fraction": 0.6031025150038132,
+          "mismatched_pixels": 1164860,
+          "mismatched_fraction": 0.6034993700056368,
           "alpha_different_pixels": 0,
-          "max_channel_error": 66,
+          "max_channel_error": 71,
           "mean_abs_error": [
-            0.400686259,
-            0.521085642,
-            0.657243174,
+            0.400212727,
+            0.521534824,
+            0.658846654,
             0.0
           ],
-          "mean_max_channel_error": 0.869105201
+          "mean_max_channel_error": 0.870248102
         },
         "first_divergence": {
           "kind": "intermediate",
@@ -421,11 +422,11 @@
       {
         "sequence": 3,
         "capture_frame_id": 3,
-        "frame_dir": ".local/m7/pr4-continuous-live-3/frames/frame-000003",
-        "shadow_dir": ".local/m7/pr4-continuous-live-3/shadow/frame-000003",
-        "manifest_sha256": "e0e5d1e8745d86f5a56c0e50c9196695749cb2b640bd69d47992f2044bbabebf",
-        "event_stream_sha256": "a20fdb70a047fe59176e518c4c9b5e6b9649787b8359f4c3298963bd94e3c6a4",
-        "reference_sha256": "85fefc69721862983a767b3196790983074ad11707148c1522624aba019a915f",
+        "frame_dir": ".local/m7/pr4-continuous-live-5/frames/frame-000003",
+        "shadow_dir": ".local/m7/pr4-continuous-live-5/shadow/frame-000003",
+        "manifest_sha256": "80e334f3b5e30960eaaca9676a018c9d2e4bff73bbc04270bd6bdbd8cc1ba933",
+        "event_stream_sha256": "29897128b0e4645c69c075456bce2a3cd1a61eb76e07cbe152c575e8bed1c889",
+        "reference_sha256": "8794dc5012e43f3f23873313cdbdc61f5d19e064305942821361e046ad38fce7",
         "operations": 325,
         "draws": 315,
         "clears": 9,
@@ -448,8 +449,8 @@
           "443"
         ],
         "lifecycle": [],
-        "readback_ns": 21444000,
-        "seal_ns": 39183000,
+        "readback_ns": 20815000,
+        "seal_ns": 37731000,
         "metal": {
           "status": "ok",
           "events": 325,
@@ -457,9 +458,9 @@
           "failed": 0,
           "command_status": 4,
           "readback": true,
-          "duration_ns": 1524147000,
-          "total_callback_ns": 6364058000,
-          "metal_frame_sha256": "221e60c77db2035d7be02a9fbb2a88423c4c833e44a9f40b4b8752572c4e85eb",
+          "duration_ns": 1430429000,
+          "total_callback_ns": 4897763000,
+          "metal_frame_sha256": "6dc870bbafc2d287082ec933a4590deb120ae5d8d5c3e714ecf32b7021707533",
           "history_status": 1,
           "carried_bindings": 0,
           "missing_history": 0,
@@ -524,17 +525,17 @@
         },
         "pixels": {
           "pixels": 1930176,
-          "mismatched_pixels": 1163950,
-          "mismatched_fraction": 0.60302791040817,
+          "mismatched_pixels": 1164726,
+          "mismatched_fraction": 0.6034299462846912,
           "alpha_different_pixels": 0,
-          "max_channel_error": 84,
+          "max_channel_error": 68,
           "mean_abs_error": [
-            0.399291567,
-            0.518984279,
-            0.65438074,
+            0.401811027,
+            0.522115082,
+            0.658568441,
             0.0
           ],
-          "mean_max_channel_error": 0.867049948
+          "mean_max_channel_error": 0.871382195
         },
         "first_divergence": {
           "kind": "intermediate",
@@ -562,46 +563,45 @@
     "pixel_verdict": "difference_with_partial_state_coverage",
     "qualified": false,
     "stop_reason": "frame_limit",
-    "policy": "continue-on-difference for the Stage-1 resource-history campaign; differences are recorded, not treated as passes"
+    "policy": "continue-on-difference for the Stage-1 resource-history campaign; differences are recorded, not treated as passes",
+    "scope_note": "Proves persistent session state and ordered 3-frame execution with the final decision handshake. The title scene re-renders every target, so carried_bindings=0; carried/missing/stale/delete branches are synthetic-fixture proofs."
   },
   "metrics": {
     "frames": 3,
     "replay_seconds": {
       "values": [
-        2.101732,
-        1.443284,
-        1.524147
+        2.072571,
+        1.427921,
+        1.430429
       ],
-      "mean": 1.689721,
-      "median": 1.524147,
-      "worst": 2.101732
+      "mean": 1.6436403333333334,
+      "median": 1.430429,
+      "worst": 2.072571
     },
     "callback_seconds": {
       "values": [
-        5.574687,
-        6.400845,
-        6.364058
+        5.447114,
+        4.915965,
+        4.897763
       ],
-      "mean": 6.113196666666667,
-      "median": 6.364058,
-      "worst": 6.400845
+      "mean": 5.086947333333334,
+      "median": 4.915965,
+      "worst": 5.447114
     },
     "capture_readback_ns": [
-      24488000,
-      23032000,
-      21444000
+      23505000,
+      22114000,
+      20815000
     ],
     "capture_seal_ns": [
-      41811000,
-      40686000,
-      39183000
+      40671000,
+      38926000,
+      37731000
     ],
-    "bytes_written": 1406084375,
+    "bytes_written": 1406082344,
     "queue_high_water": 1,
     "max_pending": 2,
-    "note": "Replay duration is the native command/readback duration; callback duration additionally includes bounded shader-translation wait. No original-EU4-without-instrumentation or capture-only pacing measurement was taken in this bounded Stage-1 campaign.",
-    "bytes_written_campaign_accounted": 2483916807,
-    "bytes_accounting_note": "The Stage-1 run used a cumulative blob counter (2,483,916,807 accounted bytes). The per-frame slice counter is fixed in this branch; this entry reports the actual on-disk bytes for the same capture."
+    "note": "Replay duration is the native command/readback duration; callback duration additionally includes bounded shader-translation wait and the per-frame decision handshake. No uninstrumented/capture-only EU4 pacing comparison was measured."
   },
   "offline": {
     "carried_renderer_output": {
@@ -634,12 +634,13 @@
     },
     "tests": {
       "test_gfx_frame_trace_writer": "24 passed (ordered frames, seals, previous links, frame limit, byte budget, lifecycle delete)",
-      "test_m7_continuous_replay": "6 passed",
-      "test_m7_continuous_supervisor": "5 passed",
+      "test_m7_continuous_replay": "7 passed",
+      "test_m7_continuous_supervisor": "6 passed",
       "test_m7_continuous_coordinator": "2 passed",
       "test_gfx_interpose": "1 passed",
-      "pr4_focused_set": "73 passed, 1 skipped"
-    }
+      "pr4_focused_set": "91 passed, 1 skipped"
+    },
+    "scope_note": "Synthetic canonical two-frame fixtures; not authentic EU4 continuation."
   },
   "limitations": [
     "The live asynchronous capture/replay pipeline is not implemented; this campaign is the synchronous Stage 1.",
@@ -649,5 +650,11 @@
     "Stages 2/3 (10-20 frames, gameplay, async) were not run.",
     "Performance comparison against uninstrumented EU4 and capture-only mode was not measured in this bounded campaign.",
     "The authentic Stage-1 run predates the per-frame blob-budget accounting fix; its campaign manifest overcounts bytes. The reported disk bytes are authoritative for that run."
-  ]
+  ],
+  "code_identity": {
+    "campaign_commit": "c0d11e4f",
+    "post_campaign_fixes": [
+      "Decision handshake and lifecycle guard verified in this run."
+    ]
+  }
 }

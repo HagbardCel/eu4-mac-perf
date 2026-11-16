@@ -802,11 +802,18 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
                     required = required_by_event.get(event)
                     actual_generation = int(row.get("generation") or 0)
                     generation_ok = actual_generation == required
-                    if continuous and required is not None:
+                    if (row.get("carried")
+                            and row.get("history_generation") is not None):
+                        # A carried sample must equal the exact generation
+                        # recorded for the previous frame; a newer one would
+                        # mean the carried producer was not the one observed.
+                        generation_ok = (
+                            actual_generation ==
+                            int(row["history_generation"]))
+                    elif continuous and required is not None:
                         # In a persistent sequence the session generation is
-                        # cumulative across frames.  A carried or rewritten
-                        # target must be at least as new as the frame-local
-                        # producer count.
+                        # cumulative across frames.  A rewritten target must
+                        # be at least as new as the frame-local producer count.
                         generation_ok = actual_generation >= required
                     if required is not None and not generation_ok:
                         consumer_problems.append({
@@ -960,6 +967,10 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
             if expected is None:
                 continue
             generation = int(item.get("generation") or 0)
+            if (item.get("carried")
+                    and item.get("history_generation") is not None):
+                if generation == int(item["history_generation"]):
+                    continue
             if continuous and generation >= expected:
                 continue
             if generation != expected:

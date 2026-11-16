@@ -12,6 +12,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
+#include <string>
 
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
@@ -20,6 +23,8 @@ int main(int argc, const char *argv[]) {
         const char *output_path = NULL;
         const char *checkpoint_path = NULL;
         const char *sequence = NULL;
+        const char *control_dir = NULL;
+        uint64_t control_timeout_ms = 120000;
         int stop_after = -1;
         int only_event = -1;
         int seed_marked = 0;
@@ -54,11 +59,24 @@ int main(int argc, const char *argv[]) {
             } else if (strcmp(argv[index], "--sequence") == 0 &&
                        index + 1 < argc) {
                 sequence = argv[++index];
+            } else if (strcmp(argv[index], "--control-dir") == 0 &&
+                       index + 1 < argc) {
+                control_dir = argv[++index];
+            } else if (strcmp(argv[index], "--control-timeout-ms") == 0 &&
+                       index + 1 < argc) {
+                control_timeout_ms = strtoull(argv[++index], NULL, 10);
             }
         }
         if (sequence != NULL) {
             if (shader_path == NULL || output_path == NULL) {
                 fprintf(stderr, "sequence requires --shaders and --out\n");
+                return 2;
+            }
+            if (stop_after >= 0 || only_event >= 0 || checkpoint_path != NULL ||
+                seed_marked || capture_post_images || capture_pre_images ||
+                depth_from_prefix) {
+                fprintf(stderr,
+                        "sequence does not accept isolation/checkpoint flags\n");
                 return 2;
             }
             char *frames = strdup(sequence);
@@ -80,12 +98,19 @@ int main(int argc, const char *argv[]) {
               withIntermediateDirectories:YES
                                attributes:nil
                                     error:NULL];
+                char frame_shader_dir[1024];
+                snprintf(frame_shader_dir, sizeof(frame_shader_dir),
+                         "%s/shaders", frame);
+                const char *effective_shader_dir =
+                    access((std::string(frame_shader_dir) + "/shaders.json").c_str(),
+                           R_OK) == 0
+                        ? frame_shader_dir : shader_path;
                 eu4_metal_replay_config config;
                 memset(&config, 0, sizeof(config));
                 config.struct_size = (uint32_t)sizeof(config);
                 config.abi_version = EU4_METAL_REPLAY_ABI_VERSION;
                 config.frame_dir = frame;
-                config.shader_dir = shader_path;
+                config.shader_dir = effective_shader_dir;
                 config.output_dir = output;
                 config.stop_after = -1;
                 config.only_event = -1;
@@ -149,6 +174,53 @@ int main(int argc, const char *argv[]) {
                 if (!frame_result.ok && result == 0) {
                     result = code != 0 ? code : 1;
                     break;
+                }
+                if (control_dir != NULL && frame_result.ok) {
+                    char decision_path[1024];
+                    snprintf(decision_path, sizeof(decision_path),
+                             "%s/decision", control_dir);
+                    uint64_t deadline = 0;
+                    struct timespec now;
+                    clock_gettime(CLOCK_MONOTONIC, &now);
+                    deadline = (uint64_t)now.tv_sec * 1000ull +
+                               (uint64_t)now.tv_nsec / 1000000ull +
+                               control_timeout_ms;
+                    int decided = 0;
+                    while (!decided) {
+                        NSData *data = [NSData dataWithContentsOfFile:
+                                            @(decision_path)];
+                        if (data != nil) {
+                            id value = [NSJSONSerialization
+                                JSONObjectWithData:data options:0 error:NULL];
+                            if ([value isKindOfClass:[NSDictionary class]] &&
+                                [value[@"continue"] isKindOfClass:
+                                    [NSNumber class]]) {
+                                if (![value[@"continue"] boolValue]) {
+                                    result = 0;
+                                    decided = -1;
+                                } else {
+                                    decided = 1;
+                                }
+                            }
+                        }
+                        if (decided != 0) {
+                            break;
+                        }
+                        clock_gettime(CLOCK_MONOTONIC, &now);
+                        uint64_t current = (uint64_t)now.tv_sec * 1000ull +
+                                           (uint64_t)now.tv_nsec / 1000000ull;
+                        if (current >= deadline) {
+                            fprintf(stderr, "control decision timed out\n");
+                            result = 4;
+                            decided = -1;
+                            break;
+                        }
+                        usleep(10000);
+                    }
+                    unlink(decision_path);
+                    if (decided < 0) {
+                        break;
+                    }
                 }
             }
             eu4_metal_replay_destroy(session);
