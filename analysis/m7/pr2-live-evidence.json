@@ -8,7 +8,7 @@
     "pr1_pr": "https://github.com/HagbardCel/eu4-mac-perf/pull/199",
     "pr2_branch": "m7/pr2-inprocess-metal",
     "stacked": true,
-    "pr2_commit": "55174d5"
+    "pr2_commit": "f824b8e"
   },
   "launch": {
     "command": "python3.14 -m automation.m6_frame capture --output .local/m7/pr2-shadow-live-6 --callers 0x103b3c8 --min-draws 1 --occurrence 300 --boundary scene --seal --shadow --shadow-timeout-ms 120000 --shadow-wait-ms 180000 --max-draws 1024 --duration 90 --timeout 600 --background --timeline",
@@ -78,7 +78,7 @@
     "timed_out": false,
     "partial": false,
     "report_fields_note": "timed_out=false and partial=false are the core result values; the live shadow-report artifact predates the bridge report-field addition.",
-    "verification_evidence": "The coordinator produced shader-receipt.json and the replay succeeded only after the bridge validated it; the live shadow-report predates the report-field addition. Native input verification is covered by offline tests and the same code path."
+    "verification_evidence": "The run produced shader-receipt.json with matching identity; receipt validation exists in the code path and is covered by offline tests. The live binary predates the receipt-verification commit, so this artifact alone does not prove the bridge checked it."
   },
   "comparison": {
     "pixel_verdict": "fail",

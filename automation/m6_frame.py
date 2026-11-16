@@ -1372,7 +1372,6 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
                 json.dumps(result, indent=2) + "\n"
             )
             return 1
-    report_deadline = min(overall_deadline, time.monotonic() + args.replay_timeout)
     try:
         translated = subprocess.run(
             [
@@ -1439,6 +1438,8 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
         )
         + "\n"
     )
+    # Translation time does not consume the in-process replay budget.
+    report_deadline = min(overall_deadline, time.monotonic() + args.replay_timeout)
     while not report_path.is_file() and time.monotonic() < report_deadline:
         time.sleep(0.1)
     if not report_path.is_file():
