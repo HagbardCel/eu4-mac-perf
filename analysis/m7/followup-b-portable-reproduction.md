@@ -82,17 +82,28 @@ translated again and no union cache is introduced.  The case-level `shaders/`
 directory remains the CLI fallback and is the target frame's own translation; it
 is never a merged report.
 
-Packaging validates every resolved frame report before claiming completeness:
-the report must be parseable, every program referenced by that frame's draws
-must be present with `status="ok"`, and each vertex/pixel stage must declare its
-MSL payload and captured stage identity (a missing MSL file is rejected).  An
-unusable report is routed to the incomplete path even when the directory and
-`shaders.json` exist.  `verify` repeats the same checks on the relocated case and
-requires the captured `source_sha256` identity to match the translation; a
-missing declaration is a verification failure, not a silent pass.  If a selected
-frame has no available or usable translation, packaging publishes an incomplete
-summary with `reason=shader_artifact_unavailable` instead of claiming independent
-reproducibility.
+Packaging and verification share one provenance validator.  For every program
+referenced by a frame's draw events it requires:
+
+- a translated program entry with `status="ok"` and both vertex and pixel
+  stages;
+- a captured stage entry for each of those stages, with a valid 64-hex
+  `sha256` identity on the draw;
+- a translated stage whose `source_sha256` is present, valid, and equal to the
+  captured identity, and whose MSL payload exists inside the translation
+  directory (declared GLSL/SPIR-V payloads must exist too).
+
+Missing, malformed, contradictory (two different captured identities for one
+program/stage) or mismatched identities are never treated as "not applicable".
+Translation defects are published as `reason=shader_artifact_unavailable`;
+missing or conflicting captured identities as
+`reason=shader_identity_unavailable`.  Both set
+`reproduction.status=incomplete`, `independently_reproducible=false`, publish no
+replay command, and fail `verify` before Metal.
+
+An older capture that lacks captured stage identities can still be preserved as
+diagnostic evidence, but it is not marked fully verified or independently
+reproducible: the missing identities are reported, not reconstructed.
 
 ### Verification and replay
 
@@ -157,7 +168,8 @@ consistent:
   frame's sequence/trace/events/reference, each checkpoint request and receipt)
   must be listed in `case.json.files`;
 - each frame's declared programs must match the programs its draw events
-  reference, including the captured stage digests;
+  reference, including a captured vertex/pixel identity and a matching
+  translated `source_sha256` for every stage;
 - within the authoritative payload directories (`frames/`, `shaders/`,
   `checkpoints/`) any file absent from the inventory is rejected, so a
   substituted shader, checkpoint or resource blob cannot hide outside the
@@ -291,8 +303,13 @@ Receipt: [followup-b-relocation-receipt.json](followup-b-relocation-receipt.json
   from the final Metal history before the carried-sample provenance check.
 - Per-frame shader provenance assumes the frame's declared translation covers
   its captured programs; it does not merge arbitrary program sets into a
-  synthetic union.  Frames without a usable translation are explicitly
-  incomplete rather than silently reusing another frame's shader report.
+  synthetic union.  Frames without a usable translation or without complete
+  captured stage identities are explicitly incomplete rather than silently
+  reusing another frame's shader report.
+- Historical captures that never recorded captured stage identities cannot be
+  qualified as independently reproducible under this contract.  Their evidence
+  is preserved as a diagnostic incomplete case; the identities are not
+  reconstructed.
 - Portable Linux CI skips the macOS-only native/Metal tests.  A green portable
   check is not macOS runtime evidence.
 - The three-frame canonical prefix is larger than the 512 MiB default budget.

@@ -314,8 +314,9 @@ session identity, missing lifecycle/mutation records, wrong generations,
 nonportable paths and stale/substituted checkpoint requests.  A complete v2
 package must also declare every required payload (per-frame shader reports and
 MSL files, checkpoints, frame data) in its SHA-256 inventory; it requires every
-program a frame's draws reference and checks the captured stage identities
-against the translation; undeclared files, duplicate entries, absolute
+program a frame's draws reference, a captured 64-hex identity for each vertex
+and pixel stage, and a matching translated `source_sha256`; missing, malformed,
+conflicting or mismatched identities are refused before replay; undeclared files, duplicate entries, absolute
 paths, `..` traversal and symlink escapes are rejected before replay.
 
 The artifact budget now bounds the whole generated package on every packaging
@@ -326,7 +327,9 @@ structured reason and the missing dependency (or required byte estimate) is
 published with no replay command.  If even a budget summary cannot fit,
 packaging fails with an explicit `case_budget` error and leaves source inputs
 untouched.  A frame whose required translation is unavailable is published as
-incomplete with reason `shader_artifact_unavailable`.
+incomplete with reason `shader_artifact_unavailable`; a frame without complete
+captured stage identities is published as incomplete with reason
+`shader_identity_unavailable` and is not claimed independently reproducible.
 
 A deterministic four-frame fixture (producer, carried, target) relocates and
 reproduces a controlled cross-frame divergence at the target's draw after the

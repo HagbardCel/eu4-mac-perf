@@ -2,7 +2,7 @@
   "schema": "m7-followup-b-relocation-receipt/v1",
   "kind": "authentic_captured_frames_with_synthetic_ordered_packaging",
   "fixture": "canonical menu-occ300 captured frame content",
-  "tested_head": "e8568640",
+  "tested_head": "84c9aff8",
   "case": {
     "schema": "gfx-strategy-b-case/v2",
     "case_id": "canonical-prefix",
@@ -206,16 +206,32 @@
       "relocated_verify": "ok",
       "replay": "qualified_match, one persistent session, target sequence 3, 0/16 mismatched pixels, history ok, carried_bindings 1, metal_render_target_bindings 1, sampled 600 source=metal_render_target and no external_capture binding",
       "negative_cases": [
-        "missing MSL file (packaging -> shader_artifact_unavailable)",
-        "corrupt shader report (packaging -> shader_artifact_unavailable)",
-        "program status error (packaging -> shader_artifact_unavailable)",
-        "dropped captured program (verify failure)",
-        "tampered captured stage identity (verify failure)",
-        "omitted source_sha256 identity (verify failure)",
-        "unavailable frame translation (packaging -> shader_artifact_unavailable)"
+        "missing MSL file -> shader_artifact_unavailable",
+        "corrupt shader report -> shader_artifact_unavailable",
+        "program status error -> shader_artifact_unavailable",
+        "missing GLSL payload -> shader_artifact_unavailable",
+        "dropped captured program -> verify failure",
+        "tampered translated identity -> verify failure",
+        "omitted translated source_sha256 -> verify failure",
+        "missing captured vertex hash -> shader_identity_unavailable",
+        "missing captured pixel hash -> shader_identity_unavailable",
+        "missing captured stage entry -> shader_identity_unavailable",
+        "conflicting captured hashes -> shader_identity_unavailable",
+        "missing captured identity in a packaged case -> verify failure before replay",
+        "unavailable frame translation -> shader_artifact_unavailable"
       ],
       "case_id": "heterogeneous-shaders",
-      "title": "M7 cross-frame differential diagnosis"
+      "title": "M7 cross-frame differential diagnosis",
+      "shader_identity_validation": {
+        "captured": "64-hex sha256 required for vertex and pixel stage of every draw program",
+        "translated": "source_sha256 required for both stages and must equal captured identity",
+        "shared_validator": true,
+        "incomplete_reasons": {
+          "shader_artifact_unavailable": "missing/corrupt translation, MSL/GLSL/SPV payload, status error",
+          "shader_identity_unavailable": "missing/malformed/conflicting captured identity or translated mismatch"
+        },
+        "historical_missing_identity": "preserved as diagnostic-only incomplete evidence; not reconstructed or independently reproducible"
+      }
     }
   },
   "budget": {
