@@ -115,9 +115,30 @@ class _StagedCase:
             dir=self.destination.parent))
 
     def commit(self) -> Path:
+        # Move the previous case aside first, then publish.  Replacement never
+        # leaves the destination missing: if the publish fails the previous
+        # directory is restored.
+        backup = None
         if self.destination.exists():
-            shutil.rmtree(self.destination)
-        self.path.replace(self.destination)
+            for attempt in range(1000):
+                candidate = self.destination.with_name(
+                    f".{self.destination.name}-previous-{os.getpid()}-{attempt}")
+                if not candidate.exists():
+                    backup = candidate
+                    break
+            if backup is None:
+                raise CaseError(
+                    "output_conflict",
+                    f"cannot stage a replacement for {self.destination}")
+            os.replace(self.destination, backup)
+        try:
+            os.replace(self.path, self.destination)
+        except OSError:
+            if backup is not None and not self.destination.exists():
+                os.replace(backup, self.destination)
+            raise
+        if backup is not None:
+            shutil.rmtree(backup, ignore_errors=True)
         return self.destination
 
     def discard(self) -> None:
@@ -690,7 +711,9 @@ def _relocate_seal(frame_dir: Path, relative: str) -> None:
     original = seal.get("capture_dir")
     seal["capture_dir"] = relative
     if original and original != relative:
-        seal["portable_original_capture_dir"] = original
+        # Provenance only: never keep an absolute campaign path in a portable
+        # v2 inventory.
+        seal["portable_original_capture_dir"] = Path(original).name
     _write_json(seal_path, seal)
 
 
@@ -711,7 +734,14 @@ def _relocate_sequence(frame_dir: Path, index: int, total: int,
     document["portable_original_campaign_frames"] = document.get(
         "campaign_frames")
     if isinstance(original_previous, dict):
-        document["portable_original_previous"] = original_previous
+        # The original directory is provenance, not evidence.  Keeping only
+        # its basename avoids embedding an environment-specific absolute path
+        # in the case inventory (which would make the case digest differ
+        # between otherwise identical runs).
+        retained = dict(original_previous)
+        if isinstance(retained.get("dir"), str) and retained["dir"]:
+            retained["dir"] = Path(retained["dir"]).name
+        document["portable_original_previous"] = retained
     document["sequence_index"] = index
     document["campaign_frames"] = total
     if index == 1 or previous is None:
@@ -847,13 +877,22 @@ def _required_prefix(frames: list[Path]) -> tuple[list[Path], dict]:
                         continue
                 elif same_frame_write or later_write:
                     continue
-                # A delete in the frame that last carries the resource is
-                # normal end-of-life cleanup: the samples in that frame happen
-                # before the delete event, and no later frame needs the
-                # resource.  Only a delete before the last carry leaves a
-                # later consumer without a producer.
+                # A delete in an *intermediate* frame that last carries the
+                # resource is normal end-of-life cleanup: later frames no
+                # longer need it.  A delete in the target frame cannot be
+                # packaged as complete: replay removes the resource from the
+                # final Metal history, so the target's own carried-sample
+                # provenance and the verifier's carried-resource check can no
+                # longer reconcile even when the pixels match.
                 if kind == "delete" and index == last_carry:
-                    continue
+                    if index != target_index:
+                        continue
+                    raise CaseError(
+                        "missing_mutation_record",
+                        f"{name} is deleted by the target frame at event "
+                        f"{event} after being carried; a target-frame cleanup "
+                        "delete leaves no retained Metal history for the "
+                        "carried-resource provenance check")
                 raise CaseError(
                     "missing_mutation_record",
                     f"{name} {kind} at frame {index + 1} event {event} has no "
@@ -990,7 +1029,6 @@ def package_sequence_diagnosis(
     required_bytes = prefix_source_bytes
     required_bytes += _tree_bytes(shader_source)
     required_bytes += _replay_artifact_bytes(metal_dir, report)
-    required_bytes += _difference_bytes(report)
     if max_bytes > 0 and required_bytes > max_bytes:
         return _budget_incomplete_case(
             destination, metal_dir=metal_dir, report=report,
@@ -1035,11 +1073,25 @@ def package_sequence_diagnosis(
             if source.is_file():
                 shutil.copy2(source, work / "replay" / source.name)
         target_relative = f"frames/{len(copied):06d}"
-        portable = _portable_diagnosis(report, work, target_relative)
+        replacements = {str(metal_dir): "replay", str(work): "."}
+        for index, source in enumerate(selected, start=1):
+            replacements[str(source)] = f"frames/{index:06d}"
+        portable = _scrub_paths(
+            _portable_diagnosis(report, work, target_relative), replacements)
         _write_json(work / "diagnostic-report.json", portable)
         graph = json.loads(json.dumps(
             report.get("graph") or gfx_frame_graph.build(copied[-1])))
         graph["frame_dir"] = target_relative
+        # Retained graph entries carry the original campaign paths.  Rewrite
+        # them to the relocated container before publishing, so the case
+        # digest does not depend on the capture machine's directory names.
+        replacements = {str(metal_dir): "replay", str(work): "."}
+        for index, source in enumerate(selected, start=1):
+            replacements[str(source)] = f"frames/{index:06d}"
+        graph = _scrub_paths(graph, replacements)
+        _portable_paths(graph, replay_dir="replay",
+                        capture_dir=target_relative)
+        graph = _scrub_paths(graph, replacements)
         _write_json(work / "dependency-graph.json", graph)
         _write_json(work / "graph.json", {
             "schema": gfx_frame_graph.SCHEMA,
@@ -1144,9 +1196,18 @@ def package_sequence_diagnosis(
 
 def _verify_sequence(case_dir: Path, manifest: dict) -> tuple[list[str], dict]:
     problems: list[str] = []
-    sequence_path = case_dir / str(manifest.get("sequence") or "sequence.json")
+    declared = str(manifest.get("sequence") or "sequence.json")
+    sequence_path, path_problem = _case_relative_path(case_dir, declared)
+    if path_problem is not None:
+        return [f"sequence manifest path is invalid: {path_problem}"], {}
+    if declared != "sequence.json":
+        # replay_case always reads sequence.json; verifying any other path
+        # would validate evidence that is never executed.
+        return [
+            f"sequence manifest path must be sequence.json, not {declared!r}"
+        ], {}
     try:
-        sequence = _json(sequence_path)
+        sequence = _json(sequence_path or case_dir / "sequence.json")
     except (OSError, UnicodeError, json.JSONDecodeError, CaseError) as exc:
         return [f"sequence manifest is unreadable: {exc}"], {}
     if sequence.get("schema") != SEQUENCE_MANIFEST_SCHEMA:
@@ -1366,7 +1427,7 @@ def _replay_sequence_case(case_dir: Path, out_dir: Path,
                 "frame": row.get("sequence"),
                 "classification": row.get("classification"),
                 "event": divergence.get("event"),
-                "operation": divergence.get("operation") or "draw",
+                "operation": divergence.get("operation"),
             }
             break
     diagnosis["reproduction"] = {
@@ -1572,6 +1633,11 @@ def verify(case_dir: Path | str) -> dict:
         for name in _sequence_inventory(sequence):
             if name not in declared:
                 problems.append(f"required payload is not declared: {name}")
+        # Only authoritative payload locations are exhaustively inventoried.
+        # The documented replay command writes its output into a scratch
+        # directory inside the case; that output is not reproduction evidence
+        # and must not invalidate an otherwise complete package.
+        authoritative = ("frames/", "shaders/", "checkpoints/")
         on_disk: set[str] = set()
         for directory, _subdirs, files in os.walk(case_dir):
             for name in files:
@@ -1581,8 +1647,9 @@ def verify(case_dir: Path | str) -> dict:
                 except ValueError:
                     problems.append(f"payload outside the case directory: {path}")
                     continue
-                if relative != "case.json":
-                    on_disk.add(relative)
+                if not relative.startswith(authoritative):
+                    continue
+                on_disk.add(relative)
         for name in sorted(on_disk - set(declared)):
             problems.append(f"payload is not declared in the inventory: {name}")
     graph: dict = {}

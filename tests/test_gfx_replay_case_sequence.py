@@ -505,8 +505,10 @@ class PortableSequenceCaseTests(unittest.TestCase):
         self.assertEqual(fault["campaign"]["target_sequence"], 3)
         self.assertEqual(
             fault["reproduction"]["earliest_affected_frame"], 3)
-        self.assertEqual(
-            fault["reproduction"]["earliest_affected_operation"], "draw")
+        # The captured diagnosis does not attribute the first divergence to a
+        # specific operation for this controlled fault; do not invent one.
+        self.assertIsNone(
+            fault["reproduction"]["earliest_affected_operation"])
 
     def test_verifier_detects_missing_predecessor(self):
         out, diagnosis = self.baseline()
@@ -870,6 +872,75 @@ class PortableSequenceCaseTests(unittest.TestCase):
         self.assertFalse(verified["ok"], verified)
         self.assertTrue(any("missing blob" in problem
                             for problem in verified["problems"]), verified)
+
+    def test_documented_replay_into_the_case_does_not_invalidate_it(self):
+        out, diagnosis = self.baseline()
+        case, _ = self.package(out, diagnosis)
+        self.assertTrue(gfx_replay_case.verify(case)["ok"])
+        # The documented complete-v2 command runs from inside the case and
+        # writes replay-rerun/ there.  That scratch output is not reproduction
+        # evidence and must not make the immutable package unverifiable.
+        replay = gfx_replay_case.replay_case(case, case / "replay-rerun")
+        self.assertEqual(replay["final"]["status"], "qualified_match", replay)
+        verified = gfx_replay_case.verify(case)
+        self.assertTrue(verified["ok"], verified["problems"])
+        again = gfx_replay_case.replay_case(case, case / "replay-rerun-2")
+        self.assertEqual(again["final"]["status"], "qualified_match", again)
+
+    def test_target_frame_cleanup_delete_is_refused(self):
+        out, diagnosis = self.baseline()
+        target = self.frames[-1]
+        path = target / "frame-sequence.json"
+        original = json.loads(path.read_text())
+        events = json.loads((target / "frame-trace.json").read_text())["events"]
+        mutated = json.loads(json.dumps(original))
+        mutated["lifecycle"] = [{
+            "kind": "delete", "event": events, "names": ["500"],
+        }]
+        path.write_text(json.dumps(mutated))
+        try:
+            case = self.fixture.base / "target-cleanup"
+            with self.assertRaises(gfx_replay_case.CaseError) as caught:
+                gfx_replay_case.package_sequence_diagnosis(
+                    self.frames, out / "out-004", case, diagnosis,
+                    shaders=self.shaders, case_id="target-cleanup")
+            self.assertEqual(caught.exception.kind, "missing_mutation_record")
+            self.assertIn("target frame", str(caught.exception))
+            self.assertFalse(case.exists())
+        finally:
+            path.write_text(json.dumps(original))
+
+    def test_verifier_rejects_an_external_sequence_reference(self):
+        out, diagnosis = self.baseline()
+        case, _ = self.package(out, diagnosis)
+        external = self.fixture.base / "external-sequence.json"
+        external.write_text((case / "sequence.json").read_text())
+        def edit(manifest):
+            manifest["sequence"] = "../../external-sequence.json"
+        self._edit_manifest(case, edit)
+        verified = gfx_replay_case.verify(case)
+        self.assertFalse(verified["ok"], verified)
+        self.assertTrue(any("sequence manifest path is invalid" in problem or
+                            "must be sequence.json" in problem
+                            for problem in verified["problems"]), verified)
+
+    def test_complete_case_evidence_is_path_independent(self):
+        out, diagnosis = self.baseline()
+        first, _ = self.package(out, diagnosis,
+                                self.fixture.base / "deterministic-a")
+        for name in ("dependency-graph.json", "diagnostic-report.json",
+                     "sequence.json"):
+            self.assertNotIn(str(self.fixture.base),
+                             (first / name).read_text(), name)
+            self.assertNotIn(str(self.fixture.base),
+                             (first / "frames" / "000001" /
+                              "frame-sequence.json").read_text(), name)
+        second, _ = self.package(out, diagnosis,
+                                 self.fixture.base / "deterministic-b")
+        self.assertEqual(sha((first / "case.json").read_bytes()),
+                         sha((second / "case.json").read_bytes()))
+        self.assertEqual(sha((first / "dependency-graph.json").read_bytes()),
+                         sha((second / "dependency-graph.json").read_bytes()))
 
     def test_single_frame_budget_fails_below_the_minimum_summary(self):
         out, diagnosis = self.baseline()
