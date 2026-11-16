@@ -8,19 +8,19 @@
     "pr1_pr": "https://github.com/HagbardCel/eu4-mac-perf/pull/199",
     "pr2_branch": "m7/pr2-inprocess-metal",
     "stacked": true,
-    "pr2_commit": "7eae228"
+    "pr2_commit": "c8553f8"
   },
   "launch": {
-    "command": "python3.14 -m automation.m6_frame capture --output .local/m7/pr2-shadow-live-6 --callers 0x103b3c8 --min-draws 1 --occurrence 300 --boundary scene --seal --shadow --shadow-timeout-ms 120000 --shadow-wait-ms 180000 --max-draws 1024 --duration 90 --timeout 600 --background --timeline",
-    "pid": 41754,
-    "session_id": "2d692cb3-9d0d-4460-8803-00b249e756f9",
+    "command": "python3.14 -m automation.m6_frame capture --output .local/m7/pr2-shadow-live-7 --callers 0x103b3c8 --min-draws 1 --occurrence 300 --boundary scene --seal --shadow --shadow-timeout-ms 120000 --shadow-wait-ms 180000 --max-draws 1024 --duration 90 --timeout 600 --background --timeline",
+    "pid": 92781,
+    "session_id": "e42b31ac-ee4b-44f5-9f65-71ed99fe6f0b",
     "eu4_processes": 1,
     "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
-    "instrumentation_library_sha256": "3e400851c990b5ada8991e7eef7e7aeafc09147020967ce5cece5a3100d8a7f1",
+    "instrumentation_library_sha256": "7ce9101ddb35aedaafa648e8baa791e58409fac61fa2418bc808187c7d5d5af9",
     "startup_summary": {
       "complete": true,
       "state": 2,
-      "refused": 328,
+      "refused": 126,
       "unavailable": 0,
       "overflow": 0,
       "unmatched": 0,
@@ -41,21 +41,21 @@
   "frame": {
     "capture_frame_id": 1,
     "boundary": "scene",
-    "present_index": 615,
-    "scene_index": 615,
-    "capture_dir": ".local/m7/pr2-shadow-live-6/frame",
+    "present_index": 603,
+    "scene_index": 603,
+    "capture_dir": ".local/m7/pr2-shadow-live-7/frame",
     "operation_count": 325,
     "draw_count": 315,
     "clear_count": 9,
     "copy_count": 1,
     "width": 1728,
     "height": 1117,
-    "manifest_sha256": "9797dc1f568b885dd6b51a553d1193fc45d6deb50b2cc0c372252fefe4a5c06d",
-    "reference_sha256": "987ecbe2cf9b326459aafffb3d23d643e9f603e22aad4aa236ce0410077254f0",
+    "manifest_sha256": "30daf18322ed6bde31eca1ba983da4718645ff010fe6768ee86c10b1f33941d4",
+    "reference_sha256": "a7991870ed19239cb93f19abae724ee9c4f858306b4b4424ba38572441210dd6",
     "reference_bytes": 7720704,
-    "readback_ns": 23420000,
-    "finalize_ns": 16806000,
-    "seal_ns": 40227000
+    "readback_ns": 23826000,
+    "finalize_ns": 16779000,
+    "seal_ns": 40607000
   },
   "metal": {
     "session_id": "dc8fd91a-88e3-4a2d-870e-787cc6e4b05c",
@@ -65,9 +65,9 @@
     "failed": 0,
     "readback_ok": true,
     "command_status": 4,
-    "metal_frame_sha256": "bdcc1322b7d51706615b3a3703f2c46c3fb0b0c8cb892b8edb15ffe548c645f1",
-    "duration_ns": 1976791000,
-    "total_callback_ns": 5110250000,
+    "metal_frame_sha256": "0dad7bc61424c3a199d8923ca521f92a941e0fd19475f7f86154a91041f614b3",
+    "duration_ns": 2082059000,
+    "total_callback_ns": 5433730000,
     "provenance": {
       "bindings": 2739,
       "metal_render_target_bindings": 274,
@@ -78,7 +78,7 @@
     "timed_out": false,
     "partial": false,
     "report_fields_note": "timed_out=false and partial=false are the core result values; the live shadow-report artifact predates the bridge report-field addition.",
-    "verification_evidence": "The archived live run predates the final structured blob verifier and detailed failure-report changes; it produced a matching shader receipt and succeeded through the then-current path. Deterministic offline tests cover the final verifier and failure classification."
+    "verification_evidence": "The final run used the structured blob verifier, shader receipt validation and bounded deadline; bridge report stage=complete, timed_out=0, partial=0."
   },
   "comparison": {
     "pixel_verdict": "fail",
@@ -88,24 +88,24 @@
       "multisample"
     ],
     "pixels": 1930176,
-    "mismatched_pixels": 1159832,
-    "mismatched_fraction": 0.6008944262077656,
+    "mismatched_pixels": 1162852,
+    "mismatched_fraction": 0.6024590503663915,
     "alpha_different_pixels": 0,
-    "max_channel_error": 76,
-    "mean_max_channel_error": 0.863011974,
+    "max_channel_error": 66,
+    "mean_max_channel_error": 0.864247095,
     "mean_abs_error_rgba": [
-      0.39732957,
-      0.51383449,
-      0.649676506,
+      0.398149702,
+      0.516010975,
+      0.652904191,
       0.0
     ],
-    "interpretation": "Spatially uniform low-amplitude differences; not proven exclusively dithering (261294 pixels >1, 69 >40). Canonical title remains exact.",
+    "interpretation": "Spatially uniform low-amplitude differences; not proven exclusively dithering (263,495 pixels >1, 50 >40). Canonical title remains exact; qualified=false.",
     "state_coverage_scope": [
       "gl_dither",
       "multisample"
     ],
-    "pixels_differing_by_more_than_1": 261294,
-    "pixels_differing_by_more_than_40": 69
+    "pixels_differing_by_more_than_1": 263495,
+    "pixels_differing_by_more_than_40": 50
   },
   "offline": {
     "canonical_title": {

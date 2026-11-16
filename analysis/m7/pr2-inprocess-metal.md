@@ -86,36 +86,36 @@ first-sample-before-write entries, and one in-frame transfer.
 
 ## Authentic same-process launch (Stage C)
 
-One original x86_64 EU4 process, **pid 41754**, session
-`2d692cb3-9d0d-4460-8803-00b249e756f9`:
+One original x86_64 EU4 process, **pid 92781**, session
+`e42b31ac-ee4b-44f5-9f65-71ed99fe6f0b`:
 
 | Field | Value |
 | --- | --- |
-| capture id / boundary | `1`, scene 615 |
+| capture id / boundary | `1`, scene 603 |
 | ordered operations | 325 (315 draws, 9 clears, 1 resolve) |
-| GL reference | `987ecbe2…`, 7,720,704 bytes |
-| trace manifest | `9797dc1f…` |
+| GL reference | `a7991870…`, 7,720,704 bytes |
+| trace manifest | `30daf183…` |
 | Metal replay | 325/325 encoded, 0 failed, readback ok, command status 4 |
-| Metal frame | `bdcc1322…` |
-| replay duration | 1.98 s (includes native input/blob verification) |
-| total callback time | 5.11 s (translation wait + replay) |
+| Metal frame | `0dad7bc6…` |
+| replay duration | 2.08 s (includes structured input/blob verification) |
+| total callback time | 5.43 s (translation wait + replay) |
 | one EU4 PID | yes; no second launch |
 | termination | launcher `terminated=true`, settings restored |
 | game stdout/stderr | 0 / 0 bytes |
 | state coverage | **partial**: `gl_dither`, `multisample` unsupported |
 | pixel verdict | **fail** |
 
-Comparison: **1,159,832 / 1,930,176** pixels differ, max channel error **76**,
+Comparison: **1,162,852 / 1,930,176** pixels differ, max channel error **66**,
 mean max error 0.87, alpha differences 0. The differences are spatially
 uniform and low-amplitude over terrain and UI, and the images are visually
-equivalent, but this is **not** proven to be exclusively dithering: 261,294
-pixels differ by more than 1 and 69 by more than 40. No A/B run with dither or
+equivalent, but this is **not** proven to be exclusively dithering: 263,495
+pixels differ by more than 1 and 50 by more than 40. No A/B run with dither or
 multisample disabled exists. The canonical title fixture remains pixel-exact,
 so this is a live-frame state/coverage gap, not a core regression. The
 coordinator writes `state-coverage.json` with the exact checked/unsupported
 flags.
 
-The generic ops observer recorded `refused=328` during the blocked frame
+The generic ops observer recorded `refused=126` during the blocked frame
 boundary; the frame trace itself is complete and validated, stdout/stderr are
 empty, and no GL error was recorded. The run is a one-shot diagnostic, not
 continuous mirroring.

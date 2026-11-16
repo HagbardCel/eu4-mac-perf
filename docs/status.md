@@ -82,12 +82,12 @@ draw re-execution is involved.
 Offline, the refactored core replays the canonical title frame exactly
 (326/326, `ff2f4e2b…`) through both the CLI and the C ABI, repeated sessions
 agree, and the copy-bearing scene-75 case preserves its known divergence
-(1,792,005 / 1,930,176, max 23). One authentic same-process launch (pid 41754,
-capture id 1, scene 615) produced a GL reference `987ecbe2…` and an independent
-Metal frame `bdcc1322…`: 325/325 operations encoded, 0 failed, command status 4,
+(1,792,005 / 1,930,176, max 23). One authentic same-process launch (pid 92781,
+capture id 1, scene 603) produced a GL reference `a7991870…` and an independent
+Metal frame `0dad7bc6…`: 325/325 operations encoded, 0 failed, command status 4,
 readback ok, one in-frame transfer, 274 Metal target / 2,465 external
-bindings. The live frame is **not** pixel-exact: 1,159,832 / 1,930,176 pixels
-differ, max 76, with `state_coverage=partial` for `gl_dither` and
+bindings. The live frame is **not** pixel-exact: 1,162,852 / 1,930,176 pixels
+differ, max 66, with `state_coverage=partial` for `gl_dither` and
 `multisample`; the difference is spatially uniform and low-amplitude,
 but is not proven to be exclusively dithering; no A/B with dither/MSAA
 disabled exists. Report:
