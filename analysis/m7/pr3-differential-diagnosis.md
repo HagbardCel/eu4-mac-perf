@@ -218,3 +218,36 @@ Focused suites cover:
 ## Review
 
 Requesting independent review. Do not merge automatically.
+
+## Checkpoint-request provenance and packaging hardening (`fc9e3838`)
+
+The offline diagnosis path now proves that a published
+`checkpoint-request.json` belongs to the sealed frame before it can support an
+equivalence claim:
+
+- the request is compared with the checkpoint plan derived from the validated
+  capture graph (exact event/target/resource identity, reference digest,
+  dimensions and producer history);
+- duplicate, extra, missing and substituted entries are `invalid_provenance`;
+- the request SHA-256, file name and count are bound to the authoritative
+  `shadow-report.json` and/or the coordinator `shader-receipt.json`; a present
+  binding that disagrees is invalid, and no binding is `incomplete_diagnostics`;
+- reconciliation additionally rejects a result whose target/resource identity
+  differs from the requested `(event, target)`.
+
+An offline fixture without authoritative request binding remains diagnosable
+but cannot be `qualified_match`.
+
+`diagnose_frame(package=True)` now defaults to a deterministic sibling case
+directory (`<metal-dir>-case`) outside both the captured frame and the Metal
+result directory. Re-running replaces only an owned case; a non-owned output
+conflict is reported as an explicit error instead of deleting user data.
+
+Regressions (final focused set: 179 passed, 1 skipped):
+
+- stale empty request, same-count different-event request, wrong digest,
+  missing binding, duplicate/extra/substituted entries, receipt from another
+  frame;
+- the real `python -m automation.m6_frame diagnose --package` CLI with no
+  `--out`, repeated invocation and a non-owned conflict;
+- canonical title and scene-75 Metal diagnoses are unchanged.

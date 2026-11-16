@@ -386,5 +386,25 @@
     "gl_dither and multisample are captured but unsupported; no A/B experiment establishes them as the cause.",
     "The canonical title capture is known-partial for texture 442, so the diagnosis is honest about capture validity rather than claiming qualified_match.",
     "The portable live case is 473 MiB because the sealed capture includes every referenced texture and vertex blob; it is stored under .local and not committed."
-  ]
+  ],
+  "provenance_hardening": {
+    "head": "fc9e3838",
+    "request_binding": [
+      "validated_capture_plan",
+      "shadow_report_sha256",
+      "shader_receipt_sha256"
+    ],
+    "fail_closed": [
+      "missing_binding",
+      "digest_mismatch",
+      "substituted_plan",
+      "duplicate_result",
+      "unexpected_result"
+    ],
+    "packaging_default": "sibling <metal-dir>-case outside captured frame and Metal result",
+    "focused_tests": {
+      "passed": 179,
+      "skipped": 1
+    }
+  }
 }
