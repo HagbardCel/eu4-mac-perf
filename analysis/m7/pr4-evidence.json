@@ -1248,7 +1248,36 @@
       "shader_cache": "keyed by verified program/stage source identity",
       "payload_dedup": "hard link from previous frame when the content digest matches",
       "digest_memoization": "verified blob digests cached per process by path/size/mtime",
-      "retention": "successful outputs retained; explicit byte savings only"
+      "retention": "successful outputs retained; explicit byte savings only",
+      "measured": {
+        "translation_cache_authentic_3_frames": {
+          "miss_seconds": 2.988,
+          "hit_seconds": [
+            0.341,
+            0.269
+          ],
+          "hit_rate": "2/3",
+          "source_identity": "126f3a260e2a... same for all three title frames"
+        },
+        "authentic_replay": {
+          "gpu_replay_seconds": [
+            0.498,
+            0.209,
+            0.205
+          ],
+          "diagnosis_seconds_average": 7.608,
+          "wall_seconds": 25.18,
+          "output_bytes": 138985175
+        },
+        "queue": {
+          "stage2_high_water": 3,
+          "max_pending": 3
+        },
+        "retention": {
+          "capture_campaign_bytes": 1406082344,
+          "prior_10_frame_bytes": 4690000000
+        }
+      }
     },
     "authentic_vs_synthetic": {
       "authentic": "three-frame captured campaign replayed through the new path",

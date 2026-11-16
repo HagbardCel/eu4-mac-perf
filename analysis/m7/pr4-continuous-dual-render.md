@@ -321,6 +321,23 @@ the previous frame when the content digest matches, and verified blob digests
 are memoized per process. The campaign manifest publishes
 `deduplicated_bytes`.
 
+### Measured efficiency
+
+- Authentic shader translation cache: frame 1 is a miss (2.99 s); frames 2 and
+  3 are hits (0.34 s and 0.27 s) and share source identity
+  `126f3a260e2a…`. Hit rate 2/3 on the three title frames.
+- Authentic three-frame replay: GPU replay 0.50/0.21/0.21 s, diagnosis
+  average 7.61 s, campaign wall 25.18 s, output 139 MB.
+- Async Stage 2 queue: `MAX_PENDING=3`, high-water 3, no dropped frames.
+- Capture storage: the 3-frame authentic capture is 1.41 GB; the prior
+  10-frame async campaign retained ~4.69 GB. Content-addressed payload
+  hard-linking and shader caching reduce replay/translation work, but
+  successful capture artifacts are still retained; the 4.69 GB figure is a
+  budget, not an unlimited-retention target.
+- Not measured in this session: uninstrumented EU4 pacing, capture-only pacing,
+  and a fresh synchronous-vs-asynchronous authentic comparison. Those require
+  a new launch and are reported as an explicit limitation.
+
 ### Authentic replay verification
 
 The existing authentic three-frame campaign (`pr4-continuous-live-5`, one EU4

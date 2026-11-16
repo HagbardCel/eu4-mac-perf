@@ -1018,10 +1018,6 @@ def evaluate_replay(graph: dict, replay: dict) -> dict:
         status = "invalid"
     provenance = replay.get("provenance") or {}
     history = replay.get("history") or {}
-    continuous = (
-        isinstance(history, dict)
-        and history.get("status") == "ok"
-        and int(history.get("sequence") or 0) > 0)
     samples = replay.get("_provenance_samples")
     if samples is None:
         samples = []
