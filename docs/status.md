@@ -354,6 +354,31 @@ paths).  Report:
 Independent review of the per-frame shader correction is required; automerge is
 disabled.
 
+## M7 Phase A/B — v2 agent dispatch and live portable packaging (2026-11-16)
+
+The v2 ordered-prefix Strategy B case is now a first-class agent case.
+`eu4_replay case` and `eu4_case_inspect` dispatch on `CASE_SCHEMAS` instead of
+the v1 schema only, and the tool surface adds bounded M7 `sequence`,
+`diagnose` and `verify` operations. Invalid, unsupported and explicitly
+incomplete evidence is returned as `invalid`/`incomplete` with
+`outcome.qualified=false`; it is never replayed as a qualified result.
+`eu4_diff_run` remains the separate two-process workflow.
+
+The production continuous shadow coordinator now packages the diagnosed
+prefix through the existing `package_sequence_diagnosis`. Packaging resolves
+each included frame's exact translation (`shadow/frame-NNNNNN/shaders`), copies
+the coordinator's checkpoint request/receipt only when it is identical to the
+deterministic request for the copied graph, and preserves predecessor
+lifecycle/capture identity. The live case budget is explicit; an over-budget
+reproduction is published as a bounded incomplete summary with no replay
+command.
+
+Focused validation: 272 native/offline tests passed, the DSH plugin's 9 tests
+passed, and a real v2 case was inspected, verified and replayed through the
+JavaScript bridge after relocation and deletion of the original campaign. No
+EU4 launch was made in this phase. Report:
+[Phase A/B](../analysis/m7/phase-ab-agent-bridge.md).
+
 ## Strategy B — independent replay (2026-11-14)
 
 Capture once, replay independently. A canonical authentic OpenGL title frame
