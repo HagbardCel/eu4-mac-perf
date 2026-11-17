@@ -8,7 +8,7 @@ Base: `origin/main` at `2bab6cc0`, the merge of PR #205
 (`m7/followup-portable-replay`, head `30f07f9a`). The branch was rebased onto
 that merged baseline and PR #206 was retargeted from the #205 branch to `main`.
 
-Final code commit for this remediation: `33808d7e`. Documentation and receipt
+Final code commit for this remediation: `80c23d88`. Documentation and receipt
 updates are a separate commit so the code identity reviewed by CI remains
 stable.
 
