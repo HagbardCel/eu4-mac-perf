@@ -286,12 +286,15 @@ executed the diagnosis and produced its required evidence. A populated
 reports `diagnostic_report: null` and `diagnostic_completed: false`.
 
 The aggregate `verdict` is derived from confirmed evidence across all trusted,
-diagnosed frames, not only the earliest classified non-equivalence. A later
-verified final-pixel or authoritative checkpoint difference therefore yields
-`different` even when an earlier frame only observed `unsupported_state`;
+diagnosed frames, not only the earliest classified non-equivalence. Only a row
+with `diagnostic_completed=true` can contribute evidence; completion requires a
+usable final-pixel statistics object (positive pixel count and a consistent
+mismatched-pixel count) and an authoritative `ok` checkpoint validation. A
+later verified final-pixel or authoritative checkpoint difference therefore
+yields `different` even when an earlier frame only observed `unsupported_state`;
 terminal failures still override the verdict without erasing the earlier
-observations. Evidence from a terminal or invalid-provenance frame is never
-promoted into `first_pixel_divergent_frame` or
+observations. Evidence from a terminal, invalid-provenance or incompletely
+diagnosed frame is never promoted into `first_pixel_divergent_frame` or
 `first_checkpoint_divergent_frame`.
 
 Portable v2 case replay (`eu4_replay case --replay-out`) succeeds only when the

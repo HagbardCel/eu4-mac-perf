@@ -1,7 +1,7 @@
 {
   "schema": "m7-phase-b-authentic-receipt/v1",
   "generated_utc": "2026-11-17T17:05:09Z",
-  "code_sha": "a25c6b09",
+  "code_sha": "b18cddb7",
   "base_sha": "2bab6cc0",
   "source_capture": ".local/m7/followup-a-live-3",
   "source_capture_mode": "existing authentic sealed capture; cloned, packaged, then the clone was deleted",
@@ -177,7 +177,7 @@
     ]
   },
   "replay": {
-    "seconds": 15.18,
+    "seconds": 15.41,
     "campaign": {
       "schema": "m7-continuous-campaign/v1",
       "status": "complete",
@@ -503,13 +503,13 @@
     "diagnostic_complete": true
   },
   "focused_test_run": {
-    "id": "20261117T174119Z-a3447756",
-    "tests": 179,
-    "duration_seconds": 47.18,
+    "id": "20261117T182713Z-5d5519ae",
+    "tests": 186,
+    "duration_seconds": 47.24,
     "modules": [
       "tests.test_agent_tools",
-      "tests.test_gfx_replay_case_sequence",
-      "tests.test_m7_continuous_supervisor"
+      "tests.test_m7_continuous_supervisor",
+      "tests.test_gfx_replay_case_sequence"
     ]
   },
   "native_bridge_test_run": {
@@ -528,5 +528,26 @@
     "target_sequence": 3,
     "terminal_failure": null,
     "pixel_equivalence_required": false
+  },
+  "evidence_trust": {
+    "diagnostic_completed_required": true,
+    "pixel_statistics_required": true,
+    "authoritative_checkpoint_status": "ok",
+    "authentic_rows_diagnostic_completed": [
+      true,
+      true,
+      true
+    ],
+    "aggregate_outcome": {
+      "status": "ok",
+      "diagnostic": "partial",
+      "verdict": "different",
+      "evidence": "valid",
+      "qualified": false,
+      "first_pixel_divergent_frame": 1,
+      "first_checkpoint_divergent_frame": 1,
+      "first_unqualified_frame": 1,
+      "terminal_failure": null
+    }
   }
 }

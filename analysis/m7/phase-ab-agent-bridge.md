@@ -8,8 +8,8 @@ Base: `origin/main` at `2bab6cc0`, the merge of PR #205
 (`m7/followup-portable-replay`, head `30f07f9a`). The branch was rebased onto
 that merged baseline and PR #206 was retargeted from the #205 branch to `main`.
 
-Final code commit for this remediation: `a25c6b09` (on top of `293997ca`,
-the `0ba76ad7` pixel-axis correction and this review round). Documentation and receipt
+Final code commit for this remediation: `b18cddb7` (on top of `293997ca`,
+`0ba76ad7`, `a25c6b09` and this evidence-trust round). Documentation and receipt
 updates are a separate commit so the code identity reviewed by CI remains
 stable.
 
@@ -186,6 +186,38 @@ Documentation and receipt updates are a separate commit.
 | Aggregate verdict after unsupported state | `test_agent_tools.StrategyBCaseToolTests.test_later_verified_mismatch_sets_the_aggregate_verdict`; `...test_later_terminal_failure_overrides_but_keeps_observations`; `...test_invalid_provenance_pixels_are_not_promoted` |
 | Minimal-prefix preserved receipts verify | `PortableSequenceCaseTests.test_minimal_prefix_preserves_source_receipts_and_verifies` |
 
+## Fourth review remediation — completed evidence only
+
+Code commit `b18cddb7` closes the remaining evidence-trust finding with the
+smallest change. Documentation and receipt updates are a separate commit.
+
+1. **Completed diagnostics gate trusted evidence.** `_campaign_row_trusted`
+   now requires `diagnostic_completed=true` before a frame can contribute
+   pixel, checkpoint or classification evidence to the aggregate verdict or to
+   `first_pixel_divergent_frame`/`first_checkpoint_divergent_frame`. An
+   incomplete `qualified_difference` therefore cannot independently establish
+   `verdict=different`; a later complete difference still can. The distinction
+   between a completed diagnostic operation and renderer qualification is
+   unchanged (`outcome.qualified` remains separate).
+2. **Declared diagnostic evidence is enforced.** `m7_continuous.diagnostic_evidence`
+   now requires a usable final-pixel statistics object (positive integer
+   `pixels`, integer `0 <= mismatched_pixels <= pixels`) and an authoritative
+   `checkpoint_validation.status == "ok"`. Missing or invalid statistics and
+   incomplete/invalid checkpoint evidence mark the diagnostic incomplete while
+   preserving the explicit checkpoint classification; they are never converted
+   into pixel differences. No new evidence abstraction was added.
+
+### New regressions
+
+| Finding | Regression |
+| --- | --- |
+| Incomplete qualified difference is not evidence | `test_agent_tools.StrategyBCaseToolTests.test_incomplete_qualified_difference_cannot_establish_difference` |
+| Complete qualified difference still yields `different` | `...test_complete_qualified_difference_still_reports_different` (axes built by the real `classify_diagnosis` contract) |
+| Missing/invalid pixel statistics | `test_m7_continuous_supervisor.DiagnosticEvidenceTests.test_missing_pixel_statistics_is_incomplete`; `...test_invalid_pixel_statistics_are_incomplete` |
+| Incomplete/invalid checkpoint evidence | `...test_incomplete_checkpoint_evidence_is_not_complete`; `...test_invalid_checkpoint_evidence_is_not_complete`; `...test_complete_evidence_is_complete` |
+| Later difference after unsupported state | Existing `test_later_verified_mismatch_sets_the_aggregate_verdict` still passes |
+| Terminal GPU precedence | Existing `test_later_terminal_failure_overrides_but_keeps_observations` still passes |
+
 ## Phase A — integration defects
 
 ### v2 Strategy B dispatch
@@ -355,6 +387,17 @@ The authentic relocated case was replayed again under the new target gate
 without an EU4 launch: campaign `complete` at target sequence 3, 15.18 s,
 `history.status=ok`, classification and pixel statistics unchanged, first
 divergence still event 286 / texture 442.
+
+Fourth-review evidence-trust run after code `b18cddb7`:
+**186 tests passed in 47.24 s** (run `20261117T182713Z-5d5519ae`) across
+`tests.test_agent_tools`, `tests.test_m7_continuous_supervisor` and
+`tests.test_gfx_replay_case_sequence`; DSH tools plugin 9/9. The authentic
+relocated case was replayed again (15.41 s, no EU4 launch): campaign
+`complete`, target 3, all rows `diagnostic_completed=true`,
+`history.status=ok`, classification/statistics unchanged and first divergence
+still event 286 / texture 442. `_campaign_outcome` on that campaign still
+returns `ok/partial/different`, with first pixel/checkpoint/unqualified frame 1
+and no terminal failure.
 
 JS plugin suite:
 
