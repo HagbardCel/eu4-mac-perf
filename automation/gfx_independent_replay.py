@@ -1040,12 +1040,13 @@ def first_divergence(graph: dict, checkpoints: list[dict],
                     "the difference is at or after the transfer")
                 recommended_action = {
                     "action": "investigate_transfer",
-                    "event": event,
+                    "event": producer_event,
+                    "observation_event": event,
                     "target": first.get("target"),
                     "resource": first.get("resource"),
                     "reason": (
                         "the source checkpoint matches, so do not bisect "
-                        "upstream; inspect the copy execution or the "
+                        "upstream; inspect the copy operation or the "
                         "destination consumer"),
                 }
             elif source_status == "invalid":

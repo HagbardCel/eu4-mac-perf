@@ -1349,6 +1349,8 @@ class FirstDivergenceSourceEvidenceTests(unittest.TestCase):
         self.assertIsNone(value["recommended_checkpoint"])
         self.assertEqual(value["recommended_action"]["action"],
                          "investigate_transfer")
+        self.assertEqual(value["recommended_action"]["event"], 284)
+        self.assertEqual(value["recommended_action"]["observation_event"], 286)
         self.assertIn("do not bisect upstream",
                       value["recommended_action"]["reason"])
 
