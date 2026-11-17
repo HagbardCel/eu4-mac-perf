@@ -793,6 +793,8 @@ def _copy_source_evidence(checkpoints: list[dict],
             "reason": "the copy-source checkpoint was independently observed "
                       "to differ",
             "checkpoint": divergent[0],
+            "event": producer_event,
+            "target": str(source_target),
         }
     diagnostic = [item for item in matching
                   if item.get("status") == "divergent_diagnostic"]
@@ -961,9 +963,11 @@ def first_divergence(graph: dict, checkpoints: list[dict],
             source_target = observed_target
             source_resource = ("fb:0" if observed_target == "0"
                                else f"tex:{observed_target}")
+        source_lookup_event = (
+            event if event_is_transfer
+            else producer_event if producer is not None else event)
         source_evidence = _copy_source_evidence(
-            checkpoints, producer_event if producer else event,
-            source_target)
+            checkpoints, source_lookup_event, source_target)
         if event_is_transfer and str(first.get("target")) == "0":
             # This checkpoint is itself the copy source.  It is independent
             # source evidence, not a destination-version proxy.
@@ -1043,7 +1047,7 @@ def first_divergence(graph: dict, checkpoints: list[dict],
                 }
             elif source_status == "invalid":
                 next_checkpoint = {
-                    "event": producer_event,
+                    "event": source_lookup_event,
                     "target": source_target,
                     "resource": source_resource,
                     "requires_capture": True,
@@ -1058,7 +1062,7 @@ def first_divergence(graph: dict, checkpoints: list[dict],
                     "the difference may originate before the copy, but "
                     "upstream bisection is not yet justified")
                 next_checkpoint = {
-                    "event": producer_event,
+                    "event": source_lookup_event,
                     "target": source_target,
                     "resource": source_resource,
                     "requires_capture": True,

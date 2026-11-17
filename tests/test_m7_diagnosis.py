@@ -1246,6 +1246,50 @@ class FirstDivergenceSourceEvidenceTests(unittest.TestCase):
         self.assertIn("no interior event",
                       value["recommended_action"]["reason"])
 
+    def test_transfer_source_evidence_uses_the_transfer_event(self):
+        graph = {
+            "events": [
+                {"event": 280, "kind": "draw", "target": "tex:123",
+                 "entry": "_GfxDraw", "program": 1},
+                {"event": 284, "kind": "resolve",
+                 "operation": "glCopyTexSubImage2D", "target": "fb:0"},
+                {"event": 286, "kind": "draw", "target": "tex:442",
+                 "entry": "_GfxDraw", "program": 2},
+            ],
+            "resources": {
+                "tex:123": {
+                    "producers": [{"event": 280, "kind": "draw",
+                                   "entry": "_GfxDraw"}],
+                    "consumers": [{"event": 284, "unit": 0,
+                                   "sampler": "resolve"}],
+                },
+                "tex:442": {
+                    "producers": [{"event": 284, "kind": "resolve",
+                                   "operation": "glCopyTexSubImage2D",
+                                   "source": "123", "source_framebuffer": 1}],
+                    "consumers": [{"event": 286, "unit": 0,
+                                   "sampler": "tex0"}],
+                },
+            },
+        }
+        checkpoints = [{
+            "event": 284, "target": "123", "resource": "tex:123",
+            "status": "divergent", "authoritative": True,
+            "statistics": {"mismatched_pixels": 10},
+        }, {
+            "event": 286, "target": "442", "resource": "tex:442",
+            "status": "divergent", "authoritative": True,
+            "statistics": {"mismatched_pixels": 10},
+        }]
+        value = gfx_independent_replay.first_divergence(
+            graph, checkpoints, {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["event"], 284)
+        self.assertEqual(value["copy_source_evidence"]["status"], "divergent")
+        self.assertEqual(value["copy_source_evidence"]["target"], "123")
+        self.assertNotIn("no copy-source checkpoint",
+                         value["copy_source_evidence"]["reason"])
+
     def test_non_default_source_keeps_its_texture_target(self):
         graph = self.graph()
         graph["resources"]["tex:442"]["producers"][0].update({
