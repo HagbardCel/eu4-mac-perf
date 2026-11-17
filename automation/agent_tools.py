@@ -2350,6 +2350,8 @@ def eu4_case_inspect(args: argparse.Namespace) -> dict:
                              or (verification.get("sequence") or {}).get(
                                  "reproduction") or {}),
             "graph": _optional_json(path / "graph.json"),
+            "reproduction_scope": manifest.get("reproduction_scope"),
+            "terminal_failure": manifest.get("terminal_failure"),
             "replay_command": manifest.get("replay_command"),
             "verify_command": manifest.get("verify_command"),
             "files": len(manifest.get("files") or []),

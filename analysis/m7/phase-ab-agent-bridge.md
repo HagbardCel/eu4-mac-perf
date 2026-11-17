@@ -61,7 +61,9 @@ architecture:
    eligible rendering differences, not hard failures. A failed coordinator
    cannot publish `qualified` from a matched prefix, and a packaged prefix is
    scoped as `completed_prefix`, separate from the terminal failure,
-   reproduction completeness and diagnostic completeness.
+   reproduction completeness and diagnostic completeness. The scope and
+   terminal failure are written into the published `case.json`, not only the
+   coordinator summary.
 
 ## Phase A — integration defects
 
@@ -208,8 +210,8 @@ Focused native/offline suite (the checked interpreter,
   --module tests.test_dsh_profile
 ```
 
-Result: **342 tests passed in 94.22 s** (run
-`20261117T055504Z-85cecc96`, after rebasing onto merged `main` `2bab6cc0`).
+Result: **343 tests passed in 94.67 s** (run
+`20261117T060603Z-7f7219cc`, after rebasing onto merged `main` `2bab6cc0`).
 This includes the new failure-precedence, policy, argument-ownership,
 provenance and negative-case regressions plus real Metal replay.
 

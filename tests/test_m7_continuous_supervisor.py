@@ -489,6 +489,33 @@ class LiveCoordinatorPackagingTests(unittest.TestCase):
         self.assertEqual(captured["kwargs"]["max_bytes"],
                          512 * 1024 * 1024)
 
+    def test_published_case_is_labeled_with_its_reproduction_scope(self):
+        def package(frames, metal_dir, case_dir, report, **kwargs):
+            path = Path(case_dir)
+            path.mkdir(parents=True, exist_ok=True)
+            (path / "case.json").write_text(json.dumps({
+                "schema": "gfx-strategy-b-case/v2", "case_id": "live",
+            }))
+            return {"case_id": "live", "files": [],
+                    "reproduction": {"status": "incomplete",
+                                     "independently_reproducible": False}}
+
+        with mock.patch.object(gfx_replay_case,
+                               "package_sequence_diagnosis",
+                               side_effect=package):
+            value = m6_frame._package_continuous_case(
+                self.run, self.shadow, 3, self.args,
+                scope="completed_prefix",
+                terminal_failure={"kind": "gpu_execution_failure",
+                                  "frame": 3})
+        self.assertEqual(value["scope"], "completed_prefix")
+        manifest = json.loads(
+            (self.shadow / "case" / "case.json").read_text())
+        self.assertEqual(manifest["reproduction_scope"],
+                         "completed_prefix")
+        self.assertEqual(manifest["terminal_failure"]["kind"],
+                         "gpu_execution_failure")
+
     def test_incomplete_reproduction_is_not_claimed_complete(self):
         with mock.patch.object(
                 gfx_replay_case, "package_sequence_diagnosis",

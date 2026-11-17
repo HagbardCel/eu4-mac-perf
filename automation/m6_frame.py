@@ -2244,6 +2244,17 @@ def _package_continuous_case(run: Path, shadow: Path, count: int,
             "case_dir": str(case_dir),
         }
     reproduction = manifest.get("reproduction") or {}
+    # Label the published case itself, not only the coordinator summary, so a
+    # completed-prefix reproduction cannot be mistaken for the terminal frame.
+    case_manifest_path = case_dir / "case.json"
+    try:
+        case_manifest = _read_json(case_manifest_path)
+        case_manifest["reproduction_scope"] = scope
+        case_manifest["terminal_failure"] = terminal_failure
+        case_manifest_path.write_text(
+            json.dumps(case_manifest, indent=2) + "\n")
+    except (FrameError, OSError, ValueError, json.JSONDecodeError):
+        pass
     return {
         "status": ("complete" if reproduction.get(
             "independently_reproducible") else "incomplete"),
