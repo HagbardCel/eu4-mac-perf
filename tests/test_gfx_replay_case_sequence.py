@@ -1003,6 +1003,36 @@ class PortableSequenceCaseTests(unittest.TestCase):
             })
         (case / "case.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
+    def rederive_checkpoint_receipt(self, case: Path, index: int) -> str:
+        """Rebind a derived receipt after intentionally editing shader evidence."""
+        shader_dir = case / "frames" / f"{index:06d}" / "shaders"
+        relative = f"checkpoints/frame-{index:03d}/shader-receipt.json"
+        receipt_path = case / relative
+        receipt = json.loads(receipt_path.read_text())
+        receipt["shaders_json_sha256"] = sha(
+            (shader_dir / "shaders.json").read_bytes())
+        digest = hashlib.sha256()
+        count = 0
+        for path in sorted(shader_dir.rglob("*")):
+            if (not path.is_file()
+                    or path.name in ("ready", "shader-receipt.json")):
+                continue
+            digest.update(str(path.relative_to(shader_dir)).encode())
+            digest.update(b"\0")
+            digest.update(sha(path.read_bytes()).encode())
+            digest.update(b"\n")
+            count += 1
+        receipt["artifacts_sha256"] = digest.hexdigest()
+        receipt["artifact_count"] = count
+        receipt_path.write_text(json.dumps(receipt))
+        sequence_path = case / "sequence.json"
+        sequence = json.loads(sequence_path.read_text())
+        entry = sequence["frames"][index - 1]
+        entry["checkpoint_preserved"] = False
+        entry["receipt_origin"] = "derived_receipt"
+        sequence_path.write_text(json.dumps(sequence))
+        return relative
+
     def test_unreferenced_program_payloads_are_not_required(self):
         out, diagnosis = self.baseline()
         case, _ = self.package(out, diagnosis)
@@ -1013,7 +1043,9 @@ class PortableSequenceCaseTests(unittest.TestCase):
         extra["stages"]["pixel"]["glsl_file"] = "missing-extra.glsl"
         report["programs"].append(extra)
         (case / relative).write_text(json.dumps(report))
+        receipt_relative = self.rederive_checkpoint_receipt(case, 1)
         self.refresh(case, relative, update_sequence_entry=True)
+        self.refresh(case, receipt_relative)
         verified = gfx_replay_case.verify(case)
         self.assertTrue(verified["ok"], verified["problems"])
 
@@ -1425,6 +1457,10 @@ class HeterogeneousShaderSequenceTests(unittest.TestCase):
             target, self.out / "out-001", complete, diagnosis,
             shaders=self.fixture.frame_shaders[1],
             case_id="single-complete", max_bytes=0)
+        complete_verified = gfx_replay_case.verify(complete)
+        self.assertTrue(complete_verified["ok"],
+                        complete_verified["problems"])
+        self.assertTrue(complete_verified["independently_reproducible"])
         size = sum(path.stat().st_size for path in complete.rglob("*")
                    if path.is_file())
         incomplete = self.fixture.base / "single-incomplete"
@@ -1437,11 +1473,25 @@ class HeterogeneousShaderSequenceTests(unittest.TestCase):
         verified = gfx_replay_case.verify(incomplete)
         self.assertFalse(verified["ok"])
         self.assertEqual(verified["reproduction_status"], "incomplete")
+        # An intentionally budget-limited v1 summary is not independently
+        # reproducible, while remaining distinguishable from corruption.
+        self.assertFalse(verified["independently_reproducible"])
         self.assertEqual(verified["problems"],
                          ["reproduction is explicitly incomplete"])
         with self.assertRaises(gfx_replay_case.CaseError):
             gfx_replay_case.replay_case(
                 incomplete, self.fixture.base / "single-incomplete-out")
+
+        # Additional integrity corruption is invalid and can never inherit
+        # independent reproducibility from the otherwise complete v1 case.
+        graph = complete / "graph.json"
+        graph.write_text(graph.read_text() + "\n")
+        corrupted = gfx_replay_case.verify(complete)
+        self.assertFalse(corrupted["ok"])
+        self.assertFalse(corrupted["independently_reproducible"])
+        self.assertTrue(any("drift" in problem
+                            for problem in corrupted["problems"]),
+                        corrupted["problems"])
 
     def test_unusable_live_mapping_refuses_complete_packaging(self):
         mapping = {str(frame): self.fixture.frame_shaders[index]
@@ -1520,6 +1570,63 @@ class HeterogeneousShaderSequenceTests(unittest.TestCase):
                          "source_receipt_request_mismatch")
         self.assertEqual(sequence["frames"][2]["checkpoint_preservation"],
                          "preserved")
+        verified = gfx_replay_case.verify(case)
+        self.assertTrue(verified["ok"], verified["problems"])
+
+    def test_checkpoint_receipt_identity_corruption_is_rejected(self):
+        relative = "checkpoints/frame-002/shader-receipt.json"
+        corruptions = {
+            "capture_frame_id": 999,
+            "pid": 999,
+            "session_id": "another-session",
+            "trace_manifest_sha256": "0" * 64,
+            "event_stream_sha256": "1" * 64,
+            "event_stream_bytes": 1,
+            "checkpoint_request_file": "another-request.json",
+            "checkpoint_count": -1,
+            "shaders_json_sha256": "2" * 64,
+            "artifacts_sha256": "3" * 64,
+            "artifact_count": 0,
+        }
+        for field, value in corruptions.items():
+            with self.subTest(field=field):
+                case = self.fixture.base / f"receipt-{field}"
+                self.package(case)
+                receipt = json.loads((case / relative).read_text())
+                self.assertIn(field, receipt)
+                receipt[field] = value
+                (case / relative).write_text(json.dumps(receipt))
+                self.refresh(case, relative)
+                verified = gfx_replay_case.verify(case)
+                self.assertFalse(verified["ok"], verified)
+                self.assertTrue(
+                    any("checkpoint receipt identity" in problem
+                        and field in problem
+                        for problem in verified["problems"]),
+                    verified["problems"])
+
+    def test_checkpoint_source_identity_mismatch_is_not_preserved(self):
+        sources = [self.out / "checkpoints" / f"frame-{index:03d}"
+                   for index in range(1, 4)]
+        receipt_path = sources[1] / "shader-receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["event_stream_bytes"] = int(
+            receipt["event_stream_bytes"]) + 1
+        receipt_path.write_text(json.dumps(receipt))
+        case = self.fixture.base / "checkpoint-identity-mismatch"
+        manifest = gfx_replay_case.package_sequence_diagnosis(
+            self.frames, self.out / "out-003", case, self.diagnosis,
+            shaders=None, checkpoint_sources=sources,
+            case_id="checkpoint-identity-mismatch")
+        self.assertTrue(manifest["reproduction"]["independently_reproducible"])
+        sequence = json.loads((case / "sequence.json").read_text())
+        self.assertFalse(sequence["frames"][1]["checkpoint_preserved"])
+        self.assertEqual(sequence["frames"][1]["checkpoint_preservation"],
+                         "source_receipt_identity_mismatch")
+        self.assertIn("event_stream_bytes",
+                      sequence["frames"][1]["checkpoint_preservation_detail"])
+        # The regenerated receipt still describes the packaged evidence, so
+        # the case remains verifiable and replayable.
         verified = gfx_replay_case.verify(case)
         self.assertTrue(verified["ok"], verified["problems"])
 

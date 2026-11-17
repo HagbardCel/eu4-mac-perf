@@ -332,6 +332,102 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(report["status"], "cancelled")
         self.assertEqual(report["stop_reason"], "cancelled")
 
+    @staticmethod
+    def qualified_diagnosis(**overrides):
+        value = {
+            "schema": gfx_independent_replay.DIAGNOSIS_SCHEMA,
+            "classification": "qualified_match",
+            "qualification": {
+                "axes": {"gpu_execution": "ok", "pixels": "match"}},
+            "pixels": {
+                "status": "match",
+                "statistics": {"pixels": 4, "mismatched_pixels": 0},
+            },
+            "checkpoint_validation": {"status": "ok", "divergent": 0},
+            "first_divergence": {"kind": "none"},
+        }
+        value.update(overrides)
+        return value
+
+    def test_duplicate_result_sequence_is_rejected_before_diagnosis(self):
+        rows = self.rows()
+        report, diagnose = self.run_with(
+            [rows[0], dict(rows[0]), rows[2]],
+            [self.qualified_diagnosis()])
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["stop_reason"], "sequence_order")
+        self.assertEqual(report["sequence_order"]["kind"], "duplicate")
+        self.assertEqual(report["sequence_order"]["expected"], 2)
+        self.assertEqual(report["sequence_order"]["received"], 1)
+        self.assertEqual(diagnose.call_count, 1)
+        self.assertEqual([row["sequence"] for row in report["frames"]], [1])
+        self.assertFalse(report["qualified"])
+
+    def test_skipped_result_sequence_is_rejected_before_diagnosis(self):
+        rows = self.rows()
+        report, diagnose = self.run_with(
+            [rows[0], rows[2]], [self.qualified_diagnosis()])
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["stop_reason"], "sequence_order")
+        self.assertEqual(report["sequence_order"]["kind"], "skipped")
+        self.assertEqual(report["sequence_order"]["expected"], 2)
+        self.assertEqual(report["sequence_order"]["received"], 3)
+        self.assertEqual(diagnose.call_count, 1)
+        self.assertFalse(report["qualified"])
+
+    def test_missing_first_result_sequence_is_rejected_before_diagnosis(self):
+        rows = self.rows()
+        report, diagnose = self.run_with(
+            [rows[1], rows[0], rows[2]], [])
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["stop_reason"], "sequence_order")
+        self.assertEqual(report["sequence_order"]["kind"], "skipped")
+        self.assertEqual(report["sequence_order"]["received"], 2)
+        self.assertEqual(diagnose.call_count, 0)
+        self.assertEqual(report["frames"], [])
+        self.assertFalse(report["qualified"])
+
+    def test_valid_result_sequence_is_qualified(self):
+        report, diagnose = self.run_with(
+            self.rows(),
+            [self.qualified_diagnosis() for _ in range(3)],
+            stop=False)
+        self.assertEqual(report["status"], "complete")
+        self.assertNotIn("sequence_order", report)
+        self.assertEqual([row["sequence"] for row in report["frames"]],
+                         [1, 2, 3])
+        self.assertTrue(all(row["diagnostic_completed"]
+                            for row in report["frames"]))
+        self.assertTrue(report["qualified"])
+        self.assertEqual(diagnose.call_count, 3)
+
+    def test_out_of_range_result_is_rejected_before_diagnosis(self):
+        rows = self.rows()
+        beyond = dict(rows[0], sequence=4)
+        report, diagnose = self.run_with([beyond], [])
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["stop_reason"], "sequence_order")
+        self.assertEqual(report["sequence_order"]["kind"], "out_of_range")
+        self.assertEqual(diagnose.call_count, 0)
+
+    def test_gpu_failure_row_never_claims_a_completed_diagnostic(self):
+        rows = self.rows()
+        rows[1]["ok"] = False
+        rows[1]["error"] = "command buffer failed"
+        report, diagnose = self.run_with(
+            rows, [self.qualified_diagnosis()], stop=False)
+        self.assertEqual(report["status"], "stopped")
+        self.assertEqual(report["stop_reason"], "gpu_execution_failure")
+        self.assertEqual(diagnose.call_count, 1)
+        first, failed = report["frames"]
+        self.assertTrue(first["diagnostic_completed"])
+        self.assertTrue(first["diagnostic_report"])
+        self.assertFalse(failed["diagnostic_completed"])
+        self.assertIsNone(failed["diagnostic_report"])
+        self.assertEqual(failed["diagnostic_evidence"]["missing"],
+                         ["diagnosis"])
+        self.assertFalse(report["qualified"])
+
     def test_sequence_identity_is_validated_before_execution(self):
         sequence = json.loads(
             (self.frames[1] / "frame-sequence.json").read_text())

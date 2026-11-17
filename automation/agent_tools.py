@@ -1822,12 +1822,14 @@ _CAMPAIGN_TERMINAL_CLASSIFICATIONS = {
 }
 _CAMPAIGN_TERMINAL_REASONS = {
     "gpu_execution_failure", "history_invalid", "host_failure",
-    "frame_timeout", "overall_timeout", "frame_identity", "tool_failure",
+    "frame_timeout", "overall_timeout", "frame_identity", "sequence_order",
+    "tool_failure",
 }
 _CAMPAIGN_PIXEL_CLASSIFICATIONS = {
     "qualified_difference", "difference_with_partial_state_coverage",
     "unsupported_state",
 }
+_CAMPAIGN_PIXEL_AXIS = "divergent"
 
 
 def _campaign_terminal_failure(report: dict) -> dict | None:
@@ -1886,6 +1888,36 @@ def _campaign_terminal_failure(report: dict) -> dict | None:
     return None
 
 
+def _campaign_pixel_divergence(row: dict) -> bool:
+    """True only for a verified divergent final-pixel comparison.
+
+    The classification alone is not enough: ``unsupported_state`` and some
+    ``qualified_difference`` rows can be caused by intermediate or semantic
+    mismatches while the final image matches.  Pixel divergence requires the
+    diagnosis pixel axis to be ``divergent`` *and* at least one mismatched
+    final pixel.
+    """
+    axes = row.get("axes") if isinstance(row.get("axes"), dict) else {}
+    statistics = row.get("pixels") if isinstance(row.get("pixels"), dict) else {}
+    try:
+        mismatched = int(statistics.get("mismatched_pixels") or 0)
+    except (TypeError, ValueError):
+        mismatched = 0
+    return (axes.get("pixels") == _CAMPAIGN_PIXEL_AXIS
+            and mismatched > 0)
+
+
+def _campaign_checkpoint_divergence(row: dict) -> bool:
+    """True only for a confirmed authoritative intermediate checkpoint diff."""
+    validation = row.get("checkpoint_validation")
+    if not isinstance(validation, dict) or validation.get("status") != "ok":
+        return False
+    try:
+        return int(validation.get("divergent") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _campaign_outcome(report: dict) -> tuple[str, str, str | None, str | None,
                                               bool, dict]:
     """Apply terminal-first campaign precedence.
@@ -1893,6 +1925,21 @@ def _campaign_outcome(report: dict) -> tuple[str, str, str | None, str | None,
     Returns ``(status, diagnostic, verdict, evidence, qualified, details)``.
     Rendering differences remain visible in ``details`` even when a later
     terminal failure supplies the overall verdict.
+
+    ``first_difference`` is retained for v1 consumers as the earliest frame
+    whose classification is any non-equivalence (including ``unsupported_state``
+    and semantic/intermediate mismatches).  It is *not* necessarily a pixel
+    difference.  Consumers that need verified evidence must use the explicit
+    fields:
+
+    * ``first_pixel_divergent_frame`` -- first frame whose final pixel axis is
+      ``divergent`` with mismatched-pixel statistics.
+    * ``first_checkpoint_divergent_frame`` -- first frame with an authoritative
+      intermediate checkpoint difference.
+    * ``first_unqualified_frame`` -- first frame not classified
+      ``qualified_match``.
+    * ``terminal_failure`` -- first terminal execution/history/provenance
+      failure, which outranks every pixel result.
     """
     rows = [row for row in report.get("frames") or []
             if isinstance(row, dict)]
@@ -1909,7 +1956,21 @@ def _campaign_outcome(report: dict) -> tuple[str, str, str | None, str | None,
             "event": (row.get("first_divergence") or {}).get("event"),
             "operation": (row.get("first_divergence") or {}).get("operation"),
             "pixels": row.get("pixels"),
+            "pixel_divergent": _campaign_pixel_divergence(row),
+            "checkpoint_divergent": _campaign_checkpoint_divergence(row),
+            "meaning": (
+                "earliest classified non-equivalence; not necessarily a "
+                "divergent final image"),
         }
+    first_pixel = next(
+        (row.get("sequence") for row in rows
+         if _campaign_pixel_divergence(row)), None)
+    first_checkpoint = next(
+        (row.get("sequence") for row in rows
+         if _campaign_checkpoint_divergence(row)), None)
+    first_unqualified = next(
+        (row.get("sequence") for row in rows
+         if row.get("classification") != "qualified_match"), None)
     terminal = _campaign_terminal_failure(report)
     details = {
         "campaign_status": report.get("status"),
@@ -1917,13 +1978,18 @@ def _campaign_outcome(report: dict) -> tuple[str, str, str | None, str | None,
         "stop_reason": report.get("stop_reason"),
         "stopped_at": report.get("stopped_at"),
         "first_difference": first_difference,
+        "first_pixel_divergent_frame": first_pixel,
+        "first_checkpoint_divergent_frame": first_checkpoint,
+        "first_unqualified_frame": first_unqualified,
         "terminal_failure": terminal,
+        "sequence_order": report.get("sequence_order"),
         "qualified": False,
     }
     if terminal is not None:
         status = ("failed" if terminal["kind"] in (
             "gpu_execution_failure", "host_failure", "frame_timeout",
-            "overall_timeout", "tool_failure", "frame_identity")
+            "overall_timeout", "tool_failure", "frame_identity",
+            "sequence_order")
             else "invalid")
         details["campaign_execution"] = "failed"
         details["qualified"] = False
@@ -1942,8 +2008,11 @@ def _campaign_outcome(report: dict) -> tuple[str, str, str | None, str | None,
         if classification == "difference_with_partial_state_coverage":
             return "ok", "partial", "different", "valid", False, details
         return "ok", "partial", "unverified", "valid", False, details
-    if report.get("qualified") and all(
-            row.get("classification") == "qualified_match" for row in rows):
+    if (report.get("qualified")
+            and first_unqualified is None
+            and all(row.get("classification") == "qualified_match"
+                    and row.get("diagnostic_completed") is True
+                    for row in rows)):
         details["qualified"] = True
         return "ok", "complete", "equal", "valid", True, details
     return "incomplete", "incomplete", None, "unverified", False, details
@@ -2207,11 +2276,21 @@ def eu4_replay(args: argparse.Namespace) -> dict:
             "stopped_at": report.get("stopped_at"),
             "qualified": bool(details["qualified"]),
             "first_difference": details["first_difference"],
+            "first_pixel_divergent_frame":
+                details["first_pixel_divergent_frame"],
+            "first_checkpoint_divergent_frame":
+                details["first_checkpoint_divergent_frame"],
+            "first_unqualified_frame": details["first_unqualified_frame"],
             "pixel_verdict": (details["first_difference"] or {}).get(
                 "classification"),
             "terminal_failure": details["terminal_failure"],
+            "sequence_order": details.get("sequence_order"),
+            # Diagnostic completion is evidence-based: every processed frame
+            # must have actually executed the diagnosis and produced its
+            # required evidence.  A populated diagnostic_report path is only a
+            # locator and is never treated as proof of completion.
             "diagnostic_complete": bool(
-                rows and all(row.get("diagnostic_report")
+                rows and all(row.get("diagnostic_completed") is True
                              for row in rows)),
             "validation": report.get("validation"),
             "policy": report.get("policy"),

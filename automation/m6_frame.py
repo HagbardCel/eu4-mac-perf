@@ -2065,7 +2065,15 @@ def _wait_for_path(path: Path, deadline: float) -> bool:
     return path.is_file()
 
 
-def _artifact_digest(directory: Path) -> tuple[str, int]:
+def artifact_digest(directory: Path) -> tuple[str, int]:
+    """Canonical digest of a translated shader directory.
+
+    Every regular payload is ordered by relative path and hashed as
+    ``relative-path \\0 sha256 \\n``.  The publish markers ``ready`` and
+    ``shader-receipt.json`` are bookkeeping, not shader artifacts, so they are
+    excluded.  The same contract is used by the live receipt writer, the
+    sequence checkpoint setup and portable-case verification.
+    """
     digest = hashlib.sha256()
     count = 0
     for path in sorted(directory.rglob("*")):
@@ -2077,6 +2085,10 @@ def _artifact_digest(directory: Path) -> tuple[str, int]:
         digest.update(b"\n")
         count += 1
     return digest.hexdigest(), count
+
+
+# Backwards-compatible private alias for callers in this module.
+_artifact_digest = artifact_digest
 
 
 def _continuous_frame_coordinator(

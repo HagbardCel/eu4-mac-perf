@@ -1234,6 +1234,75 @@ def _required_prefix(frames: list[Path]) -> tuple[list[Path], dict]:
         "carried_resources": sorted(carried_union),
     }
 
+def _receipt_shader_identity(shader_dir: Path | None) -> dict:
+    """Canonical shader-report and shader-artifact identity for a receipt."""
+    if shader_dir is None or not Path(shader_dir).is_dir():
+        return {"shaders_json_sha256": "", "artifacts_sha256": "",
+                "artifact_count": 0}
+    directory = Path(shader_dir)
+    report = directory / "shaders.json"
+    if not report.is_file():
+        return {"shaders_json_sha256": "", "artifacts_sha256": "",
+                "artifact_count": 0}
+    artifacts_sha256, artifact_count = m6_frame.artifact_digest(directory)
+    return {
+        "shaders_json_sha256": _sha(report),
+        "artifacts_sha256": artifacts_sha256,
+        "artifact_count": artifact_count,
+    }
+
+
+def _receipt_identity_problems(
+    receipt: dict,
+    *,
+    sequence: dict,
+    frame: Path,
+    shader_dir: Path | None,
+    request: Path,
+) -> list[tuple[str, str]]:
+    """Check every authoritative live-receipt identity field available.
+
+    The receipt produced by the live coordinator binds more than the checkpoint
+    request: frame/session identity, the captured trace and event-stream
+    digests, the request file/count and the canonical shader-report and
+    shader-artifact digests.  Preservation and portable verification must agree
+    on all of them, otherwise the receipt describes different evidence.
+    """
+    problems: list[tuple[str, str]] = []
+
+    def check(field: str, expected) -> None:
+        actual = receipt.get(field)
+        if actual is None:
+            problems.append((field, f"receipt is missing {field}"))
+        elif actual != expected:
+            problems.append(
+                (field, f"receipt {field} is {actual!r}, expected {expected!r}"))
+
+    trace_path = frame / "frame-trace.json"
+    events_path = frame / "frame-events.jsonl"
+    check("capture_frame_id", sequence.get("capture_frame_id"))
+    check("pid", sequence.get("pid"))
+    check("session_id", sequence.get("session_id"))
+    check("trace_manifest_sha256",
+          _sha(trace_path) if trace_path.is_file() else None)
+    check("event_stream_sha256",
+          _sha(events_path) if events_path.is_file() else None)
+    if events_path.is_file():
+        check("event_stream_bytes", events_path.stat().st_size)
+    else:
+        check("event_stream_bytes", None)
+    check("checkpoint_request_file", request.name)
+    check("checkpoint_request_sha256", _sha(request) if request.is_file() else None)
+    try:
+        expected_count = len(_json(request).get("checkpoints") or [])
+    except (OSError, UnicodeError, json.JSONDecodeError, CaseError):
+        expected_count = None
+    check("checkpoint_count", expected_count)
+    for field, value in _receipt_shader_identity(shader_dir).items():
+        check(field, value)
+    return problems
+
+
 def _checkpoint_setup(frames: list[Path], case_dir: Path,
                       sources: list[Path | str] | None = None) -> list[dict]:
     """Publish one bound checkpoint request/receipt per included frame.
@@ -1265,6 +1334,7 @@ def _checkpoint_setup(frames: list[Path], case_dir: Path,
                   if source_value is not None else None)
         preservation = ("source_not_provided" if source is None
                         else "source_incomplete")
+        preservation_detail = None
         if source is not None:
             source_request = source / "checkpoint-request.json"
             source_receipt = source / "shader-receipt.json"
@@ -1278,23 +1348,42 @@ def _checkpoint_setup(frames: list[Path], case_dir: Path,
                 expected_path.unlink()
                 if _sha(source_request) != expected_sha:
                     preservation = "source_request_differs"
+                    preservation_detail = (
+                        "the source checkpoint request differs from the "
+                        "deterministic request for this captured graph")
                 else:
                     preservation = "source_receipt_unreadable"
                     try:
                         receipt = _json(source_receipt)
                     except (OSError, UnicodeError, json.JSONDecodeError,
-                            CaseError):
+                            CaseError) as exc:
                         receipt = {}
-                    source_request_sha = _sha(source_request)
-                    if (receipt.get("checkpoint_request_sha256")
-                            != source_request_sha):
-                        preservation = "source_receipt_request_mismatch"
-                    elif receipt.get("capture_frame_id") != sequence.get(
-                            "capture_frame_id"):
-                        preservation = "source_receipt_capture_mismatch"
-                    elif receipt.get("session_id") != sequence.get("session_id"):
-                        preservation = "source_receipt_session_mismatch"
-                    else:
+                        preservation_detail = str(exc)
+                    identity_kind = None
+                    identity_detail = None
+                    if receipt:
+                        for field, detail in _receipt_identity_problems(
+                                receipt, sequence=sequence, frame=frame,
+                                shader_dir=frame / "shaders",
+                                request=source_request):
+                            identity_detail = detail
+                            if field == "checkpoint_request_sha256":
+                                identity_kind = (
+                                    "source_receipt_request_mismatch")
+                            elif field == "capture_frame_id":
+                                identity_kind = (
+                                    "source_receipt_capture_mismatch")
+                            elif field == "session_id":
+                                identity_kind = (
+                                    "source_receipt_session_mismatch")
+                            else:
+                                identity_kind = (
+                                    "source_receipt_identity_mismatch")
+                            break
+                    if identity_kind is not None:
+                        preservation = identity_kind
+                        preservation_detail = identity_detail
+                    elif receipt:
                         shutil.copy2(source_request, request_path)
                         shutil.copy2(source_receipt, receipt_path)
                         preservation = "preserved"
@@ -1308,6 +1397,8 @@ def _checkpoint_setup(frames: list[Path], case_dir: Path,
                             "graph_status": graph.get("status"),
                             "preserved": True,
                             "preservation": preservation,
+                            "preservation_detail": None,
+                            "receipt_origin": "preserved_live_receipt",
                         })
                         continue
         request = gfx_frame_graph.write_checkpoint_request(graph, request_path)
@@ -1338,8 +1429,7 @@ def _checkpoint_setup(frames: list[Path], case_dir: Path,
         receipt = {
             "schema": "m7-shadow-shader-receipt/v1",
             **identity,
-            "artifacts_sha256": "",
-            "artifact_count": 0,
+            **_receipt_shader_identity(frame / "shaders"),
             "checkpoint_request_file": request_path.name,
             "checkpoint_request_sha256": request_sha,
             "checkpoint_count": len(request.get("checkpoints") or []),
@@ -1355,6 +1445,8 @@ def _checkpoint_setup(frames: list[Path], case_dir: Path,
             "graph_status": graph.get("status"),
             "preserved": False,
             "preservation": preservation,
+            "preservation_detail": preservation_detail,
+            "receipt_origin": "derived_receipt",
         })
     return records
 
@@ -1654,6 +1746,9 @@ def package_sequence_diagnosis(
                 "shader_programs": sequence.get("shader_programs") or [],
                 "checkpoint_preserved": checkpoint.get("preserved"),
                 "checkpoint_preservation": checkpoint.get("preservation"),
+                "checkpoint_preservation_detail": checkpoint.get(
+                    "preservation_detail"),
+                "receipt_origin": checkpoint.get("receipt_origin"),
             })
         sequence_manifest = {
             "schema": SEQUENCE_MANIFEST_SCHEMA,
@@ -1819,6 +1914,7 @@ def _verify_sequence(case_dir: Path, manifest: dict) -> tuple[list[str], dict]:
             history = {}
             trace = {}
         shader_relative = entry.get("shader_dir")
+        receipt_shader_dir: Path | None = None
         if not isinstance(shader_relative, str) or not shader_relative:
             problems.append(f"frame {index} has no shader directory binding")
         else:
@@ -1832,6 +1928,7 @@ def _verify_sequence(case_dir: Path, manifest: dict) -> tuple[list[str], dict]:
                 problems.append(
                     f"frame {index} shader report is missing")
             else:
+                receipt_shader_dir = shader_path
                 try:
                     shader_report = _json(shader_path / "shaders.json")
                 except (OSError, UnicodeError, json.JSONDecodeError,
@@ -1890,17 +1987,43 @@ def _verify_sequence(case_dir: Path, manifest: dict) -> tuple[list[str], dict]:
                 except (OSError, UnicodeError, json.JSONDecodeError,
                         CaseError):
                     receipt_value = {}
-                if receipt_value.get("checkpoint_request_sha256") != checkpoint_sha:
+                if request.is_file():
+                    for field, detail in _receipt_identity_problems(
+                            receipt_value, sequence=sequence_record,
+                            frame=frame, shader_dir=receipt_shader_dir,
+                            request=request):
+                        problems.append(
+                            f"frame {index} checkpoint receipt identity "
+                            f"disagrees: {detail}")
+                if entry.get("checkpoint_count") is not None:
+                    try:
+                        expected_count = len(
+                            _json(request).get("checkpoints") or [])
+                    except (OSError, UnicodeError, json.JSONDecodeError,
+                            CaseError):
+                        expected_count = None
+                    if (expected_count is not None and
+                            entry.get("checkpoint_count") != expected_count):
+                        problems.append(
+                            f"frame {index} checkpoint request count drifted "
+                            f"from the declared sequence")
+                if receipt_value.get("sequence") not in (None, index):
                     problems.append(
-                        f"frame {index} checkpoint receipt does not bind the "
-                        "request")
-                if receipt_value.get("capture_frame_id") != entry.get(
-                        "capture_frame_id"):
+                        f"frame {index} checkpoint receipt has another "
+                        "portable sequence index")
+                origin = entry.get("receipt_origin")
+                if origin not in ("preserved_live_receipt", "derived_receipt"):
                     problems.append(
-                        f"frame {index} checkpoint receipt has another frame")
-                if receipt_value.get("session_id") != session:
+                        f"frame {index} checkpoint receipt origin is "
+                        "missing or invalid")
+                expected_origin = ("preserved_live_receipt"
+                                   if entry.get("checkpoint_preserved")
+                                   else "derived_receipt")
+                if (origin in ("preserved_live_receipt", "derived_receipt")
+                        and origin != expected_origin):
                     problems.append(
-                        f"frame {index} checkpoint receipt has another session")
+                        f"frame {index} checkpoint receipt origin disagrees "
+                        "with its preservation record")
         previous_sequence = sequence_record
         previous_dir = frame
     for name in carried_by_target:
@@ -2278,10 +2401,26 @@ def verify(case_dir: Path | str) -> dict:
         problems.append("graph.json is unreadable")
     if reproduction.get("independently_reproducible") is False:
         problems.append("reproduction is explicitly incomplete")
+    verified = not problems
+    if is_sequence:
+        # A sequence is independently reproducible only when its own manifest
+        # says so *and* every drift/integrity check above passed.
+        independently_reproducible = bool(
+            verified and reproduction.get("independently_reproducible"))
+    else:
+        # v1 single-frame cases pre-date the explicit reproduction block.
+        # Missing metadata stays backward-compatible only for a genuinely
+        # complete case: an incomplete or corrupted v1 case is never claimed
+        # independently reproducible, even though its budget-limited summary
+        # is expected and verified as incomplete evidence.
+        independently_reproducible = bool(
+            verified
+            and not incomplete
+            and reproduction.get("independently_reproducible") is not False)
     return {
         "schema": "gfx-strategy-b-case-verification/v1",
         "case_id": manifest.get("case_id"),
-        "ok": not problems,
+        "ok": verified,
         "problems": problems,
         "files": len(manifest.get("files") or []),
         "graph_status": graph.get("status"),
@@ -2289,9 +2428,7 @@ def verify(case_dir: Path | str) -> dict:
         "sequence": sequence_summary,
         "reproduction_status": reproduction.get("status"),
         "reproduction_reason": reproduction.get("reason"),
-        "independently_reproducible": (
-            reproduction.get("independently_reproducible")
-            if is_sequence else True),
+        "independently_reproducible": independently_reproducible,
     }
 
 

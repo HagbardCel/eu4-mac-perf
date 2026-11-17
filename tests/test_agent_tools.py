@@ -1341,7 +1341,9 @@ class StrategyBCaseToolTests(ToolTests):
         report = {
             "status": "complete", "stop_reason": "frame_limit",
             "qualified": True, "validation": {"status": "ok"},
-            "frames": [{"sequence": index, "classification": "qualified_match"}
+            "frames": [{"sequence": index, "classification": "qualified_match",
+                        "diagnostic_completed": True,
+                        "diagnostic_report": f"f{index}.json"}
                        for index in (1, 2, 3)],
             "metrics": {"wall_seconds": 1.0},
         }
@@ -1367,6 +1369,93 @@ class StrategyBCaseToolTests(ToolTests):
         self.assertEqual(kwargs["frame_timeout"], 30.0)
         self.assertEqual(kwargs["timeout"], 60.0)
         self.assertEqual(value["result"]["status"], "complete")
+
+    def test_sequence_diagnostic_completeness_requires_evidence(self):
+        report = {
+            "status": "failed", "stop_reason": "gpu_execution_failure",
+            "stopped_at": 2, "qualified": False,
+            "frames": [
+                {"sequence": 1, "classification": "qualified_match",
+                 "history_status": 1, "diagnostic_completed": True,
+                 "diagnostic_report": "f1.json"},
+                {"sequence": 2, "ok": False, "history_status": 0,
+                 "classification": "gpu_execution_failure",
+                 "diagnostic_report": None, "diagnostic_completed": False,
+                 "diagnostic_evidence": {
+                     "completed": False, "missing": ["diagnosis"]},
+                 "error": "command buffer failed"},
+            ],
+        }
+        code, value, _ = self.run_sequence(
+            report, extra=("--continue-on-difference",), frame_count=2)
+        self.assertEqual(code, 2, value)
+        result = value["result"]
+        self.assertFalse(result["diagnostic_complete"])
+        # The earlier completed diagnosis is preserved even though the later
+        # frame failed.
+        self.assertTrue(result["frames"][0]["diagnostic_completed"])
+        self.assertEqual(result["frames"][0]["diagnostic_report"], "f1.json")
+        self.assertFalse(result["frames"][1]["diagnostic_completed"])
+        self.assertIsNone(result["frames"][1]["diagnostic_report"])
+        self.assertEqual(value["status"], "failed")
+
+    def test_successful_sequence_reports_evidence_based_completion(self):
+        report = {
+            "status": "complete", "stop_reason": "frame_limit",
+            "qualified": True,
+            "frames": [
+                {"sequence": index, "classification": "qualified_match",
+                 "history_status": 1, "diagnostic_completed": True,
+                 "diagnostic_report": f"f{index}.json"}
+                for index in (1, 2, 3)
+            ],
+        }
+        code, value, _ = self.run_sequence(report)
+        self.assertEqual(code, 0, value)
+        self.assertTrue(value["result"]["diagnostic_complete"])
+        self.assertTrue(value["outcome"]["qualified"])
+        self.assertEqual(value["outcome"]["verdict"], "equal")
+
+    def test_pixel_divergence_is_separate_from_unsupported_state(self):
+        report = {
+            "status": "failed", "stop_reason": "gpu_execution_failure",
+            "stopped_at": 3, "qualified": False,
+            "frames": [
+                {"sequence": 1, "classification": "unsupported_state",
+                 "history_status": 1, "diagnostic_completed": True,
+                 "axes": {"pixels": "match", "state_coverage": "invalid"},
+                 "pixels": {"pixels": 100, "mismatched_pixels": 0},
+                 "checkpoint_validation": {"status": "ok", "divergent": 0},
+                 "first_divergence": {"kind": "unsupported_state",
+                                      "event": 5}},
+                {"sequence": 2, "classification": "qualified_difference",
+                 "history_status": 1, "diagnostic_completed": True,
+                 "axes": {"pixels": "divergent"},
+                 "pixels": {"pixels": 100, "mismatched_pixels": 7},
+                 "checkpoint_validation": {"status": "ok", "divergent": 2},
+                 "first_divergence": {"kind": "final_only", "event": 17,
+                                      "operation": "draw"}},
+                {"sequence": 3, "ok": False, "history_status": 0,
+                 "classification": "gpu_execution_failure",
+                 "diagnostic_completed": False,
+                 "error": "command buffer failed"},
+            ],
+        }
+        code, value, _ = self.run_sequence(
+            report, extra=("--continue-on-difference",))
+        self.assertEqual(code, 2, value)
+        result = value["result"]
+        self.assertEqual(result["first_pixel_divergent_frame"], 2)
+        self.assertEqual(result["first_checkpoint_divergent_frame"], 2)
+        self.assertEqual(result["first_unqualified_frame"], 1)
+        self.assertEqual(result["terminal_failure"]["kind"],
+                         "gpu_execution_failure")
+        self.assertFalse(result["qualified"])
+        # ``first_difference`` stays the earliest non-equivalence (the
+        # unsupported-state frame) but must not claim a pixel difference.
+        self.assertEqual(result["first_difference"]["frame"], 1)
+        self.assertFalse(result["first_difference"]["pixel_divergent"])
+        self.assertFalse(result["first_difference"]["checkpoint_divergent"])
 
     def run_sequence(self, report, *, extra=(), frame_count=3):
         from automation import m7_continuous
@@ -1430,6 +1519,7 @@ class StrategyBCaseToolTests(ToolTests):
             "qualified": True, "frames": [{
                 "sequence": 1, "classification": "qualified_match",
                 "history_status": 1, "diagnostic_report": "f1.json",
+                "diagnostic_completed": True,
             }],
             "policy": {"path": str(policy), "sha256": "a" * 64,
                        "source": "explicit"},
@@ -1531,6 +1621,7 @@ class StrategyBCaseToolTests(ToolTests):
             "qualified": True, "frames": [{
                 "sequence": 1, "classification": "qualified_match",
                 "history_status": 1, "diagnostic_report": "f1.json",
+                "diagnostic_completed": True,
             }],
         }
         for alias in ("--replay-out", "--out"):
