@@ -45,7 +45,8 @@ def make_frame(root: Path, *, source: bytes, destination: bytes,
                destination_format: str = "RGBA8",
                write_sequence: bool = True,
                declared_destination_sha: str | None = None,
-               write_source: bool = True) -> Path:
+               write_source: bool = True,
+               render_targets: list[str] | None = None) -> Path:
     frame = root / "frame"
     (frame / "blobs").mkdir(parents=True)
     if write_source:
@@ -75,6 +76,8 @@ def make_frame(root: Path, *, source: bytes, destination: bytes,
             "schema": "gfx-frame-sequence/v1",
             "session_id": "test", "pid": 1, "sequence_index": 1,
             "capture_frame_id": 1, "complete": True,
+            "render_targets": (["442"] if render_targets is None
+                               else render_targets),
             "lifecycle": lifecycle or [],
         }))
     return frame
@@ -168,6 +171,36 @@ class GlTransferControlTests(unittest.TestCase):
         self.assertEqual(report["status"], "incomplete")
         self.assertEqual(report["checks"][0]["reason_code"],
                          "lifecycle_mutation")
+
+    def test_rgb16_destination_forces_opaque_alpha(self):
+        source = bytes((1, 2, 3, 128, 4, 5, 6, 128,
+                        7, 8, 9, 128, 10, 11, 12, 128))
+        destination = bytes((3, 2, 1, 255, 6, 5, 4, 255,
+                             9, 8, 7, 255, 12, 11, 10, 255))
+        events = [{
+            "index": 1, "kind": "resolve",
+            "operation": "glCopyTexSubImage2D", "source": "0",
+            "destination": "442", "internal_format": 32852,
+            "source_image": {"file": "copy-source.bgra",
+                             "sha256": _sha(source),
+                             "width": 2, "height": 2},
+        }, _draw(2, textures=[_texture(
+            442, "destination.bin", _sha(destination))])]
+        frame = make_frame(self.root, source=source,
+                           destination=destination, events=events)
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "match")
+        self.assertEqual(report["checks"][0]["normalization"]["alpha"],
+                         "force_opaque")
+
+    def test_uncovered_copy_destination_is_unavailable(self):
+        frame = make_frame(self.root, source=self.source,
+                           destination=self.destination,
+                           render_targets=[])
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "incomplete")
+        self.assertEqual(report["checks"][0]["reason_code"],
+                         "unverified_lifecycle_coverage")
 
     def test_rgb_destination_forces_opaque_alpha(self):
         source = bytes((1, 2, 3, 128, 4, 5, 6, 128,

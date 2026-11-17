@@ -63,18 +63,30 @@ def _read_events(frame: Path) -> list[dict]:
     return events
 
 
-def _read_lifecycle(frame: Path) -> tuple[list[dict] | None, str | None]:
+def _read_lifecycle(
+        frame: Path) -> tuple[list[dict] | None, str | None, set[str]]:
     path = frame / "frame-sequence.json"
     if not path.is_file():
-        return None, "missing_lifecycle_provenance"
+        return None, "missing_lifecycle_provenance", set()
     try:
         document = json.loads(path.read_text())
     except (OSError, UnicodeError, json.JSONDecodeError):
-        return None, "invalid_lifecycle_provenance"
+        return None, "invalid_lifecycle_provenance", set()
     lifecycle = document.get("lifecycle")
     if not isinstance(lifecycle, list):
-        return None, "invalid_lifecycle_provenance"
-    return lifecycle, None
+        return None, "invalid_lifecycle_provenance", set()
+    covered = set()
+    for key in ("render_targets", "carried_renderer_outputs"):
+        for name in document.get(key) or []:
+            covered.add(str(name))
+    for item in lifecycle:
+        names = item.get("names")
+        if not isinstance(names, list):
+            names = [item.get("name")]
+        for name in names:
+            if name is not None:
+                covered.add(str(name))
+    return lifecycle, None, covered
 
 
 def _channel_swap(source_format: str | None,
@@ -105,7 +117,8 @@ def _swap_red_blue(body: bytes) -> bytes:
 
 _INTERNAL_FORMATS = {
     32849: "RGB8", 32856: "RGBA8", 6407: "RGB", 6408: "RGBA",
-    32852: "RGB16F", 34836: "RGBA32F", 33327: "RGB10_A2",
+    32852: "RGB16", 34843: "RGB16F", 34836: "RGBA32F",
+    33327: "RGB10_A2",
 }
 
 
@@ -307,7 +320,7 @@ def control_frame(frame_dir: Path | str) -> dict:
     """
     frame = Path(frame_dir).expanduser().resolve()
     events = _read_events(frame)
-    lifecycle, lifecycle_error = _read_lifecycle(frame)
+    lifecycle, lifecycle_error, lifecycle_coverage = _read_lifecycle(frame)
     checks: list[dict] = []
     for position, event in enumerate(events):
         if event.get("kind") != "resolve":
@@ -325,6 +338,16 @@ def control_frame(frame_dir: Path | str) -> dict:
                 "reason": (
                     "the frame has no readable frame-sequence lifecycle "
                     "record, so a later write cannot be excluded"),
+                "event": None,
+            }))
+            continue
+        if destination not in lifecycle_coverage:
+            checks.append(_unavailable_check(index, event, destination, {
+                "reason_code": "unverified_lifecycle_coverage",
+                "reason": (
+                    f"destination {destination} is not covered by the "
+                    "frame's lifecycle records; a later CPU write cannot be "
+                    "excluded"),
                 "event": None,
             }))
             continue
@@ -462,7 +485,9 @@ def control_frame(frame_dir: Path | str) -> dict:
             source_bytes, width, height, region["source_x"],
             region["source_y"], region["width"], region["height"])
         alpha_normalization = None
-        if internal_name in ("RGB8", "RGB"):
+        if (internal_name and internal_name.startswith("RGB")
+                and not internal_name.startswith("RGBA")
+                and "_A" not in internal_name):
             source_region = _force_opaque(source_region)
             alpha_normalization = "force_opaque"
         destination_region = _crop_pixels(
