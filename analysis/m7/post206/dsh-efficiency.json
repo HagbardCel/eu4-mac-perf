@@ -1,21 +1,21 @@
 {
   "calls": {
     "by_tool": {
-      "bash": 446,
+      "bash": 469,
       "create_goal": 2,
-      "get_goal": 1,
+      "get_goal": 2,
       "job_kill": 1,
       "job_list": 1,
       "job_output": 8,
       "todo_write": 2,
-      "update_goal": 1,
+      "update_goal": 2,
       "write": 6
     },
     "failed": 0,
     "failed_by_tool": {},
     "failure_rate": 0.0,
     "note": "failed counts tool-level errors; shell_failures counts bash commands whose result text reports a nonzero exit code",
-    "shell_commands": 446,
+    "shell_commands": 469,
     "shell_failure_examples": [
       {
         "command_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_infra && timeout 25 git fetch origin 2>&1 | tail -20; echo \\\"exit=${PIPESTATUS[0]}\\\"; git log\u2026",
@@ -59,7 +59,7 @@
       }
     ],
     "shell_failures": 15,
-    "total": 468
+    "total": 493
   },
   "eu4_launches": {
     "bash_launches": 3,
@@ -83,17 +83,18 @@
     "process_starts_estimate": 6
   },
   "goal": {
-    "active": true,
-    "last_operation": "create",
-    "last_phase": "active",
+    "active": false,
+    "last_operation": "complete",
+    "last_phase": "complete",
     "last_turn_reason": "completed",
     "operations": [
       "create",
       "complete",
-      "create"
+      "create",
+      "complete"
     ],
-    "outcome": "active",
-    "terminal": false,
+    "outcome": "completed",
+    "terminal": true,
     "turn_end_reasons": [
       "completed"
     ]
@@ -106,7 +107,7 @@
     "user_messages": 2
   },
   "long_jobs": {
-    "count": 21,
+    "count": 22,
     "jobs": [
       {
         "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && mkdir -p .local/m7 && pgrep -fl 'EuropaUniversalisIV/eu4' || true && /opt/homebrew/bin/python3 -m aut",
@@ -116,6 +117,11 @@
       {
         "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && pgrep -fl 'EuropaUniversalisIV/eu4' || true; /opt/homebrew/bin/python3 -m automation.m6_frame capture",
         "seconds": 248.751,
+        "status": "completed"
+      },
+      {
+        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && gh pr checks 209 --watch --interval 10 2>&1 | tail -10",
+        "seconds": 189.302,
         "status": "completed"
       },
       {
@@ -145,17 +151,12 @@
       },
       {
         "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && /opt/homebrew/bin/python3 -m automation.test_runner run --module tests.test_m6_frame --module tests.tes",
+        "seconds": 125.758,
+        "status": "completed"
+      },
+      {
+        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && /opt/homebrew/bin/python3 -m automation.test_runner run --module tests.test_m6_frame --module tests.tes",
         "seconds": 124.763,
-        "status": "completed"
-      },
-      {
-        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && sleep 120; for p in 207 208 209; do echo \"=== $p\"; gh pr checks $p 2>&1 | head -5; done",
-        "seconds": 123.265,
-        "status": "completed"
-      },
-      {
-        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && sleep 120; gh pr checks 209 2>&1 | head -5; gh pr view 209 --json mergeStateStatus,reviewDecision,url",
-        "seconds": 121.745,
         "status": "completed"
       }
     ],
@@ -227,7 +228,7 @@
     ],
     "oversized_count": 17,
     "threshold_chars": 12000,
-    "total_chars": 1217481,
+    "total_chars": 1225155,
     "truncated": [
       {
         "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && /opt/homebrew/bin/python3 - <<'PY'\\nfrom pathlib import Path\\np=Path('tests/test_m\u2026",
@@ -257,6 +258,11 @@
       "argument_excerpt": "{\"job_id\":\"bash-0fecc3d493684091\"}",
       "count": 2,
       "tool": "job_output"
+    },
+    {
+      "argument_excerpt": "{}",
+      "count": 2,
+      "tool": "get_goal"
     }
   ],
   "schema": "dsh-efficiency/v1",
@@ -299,45 +305,45 @@
     "test_invocations": 29
   },
   "tokens": {
-    "cache_read": 160852096,
-    "cache_read_share_of_total": 0.9944,
+    "cache_read": 176899712,
+    "cache_read_share_of_total": 0.9947,
     "cache_write": 0,
-    "effective_input": 161509377,
-    "input": 657281,
-    "output": 252314,
-    "total": 161761691
+    "effective_input": 177577295,
+    "input": 677583,
+    "output": 267432,
+    "total": 177844727
   },
   "turn": null,
   "wait": {
     "by_tool": {
-      "bash": 1786.22,
+      "bash": 2142.834,
       "create_goal": 0.025,
-      "get_goal": 0.009,
+      "get_goal": 0.018,
       "job_kill": 0.005,
       "job_list": 0.012,
       "job_output": 0.053,
       "todo_write": 0.014,
-      "update_goal": 0.012,
+      "update_goal": 0.021,
       "write": 0.095
     },
     "calls_measured": {
-      "bash": 445,
+      "bash": 468,
       "create_goal": 2,
-      "get_goal": 1,
+      "get_goal": 2,
       "job_kill": 1,
       "job_list": 1,
       "job_output": 8,
       "todo_write": 2,
-      "update_goal": 1,
+      "update_goal": 2,
       "write": 6
     },
-    "share_of_elapsed": 0.2952,
-    "tool_wait_seconds": 1786.445
+    "share_of_elapsed": 0.3229,
+    "tool_wait_seconds": 2143.077
   },
   "window": {
-    "elapsed_seconds": 6052.482,
-    "end_utc": "2026-11-17T20:24:50.646000+00:00",
-    "model_calls": 435,
+    "elapsed_seconds": 6636.629,
+    "end_utc": "2026-11-17T20:34:34.793000+00:00",
+    "model_calls": 460,
     "start_utc": "2026-11-17T18:43:58.164000+00:00",
     "turns": 2
   }

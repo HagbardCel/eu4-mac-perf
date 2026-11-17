@@ -559,7 +559,7 @@
         "status": "awaiting independent review"
       },
       "209": {
-        "head": "pending final push",
+        "head": "latest head of PR #209 (the commit containing this artifact)",
         "status": "awaiting independent review"
       }
     },

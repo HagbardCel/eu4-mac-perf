@@ -103,13 +103,13 @@ snapshot:
 | Metric | Value |
 | --- | --- |
 | Session | `session-67b86ef2…`, start 2026-11-17T18:43:58Z |
-| Tool calls | 467 total: 445 bash, 6 write, 8 job_output, 2 create_goal, 2 todo_write, 1 get_goal, 1 update_goal, 1 job_kill, 1 job_list |
+| Tool calls | 493 total: 469 bash, 6 write, 8 job_output, 2 create_goal, 2 get_goal, 2 update_goal, 2 todo_write, 1 job_kill, 1 job_list |
 | Tool-level failures | 0 adapter errors; 15 shell commands with a nonzero exit marker (including deliberate negative tests) |
 | Long jobs | 10; captures 250.4 s and 248.8 s, the stopped full run 153.2 s, focused suites 127.8/127.2/126.7/124.8/123.3/121.7 s, ~20–39 s replays |
 | Test invocations | 29 invocations / 16 distinct commands; 13 focused re-runs; the module-list full run is not counted as a completed full-suite pass |
-| Tool wait | 1,785.5 s of 5,998.5 s elapsed (29.8%) |
-| Output volume | 1,180,485 chars; 15 oversized outputs, 3 truncated |
-| Tokens | 159.9 M total; 159.0 M cache-read (99.4%) |
+| Tool wait | 2,143.1 s of 6,636.6 s elapsed (32.3%) |
+| Output volume | 1,225,155 chars; 17 oversized outputs, 3 truncated |
+| Tokens | 177.8 M total; 177.0 M cache-read (99.5%) |
 | Human interventions | 1 approval-policy event; 0 user questions |
 | EU4 launches | 3 capture command invocations, 2 actual EU4 process starts (one failed `draw_cap`, one successful 3-frame capture); 0 for the pilot |
 

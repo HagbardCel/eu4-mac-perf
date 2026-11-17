@@ -9,12 +9,12 @@ the export, not estimated.
 
 | Metric | Value | Interpretation |
 | --- | --- | --- |
-| Elapsed / model calls | 5,998 s / 432 | Two user turns; includes preparation and the Phase E0 pilot |
-| Tool calls | 467 total (445 bash, 6 write, 8 job_output, 2 create_goal, 2 todo_write, 1 get_goal, 1 update_goal, 1 job_kill, 1 job_list) | 0 native tool-level failures |
-| Shell commands / shell failures | 445 / 15 | `calls.failed` only counts tool-adapter errors; `shell_failures` counts bash results with a nonzero exit marker. The 15 include intentional diagnostic/test failures and negative tests, not 15 broken tools. |
-| Tool wait | 1,785.5 s (29.8% of elapsed) | Includes two authentic captures and every test/replay job |
-| Tokens | 159.9 M total, 99.4% cache-read | Effective input 159.0 M; output 0.5 M |
-| Output volume | 1,180,485 chars; 15 oversized, 3 truncated | Oversized rows are mostly historical document reads and full test logs |
+| Elapsed / model calls | 6,636.6 s / 460 | Two user turns; includes preparation and the Phase E0 pilot |
+| Tool calls | 493 total (469 bash, 6 write, 8 job_output, 2 create_goal, 2 get_goal, 2 update_goal, 2 todo_write, 1 job_kill, 1 job_list) | 0 native tool-level failures |
+| Shell commands / shell failures | 469 / 15 | `calls.failed` only counts tool-adapter errors; `shell_failures` counts bash results with a nonzero exit marker. The 15 include intentional diagnostic/test failures and negative tests, not 15 broken tools. |
+| Tool wait | 2,143.1 s (32.3% of elapsed) | Includes two authentic captures and every test/replay job |
+| Tokens | 177.8 M total, 99.5% cache-read | Effective input 177.0 M; output 0.8 M |
+| Output volume | 1,225,155 chars; 17 oversized, 3 truncated | Oversized rows are mostly historical document reads and full test logs |
 
 ## EU4 launches: reconciliation
 
@@ -54,12 +54,10 @@ about 13 command invocations without losing coverage.
 
 ## Goal status
 
-The export contains `create → complete → create`: the first goal completed;
-the second goal is the current PR-remediation goal. At this snapshot it is
-`active`, and the last turn-end reason is `completed` (the turn ended, not the
-goal). The readiness assessment uses the goal's terminal status only when it is
-actually terminal; the final artifact records `complete` after the remediation
-goal closes.
+The export contains `create → complete → create → complete`: the first goal
+and the PR-remediation goal both completed. The final snapshot records
+`goal.terminal=true` and `goal.outcome=completed`; the earlier `active` state
+was only an intermediate snapshot.
 
 ## Measured improvements
 
