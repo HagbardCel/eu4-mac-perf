@@ -1891,11 +1891,16 @@ def _campaign_terminal_failure(report: dict) -> dict | None:
 def _campaign_row_trusted(row: dict) -> bool:
     """True when a row's pixel/checkpoint evidence is trustworthy.
 
-    A terminal row (GPU failure, invalid provenance, incomplete capture or
-    diagnostics), a failed history, or an explicitly invalid capture/provenance
-    axis must never be promoted into a verified first-divergence claim.
-    Missing axes remain compatible with older synthetic reports.
+    Only a frame whose diagnostic actually completed can supply pixel,
+    checkpoint or classification evidence.  A terminal row (GPU failure,
+    invalid provenance, incomplete capture or diagnostics), a failed history,
+    or an explicitly invalid capture/provenance axis must never be promoted
+    into a verified first-divergence claim.  Missing axes remain compatible
+    with older synthetic reports; a missing diagnostic-completion marker does
+    not.
     """
+    if row.get("diagnostic_completed") is not True:
+        return False
     if row.get("ok") is False:
         return False
     if row.get("history_status") not in (1, None):

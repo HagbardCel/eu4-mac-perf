@@ -1517,6 +1517,51 @@ class StrategyBCaseToolTests(ToolTests):
         self.assertFalse(result["first_difference"]["pixel_divergent"])
         self.assertFalse(result["qualified"])
 
+    def test_incomplete_qualified_difference_cannot_establish_difference(self):
+        frame = self.trusted_frame(
+            1, "qualified_difference", pixels=7,
+            pixel_comparison="divergent", checkpoint_divergent=1)
+        frame["diagnostic_completed"] = False
+        report = {
+            "status": "complete", "stop_reason": "frame_limit",
+            "qualified": True, "frames": [frame],
+        }
+        code, value, _ = self.run_sequence(report, frame_count=1)
+        self.assertEqual(code, 2, value)
+        self.assertIsNone(value["outcome"]["verdict"])
+        self.assertEqual(value["outcome"]["diagnostic"], "incomplete")
+        result = value["result"]
+        self.assertIsNone(result["first_pixel_divergent_frame"])
+        self.assertIsNone(result["first_checkpoint_divergent_frame"])
+        self.assertFalse(result["qualified"])
+        self.assertFalse(result["first_difference"]["pixel_divergent"])
+
+    def test_complete_qualified_difference_still_reports_different(self):
+        from automation import gfx_independent_replay
+
+        classification, qualification = (
+            gfx_independent_replay.classify_diagnosis(
+                capture_validity="valid", identity="verified",
+                execution="ok", provenance="verified",
+                operation_coverage="complete", state_cov="complete",
+                pixels="divergent", divergence="final_only",
+                checkpoint_validation={"status": "ok"}))
+        self.assertEqual(classification, "qualified_difference")
+        frame = self.trusted_frame(
+            1, classification, pixels=9, pixel_comparison="divergent")
+        frame["axes"] = qualification["axes"]
+        report = {
+            "status": "complete", "stop_reason": "frame_limit",
+            "qualified": False, "frames": [frame],
+        }
+        code, value, _ = self.run_sequence(report, frame_count=1)
+        self.assertEqual(code, 0, value)
+        self.assertEqual(value["outcome"]["verdict"], "different")
+        self.assertEqual(value["outcome"]["diagnostic"], "complete")
+        self.assertFalse(value["outcome"]["qualified"])
+        self.assertEqual(
+            value["result"]["first_pixel_divergent_frame"], 1)
+
     def test_later_terminal_failure_overrides_but_keeps_observations(self):
         report = {
             "status": "failed", "stop_reason": "gpu_execution_failure",

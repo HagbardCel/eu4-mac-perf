@@ -541,6 +541,71 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(caught.exception.kind, "byte_budget")
 
 
+class DiagnosticEvidenceTests(unittest.TestCase):
+    """diagnostic_evidence requires the declared evidence, not just labels."""
+
+    @staticmethod
+    def diagnosis(**overrides):
+        value = {
+            "schema": gfx_independent_replay.DIAGNOSIS_SCHEMA,
+            "classification": "qualified_match",
+            "qualification": {"axes": {"pixel_comparison": "match"}},
+            "pixels": {
+                "status": "match",
+                "statistics": {"pixels": 16, "mismatched_pixels": 0},
+            },
+            "checkpoint_validation": {"status": "ok"},
+            "first_divergence": {"kind": "none"},
+        }
+        value.update(overrides)
+        return value
+
+    def test_missing_pixel_statistics_is_incomplete(self):
+        evidence = m7_continuous.diagnostic_evidence(
+            self.diagnosis(pixels={"status": "match"}))
+        self.assertFalse(evidence["completed"])
+        self.assertIn("pixels.statistics", evidence["missing"])
+
+    def test_invalid_pixel_statistics_are_incomplete(self):
+        variants = {
+            "zero_pixels": {"pixels": 0, "mismatched_pixels": 0},
+            "negative": {"pixels": 16, "mismatched_pixels": -1},
+            "over_count": {"pixels": 16, "mismatched_pixels": 17},
+            "non_numeric": {"pixels": "16", "mismatched_pixels": 2},
+        }
+        for name, statistics in variants.items():
+            with self.subTest(variant=name):
+                evidence = m7_continuous.diagnostic_evidence(
+                    self.diagnosis(pixels={
+                        "status": "match", "statistics": statistics}))
+                self.assertFalse(evidence["completed"])
+                self.assertIn("pixels.statistics", evidence["missing"])
+
+    def test_incomplete_checkpoint_evidence_is_not_complete(self):
+        diagnosis = self.diagnosis(
+            classification="incomplete_diagnostics",
+            checkpoint_validation={"status": "incomplete"})
+        evidence = m7_continuous.diagnostic_evidence(diagnosis)
+        self.assertFalse(evidence["completed"])
+        self.assertIn("checkpoint_validation.status", evidence["missing"])
+        self.assertEqual(evidence["checkpoint_status"], "incomplete")
+        # The explicit classification is preserved; it is not rewritten into a
+        # pixel difference.
+        self.assertEqual(diagnosis["classification"], "incomplete_diagnostics")
+
+    def test_invalid_checkpoint_evidence_is_not_complete(self):
+        evidence = m7_continuous.diagnostic_evidence(self.diagnosis(
+            classification="invalid_provenance",
+            checkpoint_validation={"status": "invalid"}))
+        self.assertFalse(evidence["completed"])
+        self.assertEqual(evidence["checkpoint_status"], "invalid")
+
+    def test_complete_evidence_is_complete(self):
+        evidence = m7_continuous.diagnostic_evidence(self.diagnosis())
+        self.assertTrue(evidence["completed"], evidence)
+        self.assertEqual(evidence["mismatched_pixels"], 0)
+
+
 class LiveCoordinatorPackagingTests(unittest.TestCase):
     """The live coordinator packages the exact per-frame translations it used."""
 

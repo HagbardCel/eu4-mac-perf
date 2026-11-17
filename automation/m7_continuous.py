@@ -268,13 +268,26 @@ def diagnostic_evidence(diagnosis: dict | None) -> dict:
     pixel_status = pixels.get("status") if isinstance(pixels, dict) else None
     if pixel_status not in ("match", "divergent"):
         missing.append("pixels.status")
+    statistics = pixels.get("statistics") if isinstance(pixels, dict) else None
+    statistics_ok = False
+    if isinstance(statistics, dict):
+        total = statistics.get("pixels")
+        mismatched = statistics.get("mismatched_pixels")
+        if (isinstance(total, int) and not isinstance(total, bool)
+                and total > 0
+                and isinstance(mismatched, int)
+                and not isinstance(mismatched, bool)
+                and 0 <= mismatched <= total):
+            statistics_ok = True
+    if not statistics_ok:
+        missing.append("pixels.statistics")
     checkpoints = diagnosis.get("checkpoint_validation")
-    if not isinstance(checkpoints, dict) or not checkpoints.get("status"):
+    if (not isinstance(checkpoints, dict)
+            or checkpoints.get("status") != "ok"):
         missing.append("checkpoint_validation.status")
     divergence = diagnosis.get("first_divergence")
     if not isinstance(divergence, dict) or not divergence.get("kind"):
         missing.append("first_divergence.kind")
-    statistics = pixels.get("statistics") if isinstance(pixels, dict) else None
     return {
         "completed": not missing,
         "missing": missing,
@@ -283,8 +296,8 @@ def diagnostic_evidence(diagnosis: dict | None) -> dict:
         "checkpoint_status": (
             checkpoints.get("status") if isinstance(checkpoints, dict) else None),
         "mismatched_pixels": (
-            int((statistics or {}).get("mismatched_pixels") or 0)
-            if isinstance(statistics, dict) else 0),
+            int(statistics.get("mismatched_pixels") or 0)
+            if statistics_ok else 0),
     }
 
 
