@@ -1,0 +1,121 @@
+{
+  "schema": "m7-e0-pilot-analysis/v1",
+  "frame": {
+    "sequence": 1,
+    "present_index": 615,
+    "capture_frame_id": 1
+  },
+  "source": "blobs/copy-source-546.bgra",
+  "source_sha256": "abd4ad6b88c9d1043df75d9b8cf0132bf3d485efa627114dd9127a4efb1bb9d7",
+  "metal_sha256": "c1c35604e3058fea9bb5ad61dab8bbe9c0a6ae18514cb027091791c0932526a5",
+  "difference": {
+    "pixels": 1930176,
+    "mismatched_pixels": 1234947,
+    "mismatched_fraction": 0.639810566,
+    "max_channel_error": 104,
+    "mean_abs_error": [
+      0.443596,
+      0.599732,
+      0.716002
+    ],
+    "one_lsb_share": 0.752938,
+    "histogram_0_to_7": [
+      695229,
+      929839,
+      158033,
+      66751,
+      35785,
+      17888,
+      10528,
+      5904
+    ]
+  },
+  "edge_statistics": {
+    "edge_fraction": 0.050673,
+    "mismatch_on_edge": 0.564162,
+    "mismatch_on_flat": 0.643848,
+    "mean_error_on_edge": 0.783594,
+    "mean_error_on_flat": 0.998376
+  },
+  "cross_frame_sign_agreement": [
+    {
+      "frames": [
+        1,
+        2
+      ],
+      "agreement": 0.717806,
+      "overlap": 1024250
+    },
+    {
+      "frames": [
+        2,
+        3
+      ],
+      "agreement": 0.753748,
+      "overlap": 1061374
+    },
+    {
+      "frames": [
+        1,
+        3
+      ],
+      "agreement": 0.685824,
+      "overlap": 996272
+    }
+  ],
+  "hypotheses": [
+    {
+      "id": "copy_execution",
+      "status": "rejected",
+      "evidence": "GL copy source and GL copy destination are byte-identical after the declared BGRA->RGBA channel swap: 0/1,930,176 differing pixels in all three frames.",
+      "artifacts": [
+        "gl-control-frame1.json",
+        "gl-control-frame2.json",
+        "gl-control-frame3.json"
+      ]
+    },
+    {
+      "id": "constant_channel_bias",
+      "status": "rejected",
+      "evidence": "Adding +1 to any channel or all channels increases mismatches from 1,234,947 to 1,747,123-1,928,591."
+    },
+    {
+      "id": "simple_bayer_dither",
+      "status": "not_supported",
+      "evidence": "Adding 4x4 or 8x8 Bayer +/-1 patterns increases mismatches (1,244,082-1,598,720); the per-cell error means are nearly uniform."
+    },
+    {
+      "id": "fast_math_translation",
+      "status": "rejected_as_dominant",
+      "evidence": "Recompiling every MSL stage with fastMathEnabled=NO changed the final output but only changed 253 of 1160152 mismatched pixels (1159899 remaining)."
+    },
+    {
+      "id": "multisample_edges",
+      "status": "not_supported",
+      "evidence": "Only 5.07% of pixels are local edges; mismatch is lower on edges (56.4%) than on flat regions (64.4%)."
+    },
+    {
+      "id": "content_dependent_shader_or_filter_precision",
+      "status": "leading_hypothesis",
+      "evidence": "929839/1234947 differing pixels are exactly 1 LSB; error signs agree across different frames at the same coordinates only 71.8-75.4% of the time; the residual is not a static screen-space dither pattern and is not a constant bias."
+    }
+  ],
+  "ghidra": {
+    "query": "eu4_re_query function 0x15ece13",
+    "function": "_GfxResolve",
+    "pseudocode_summary": "_glBindTexture(GL_TEXTURE_2D, dst); _glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, width, height); _glBindTexture(GL_TEXTURE_2D, 0);",
+    "conclusion": "the engine transfer is a plain copy of the default framebuffer; the GL/GL control confirms it is reproduced exactly"
+  },
+  "root_cause": "not_established",
+  "unresolved_interval": {
+    "start_event": 13,
+    "end_event": 284
+  },
+  "next_checkpoint": {
+    "event": 148,
+    "target": "0",
+    "requires_capture": true,
+    "reason": "capture a default-framebuffer checkpoint near the midpoint to bisect the first 13-284 interval"
+  },
+  "conclusion": "The copy path is exact; the difference is already present in the default framebuffer before the copy. The residual is content-dependent and dominated by 1 LSB, so the next step is an event-148 default-framebuffer checkpoint, not a copy or fast-math change."
+}

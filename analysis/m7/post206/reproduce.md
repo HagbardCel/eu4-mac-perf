@@ -1,0 +1,107 @@
+# Reproducing the post-PR-#206 qualification
+
+These commands assume the preparation worktree and the checked interpreter
+`/opt/homebrew/bin/python3` (Python 3.15.2, NumPy 2.5.5). Authentic capture is
+outside routine CI and requires the local EU4 installation.
+
+## 1. Capture (one process, three frames)
+
+```sh
+python3 -m automation.m6_frame capture \
+  --output .local/m7/phase-c-authentic-v2 \
+  --callers 0x103b3c8 --min-draws 1 --occurrence 300 --boundary scene \
+  --continuous --shadow --seal --max-frames 3 --max-pending 2 \
+  --max-bytes 2147483648 --case-max-bytes 2147483648 --copy-source \
+  --max-draws 512 --background --duration 240 --timeout 600 \
+  --shadow-timeout-ms 120000 --shadow-wait-ms 180000
+```
+
+`--max-draws 512` is required for the 325-event title frame. `--max-bytes` and
+`--case-max-bytes` are the explicit 2 GiB case budget; a 512 MiB budget
+publishes an explicit incomplete summary instead of dropping evidence.
+
+## 2. Translate frames 2 and 3
+
+The live coordinator translates frame 1 when it stops. For the full offline
+sequence, translate every frame explicitly:
+
+```sh
+for i in 1 2 3; do
+  python3 -m automation.m6_frame translate \
+    --frame .local/m7/phase-c-authentic-v2/frames/frame-$(printf '%06d' "$i") \
+    --out .local/m7/phase-c-authentic-v2/shadow/frame-$(printf '%06d' "$i")/shaders \
+    --cache-dir .local/m7/phase-c-authentic-v2/shadow/translation-cache
+done
+```
+
+## 3. Same-backend GL control
+
+```sh
+python3 -m automation.agent_tools eu4_capture gl-control \
+  --run .local/m7/phase-c-authentic-v2
+```
+
+Expected: `status=ok`, `outcome.verdict=equal`, zero differing pixels for all
+three frames. This is a transfer/readback control, not a full-frame GL replay.
+
+## 4. GL/Metal sequence
+
+```sh
+python3 -m automation.agent_tools eu4_replay sequence \
+  --frame-dir .local/m7/phase-c-authentic-v2/frames/frame-000001 \
+  --frame-dir .local/m7/phase-c-authentic-v2/frames/frame-000002 \
+  --frame-dir .local/m7/phase-c-authentic-v2/frames/frame-000003 \
+  --shaders .local/m7/phase-c-authentic-v2/shadow/frame-000001/shaders \
+  --out .local/m7/phase-c-authentic-v2/replay-sequence \
+  --max-frames 3 --continue-on-difference --require-engine-identity \
+  --frame-timeout 300 --timeout 1800
+```
+
+Expected: all three frames complete, 325/325 operations, history ok, engine
+identity `gap_free`, classification `difference_with_partial_state_coverage`,
+first divergence event 284 target 0.
+
+## 5. Portable case
+
+The case is packaged with the per-frame shader directories and checkpoint
+sources. The packaging call is in `analysis/m7/post206/phase-c-qualification.md`;
+then:
+
+```sh
+python3 -m automation.agent_tools eu4_replay verify \
+  --case .local/m7/phase-c-authentic-v2/phase-c-authentic-case-v2
+python3 -m automation.agent_tools eu4_replay case \
+  --case .local/m7/phase-c-authentic-v2/phase-c-authentic-case-v2 \
+  --replay-out .local/m7/phase-c-case-replay
+```
+
+## 6. Controlled later-frame divergence
+
+```sh
+python3 -m automation.agent_tools eu4_replay sequence \
+  --frame-dir .local/m7/phase-c-authentic-v2/frames/frame-000001 \
+  --frame-dir .local/m7/phase-c-authentic-v2/frames/frame-000002 \
+  --frame-dir .local/m7/phase-c-authentic-v2/frames/frame-000003 \
+  --shaders .local/m7/phase-c-authentic-v2/shadow/frame-000001/shaders \
+  --out .local/m7/phase-c-authentic-v2/replay-fault-frame2 \
+  --max-frames 3 --continue-on-difference --require-engine-identity \
+  --fault-frame 2 --fault-event 1 --sampler-shift 1 --sampler-shift-min 0
+```
+
+Expected: frame 1 unchanged; frame 2 reports `fault_injection.frame=2`,
+first divergence `kind=semantic`, `event=1`; the deliberate fault is not
+qualified.
+
+## 7. Compact diagnosis
+
+```sh
+python3 -m automation.agent_tools eu4_replay diagnose \
+  --frame .local/m7/phase-c-authentic-v2/frames/frame-000001 \
+  --metal .local/m7/phase-c-authentic-v2/replay-sequence/out-001 \
+  --out .local/m7/phase-c-authentic-v2/diagnose-compact \
+  --shaders .local/m7/phase-c-authentic-v2/shadow/frame-000001/shaders \
+  --require-seal
+```
+
+`diagnose-compact/agent-diagnosis.json` is the bounded projection; the full
+`diagnostic-report.json` remains authoritative.

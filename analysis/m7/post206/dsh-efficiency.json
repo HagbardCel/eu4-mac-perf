@@ -1,0 +1,234 @@
+{
+  "calls": {
+    "by_tool": {
+      "bash": 311,
+      "create_goal": 1,
+      "job_kill": 1,
+      "job_list": 1,
+      "job_output": 8,
+      "todo_write": 1,
+      "write": 6
+    },
+    "failed": 0,
+    "failed_by_tool": {},
+    "failure_rate": 0.0,
+    "total": 329
+  },
+  "eu4_launches": {
+    "command_evidence": [],
+    "count": 0,
+    "launch_tool_calls": 0,
+    "process_starts_estimate": 0
+  },
+  "goal": {
+    "last_operation": "create",
+    "last_phase": "active",
+    "operations": [
+      "create"
+    ],
+    "outcome": "active",
+    "turn_end_reasons": []
+  },
+  "human": {
+    "approval_interventions": 1,
+    "approval_policy_events": 2,
+    "ask_user_question_calls": 0,
+    "permission_commands": 1,
+    "user_messages": 1
+  },
+  "long_jobs": {
+    "count": 14,
+    "jobs": [
+      {
+        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && mkdir -p .local/m7 && pgrep -fl 'EuropaUniversalisIV/eu4' || true && /opt/homebrew/bin/python3 -m aut",
+        "seconds": 250.401,
+        "status": "completed"
+      },
+      {
+        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && pgrep -fl 'EuropaUniversalisIV/eu4' || true; /opt/homebrew/bin/python3 -m automation.m6_frame capture",
+        "seconds": 248.751,
+        "status": "completed"
+      },
+      {
+        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && mods=$(ls tests/test_*.py | sed 's#^tests/##; s#\\.py$##' | grep -v '^test_trace_tr3$' | sed 's#^#--mo",
+        "seconds": 153.157,
+        "status": "killed"
+      },
+      {
+        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && /opt/homebrew/bin/python3 -m automation.test_runner run --module tests.test_m6_frame --module tests.t",
+        "seconds": 127.199,
+        "status": "completed"
+      },
+      {
+        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && /opt/homebrew/bin/python3 -m automation.test_runner run --module tests.test_m6_frame --module tests.t",
+        "seconds": 126.719,
+        "status": "completed"
+      },
+      {
+        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && sleep 120; for p in 207 208 209; do echo \"=== $p\"; gh pr checks $p 2>&1 | head -5; done",
+        "seconds": 123.265,
+        "status": "completed"
+      },
+      {
+        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && /opt/homebrew/bin/python3 -m automation.test_runner run --module tests.test_m7_continuous_supervisor ",
+        "seconds": 118.837,
+        "status": "completed"
+      },
+      {
+        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && sleep 90; gh pr checks 209 2>&1 | head -5; gh pr view 209 --json headRefOid,mergeStateStatus,url 2>&1",
+        "seconds": 91.526,
+        "status": "completed"
+      },
+      {
+        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && sleep 60; for p in 207 208 209; do echo \"=== $p\"; gh pr checks $p 2>&1 | head -5; done",
+        "seconds": 63.045,
+        "status": "completed"
+      },
+      {
+        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && mkdir -p .local && /opt/homebrew/bin/python3 -m automation.test_runner run --module tests.test_agent_",
+        "seconds": 49.359,
+        "status": "completed"
+      }
+    ],
+    "threshold_seconds": 20.0
+  },
+  "output": {
+    "max_chars": 49931,
+    "oversized": [
+      {
+        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && /opt/homebrew/bin/python3 - <<'PY'\\nfrom pathlib import Path\\np=Path('tests/test_m\u2026",
+        "chars": 49931,
+        "tool": "bash",
+        "truncated": true
+      },
+      {
+        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_infra && sed -n 520,900p docs/status.md\",\"description\":\"Read status doc tail\"}",
+        "chars": 45944,
+        "tool": "bash",
+        "truncated": false
+      },
+      {
+        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_infra && sed -n 160,700p analysis/m7/phase-ab-agent-bridge.md\",\"description\":\"Read phase AB r\u2026",
+        "chars": 25905,
+        "tool": "bash",
+        "truncated": false
+      },
+      {
+        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf && /opt/homebrew/bin/python3 - <<'PY'\\nimport json\\np='.local/m6/frames/menu-occ300\u2026",
+        "chars": 24485,
+        "tool": "bash",
+        "truncated": false
+      },
+      {
+        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_infra && sed -n 200,520p docs/status.md\",\"description\":\"Read status doc middle\"}",
+        "chars": 20432,
+        "tool": "bash",
+        "truncated": false
+      },
+      {
+        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && /opt/homebrew/bin/python3 -m automation.test_runner list --limit 5 2>&1 | tail -40\u2026",
+        "chars": 20281,
+        "tool": "bash",
+        "truncated": false
+      },
+      {
+        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_infra && sed -n 1,220p automation/README.md\",\"description\":\"Read automation README\"}",
+        "chars": 18670,
+        "tool": "bash",
+        "truncated": false
+      },
+      {
+        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_infra && sed -n 541,880p automation/m6_frame.py\",\"description\":\"Read capture implementation\"}",
+        "chars": 14292,
+        "tool": "bash",
+        "truncated": false
+      },
+      {
+        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_infra && sed -n 200,460p docs/agent-tools.md\",\"description\":\"Read agent tools doc rest\"}",
+        "chars": 13441,
+        "tool": "bash",
+        "truncated": false
+      },
+      {
+        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_infra && /opt/homebrew/bin/python3 - <<'PY'\\nimport json\\np='.local/m7/followup-a-live-3/fram\u2026",
+        "chars": 13425,
+        "tool": "bash",
+        "truncated": false
+      }
+    ],
+    "oversized_count": 12,
+    "threshold_chars": 12000,
+    "total_chars": 933504,
+    "truncated": [
+      {
+        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && /opt/homebrew/bin/python3 - <<'PY'\\nfrom pathlib import Path\\np=Path('tests/test_m\u2026",
+        "chars": 49931,
+        "tool": "bash"
+      }
+    ],
+    "truncated_count": 1
+  },
+  "repeated_calls": [
+    {
+      "argument_excerpt": "{\"job_id\":\"bash-965cc7c37d544833\"}",
+      "count": 5,
+      "tool": "job_output"
+    },
+    {
+      "argument_excerpt": "{\"job_id\":\"bash-0fecc3d493684091\"}",
+      "count": 2,
+      "tool": "job_output"
+    }
+  ],
+  "schema": "dsh-efficiency/v1",
+  "session": {
+    "created_utc": "2026-11-17T18:43:58.157000+00:00",
+    "cwd": "<home>/Projects/MiniProjects/eu4-mac-perf/wt_infra",
+    "id": "session-67b86ef2-53a9-4388-bd8d-fa63872f69a0"
+  },
+  "tests": {
+    "distinct_commands": 8,
+    "duplicates": [],
+    "full_suite_invocations": 0,
+    "test_invocations": 8
+  },
+  "tokens": {
+    "cache_read": 86219136,
+    "cache_read_share_of_total": 0.9926,
+    "cache_write": 0,
+    "effective_input": 86698738,
+    "input": 479602,
+    "output": 160143,
+    "total": 86858881
+  },
+  "turn": null,
+  "wait": {
+    "by_tool": {
+      "bash": 1030.4,
+      "create_goal": 0.012,
+      "job_kill": 0.005,
+      "job_list": 0.012,
+      "job_output": 0.053,
+      "todo_write": 0.006,
+      "write": 0.095
+    },
+    "calls_measured": {
+      "bash": 310,
+      "create_goal": 1,
+      "job_kill": 1,
+      "job_list": 1,
+      "job_output": 8,
+      "todo_write": 1,
+      "write": 6
+    },
+    "share_of_elapsed": 0.2865,
+    "tool_wait_seconds": 1030.583
+  },
+  "window": {
+    "elapsed_seconds": 3596.583,
+    "end_utc": "2026-11-17T19:43:54.747000+00:00",
+    "model_calls": 298,
+    "start_utc": "2026-11-17T18:43:58.164000+00:00",
+    "turns": 1
+  }
+}

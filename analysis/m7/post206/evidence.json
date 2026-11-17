@@ -1,0 +1,724 @@
+{
+  "schema": "m7-post206-preparation-evidence/v1",
+  "generated_utc": "2026-11-17T19:23:25.629771+00:00",
+  "baseline": {
+    "repository": "HagbardCel/eu4-mac-perf",
+    "commit": "f13602e4eede1418e92dee1042ac4b857a239926",
+    "commit_subject": "Merge pull request #206 from HagbardCel/m7/phase-ab-agent-live",
+    "pr_206_merged_at": "2026-11-17T18:46:16Z",
+    "preparation_branch": "m7/prep-post206",
+    "worktree": "<home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep"
+  },
+  "environment": {
+    "platform": "macOS arm64",
+    "python": "3.15.2",
+    "numpy": "2.5.5",
+    "dsh": "0.2.2-rc.1",
+    "node": "v26.13.1",
+    "npm": "11.20.0",
+    "ghidra": "/opt/homebrew/opt/ghidra",
+    "eu4_executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "betterdisplay_display": {
+      "name": "EU4 Test",
+      "display_id": 12,
+      "width": 1920,
+      "height": 1200,
+      "main": false
+    },
+    "primary_display": {
+      "name": "Built-in Display",
+      "width": 1728,
+      "height": 1117,
+      "hidpi": true
+    }
+  },
+  "tests": {
+    "baseline_focused": {
+      "id": "20261117T184907Z-a54c1e2b",
+      "ran": 232,
+      "skipped": 1,
+      "failures": 0,
+      "errors": 0,
+      "seconds": 49.247
+    },
+    "phase_c_focused": {
+      "id": "20261117T190914Z-318c7096",
+      "ran": 230,
+      "skipped": 1,
+      "failures": 0,
+      "errors": 0,
+      "seconds": 118.764
+    },
+    "dsh_plugin": {
+      "tests": 9,
+      "fail": 0
+    }
+  },
+  "capture": {
+    "session_id": "7ee7b098-c097-4d03-946a-b7eb05a05236",
+    "pid": 84477,
+    "status": "complete",
+    "reason": "frame_limit",
+    "frames_completed": 3,
+    "wall_seconds_approx": 247,
+    "engine_identity": {
+      "status": "gap_free",
+      "present_indices": [
+        615,
+        616,
+        617
+      ],
+      "scene_indices": [
+        615,
+        616,
+        617
+      ]
+    },
+    "frames": [
+      {
+        "sequence": 1,
+        "capture_frame_id": 1,
+        "present_index": 615,
+        "scene_index": 615,
+        "manifest_sha256": "fd7ad829a2275b88305b33a336ec4e6a0f1193f2f8aa7ecdfd5d0f0f2c26e1e7",
+        "event_stream_sha256": "c75fc472891f357fb68325c34f3dbbb90728bf8f3da602317e4bb509b993a77c",
+        "reference_sha256": "c69e1a3ab9675edec86da9a3845c051744e266e6f166fea997153b5103619b50",
+        "operations": 325,
+        "draws": 315,
+        "clears": 9,
+        "copies": 1,
+        "seal_ns": 40945000,
+        "readback_ns": 23401000,
+        "finalize_ns": 17540000,
+        "event_stream_bytes": 6392725,
+        "reference_bytes": 7720704
+      },
+      {
+        "sequence": 2,
+        "capture_frame_id": 2,
+        "present_index": 616,
+        "scene_index": 616,
+        "manifest_sha256": "8f6ff05d689ffad6911eafd1802fe11f899d3fdac9c57faffc80bb9678db63c4",
+        "event_stream_sha256": "3ab4a5a74bba694369815ff6f9be31f8b55e4bd2a3266be095e7e3841a001fc3",
+        "reference_sha256": "2396c9e1939d3e365536b52b14304df59217a9bcd39572dd9ce66e4ae2dc2d3b",
+        "operations": 325,
+        "draws": 315,
+        "clears": 9,
+        "copies": 1,
+        "seal_ns": 38958000,
+        "readback_ns": 21778000,
+        "finalize_ns": 17179000,
+        "event_stream_bytes": 6392725,
+        "reference_bytes": 7720704
+      },
+      {
+        "sequence": 3,
+        "capture_frame_id": 3,
+        "present_index": 617,
+        "scene_index": 617,
+        "manifest_sha256": "6e5cce908cba8fc755c1c8830b5fa532a5dfe867119871be412619ca32df610d",
+        "event_stream_sha256": "f97b253a6f63807c07d9c3815fb4fedb71a973e72dff407cb9bceca531e1df80",
+        "reference_sha256": "2f588b788703847c9d6036d5fea1ab5d46385234b0619787f98a028e90846acb",
+        "operations": 325,
+        "draws": 315,
+        "clears": 9,
+        "copies": 1,
+        "seal_ns": 39037000,
+        "readback_ns": 21687000,
+        "finalize_ns": 17349000,
+        "event_stream_bytes": 6392725,
+        "reference_bytes": 7720704
+      }
+    ],
+    "display_restore": {
+      "restored": true,
+      "reason": "already_original",
+      "settings_sha256": "62b4902a3a999ad3e623dd92800c3406359b44e60497491393e6b191836dd496"
+    }
+  },
+  "gl_control": {
+    "scope": "captured_transfer",
+    "checks": [
+      {
+        "sequence": 1,
+        "event": 284,
+        "destination_event": 286,
+        "status": "match",
+        "mismatched_pixels": 0,
+        "normalization": {
+          "channel_swap": "bgra_to_rgba",
+          "row_origin": "declared_lower_left"
+        },
+        "source_sha256": "abd4ad6b88c9d1043df75d9b8cf0132bf3d485efa627114dd9127a4efb1bb9d7",
+        "destination_sha256": "229efdaefda285d28414042e610323daade30c7894cc05276e69eaea45d0e1f5"
+      },
+      {
+        "sequence": 2,
+        "event": 284,
+        "destination_event": 286,
+        "status": "match",
+        "mismatched_pixels": 0,
+        "normalization": {
+          "channel_swap": "bgra_to_rgba",
+          "row_origin": "declared_lower_left"
+        },
+        "source_sha256": "7adfe4a85b3be3a1f5c3a59102e8fc2df2ab811c1a0cbe432e7998cacf1933a3",
+        "destination_sha256": "dbcf89790bcd20c3c1f1e0c70d746b3e7b3841641ed6ab80f133641107ca21b8"
+      },
+      {
+        "sequence": 3,
+        "event": 284,
+        "destination_event": 286,
+        "status": "match",
+        "mismatched_pixels": 0,
+        "normalization": {
+          "channel_swap": "bgra_to_rgba",
+          "row_origin": "declared_lower_left"
+        },
+        "source_sha256": "4184585504c54eda6754c2540104bff21d25dd45ded11b4e85b8c835c7b60804",
+        "destination_sha256": "931aaf9cd5819554fc81f88b8e98aa91aa96a417acc2cde5e9c00bcb9542b888"
+      }
+    ],
+    "status": "match"
+  },
+  "portable_case": {
+    "case_id": "m7-phase-c-authentic-3frame",
+    "case_json_sha256": "b226fbf4c48732c5574cb971b6c63ce821fd9c83f8caa67efd00700b8f5e1f34",
+    "sequence_json_sha256": "b3c549ab5fd7b5736e77ad81160346f9e973e01e53e82b063c00e5fe7e962a34",
+    "files": 3811,
+    "logical_bytes": 1348032569,
+    "reproduction": {
+      "status": "complete",
+      "independently_reproducible": true,
+      "missing": []
+    },
+    "verify": {
+      "ok": true,
+      "problems": [],
+      "engine_identity": {
+        "status": "gap_free",
+        "gap_free": true,
+        "present_indices": [
+          615,
+          616,
+          617
+        ],
+        "scene_indices": [
+          615,
+          616,
+          617
+        ]
+      },
+      "seconds": 1.79
+    },
+    "replay": {
+      "status": "complete",
+      "frames": 3,
+      "target_sequence": 3,
+      "history_status": "ok",
+      "history_sequence": 3,
+      "mismatched_pixels": 1162904,
+      "max_channel_error": 73,
+      "seconds": 19.97
+    }
+  },
+  "diagnostics": [
+    {
+      "sequence": 1,
+      "capture_frame_id": 1,
+      "present_index": 615,
+      "classification": "difference_with_partial_state_coverage",
+      "first_divergence": {
+        "kind": "intermediate",
+        "event": 284,
+        "target": "0",
+        "operation": "glCopyTexSubImage2D",
+        "producer_event": 283,
+        "producer_program": 346,
+        "mismatched_pixels": 1234947,
+        "max_channel_error": 104,
+        "pixel_location": {
+          "x": 0,
+          "y": 0,
+          "offset": 0
+        },
+        "differing_bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1728,
+          "height": 1117
+        },
+        "unresolved_interval": {
+          "start_event": 13,
+          "end_event": 284,
+          "note": "the first confirmed divergent checkpoint; earlier operations in this interval were not checkpointed"
+        },
+        "next_checkpoint": null
+      },
+      "final": {
+        "mismatched_pixels": 1160152,
+        "max_channel_error": 78
+      }
+    },
+    {
+      "sequence": 2,
+      "capture_frame_id": 2,
+      "present_index": 616,
+      "classification": "difference_with_partial_state_coverage",
+      "first_divergence": {
+        "kind": "intermediate",
+        "event": 284,
+        "target": "0",
+        "operation": "glCopyTexSubImage2D",
+        "producer_event": 283,
+        "producer_program": 346,
+        "mismatched_pixels": 1238329,
+        "max_channel_error": 104,
+        "pixel_location": {
+          "x": 0,
+          "y": 0,
+          "offset": 0
+        },
+        "differing_bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1728,
+          "height": 1117
+        },
+        "unresolved_interval": {
+          "start_event": 13,
+          "end_event": 284,
+          "note": "the first confirmed divergent checkpoint; earlier operations in this interval were not checkpointed"
+        },
+        "next_checkpoint": null
+      },
+      "final": {
+        "mismatched_pixels": 1163953,
+        "max_channel_error": 67
+      }
+    },
+    {
+      "sequence": 3,
+      "capture_frame_id": 3,
+      "present_index": 617,
+      "classification": "difference_with_partial_state_coverage",
+      "first_divergence": {
+        "kind": "intermediate",
+        "event": 284,
+        "target": "0",
+        "operation": "glCopyTexSubImage2D",
+        "producer_event": 283,
+        "producer_program": 346,
+        "mismatched_pixels": 1238080,
+        "max_channel_error": 101,
+        "pixel_location": {
+          "x": 0,
+          "y": 0,
+          "offset": 0
+        },
+        "differing_bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1728,
+          "height": 1117
+        },
+        "unresolved_interval": {
+          "start_event": 13,
+          "end_event": 284,
+          "note": "the first confirmed divergent checkpoint; earlier operations in this interval were not checkpointed"
+        },
+        "next_checkpoint": null
+      },
+      "final": {
+        "mismatched_pixels": 1162904,
+        "max_channel_error": 73
+      }
+    }
+  ],
+  "fault_injection": {
+    "campaign": {
+      "frame": 2,
+      "kind": "sampler_shift",
+      "sampler_shift": 1,
+      "sampler_shift_min": 0,
+      "event": 1
+    },
+    "frame_1_fault": null,
+    "frame_2_fault": {
+      "frame": 2,
+      "kind": "sampler_shift",
+      "sampler_shift": 1,
+      "sampler_shift_min": 0,
+      "event": 1
+    },
+    "frame_2_first_divergence": {
+      "schema": "gfx-first-divergence/v1",
+      "frame_id": 2,
+      "kind": "semantic",
+      "event": 1,
+      "target": "tex:433",
+      "operation": "draw",
+      "entry": "_GfxDrawIndexed",
+      "caller_rva": "0x10d4e50",
+      "program": 310,
+      "inputs": [
+        {
+          "resource": "tex:370",
+          "unit": 2,
+          "sampler": "tex2"
+        },
+        {
+          "resource": "tex:386",
+          "unit": 0,
+          "sampler": "tex0"
+        },
+        {
+          "resource": "tex:369",
+          "unit": 1,
+          "sampler": "tex1"
+        }
+      ],
+      "render_target": "tex:433",
+      "dependent_resources": [],
+      "state": {
+        "blend": {
+          "enabled": false,
+          "src_rgb": "0x1",
+          "dst_rgb": "0x0",
+          "src_alpha": "0x1",
+          "dst_alpha": "0x0",
+          "equation_rgb": "0x8006",
+          "equation_alpha": "0x8006"
+        },
+        "depth": {
+          "test": true,
+          "func": "0x203",
+          "write": true
+        },
+        "stencil": {
+          "test": false,
+          "func": "0x207",
+          "ref": 0,
+          "value_mask": -1,
+          "fail": "0x1e00",
+          "zfail": "0x1e00",
+          "zpass": "0x1e00",
+          "write_mask": -1
+        },
+        "cull": {
+          "enabled": true,
+          "mode": "0x405",
+          "front": "0x901"
+        },
+        "polygon": {
+          "mode": [
+            "0x1b02",
+            "0x1b02"
+          ],
+          "offset_fill": false,
+          "offset_factor": 0,
+          "offset_units": 0
+        },
+        "alpha_test": {
+          "enabled": false,
+          "func": "0x206",
+          "ref": 1
+        },
+        "scissor": {
+          "enabled": false,
+          "box": [
+            0,
+            0,
+            1728,
+            1117
+          ]
+        },
+        "viewport": [
+          0,
+          0,
+          1728,
+          1117
+        ],
+        "color_mask": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "dither": true,
+        "multisample": true
+      },
+      "semantic": {
+        "event": 1,
+        "kind": "wrong_texture_selected",
+        "sampler": "tex1",
+        "shader_unit": 0,
+        "engine_unit": 2,
+        "expected_texture": "369",
+        "selected_texture": "370",
+        "shift": 1
+      },
+      "intermediate": {
+        "event": 284,
+        "target": "0",
+        "resource": "fb:0",
+        "width": 1728,
+        "height": 1117,
+        "format": "BGRA8",
+        "producer_events": [],
+        "metal_file": ".local/m7/phase-c-authentic-v2/replay-fault-frame2/out-002/intermediate-event284-tex0.bgra",
+        "reference_file": ".local/m7/phase-c-authentic-v2/frames/frame-000002/blobs/copy-source-547.bgra",
+        "authoritative": true,
+        "requested": true,
+        "normalization": {
+          "channel_swap": null,
+          "row_origin": "declared_lower_left"
+        },
+        "statistics": {
+          "pixels": 1930176,
+          "mismatched_pixels": 1273682,
+          "mismatched_fraction": 0.6598786846380849,
+          "alpha_different_pixels": 6,
+          "max_channel_error": 104,
+          "mean_abs_error": [
+            0.652505782,
+            0.715002673,
+            0.738494832,
+            3.109e-06
+          ],
+          "mean_max_channel_error": 1.16398401,
+          "first_differing_pixel": {
+            "x": 0,
+            "y": 0,
+            "offset": 0
+          },
+          "differing_bounds": {
+            "x": 0,
+            "y": 0,
+            "width": 1728,
+            "height": 1117
+          }
+        },
+        "worst_regions": [
+          {
+            "row": 1,
+            "column": 0,
+            "x": 0,
+            "y": 139,
+            "width": 216,
+            "height": 139,
+            "mean_max_channel_error": 4.23912
+          },
+          {
+            "row": 3,
+            "column": 0,
+            "x": 0,
+            "y": 418,
+            "width": 216,
+            "height": 139,
+            "mean_max_channel_error": 3.973479
+          },
+          {
+            "row": 2,
+            "column": 0,
+            "x": 0,
+            "y": 279,
+            "width": 216,
+            "height": 139,
+            "mean_max_channel_error": 3.905642
+          },
+          {
+            "row": 0,
+            "column": 0,
+            "x": 0,
+            "y": 0,
+            "width": 216,
+            "height": 139,
+            "mean_max_channel_error": 3.180159
+          }
+        ],
+        "metal_sha256": "1c88ea6c4a8ab2ee1f83621e8bd6e5ded915c0dbc2f8b11e4c2865019da34413",
+        "reference_sha256": "7adfe4a85b3be3a1f5c3a59102e8fc2df2ab811c1a0cbe432e7998cacf1933a3",
+        "status": "divergent"
+      },
+      "final": "divergent",
+      "fault": {
+        "frame": 2,
+        "kind": "sampler_shift",
+        "sampler_shift": 1,
+        "sampler_shift_min": 0,
+        "event": 1
+      },
+      "unsupported_state": [
+        "gl_dither",
+        "multisample"
+      ],
+      "confidence": "confirmed",
+      "root_cause": "not_established",
+      "authoritative_because": "the replay's own binding provenance disagrees with the captured shader/texture contract at this event",
+      "reason": "the earliest confirmed difference is a binding/state mismatch; its pixel effect may be overdrawn later",
+      "present_index": 616,
+      "scene_index": 616
+    },
+    "frame_2_classification": "invalid_provenance",
+    "engine_identity": {
+      "status": "gap_free",
+      "gap_free": true,
+      "present_indices": [
+        615,
+        616,
+        617
+      ],
+      "scene_indices": [
+        615,
+        616,
+        617
+      ],
+      "frames": [
+        {
+          "sequence": 1,
+          "present_index": 615,
+          "scene_index": 615
+        },
+        {
+          "sequence": 2,
+          "present_index": 616,
+          "scene_index": 616
+        },
+        {
+          "sequence": 3,
+          "present_index": 617,
+          "scene_index": 617
+        }
+      ],
+      "note": "consecutive engine present indices prove no captured frame was skipped; a missing identity is reported as unavailable, never inferred"
+    }
+  },
+  "pilot": {
+    "schema": "m7-e0-pilot-analysis/v1",
+    "frame": {
+      "sequence": 1,
+      "present_index": 615,
+      "capture_frame_id": 1
+    },
+    "source": "blobs/copy-source-546.bgra",
+    "source_sha256": "abd4ad6b88c9d1043df75d9b8cf0132bf3d485efa627114dd9127a4efb1bb9d7",
+    "metal_sha256": "c1c35604e3058fea9bb5ad61dab8bbe9c0a6ae18514cb027091791c0932526a5",
+    "difference": {
+      "pixels": 1930176,
+      "mismatched_pixels": 1234947,
+      "mismatched_fraction": 0.639810566,
+      "max_channel_error": 104,
+      "mean_abs_error": [
+        0.443596,
+        0.599732,
+        0.716002
+      ],
+      "one_lsb_share": 0.752938,
+      "histogram_0_to_7": [
+        695229,
+        929839,
+        158033,
+        66751,
+        35785,
+        17888,
+        10528,
+        5904
+      ]
+    },
+    "edge_statistics": {
+      "edge_fraction": 0.050673,
+      "mismatch_on_edge": 0.564162,
+      "mismatch_on_flat": 0.643848,
+      "mean_error_on_edge": 0.783594,
+      "mean_error_on_flat": 0.998376
+    },
+    "cross_frame_sign_agreement": [
+      {
+        "frames": [
+          1,
+          2
+        ],
+        "agreement": 0.717806,
+        "overlap": 1024250
+      },
+      {
+        "frames": [
+          2,
+          3
+        ],
+        "agreement": 0.753748,
+        "overlap": 1061374
+      },
+      {
+        "frames": [
+          1,
+          3
+        ],
+        "agreement": 0.685824,
+        "overlap": 996272
+      }
+    ],
+    "hypotheses": [
+      {
+        "id": "copy_execution",
+        "status": "rejected",
+        "evidence": "GL copy source and GL copy destination are byte-identical after the declared BGRA->RGBA channel swap: 0/1,930,176 differing pixels in all three frames.",
+        "artifacts": [
+          "gl-control-frame1.json",
+          "gl-control-frame2.json",
+          "gl-control-frame3.json"
+        ]
+      },
+      {
+        "id": "constant_channel_bias",
+        "status": "rejected",
+        "evidence": "Adding +1 to any channel or all channels increases mismatches from 1,234,947 to 1,747,123-1,928,591."
+      },
+      {
+        "id": "simple_bayer_dither",
+        "status": "not_supported",
+        "evidence": "Adding 4x4 or 8x8 Bayer +/-1 patterns increases mismatches (1,244,082-1,598,720); the per-cell error means are nearly uniform."
+      },
+      {
+        "id": "fast_math_translation",
+        "status": "rejected_as_dominant",
+        "evidence": "Recompiling every MSL stage with fastMathEnabled=NO changed the final output but only changed 253 of 1160152 mismatched pixels (1159899 remaining)."
+      },
+      {
+        "id": "multisample_edges",
+        "status": "not_supported",
+        "evidence": "Only 5.07% of pixels are local edges; mismatch is lower on edges (56.4%) than on flat regions (64.4%)."
+      },
+      {
+        "id": "content_dependent_shader_or_filter_precision",
+        "status": "leading_hypothesis",
+        "evidence": "929839/1234947 differing pixels are exactly 1 LSB; error signs agree across different frames at the same coordinates only 71.8-75.4% of the time; the residual is not a static screen-space dither pattern and is not a constant bias."
+      }
+    ],
+    "ghidra": {
+      "query": "eu4_re_query function 0x15ece13",
+      "function": "_GfxResolve",
+      "pseudocode_summary": "_glBindTexture(GL_TEXTURE_2D, dst); _glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, width, height); _glBindTexture(GL_TEXTURE_2D, 0);",
+      "conclusion": "the engine transfer is a plain copy of the default framebuffer; the GL/GL control confirms it is reproduced exactly"
+    },
+    "root_cause": "not_established",
+    "unresolved_interval": {
+      "start_event": 13,
+      "end_event": 284
+    },
+    "next_checkpoint": {
+      "event": 148,
+      "target": "0",
+      "requires_capture": true,
+      "reason": "capture a default-framebuffer checkpoint near the midpoint to bisect the first 13-284 interval"
+    },
+    "conclusion": "The copy path is exact; the difference is already present in the default framebuffer before the copy. The residual is content-dependent and dominated by 1 LSB, so the next step is an event-148 default-framebuffer checkpoint, not a copy or fast-math change."
+  },
+  "limitations": [
+    "full-frame GL/GL replay is not implemented; the GL/GL control covers the captured copy/readback transfer path only",
+    "gl_dither and multisample remain unsupported; renderer equivalence is not claimed",
+    "the causal origin inside the 13-284 event interval is not established",
+    "one successful authentic EU4 launch and one failed draw-cap launch were used; the pilot did not launch EU4 again"
+  ]
+}
