@@ -50,8 +50,10 @@ architecture:
    unsupported `gfx-strategy-b-case/*`, recognized legacy, missing and
    Strategy B cases. Only recognized legacy cases reach the old comparator.
    Verifier exceptions, digest corruption and missing payloads are `invalid`;
-   an explicit budget-limited reproduction is `incomplete`; none can be
-   qualified.
+   an explicit budget-limited reproduction is `incomplete`, for both v1
+   single-frame and v2 sequence summaries. An incomplete summary that also has
+   an integrity failure (digest/size drift or a missing diagnostic artifact)
+   is `invalid`, not excused by its budget status. None can be qualified.
 5. **Live provenance.** A live coordinator shader mapping wins over a stale
    frame-local translation and is recorded as `shader_source` per frame,
    including the single-frame delegation. Missing/unusable mappings refuse
@@ -219,8 +221,8 @@ Focused native/offline suite (the checked interpreter,
   --module tests.test_dsh_profile
 ```
 
-Result: **348 tests passed in 94.93 s** (run
-`20261117T061939Z-0d36afdb`, after rebasing onto merged `main` `2bab6cc0`).
+Result: **350 tests passed in 94.79 s** (run
+`20261117T062816Z-fa6ee105`, after rebasing onto merged `main` `2bab6cc0`).
 This includes the new failure-precedence, policy, argument-ownership,
 provenance and negative-case regressions plus real Metal replay.
 

@@ -1416,6 +1416,33 @@ class HeterogeneousShaderSequenceTests(unittest.TestCase):
         verified = gfx_replay_case.verify(case)
         self.assertTrue(verified["ok"], verified["problems"])
 
+    def test_single_frame_budget_incomplete_is_verified_incomplete(self):
+        target = self.frames[0]
+        diagnosis = json.loads(
+            (self.out / "out-001" / "diagnostic-report.json").read_text())
+        complete = self.fixture.base / "single-complete"
+        gfx_replay_case.package_diagnosis(
+            target, self.out / "out-001", complete, diagnosis,
+            shaders=self.fixture.frame_shaders[1],
+            case_id="single-complete", max_bytes=0)
+        size = sum(path.stat().st_size for path in complete.rglob("*")
+                   if path.is_file())
+        incomplete = self.fixture.base / "single-incomplete"
+        manifest = gfx_replay_case.package_diagnosis(
+            target, self.out / "out-001", incomplete, diagnosis,
+            shaders=self.fixture.frame_shaders[1],
+            case_id="single-incomplete", max_bytes=size - 1)
+        self.assertEqual(manifest["schema"], gfx_replay_case.SCHEMA)
+        self.assertEqual(manifest["reproduction"]["status"], "incomplete")
+        verified = gfx_replay_case.verify(incomplete)
+        self.assertFalse(verified["ok"])
+        self.assertEqual(verified["reproduction_status"], "incomplete")
+        self.assertEqual(verified["problems"],
+                         ["reproduction is explicitly incomplete"])
+        with self.assertRaises(gfx_replay_case.CaseError):
+            gfx_replay_case.replay_case(
+                incomplete, self.fixture.base / "single-incomplete-out")
+
     def test_unusable_live_mapping_refuses_complete_packaging(self):
         mapping = {str(frame): self.fixture.frame_shaders[index]
                    for index, frame in enumerate(self.frames, start=1)}

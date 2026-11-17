@@ -2200,25 +2200,25 @@ def verify(case_dir: Path | str) -> dict:
     is_sequence = manifest.get("schema") == SEQUENCE_SCHEMA
     reproduction = manifest.get("reproduction") or {}
     incomplete = reproduction.get("status") == "incomplete"
-    if is_sequence:
-        if incomplete:
-            # A bounded diagnostic-only summary has no sequence or replay
-            # command; verify its declared evidence without pretending the
-            # absent reproduction payloads are corrupt.
-            required = ["reproduction-incomplete.json",
-                        "diagnostic-report.json", "dependency-graph.json",
-                        "graph.json"]
-            sequence_summary = {
-                "status": "incomplete",
-                "reason": reproduction.get("reason"),
-            }
-        else:
-            required = ["sequence.json", "shaders/shaders.json",
-                        "diagnostic-report.json", "dependency-graph.json",
-                        "graph.json"]
-            sequence_problems, sequence_summary = _verify_sequence(
-                case_dir, manifest)
-            problems.extend(sequence_problems)
+    if incomplete:
+        # A bounded diagnostic-only summary has no sequence or replay command;
+        # verify its declared evidence without pretending the absent
+        # reproduction payloads are corrupt.  This applies to v1 single-frame
+        # and v2 sequence summaries alike.
+        required = ["reproduction-incomplete.json",
+                    "diagnostic-report.json", "dependency-graph.json",
+                    "graph.json"]
+        sequence_summary = {
+            "status": "incomplete",
+            "reason": reproduction.get("reason"),
+        } if is_sequence else {}
+    elif is_sequence:
+        required = ["sequence.json", "shaders/shaders.json",
+                    "diagnostic-report.json", "dependency-graph.json",
+                    "graph.json"]
+        sequence_problems, sequence_summary = _verify_sequence(
+            case_dir, manifest)
+        problems.extend(sequence_problems)
     else:
         required = ["capture/frame-trace.json", "capture/frame-events.jsonl",
                     "shaders/shaders.json", "graph.json"]

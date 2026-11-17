@@ -1634,6 +1634,35 @@ class StrategyBCaseToolTests(ToolTests):
         self.assertEqual(value["outcome"]["evidence"], "invalid")
         self.assertFalse(value["outcome"]["qualified"])
 
+    def test_v1_incomplete_is_incomplete_and_integrity_failure_is_invalid(self):
+        case = self.make_v2_case()
+        (case / "case.json").write_text(json.dumps({
+            "schema": gfx_replay_case.SCHEMA,
+            "case_id": "v1-incomplete",
+            "reproduction": {"status": "incomplete",
+                             "independently_reproducible": False},
+        }))
+        verification = self.verification(
+            ok=False, reproducible=False, reproduction_status="incomplete",
+            problems=["reproduction is explicitly incomplete"])
+        with mock.patch.object(agent_tools.gfx_replay_case, "verify",
+                               return_value=verification):
+            code, value = self.call(["eu4_case_inspect", "--case", str(case)])
+        self.assertEqual(code, 2, value)
+        self.assertEqual(value["status"], "incomplete")
+        self.assertEqual(value["outcome"]["evidence"], "unverified")
+
+        verification["problems"] = [
+            "reproduction is explicitly incomplete",
+            "digest drift diagnostic-report.json",
+        ]
+        with mock.patch.object(agent_tools.gfx_replay_case, "verify",
+                               return_value=verification):
+            code, value = self.call(["eu4_case_inspect", "--case", str(case)])
+        self.assertEqual(code, 2, value)
+        self.assertEqual(value["status"], "invalid")
+        self.assertEqual(value["outcome"]["evidence"], "invalid")
+
     def test_budget_incomplete_is_incomplete_and_never_qualified(self):
         case = self.make_v2_case()
         verification = self.verification(

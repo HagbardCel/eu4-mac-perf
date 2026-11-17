@@ -1693,8 +1693,13 @@ def _case_verification_outcome(verification: dict,
         return "invalid", "invalid", "invalid"
     if verification.get("ok"):
         return "ok", "complete", "valid"
-    if (schema == gfx_replay_case.SEQUENCE_SCHEMA
-            and verification.get("reproduction_status") == "incomplete"):
+    problems = [str(item) for item in verification.get("problems") or []]
+    expected_incomplete = [item for item in problems
+                           if item == "reproduction is explicitly incomplete"]
+    additional = [item for item in problems
+                  if item not in expected_incomplete]
+    if (verification.get("reproduction_status") == "incomplete"
+            and expected_incomplete and not additional):
         return "incomplete", "incomplete", "unverified"
     return "invalid", "invalid", "invalid"
 
