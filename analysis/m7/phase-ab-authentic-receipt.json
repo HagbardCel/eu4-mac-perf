@@ -1,6 +1,8 @@
 {
   "schema": "m7-phase-b-authentic-receipt/v1",
-  "generated_utc": "2026-11-16T23:11:00Z",
+  "generated_utc": "2026-11-17T17:05:09Z",
+  "code_sha": "293997ca",
+  "base_sha": "2bab6cc0",
   "source_capture": ".local/m7/followup-a-live-3",
   "source_capture_mode": "existing authentic sealed capture; cloned, packaged, then the clone was deleted",
   "new_eu4_launches": 0,
@@ -42,17 +44,23 @@
     ],
     "mean_max_channel_error": 0.868476761
   },
+  "statistics_unchanged": true,
   "budget_512_mib": {
     "status": "incomplete",
     "independently_reproducible": false,
     "reason": "artifact_budget",
     "required_bytes": 1310375043,
-    "max_bytes": 536870912
+    "max_bytes": 536870912,
+    "replay_command": [],
+    "verified_ok": false,
+    "verify_problems": [
+      "reproduction is explicitly incomplete"
+    ]
   },
   "case": {
-    "relocated_path": ".local/m7/phase-b-authentic-relocated",
-    "manifest_sha256": "d7f648339e93593032e17d407fada4a047c824b1494b9fb3c7c9182cc3593929",
-    "bytes": 1317958286,
+    "relocated_path": ".local/m7/phase-ab-pr206-recheck/relocated",
+    "manifest_sha256": "8f2138f0877dc250843282fd0e56491027872f94b395514ea2efd7c6c3f1a81c",
+    "bytes": 1317959102,
     "files": 3810,
     "reproduction": {
       "status": "complete",
@@ -60,10 +68,35 @@
       "missing": []
     },
     "verify_ok": true,
+    "verify_problems": [],
     "relocated_verify_ok": true,
     "source_deleted": true,
-    "package_seconds": 2.73,
-    "verify_seconds": 1.626
+    "package_seconds": 3.05,
+    "verify_seconds": 1.61,
+    "checkpoint_receipts": [
+      {
+        "index": 1,
+        "checkpoint_preserved": true,
+        "checkpoint_preservation": "preserved",
+        "receipt_origin": "preserved_live_receipt",
+        "checkpoint_count": 6
+      },
+      {
+        "index": 2,
+        "checkpoint_preserved": true,
+        "checkpoint_preservation": "preserved",
+        "receipt_origin": "preserved_live_receipt",
+        "checkpoint_count": 6
+      },
+      {
+        "index": 3,
+        "checkpoint_preserved": true,
+        "checkpoint_preservation": "preserved",
+        "receipt_origin": "preserved_live_receipt",
+        "checkpoint_count": 6
+      }
+    ],
+    "preserved_live_receipts": 3
   },
   "sequence": {
     "frames": 3,
@@ -77,6 +110,7 @@
       "443",
       "447"
     ],
+    "minimal_prefix": false,
     "per_frame_shaders": [
       "frames/000001/shaders",
       "frames/000002/shaders",
@@ -143,7 +177,7 @@
     ]
   },
   "replay": {
-    "seconds": 14.767,
+    "seconds": 14.33,
     "campaign": {
       "schema": "m7-continuous-campaign/v1",
       "status": "complete",
@@ -158,19 +192,100 @@
     "provenance": {
       "status": "verified",
       "evaluation": "complete",
+      "consumer_problems": [],
+      "consumer_problems_count": 0,
+      "transfer_problems": [],
+      "transfer_problems_count": 0,
+      "seeded_intermediates": [],
       "bindings": 2739,
       "metal_render_target_bindings": 274,
-      "external_capture_bindings": 2465,
-      "seeded_intermediates": []
+      "external_capture_bindings": 2465
+    },
+    "binding_sources": {
+      "external_capture": 2465,
+      "metal_render_target": 274
     },
     "first_divergence": {
+      "schema": "gfx-first-divergence/v1",
+      "frame_id": 3,
       "kind": "intermediate",
       "event": 286,
       "target": "442",
       "resource": "tex:442",
       "operation": "glCopyTexSubImage2D",
-      "confidence": "confirmed",
-      "root_cause": "not_established",
+      "entry": null,
+      "caller_rva": null,
+      "program": null,
+      "producer_program": null,
+      "producer_entry": null,
+      "producer_caller_rva": null,
+      "producer_event": 284,
+      "producer": {
+        "event": 284,
+        "kind": "resolve",
+        "operation": "glCopyTexSubImage2D",
+        "rect": [
+          0,
+          0,
+          1728,
+          1117
+        ],
+        "destination_offset": [
+          0,
+          0
+        ],
+        "source": "0",
+        "source_framebuffer": 0,
+        "read_buffer": 1029,
+        "source_level": 0,
+        "destination_level": 0,
+        "source_image": null
+      },
+      "prior_producers": [
+        {
+          "event": 284,
+          "kind": "resolve",
+          "operation": "glCopyTexSubImage2D",
+          "program": null
+        }
+      ],
+      "inputs": [
+        {
+          "resource": "fb:0",
+          "unit": null,
+          "sampler": "resolve"
+        }
+      ],
+      "render_target": "tex:442",
+      "dependent_resources": [
+        {
+          "event": 290,
+          "unit": 0,
+          "sampler": "tex0",
+          "operation": null,
+          "destination": null
+        }
+      ],
+      "state": {},
+      "gl_sha256": "f22a069701d707f9dab884d429de09486552f10fcd0f192a2ad9971efe0aa6b6",
+      "metal_sha256": "ec940a78957d3491b699c6b60ace042b99ea036959ed3ccd149f749a229f9e36",
+      "statistics": {
+        "pixels": 1930176,
+        "mismatched_pixels": 1239759,
+        "mismatched_fraction": 0.6423036034019696,
+        "alpha_different_pixels": 5,
+        "max_channel_error": 100,
+        "mean_abs_error": [
+          0.719586193,
+          0.605646324,
+          0.444694681,
+          4.663e-06
+        ],
+        "mean_max_channel_error": 0.989383352
+      },
+      "upstream_checkpoints": [],
+      "semantic": null,
+      "final": "divergent",
       "unresolved_interval": {
         "start_event": 13,
         "end_event": 286,
@@ -182,58 +297,161 @@
         "resource": "fb:0",
         "reason": "checkpoint the copy source immediately before the transfer to separate source contents from copy execution"
       },
+      "diagnostic_checkpoints": [
+        {
+          "event": 270,
+          "target": "433",
+          "statistics": {
+            "pixels": 1930176,
+            "mismatched_pixels": 797558,
+            "mismatched_fraction": 0.4132048061938393,
+            "alpha_different_pixels": 224250,
+            "max_channel_error": 255,
+            "mean_abs_error": [
+              0.06743012,
+              0.153224887,
+              0.154357945,
+              29.626184348
+            ],
+            "mean_max_channel_error": 29.925540469
+          },
+          "reason": "non-authoritative checkpoint format; useful as a diagnostic observation, not a confirmed divergence"
+        }
+      ],
+      "earliest_observed_difference": {
+        "event": 270,
+        "target": "433",
+        "resource": "tex:433",
+        "width": 1728,
+        "height": 1117,
+        "format": "RGB8",
+        "producer_events": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/wt_infra/.local/m7/phase-ab-pr206-recheck/replay/out-003/intermediate-event270-tex433.bgra",
+        "reference_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/wt_infra/.local/m7/phase-ab-pr206-recheck/relocated/frames/000003/blobs/tex-9f07dcf09900eef91c842587f22c53c0aefb93f0f40d865ab64b43268ccce77a.bin",
+        "authoritative": false,
+        "requested": true,
+        "normalization": {
+          "channel_swap": "bgra_to_rgba",
+          "row_origin": "declared_lower_left"
+        },
+        "statistics": {
+          "pixels": 1930176,
+          "mismatched_pixels": 797558,
+          "mismatched_fraction": 0.4132048061938393,
+          "alpha_different_pixels": 224250,
+          "max_channel_error": 255,
+          "mean_abs_error": [
+            0.06743012,
+            0.153224887,
+            0.154357945,
+            29.626184348
+          ],
+          "mean_max_channel_error": 29.925540469
+        },
+        "worst_regions": [
+          {
+            "row": 1,
+            "column": 7,
+            "x": 1512,
+            "y": 139,
+            "width": 216,
+            "height": 139,
+            "mean_max_channel_error": 196.410648
+          },
+          {
+            "row": 0,
+            "column": 2,
+            "x": 432,
+            "y": 0,
+            "width": 216,
+            "height": 139,
+            "mean_max_channel_error": 178.726224
+          },
+          {
+            "row": 1,
+            "column": 6,
+            "x": 1296,
+            "y": 139,
+            "width": 216,
+            "height": 139,
+            "mean_max_channel_error": 167.539286
+          },
+          {
+            "row": 3,
+            "column": 4,
+            "x": 864,
+            "y": 418,
+            "width": 216,
+            "height": 139,
+            "mean_max_channel_error": 136.854332
+          }
+        ],
+        "metal_sha256": "f6130673c2271d4b59bb49c7048630cb7e49d0a446d04ff28828e61b396844db",
+        "reference_sha256": "9f07dcf09900eef91c842587f22c53c0aefb93f0f40d865ab64b43268ccce77a",
+        "status": "divergent_diagnostic"
+      },
+      "limitations": [
+        "the earliest observed differing event is not a proven root cause; earlier operations in the unresolved interval were not checkpointed",
+        "captured state not implemented by Metal: gl_dither, multisample; no A/B experiment attributes the difference to it"
+      ],
       "unsupported_state": [
         "gl_dither",
         "multisample"
-      ]
+      ],
+      "confidence": "confirmed",
+      "root_cause": "not_established",
+      "authoritative_because": "this is a reconciled request/response checkpoint whose captured reference digest and Metal output were verified; it is the earliest such checkpoint before the final framebuffer",
+      "reason": "the earliest authoritative intermediate checkpoint differs; its inputs are not necessarily the cause",
+      "fault": null
     },
-    "reproduction": {
-      "earliest_affected_frame": 1,
-      "earliest_affected_event": 286,
-      "earliest_affected_operation": "glCopyTexSubImage2D",
-      "first_divergent_frame": {
-        "frame": 1,
-        "classification": "difference_with_partial_state_coverage",
-        "event": 286,
-        "operation": "glCopyTexSubImage2D"
+    "qualification": {
+      "schema": "m7-qualification-contract/v1",
+      "axes": {
+        "capture_validity": "valid",
+        "frame_shader_identity": "verified",
+        "gpu_execution": "ok",
+        "resource_provenance": "verified",
+        "operation_coverage": "complete",
+        "rendering_state_coverage": "partial",
+        "pixel_comparison": "divergent",
+        "first_divergence_confidence": "intermediate"
       },
-      "target_sequence": 3
+      "classification": "difference_with_partial_state_coverage",
+      "qualified": false,
+      "diagnostic_qualified": false,
+      "renderer_equivalence": false,
+      "claim": "a difference is confirmed, but captured state is not fully implemented; this does not prove unsupported state caused it"
     },
-    "policy": {
-      "name": "m6-menu-frame",
-      "source": "default",
-      "sha256": "33a7ce61eb1fb95f93b1e4747efc0ce53a749a1448841e655c7264d43f173e64",
-      "bytes": 860,
-      "schema": "gfx-frame-comparison-policy/v1"
-    },
-    "unsupported_states": [
-      "gl_dither",
-      "multisample"
-    ]
-  },
-  "result": "The relocated case verified and replayed through the existing persistent Metal session with the same classification and identical final pixel statistics as the live target diagnosis.",
-  "revalidated_after_rebase": {
-    "base_sha": "2bab6cc0",
-    "code_sha": "33808d7e",
-    "classification_unchanged": true,
-    "statistics_unchanged": true,
-    "first_divergence": {
-      "event": 286,
-      "target": "442",
-      "operation": "glCopyTexSubImage2D",
-      "confidence": "confirmed"
+    "capture": {
+      "validity": "valid",
+      "seal": {
+        "status": "verified",
+        "error": null,
+        "path": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/wt_infra/.local/m7/phase-ab-pr206-recheck/relocated/frames/000003/frame-seal.json"
+      },
+      "graph_status": "complete",
+      "graph_reasons": [],
+      "counts": {
+        "events": 325,
+        "draws": 315,
+        "clears": 9,
+        "resolves": 1,
+        "resources": 68,
+        "external_inputs": 60,
+        "renderer_generated": 8,
+        "renderer_generated_sampled": 6,
+        "unproven": 0
+      }
     }
   },
-  "final_code_sha": "6d0ac1a8",
-  "base_sha": "2bab6cc0",
-  "declared_unsupported_states": [
-    "gl_dither",
-    "multisample",
-    "stencil_test",
-    "polygon_mode",
-    "polygon_offset",
-    "alpha_test"
-  ],
   "agent_classification": {
     "case_inspect_complete": {
       "status": "ok",
@@ -250,5 +468,26 @@
       "qualified": false,
       "independently_reproducible": false
     }
-  }
+  },
+  "declared_unsupported_states": [
+    "gl_dither",
+    "multisample",
+    "stencil_test",
+    "polygon_mode",
+    "polygon_offset",
+    "alpha_test"
+  ],
+  "observed_unsupported_states": [
+    "gl_dither",
+    "multisample"
+  ],
+  "follow_up_phase_c": [
+    "prove gap-free monitoring using actual engine-frame indices",
+    "inject a controlled divergence at frame K and establish correct first-visible-frame detection",
+    "investigate the authentic event-286 difference using the event-284 copy-source checkpoint",
+    "measure agent turns, replay runs and EU4 launches required for a useful causal investigation"
+  ],
+  "result": "The relocated case verified and replayed through the existing persistent Metal session with the same classification, identical final pixel statistics, the same resource-history verdict and the same first authoritative intermediate divergence as the live target diagnosis. All three checkpoint receipts were preserved from the live capture.",
+  "previous_case_digest": "d7f648339e93593032e17d407fada4a047c824b1494b9fb3c7c9182cc3593929",
+  "case_digest_note": "The digest changed because regenerated/preserved receipts now bind the canonical shader-report and shader-artifact identity; capture frames, shaders and replay artifacts are unchanged."
 }

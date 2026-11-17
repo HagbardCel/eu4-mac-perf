@@ -265,6 +265,26 @@ path, content SHA-256 and whether it was explicit or the default. A campaign
 with a terminal GPU/resource-history/capture failure is `failed`/`invalid`
 even when an earlier frame reported a rendering difference.
 
+`eu4_replay sequence` requires each replay result to carry exactly the next
+expected sequence number; duplicate, skipped, reversed or out-of-range results
+stop the campaign with a structured `stop_reason: "sequence_order"` before
+diagnosis. `qualified: true` requires every input frame to have been executed
+and diagnosed. The result separates:
+
+- `first_pixel_divergent_frame` — verified divergent final pixels;
+- `first_checkpoint_divergent_frame` — a confirmed authoritative intermediate
+  checkpoint difference;
+- `first_unqualified_frame` — the first frame not classified `qualified_match`;
+- `terminal_failure` — the first execution/history/invalid-capture failure;
+- `first_difference` — the legacy earliest classified non-equivalence, which
+  may be an `unsupported_state`/semantic mismatch and is not necessarily a
+  pixel difference.
+
+`diagnostic_complete` is evidence-based: every processed frame must have
+executed the diagnosis and produced its required evidence. A populated
+`diagnostic_report` path is only a locator; a Metal execution failure row
+reports `diagnostic_report: null` and `diagnostic_completed: false`.
+
 ### `eu4_case_inspect`
 
 ```sh

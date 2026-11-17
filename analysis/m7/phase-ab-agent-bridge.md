@@ -8,7 +8,7 @@ Base: `origin/main` at `2bab6cc0`, the merge of PR #205
 (`m7/followup-portable-replay`, head `30f07f9a`). The branch was rebased onto
 that merged baseline and PR #206 was retargeted from the #205 branch to `main`.
 
-Final code commit for this remediation: `6d0ac1a8`. Documentation and receipt
+Final code commit for this remediation: `293997ca`. Documentation and receipt
 updates are a separate commit so the code identity reviewed by CI remains
 stable.
 
@@ -75,6 +75,69 @@ architecture:
    the published `case.json`, not only the coordinator summary. A complete
    single-frame v1 package is normalized as complete, not mislabelled as
    incomplete merely because v1 has no `reproduction` member.
+
+## Second review remediation — exact order, evidence and receipt identity
+
+Code commit `293997ca` closes the remaining Phase A/B correctness findings.
+Documentation and receipt updates are a separate commit so the code identity
+reviewed by CI stays stable.
+
+1. **Exact replay-result ordering (P1).** `m7_continuous.run_campaign`
+   requires every replay result to carry exactly the next expected sequence
+   number. Duplicate, skipped, reversed and out-of-range rows are rejected
+   *before* `diagnose_frame`; the campaign records a structured
+   `stop_reason=sequence_order` with `{kind, expected, received, executed,
+   input_frames, detail}` and stops. A completed sequence can publish
+   `qualified=true` only when every input frame was processed, every row is
+   `qualified_match`, and every row has evidence-based
+   `diagnostic_completed=true`.
+2. **Pixel divergence is separate from qualification (P1).**
+   `_campaign_outcome` now exposes:
+   - `first_pixel_divergent_frame`: first row whose diagnosis pixel axis is
+     `divergent` and whose final mismatched-pixel statistic is positive;
+   - `first_checkpoint_divergent_frame`: first row with
+     `checkpoint_validation.status=ok` and an authoritative divergent
+     checkpoint;
+   - `first_unqualified_frame`: first row not classified `qualified_match`;
+   - `terminal_failure`: unchanged first-terminal-failure precedence.
+
+   `first_difference` remains the earliest classified non-equivalence for v1
+   consumers, but now carries `pixel_divergent`, `checkpoint_divergent` and an
+   explicit `meaning`; an `unsupported_state`-only frame is never labelled a
+   pixel difference.
+3. **Single-frame reproducibility metadata (P2).** `gfx_replay_case.verify`
+   reports v1 `independently_reproducible=true` only for a verified, complete
+   case. An intentionally budget-limited v1 summary reports `false` with
+   `reproduction_status=incomplete`, while additional digest/size drift is
+   reported as invalid corruption. A v2 sequence likewise cannot claim
+   reproducibility after any verification problem.
+4. **Evidence-based diagnostic completeness (P2).** `eu4_replay sequence`
+   derives `result.diagnostic_complete` from per-frame
+   `diagnostic_completed` evidence (diagnosis schema, classification,
+   qualification axes, pixel verdict/statistics, checkpoint validation and
+   first divergence). A Metal failure row sets `diagnostic_report=null`,
+   records `diagnostic_evidence.missing=["diagnosis"]`, and cannot inherit
+   completion from a path string. Earlier completed frames retain their
+   evidence when a later frame fails.
+5. **Preserved live-receipt validation (P2).** `_checkpoint_setup` and
+   `_verify_sequence` now compare every authoritative receipt field available:
+   capture-frame id, pid, session id, trace-manifest and event-stream digests
+   and byte count, checkpoint request file/hash/count, and the canonical
+   shader-report and shader-artifact digests (`m6_frame.artifact_digest`).
+   Non-preserved receipts record `preservation`,
+   `preservation_detail` and `receipt_origin=derived_receipt`; preserved live
+   receipts record `receipt_origin=preserved_live_receipt`. No second receipt
+   format or provenance abstraction was added.
+
+### New regressions
+
+| Finding | Regression |
+| --- | --- |
+| Exact result ordering | `SupervisorTests.test_duplicate_result_sequence_is_rejected_before_diagnosis`; `test_skipped_result_sequence_is_rejected_before_diagnosis`; `test_missing_first_result_sequence_is_rejected_before_diagnosis`; `test_out_of_range_result_is_rejected_before_diagnosis`; `test_valid_result_sequence_is_qualified` |
+| Pixel vs unsupported-state evidence | `StrategyBCaseToolTests.test_pixel_divergence_is_separate_from_unsupported_state` |
+| Evidence-based diagnostic completion | `SupervisorTests.test_gpu_failure_row_never_claims_a_completed_diagnostic`; `StrategyBCaseToolTests.test_sequence_diagnostic_completeness_requires_evidence`; `test_successful_sequence_reports_evidence_based_completion` |
+| v1 reproduction metadata | `HeterogeneousShaderSequenceTests.test_single_frame_budget_incomplete_is_verified_incomplete` (actual `package_diagnosis` v1 fixtures: complete, budget-incomplete and corrupted) |
+| Receipt identity | `test_checkpoint_receipt_identity_corruption_is_rejected` (frame/session/digest/request/shader fields); `test_checkpoint_source_identity_mismatch_is_not_preserved` |
 
 ## Phase A — integration defects
 
@@ -226,6 +289,15 @@ Result: **350 tests passed in 94.79 s** (run
 This includes the new failure-precedence, policy, argument-ownership,
 provenance and negative-case regressions plus real Metal replay.
 
+Second-review focused run after code `293997ca` (same checked interpreter):
+**313 tests passed in 97.40 s** (run
+`20261117T170123Z-95891de9`) across `tests.test_agent_tools`,
+`tests.test_dsh_native_bridge`, `tests.test_gfx_replay_case`,
+`tests.test_gfx_replay_case_sequence`, `tests.test_m6_frame`,
+`tests.test_m7_continuous_replay`, `tests.test_m7_continuous_supervisor`,
+`tests.test_m7_diagnosis`, `tests.test_m7_metal_replay` and
+`tests.test_m7_shadow_receipt`.
+
 JS plugin suite:
 
 ```sh
@@ -335,6 +407,45 @@ full-suite run; the focused native/offline suite above is the applicable gate
 for this phase. A full run belongs at the later qualification gate, after the
 live-test authorization policy is handled deliberately.
 
+### Second-review authentic revalidation (code `293997ca`)
+
+The same existing sealed capture was cloned again, packaged, relocated, and
+replayed without launching EU4. The receipt now binds the canonical shader
+identity for every receipt and records preserved-live-receipt origin.
+
+- 512 MiB budget: `reproduction.status=incomplete`,
+  `reason=artifact_budget`, required 1,310,375,043 bytes, max 536,870,912,
+  `replay_command=[]`; `verify` returned `ok=false`,
+  `independently_reproducible=false` with only
+  `reproduction is explicitly incomplete`.
+- 2 GiB budget: complete case, 3,810 files, 1,317,959,102 bytes, `case.json`
+  SHA-256 `8f2138f0877dc250843282fd0e56491027872f94b395514ea2efd7c6c3f1a81c`,
+  `reproduction.status=complete`, `independently_reproducible=true`.
+- All three checkpoint pairs were preserved from the live capture
+  (`checkpoint_preserved=true`, `receipt_origin=preserved_live_receipt`,
+  `checkpoint_preservation=preserved`); the receipt fields include frame/pid/
+  session identity, trace and event-stream digests, request hash/count and
+  shader-report/artifact identity.
+- The case digest changed relative to the earlier `d7f64833…` package because
+  the preserved/derived receipts now carry shader identity; captured frames,
+  shaders, checkpoint requests and replay artifacts are unchanged.
+- Relocated `verify`: `ok=true`, 1.61 s. Relocated replay through one
+  persistent Metal session: campaign `complete`, 14.3 s wall,
+  `history.status=ok`, zero missing/stale history, 274 Metal render-target
+  bindings, 2,465 external-capture bindings, zero seeded intermediates.
+- Live target and replay remain `difference_with_partial_state_coverage` with
+  identical final statistics: 1,163,584 / 1,930,176 mismatched pixels, max
+  channel error 72, mean absolute error
+  `[0.400848, 0.520239, 0.656648, 0.0]`. No tolerance or policy was changed.
+- The first authoritative divergence remains event 286 / texture 442
+  (`glCopyTexSubImage2D`, producer event 284), with the same unresolved
+  interval and next-checkpoint recommendation.
+- `gl_dither` and `multisample` remain declared unsupported and are not
+  declared equivalent.
+
+Receipt: [phase-ab-authentic-receipt.json](phase-ab-authentic-receipt.json).
+The disposable recheck tree is `.local/m7/phase-ab-pr206-recheck` (gitignored).
+
 ## Reproducing a packaged case
 
 ```sh
@@ -368,15 +479,13 @@ original capture directory.
   `reproduction.status=incomplete`, `independently_reproducible=false`,
   `reason=artifact_budget`, required 1,310,375,043 bytes and max
   536,870,912 bytes, with no replay command. A 2 GiB budget publishes the
-  complete 1,317,958,286-byte, 3,810-file case. An incomplete case is never
+  complete 1,317,959,102-byte, 3,810-file case. An incomplete case is never
   reported as independently reproducible.
 - The older canonical prefix from the historical M6 capture still remains
   `incomplete_diagnostics` because that capture has no same-process frame seal.
   This phase does not synthesize a seal.
-- The task premise said PR #205 was corrected and merged into `main`; in the
-  checked-out remote it is open at `9c645d79`, and `origin/main` is
-  `096c76ae`. This branch includes the PR head and the Phase A correction, so a
-  future merge must preserve that ordering.
+- The branch is based on `main` at `2bab6cc0`, the merge of PR #205. A future
+  merge must preserve that baseline.
 - No production replacement, Phase C qualification, Phase D diagnostic
   enhancement, Phase E autonomous correction or Phase F production PR is
   started. `gl_dither`, multisample and carried-resource coverage remain
@@ -385,3 +494,15 @@ original capture directory.
   `capture --continuous --shadow --seal --max-frames N`, then inspect
   `shadow/case`, verify it after relocation, and compare the replay
   classification with the live coordinator's target classification.
+
+### Phase C follow-up acceptance tasks
+
+These are deliberately not implemented in PR #206:
+
+1. Prove gap-free monitoring using actual engine-frame indices.
+2. Inject a controlled divergence at frame K and establish correct
+   first-visible-frame detection.
+3. Investigate the authentic event-286 difference using the event-284
+   copy-source checkpoint.
+4. Measure the agent turns, replay runs and EU4 launches required for a useful
+   causal investigation.
