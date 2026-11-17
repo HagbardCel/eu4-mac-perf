@@ -159,6 +159,54 @@ class GlTransferControlTests(unittest.TestCase):
         self.assertEqual(report["checks"][0]["reason_code"],
                          "copy_region_out_of_bounds")
 
+    def test_lifecycle_change_at_the_consumer_index_is_unavailable(self):
+        frame = make_frame(
+            self.root, source=self.source, destination=self.destination,
+            lifecycle=[{"kind": "mutation", "event": 2,
+                        "lifecycle_sequence": 8, "names": ["442"]}])
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "incomplete")
+        self.assertEqual(report["checks"][0]["reason_code"],
+                         "lifecycle_mutation")
+
+    def test_rgb_destination_forces_opaque_alpha(self):
+        source = bytes((1, 2, 3, 128, 4, 5, 6, 128,
+                        7, 8, 9, 128, 10, 11, 12, 128))
+        destination = bytes((3, 2, 1, 255, 6, 5, 4, 255,
+                             9, 8, 7, 255, 12, 11, 10, 255))
+        events = [{
+            "index": 1, "kind": "resolve",
+            "operation": "glCopyTexSubImage2D", "source": "0",
+            "destination": "442", "internal_format": 32849,
+            "source_image": {"file": "copy-source.bgra",
+                             "sha256": _sha(source),
+                             "width": 2, "height": 2},
+        }, _draw(2, textures=[_texture(
+            442, "destination.bin", _sha(destination))])]
+        frame = make_frame(self.root, source=source,
+                           destination=destination, events=events)
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "match")
+        self.assertEqual(report["checks"][0]["normalization"]["alpha"],
+                         "force_opaque")
+
+    def test_unknown_destination_internal_format_is_unavailable(self):
+        events = [{
+            "index": 1, "kind": "resolve",
+            "operation": "glCopyTexSubImage2D", "source": "0",
+            "destination": "442", "internal_format": 0x9999,
+            "source_image": {"file": "copy-source.bgra",
+                             "sha256": _sha(self.source),
+                             "width": 2, "height": 2},
+        }, _draw(2, textures=[_texture(
+            442, "destination.bin", _sha(self.destination))])]
+        frame = make_frame(self.root, source=self.source,
+                           destination=self.destination, events=events)
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "incomplete")
+        self.assertEqual(report["checks"][0]["reason_code"],
+                         "unsupported_internal_format")
+
     def test_two_copies_before_sample_make_the_first_unavailable(self):
         source_a = self.source
         source_b = bytes((21, 22, 23, 255, 24, 25, 26, 255,

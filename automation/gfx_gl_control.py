@@ -103,6 +103,32 @@ def _swap_red_blue(body: bytes) -> bytes:
     return bytes(swapped)
 
 
+_INTERNAL_FORMATS = {
+    32849: "RGB8", 32856: "RGBA8", 6407: "RGB", 6408: "RGBA",
+    32852: "RGB16F", 34836: "RGBA32F", 33327: "RGB10_A2",
+}
+
+
+def _internal_format_name(value) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        name = value.upper()
+        return name if name in set(_INTERNAL_FORMATS.values()) else None
+    if isinstance(value, int):
+        return _INTERNAL_FORMATS.get(value)
+    return None
+
+
+def _force_opaque(body: bytes) -> bytes:
+    if len(body) % 4:
+        raise ControlError("invalid_payload", "pixel payload is not BGRA8")
+    forced = bytearray(body)
+    for offset in range(3, len(forced), 4):
+        forced[offset] = 255
+    return bytes(forced)
+
+
 def _copy_region(event: dict, width: int, height: int) -> dict:
     rect = event.get("source_rect")
     if not isinstance(rect, list) or len(rect) != 4:
@@ -145,7 +171,7 @@ def _lifecycle_write(lifecycle: list[dict], start_event: int,
     for item in lifecycle:
         event = item.get("event")
         if not isinstance(event, int) or event < start_event \
-                or event >= end_event:
+                or event > end_event:
             continue
         names = item.get("names")
         if not isinstance(names, list):
@@ -308,6 +334,17 @@ def control_frame(frame_dir: Path | str) -> dict:
             checks.append(_unavailable_check(
                 index, event, destination, observation))
             continue
+        internal_name = _internal_format_name(event.get("internal_format"))
+        declared_internal = event.get("internal_format")
+        if declared_internal is not None and internal_name is None:
+            checks.append(_unavailable_check(index, event, destination, {
+                "reason_code": "unsupported_internal_format",
+                "reason": (
+                    f"copy destination internal format {declared_internal!r} "
+                    "has no declared normalization"),
+                "event": observation["event"],
+            }))
+            continue
         source_path = frame / "blobs" / str(source["file"])
         destination_path = frame / "blobs" / str(observation["file"])
         if not source_path.is_file():
@@ -424,6 +461,10 @@ def control_frame(frame_dir: Path | str) -> dict:
         source_region = _crop_pixels(
             source_bytes, width, height, region["source_x"],
             region["source_y"], region["width"], region["height"])
+        alpha_normalization = None
+        if internal_name in ("RGB8", "RGB"):
+            source_region = _force_opaque(source_region)
+            alpha_normalization = "force_opaque"
         destination_region = _crop_pixels(
             destination_bytes, width, height, region["destination_x"],
             region["destination_y"], region["width"], region["height"])
@@ -447,6 +488,7 @@ def control_frame(frame_dir: Path | str) -> dict:
             "destination_sha256": destination_sha,
             "normalization": {
                 "channel_swap": normalization,
+                "alpha": alpha_normalization,
                 "row_origin": "declared_lower_left",
             },
             "copy_region": region,
