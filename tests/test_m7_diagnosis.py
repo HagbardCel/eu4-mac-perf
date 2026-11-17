@@ -1242,8 +1242,9 @@ class FirstDivergenceSourceEvidenceTests(unittest.TestCase):
         self.assertIsNone(value["recommended_checkpoint"])
         self.assertEqual(value["recommended_action"]["action"],
                          "investigate_event")
-        self.assertEqual(value["recommended_action"]["event"], 284)
-        self.assertIn("no interior event",
+        self.assertEqual(value["recommended_action"]["event"], 283)
+        self.assertEqual(value["recommended_action"]["observation_event"], 284)
+        self.assertIn("observes the result",
                       value["recommended_action"]["reason"])
 
     def test_transfer_source_evidence_uses_the_transfer_event(self):

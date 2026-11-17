@@ -1003,14 +1003,16 @@ def first_divergence(graph: dict, checkpoints: list[dict],
                     "the divergent event; no interior checkpoint remains")
                 recommended_action = {
                     "action": "investigate_event",
-                    "event": event,
+                    "event": source_previous,
+                    "observation_event": event,
                     "target": first.get("target"),
                     "resource": first.get("resource"),
                     "reason": (
                         "the last matching same-resource checkpoint is "
-                        "immediately before the divergence; there is no "
-                        "interior event to bisect, so inspect this event or "
-                        "capture a finer-grained observation"),
+                        "immediately before the divergence; checkpoints "
+                        "observe state before their event, so operation "
+                        f"{source_previous} is the candidate and event "
+                        f"{event} only observes the result"),
                 }
             else:
                 midpoint = max(int(start_event) + 1,
