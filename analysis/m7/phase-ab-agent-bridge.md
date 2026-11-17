@@ -8,8 +8,8 @@ Base: `origin/main` at `2bab6cc0`, the merge of PR #205
 (`m7/followup-portable-replay`, head `30f07f9a`). The branch was rebased onto
 that merged baseline and PR #206 was retargeted from the #205 branch to `main`.
 
-Final code commit for this remediation: `0ba76ad7` (`293997ca` plus the
-pixel-axis correction found while validating the authentic campaign). Documentation and receipt
+Final code commit for this remediation: `a25c6b09` (on top of `293997ca`,
+the `0ba76ad7` pixel-axis correction and this review round). Documentation and receipt
 updates are a separate commit so the code identity reviewed by CI remains
 stable.
 
@@ -142,6 +142,49 @@ reviewed by CI stays stable.
 | Evidence-based diagnostic completion | `SupervisorTests.test_gpu_failure_row_never_claims_a_completed_diagnostic`; `StrategyBCaseToolTests.test_sequence_diagnostic_completeness_requires_evidence`; `test_successful_sequence_reports_evidence_based_completion` |
 | v1 reproduction metadata | `HeterogeneousShaderSequenceTests.test_single_frame_budget_incomplete_is_verified_incomplete` (actual `package_diagnosis` v1 fixtures: complete, budget-incomplete and corrupted) |
 | Receipt identity | `test_checkpoint_receipt_identity_corruption_is_rejected` (frame/session/digest/request/shader fields); `test_checkpoint_source_identity_mismatch_is_not_preserved` |
+
+## Third review remediation — target completion and aggregate verdict
+
+Code commit `a25c6b09` closes the two remaining correctness findings and the
+blocking receipt-index finding from the independent review of `2850f062`.
+Documentation and receipt updates are a separate commit.
+
+1. **Portable sequence replay must reach its declared target (P1).**
+   `gfx_replay_case._replay_sequence_case` no longer accepts a `stopped`
+   campaign. The success gate requires campaign `complete`, exactly the
+   declared ordered frames executed, the last executed frame equal to the
+   declared target, every frame diagnosed, and no terminal GPU, history,
+   provenance, identity or infrastructure failure. Pixel equivalence is
+   deliberately not required. On failure it raises
+   `CaseError("sequence_replay", ...)` with the campaign status, stop reason,
+   executed/expected frames, last sequence and explicit reasons; it never
+   copies the last available frame's diagnosis into the target result.
+2. **Aggregate verdict from confirmed evidence (P1).**
+   `_campaign_outcome` now derives `verdict=different` from any trusted,
+   diagnosed frame with a verified final-pixel difference, an authoritative
+   intermediate checkpoint difference, or a `qualified_difference`/
+   `difference_with_partial_state_coverage` classification. An earlier
+   `unsupported_state` frame stays visible and keeps `qualified=false`, but
+   cannot suppress a later verified mismatch. Terminal execution/history/
+   provenance failures still outrank the rendering verdict. Pixel and
+   checkpoint evidence on an untrusted frame (GPU/history/terminal
+   classification or explicitly invalid capture/provenance axis) is not
+   promoted into a first-divergence claim.
+3. **Minimal-prefix preserved receipts (blocking review finding).**
+   `_checkpoint_setup` preserves live receipts whose `sequence` is the source
+   campaign index while prefix selection renumbers the portable sequence to
+   1..N. `_receipt_identity_problems` now accepts either the portable index or
+   `portable_original_sequence_index`, so preservation and verification agree.
+   The prior verifier-only reindex check was removed.
+
+### New regressions
+
+| Finding | Regression |
+| --- | --- |
+| Sequence replay target gate | `test_gfx_replay_case_sequence.SequenceReplayGateTests.test_complete_divergent_sequence_reproduces_the_target`; `...test_complete_sequence_with_matching_target_is_valid`; `...test_premature_history_stop_is_not_a_reproduction`; `...test_premature_provenance_stop_is_not_a_reproduction`; `...test_gpu_failure_at_frame_two_is_not_a_reproduction` |
+| Legacy incomplete-diagnostic prefix is refused | `AuthenticCanonicalPrefixTests.test_canonical_prefix_relocates_and_keeps_carried_metal_history` now asserts `CaseError("sequence_replay")` with `incomplete_diagnostics` |
+| Aggregate verdict after unsupported state | `test_agent_tools.StrategyBCaseToolTests.test_later_verified_mismatch_sets_the_aggregate_verdict`; `...test_later_terminal_failure_overrides_but_keeps_observations`; `...test_invalid_provenance_pixels_are_not_promoted` |
+| Minimal-prefix preserved receipts verify | `PortableSequenceCaseTests.test_minimal_prefix_preserves_source_receipts_and_verifies` |
 
 ## Phase A — integration defects
 
@@ -301,6 +344,17 @@ Second-review focused run after code `0ba76ad7` (same checked interpreter):
 `tests.test_m7_continuous_replay`, `tests.test_m7_continuous_supervisor`,
 `tests.test_m7_diagnosis`, `tests.test_m7_metal_replay` and
 `tests.test_m7_shadow_receipt`.
+
+Third-review affected run after code `a25c6b09`:
+**179 tests passed in 47.18 s** (run `20261117T174119Z-a3447756`) across
+`tests.test_agent_tools`, `tests.test_gfx_replay_case_sequence` and
+`tests.test_m7_continuous_supervisor`. The native bridge module also passed
+(`tests.test_dsh_native_bridge`, 2.59 s), and the DSH tools plugin passed 9/9.
+
+The authentic relocated case was replayed again under the new target gate
+without an EU4 launch: campaign `complete` at target sequence 3, 15.18 s,
+`history.status=ok`, classification and pixel statistics unchanged, first
+divergence still event 286 / texture 442.
 
 JS plugin suite:
 

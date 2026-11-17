@@ -381,10 +381,12 @@ over stale frame-local translations, and kept continue-on-difference limited
 to eligible rendering differences. A failed live campaign can no longer
 publish `qualified` from a matched prefix.
 
-Focused validation: 342 native/offline tests passed after rebasing onto merged
-`main` `2bab6cc0`, the DSH plugin's 9 tests passed, and a real
-v2 case was inspected, verified and replayed through the JavaScript bridge
-after relocation and deletion of the original campaign. The
+Focused validation: the 179 affected native/offline tests passed in 47.18 s
+(`test_agent_tools`, `test_gfx_replay_case_sequence`,
+`test_m7_continuous_supervisor`), the native bridge module passed, and the DSH
+plugin's 9 tests passed; a real v2 case was inspected, verified and replayed
+through the JavaScript bridge after relocation and deletion of the original
+campaign. The
 existing authentic sealed follow-up A capture (three frames, session
 `c66b3625…`, pid 27780) was also cloned, packaged under a 2 GiB budget,
 relocated, deleted at the source, verified and replayed: the

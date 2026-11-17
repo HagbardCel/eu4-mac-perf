@@ -1,7 +1,7 @@
 {
   "schema": "m7-phase-b-authentic-receipt/v1",
   "generated_utc": "2026-11-17T17:05:09Z",
-  "code_sha": "0ba76ad7",
+  "code_sha": "a25c6b09",
   "base_sha": "2bab6cc0",
   "source_capture": ".local/m7/followup-a-live-3",
   "source_capture_mode": "existing authentic sealed capture; cloned, packaged, then the clone was deleted",
@@ -177,7 +177,7 @@
     ]
   },
   "replay": {
-    "seconds": 14.33,
+    "seconds": 15.18,
     "campaign": {
       "schema": "m7-continuous-campaign/v1",
       "status": "complete",
@@ -503,20 +503,30 @@
     "diagnostic_complete": true
   },
   "focused_test_run": {
-    "id": "20261117T171357Z-f9feef43",
-    "tests": 313,
-    "duration_seconds": 95.19,
+    "id": "20261117T174119Z-a3447756",
+    "tests": 179,
+    "duration_seconds": 47.18,
     "modules": [
       "tests.test_agent_tools",
-      "tests.test_dsh_native_bridge",
-      "tests.test_gfx_replay_case",
       "tests.test_gfx_replay_case_sequence",
-      "tests.test_m6_frame",
-      "tests.test_m7_continuous_replay",
-      "tests.test_m7_continuous_supervisor",
-      "tests.test_m7_diagnosis",
-      "tests.test_m7_metal_replay",
-      "tests.test_m7_shadow_receipt"
+      "tests.test_m7_continuous_supervisor"
     ]
+  },
+  "native_bridge_test_run": {
+    "module": "tests.test_dsh_native_bridge",
+    "duration_seconds": 2.59,
+    "status": "passed"
+  },
+  "dsh_plugin_tests": {
+    "tests": 9,
+    "failed": 0
+  },
+  "replay_gate": {
+    "campaign_complete": true,
+    "expected_frames": 3,
+    "executed_frames": 3,
+    "target_sequence": 3,
+    "terminal_failure": null,
+    "pixel_equivalence_required": false
   }
 }

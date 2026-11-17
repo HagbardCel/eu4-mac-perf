@@ -285,6 +285,23 @@ executed the diagnosis and produced its required evidence. A populated
 `diagnostic_report` path is only a locator; a Metal execution failure row
 reports `diagnostic_report: null` and `diagnostic_completed: false`.
 
+The aggregate `verdict` is derived from confirmed evidence across all trusted,
+diagnosed frames, not only the earliest classified non-equivalence. A later
+verified final-pixel or authoritative checkpoint difference therefore yields
+`different` even when an earlier frame only observed `unsupported_state`;
+terminal failures still override the verdict without erasing the earlier
+observations. Evidence from a terminal or invalid-provenance frame is never
+promoted into `first_pixel_divergent_frame` or
+`first_checkpoint_divergent_frame`.
+
+Portable v2 case replay (`eu4_replay case --replay-out`) succeeds only when the
+campaign is `complete`, every declared frame was executed and diagnosed, the
+last frame is the declared target, and no terminal GPU/history/provenance/
+identity/infrastructure failure occurred. Pixel equivalence is not required; a
+fully executed divergent campaign is a valid reproduction. A premature stop
+raises a structured `sequence_replay` error and never reuses the last available
+frame's diagnosis.
+
 ### `eu4_case_inspect`
 
 ```sh
