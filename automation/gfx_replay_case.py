@@ -1502,6 +1502,10 @@ def package_sequence_diagnosis(
     and they are renumbered as a relocatable ordered sequence while retaining
     every authoritative capture identity and digest.
 
+    A selected fault experiment is never published as an independently
+    reproducible sequence: its replay path cannot know the scoped fault, and a
+    fault case must not advertise an unfaulted replay as equivalent.
+
     ``max_bytes`` bounds the complete generated package: captured frames,
     shaders, replay/checkpoint artifacts and manifests.  The sequence path does
     not generate a difference image; the single-frame path budgets one.
@@ -1511,6 +1515,25 @@ def package_sequence_diagnosis(
     (never a valid reproduction command); if even that summary cannot fit, an
     explicit ``case_budget`` error is raised.
     """
+    if report.get("faults") or report.get("fault_evidence") \
+            or report.get("fault_injection"):
+        return _incomplete_case(
+            Path(case_dir).expanduser().resolve(),
+            metal_dir=Path(metal_dir).expanduser().resolve(),
+            report=report,
+            missing=[{
+                "kind": "fault_experiment",
+                "reason": (
+                    "the selected fault is scoped to the source campaign and "
+                    "cannot be replayed by the portable case"),
+            }],
+            schema=SEQUENCE_SCHEMA,
+            case_id=case_id,
+            title=title,
+            inputs=[],
+            reason="fault_experiment_not_portable",
+            max_bytes=max_bytes,
+        )
     frames = [Path(frame).expanduser().resolve() for frame in frames]
     metal_dir = Path(metal_dir).expanduser().resolve()
     destination = Path(case_dir).expanduser().resolve()
