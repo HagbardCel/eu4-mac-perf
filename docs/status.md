@@ -11,8 +11,9 @@ now propagate through native sequence records, validation, campaign rows,
 diagnoses and portable cases, and a skipped/partial identity fails closed. A
 frame/event-scoped sampler fault proves later-frame detection. A reusable
 same-backend GL/GL control compares the captured copy source with the captured
-GL destination and reports 0/1,930,176 differing pixels on all three authentic
-frames; it is scoped to the transfer/readback path, not a full-frame GL replay.
+GL destination. Frame 1 matches exactly (0/1,930,176); frames 2/3 are
+`unavailable` because the historical capture has no lifecycle coverage for
+copy-only destination 442. It is transfer-scoped, not a full-frame GL replay.
 
 One authentic EU4 process captured three gap-free frames (present indices
 615/616/617, 325 operations each, copy source included) and replayed them

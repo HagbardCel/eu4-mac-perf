@@ -42,8 +42,11 @@ python3 -m automation.agent_tools eu4_capture gl-control \
   --run .local/m7/phase-c-authentic-v2
 ```
 
-Expected: `status=ok`, `outcome.verdict=equal`, zero differing pixels for all
-three frames. This is a transfer/readback control, not a full-frame GL replay.
+Expected: frame 1 `match` with zero differing pixels; frames 2/3 are
+`unavailable` (`unverified_lifecycle_coverage`) because the historical capture
+has no lifecycle coverage for copy-only destination 442. The aggregate result is
+`incomplete`/`unverified`, not a three-frame match. This is a transfer/readback
+control, not a full-frame GL replay.
 
 ## 4. GL/Metal sequence
 
