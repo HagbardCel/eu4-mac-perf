@@ -1903,7 +1903,7 @@ def _campaign_pixel_divergence(row: dict) -> bool:
         mismatched = int(statistics.get("mismatched_pixels") or 0)
     except (TypeError, ValueError):
         mismatched = 0
-    return (axes.get("pixels") == _CAMPAIGN_PIXEL_AXIS
+    return (axes.get("pixel_comparison") == _CAMPAIGN_PIXEL_AXIS
             and mismatched > 0)
 
 

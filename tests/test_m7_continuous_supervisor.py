@@ -338,7 +338,8 @@ class SupervisorTests(unittest.TestCase):
             "schema": gfx_independent_replay.DIAGNOSIS_SCHEMA,
             "classification": "qualified_match",
             "qualification": {
-                "axes": {"gpu_execution": "ok", "pixels": "match"}},
+                "axes": {"gpu_execution": "ok",
+                          "pixel_comparison": "match"}},
             "pixels": {
                 "status": "match",
                 "statistics": {"pixels": 4, "mismatched_pixels": 0},
