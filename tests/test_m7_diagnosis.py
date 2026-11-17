@@ -1192,6 +1192,82 @@ class FirstDivergenceSourceEvidenceTests(unittest.TestCase):
         self.assertIn("copy source already differs",
                       value["recommended_checkpoint"]["reason"])
 
+    def test_unrelated_matching_checkpoint_does_not_tighten_the_interval(self):
+        checkpoints = [
+            {"event": 280, "target": "10", "resource": "tex:10",
+             "status": "match", "authoritative": True},
+            {"event": 284, "target": "0", "resource": "fb:0",
+             "status": "divergent", "authoritative": True,
+             "statistics": {"mismatched_pixels": 10}},
+        ]
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), checkpoints, {"status": "divergent",
+                                        "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertIsNone(value["unresolved_interval"]["start_event"])
+        self.assertEqual(value["recommended_checkpoint"]["event"], 142)
+        self.assertEqual(value["recommended_checkpoint"]["lower_bound"],
+                         "unbounded")
+
+    def test_same_resource_match_sets_the_bisection_lower_bound(self):
+        checkpoints = [
+            {"event": 280, "target": "0", "resource": "fb:0",
+             "status": "match", "authoritative": True},
+            {"event": 284, "target": "0", "resource": "fb:0",
+             "status": "divergent", "authoritative": True,
+             "statistics": {"mismatched_pixels": 10}},
+        ]
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), checkpoints, {"status": "divergent",
+                                        "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["unresolved_interval"]["start_event"], 280)
+        self.assertEqual(value["recommended_checkpoint"]["event"], 282)
+        self.assertEqual(value["recommended_checkpoint"]["lower_bound"],
+                         "same_resource_match")
+
+    def test_non_default_source_keeps_its_texture_target(self):
+        graph = self.graph()
+        graph["resources"]["tex:442"]["producers"][0].update({
+            "source": "123", "source_framebuffer": 1})
+        checkpoints = [{
+            "event": 286, "target": "442", "resource": "tex:442",
+            "status": "divergent", "authoritative": True,
+            "statistics": {"mismatched_pixels": 10},
+        }]
+        # The source checkpoint must use the actual source target.
+        checkpoints.insert(0, {
+            "event": 284, "target": "123", "resource": "tex:123",
+            "status": "match", "authoritative": True,
+        })
+        value = gfx_independent_replay.first_divergence(
+            graph, checkpoints, {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["copy_source_evidence"]["status"], "match")
+        self.assertEqual(value["recommended_action"]["action"],
+                         "investigate_transfer")
+
+    def test_non_default_divergent_source_recommends_the_same_target(self):
+        graph = self.graph()
+        graph["resources"]["tex:442"]["producers"][0].update({
+            "source": "123", "source_framebuffer": 1})
+        checkpoints = [{
+            "event": 284, "target": "123", "resource": "tex:123",
+            "status": "divergent", "authoritative": True,
+            "statistics": {"mismatched_pixels": 10},
+        }, {
+            "event": 286, "target": "442", "resource": "tex:442",
+            "status": "divergent", "authoritative": True,
+            "statistics": {"mismatched_pixels": 10},
+        }]
+        value = gfx_independent_replay.first_divergence(
+            graph, checkpoints, {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["copy_source_evidence"]["status"], "divergent")
+        self.assertEqual(value["recommended_checkpoint"]["target"], "123")
+        self.assertEqual(value["recommended_checkpoint"]["resource"],
+                         "tex:123")
+
     def test_matching_source_recommends_transfer_investigation(self):
         checkpoints = [
             {"event": 284, "target": "0", "status": "match",

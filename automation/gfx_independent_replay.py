@@ -751,12 +751,14 @@ def _suggested_checkpoint(graph: dict, final: dict) -> dict | None:
 
 
 def _copy_source_evidence(checkpoints: list[dict],
-                          producer_event: int | None) -> dict:
+                          producer_event: int | None,
+                          source_target: str = "0") -> dict:
     """Return independent evidence for a copy source checkpoint.
 
     Destination ``captured_versions`` are not source evidence.  The only
     source evidence is a checkpoint whose event is the copy producer and
-    whose target is the default framebuffer.
+    whose target is the actual source resource (``0`` for the default
+    framebuffer, the texture name for an attachment copy).
     """
     if producer_event is None:
         return {"status": "unobserved",
@@ -764,7 +766,7 @@ def _copy_source_evidence(checkpoints: list[dict],
     matching = [
         item for item in checkpoints
         if item.get("event") == producer_event
-        and str(item.get("target")) == "0"
+        and str(item.get("target")) == str(source_target)
     ]
     if not matching:
         return {
@@ -773,7 +775,7 @@ def _copy_source_evidence(checkpoints: list[dict],
                 "no copy-source checkpoint was captured at the producer "
                 "event"),
             "event": producer_event,
-            "target": "0",
+            "target": str(source_target),
         }
     invalid = [item for item in matching if item.get("status") == "invalid"]
     if invalid:
@@ -828,6 +830,7 @@ def _normalise_checkpoint(value: dict | None,
         "reason": str(value.get("reason") or ""),
         "source": source,
         "interval": value.get("interval"),
+        "lower_bound": value.get("lower_bound"),
     }
 
 
@@ -945,8 +948,22 @@ def first_divergence(graph: dict, checkpoints: list[dict],
         next_checkpoint = None
         recommended_action = None
         producer_event = producer.get("event") if producer else None
+        source_resource = "fb:0"
+        if producer:
+            source = str(producer.get("source") or "")
+            source_fbo = producer.get("source_framebuffer")
+            source_resource = ("fb:0" if source in ("", "0")
+                               or source_fbo == 0 else f"tex:{source}")
+        source_target = ("0" if source_resource == "fb:0"
+                         else source_resource.split(":", 1)[-1])
+        if event_is_transfer:
+            observed_target = str(first.get("target") or "0")
+            source_target = observed_target
+            source_resource = ("fb:0" if observed_target == "0"
+                               else f"tex:{observed_target}")
         source_evidence = _copy_source_evidence(
-            checkpoints, producer_event if producer else event)
+            checkpoints, producer_event if producer else event,
+            source_target)
         if event_is_transfer and str(first.get("target")) == "0":
             # This checkpoint is itself the copy source.  It is independent
             # source evidence, not a destination-version proxy.
@@ -957,32 +974,39 @@ def first_divergence(graph: dict, checkpoints: list[dict],
                     "copy source"),
                 "checkpoint": first,
                 "event": event,
-                "target": "0",
+                "target": source_target,
             }
-        source_resource = "fb:0"
-        if producer:
-            source = str(producer.get("source") or "")
-            source_fbo = producer.get("source_framebuffer")
-            source_resource = ("fb:0" if source in ("", "0")
-                               or source_fbo == 0 else f"tex:{source}")
         source_status = source_evidence.get("status")
+        source_matching = [
+            int(item["event"]) for item in checkpoints
+            if item.get("status") == "match"
+            and item.get("event") is not None
+            and int(item["event"]) < int(event or 0)
+            and (str(item.get("resource")) == source_resource
+                 or str(item.get("target")) == source_target)
+        ]
+        source_previous = max(source_matching) if source_matching else None
         if source_status == "divergent":
             limitations.append(
                 "the copy source was independently observed to differ; "
                 "the copy execution is not established as the cause")
-            start_event = (previous if previous is not None else 0)
+            start_event = (source_previous
+                           if source_previous is not None else 0)
             midpoint = max(int(start_event) + 1,
                            (int(start_event) + int(event)) // 2)
             next_checkpoint = {
                 "event": midpoint,
-                "target": "0",
-                "resource": "fb:0",
+                "target": source_target,
+                "resource": source_resource,
                 "requires_capture": True,
                 "reason": (
                     "the copy source already differs; capture a "
-                    "default-framebuffer checkpoint near the midpoint of the "
+                    f"{source_resource} checkpoint near the midpoint of the "
                     "unresolved interval to bisect the origin"),
                 "interval": [int(start_event), int(event)],
+                "lower_bound": ("same_resource_match"
+                                if source_previous is not None
+                                else "unbounded"),
             }
         elif producer and (event_is_transfer
                            or str(producer.get("kind")) in ("resolve",
@@ -1004,7 +1028,7 @@ def first_divergence(graph: dict, checkpoints: list[dict],
             elif source_status == "invalid":
                 next_checkpoint = {
                     "event": producer_event,
-                    "target": "0",
+                    "target": source_target,
                     "resource": source_resource,
                     "requires_capture": True,
                     "reason": (
@@ -1019,7 +1043,7 @@ def first_divergence(graph: dict, checkpoints: list[dict],
                     "upstream bisection is not yet justified")
                 next_checkpoint = {
                     "event": producer_event,
-                    "target": "0",
+                    "target": source_target,
                     "resource": source_resource,
                     "requires_capture": True,
                     "reason": (
@@ -1027,6 +1051,10 @@ def first_divergence(graph: dict, checkpoints: list[dict],
                         "transfer to establish whether the source or the "
                         "copy execution differs"),
                 }
+        copy_case = bool(
+            event_is_transfer
+            or (producer and str(producer.get("kind")) in ("resolve", "copy")))
+        interval_start = source_previous if copy_case else previous
         if source_evidence.get("status") == "unobserved" \
                 and not (event_is_transfer and str(first.get("target")) == "0"):
             limitations.append(
@@ -1102,11 +1130,12 @@ def first_divergence(graph: dict, checkpoints: list[dict],
             "semantic": first_semantic,
             "final": final.get("status"),
             "unresolved_interval": {
-                "start_event": previous,
+                "start_event": interval_start,
                 "end_event": event,
                 "note": (
-                    "the first confirmed divergent checkpoint; earlier "
-                    "operations in this interval were not checkpointed"),
+                    "the first confirmed divergent checkpoint; the lower "
+                    "bound is the last matching checkpoint for the same "
+                    "resource when one exists, otherwise it is unbounded"),
             },
             "next_checkpoint": next_checkpoint,
             "copy_source_evidence": source_evidence,
