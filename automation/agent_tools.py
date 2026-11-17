@@ -1958,6 +1958,7 @@ def _replay_report_view(report: dict) -> dict:
         or source.get("qualification"),
         "reproduction": report.get("reproduction"),
         "campaign": report.get("campaign"),
+        "policy": report.get("policy") or source.get("policy"),
         "evaluation": report.get("evaluation") or source.get("evaluation"),
         "checkpoints": report.get("checkpoints") or source.get("checkpoints"),
         "checkpoint_validation": report.get("checkpoint_validation")

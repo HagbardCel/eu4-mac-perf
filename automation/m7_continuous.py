@@ -498,8 +498,12 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
             "diagnosis_seconds": diagnosis_seconds,
         }
         result["frames"].append(entry)
+        terminal_classification = classification in (
+            "gpu_execution_failure", "invalid_provenance",
+            "incomplete_capture")
         hard_stop = (not row.get("ok")
-                     or row.get("history_status") not in (1, None))
+                     or row.get("history_status") not in (1, None)
+                     or terminal_classification)
         soft_stop = (classification in STOP_CLASSIFICATIONS
                      or classification != "qualified_match")
         stop = hard_stop or (stop_on_difference and soft_stop)

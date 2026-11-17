@@ -53,11 +53,16 @@ architecture:
    an explicit budget-limited reproduction is `incomplete`; none can be
    qualified.
 5. **Live provenance.** A live coordinator shader mapping wins over a stale
-   frame-local translation and is recorded as `shader_source` per frame.
-   Missing/unusable mappings refuse complete packaging. Checkpoint sources
-   record why they were preserved or regenerated; a substituted receipt is
-   never copied.
-6. **Live failure reporting.** A single continuation predicate is used both
+   frame-local translation and is recorded as `shader_source` per frame,
+   including the single-frame delegation. Missing/unusable mappings refuse
+   complete packaging. Checkpoint sources record why they were preserved or
+   regenerated (`source_incomplete` for a half-published pair, request/receipt
+   mismatch reasons, or `preserved`); a substituted receipt is never copied.
+6. **Live failure reporting.** The offline supervisor now hard-stops on
+   `gpu_execution_failure`, `invalid_provenance` and `incomplete_capture` even
+   when `stop_on_difference=False`; `incomplete_diagnostics` may still execute
+   the ordered prefix so diagnostic coverage can complete, but
+   `_campaign_outcome` fails closed. A single continuation predicate is used both
    for the native per-frame `decision.json` and the supervisor loop, so a
    terminal classification never publishes `continue=true`. The predicate
    continues only eligible rendering differences (when requested) or a
@@ -214,8 +219,8 @@ Focused native/offline suite (the checked interpreter,
   --module tests.test_dsh_profile
 ```
 
-Result: **345 tests passed in 94.29 s** (run
-`20261117T061052Z-770d77e8`, after rebasing onto merged `main` `2bab6cc0`).
+Result: **348 tests passed in 94.93 s** (run
+`20261117T061939Z-0d36afdb`, after rebasing onto merged `main` `2bab6cc0`).
 This includes the new failure-precedence, policy, argument-ownership,
 provenance and negative-case regressions plus real Metal replay.
 

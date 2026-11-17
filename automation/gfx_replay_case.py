@@ -653,6 +653,17 @@ def _frame_shader_selection(frame_dir: Path, directory: Path | None,
     return "unknown"
 
 
+def _single_frame_shader_dir(frame: Path, metal_dir: Path,
+                             shaders: Path | str | None,
+                             frame_shaders: dict | None) -> Path:
+    directory = _frame_shader_dir(frame, metal_dir, shaders, frame_shaders)
+    if directory is None:
+        raise CaseError(
+            "shaders_missing",
+            f"no translated shader directory for {frame}")
+    return directory
+
+
 def _shader_member(shader_dir: Path, name) -> Path | None:
     """Resolve a declared shader payload and require it to stay inside the dir."""
     if not isinstance(name, str) or not name:
@@ -1253,7 +1264,7 @@ def _checkpoint_setup(frames: list[Path], case_dir: Path,
         source = (Path(source_value).expanduser().resolve()
                   if source_value is not None else None)
         preservation = ("source_not_provided" if source is None
-                        else "source_missing")
+                        else "source_incomplete")
         if source is not None:
             source_request = source / "checkpoint-request.json"
             source_receipt = source / "shader-receipt.json"
@@ -1407,16 +1418,28 @@ def package_sequence_diagnosis(
                 normalized_shaders[str(key)] = value
         frame_shaders = normalized_shaders
     if len(frames) == 1:
-        return package_diagnosis(
+        shader_dir = _single_frame_shader_dir(
+            frames[0], metal_dir, shaders, frame_shaders)
+        manifest = package_diagnosis(
             frames[0], metal_dir, destination, report, case_id=case_id,
-            title=title, shaders=shaders, max_bytes=max_bytes)
+            title=title, shaders=shader_dir, max_bytes=max_bytes)
+        manifest["shader_source"] = _frame_shader_selection(
+            frames[0], shader_dir, shaders, frame_shaders)
+        _write_json(destination / "case.json", manifest)
+        return manifest
     selected, selection = _required_prefix(frames)
     full_source_bytes = _normalized_frame_bytes(frames)
     prefix_source_bytes = _normalized_frame_bytes(selected)
     if len(selected) == 1:
-        return package_diagnosis(
+        shader_dir = _single_frame_shader_dir(
+            selected[0], metal_dir, shaders, frame_shaders)
+        manifest = package_diagnosis(
             selected[0], metal_dir, destination, report, case_id=case_id,
-            title=title, shaders=shaders, max_bytes=max_bytes)
+            title=title, shaders=shader_dir, max_bytes=max_bytes)
+        manifest["shader_source"] = _frame_shader_selection(
+            selected[0], shader_dir, shaders, frame_shaders)
+        _write_json(destination / "case.json", manifest)
+        return manifest
     shader_dirs: list[Path] = []
     shader_selections: list[str] = []
     missing_shaders: list[dict] = []

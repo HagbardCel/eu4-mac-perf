@@ -345,6 +345,26 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(caught.exception.kind, "previous_manifest")
         run.assert_not_called()
 
+    def test_offline_sequence_stops_on_terminal_classification(self):
+        report, diagnose = self.run_with(
+            self.rows(),
+            [{"classification": "qualified_difference",
+              "qualification": {"axes": {}},
+              "first_divergence": {"kind": "final_only"},
+              "pixels": {"statistics": {}},
+              "checkpoint_validation": {"status": "ok"}},
+             {"classification": "invalid_provenance",
+              "qualification": {"axes": {}},
+              "first_divergence": {"kind": "invalid_checkpoint"},
+              "pixels": {"statistics": {}},
+              "checkpoint_validation": {"status": "invalid"}}],
+            stop=False)
+        self.assertEqual(report["status"], "stopped")
+        self.assertEqual(report["stop_reason"], "invalid_provenance")
+        self.assertEqual(report["stopped_at"], 2)
+        self.assertEqual(diagnose.call_count, 2)
+        self.assertEqual([row["sequence"] for row in report["frames"]], [1, 2])
+
     def test_policy_is_forwarded_and_digest_is_saved(self):
         import io
 

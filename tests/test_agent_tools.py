@@ -1678,6 +1678,7 @@ class StrategyBCaseToolTests(ToolTests):
             "first_divergence": {"kind": "final_only"},
             "checkpoints": [],
             "checkpoint_validation": {"status": "ok"},
+            "policy": {"sha256": "b" * 64, "source": "explicit"},
         }
         with mock.patch.object(gfx_independent_replay, "diagnose_frame",
                                return_value=report) as diagnose:
@@ -1693,6 +1694,8 @@ class StrategyBCaseToolTests(ToolTests):
         self.assertEqual(value["outcome"]["verdict"], "different")
         self.assertFalse(value["outcome"]["qualified"])
         self.assertTrue(diagnose.call_args.kwargs["require_seal"])
+        self.assertEqual(value["result"]["policy"]["sha256"], "b" * 64)
+        self.assertEqual(value["result"]["policy"]["source"], "explicit")
 
         report["classification"] = "incomplete_diagnostics"
         report["qualification"] = {"qualified": False}

@@ -1428,6 +1428,46 @@ class HeterogeneousShaderSequenceTests(unittest.TestCase):
                 case_id="missing-live-mapping")
         self.assertEqual(caught.exception.kind, "shaders_missing")
 
+    def test_single_frame_mapping_is_authoritative(self):
+        target = self.frames[0]
+        live = self.fixture.base / "single-live-shaders"
+        shutil.copytree(self.fixture.frame_shaders[1], live)
+        stale = self.fixture.base / "single-stale-shaders"
+        shutil.copytree(self.fixture.frame_shaders[3], stale)
+        shutil.rmtree(target / "shaders")
+        shutil.copytree(stale, target / "shaders")
+        diagnosis = json.loads(
+            (self.out / "out-001" / "diagnostic-report.json").read_text())
+        case = self.fixture.base / "single-frame-case"
+        manifest = gfx_replay_case.package_sequence_diagnosis(
+            [target], self.out / "out-001", case, diagnosis,
+            shaders=None, frame_shaders={str(target): live},
+            case_id="single-frame-mapping")
+        self.assertEqual(manifest["schema"], gfx_replay_case.SCHEMA)
+        self.assertEqual(manifest["shader_source"],
+                         "live_coordinator_mapping")
+        shader_report = json.loads(
+            (case / "shaders" / "shaders.json").read_text())
+        self.assertEqual(
+            sorted(item["program"] for item in shader_report["programs"]),
+            [1])
+        verified = gfx_replay_case.verify(case)
+        self.assertTrue(verified["ok"], verified["problems"])
+
+    def test_missing_checkpoint_source_half_is_reported(self):
+        sources = [self.out / "checkpoints" / f"frame-{index:03d}"
+                   for index in range(1, 4)]
+        (sources[0] / "shader-receipt.json").unlink()
+        case = self.fixture.base / "checkpoint-incomplete"
+        gfx_replay_case.package_sequence_diagnosis(
+            self.frames, self.out / "out-003", case, self.diagnosis,
+            shaders=None, checkpoint_sources=sources,
+            case_id="checkpoint-incomplete")
+        sequence = json.loads((case / "sequence.json").read_text())
+        self.assertFalse(sequence["frames"][0]["checkpoint_preserved"])
+        self.assertEqual(sequence["frames"][0]["checkpoint_preservation"],
+                         "source_incomplete")
+
     def test_checkpoint_source_mismatch_is_recorded_and_regenerated(self):
         sources = [self.out / "checkpoints" / f"frame-{index:03d}"
                    for index in range(1, 4)]
