@@ -443,6 +443,7 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
                     "pixels", "mismatched_pixels", "mismatched_fraction",
                     "alpha_different_pixels", "max_channel_error",
                     "mean_abs_error", "mean_max_channel_error",
+                    "first_differing_pixel", "differing_bounds",
                 )
             },
             "worst_regions": statistics["regions"][:4],
@@ -599,7 +600,7 @@ def fault_evidence(provenance: list[dict], request: dict | None) -> dict | None:
 _FINAL_STATISTICS = (
     "pixels", "mismatched_pixels", "mismatched_fraction",
     "alpha_different_pixels", "max_channel_error", "mean_abs_error",
-    "mean_max_channel_error",
+    "mean_max_channel_error", "first_differing_pixel", "differing_bounds",
 )
 
 
@@ -847,7 +848,30 @@ def first_divergence(graph: dict, checkpoints: list[dict],
         event_is_transfer = event_kind in ("resolve", "copy")
         limitations: list[str] = []
         next_checkpoint = None
-        if producer and str(producer.get("kind")) in ("resolve", "copy"):
+        if (event_is_transfer and str(first.get("target")) == "0"
+                and producer is not None):
+            # The divergent checkpoint is the captured copy source itself.
+            # The copy execution is not the established cause; the difference
+            # is already present in the default framebuffer before the copy.
+            limitations.append(
+                "the captured copy source is the earliest authoritative "
+                "divergent checkpoint; the copy execution is not established "
+                "as the cause")
+            start_event = (previous if previous is not None else 0)
+            midpoint = max(int(start_event) + 1,
+                           (int(start_event) + int(event)) // 2)
+            next_checkpoint = {
+                "event": midpoint,
+                "target": "0",
+                "resource": "fb:0",
+                "requires_capture": True,
+                "reason": (
+                    "the copy source already differs; capture a "
+                    "default-framebuffer checkpoint near the midpoint of the "
+                    "unresolved interval to bisect the origin"),
+                "interval": [int(start_event), int(event)],
+            }
+        elif producer and str(producer.get("kind")) in ("resolve", "copy"):
             source = str(producer.get("source") or "")
             source_fbo = producer.get("source_framebuffer")
             source_resource = ("fb:0" if source in ("", "0")
@@ -856,15 +880,32 @@ def first_divergence(graph: dict, checkpoints: list[dict],
                 limitations.append(
                     "the copy source has no independent captured checkpoint; "
                     "the difference may originate before the copy")
-            next_checkpoint = {
-                "event": producer.get("event"),
-                "target": ("0" if source_resource == "fb:0"
-                           else source_resource.split(":", 1)[-1]),
-                "resource": source_resource,
-                "reason": (
-                    "checkpoint the copy source immediately before the "
-                    "transfer to separate source contents from copy execution"),
-            }
+                next_checkpoint = {
+                    "event": producer.get("event"),
+                    "target": ("0" if source_resource == "fb:0"
+                               else source_resource.split(":", 1)[-1]),
+                    "resource": source_resource,
+                    "reason": (
+                        "checkpoint the copy source immediately before the "
+                        "transfer to separate source contents from copy "
+                        "execution"),
+                }
+            else:
+                start_event = (previous if previous is not None else 0)
+                midpoint = max(start_event + 1,
+                               (int(start_event) + int(event)) // 2)
+                next_checkpoint = {
+                    "event": midpoint,
+                    "target": "0",
+                    "resource": "fb:0",
+                    "requires_capture": True,
+                    "reason": (
+                        "the captured copy source already differs, so the "
+                        "difference originates at or before the copy; capture "
+                        "a default-framebuffer checkpoint near the midpoint of "
+                        "the unresolved interval to bisect it"),
+                    "interval": [int(start_event), int(event)],
+                }
         limitations.append(
             "the earliest observed differing event is not a proven root "
             "cause; earlier operations in the unresolved interval were not "
@@ -915,6 +956,10 @@ def first_divergence(graph: dict, checkpoints: list[dict],
             "gl_sha256": first.get("reference_sha256"),
             "metal_sha256": first.get("metal_sha256"),
             "statistics": first.get("statistics"),
+            "pixel_location": (
+                (first.get("statistics") or {}).get("first_differing_pixel")),
+            "differing_bounds": (
+                (first.get("statistics") or {}).get("differing_bounds")),
             "upstream_checkpoints": [
                 {"event": row.get("event"), "target": row.get("target"),
                  "status": next(
@@ -978,6 +1023,10 @@ def first_divergence(graph: dict, checkpoints: list[dict],
             "event": None,
             "last_event": last_event if last_event >= 0 else event_count,
             "statistics": final.get("statistics"),
+            "pixel_location": (
+                (final.get("statistics") or {}).get("first_differing_pixel")),
+            "differing_bounds": (
+                (final.get("statistics") or {}).get("differing_bounds")),
             "semantic": first_semantic,
             "intermediate": None,
             "suggested_checkpoint": _suggested_checkpoint(graph, final),
@@ -1990,11 +2039,16 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
     final = final_comparison_report(frame_dir, metal_dir, policy)
     frame_info = trace.get("frame") or {}
     frame_id = (seal or {}).get("capture_frame_id")
+    present_index = (seal or {}).get("present_index",
+                                     trace.get("present_index"))
+    scene_index = (seal or {}).get("scene_index", trace.get("scene_index"))
     divergence = first_divergence(
         graph, checkpoints, final, binding_audit=audit,
         fault=faults or None, checkpoint_validation=validation,
         frame_id=frame_id, state_coverage_report=states,
         event_count=trace_events)
+    divergence["present_index"] = present_index
+    divergence["scene_index"] = scene_index
     encoded = replay.get("encoded")
     failed = replay.get("failed")
     command_status = replay.get("command_status")
@@ -2074,6 +2128,8 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
         "faults": faults or {},
         "frame": {
             "capture_frame_id": frame_id,
+            "present_index": present_index,
+            "scene_index": scene_index,
             "boundary": (seal or {}).get("boundary"),
             "width": frame_info.get("width"),
             "height": frame_info.get("height"),
@@ -2188,6 +2244,79 @@ def _default_case_destination(frame_dir: Path, metal_dir: Path,
         "directories is available")
 
 
+def compact_diagnosis(report: dict) -> dict:
+    """A bounded, machine-readable diagnosis for an autonomous coding agent.
+
+    The full ``diagnostic-report.json`` keeps the dependency graph and raw
+    evidence.  This projection carries only the fields needed to choose the
+    next diagnostic action, so an agent does not need to parse a multi-megabyte
+    report or infer the causal interval from prose.
+    """
+    qualification = report.get("qualification") or {}
+    divergence = report.get("first_divergence") or {}
+    checkpoints = []
+    for item in (report.get("checkpoints") or [])[:32]:
+        statistics = item.get("statistics") or {}
+        checkpoints.append({
+            "event": item.get("event"),
+            "target": item.get("target"),
+            "resource": item.get("resource"),
+            "status": item.get("status"),
+            "authoritative": item.get("authoritative"),
+            "mismatched_pixels": statistics.get("mismatched_pixels"),
+            "max_channel_error": statistics.get("max_channel_error"),
+        })
+    return {
+        "schema": "gfx-agent-diagnosis/v1",
+        "classification": report.get("classification"),
+        "qualified": qualification.get("qualified"),
+        "axes": qualification.get("axes"),
+        "frame": {
+            key: (report.get("frame") or {}).get(key)
+            for key in ("capture_frame_id", "present_index", "scene_index",
+                        "events", "sealed")
+        },
+        "execution": {
+            key: (report.get("execution") or {}).get(key)
+            for key in ("status", "events", "encoded", "failed",
+                        "command_status", "stage", "error")
+        },
+        "first_divergence": {
+            key: divergence.get(key)
+            for key in ("kind", "event", "target", "resource", "operation",
+                        "entry", "caller_rva", "program", "producer_event",
+                        "producer_program", "producer_entry",
+                        "producer_caller_rva", "confidence", "root_cause",
+                        "reason", "pixel_location", "differing_bounds",
+                        "unresolved_interval", "next_checkpoint",
+                        "unsupported_state", "limitations")
+        },
+        "inputs": (divergence.get("inputs") or [])[:16],
+        "checkpoints": checkpoints,
+        "final": {
+            "status": (report.get("pixels") or {}).get("status"),
+            "statistics": ((report.get("pixels") or {}).get("final")
+                           or {}).get("statistics"),
+        },
+        "checkpoint_validation": {
+            key: (report.get("checkpoint_validation") or {}).get(key)
+            for key in ("status", "requested", "returned", "matched",
+                        "diagnostic", "divergent", "invalid", "problems")
+        },
+        "artifacts": dict(report.get("artifacts") or {}),
+        "next_action": (
+            (divergence.get("next_checkpoint") or {}).get("reason")
+            or "no further checkpoint is recommended by this diagnosis"),
+    }
+
+
+def write_compact_diagnosis(out_dir: Path | str, report: dict) -> Path:
+    path = Path(out_dir) / "agent-diagnosis.json"
+    path.write_text(json.dumps(compact_diagnosis(report), indent=2) + "\n",
+                    encoding="utf-8")
+    return path
+
+
 def diagnose_frame(frame_dir: Path | str, metal_result_dir: Path | str,
                    output_dir: Path | str,
                    policy: Path | str | None = None, *,
@@ -2213,6 +2342,8 @@ def diagnose_frame(frame_dir: Path | str, metal_result_dir: Path | str,
     report["artifacts"]["diagnostic_report"] = str(report_path)
     report_path.write_text(json.dumps(report, indent=2) + "\n",
                            encoding="utf-8")
+    compact_path = write_compact_diagnosis(out_dir, report)
+    report["artifacts"]["agent_diagnosis"] = str(compact_path)
     if package:
         from automation import gfx_replay_case
 

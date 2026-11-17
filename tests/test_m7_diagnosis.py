@@ -1025,3 +1025,66 @@ class FaultExperimentClassificationTests(unittest.TestCase):
         classification, qualification = self.classify(execution="failed")
         self.assertEqual(classification, "gpu_execution_failure")
         self.assertFalse(qualification["qualified"])
+
+
+class CompactAgentDiagnosisTests(unittest.TestCase):
+    def test_compact_projection_is_bounded_and_actionable(self):
+        report = {
+            "classification": "difference_with_partial_state_coverage",
+            "qualification": {"qualified": False,
+                              "axes": {"pixel_comparison": "divergent"}},
+            "frame": {"capture_frame_id": 3, "present_index": 617,
+                      "scene_index": 617, "events": 325, "sealed": True},
+            "execution": {"status": "ok", "events": 325, "encoded": 325,
+                          "failed": 0, "command_status": 4},
+            "first_divergence": {
+                "kind": "intermediate", "event": 284, "target": "0",
+                "resource": "fb:0", "operation": "glCopyTexSubImage2D",
+                "producer_event": 283, "producer_program": 346,
+                "confidence": "confirmed", "root_cause": "not_established",
+                "unresolved_interval": {"start_event": 13,
+                                        "end_event": 284},
+                "next_checkpoint": {"event": 148, "target": "0",
+                                    "reason": "bisect the interval"},
+                "pixel_location": {"x": 0, "y": 0, "offset": 0},
+                "differing_bounds": {"x": 0, "y": 0, "width": 8,
+                                     "height": 8},
+                "inputs": [{"resource": "tex:428"}] * 40,
+                "limitations": ["not a root cause"],
+            },
+            "checkpoints": [{"event": index, "target": "442",
+                             "status": "divergent" if index == 286 else "match",
+                             "statistics": {"mismatched_pixels": index,
+                                            "max_channel_error": 1}}
+                            for index in range(1, 40)],
+            "pixels": {"status": "divergent",
+                       "final": {"statistics": {"mismatched_pixels": 10}}},
+            "checkpoint_validation": {"status": "ok", "requested": 7,
+                                      "returned": 7},
+            "graph": {"large": "not projected"},
+            "artifacts": {"diagnostic_report": "/tmp/diagnostic-report.json"},
+        }
+        compact = gfx_independent_replay.compact_diagnosis(report)
+        self.assertEqual(compact["schema"], "gfx-agent-diagnosis/v1")
+        self.assertEqual(compact["first_divergence"]["event"], 284)
+        self.assertEqual(compact["first_divergence"]["next_checkpoint"]["event"],
+                         148)
+        self.assertEqual(len(compact["checkpoints"]), 32)
+        self.assertEqual(len(compact["inputs"]), 16)
+        self.assertNotIn("graph", compact)
+        self.assertIn("bisect", compact["next_action"])
+
+    def test_compact_diagnosis_is_written_next_to_the_report(self):
+        report = {
+            "classification": "qualified_match",
+            "qualification": {"qualified": True, "axes": {}},
+            "frame": {"capture_frame_id": 1},
+            "first_divergence": {"kind": "none"},
+            "artifacts": {},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = gfx_independent_replay.write_compact_diagnosis(
+                directory, report)
+            self.assertTrue(path.is_file())
+            value = json.loads(path.read_text())
+            self.assertEqual(value["schema"], "gfx-agent-diagnosis/v1")

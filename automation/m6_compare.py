@@ -81,6 +81,9 @@ def compare_images(
     alpha_different = 0
     sum_abs = [0, 0, 0, 0]
     max_error = 0
+    first_pixel = None
+    bounds_min_x = bounds_min_y = None
+    bounds_max_x = bounds_max_y = None
     # Region grid for localization (default 8x8).
     grid_y, grid_x = 8, 8
     region_sum = [
@@ -100,6 +103,18 @@ def compare_images(
         pixel_max = max(differences)
         if pixel_max != 0:
             mismatched += 1
+            x = pixel % width
+            y = pixel // width
+            if first_pixel is None:
+                first_pixel = {"x": x, "y": y, "offset": pixel}
+            if bounds_min_x is None or x < bounds_min_x:
+                bounds_min_x = x
+            if bounds_max_x is None or x > bounds_max_x:
+                bounds_max_x = x
+            if bounds_min_y is None or y < bounds_min_y:
+                bounds_min_y = y
+            if bounds_max_y is None or y > bounds_max_y:
+                bounds_max_y = y
         if a0 != a1:
             alpha_different += 1
         if pixel_max > max_error:
@@ -142,6 +157,16 @@ def compare_images(
             sum(region_sum[gy][gx] for gy in range(grid_y) for gx in range(grid_x))
             / total,
             9,
+        ),
+        "first_differing_pixel": first_pixel,
+        "differing_bounds": (
+            {
+                "x": bounds_min_x,
+                "y": bounds_min_y,
+                "width": bounds_max_x - bounds_min_x + 1,
+                "height": bounds_max_y - bounds_min_y + 1,
+            }
+            if first_pixel is not None else None
         ),
         "regions": regions,
     }

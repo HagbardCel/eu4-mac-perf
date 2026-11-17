@@ -149,6 +149,7 @@ python3 -m automation.agent_tools eu4_capture frames --run <session-dir> --frame
 python3 -m automation.agent_tools eu4_capture request --run <session-dir> --role candidate --frame 42
 python3 -m automation.agent_tools eu4_capture probe --checkpoint after-present \
   --output <dir> --campaign-run-root <authorized-root>
+python3 -m automation.agent_tools eu4_capture gl-control --run <capture-root>
 ```
 
 `frames` applies exact `--frame` filtering (repeatable), optional `--role`
@@ -165,6 +166,13 @@ both role directories): each source is reported with its path and verdict, the
 and a disagreement is preserved. An `unknown` verdict is never presented as
 healthy execution. On a campaign root with several sessions it returns one
 bounded health row per session instead of silently choosing one.
+
+`gl-control` runs the same-backend GL control for every captured copy source /
+destination pair (`--copy-source` capture). It compares the GL default
+framebuffer image with the GL destination texture under the declared channel
+normalization and requires zero differing pixels. It is scoped to the captured
+transfer/readback path; it is not a full-frame GL replay. A mismatch is
+`invalid` evidence, never a qualified result.
 
 `probe` is a pass-through to the existing live launch path and still requires an
 operator ledger.
@@ -234,7 +242,16 @@ python3 -m automation.agent_tools eu4_replay diagnose --frame <frame-dir> \
 python3 -m automation.agent_tools eu4_replay sequence \
   --frame-dir <frame-1> --frame-dir <frame-2> --frame-dir <frame-3> \
   --shaders <fallback-shader-dir> --out <campaign-dir> \
-  --max-frames 3 --case-max-bytes 536870912 --frame-timeout 180
+  --max-frames 3 --case-max-bytes 536870912 --frame-timeout 180 \
+  --require-engine-identity
+
+# Controlled divergence: apply the sampler fault only to frame 2 event 1.
+# This is a diagnostic experiment and is never qualified.
+python3 -m automation.agent_tools eu4_replay sequence \
+  --frame-dir <frame-1> --frame-dir <frame-2> --frame-dir <frame-3> \
+  --shaders <fallback-shader-dir> --out <campaign-dir> --max-frames 3 \
+  --continue-on-difference --fault-frame 2 --fault-event 1 \
+  --sampler-shift 1 --sampler-shift-min 0
 
 # Existing selected-event single-frame replay.
 python3 -m automation.agent_tools eu4_replay frame --frame <trace-dir> \
@@ -279,6 +296,14 @@ and diagnosed. The result separates:
 - `first_difference` — the legacy earliest classified non-equivalence, which
   may be an `unsupported_state`/semantic mismatch and is not necessarily a
   pixel difference.
+
+`--require-engine-identity` refuses a sequence whose frames do not carry
+consecutive engine `present_index`/`scene_index` values. A skipped or partial
+identity is `engine_frame_gap` / `engine_identity_partial`; an old capture with
+no identity reports `engine_identity.status=unavailable` rather than inferring
+one. `--fault-frame`/`--fault-event` scope the existing sampler fault to one
+frame and event; the campaign records `fault_injection` and can never be
+`qualified`.
 
 `diagnostic_complete` is evidence-based: every processed frame must have
 executed the diagnosis and produced its required evidence. A populated
