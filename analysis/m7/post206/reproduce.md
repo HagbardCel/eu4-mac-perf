@@ -12,7 +12,7 @@ python3 -m automation.m6_frame capture \
   --callers 0x103b3c8 --min-draws 1 --occurrence 300 --boundary scene \
   --continuous --shadow --seal --max-frames 3 --max-pending 2 \
   --max-bytes 2147483648 --case-max-bytes 2147483648 --copy-source \
-  --max-draws 512 --background --duration 240 --timeout 600 \
+  --continue-on-difference --max-draws 512 --background --duration 240 --timeout 600 \
   --shadow-timeout-ms 120000 --shadow-wait-ms 180000
 ```
 
