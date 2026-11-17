@@ -1038,13 +1038,15 @@ class CompactAgentDiagnosisTests(unittest.TestCase):
             "execution": {"status": "ok", "events": 325, "encoded": 325,
                           "failed": 0, "command_status": 4},
             "first_divergence": {
-                "kind": "intermediate", "event": 284, "target": "0",
-                "resource": "fb:0", "operation": "glCopyTexSubImage2D",
+                "kind": "intermediate", "event": 286, "target": "442",
+                "resource": "tex:442", "operation": "glCopyTexSubImage2D",
                 "producer_event": 283, "producer_program": 346,
                 "confidence": "confirmed", "root_cause": "not_established",
                 "unresolved_interval": {"start_event": 13,
                                         "end_event": 284},
                 "next_checkpoint": {"event": 148, "target": "0",
+                                    "resource": "fb:0",
+                                    "requires_capture": True,
                                     "reason": "bisect the interval"},
                 "pixel_location": {"x": 0, "y": 0, "offset": 0},
                 "differing_bounds": {"x": 0, "y": 0, "width": 8,
@@ -1056,7 +1058,7 @@ class CompactAgentDiagnosisTests(unittest.TestCase):
                              "status": "divergent" if index == 286 else "match",
                              "statistics": {"mismatched_pixels": index,
                                             "max_channel_error": 1}}
-                            for index in range(1, 40)],
+                            for index in range(1, 300)],
             "pixels": {"status": "divergent",
                        "final": {"statistics": {"mismatched_pixels": 10}}},
             "checkpoint_validation": {"status": "ok", "requested": 7,
@@ -1066,13 +1068,60 @@ class CompactAgentDiagnosisTests(unittest.TestCase):
         }
         compact = gfx_independent_replay.compact_diagnosis(report)
         self.assertEqual(compact["schema"], "gfx-agent-diagnosis/v1")
-        self.assertEqual(compact["first_divergence"]["event"], 284)
+        self.assertEqual(compact["first_divergence"]["event"], 286)
         self.assertEqual(compact["first_divergence"]["next_checkpoint"]["event"],
                          148)
-        self.assertEqual(len(compact["checkpoints"]), 32)
-        self.assertEqual(len(compact["inputs"]), 16)
-        self.assertNotIn("graph", compact)
+        self.assertLessEqual(len(compact["checkpoints"]), 32)
+        self.assertGreater(compact["checkpoint_selection"]["total"], 32)
+        selected_events = {item["event"] for item in compact["checkpoints"]}
+        self.assertIn(286, selected_events)
+        self.assertIn(285, selected_events)
+        self.assertIn(148, selected_events)
+        self.assertIn(1, selected_events)
+        self.assertIn(299, selected_events)
+        self.assertEqual(compact["checkpoints"][0]["selected_because"],
+                         ["first_observation"])
         self.assertIn("bisect", compact["next_action"])
+        self.assertEqual(compact["first_divergence"]["recommended_checkpoint"]
+                         ["source"], "next_checkpoint")
+
+    def test_selection_is_deterministic_and_causally_bounded(self):
+        report = {
+            "classification": "difference_with_partial_state_coverage",
+            "qualification": {"qualified": False, "axes": {}},
+            "frame": {"capture_frame_id": 1},
+            "execution": {"status": "ok"},
+            "first_divergence": {
+                "kind": "intermediate", "event": 150, "target": "442",
+                "resource": "tex:442", "producer_event": 148,
+                "recommended_checkpoint": {
+                    "event": 190, "target": "0", "resource": "fb:0",
+                    "requires_capture": True, "reason": "next bisection",
+                    "source": "next_checkpoint"},
+            },
+            "checkpoints": [{
+                "event": index, "target": "442",
+                "resource": "tex:442",
+                "status": "divergent" if index == 150 else "match",
+                "statistics": {"mismatched_pixels": 1},
+            } for index in range(1, 201)],
+            "pixels": {"status": "divergent"},
+            "checkpoint_validation": {"status": "ok"},
+        }
+        first = gfx_independent_replay.compact_diagnosis(report)
+        second = gfx_independent_replay.compact_diagnosis(report)
+        self.assertEqual(first["checkpoints"], second["checkpoints"])
+        events = {item["event"] for item in first["checkpoints"]}
+        self.assertLessEqual(len(first["checkpoints"]), 32)
+        for expected in (1, 149, 150, 190, 200):
+            self.assertIn(expected, events)
+        self.assertNotIn(50, events)
+        self.assertIn("150", str(first["checkpoints"]))
+        selected = {item["event"]: item["selected_because"]
+                    for item in first["checkpoints"]}
+        self.assertIn("first_divergent", selected[150])
+        self.assertIn("last_matching", selected[149])
+        self.assertIn("recommended_next", selected[190])
 
     def test_compact_diagnosis_is_written_next_to_the_report(self):
         report = {
@@ -1088,3 +1137,140 @@ class CompactAgentDiagnosisTests(unittest.TestCase):
             self.assertTrue(path.is_file())
             value = json.loads(path.read_text())
             self.assertEqual(value["schema"], "gfx-agent-diagnosis/v1")
+
+
+class FirstDivergenceSourceEvidenceTests(unittest.TestCase):
+    def graph(self):
+        return {
+            "events": [
+                {"event": 284, "kind": "resolve",
+                 "operation": "glCopyTexSubImage2D", "target": "fb:0"},
+                {"event": 286, "kind": "draw", "target": "tex:442",
+                 "entry": "_GfxDraw", "program": 352,
+                 "samples": [{"resource": "tex:442"}]},
+            ],
+            "resources": {
+                "tex:442": {
+                    "producers": [{
+                        "event": 284, "kind": "resolve",
+                        "operation": "glCopyTexSubImage2D",
+                        "source": "0", "source_framebuffer": 0,
+                    }],
+                    "consumers": [{"event": 286, "unit": 0,
+                                   "sampler": "tex0"}],
+                    # Destination captures must never be used as source
+                    # evidence.
+                    "captured_versions": [{
+                        "event": 286, "file": "destination.bin",
+                        "sha256": "d" * 64,
+                    }],
+                },
+            },
+        }
+
+    def divergent(self, event=286, target="442", resource="tex:442"):
+        return {
+            "event": event, "target": target, "resource": resource,
+            "status": "divergent", "authoritative": True,
+            "statistics": {"mismatched_pixels": 10},
+        }
+
+    def test_independent_divergent_source_justifies_upstream_bisection(self):
+        checkpoints = [{
+            "event": 284, "target": "0", "resource": "fb:0",
+            "status": "divergent", "authoritative": True,
+            "statistics": {"mismatched_pixels": 10},
+        }]
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), checkpoints, {"status": "divergent",
+                                        "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["event"], 284)
+        self.assertEqual(value["copy_source_evidence"]["status"], "divergent")
+        self.assertTrue(value["recommended_checkpoint"]["requires_capture"])
+        self.assertEqual(value["recommended_checkpoint"]["event"], 142)
+        self.assertIn("copy source already differs",
+                      value["recommended_checkpoint"]["reason"])
+
+    def test_matching_source_recommends_transfer_investigation(self):
+        checkpoints = [
+            {"event": 284, "target": "0", "status": "match",
+             "authoritative": True},
+            self.divergent(),
+        ]
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), checkpoints, {"status": "divergent",
+                                        "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["event"], 286)
+        self.assertEqual(value["copy_source_evidence"]["status"], "match")
+        self.assertIsNone(value["next_checkpoint"])
+        self.assertIsNone(value["recommended_checkpoint"])
+        self.assertEqual(value["recommended_action"]["action"],
+                         "investigate_transfer")
+        self.assertIn("do not bisect upstream",
+                      value["recommended_action"]["reason"])
+
+    def test_destination_captures_do_not_substitute_for_source_evidence(self):
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), [self.divergent()],
+            {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["copy_source_evidence"]["status"], "unobserved")
+        self.assertEqual(value["next_checkpoint"]["event"], 284)
+        self.assertEqual(value["next_checkpoint"]["target"], "0")
+        self.assertTrue(value["next_checkpoint"]["requires_capture"])
+        self.assertEqual(value["recommended_checkpoint"]["source"],
+                         "next_checkpoint")
+
+    def test_invalid_source_recommends_repair(self):
+        checkpoints = [
+            {"event": 284, "target": "0", "status": "invalid",
+             "authoritative": False},
+            self.divergent(),
+        ]
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), checkpoints, {"status": "divergent",
+                                        "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["copy_source_evidence"]["status"], "invalid")
+        self.assertTrue(value["next_checkpoint"]["requires_capture"])
+        self.assertIn("invalid", value["next_checkpoint"]["reason"])
+
+    def test_final_only_normalizes_suggested_checkpoint(self):
+        graph = self.graph()
+        graph["events"].append({
+            "event": 290, "kind": "draw", "target": "fb:0",
+            "entry": "_GfxDraw", "program": 1,
+        })
+        value = gfx_independent_replay.first_divergence(
+            graph, [], {"status": "divergent",
+                        "statistics": {"mismatched_pixels": 4}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["kind"], "final_only")
+        self.assertIsNotNone(value["suggested_checkpoint"])
+        self.assertEqual(value["recommended_checkpoint"]["event"], 290)
+        self.assertEqual(value["recommended_checkpoint"]["source"],
+                         "suggested_checkpoint")
+        self.assertEqual(value["recommended_checkpoint"]["target"], "0")
+
+    def test_missing_evidence_has_no_checkpoint_recommendation(self):
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), [], {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "incomplete"})
+        self.assertIsNone(value["recommended_checkpoint"])
+        self.assertEqual(value["recommended_action"]["action"],
+                         "repair_evidence")
+
+    def test_unsupported_state_retains_the_final_recommendation(self):
+        graph = self.graph()
+        graph["events"].append({
+            "event": 290, "kind": "draw", "target": "fb:0",
+            "entry": "_GfxDraw", "program": 1,
+        })
+        value = gfx_independent_replay.first_divergence(
+            graph, [], {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"},
+            state_coverage_report={"unsupported": ["gl_dither"]})
+        self.assertEqual(value["unsupported_state"], ["gl_dither"])
+        self.assertEqual(value["recommended_checkpoint"]["event"], 290)
