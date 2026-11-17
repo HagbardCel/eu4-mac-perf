@@ -47,9 +47,11 @@ _EU4_COMMAND = re.compile(
     r"(?:automation\.)?(eu4_diff_run|gfx_dual_run|live_gfx)\b"
     r"|(?:open\s+-a\s+[\"']?[^\s\"']*(?:EU4|Europa))"
     r"|(?:[A-Za-z0-9_./ -]*Europa Universalis[^\s\"']*\.app)"
-    r"|(?:[A-Za-z0-9_./ -]*eu4\.[A-Za-z0-9_]+\.exe)"
-    r"|(?:[A-Za-z0-9_./-]*python[\d.]*\s+-m\s+(?:automation\.)?"
-    r"m6_frame\s+capture)",
+    r"|(?:[A-Za-z0-9_./ -]*eu4\.[A-Za-z0-9_]+\.exe)",
+    re.IGNORECASE)
+_CAPTURE_COMMAND = re.compile(
+    r"(?:^|[;&|]\s*)(?:[A-Za-z0-9_./-]*/)?"
+    r"(?:python[\d.]*\s+-m\s+(?:automation\.)?m6_frame\s+capture)\b",
     re.IGNORECASE)
 _SPILL = ("dsh-spill", "use read with offset/limit", "[truncated", "(truncated")
 
@@ -447,7 +449,8 @@ def analyze(
                                  "excerpt": _sanitize(_excerpt(call["arguments"]))})
             continue
         command = _command_without_heredoc(command) if command else command
-        if command and _EU4_COMMAND.search(command):
+        if command and (_EU4_COMMAND.search(command)
+                        or _CAPTURE_COMMAND.search(command)):
             bash_launches += 1
             launches.append({"kind": "bash",
                              "excerpt": _sanitize(command[:200])})

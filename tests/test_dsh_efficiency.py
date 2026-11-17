@@ -136,6 +136,33 @@ class EfficiencyTests(unittest.TestCase):
         self.assertEqual(
             value["eu4_launches"]["command_evidence"][0]["kind"], "bash")
 
+    def test_documentation_search_is_not_counted_as_a_launch(self):
+        events = [
+            {"type": "tool/call", "data": {
+                "callId": "search", "name": "bash",
+                "arguments": {"command":
+                              "rg 'python3 -m automation.m6_frame capture' "
+                              "analysis/m7/post206/reproduce.md"}}},
+            {"type": "tool/result", "data": {
+                "toolCallId": "search",
+                "message": {"isError": False, "content": [
+                    {"type": "text", "text": "match"}]}}},
+            {"type": "tool/call", "data": {
+                "callId": "launch", "name": "bash",
+                "arguments": {"command":
+                              "cd /tmp && python3 -m automation.m6_frame "
+                              "capture --output /tmp/x"}}},
+            {"type": "tool/result", "data": {
+                "toolCallId": "launch",
+                "message": {"isError": False, "content": [
+                    {"type": "text", "text": "capture_exit=1"}]}}},
+        ]
+        value = dsh_efficiency.analyze(events)
+        self.assertEqual(value["eu4_launches"]["count"], 1)
+        self.assertEqual(value["eu4_launches"]["bash_launches"], 1)
+        self.assertEqual(
+            value["eu4_launches"]["command_evidence"][0]["kind"], "bash")
+
     def test_zstd_export_is_read_transparently(self):
         if not shutil.which("zstd"):
             self.skipTest("zstd is not available")
