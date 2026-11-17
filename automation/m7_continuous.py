@@ -378,6 +378,11 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
             "timeout", "frame_timeout and timeout must be positive")
     started = time.monotonic()
     frames = [Path(frame).expanduser().resolve() for frame in frames]
+    try:
+        _policy_value, policy_evidence = gfx_independent_replay.load_policy(
+            policy)
+    except gfx_independent_replay.ReplayError as exc:
+        raise ContinuousError(exc.kind, exc.detail) from exc
     out_dir = prepare_output(Path(out_dir), frames)
     validation = validate_sequence(frames, max_frames=max_frames,
                                    max_bytes=max_bytes)
@@ -403,6 +408,7 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
         "max_frames": max_frames,
         "max_bytes": max_bytes,
         "stop_on_difference": stop_on_difference,
+        "policy": policy_evidence,
         "validation": validation,
         "frames": [],
         "stop_reason": None,
@@ -462,6 +468,8 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
                 frame, output, output, policy,
                 shaders=effective_shaders,
                 require_seal=bool(validation.get("sealed")))
+            diagnosis["campaign_policy"] = policy_evidence
+            diagnosis["policy"] = policy_evidence
         diagnosis_seconds = time.monotonic() - diagnosis_started
         diagnosis_times.append(diagnosis_seconds)
         replay_times.append(float(row.get("duration_ns") or 0) / 1e9)

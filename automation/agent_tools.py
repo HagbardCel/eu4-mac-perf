@@ -1640,35 +1640,61 @@ def _case_replay_outcome(result: dict) -> tuple[str, str, str | None, str | None
     return "incomplete", "incomplete", None, "unverified"
 
 
-def _case_schema(case_path: Path) -> tuple[str | None, dict]:
-    """Return the declared Strategy B schema, if this is a case package.
+CASE_KIND_STRATEGY_B = "strategy_b"
+CASE_KIND_LEGACY = "legacy"
+CASE_KIND_UNSUPPORTED = "unsupported"
+CASE_KIND_MALFORMED = "malformed"
+CASE_KIND_MISSING = "missing"
 
-    The v2 sequence package is a first-class Strategy B case.  A legacy
-    image-comparison case has no ``gfx-strategy-b-case`` manifest and is
-    handled by the older comparison path.
+
+def _case_schema(case_path: Path) -> tuple[str, str | None, dict, str | None]:
+    """Classify a case directory without ever guessing a schema.
+
+    A malformed manifest, an unsupported ``gfx-strategy-b-case/*`` version and
+    a recognized legacy image-comparison case are distinct outcomes.  Only the
+    recognized legacy schema may reach the older comparator.
     """
-    manifest = _optional_json(case_path / "case.json")
-    if not manifest:
-        return None, {}
+    manifest_path = case_path / "case.json"
+    if not manifest_path.is_file():
+        # A legacy image-comparison source may be a built case (manifest.json)
+        # or a run directory the legacy comparator can inspect.  Recognize
+        # those explicitly; a directory with no legacy markers is missing.
+        for name in ("manifest.json", "result.json"):
+            manifest = _optional_json(case_path / name)
+            if manifest:
+                return CASE_KIND_LEGACY, None, manifest, (
+                    f"legacy image-comparison evidence in {name}")
+        if (case_path / "repro" / "repro.json").is_file():
+            return CASE_KIND_LEGACY, None, {}, "legacy repro/repro.json"
+        return CASE_KIND_MISSING, None, {}, "no case.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return CASE_KIND_MALFORMED, None, {}, f"case.json is unreadable: {exc}"
+    if not isinstance(manifest, dict):
+        return CASE_KIND_MALFORMED, None, {}, "case.json is not an object"
     schema = manifest.get("schema")
     if schema in gfx_replay_case.CASE_SCHEMAS:
-        return str(schema), manifest
-    return None, manifest
+        return CASE_KIND_STRATEGY_B, str(schema), manifest, None
+    if isinstance(schema, str) and schema.startswith("gfx-strategy-b-case/"):
+        return CASE_KIND_UNSUPPORTED, schema, manifest, (
+            f"unsupported Strategy B schema: {schema}")
+    if schema == gfx_case.SCHEMA:
+        return CASE_KIND_LEGACY, None, manifest, "legacy image-comparison case"
+    return CASE_KIND_UNSUPPORTED, (
+        schema if isinstance(schema, str) else None), manifest, (
+            f"unsupported case schema: {schema!r}")
 
 
 def _case_verification_outcome(verification: dict,
                                schema: str | None) -> tuple[str, str, str]:
     """Map a Strategy B verification to (status, diagnostic, evidence)."""
+    if verification.get("verifier_exception"):
+        return "invalid", "invalid", "invalid"
     if verification.get("ok"):
         return "ok", "complete", "valid"
-    problems = " ".join(str(item) for item in
-                        (verification.get("problems") or [])).lower()
-    incomplete = (
-        verification.get("independently_reproducible") is False
-        or "incomplete" in problems
-        or "not independently reproducible" in problems
-    )
-    if schema == gfx_replay_case.SEQUENCE_SCHEMA and incomplete:
+    if (schema == gfx_replay_case.SEQUENCE_SCHEMA
+            and verification.get("reproduction_status") == "incomplete"):
         return "incomplete", "incomplete", "unverified"
     return "invalid", "invalid", "invalid"
 
@@ -1682,6 +1708,10 @@ def _case_verification_view(verification: dict) -> dict:
         "files": verification.get("files"),
         "graph_status": verification.get("graph_status"),
         "sequence": verification.get("sequence") or {},
+        "reproduction_status": verification.get("reproduction_status"),
+        "reproduction_reason": verification.get("reproduction_reason"),
+        "verifier_exception": bool(verification.get("verifier_exception")),
+        "exception": verification.get("exception"),
         "independently_reproducible": verification.get(
             "independently_reproducible"),
     }
@@ -1781,6 +1811,139 @@ def _diagnosis_outcome(report: dict, *, verification_ok: bool = True,
     return "incomplete", "incomplete", None, "unverified", False
 
 
+_CAMPAIGN_TERMINAL_CLASSIFICATIONS = {
+    "gpu_execution_failure", "invalid_provenance", "incomplete_capture",
+    "incomplete_diagnostics",
+}
+_CAMPAIGN_TERMINAL_REASONS = {
+    "gpu_execution_failure", "history_invalid", "host_failure",
+    "frame_timeout", "overall_timeout", "frame_identity", "tool_failure",
+}
+_CAMPAIGN_PIXEL_CLASSIFICATIONS = {
+    "qualified_difference", "difference_with_partial_state_coverage",
+    "unsupported_state",
+}
+
+
+def _campaign_terminal_failure(report: dict) -> dict | None:
+    """Return the first terminal execution/history/infrastructure failure.
+
+    A terminal failure outranks every pixel result, including an earlier
+    qualified difference.  A completed prefix that matched must never make a
+    failed campaign look successful.
+    """
+    for row in report.get("frames") or []:
+        if not isinstance(row, dict):
+            continue
+        sequence = row.get("sequence")
+        if row.get("ok") is False:
+            return {
+                "kind": "gpu_execution_failure",
+                "frame": sequence,
+                "sequence": sequence,
+                "detail": str(row.get("error") or row.get("stage")
+                              or "Metal execution failed"),
+            }
+        if row.get("history_status") not in (1, None):
+            return {
+                "kind": "resource_history_failure",
+                "frame": sequence,
+                "sequence": sequence,
+                "detail": f"history_status={row.get('history_status')}"
+                          + (f": {row.get('error')}" if row.get("error") else ""),
+            }
+        classification = row.get("classification")
+        if classification in _CAMPAIGN_TERMINAL_CLASSIFICATIONS:
+            return {
+                "kind": str(classification),
+                "frame": sequence,
+                "sequence": sequence,
+                "detail": str((row.get("first_divergence") or {}).get("reason")
+                              or row.get("error") or classification),
+            }
+    status = report.get("status")
+    stop_reason = report.get("stop_reason")
+    if status == "failed":
+        return {
+            "kind": str(stop_reason or "campaign_failure"),
+            "frame": report.get("stopped_at"),
+            "sequence": report.get("stopped_at"),
+            "detail": str(report.get("error") or stop_reason
+                          or "campaign failed"),
+        }
+    if stop_reason in _CAMPAIGN_TERMINAL_REASONS:
+        return {
+            "kind": str(stop_reason),
+            "frame": report.get("stopped_at"),
+            "sequence": report.get("stopped_at"),
+            "detail": str(report.get("error") or stop_reason),
+        }
+    return None
+
+
+def _campaign_outcome(report: dict) -> tuple[str, str, str | None, str | None,
+                                              bool, dict]:
+    """Apply terminal-first campaign precedence.
+
+    Returns ``(status, diagnostic, verdict, evidence, qualified, details)``.
+    Rendering differences remain visible in ``details`` even when a later
+    terminal failure supplies the overall verdict.
+    """
+    rows = [row for row in report.get("frames") or []
+            if isinstance(row, dict)]
+    differences = [row for row in rows
+                   if row.get("classification")
+                   in _CAMPAIGN_PIXEL_CLASSIFICATIONS]
+    first_difference = None
+    if differences:
+        row = differences[0]
+        first_difference = {
+            "frame": row.get("sequence"),
+            "sequence": row.get("sequence"),
+            "classification": row.get("classification"),
+            "event": (row.get("first_divergence") or {}).get("event"),
+            "operation": (row.get("first_divergence") or {}).get("operation"),
+            "pixels": row.get("pixels"),
+        }
+    terminal = _campaign_terminal_failure(report)
+    details = {
+        "campaign_status": report.get("status"),
+        "campaign_execution": "ok",
+        "stop_reason": report.get("stop_reason"),
+        "stopped_at": report.get("stopped_at"),
+        "first_difference": first_difference,
+        "terminal_failure": terminal,
+        "qualified": False,
+    }
+    if terminal is not None:
+        status = ("failed" if terminal["kind"] in (
+            "gpu_execution_failure", "host_failure", "frame_timeout",
+            "overall_timeout", "tool_failure", "frame_identity")
+            else "invalid")
+        details["campaign_execution"] = "failed"
+        details["qualified"] = False
+        return status, ("failed" if status == "failed" else "invalid"), None, \
+            "invalid", False, details
+    if report.get("status") == "cancelled":
+        details["campaign_execution"] = "cancelled"
+        return "refused", "refused", None, "unverified", False, details
+    if report.get("status") == "incomplete":
+        details["campaign_execution"] = "incomplete"
+        return "incomplete", "incomplete", None, "unverified", False, details
+    if first_difference is not None:
+        classification = first_difference["classification"]
+        if classification == "qualified_difference":
+            return "ok", "complete", "different", "valid", False, details
+        if classification == "difference_with_partial_state_coverage":
+            return "ok", "partial", "different", "valid", False, details
+        return "ok", "partial", "unverified", "valid", False, details
+    if report.get("qualified") and all(
+            row.get("classification") == "qualified_match" for row in rows):
+        details["qualified"] = True
+        return "ok", "complete", "equal", "valid", True, details
+    return "incomplete", "incomplete", None, "unverified", False, details
+
+
 def _replay_report_view(report: dict) -> dict:
     """Bounded, JSON-safe view of a v1 or v2 replay diagnosis."""
     diagnosis = report.get("diagnosis") if isinstance(
@@ -1823,12 +1986,29 @@ def _strategy_b_verify(case_path: Path) -> dict:
             "schema": "gfx-strategy-b-case-verification/v1",
             "case_id": None,
             "ok": False,
-            "problems": [f"case verification failed: {exc}"],
+            "verifier_exception": True,
+            "exception": f"{type(exc).__name__}: {exc}",
+            "problems": [f"case verification raised "
+                         f"{type(exc).__name__}: {exc}"],
             "files": 0,
             "graph_status": None,
             "sequence": {},
+            "reproduction_status": "invalid",
             "independently_reproducible": False,
         }
+
+
+def _case_invalid_envelope(tool: str, case_path: Path, kind: str,
+                           schema: str | None, detail: str | None) -> dict:
+    status = ("not_found" if kind == CASE_KIND_MISSING else "invalid")
+    return _envelope(
+        tool, status, {
+            "case": str(case_path), "kind": kind, "schema": schema,
+            "detail": detail,
+        }, diagnostic=("unavailable" if status == "not_found"
+                       else "invalid"),
+        evidence="invalid", qualified=False,
+        reason=detail or f"case cannot be used ({kind})")
 
 
 def _strategy_b_verify_result(case_path: Path, schema: str,
@@ -1917,13 +2097,17 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                 "case": str(case_path), "exists": False,
             }, diagnostic="unavailable",
                reason=f"case directory does not exist: {case_path}")
-        schema, manifest = _case_schema(case_path)
-        if schema is None:
-            return _envelope(
-                "eu4_replay", "refused", {"case": str(case_path)},
-                diagnostic="refused", evidence="invalid",
-                reason="directory is not a Strategy B case (no recognized "
-                       "gfx-strategy-b-case manifest)")
+        kind, schema, manifest, detail = _case_schema(case_path)
+        if kind != CASE_KIND_STRATEGY_B:
+            if kind == CASE_KIND_LEGACY:
+                return _envelope(
+                    "eu4_replay", "refused", {
+                        "case": str(case_path), "kind": kind,
+                    }, diagnostic="refused", evidence="invalid",
+                    reason="legacy image-comparison case; use "
+                           "`eu4_replay case`, not `verify`")
+            return _case_invalid_envelope(
+                "eu4_replay", case_path, kind, schema, detail)
         verification = _strategy_b_verify(case_path)
         return _strategy_b_verify_result(case_path, schema, manifest,
                                          verification)
@@ -1979,6 +2163,7 @@ def eu4_replay(args: argparse.Namespace) -> dict:
         try:
             report = m7_continuous.run_campaign(
                 frame_dirs, Path(args.replay_out), shaders=shaders,
+                policy=getattr(args, "policy", None),
                 max_frames=max_frames,
                 max_bytes=int(getattr(args, "max_bytes", 0) or 0),
                 max_seconds=float(getattr(args, "max_seconds", 0.0) or 0.0),
@@ -1990,6 +2175,15 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                                     or 180.0),
                 case_max_bytes=int(getattr(args, "case_max_bytes", 0) or 0),
             )
+        except m7_continuous.ContinuousError as exc:
+            policy_failure = exc.kind in ("policy_unavailable", "policy_invalid")
+            return _envelope(
+                "eu4_replay", "refused" if policy_failure else "failed",
+                {"frames": [str(item) for item in frame_dirs],
+                 "kind": exc.kind},
+                diagnostic="refused" if policy_failure else "failed",
+                evidence="invalid",
+                reason=f"M7 sequence execution did not complete: {exc}")
         except (RuntimeError, OSError, ValueError) as exc:
             return _envelope(
                 "eu4_replay", "failed",
@@ -1998,33 +2192,23 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                 reason=f"M7 sequence execution did not complete: {exc}")
         rows = report.get("frames") or []
         last = rows[-1] if rows else {}
-        nonqualified = [row for row in rows
-                        if row.get("classification") != "qualified_match"]
-        classification = (
-            nonqualified[0].get("classification") if nonqualified
-            else last.get("classification") or report.get("stop_reason"))
-        qualification = {"qualified": bool(report.get("qualified")),
-                         "classification": classification}
-        status, diagnostic, verdict, evidence, qualified = _diagnosis_outcome(
-            {"classification": classification,
-             "qualification": qualification,
-             "evaluation": {"reasons": [str(report.get("stop_reason") or "")]}})
-        if report.get("status") == "cancelled":
-            status, diagnostic, verdict, evidence = (
-                "refused", "refused", None, "unverified")
-            qualified = False
-        elif report.get("status") == "failed":
-            status, diagnostic, verdict, evidence = (
-                "failed", "failed", None, "invalid")
-        elif report.get("status") == "incomplete":
-            status, diagnostic, verdict, evidence = (
-                "incomplete", "incomplete", None, "unverified")
+        status, diagnostic, verdict, evidence, qualified, details = (
+            _campaign_outcome(report))
         value = {
             "status": report.get("status"),
+            "campaign_execution": details["campaign_execution"],
             "stop_reason": report.get("stop_reason"),
             "stopped_at": report.get("stopped_at"),
-            "qualified": bool(report.get("qualified")),
+            "qualified": bool(details["qualified"]),
+            "first_difference": details["first_difference"],
+            "pixel_verdict": (details["first_difference"] or {}).get(
+                "classification"),
+            "terminal_failure": details["terminal_failure"],
+            "diagnostic_complete": bool(
+                rows and all(row.get("diagnostic_report")
+                             for row in rows)),
             "validation": report.get("validation"),
+            "policy": report.get("policy"),
             "frames": rows,
             "unexecuted_frames": report.get("unexecuted_frames") or [],
             "queue": report.get("queue"),
@@ -2034,13 +2218,11 @@ def eu4_replay(args: argparse.Namespace) -> dict:
             "reproduction": (last.get("reproduction")
                              if isinstance(last, dict) else None),
         }
-        if report.get("status") == "stopped" and classification == "qualified_difference":
-            status, diagnostic, verdict, evidence, qualified = (
-                "ok", "complete", "different", "valid", False)
         return _envelope(
             "eu4_replay", status, value, diagnostic=diagnostic,
             verdict=verdict, evidence=evidence, qualified=qualified,
-            reason=str(report.get("error") or report.get("stop_reason") or ""))
+            reason=str((details["terminal_failure"] or {}).get("detail")
+                       or report.get("error") or report.get("stop_reason") or ""))
     if args.replay_op == "case":
         case_path = Path(args.case)
         if not case_path.is_dir():
@@ -2048,8 +2230,8 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                 "case": str(case_path), "exists": False,
             }, diagnostic="unavailable",
                reason=f"case directory does not exist: {case_path}")
-        schema, manifest = _case_schema(case_path)
-        if schema is not None:
+        kind, schema, manifest, detail = _case_schema(case_path)
+        if kind == CASE_KIND_STRATEGY_B:
             verification = _strategy_b_verify(case_path)
             if not verification["ok"]:
                 return _strategy_b_verify_result(
@@ -2084,6 +2266,9 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                         "reasons") or []))
             return _strategy_b_verify_result(
                 case_path, schema, manifest, verification)
+        if kind != CASE_KIND_LEGACY:
+            return _case_invalid_envelope(
+                "eu4_replay", case_path, kind, schema, detail)
         # The legacy image-comparison case needs NumPy; Strategy B replay above
         # does not, so the dependency gate is scoped to this path only.
         dependency = _dependency_failure("eu4_replay", case_path)
@@ -2150,8 +2335,8 @@ def eu4_case_inspect(args: argparse.Namespace) -> dict:
             "case": str(path), "exists": False,
         }, diagnostic="unavailable",
            reason=f"case directory does not exist: {path}")
-    schema, manifest = _case_schema(path)
-    if schema is not None:
+    kind, schema, manifest, detail = _case_schema(path)
+    if kind == CASE_KIND_STRATEGY_B:
         verification = _strategy_b_verify(path)
         status, diagnostic, evidence = _case_verification_outcome(
             verification, schema)
@@ -2179,6 +2364,9 @@ def eu4_case_inspect(args: argparse.Namespace) -> dict:
             reason="; ".join(str(item) for item in
                              (verification.get("problems") or [])),
             diagnostic=diagnostic, evidence=evidence, qualified=False)
+    if kind != CASE_KIND_LEGACY:
+        return _case_invalid_envelope(
+            "eu4_case_inspect", path, kind, schema, detail)
     value = gfx_case.inspect_case(path)
     verdict = {
         "pass": "equal", "fail": "different", "unverified": "unverified",
@@ -2196,8 +2384,10 @@ def eu4_case_inspect(args: argparse.Namespace) -> dict:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", type=Path, default=None,
-                        help="also write the JSON envelope to this file")
+    parser.add_argument("--out", "--envelope-out", dest="out", type=Path,
+                        default=None,
+                        help="also write the JSON envelope to this file; "
+                             "after a subcommand --out belongs to that tool")
     sub = parser.add_subparsers(dest="tool", required=True)
 
     re_query = sub.add_parser("eu4_re_query")
@@ -2329,14 +2519,30 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
-    if getattr(args, "out", None) is None and argv:
-        # ``argparse`` subparsers reset parent defaults in this layout; honour
-        # ``--out`` in either position without duplicating it on every parser.
-        for index, token in enumerate(argv):
-            if token == "--out" and index + 1 < len(argv):
-                args.out = Path(argv[index + 1])
-                break
+    raw = list(sys.argv[1:] if argv is None else argv)
+    # ``--envelope-out`` is unambiguous in any position and must not be
+    # confused with a subcommand's own ``--out`` (the replay output directory).
+    envelope_out = None
+    cleaned: list[str] = []
+    index = 0
+    while index < len(raw):
+        token = raw[index]
+        if token == "--envelope-out":
+            if index + 1 >= len(raw):
+                print(json.dumps({
+                    "schema": SCHEMA, "tool": "agent_tools", "ok": False,
+                    "status": "error",
+                    "reason": "--envelope-out requires a file path",
+                }, indent=2))
+                return 3
+            envelope_out = Path(raw[index + 1])
+            index += 2
+            continue
+        cleaned.append(token)
+        index += 1
+    args = _parser().parse_args(cleaned)
+    if envelope_out is not None:
+        args.out = envelope_out
     implementations = {
         "eu4_re_query": eu4_re_query,
         "eu4_session": eu4_session,
@@ -2354,9 +2560,17 @@ def main(argv: list[str] | None = None) -> int:
         code = 3
     text = json.dumps(value, indent=2, sort_keys=False) + "\n"
     if args.out is not None:
-        args.out = Path(args.out)
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_text(text, encoding="utf-8")
+        envelope_path = Path(args.out)
+        if envelope_path.exists() and envelope_path.is_dir():
+            code = 3
+            value = _envelope(
+                args.tool, "error",
+                reason=(f"envelope destination is a directory, not a file: "
+                        f"{envelope_path}"))
+            text = json.dumps(value, indent=2, sort_keys=False) + "\n"
+        else:
+            envelope_path.parent.mkdir(parents=True, exist_ok=True)
+            envelope_path.write_text(text, encoding="utf-8")
     print(text, end="")
     return code
 

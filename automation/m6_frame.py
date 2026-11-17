@@ -1554,6 +1554,51 @@ def shadow_failure_detail(report: dict) -> str:
     return error
 
 
+_CONTINUOUS_RENDERING_DIFFERENCES = {
+    "qualified_difference", "difference_with_partial_state_coverage",
+}
+_CONTINUOUS_TERMINAL_CLASSIFICATIONS = {
+    "gpu_execution_failure", "invalid_provenance", "incomplete_capture",
+    "incomplete_diagnostics",
+}
+
+
+def _continuous_terminal_failure(report: dict) -> dict | None:
+    """Return a terminal live-campaign failure, if one exists."""
+    rows = [row for row in report.get("frames") or []
+            if isinstance(row, dict)]
+    for row in rows:
+        if row.get("history") not in (1, None):
+            return {
+                "kind": "resource_history_failure",
+                "frame": row.get("sequence"),
+                "detail": f"history={row.get('history')}",
+            }
+        classification = row.get("classification")
+        if classification in _CONTINUOUS_TERMINAL_CLASSIFICATIONS:
+            return {
+                "kind": str(classification),
+                "frame": row.get("sequence"),
+                "detail": str(classification),
+            }
+    if report.get("status") not in ("ok", "running", None):
+        return {
+            "kind": str(report.get("stop_reason") or report.get("status")),
+            "frame": report.get("stopped_at"),
+            "detail": str(report.get("error") or report.get("stop_reason")
+                          or report.get("status")),
+        }
+    stop_reason = report.get("stop_reason")
+    if stop_reason in ("tool_failure", "gpu_execution_failure",
+                       "history_invalid", "host_failure", "frame_timeout"):
+        return {
+            "kind": str(stop_reason),
+            "frame": report.get("stopped_at"),
+            "detail": str(report.get("error") or stop_reason),
+        }
+    return None
+
+
 def apply_shadow_report(result: dict, shadow_report: dict) -> str | None:
     """Copy the coordinator report into the final capture summary.
 
@@ -1567,13 +1612,25 @@ def apply_shadow_report(result: dict, shadow_report: dict) -> str | None:
     if shadow_report.get("mode") == "continuous":
         frames = list(shadow_report.get("frames") or [])
         last = frames[-1] if frames else {}
+        terminal = _continuous_terminal_failure(shadow_report)
+        campaign_ok = shadow_report.get("status") == "ok" and terminal is None
         result["continuous"] = shadow_report
         result["pixel_verdict"] = last.get("classification")
-        result["classification"] = last.get("classification")
+        result["campaign_execution"] = (
+            "ok" if campaign_ok else
+            "failed" if shadow_report.get("status") == "failed" else
+            "incomplete")
+        result["terminal_failure"] = terminal
+        result["classification"] = (
+            terminal.get("kind") if terminal else last.get("classification"))
         result["first_divergence"] = last.get("first_divergence")
         result["qualified"] = bool(
-            frames and all(item.get("classification") == "qualified_match"
-                           for item in frames))
+            campaign_ok and frames
+            and all(item.get("classification") == "qualified_match"
+                    and item.get("history") in (1, None) for item in frames))
+        result["diagnostic_complete"] = bool(
+            campaign_ok and frames
+            and all(item.get("diagnostic_report") for item in frames))
         result["case"] = shadow_report.get("case")
         result["reproduction"] = shadow_report.get("reproduction")
         result["reproduction_complete"] = bool(
@@ -1587,7 +1644,7 @@ def apply_shadow_report(result: dict, shadow_report: dict) -> str | None:
             "diagnostic_reports": [item.get("diagnostic_report")
                                    for item in frames],
         }
-        if shadow_report.get("status") == "ok":
+        if shadow_report.get("status") == "ok" and terminal is None:
             return None
         return shadow_failure_detail(shadow_report)
     failure = shadow_report.get("failure")
@@ -2137,7 +2194,9 @@ def _continuous_frame_coordinator(
 
 
 def _package_continuous_case(run: Path, shadow: Path, count: int,
-                             args: argparse.Namespace) -> dict:
+                             args: argparse.Namespace, *,
+                             scope: str = "target_frame",
+                             terminal_failure: dict | None = None) -> dict:
     """Package the diagnosed ordered prefix from the live coordinator.
 
     The live layout keeps each frame's capture under ``run/frames`` and that
@@ -2188,6 +2247,8 @@ def _package_continuous_case(run: Path, shadow: Path, count: int,
     return {
         "status": ("complete" if reproduction.get(
             "independently_reproducible") else "incomplete"),
+        "scope": scope,
+        "terminal_failure": terminal_failure,
         "case_id": manifest.get("case_id"),
         "case_dir": str(case_dir),
         "files": len(manifest.get("files") or []),
@@ -2197,6 +2258,24 @@ def _package_continuous_case(run: Path, shadow: Path, count: int,
         "replay_command": manifest.get("replay_command"),
         "verify_command": manifest.get("verify_command"),
     }
+
+
+def _continuous_summary_terminal(summary: dict) -> dict | None:
+    """Terminal failure from one live frame summary, if any."""
+    if summary.get("history") not in (1, None):
+        return {
+            "kind": "resource_history_failure",
+            "frame": summary.get("sequence"),
+            "detail": f"history={summary.get('history')}",
+        }
+    classification = summary.get("classification")
+    if classification in _CONTINUOUS_TERMINAL_CLASSIFICATIONS:
+        return {
+            "kind": str(classification),
+            "frame": summary.get("sequence"),
+            "detail": str(classification),
+        }
+    return None
 
 
 def shadow_coordinator_continuous(args: argparse.Namespace) -> int:
@@ -2237,30 +2316,57 @@ def shadow_coordinator_continuous(args: argparse.Namespace) -> int:
             result["error"] = str(exc)
             result["stop_reason"] = "tool_failure"
             result["qualified"] = False
+            result["diagnostic_complete"] = False
+            result["terminal_failure"] = {
+                "kind": "tool_failure", "frame": frame_index,
+                "detail": str(exc),
+            }
             if result["frames"]:
                 result["case"] = _package_continuous_case(
-                    run, shadow, len(result["frames"]), args)
+                    run, shadow, len(result["frames"]), args,
+                    scope="completed_prefix",
+                    terminal_failure=result["terminal_failure"])
                 result["reproduction"] = result["case"].get("reproduction")
             (shadow / "coordinator.json").write_text(
                 json.dumps(result, indent=2) + "\n")
             return 1
         result["frames"].append(summary)
         classification = summary.get("classification")
-        if (not args.continue_on_difference and
-                classification != "qualified_match"):
+        terminal = _continuous_summary_terminal(summary)
+        if terminal is not None:
+            result["status"] = "failed"
+            result["qualified"] = False
+            result["terminal_failure"] = terminal
+            result["stop_reason"] = terminal["kind"]
+            result["stopped_at"] = frame_index
+            result["diagnostic_complete"] = False
+            result["case"] = _package_continuous_case(
+                run, shadow, max(0, frame_index - 1), args,
+                scope="completed_prefix", terminal_failure=terminal)
+            result["reproduction"] = result["case"].get("reproduction")
+            (shadow / "coordinator.json").write_text(
+                json.dumps(result, indent=2) + "\n")
+            return 1
+        eligible_difference = (
+            classification in _CONTINUOUS_RENDERING_DIFFERENCES)
+        continue_campaign = (
+            classification == "qualified_match"
+            or (eligible_difference and args.continue_on_difference))
+        if not continue_campaign:
             result["status"] = "ok"
             result["stop_reason"] = (
                 "first_qualified_difference"
                 if classification == "qualified_difference"
                 else f"stop_{classification}")
             result["stopped_at"] = frame_index
-            result["case"] = _package_continuous_case(
-                run, shadow, frame_index, args)
-            result["reproduction"] = result["case"].get("reproduction")
-            result["qualified"] = bool(
+            result["qualified"] = False
+            result["diagnostic_complete"] = bool(
                 result["frames"] and all(
-                    item.get("classification") == "qualified_match"
+                    item.get("diagnostic_report")
                     for item in result["frames"]))
+            result["case"] = _package_continuous_case(
+                run, shadow, frame_index, args, scope="target_frame")
+            result["reproduction"] = result["case"].get("reproduction")
             (shadow / "coordinator.json").write_text(
                 json.dumps(result, indent=2) + "\n")
             return 0
@@ -2269,9 +2375,14 @@ def shadow_coordinator_continuous(args: argparse.Namespace) -> int:
     result["qualified"] = bool(
         result["frames"] and all(
             item.get("classification") == "qualified_match"
+            and item.get("history") in (1, None)
             for item in result["frames"]))
+    result["diagnostic_complete"] = bool(
+        result["frames"] and all(
+            item.get("diagnostic_report") for item in result["frames"]))
     result["case"] = _package_continuous_case(
-        run, shadow, len(result["frames"]), args)
+        run, shadow, len(result["frames"]), args,
+        scope="completed_sequence")
     result["reproduction"] = result["case"].get("reproduction")
     (shadow / "coordinator.json").write_text(
         json.dumps(result, indent=2) + "\n")

@@ -1199,7 +1199,11 @@ class StrategyBCaseToolTests(ToolTests):
         }))
         return case
 
-    def verification(self, *, ok=True, reproducible=True, problems=None):
+    def verification(self, *, ok=True, reproducible=True, problems=None,
+                     reproduction_status=None, verifier_exception=False):
+        if reproduction_status is None:
+            reproduction_status = ("complete" if ok or reproducible
+                                   else "incomplete")
         return {
             "schema": "gfx-strategy-b-case-verification/v1",
             "case_id": "v2-agent-case", "ok": ok,
@@ -1207,6 +1211,8 @@ class StrategyBCaseToolTests(ToolTests):
             "graph_status": "ok",
             "sequence": {"status": "verified" if ok else "invalid",
                          "frames": 2, "target_index": 2},
+            "reproduction_status": reproduction_status,
+            "verifier_exception": verifier_exception,
             "independently_reproducible": reproducible,
         }
 
@@ -1361,6 +1367,303 @@ class StrategyBCaseToolTests(ToolTests):
         self.assertEqual(kwargs["frame_timeout"], 30.0)
         self.assertEqual(kwargs["timeout"], 60.0)
         self.assertEqual(value["result"]["status"], "complete")
+
+    def run_sequence(self, report, *, extra=(), frame_count=3):
+        from automation import m7_continuous
+
+        frames = [self.root / "seq" / f"frame-{index:06d}"
+                  for index in range(1, frame_count + 1)]
+        with mock.patch.object(m7_continuous, "run_campaign",
+                               return_value=report) as run:
+            code, value = self.call([
+                "eu4_replay", "sequence",
+                *[token for frame in frames
+                  for token in ("--frame-dir", str(frame))],
+                "--shaders", str(self.root / "shaders"),
+                "--replay-out", str(self.root / "sequence-out"),
+                *extra,
+            ])
+        return code, value, run
+
+    def test_terminal_gpu_failure_outranks_an_earlier_difference(self):
+        report = {
+            "status": "stopped", "stop_reason": "gpu_execution_failure",
+            "stopped_at": 3, "qualified": False,
+            "frames": [
+                {"sequence": 1, "classification": "qualified_match",
+                 "history_status": 1, "diagnostic_report": "f1.json"},
+                {"sequence": 2, "classification": "qualified_difference",
+                 "history_status": 1, "diagnostic_report": "f2.json",
+                 "first_divergence": {"event": 17, "operation": "draw"},
+                 "pixels": {"mismatched_pixels": 4}},
+                {"sequence": 3, "ok": False, "history_status": 0,
+                 "classification": "gpu_execution_failure",
+                 "error": "command buffer failed"},
+            ],
+        }
+        code, value, _ = self.run_sequence(
+            report, extra=("--continue-on-difference",))
+        self.assertEqual(code, 2, value)
+        self.assertFalse(value["ok"])
+        self.assertEqual(value["status"], "failed")
+        self.assertEqual(value["outcome"]["diagnostic"], "failed")
+        self.assertIsNone(value["outcome"]["verdict"])
+        self.assertEqual(value["outcome"]["evidence"], "invalid")
+        self.assertFalse(value["outcome"]["qualified"])
+        self.assertEqual(value["result"]["campaign_execution"], "failed")
+        self.assertEqual(value["result"]["terminal_failure"]["kind"],
+                         "gpu_execution_failure")
+        self.assertEqual(value["result"]["first_difference"]["frame"], 2)
+        self.assertEqual(
+            value["result"]["frames"][1]["classification"],
+            "qualified_difference")
+        self.assertFalse(value["result"]["qualified"])
+
+    def test_sequence_forwards_the_selected_policy(self):
+        policy = self.root / "custom-policy.json"
+        policy.write_text(json.dumps({
+            "schema": "gfx-frame-comparison-policy/v1",
+            "name": "custom", "thresholds": {"max_channel_error": 0},
+        }))
+        report = {
+            "status": "complete", "stop_reason": "frame_limit",
+            "qualified": True, "frames": [{
+                "sequence": 1, "classification": "qualified_match",
+                "history_status": 1, "diagnostic_report": "f1.json",
+            }],
+            "policy": {"path": str(policy), "sha256": "a" * 64,
+                       "source": "explicit"},
+        }
+        code, value, run = self.run_sequence(
+            report, extra=("--policy", str(policy)), frame_count=1)
+        self.assertEqual(code, 0, value)
+        self.assertEqual(run.call_args.kwargs["policy"], str(policy))
+        self.assertEqual(value["result"]["policy"]["source"], "explicit")
+        self.assertEqual(value["result"]["policy"]["sha256"], "a" * 64)
+
+    def test_unavailable_or_invalid_policy_is_not_silently_defaulted(self):
+        from automation import m7_continuous
+
+        frames = [self.root / "seq" / "frame-000001"]
+        with mock.patch.object(
+                m7_continuous, "run_campaign",
+                side_effect=m7_continuous.ContinuousError(
+                    "policy_unavailable", "missing policy")):
+            code, value = self.call([
+                "eu4_replay", "sequence",
+                "--frame-dir", str(frames[0]),
+                "--shaders", str(self.root / "shaders"),
+                "--replay-out", str(self.root / "sequence-out"),
+                "--policy", str(self.root / "missing.json"),
+            ])
+        self.assertEqual(code, 2, value)
+        self.assertEqual(value["status"], "refused")
+        self.assertEqual(value["outcome"]["diagnostic"], "refused")
+        self.assertFalse(value["outcome"]["qualified"])
+        self.assertIn("policy_unavailable", value["reason"])
+
+    def test_replay_output_aliases_are_not_envelope_destinations(self):
+        case = self.make_v2_case()
+        report = {
+            "classification": "qualified_match",
+            "qualification": {"qualified": True},
+            "campaign": {"status": "complete"},
+            "reproduction": {"status": "complete",
+                             "independently_reproducible": True},
+            "pixels": {"final": {"status": "match"}},
+            "first_divergence": {"kind": "none"},
+        }
+        for alias in ("--replay-out", "--out"):
+            with self.subTest(alias=alias):
+                out = self.root / f"alias-{alias.lstrip('-')}"
+                with mock.patch.object(
+                        agent_tools.gfx_replay_case, "verify",
+                        return_value=self.verification()), \
+                     mock.patch.object(
+                        agent_tools.gfx_replay_case, "replay_case",
+                        return_value=report) as replay:
+                    code, value = self.call([
+                        "eu4_replay", "case", "--case", str(case),
+                        alias, str(out),
+                    ])
+                self.assertEqual(code, 0, value)
+                self.assertEqual(value["schema"], agent_tools.SCHEMA)
+                self.assertEqual(value["tool"], "eu4_replay")
+                self.assertEqual(replay.call_args.args[1], out)
+                self.assertFalse(out.exists())
+
+    def test_envelope_destination_is_explicit_and_separate(self):
+        case = self.make_v2_case()
+        replay_out = self.root / "explicit-replay"
+        envelope = self.root / "explicit-envelope.json"
+        report = {
+            "classification": "qualified_match",
+            "qualification": {"qualified": True},
+            "campaign": {"status": "complete"},
+            "reproduction": {"status": "complete",
+                             "independently_reproducible": True},
+            "pixels": {"final": {"status": "match"}},
+        }
+        with mock.patch.object(
+                agent_tools.gfx_replay_case, "verify",
+                return_value=self.verification()), \
+             mock.patch.object(
+                agent_tools.gfx_replay_case, "replay_case",
+                return_value=report) as replay, \
+             contextlib.redirect_stdout(io.StringIO()):
+            code = agent_tools.main([
+                "eu4_replay", "case", "--case", str(case),
+                "--out", str(replay_out),
+                "--envelope-out", str(envelope),
+            ])
+        self.assertEqual(code, 0)
+        self.assertEqual(replay.call_args.args[1], replay_out)
+        value = json.loads(envelope.read_text())
+        self.assertEqual(value["schema"], agent_tools.SCHEMA)
+        self.assertEqual(value["tool"], "eu4_replay")
+        self.assertFalse(envelope.is_dir())
+
+    def test_sequence_and_diagnose_accept_both_output_aliases(self):
+        from automation import gfx_independent_replay, m7_continuous
+
+        report = {
+            "status": "complete", "stop_reason": "frame_limit",
+            "qualified": True, "frames": [{
+                "sequence": 1, "classification": "qualified_match",
+                "history_status": 1, "diagnostic_report": "f1.json",
+            }],
+        }
+        for alias in ("--replay-out", "--out"):
+            with self.subTest(op="sequence", alias=alias):
+                out = self.root / f"seq-{alias.lstrip('-')}"
+                with mock.patch.object(m7_continuous, "run_campaign",
+                                       return_value=report) as run:
+                    code, value = self.call([
+                        "eu4_replay", "sequence",
+                        "--frame-dir", str(self.root / "frame"),
+                        "--shaders", str(self.root / "shaders"),
+                        alias, str(out), "--max-frames", "1",
+                    ])
+                self.assertEqual(code, 0, value)
+                self.assertEqual(run.call_args.args[1], out)
+        for alias in ("--replay-out", "--out"):
+            with self.subTest(op="diagnose", alias=alias):
+                out = self.root / f"diag-{alias.lstrip('-')}"
+                diagnosis = {
+                    "schema": "gfx-frame-diagnosis/v1",
+                    "classification": "qualified_match",
+                    "qualification": {"qualified": True},
+                    "checkpoint_validation": {"status": "ok"},
+                }
+                with mock.patch.object(
+                        gfx_independent_replay, "diagnose_frame",
+                        return_value=diagnosis) as diagnose:
+                    code, value = self.call([
+                        "eu4_replay", "diagnose",
+                        "--frame", str(self.root / "frame"),
+                        "--metal", str(self.root / "metal"),
+                        alias, str(out),
+                    ])
+                self.assertEqual(code, 0, value)
+                self.assertEqual(diagnose.call_args.args[2], out)
+
+    def test_unknown_strategy_b_schema_never_reaches_the_legacy_comparator(self):
+        case = self.root / "unknown-v2"
+        case.mkdir()
+        (case / "case.json").write_text(json.dumps({
+            "schema": "gfx-strategy-b-case/v99", "case_id": "unknown",
+        }))
+        with mock.patch.object(agent_tools.gfx_case, "inspect_case") as legacy:
+            code, value = self.call(["eu4_case_inspect", "--case", str(case)])
+        self.assertEqual(code, 2, value)
+        self.assertEqual(value["status"], "invalid")
+        self.assertEqual(value["outcome"]["evidence"], "invalid")
+        self.assertIn("unsupported Strategy B schema", value["reason"])
+        legacy.assert_not_called()
+
+    def test_malformed_case_manifest_is_invalid_not_legacy(self):
+        case = self.root / "malformed-case"
+        case.mkdir()
+        (case / "case.json").write_text("{not json")
+        with mock.patch.object(agent_tools.gfx_case, "inspect_case") as legacy:
+            code, value = self.call(["eu4_case_inspect", "--case", str(case)])
+        self.assertEqual(code, 2, value)
+        self.assertEqual(value["status"], "invalid")
+        self.assertIn("unreadable", value["reason"])
+        legacy.assert_not_called()
+
+    def test_verifier_exception_is_invalid_not_incomplete(self):
+        case = self.make_v2_case()
+        with mock.patch.object(agent_tools.gfx_replay_case, "verify",
+                               side_effect=RuntimeError("corrupt manifest")):
+            code, value = self.call(["eu4_case_inspect", "--case", str(case)])
+        self.assertEqual(code, 2, value)
+        self.assertEqual(value["status"], "invalid")
+        self.assertEqual(value["outcome"]["evidence"], "invalid")
+        self.assertTrue(value["result"]["verification"]["verifier_exception"])
+        self.assertIn("RuntimeError", value["reason"])
+
+    def test_digest_corruption_is_invalid_and_never_replayed(self):
+        case = self.make_v2_case()
+        verification = self.verification(
+            ok=False, reproducible=True, reproduction_status="complete",
+            problems=["digest drift frames/000001/frame-events.jsonl"])
+        with mock.patch.object(agent_tools.gfx_replay_case, "verify",
+                               return_value=verification), \
+             mock.patch.object(agent_tools.gfx_replay_case, "replay_case") as replay:
+            code, value = self.call([
+                "eu4_replay", "case", "--case", str(case),
+                "--replay-out", str(self.root / "corrupt-replay"),
+            ])
+        self.assertEqual(code, 2, value)
+        self.assertEqual(value["status"], "invalid")
+        self.assertEqual(value["outcome"]["evidence"], "invalid")
+        self.assertFalse(value["outcome"]["qualified"])
+        replay.assert_not_called()
+
+    def test_missing_required_payload_is_invalid(self):
+        case = self.make_v2_case()
+        verification = self.verification(
+            ok=False, reproducible=True, reproduction_status="complete",
+            problems=["missing required frames/000002/shaders/shaders.json"])
+        with mock.patch.object(agent_tools.gfx_replay_case, "verify",
+                               return_value=verification):
+            code, value = self.call(["eu4_case_inspect", "--case", str(case)])
+        self.assertEqual(code, 2, value)
+        self.assertEqual(value["status"], "invalid")
+        self.assertEqual(value["outcome"]["evidence"], "invalid")
+        self.assertFalse(value["outcome"]["qualified"])
+
+    def test_budget_incomplete_is_incomplete_and_never_qualified(self):
+        case = self.make_v2_case()
+        verification = self.verification(
+            ok=False, reproducible=False,
+            reproduction_status="incomplete",
+            problems=["reproduction is explicitly incomplete"])
+        with mock.patch.object(agent_tools.gfx_replay_case, "verify",
+                               return_value=verification):
+            code, value = self.call(["eu4_case_inspect", "--case", str(case)])
+        self.assertEqual(code, 2, value)
+        self.assertEqual(value["status"], "incomplete")
+        self.assertEqual(value["outcome"]["diagnostic"], "incomplete")
+        self.assertEqual(value["outcome"]["evidence"], "unverified")
+        self.assertFalse(value["outcome"]["qualified"])
+
+    def test_legacy_image_comparison_case_is_still_recognized(self):
+        case = self.root / "legacy-case"
+        case.mkdir()
+        (case / "case.json").write_text(json.dumps({
+            "schema": agent_tools.gfx_case.SCHEMA,
+            "case_dir": str(case),
+        }))
+        expected = {"schema": agent_tools.gfx_case.SCHEMA,
+                    "comparison_status": "fail"}
+        with mock.patch.object(agent_tools.gfx_case, "inspect_case",
+                               return_value=expected) as legacy:
+            code, value = self.call(["eu4_case_inspect", "--case", str(case)])
+        self.assertEqual(code, 0, value)
+        self.assertEqual(value["result"]["comparison_status"], "fail")
+        legacy.assert_called_once()
 
     def test_m7_diagnosis_does_not_promote_incomplete_evidence(self):
         from automation import gfx_independent_replay

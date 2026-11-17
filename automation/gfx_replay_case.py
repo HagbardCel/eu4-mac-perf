@@ -602,10 +602,10 @@ def _frame_shader_dir(frame_dir: Path, metal_dir: Path,
     ``translated/`` and Metal result directories are the legacy fallbacks.
     Returns ``None`` when no verified translation exists.
     """
-    frame_local = (frame_dir / "shaders").resolve()
-    if _valid_shader_dir(frame_local):
-        return frame_local
     if frame_shaders:
+        # The live coordinator's mapping records the translation its shadow
+        # host actually executed.  It wins over a possibly stale
+        # ``<frame>/shaders`` left by a previous offline translation.
         mapped = (frame_shaders.get(frame_dir)
                   or frame_shaders.get(str(frame_dir))
                   or frame_shaders.get(str(frame_dir.resolve())))
@@ -614,6 +614,9 @@ def _frame_shader_dir(frame_dir: Path, metal_dir: Path,
             if _valid_shader_dir(path):
                 return path
             raise CaseError("shaders_missing", str(path))
+    frame_local = (frame_dir / "shaders").resolve()
+    if _valid_shader_dir(frame_local):
+        return frame_local
     if shaders is not None:
         path = Path(shaders).expanduser().resolve()
         if _valid_shader_dir(path):
@@ -624,6 +627,30 @@ def _frame_shader_dir(frame_dir: Path, metal_dir: Path,
         if _valid_shader_dir(candidate):
             return candidate
     return None
+
+
+def _frame_shader_selection(frame_dir: Path, directory: Path | None,
+                            shaders: Path | str | None,
+                            frame_shaders: dict | None) -> str:
+    """Name the authoritative translation source selected for a frame."""
+    if directory is None:
+        return "missing"
+    selected = directory.resolve()
+    if frame_shaders:
+        mapped = (frame_shaders.get(frame_dir)
+                  or frame_shaders.get(str(frame_dir))
+                  or frame_shaders.get(str(frame_dir.resolve())))
+        if mapped is not None and Path(mapped).expanduser().resolve() == selected:
+            return "live_coordinator_mapping"
+    if (frame_dir / "shaders").resolve() == selected:
+        return "frame_local"
+    if shaders is not None and Path(shaders).expanduser().resolve() == selected:
+        return "explicit_fallback"
+    if (frame_dir.parent / "translated").resolve() == selected:
+        return "sibling_translated"
+    if (frame_dir / "shaders").resolve() != selected:
+        return "metal_result_or_legacy"
+    return "unknown"
 
 
 def _shader_member(shader_dir: Path, name) -> Path | None:
@@ -1225,6 +1252,8 @@ def _checkpoint_setup(frames: list[Path], case_dir: Path,
                         if sources and index - 1 < len(sources) else None)
         source = (Path(source_value).expanduser().resolve()
                   if source_value is not None else None)
+        preservation = ("source_not_provided" if source is None
+                        else "source_missing")
         if source is not None:
             source_request = source / "checkpoint-request.json"
             source_receipt = source / "shader-receipt.json"
@@ -1236,30 +1265,38 @@ def _checkpoint_setup(frames: list[Path], case_dir: Path,
                 gfx_frame_graph.write_checkpoint_request(graph, expected_path)
                 expected_sha = _sha(expected_path)
                 expected_path.unlink()
-                if _sha(source_request) == expected_sha:
-                    shutil.copy2(source_request, request_path)
-                    request_sha = _sha(request_path)
+                if _sha(source_request) != expected_sha:
+                    preservation = "source_request_differs"
+                else:
+                    preservation = "source_receipt_unreadable"
                     try:
                         receipt = _json(source_receipt)
                     except (OSError, UnicodeError, json.JSONDecodeError,
                             CaseError):
                         receipt = {}
+                    source_request_sha = _sha(source_request)
                     if (receipt.get("checkpoint_request_sha256")
-                            == request_sha
-                            and receipt.get("capture_frame_id")
-                            == sequence.get("capture_frame_id")
-                            and receipt.get("session_id")
-                            == sequence.get("session_id")):
+                            != source_request_sha):
+                        preservation = "source_receipt_request_mismatch"
+                    elif receipt.get("capture_frame_id") != sequence.get(
+                            "capture_frame_id"):
+                        preservation = "source_receipt_capture_mismatch"
+                    elif receipt.get("session_id") != sequence.get("session_id"):
+                        preservation = "source_receipt_session_mismatch"
+                    else:
+                        shutil.copy2(source_request, request_path)
                         shutil.copy2(source_receipt, receipt_path)
+                        preservation = "preserved"
                         records.append({
                             "index": index,
                             "directory": directory.relative_to(
                                 case_dir).as_posix(),
-                            "request_sha256": request_sha,
+                            "request_sha256": _sha(request_path),
                             "checkpoint_count": len(
                                 _json(request_path).get("checkpoints") or []),
                             "graph_status": graph.get("status"),
                             "preserved": True,
+                            "preservation": preservation,
                         })
                         continue
         request = gfx_frame_graph.write_checkpoint_request(graph, request_path)
@@ -1306,6 +1343,7 @@ def _checkpoint_setup(frames: list[Path], case_dir: Path,
             "checkpoint_count": len(request.get("checkpoints") or []),
             "graph_status": graph.get("status"),
             "preserved": False,
+            "preservation": preservation,
         })
     return records
 
@@ -1380,10 +1418,13 @@ def package_sequence_diagnosis(
             selected[0], metal_dir, destination, report, case_id=case_id,
             title=title, shaders=shaders, max_bytes=max_bytes)
     shader_dirs: list[Path] = []
+    shader_selections: list[str] = []
     missing_shaders: list[dict] = []
     for index, frame in enumerate(selected, start=1):
         directory = _frame_shader_dir(frame, metal_dir, shaders,
                                       frame_shaders)
+        shader_selections.append(
+            _frame_shader_selection(frame, directory, shaders, frame_shaders))
         if directory is None:
             missing_shaders.append({
                 "kind": "shader_artifact",
@@ -1455,6 +1496,7 @@ def package_sequence_diagnosis(
             shutil.rmtree(frame_copy / "shaders", ignore_errors=True)
             _linked_copy(shader_dirs[index - 1], frame_copy / "shaders")
             sequence["shader_dir"] = f"frames/{index:06d}/shaders"
+            sequence["shader_source"] = shader_selections[index - 1]
             sequence["shader_report_sha256"] = _sha(
                 frame_copy / "shaders" / "shaders.json")
             sequence["shader_programs"] = _frame_programs(source)
@@ -1583,9 +1625,12 @@ def package_sequence_diagnosis(
                 "checkpoint_count": checkpoint["checkpoint_count"],
                 "graph_status": checkpoint["graph_status"],
                 "shader_dir": sequence.get("shader_dir"),
+                "shader_source": sequence.get("shader_source"),
                 "shader_report_sha256": sequence.get(
                     "shader_report_sha256"),
                 "shader_programs": sequence.get("shader_programs") or [],
+                "checkpoint_preserved": checkpoint.get("preserved"),
+                "checkpoint_preservation": checkpoint.get("preservation"),
             })
         sequence_manifest = {
             "schema": SEQUENCE_MANIFEST_SCHEMA,
@@ -2133,12 +2178,24 @@ def verify(case_dir: Path | str) -> dict:
     reproduction = manifest.get("reproduction") or {}
     incomplete = reproduction.get("status") == "incomplete"
     if is_sequence:
-        required = ["sequence.json", "shaders/shaders.json",
-                    "diagnostic-report.json", "dependency-graph.json",
-                    "graph.json"]
-        sequence_problems, sequence_summary = _verify_sequence(case_dir,
-                                                               manifest)
-        problems.extend(sequence_problems)
+        if incomplete:
+            # A bounded diagnostic-only summary has no sequence or replay
+            # command; verify its declared evidence without pretending the
+            # absent reproduction payloads are corrupt.
+            required = ["reproduction-incomplete.json",
+                        "diagnostic-report.json", "dependency-graph.json",
+                        "graph.json"]
+            sequence_summary = {
+                "status": "incomplete",
+                "reason": reproduction.get("reason"),
+            }
+        else:
+            required = ["sequence.json", "shaders/shaders.json",
+                        "diagnostic-report.json", "dependency-graph.json",
+                        "graph.json"]
+            sequence_problems, sequence_summary = _verify_sequence(
+                case_dir, manifest)
+            problems.extend(sequence_problems)
     else:
         required = ["capture/frame-trace.json", "capture/frame-events.jsonl",
                     "shaders/shaders.json", "graph.json"]
@@ -2207,6 +2264,8 @@ def verify(case_dir: Path | str) -> dict:
         "graph_status": graph.get("status"),
         "replay_status": manifest.get("replay_status"),
         "sequence": sequence_summary,
+        "reproduction_status": reproduction.get("status"),
+        "reproduction_reason": reproduction.get("reason"),
         "independently_reproducible": (
             reproduction.get("independently_reproducible")
             if is_sequence else True),

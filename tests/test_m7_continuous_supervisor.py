@@ -345,6 +345,76 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(caught.exception.kind, "previous_manifest")
         run.assert_not_called()
 
+    def test_policy_is_forwarded_and_digest_is_saved(self):
+        import io
+
+        policy = self.root / "policy.json"
+        policy.write_text(json.dumps({
+            "schema": "gfx-frame-comparison-policy/v1",
+            "name": "campaign-policy",
+            "thresholds": {"max_channel_error": 0},
+        }))
+        rows = self.rows()
+        seen = {}
+
+        class FakeProcess:
+            def __init__(self):
+                self.stdout = iter(
+                    json.dumps(row) + "\n" for row in rows)
+                self.stderr = io.StringIO("")
+                self.returncode = 0
+
+            def poll(self):
+                return self.returncode
+
+            def wait(self, timeout=None):
+                return self.returncode
+
+            def terminate(self):
+                self.returncode = 0
+
+            def kill(self):
+                self.returncode = 0
+
+        def diagnose(frame, output, out_dir, selected_policy, **kwargs):
+            seen["policy"] = str(selected_policy)
+            return {"classification": "qualified_match",
+                    "qualification": {"axes": {}},
+                    "first_divergence": {"kind": "none"},
+                    "pixels": {"statistics": {}},
+                    "checkpoint_validation": {"status": "ok"}}
+
+        with mock.patch.object(m7_continuous.m6_frame, "build_replay_host",
+                               return_value=Path("/bin/true")), \
+             mock.patch.object(m7_continuous.subprocess, "Popen",
+                               return_value=FakeProcess()), \
+             mock.patch.object(gfx_independent_replay, "diagnose_frame",
+                               side_effect=diagnose), \
+             mock.patch.object(gfx_replay_case, "package_sequence_diagnosis",
+                               return_value={"case_id": "case",
+                                             "files": [{"bytes": 1}]}):
+            report = m7_continuous.run_campaign(
+                self.frames, self.root / "policy-out", shaders=self.root,
+                policy=policy, stop_on_difference=False)
+        self.assertEqual(report["status"], "complete")
+        self.assertEqual(Path(seen["policy"]).resolve(), policy.resolve())
+        digest = hashlib.sha256(policy.read_bytes()).hexdigest()
+        self.assertEqual(report["policy"]["sha256"], digest)
+        self.assertEqual(report["policy"]["source"], "explicit")
+        saved = json.loads(
+            (self.root / "policy-out" / "campaign-report.json").read_text())
+        self.assertEqual(saved["policy"]["sha256"], digest)
+
+    def test_missing_policy_is_refused_before_execution(self):
+        missing = self.root / "missing-policy.json"
+        with mock.patch.object(m7_continuous.subprocess, "run") as run:
+            with self.assertRaises(m7_continuous.ContinuousError) as caught:
+                m7_continuous.run_campaign(
+                    self.frames, self.root / "missing-policy-out",
+                    shaders=self.root, policy=missing)
+        self.assertEqual(caught.exception.kind, "policy_unavailable")
+        run.assert_not_called()
+
     def test_frame_and_byte_budgets_fail_closed(self):
         with self.assertRaises(m7_continuous.ContinuousError) as caught:
             m7_continuous.validate_sequence(self.frames, max_frames=2)
@@ -445,6 +515,112 @@ class LiveCoordinatorPackagingTests(unittest.TestCase):
         self.assertEqual(value["status"], "failed")
         self.assertIn("missing_predecessor", value["reason"])
 
+    def test_continue_on_difference_stops_on_a_hard_failure(self):
+        summaries = [
+            {"sequence": 1, "classification": "qualified_match",
+             "history": 1, "diagnostic_report": "f1.json"},
+            {"sequence": 2,
+             "classification": "difference_with_partial_state_coverage",
+             "history": 1, "diagnostic_report": "f2.json"},
+            {"sequence": 3, "classification": "invalid_provenance",
+             "history": 1, "diagnostic_report": "f3.json"},
+        ]
+        args = type("Args", (), {
+            "run": str(self.run), "shadow_dir": str(self.shadow),
+            "max_frames": 4, "timeout": 30.0, "continue_on_difference": True,
+            "case_dir": "", "case_max_bytes": 0,
+        })()
+        packaged = []
+
+        def coordinator(run, shadow, frame_index, args, deadline):
+            return summaries[frame_index - 1], {"classification": "x"}
+
+        def package(run, shadow, count, args, **kwargs):
+            packaged.append((count, kwargs.get("scope")))
+            return {"status": "incomplete", "scope": kwargs.get("scope"),
+                    "reproduction": {"independently_reproducible": False}}
+
+        with mock.patch.object(m6_frame, "_continuous_frame_coordinator",
+                               side_effect=coordinator), \
+             mock.patch.object(m6_frame, "_package_continuous_case",
+                               side_effect=package):
+            code = m6_frame.shadow_coordinator_continuous(args)
+        self.assertEqual(code, 1)
+        report = json.loads((self.shadow / "coordinator.json").read_text())
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["stop_reason"], "invalid_provenance")
+        self.assertEqual(report["terminal_failure"]["kind"],
+                         "invalid_provenance")
+        self.assertFalse(report["qualified"])
+        self.assertEqual(packaged, [(2, "completed_prefix")])
+
+    def test_continue_on_difference_continues_eligible_differences(self):
+        summaries = [
+            {"sequence": 1,
+             "classification": "difference_with_partial_state_coverage",
+             "history": 1, "diagnostic_report": "f1.json"},
+            {"sequence": 2, "classification": "qualified_match",
+             "history": 1, "diagnostic_report": "f2.json"},
+        ]
+        args = type("Args", (), {
+            "run": str(self.run), "shadow_dir": str(self.shadow),
+            "max_frames": 2, "timeout": 30.0, "continue_on_difference": True,
+            "case_dir": "", "case_max_bytes": 0,
+        })()
+
+        def coordinator(run, shadow, frame_index, args, deadline):
+            return summaries[frame_index - 1], {"classification": "x"}
+
+        with mock.patch.object(m6_frame, "_continuous_frame_coordinator",
+                               side_effect=coordinator), \
+             mock.patch.object(
+                m6_frame, "_package_continuous_case",
+                return_value={"status": "complete",
+                              "scope": "completed_sequence",
+                              "reproduction": {
+                                  "independently_reproducible": True}}):
+            code = m6_frame.shadow_coordinator_continuous(args)
+        self.assertEqual(code, 0)
+        report = json.loads((self.shadow / "coordinator.json").read_text())
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["stop_reason"], "frame_limit")
+        self.assertEqual(len(report["frames"]), 2)
+        self.assertFalse(report["qualified"])
+
+    def test_failed_continuous_report_never_publishes_qualified(self):
+        report = {
+            "schema": "m7-shadow-coordinator/v1", "mode": "continuous",
+            "status": "failed", "stop_reason": "tool_failure",
+            "error": "frame 2 preparation failed",
+            "frames": [{
+                "sequence": 1, "classification": "qualified_match",
+                "history": 1, "diagnostic_report": "f1.json",
+            }],
+        }
+        result = {}
+        failure = m6_frame.apply_shadow_report(result, report)
+        self.assertIn("frame 2 preparation failed", failure)
+        self.assertEqual(result["campaign_execution"], "failed")
+        self.assertEqual(result["classification"], "tool_failure")
+        self.assertEqual(result["terminal_failure"]["kind"], "tool_failure")
+        self.assertFalse(result["qualified"])
+        self.assertFalse(result["diagnostic_complete"])
+
+    def test_successful_continuous_report_can_publish_qualified(self):
+        report = {
+            "schema": "m7-shadow-coordinator/v1", "mode": "continuous",
+            "status": "ok", "stop_reason": "frame_limit",
+            "frames": [{
+                "sequence": 1, "classification": "qualified_match",
+                "history": 1, "diagnostic_report": "f1.json",
+            }],
+        }
+        result = {}
+        self.assertIsNone(m6_frame.apply_shadow_report(result, report))
+        self.assertEqual(result["campaign_execution"], "ok")
+        self.assertTrue(result["qualified"])
+        self.assertTrue(result["diagnostic_complete"])
+
     def test_stop_and_frame_limit_publish_the_case(self):
         summaries = [
             {"sequence": 1, "classification": "qualified_match"},
@@ -461,9 +637,9 @@ class LiveCoordinatorPackagingTests(unittest.TestCase):
         })()
         packaged = []
 
-        def package(run, shadow, count, args):
+        def package(run, shadow, count, args, **kwargs):
             packaged.append(count)
-            return {"status": "complete",
+            return {"status": "complete", "scope": kwargs.get("scope"),
                     "reproduction": {"independently_reproducible": True}}
 
         with mock.patch.object(m6_frame, "_continuous_frame_coordinator",

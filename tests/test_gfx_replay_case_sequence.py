@@ -795,6 +795,19 @@ class PortableSequenceCaseTests(unittest.TestCase):
         sequence = json.loads((case / "sequence.json").read_text())
         self.assertEqual(sequence["target_index"], 3)
         self.assertEqual(sequence["excluded_frames"], 1)
+        self.assertEqual(
+            [entry["original_sequence_index"] for entry in sequence["frames"]],
+            [2, 3, 4])
+        for entry in sequence["frames"]:
+            original = entry["original_sequence_index"]
+            source = out / "checkpoints" / f"frame-{original:03d}" / (
+                "checkpoint-request.json")
+            packaged = case / "checkpoints" / (
+                f"frame-{entry['index']:03d}") / "checkpoint-request.json"
+            self.assertTrue(entry["checkpoint_preserved"], entry)
+            self.assertEqual(entry["checkpoint_preservation"], "preserved")
+            self.assertEqual(sha(packaged.read_bytes()),
+                             sha(source.read_bytes()))
 
     def test_prefix_is_transitively_closed_over_predecessor_carried_outputs(self):
         self.fixture = SequenceFixture(
@@ -1376,6 +1389,72 @@ class HeterogeneousShaderSequenceTests(unittest.TestCase):
         self.assertEqual((replay.get("history") or {}).get("status"), "ok")
         self.assertGreaterEqual(
             (replay.get("history") or {}).get("carried_bindings") or 0, 1)
+
+    def test_live_mapping_is_authoritative_over_stale_frame_shaders(self):
+        """A live mapping wins over a stale frame-local translation."""
+        mapping = {}
+        stale_source = self.fixture.base / "stale-shaders"
+        shutil.copytree(self.fixture.frame_shaders[3], stale_source)
+        for index, frame in enumerate(self.frames, start=1):
+            live = self.fixture.base / "live-shaders" / str(index)
+            shutil.copytree(self.fixture.frame_shaders[index], live)
+            mapping[str(frame)] = live
+            shutil.rmtree(frame / "shaders")
+            # A stale offline translation that cannot serve this frame's draws.
+            shutil.copytree(stale_source, frame / "shaders")
+        case = self.fixture.base / "live-mapping-case"
+        manifest = gfx_replay_case.package_sequence_diagnosis(
+            self.frames, self.out / "out-003", case, self.diagnosis,
+            shaders=None, frame_shaders=mapping, case_id="live-mapping")
+        self.assertTrue(manifest["reproduction"]["independently_reproducible"])
+        sequence = json.loads((case / "sequence.json").read_text())
+        self.assertEqual([entry["shader_source"] for entry in
+                          sequence["frames"]],
+                         ["live_coordinator_mapping"] * 3)
+        self.assertEqual([entry["shader_programs"] for entry in
+                          sequence["frames"]], [[1], [3], [2]])
+        verified = gfx_replay_case.verify(case)
+        self.assertTrue(verified["ok"], verified["problems"])
+
+    def test_unusable_live_mapping_refuses_complete_packaging(self):
+        mapping = {str(frame): self.fixture.frame_shaders[index]
+                   for index, frame in enumerate(self.frames, start=1)}
+        shutil.rmtree(mapping[str(self.frames[0])])
+        case = self.fixture.base / "missing-live-mapping"
+        with self.assertRaises(gfx_replay_case.CaseError) as caught:
+            gfx_replay_case.package_sequence_diagnosis(
+                self.frames, self.out / "out-003", case, self.diagnosis,
+                shaders=None, frame_shaders=mapping,
+                case_id="missing-live-mapping")
+        self.assertEqual(caught.exception.kind, "shaders_missing")
+
+    def test_checkpoint_source_mismatch_is_recorded_and_regenerated(self):
+        sources = [self.out / "checkpoints" / f"frame-{index:03d}"
+                   for index in range(1, 4)]
+        receipt = json.loads(
+            (sources[1] / "shader-receipt.json").read_text())
+        receipt["checkpoint_request_sha256"] = "0" * 64
+        (sources[1] / "shader-receipt.json").write_text(json.dumps(receipt))
+        case = self.fixture.base / "checkpoint-mismatch"
+        manifest = gfx_replay_case.package_sequence_diagnosis(
+            self.frames, self.out / "out-003", case, self.diagnosis,
+            shaders=None, checkpoint_sources=sources,
+            case_id="checkpoint-mismatch")
+        self.assertTrue(manifest["reproduction"]["independently_reproducible"])
+        sequence = json.loads((case / "sequence.json").read_text())
+        # The pristine sources are preserved; the mutated one is regenerated
+        # with an explicit reason instead of being copied.
+        self.assertTrue(sequence["frames"][0]["checkpoint_preserved"])
+        self.assertTrue(sequence["frames"][2]["checkpoint_preserved"])
+        self.assertFalse(sequence["frames"][1]["checkpoint_preserved"])
+        self.assertEqual(sequence["frames"][0]["checkpoint_preservation"],
+                         "preserved")
+        self.assertEqual(sequence["frames"][1]["checkpoint_preservation"],
+                         "source_receipt_request_mismatch")
+        self.assertEqual(sequence["frames"][2]["checkpoint_preservation"],
+                         "preserved")
+        verified = gfx_replay_case.verify(case)
+        self.assertTrue(verified["ok"], verified["problems"])
 
     def test_verifier_detects_missing_frame_shader_artifact(self):
         case = self.fixture.base / "case-missing"
