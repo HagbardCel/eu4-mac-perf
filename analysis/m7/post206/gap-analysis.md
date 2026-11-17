@@ -107,12 +107,12 @@ derived fixtures remain in `tests/`.
 - Baseline focused set (`test_agent_tools`, `test_m7_continuous_supervisor`,
   `test_gfx_replay_case_sequence`, `test_m7_diagnosis`): **232 passed, 1
   skipped, 0 failures** in 49.2 s (`20261117T184907Z-a54c1e2b`).
-- PR #207 focused set: **356 passed, 1 skipped, 0 failures** (supervisor,
+- PR #207 focused set: **374 passed, 1 skipped, 0 failures** (supervisor,
   continuous replay, agent tools, GL control, diagnosis, case sequence, native
   bridge, frame capture).
-- PR #208 focused set: **312 passed, 1 skipped, 0 failures** (diagnosis, pixel
+- PR #208 focused set: **319 passed, 1 skipped, 0 failures** (diagnosis, pixel
   diagnostics, agent tools, supervisor, continuous replay, case sequence).
-- PR #209 final focused set: **407 passed, 1 skipped, 0 failures** across the
+- PR #209 final focused set: **432 passed, 1 skipped, 0 failures** across the
   capture, efficiency, agent, supervisor, replay, GL control, diagnosis, pixel,
   case and checkpoint modules.
 - DSH tools plugin: **9 passed, 0 failed**.
