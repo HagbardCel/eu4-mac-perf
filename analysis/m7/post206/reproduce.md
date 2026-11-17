@@ -64,9 +64,47 @@ first divergence event 284 target 0.
 
 ## 5. Portable case
 
-The case is packaged with the per-frame shader directories and checkpoint
-sources. The packaging call is in `analysis/m7/post206/phase-c-qualification.md`;
-then:
+Package the three-frame case from the captured frames, their per-frame
+translations and the supervisor's checkpoint requests:
+
+```sh
+python3 - <<'PY'
+import json
+from pathlib import Path
+from automation import gfx_replay_case
+
+run = Path(".local/m7/phase-c-authentic-v2").resolve()
+frames = [run / "frames" / f"frame-{i:06d}" for i in (1, 2, 3)]
+shaders = run / "shadow" / "frame-000001" / "shaders"
+frame_shaders = {
+    str(frame.resolve()): (run / "shadow" / f"frame-{i:06d}" / "shaders").resolve()
+    for i, frame in enumerate(frames, 1)
+}
+checkpoint_sources = [
+    run / "replay-sequence" / "checkpoints" / f"frame-{i:03d}"
+    for i in (1, 2, 3)
+]
+report = json.load(open(
+    run / "replay-sequence" / "out-003" / "diagnostic-report.json"))
+manifest = gfx_replay_case.package_sequence_diagnosis(
+    frames,
+    run / "replay-sequence" / "out-003",
+    run / "phase-c-authentic-case-v2",
+    report,
+    case_id="m7-phase-c-authentic-3frame",
+    shaders=shaders,
+    frame_shaders=frame_shaders,
+    checkpoint_sources=checkpoint_sources,
+    max_bytes=2 * 1024 ** 3,
+)
+print(json.dumps(manifest.get("reproduction"), indent=2))
+PY
+```
+
+The 2 GiB `max_bytes` is the explicit case budget. The default 512 MiB is an
+intentional bound and publishes an incomplete summary, not a silent drop.
+
+Then:
 
 ```sh
 python3 -m automation.agent_tools eu4_replay verify \
