@@ -33,7 +33,7 @@ review still required. No PR is merged.
   incorrect bytes in the correct version, missing lifecycle, unsupported
   channels, missing source, missing sample, digest corruption, lifecycle
   mutation and clear.
-- The authentic three-frame transfer control still matches 0/1,930,176.
+- The authentic frame-1 transfer control still matches 0/1,930,176; frames 2/3 are `unavailable` because the historical capture lacks copy-only lifecycle coverage. This is an explicit limitation, not a difference.
 
 ## PR #208 — Phase D
 

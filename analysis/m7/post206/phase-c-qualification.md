@@ -69,10 +69,13 @@ The same-backend control now verifies that the first sample of the destination
 is still the version produced by the selected copy. It compares the captured
 GL default-framebuffer source (BGRA8) with that captured GL destination
 texture (RGBA8) under the declared `bgra_to_rgba` channel swap and zero row
-flip. For all three frames:
+flip. The historical capture has lifecycle coverage for destination 442 only
+in frame 1; frames 2 and 3 do not, so the control fails closed:
 
 ```text
-status=match  checked=1930176  mismatched=0  max_channel_error=0
+frame 1: match         checked=1930176  mismatched=0
+frame 2: unavailable   reason=unverified_lifecycle_coverage
+frame 3: unavailable   reason=unverified_lifecycle_coverage
 ```
 
 The run-level tool result is:
@@ -83,8 +86,8 @@ python3 -m automation.agent_tools eu4_capture gl-control \
 ```
 
 ```json
-{"status": "ok", "outcome": {"verdict": "equal", "evidence": "valid",
- "qualified": true}}
+{"status": "incomplete", "outcome": {"verdict": "unverified",
+ "evidence": "unverified", "qualified": false}}
 ```
 
 The report records the selected copy event (284), the first consumer (286),
@@ -93,8 +96,10 @@ mutation or missing lifecycle record is `unavailable`, not `different`.
 
 **Scope limitation:** this is a same-backend control of the captured copy and
 readback path. It does not re-execute the full 325-operation frame through
-OpenGL. The control proves that the transfer and the capture decoder are
-exact, so the authentic difference is upstream of the copy.
+OpenGL. Frame 1 proves the transfer and capture decoder are exact; frames 2/3
+are incomplete evidence, not differences, until copy-only lifecycle coverage
+is captured. The authentic differential evidence for those frames remains the
+GL/Metal sequence and final-pixel statistics.
 
 ## GL/Metal differential
 

@@ -34,7 +34,7 @@ whose acceptance does not claim full renderer equivalence.
 | Area | Required evidence | Result |
 | --- | --- | --- |
 | Capture | One-process, correctly ordered frame stream | **Pass.** One process (pid 84477) captured 3 sealed frames, 325 operations each; engine present indices 615/616/617 are consecutive; validator and case verifier report `gap_free`. |
-| Reproduction | Deterministic GL/GL identity | **Partial.** The versioned transfer/readback control is 0/1,930,176 on all three frames. A full-frame GL command replay is not implemented. |
+| Reproduction | Deterministic GL/GL identity | **Partial.** The versioned transfer/readback control matches frame 1 exactly (0/1,930,176); frames 2/3 are `unavailable` because the historical capture lacks copy-only lifecycle coverage. A full-frame GL command replay is not implemented. |
 | Differential validation | Genuine GL/Metal results with truthful classification | **Pass for diagnostics, not equivalence.** Three frames replay 325/325 operations with 0 failures, provenance verified, history `ok`; all are `difference_with_partial_state_coverage`; `gl_dither`/`multisample` unsupported. |
 | Cross-frame behavior | Verified identities, resource continuity, later-frame fault detection | **Pass.** One persistent session; history `ok` at sequence 3; controlled frame-2 event-1 fault is detected at frame 2 event 1 and the campaign remains unqualified. |
 | Diagnostics | Actionable first-divergence localization | **Pass.** Event 284 / default framebuffer / copy source; producer draw 283 / program 346; interval 13–284; normalized recommendation event 148; compact package 6,075 bytes. |

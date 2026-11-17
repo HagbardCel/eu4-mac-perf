@@ -67,7 +67,7 @@
     {
       "id": "copy_execution",
       "status": "rejected",
-      "evidence": "GL copy source and GL copy destination are byte-identical after the declared BGRA->RGBA channel swap: 0/1,930,176 differing pixels in all three frames.",
+      "evidence": "Frame 1 GL copy source and destination are byte-identical after the declared BGRA->RGBA channel swap (0/1,930,176). Frames 2/3 are unavailable because the historical capture lacks copy-only lifecycle coverage; they are not reported as differences.",
       "artifacts": [
         "gl-control-frame1.json",
         "gl-control-frame2.json",

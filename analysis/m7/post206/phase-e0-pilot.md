@@ -56,9 +56,9 @@ The GL/GL control compares the captured GL source with the captured GL copy
 destination under `bgra_to_rgba`:
 
 ```text
-frame 1: 0 / 1,930,176 differing pixels
-frame 2: 0 / 1,930,176 differing pixels
-frame 3: 0 / 1,930,176 differing pixels
+frame 1: match, 0 / 1,930,176 differing pixels
+frame 2: unavailable, reason=unverified_lifecycle_coverage
+frame 3: unavailable, reason=unverified_lifecycle_coverage
 ```
 
 The copy path is exact. The difference is already present in the default

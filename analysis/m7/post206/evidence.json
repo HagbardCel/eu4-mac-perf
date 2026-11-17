@@ -148,49 +148,38 @@
   },
   "gl_control": {
     "scope": "captured_transfer",
-    "status": "match",
+    "status": "incomplete",
+    "qualified": false,
     "checks": [
       {
         "sequence": 1,
+        "status": "match",
         "event": 284,
         "destination_event": 286,
-        "status": "match",
-        "mismatched_pixels": 0,
-        "normalization": {
-          "channel_swap": "bgra_to_rgba",
-          "row_origin": "declared_lower_left"
-        },
-        "source_sha256": "abd4ad6b88c9d1043df75d9b8cf0132bf3d485efa627114dd9127a4efb1bb9d7",
-        "destination_sha256": "229efdaefda285d28414042e610323daade30c7894cc05276e69eaea45d0e1f5"
+        "reason_code": null,
+        "reason": null,
+        "mismatched_pixels": 0
       },
       {
         "sequence": 2,
+        "status": "unavailable",
         "event": 284,
-        "destination_event": 286,
-        "status": "match",
-        "mismatched_pixels": 0,
-        "normalization": {
-          "channel_swap": "bgra_to_rgba",
-          "row_origin": "declared_lower_left"
-        },
-        "source_sha256": "7adfe4a85b3be3a1f5c3a59102e8fc2df2ab811c1a0cbe432e7998cacf1933a3",
-        "destination_sha256": "dbcf89790bcd20c3c1f1e0c70d746b3e7b3841641ed6ab80f133641107ca21b8"
+        "destination_event": null,
+        "reason_code": "unverified_lifecycle_coverage",
+        "reason": "destination 442 is not covered by the frame's lifecycle records; a later CPU write cannot be excluded",
+        "mismatched_pixels": null
       },
       {
         "sequence": 3,
+        "status": "unavailable",
         "event": 284,
-        "destination_event": 286,
-        "status": "match",
-        "mismatched_pixels": 0,
-        "normalization": {
-          "channel_swap": "bgra_to_rgba",
-          "row_origin": "declared_lower_left"
-        },
-        "source_sha256": "4184585504c54eda6754c2540104bff21d25dd45ded11b4e85b8c835c7b60804",
-        "destination_sha256": "931aaf9cd5819554fc81f88b8e98aa91aa96a417acc2cde5e9c00bcb9542b888"
+        "destination_event": null,
+        "reason_code": "unverified_lifecycle_coverage",
+        "reason": "destination 442 is not covered by the frame's lifecycle records; a later CPU write cannot be excluded",
+        "mismatched_pixels": null
       }
     ],
-    "qualified": true
+    "note": "Frame 1 matches exactly; frames 2/3 are unavailable because the historical capture has no lifecycle coverage for copy-only destination 442. The control fails closed rather than reporting a false difference."
   },
   "portable_case": {
     "case_id": "m7-phase-c-authentic-3frame",
@@ -469,7 +458,7 @@
       {
         "id": "copy_execution",
         "status": "rejected",
-        "evidence": "GL copy source and GL copy destination are byte-identical after the declared BGRA->RGBA channel swap: 0/1,930,176 differing pixels in all three frames.",
+        "evidence": "Frame 1 GL copy source and destination are byte-identical after the declared BGRA->RGBA channel swap (0/1,930,176). Frames 2/3 are unavailable because the historical capture lacks copy-only lifecycle coverage; they are not reported as differences.",
         "artifacts": [
           "gl-control-frame1.json",
           "gl-control-frame2.json",
@@ -551,11 +540,11 @@
   "review": {
     "prs": {
       "207": {
-        "head": "50a37337",
+        "head": "b9cb0e16",
         "status": "awaiting independent review"
       },
       "208": {
-        "head": "47d758b0",
+        "head": "b419ef33",
         "status": "awaiting independent review"
       },
       "209": {
