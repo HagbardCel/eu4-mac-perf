@@ -16,6 +16,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "benchmark"
@@ -590,12 +591,17 @@ class AuthenticCanonicalPrefixTests(unittest.TestCase):
         shutil.rmtree(out)
         verified = gfx_replay_case.verify(moved)
         self.assertTrue(verified["ok"], verified["problems"])
-        replay = gfx_replay_case.replay_case(moved, self.base / "replay")
-        self.assertEqual(replay["campaign"]["target_sequence"], 3)
-        self.assertEqual(replay["classification"],
-                         diagnosis["classification"])
-        self.assertGreaterEqual(
-            replay["provenance"]["metal_render_target_bindings"], 1)
+        # The historical canonical capture has no same-process seal, so its
+        # diagnosis is incomplete_diagnostics.  The replay gate must refuse to
+        # promote that executed-but-incomplete campaign into a reproduction
+        # result, even though the target frame itself was reached.
+        self.assertEqual(diagnosis["classification"], "incomplete_diagnostics")
+        with self.assertRaises(gfx_replay_case.CaseError) as caught:
+            gfx_replay_case.replay_case(moved, self.base / "replay")
+        self.assertEqual(caught.exception.kind, "sequence_replay")
+        detail = json.loads(caught.exception.detail)
+        self.assertEqual(detail["last_sequence"], 3)
+        self.assertIn("incomplete_diagnostics", " ".join(detail["reasons"]))
 
 
 @unittest.skipUnless(sys.platform == "darwin", "Metal replay is macOS")
@@ -692,6 +698,39 @@ class PortableSequenceCaseTests(unittest.TestCase):
         # specific operation for this controlled fault; do not invent one.
         self.assertIsNone(
             fault["reproduction"]["earliest_affected_operation"])
+
+    def test_minimal_prefix_preserves_source_receipts_and_verifies(self):
+        out, diagnosis = self.baseline()
+        sources = [out / "checkpoints" / f"frame-{index:03d}"
+                   for index in range(1, 5)]
+        case = self.fixture.base / "prefix-preserved-receipts"
+        manifest = gfx_replay_case.package_sequence_diagnosis(
+            self.frames, out / "out-004", case, diagnosis,
+            shaders=self.shaders, checkpoint_sources=sources,
+            case_id="prefix-preserved-receipts")
+        self.assertTrue(manifest["reproduction"]["independently_reproducible"])
+        sequence = json.loads((case / "sequence.json").read_text())
+        self.assertTrue(sequence["minimal_prefix"])
+        self.assertEqual(sequence["excluded_frames"], 1)
+        self.assertEqual([entry["original_sequence_index"]
+                          for entry in sequence["frames"]], [2, 3, 4])
+        for entry in sequence["frames"]:
+            self.assertTrue(entry["checkpoint_preserved"], entry)
+            self.assertEqual(entry["receipt_origin"],
+                             "preserved_live_receipt")
+            self.assertEqual(entry["checkpoint_preservation"], "preserved")
+        # The live receipts keep their original campaign indices (2..4) while
+        # the portable sequence is renumbered 1..3; verification must accept
+        # both authoritative spellings rather than rejecting the case.
+        receipts = [
+            json.loads((case / "checkpoints" / f"frame-{index:03d}" /
+                        "shader-receipt.json").read_text())
+            for index in (1, 2, 3)
+        ]
+        self.assertEqual([receipt["sequence"] for receipt in receipts],
+                         [2, 3, 4])
+        verified = gfx_replay_case.verify(case)
+        self.assertTrue(verified["ok"], verified["problems"])
 
     def test_verifier_detects_missing_predecessor(self):
         out, diagnosis = self.baseline()
@@ -1899,6 +1938,164 @@ class HeterogeneousShaderSequenceTests(unittest.TestCase):
         self.assertEqual(missing[0]["frame"], 2)
         self.assertEqual(manifest["replay_command"], [])
         self.assertFalse(gfx_replay_case.verify(case)["ok"])
+
+
+class SequenceReplayGateTests(unittest.TestCase):
+    """A portable sequence replay may only succeed at its declared target."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.base = Path(self.temporary.name)
+        self.case = self.base / "case"
+        for index in (1, 2, 3):
+            (self.case / "frames" / f"{index:06d}").mkdir(parents=True)
+        (self.case / "sequence.json").write_text(json.dumps({
+            "schema": gfx_replay_case.SEQUENCE_MANIFEST_SCHEMA,
+            "session_id": "gate-session",
+            "pid": 7,
+            "target_index": 3,
+            "frames": [
+                {"index": index, "dir": f"frames/{index:06d}",
+                 "capture_frame_id": index}
+                for index in (1, 2, 3)
+            ],
+        }))
+        self.out = self.base / "out"
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def diagnosis(self, index, classification, *, mismatched=0):
+        path = self.out / f"out-{index:03d}" / "diagnostic-report.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "schema": "gfx-frame-diagnosis/v1",
+            "classification": classification,
+            "qualification": {
+                "axes": {"pixel_comparison": (
+                    "divergent" if mismatched else "match")}},
+            "pixels": {"status": "divergent" if mismatched else "match",
+                       "statistics": {"pixels": 16,
+                                      "mismatched_pixels": mismatched}},
+            "checkpoint_validation": {"status": "ok", "divergent": 0},
+            "first_divergence": {
+                "kind": ("final_only" if mismatched else "none")},
+        }))
+        return str(path)
+
+    def row(self, index, classification, *, ok=True, history_status=1,
+            diagnostic_completed=True, mismatched=0,
+            diagnostic_report=None):
+        return {
+            "sequence": index,
+            "output_dir": str(self.out / f"out-{index:03d}"),
+            "ok": ok,
+            "history_status": history_status,
+            "classification": classification,
+            "diagnostic_completed": diagnostic_completed,
+            "diagnostic_report": (
+                diagnostic_report if diagnostic_report is not None
+                else self.diagnosis(index, classification,
+                                    mismatched=mismatched)),
+            "pixels": {"pixels": 16, "mismatched_pixels": mismatched},
+            "axes": {"pixel_comparison": (
+                "divergent" if mismatched else "match")},
+            "checkpoint_validation": {"status": "ok", "divergent": 0},
+            "first_divergence": {
+                "kind": ("final_only" if mismatched else "none")},
+        }
+
+    def replay(self, report):
+        from automation import m7_continuous
+
+        with mock.patch.object(m7_continuous, "run_campaign",
+                               return_value=report) as run:
+            value = gfx_replay_case._replay_sequence_case(
+                self.case, self.out)
+        run.assert_called_once()
+        return value
+
+    def assert_gate_failure(self, report, *needles):
+        with self.assertRaises(gfx_replay_case.CaseError) as caught:
+            self.replay(report)
+        self.assertEqual(caught.exception.kind, "sequence_replay")
+        detail = json.loads(caught.exception.detail)
+        self.assertEqual(detail["target_index"], 3)
+        self.assertLess(detail["executed_frames"], 3)
+        joined = " ".join(detail["reasons"])
+        for needle in needles:
+            self.assertIn(needle, joined)
+        return detail
+
+    def test_complete_divergent_sequence_reproduces_the_target(self):
+        report = {
+            "status": "complete", "stop_reason": "frame_limit",
+            "frames": [
+                self.row(1, "difference_with_partial_state_coverage",
+                         mismatched=4),
+                self.row(2, "difference_with_partial_state_coverage",
+                         mismatched=5),
+                self.row(3, "difference_with_partial_state_coverage",
+                         mismatched=6),
+            ],
+        }
+        value = self.replay(report)
+        self.assertEqual(value["status"], "ok")
+        self.assertEqual(value["classification"],
+                         "difference_with_partial_state_coverage")
+        self.assertEqual(value["campaign"]["target_sequence"], 3)
+        self.assertEqual(value["reproduction"]["target_sequence"], 3)
+        self.assertEqual(value["final"]["sequence"], 3)
+
+    def test_complete_sequence_with_matching_target_is_valid(self):
+        report = {
+            "status": "complete", "stop_reason": "frame_limit",
+            "frames": [
+                self.row(1, "qualified_difference", mismatched=3),
+                self.row(2, "qualified_match"),
+                self.row(3, "qualified_match"),
+            ],
+        }
+        value = self.replay(report)
+        self.assertEqual(value["final"]["sequence"], 3)
+        self.assertEqual(value["classification"], "qualified_match")
+        self.assertEqual(value["reproduction"]["earliest_affected_frame"], 1)
+
+    def test_premature_history_stop_is_not_a_reproduction(self):
+        detail = self.assert_gate_failure({
+            "status": "stopped", "stop_reason": "history_invalid",
+            "stopped_at": 2,
+            "frames": [
+                self.row(1, "qualified_match"),
+                self.row(2, "qualified_match", history_status=0),
+            ],
+        }, "campaign status", "history_status=0", "not the declared target")
+        self.assertEqual(detail["stop_reason"], "history_invalid")
+
+    def test_premature_provenance_stop_is_not_a_reproduction(self):
+        detail = self.assert_gate_failure({
+            "status": "stopped", "stop_reason": "invalid_provenance",
+            "stopped_at": 2,
+            "frames": [
+                self.row(1, "qualified_match"),
+                self.row(2, "invalid_provenance"),
+            ],
+        }, "invalid_provenance", "not the declared target")
+        self.assertEqual(detail["stop_reason"], "invalid_provenance")
+
+    def test_gpu_failure_at_frame_two_is_not_a_reproduction(self):
+        detail = self.assert_gate_failure({
+            "status": "stopped", "stop_reason": "gpu_execution_failure",
+            "stopped_at": 2,
+            "frames": [
+                self.row(1, "qualified_match"),
+                self.row(2, "gpu_execution_failure", ok=False,
+                         diagnostic_completed=False,
+                         diagnostic_report=""),
+            ],
+        }, "GPU execution failed", "no completed diagnostic",
+           "not the declared target")
+        self.assertEqual(detail["last_sequence"], 2)
 
 
 if __name__ == "__main__":

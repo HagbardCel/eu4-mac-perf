@@ -1298,6 +1298,23 @@ def _receipt_identity_problems(
     except (OSError, UnicodeError, json.JSONDecodeError, CaseError):
         expected_count = None
     check("checkpoint_count", expected_count)
+    # A preserved receipt records the source campaign index; a derived receipt
+    # records the portable index.  Prefix selection renumbers the container, so
+    # both are authoritative for their respective origin and must agree with
+    # one of the two recorded indices.
+    allowed_sequences = {
+        value for value in (
+            sequence.get("sequence_index"),
+            sequence.get("portable_original_sequence_index"))
+        if isinstance(value, int) and not isinstance(value, bool)
+    }
+    receipt_sequence = receipt.get("sequence")
+    if (receipt_sequence is not None
+            and receipt_sequence not in allowed_sequences):
+        problems.append((
+            "sequence",
+            f"receipt sequence {receipt_sequence!r} is not one of "
+            f"{sorted(allowed_sequences)}"))
     for field, value in _receipt_shader_identity(shader_dir).items():
         check(field, value)
     return problems
@@ -2007,10 +2024,6 @@ def _verify_sequence(case_dir: Path, manifest: dict) -> tuple[list[str], dict]:
                         problems.append(
                             f"frame {index} checkpoint request count drifted "
                             f"from the declared sequence")
-                if receipt_value.get("sequence") not in (None, index):
-                    problems.append(
-                        f"frame {index} checkpoint receipt has another "
-                        "portable sequence index")
                 origin = entry.get("receipt_origin")
                 if origin not in ("preserved_live_receipt", "derived_receipt"):
                     problems.append(
@@ -2053,6 +2066,71 @@ def _verify_sequence(case_dir: Path, manifest: dict) -> tuple[list[str], dict]:
     return problems, summary
 
 
+_REPLAY_TERMINAL_CLASSIFICATIONS = {
+    "gpu_execution_failure", "invalid_provenance", "incomplete_capture",
+    "incomplete_diagnostics",
+}
+_REPLAY_INFRASTRUCTURE_REASONS = {
+    "host_failure", "frame_timeout", "overall_timeout", "tool_failure",
+    "sequence_order", "frame_identity", "cancelled", "time_budget",
+}
+
+
+def _sequence_replay_problems(report: dict, expected_frames: int,
+                              target_index: int) -> list[str]:
+    """Explain why a sequence replay did not execute its declared target.
+
+    A portable reproduction is only successful when the campaign completed,
+    every declared frame was executed once in order, each frame was diagnosed,
+    the last executed frame is the declared target, and no terminal execution,
+    history, provenance, identity or infrastructure failure occurred.  Pixel
+    equivalence is deliberately *not* required: a fully executed, divergent
+    campaign is a valid reproduction of a rendering defect.
+    """
+    problems: list[str] = []
+    status = report.get("status")
+    stop_reason = report.get("stop_reason")
+    if status != "complete":
+        problems.append(
+            f"campaign status is {status!r}, not 'complete'"
+            + (f" (stop_reason={stop_reason!r})" if stop_reason else ""))
+    if stop_reason in _REPLAY_INFRASTRUCTURE_REASONS:
+        problems.append(f"infrastructure failure: {stop_reason}")
+    rows = [row for row in report.get("frames") or [] if isinstance(row, dict)]
+    if len(rows) != expected_frames:
+        problems.append(
+            f"executed {len(rows)} of {expected_frames} declared frames")
+    sequences = [row.get("sequence") for row in rows]
+    expected_sequences = list(range(1, expected_frames + 1))
+    if sequences != expected_sequences:
+        problems.append(
+            f"executed sequence {sequences} is not {expected_sequences}")
+    for row in rows:
+        sequence = row.get("sequence")
+        if row.get("ok") is False:
+            problems.append(
+                f"frame {sequence} GPU execution failed: "
+                f"{row.get('error') or row.get('stage') or 'unknown'}")
+        if row.get("history_status") not in (1, None):
+            problems.append(
+                f"frame {sequence} resource history failed: "
+                f"history_status={row.get('history_status')}")
+        classification = row.get("classification")
+        if classification in _REPLAY_TERMINAL_CLASSIFICATIONS:
+            problems.append(
+                f"frame {sequence} terminal classification: {classification}")
+        if row.get("diagnostic_completed") is not True:
+            problems.append(
+                f"frame {sequence} has no completed diagnostic evidence: "
+                f"{(row.get('diagnostic_evidence') or {}).get('missing')}")
+    last_sequence = sequences[-1] if sequences else None
+    if last_sequence != target_index:
+        problems.append(
+            f"last executed frame {last_sequence} is not the declared target "
+            f"{target_index}")
+    return problems
+
+
 def _replay_sequence_case(case_dir: Path, out_dir: Path,
                           *, faults: dict | None = None) -> dict:
     from automation import m7_continuous
@@ -2060,6 +2138,7 @@ def _replay_sequence_case(case_dir: Path, out_dir: Path,
     sequence = _json(case_dir / "sequence.json")
     frames = [(case_dir / entry["dir"]).resolve()
               for entry in sequence.get("frames") or []]
+    target_index = int(sequence.get("target_index") or len(frames))
     environment = {
         "EU4_FRAME_REPLAY_DISABLE_RT_FLIP": (
             "1" if (faults or {}).get("disable_render_target_vflip") else None),
@@ -2084,14 +2163,26 @@ def _replay_sequence_case(case_dir: Path, out_dir: Path,
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
-    if report.get("status") not in ("complete", "stopped"):
-        raise CaseError(
-            "sequence_replay",
-            f"campaign ended {report.get('status')}: {report.get('stop_reason')}")
+    problems = _sequence_replay_problems(report, len(frames), target_index)
+    if problems:
+        # Never fall back to the last available frame: a diagnosis produced
+        # before the declared target is not a reproduction of this case.
+        raise CaseError("sequence_replay", json.dumps({
+            "status": report.get("status"),
+            "stop_reason": report.get("stop_reason"),
+            "stopped_at": report.get("stopped_at"),
+            "expected_frames": len(frames),
+            "executed_frames": len(report.get("frames") or []),
+            "target_index": target_index,
+            "last_sequence": (
+                (report.get("frames") or [{}])[-1].get("sequence")
+                if report.get("frames") else None),
+            "reasons": problems,
+        }, sort_keys=True))
     last = (report.get("frames") or [])[-1]
     diagnostic_path = Path(str(last.get("diagnostic_report") or ""))
     if not diagnostic_path.is_file():
-        raise CaseError("sequence_replay", "no final frame diagnosis")
+        raise CaseError("sequence_replay", "no target frame diagnosis")
     diagnosis = _json(diagnostic_path)
     diagnosis = dict(diagnosis)
     diagnosis["campaign"] = {

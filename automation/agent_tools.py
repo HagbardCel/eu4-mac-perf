@@ -1888,15 +1888,41 @@ def _campaign_terminal_failure(report: dict) -> dict | None:
     return None
 
 
+def _campaign_row_trusted(row: dict) -> bool:
+    """True when a row's pixel/checkpoint evidence is trustworthy.
+
+    A terminal row (GPU failure, invalid provenance, incomplete capture or
+    diagnostics), a failed history, or an explicitly invalid capture/provenance
+    axis must never be promoted into a verified first-divergence claim.
+    Missing axes remain compatible with older synthetic reports.
+    """
+    if row.get("ok") is False:
+        return False
+    if row.get("history_status") not in (1, None):
+        return False
+    if row.get("classification") in _CAMPAIGN_TERMINAL_CLASSIFICATIONS:
+        return False
+    axes = row.get("axes") if isinstance(row.get("axes"), dict) else {}
+    if axes.get("capture_validity") not in (None, "valid"):
+        return False
+    if axes.get("resource_provenance") not in (None, "verified"):
+        return False
+    if axes.get("gpu_execution") not in (None, "ok"):
+        return False
+    return True
+
+
 def _campaign_pixel_divergence(row: dict) -> bool:
     """True only for a verified divergent final-pixel comparison.
 
     The classification alone is not enough: ``unsupported_state`` and some
     ``qualified_difference`` rows can be caused by intermediate or semantic
     mismatches while the final image matches.  Pixel divergence requires the
-    diagnosis pixel axis to be ``divergent`` *and* at least one mismatched
-    final pixel.
+    authoritative ``pixel_comparison`` qualification axis to be ``divergent``
+    and at least one mismatched final pixel, on a trustworthy frame.
     """
+    if not _campaign_row_trusted(row):
+        return False
     axes = row.get("axes") if isinstance(row.get("axes"), dict) else {}
     statistics = row.get("pixels") if isinstance(row.get("pixels"), dict) else {}
     try:
@@ -1909,6 +1935,8 @@ def _campaign_pixel_divergence(row: dict) -> bool:
 
 def _campaign_checkpoint_divergence(row: dict) -> bool:
     """True only for a confirmed authoritative intermediate checkpoint diff."""
+    if not _campaign_row_trusted(row):
+        return False
     validation = row.get("checkpoint_validation")
     if not isinstance(validation, dict) or validation.get("status") != "ok":
         return False
@@ -1929,8 +1957,12 @@ def _campaign_outcome(report: dict) -> tuple[str, str, str | None, str | None,
     ``first_difference`` is retained for v1 consumers as the earliest frame
     whose classification is any non-equivalence (including ``unsupported_state``
     and semantic/intermediate mismatches).  It is *not* necessarily a pixel
-    difference.  Consumers that need verified evidence must use the explicit
-    fields:
+    difference.  The aggregate verdict, however, is derived from confirmed
+    evidence across all trusted, diagnosed frames: any verified final-pixel or
+    authoritative checkpoint difference makes the verdict ``different`` even
+    when an earlier frame only observed unsupported state.  Terminal failures
+    still outrank every rendering verdict.  Consumers that need the individual
+    evidence should use:
 
     * ``first_pixel_divergent_frame`` -- first frame whose final pixel axis is
       ``divergent`` with mismatched-pixel statistics.
@@ -2001,12 +2033,25 @@ def _campaign_outcome(report: dict) -> tuple[str, str, str | None, str | None,
     if report.get("status") == "incomplete":
         details["campaign_execution"] = "incomplete"
         return "incomplete", "incomplete", None, "unverified", False, details
-    if first_difference is not None:
-        classification = first_difference["classification"]
-        if classification == "qualified_difference":
-            return "ok", "complete", "different", "valid", False, details
-        if classification == "difference_with_partial_state_coverage":
-            return "ok", "partial", "different", "valid", False, details
+    trusted = [row for row in rows if _campaign_row_trusted(row)]
+    trusted_classifications = {
+        row.get("classification") for row in trusted
+        if row.get("classification") in (
+            "qualified_difference", "difference_with_partial_state_coverage")
+    }
+    # Aggregate from confirmed evidence across every diagnosed frame, not from
+    # the earliest classified non-equivalence.  A later verified pixel or
+    # checkpoint difference therefore outranks an earlier unsupported state.
+    if first_pixel is not None or first_checkpoint is not None \
+            or trusted_classifications:
+        diagnostic = ("complete"
+                      if "qualified_difference" in trusted_classifications
+                      else "partial")
+        return "ok", diagnostic, "different", "valid", False, details
+    if any(row.get("classification") == "unsupported_state"
+           for row in trusted):
+        # Unsupported state prevents an equivalence claim, but with no
+        # verified pixel or checkpoint difference the verdict is unverified.
         return "ok", "partial", "unverified", "valid", False, details
     if (report.get("qualified")
             and first_unqualified is None

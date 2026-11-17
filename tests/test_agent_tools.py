@@ -1458,6 +1458,112 @@ class StrategyBCaseToolTests(ToolTests):
         self.assertFalse(result["first_difference"]["pixel_divergent"])
         self.assertFalse(result["first_difference"]["checkpoint_divergent"])
 
+    @staticmethod
+    def trusted_frame(sequence, classification, *, pixels=0,
+                      pixel_comparison="match", checkpoint_divergent=0,
+                      ok=True, diagnostic_completed=True, **extra):
+        value = {
+            "sequence": sequence,
+            "classification": classification,
+            "history_status": 1,
+            "ok": ok,
+            "diagnostic_completed": diagnostic_completed,
+            "axes": {
+                "capture_validity": "valid",
+                "gpu_execution": "ok",
+                "resource_provenance": "verified",
+                "pixel_comparison": pixel_comparison,
+                "rendering_state_coverage": (
+                    "partial" if classification != "qualified_match"
+                    else "complete"),
+            },
+            "pixels": {"pixels": 100, "mismatched_pixels": pixels},
+            "checkpoint_validation": {
+                "status": "ok", "divergent": checkpoint_divergent},
+            "first_divergence": {
+                "kind": "final_only" if pixel_comparison == "divergent"
+                else "none"},
+        }
+        value.update(extra)
+        return value
+
+    def test_later_verified_mismatch_sets_the_aggregate_verdict(self):
+        report = {
+            "status": "complete", "stop_reason": "frame_limit",
+            "qualified": False,
+            "frames": [
+                self.trusted_frame(1, "unsupported_state"),
+                self.trusted_frame(2, "qualified_difference", pixels=7,
+                                   pixel_comparison="divergent",
+                                   checkpoint_divergent=2,
+                                   first_divergence={
+                                       "kind": "final_only", "event": 17,
+                                       "operation": "draw"}),
+                self.trusted_frame(3, "qualified_match"),
+            ],
+        }
+        code, value, _ = self.run_sequence(report)
+        self.assertEqual(code, 0, value)
+        self.assertEqual(value["outcome"]["diagnostic"], "complete")
+        self.assertEqual(value["outcome"]["verdict"], "different")
+        self.assertEqual(value["outcome"]["evidence"], "valid")
+        self.assertFalse(value["outcome"]["qualified"])
+        result = value["result"]
+        self.assertEqual(result["first_pixel_divergent_frame"], 2)
+        self.assertEqual(result["first_checkpoint_divergent_frame"], 2)
+        self.assertEqual(result["first_unqualified_frame"], 1)
+        self.assertIsNone(result["terminal_failure"])
+        self.assertEqual(result["first_difference"]["frame"], 1)
+        self.assertFalse(result["first_difference"]["pixel_divergent"])
+        self.assertFalse(result["qualified"])
+
+    def test_later_terminal_failure_overrides_but_keeps_observations(self):
+        report = {
+            "status": "failed", "stop_reason": "gpu_execution_failure",
+            "stopped_at": 4, "qualified": False,
+            "frames": [
+                self.trusted_frame(1, "unsupported_state"),
+                self.trusted_frame(2, "qualified_difference", pixels=7,
+                                   pixel_comparison="divergent",
+                                   checkpoint_divergent=1),
+                self.trusted_frame(3, "qualified_match"),
+                self.trusted_frame(4, "gpu_execution_failure", ok=False,
+                                   diagnostic_completed=False,
+                                   error="command buffer failed"),
+            ],
+        }
+        code, value, _ = self.run_sequence(report, frame_count=4)
+        self.assertEqual(code, 2, value)
+        self.assertEqual(value["status"], "failed")
+        self.assertEqual(value["outcome"]["diagnostic"], "failed")
+        self.assertIsNone(value["outcome"]["verdict"])
+        self.assertEqual(value["outcome"]["evidence"], "invalid")
+        self.assertFalse(value["outcome"]["qualified"])
+        result = value["result"]
+        self.assertEqual(result["first_pixel_divergent_frame"], 2)
+        self.assertEqual(result["first_checkpoint_divergent_frame"], 2)
+        self.assertEqual(result["first_unqualified_frame"], 1)
+        self.assertEqual(result["terminal_failure"]["kind"],
+                         "gpu_execution_failure")
+        self.assertEqual(result["first_difference"]["frame"], 1)
+
+    def test_invalid_provenance_pixels_are_not_promoted(self):
+        report = {
+            "status": "stopped", "stop_reason": "invalid_provenance",
+            "stopped_at": 1, "qualified": False,
+            "frames": [self.trusted_frame(
+                1, "invalid_provenance", pixels=5,
+                pixel_comparison="divergent")],
+        }
+        report["frames"][0]["axes"]["capture_validity"] = "invalid"
+        code, value, _ = self.run_sequence(report, frame_count=1)
+        self.assertEqual(code, 2, value)
+        result = value["result"]
+        self.assertIsNone(result["first_pixel_divergent_frame"])
+        self.assertIsNone(result["first_checkpoint_divergent_frame"])
+        self.assertEqual(result["terminal_failure"]["kind"],
+                         "invalid_provenance")
+
     def run_sequence(self, report, *, extra=(), frame_count=3):
         from automation import m7_continuous
 
