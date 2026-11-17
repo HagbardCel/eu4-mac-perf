@@ -38,6 +38,7 @@ STOP_CLASSIFICATIONS = {
     "unsupported_state",
     "gpu_execution_failure",
     "incomplete_diagnostics",
+    "fault_experiment",
 }
 
 
@@ -564,6 +565,12 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
         "validation": validation,
         "engine_identity": validation.get("engine_identity"),
         "fault_injection": dict(fault or {}) or None,
+        "fault_evidence": {
+            "schema": "gfx-fault-campaign-evidence/v1",
+            "requested": dict(fault or {}) or None,
+            "fired": False,
+            "frames": [],
+        },
         "frames": [],
         "stop_reason": None,
         "returncode": None,
@@ -706,6 +713,7 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
             "diagnostic_completed": bool(evidence.get("completed")),
             "fault_injection": (dict(applied_fault)
                                 if applied_fault else None),
+            "fault_evidence": diagnosis.get("fault_evidence"),
             "diagnostic_evidence": evidence,
             "shader_dir": str(effective_shaders),
             "diagnosis_seconds": diagnosis_seconds,
@@ -911,8 +919,21 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
         else:
             result["status"] = "complete"
             result["stop_reason"] = "frame_limit"
+    fault_records = [
+        item.get("fault_evidence") for item in result["frames"]
+        if isinstance(item.get("fault_evidence"), dict)]
+    result["fault_evidence"]["frames"] = fault_records
+    result["fault_evidence"]["fired"] = any(
+        record.get("fired") is True for record in fault_records)
+    result["fault_evidence"]["reason"] = (
+        "no fault was requested" if not fault else
+        "the selected fault fired in at least one frame"
+        if result["fault_evidence"]["fired"] else
+        "the selected fault did not fire; the campaign is still a fault "
+        "experiment and cannot be qualified")
     result["qualified"] = bool(
         result["status"] == "complete"
+        and not fault
         and len(result["frames"]) == len(frames)
         and all(item.get("classification") == "qualified_match"
                 and item.get("diagnostic_completed") is True

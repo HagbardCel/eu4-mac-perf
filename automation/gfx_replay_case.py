@@ -2102,7 +2102,7 @@ def _verify_sequence(case_dir: Path, manifest: dict) -> tuple[list[str], dict]:
 
 _REPLAY_TERMINAL_CLASSIFICATIONS = {
     "gpu_execution_failure", "invalid_provenance", "incomplete_capture",
-    "incomplete_diagnostics",
+    "incomplete_diagnostics", "fault_experiment",
 }
 _REPLAY_INFRASTRUCTURE_REASONS = {
     "host_failure", "frame_timeout", "overall_timeout", "tool_failure",

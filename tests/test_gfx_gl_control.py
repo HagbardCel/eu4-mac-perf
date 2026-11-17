@@ -1,4 +1,4 @@
-"""Same-backend GL control for captured transfers."""
+"""Same-backend GL control for captured transfers, including versioning."""
 from __future__ import annotations
 
 import hashlib
@@ -19,37 +19,64 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _draw(index: int, *, textures=None, target_name=None) -> dict:
+    value = {"index": index, "kind": "draw"}
+    if target_name is not None:
+        value["target"] = {"color_attachment": {"name": int(target_name)}}
+    if textures:
+        value["textures"] = textures
+    return value
+
+
+def _texture(name: str, file: str, digest: str, *, pixel_format="RGBA8"):
+    return {
+        "name": int(name),
+        "levels": [{
+            "width": 2, "height": 2, "pixel_format": pixel_format,
+            "file": file, "sha256": digest,
+        }],
+    }
+
+
 def make_frame(root: Path, *, source: bytes, destination: bytes,
-               destination_event: bool = True) -> Path:
+               destination_event: bool = True,
+               events: list[dict] | None = None,
+               lifecycle: list[dict] | None = None,
+               destination_format: str = "RGBA8",
+               write_sequence: bool = True,
+               declared_destination_sha: str | None = None,
+               write_source: bool = True) -> Path:
     frame = root / "frame"
     (frame / "blobs").mkdir(parents=True)
-    (frame / "blobs" / "copy-source.bgra").write_bytes(source)
+    if write_source:
+        (frame / "blobs" / "copy-source.bgra").write_bytes(source)
     (frame / "blobs" / "destination.bin").write_bytes(destination)
-    events = [{
-        "index": 1,
-        "kind": "resolve",
-        "operation": "glCopyTexSubImage2D",
-        "source": "0",
-        "destination": "442",
-        "source_image": {
-            "file": "copy-source.bgra", "sha256": _sha(source),
-            "width": 2, "height": 2, "bytes": len(source),
-        },
-    }]
-    if destination_event:
-        events.append({
-            "index": 2,
-            "kind": "draw",
-            "textures": [{
-                "name": 442,
-                "levels": [{
-                    "width": 2, "height": 2, "pixel_format": "RGBA8",
-                    "file": "destination.bin", "sha256": _sha(destination),
-                }],
-            }],
-        })
+    if events is None:
+        events = [{
+            "index": 1,
+            "kind": "resolve",
+            "operation": "glCopyTexSubImage2D",
+            "source": "0",
+            "destination": "442",
+            "source_image": {
+                "file": "copy-source.bgra", "sha256": _sha(source),
+                "width": 2, "height": 2, "bytes": len(source),
+            },
+        }]
+        if destination_event:
+            events.append(_draw(2, textures=[_texture(
+                442, "destination.bin",
+                declared_destination_sha or _sha(destination),
+                pixel_format=destination_format)]))
     (frame / "frame-events.jsonl").write_text(
         "\n".join(json.dumps(item) for item in events) + "\n")
+    if write_sequence:
+        (frame / "frame-sequence.json").write_text(json.dumps({
+            "schema": "gfx-frame-sequence/v1",
+            "session_id": "test", "pid": 1, "sequence_index": 1,
+            "capture_frame_id": 1, "complete": True,
+            "lifecycle": lifecycle or [],
+        }))
     return frame
 
 
@@ -57,8 +84,8 @@ class GlTransferControlTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
-        # The source is BGRA; the destination is RGBA, so the declared swap
-        # must reproduce the source exactly.
+        # Source is BGRA; destination is RGBA, so the declared swap must
+        # reproduce the source exactly.
         self.source = bytes((1, 2, 3, 255, 4, 5, 6, 255,
                              7, 8, 9, 255, 10, 11, 12, 255))
         self.destination = bytes((3, 2, 1, 255, 6, 5, 4, 255,
@@ -67,7 +94,7 @@ class GlTransferControlTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def test_zero_differing_pixels_after_declared_normalization(self):
+    def test_one_copy_followed_by_sample_matches(self):
         frame = make_frame(self.root, source=self.source,
                            destination=self.destination)
         report = gfx_gl_control.control_frame(frame)
@@ -77,8 +104,63 @@ class GlTransferControlTests(unittest.TestCase):
                          "bgra_to_rgba")
         self.assertEqual(
             report["checks"][0]["statistics"]["mismatched_pixels"], 0)
+        self.assertEqual(report["checks"][0]["provenance"],
+                         {"selected_copy_event": 1,
+                          "first_consumer_event": 2,
+                          "lifecycle": "checked"})
 
-    def test_one_changed_pixel_fails_the_control(self):
+    def test_two_copies_before_sample_make_the_first_unavailable(self):
+        source_a = self.source
+        source_b = bytes((21, 22, 23, 255, 24, 25, 26, 255,
+                          27, 28, 29, 255, 30, 31, 32, 255))
+        destination_b = bytes((23, 22, 21, 255, 26, 25, 24, 255,
+                               29, 28, 27, 255, 32, 31, 30, 255))
+        events = [{
+            "index": 1, "kind": "resolve",
+            "operation": "glCopyTexSubImage2D", "source": "0",
+            "destination": "442",
+            "source_image": {"file": "copy-source-a.bgra",
+                             "sha256": _sha(source_a),
+                             "width": 2, "height": 2},
+        }, {
+            "index": 2, "kind": "resolve",
+            "operation": "glCopyTexSubImage2D", "source": "0",
+            "destination": "442",
+            "source_image": {"file": "copy-source-b.bgra",
+                             "sha256": _sha(source_b),
+                             "width": 2, "height": 2},
+        }, _draw(3, textures=[_texture(
+            442, "destination.bin", _sha(destination_b))])]
+        frame = make_frame(self.root, source=source_a,
+                           destination=destination_b, events=events)
+        (frame / "blobs" / "copy-source-a.bgra").write_bytes(source_a)
+        (frame / "blobs" / "copy-source-b.bgra").write_bytes(source_b)
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "incomplete")
+        self.assertEqual(report["checks"][0]["status"], "unavailable")
+        self.assertEqual(report["checks"][0]["reason_code"],
+                         "intervening_copy")
+        self.assertEqual(report["checks"][1]["status"], "match")
+
+    def test_intervening_write_makes_the_copy_unavailable(self):
+        events = [{
+            "index": 1, "kind": "resolve",
+            "operation": "glCopyTexSubImage2D", "source": "0",
+            "destination": "442",
+            "source_image": {"file": "copy-source.bgra",
+                             "sha256": _sha(self.source),
+                             "width": 2, "height": 2},
+        }, _draw(2, target_name="442"),
+           _draw(3, textures=[_texture(
+               442, "destination.bin", _sha(self.destination))])]
+        frame = make_frame(self.root, source=self.source,
+                           destination=self.destination, events=events)
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "incomplete")
+        self.assertEqual(report["checks"][0]["reason_code"],
+                         "intervening_write")
+
+    def test_incorrect_bytes_in_the_correct_version_are_a_difference(self):
         changed = bytearray(self.destination)
         changed[0] ^= 0xFF
         frame = make_frame(self.root, source=self.source,
@@ -86,22 +168,89 @@ class GlTransferControlTests(unittest.TestCase):
         report = gfx_gl_control.control_frame(frame)
         self.assertEqual(report["status"], "different")
         self.assertFalse(report["qualified"])
+        self.assertEqual(report["checks"][0]["status"], "different")
 
-    def test_missing_destination_fails_closed(self):
+    def test_missing_lifecycle_provenance_is_incomplete(self):
+        frame = make_frame(self.root, source=self.source,
+                           destination=self.destination,
+                           write_sequence=False)
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "incomplete")
+        self.assertEqual(report["checks"][0]["reason_code"],
+                         "missing_lifecycle_provenance")
+
+    def test_unsupported_channels_are_unavailable(self):
+        frame = make_frame(self.root, source=self.source,
+                           destination=self.destination,
+                           destination_format="RGB10")
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "incomplete")
+        self.assertEqual(report["checks"][0]["reason_code"],
+                         "unsupported_channels")
+
+    def test_missing_source_is_unavailable(self):
+        frame = make_frame(self.root, source=self.source,
+                           destination=self.destination,
+                           write_source=False)
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "incomplete")
+        self.assertEqual(report["checks"][0]["reason_code"],
+                         "missing_source")
+
+    def test_missing_destination_sample_is_unavailable(self):
         frame = make_frame(self.root, source=self.source,
                            destination=self.destination,
                            destination_event=False)
-        with self.assertRaises(gfx_gl_control.ControlError) as raised:
-            gfx_gl_control.control_frame(frame)
-        self.assertEqual(raised.exception.kind, "missing_destination")
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "incomplete")
+        self.assertEqual(report["checks"][0]["reason_code"], "no_consumer")
 
-    def test_missing_source_fails_closed(self):
+    def test_digest_corruption_is_invalid(self):
         frame = make_frame(self.root, source=self.source,
-                           destination=self.destination)
-        (frame / "blobs" / "copy-source.bgra").unlink()
-        with self.assertRaises(gfx_gl_control.ControlError) as raised:
-            gfx_gl_control.control_frame(frame)
-        self.assertEqual(raised.exception.kind, "missing_source")
+                           destination=self.destination,
+                           declared_destination_sha="0" * 64)
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "invalid")
+        self.assertEqual(report["checks"][0]["reason_code"],
+                         "destination_digest")
+
+    def test_lifecycle_mutation_between_copy_and_sample_is_unavailable(self):
+        frame = make_frame(
+            self.root, source=self.source, destination=self.destination,
+            lifecycle=[{"kind": "mutation", "event": 1,
+                        "lifecycle_sequence": 7, "names": ["442"]}])
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "incomplete")
+        self.assertEqual(report["checks"][0]["reason_code"],
+                         "lifecycle_mutation")
+
+    def test_clear_between_copy_and_sample_is_unavailable(self):
+        events = [{
+            "index": 1, "kind": "resolve",
+            "operation": "glCopyTexSubImage2D", "source": "0",
+            "destination": "442",
+            "source_image": {"file": "copy-source.bgra",
+                             "sha256": _sha(self.source),
+                             "width": 2, "height": 2},
+        }, {"index": 2, "kind": "clear",
+            "target": {"color_attachment": {"name": 442}}},
+           _draw(3, textures=[_texture(
+               442, "destination.bin", _sha(self.destination))])]
+        frame = make_frame(self.root, source=self.source,
+                           destination=self.destination, events=events)
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "incomplete")
+        self.assertEqual(report["checks"][0]["reason_code"],
+                         "intervening_clear")
+
+    def test_no_control_is_unavailable_not_different(self):
+        events = [_draw(1, textures=[_texture(
+            442, "destination.bin", _sha(self.destination))])]
+        frame = make_frame(self.root, source=self.source,
+                           destination=self.destination, events=events)
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "unavailable")
+        self.assertFalse(report["qualified"])
 
 
 if __name__ == "__main__":

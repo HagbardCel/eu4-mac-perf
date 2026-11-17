@@ -823,22 +823,47 @@ def eu4_capture(args: argparse.Namespace) -> dict:
                     diagnostic="complete", verdict="unverified",
                     evidence="invalid", qualified=False,
                     reason=str(exc))
-        matched = all(item["qualified"] for item in reports)
+        statuses = {item["status"] for item in reports}
+        if "invalid" in statuses:
+            status = "invalid"
+        elif reports and all(item["status"] == "match" for item in reports):
+            status = "match"
+        elif "different" in statuses:
+            status = "different"
+        else:
+            status = "incomplete"
         value = {
             "schema": "gfx-gl-control-run/v1",
             "frames": reports,
-            "status": "match" if matched else "different",
-            "qualified": matched,
+            "status": status,
+            "qualified": status == "match",
             "scope": "captured_transfer",
+            "reason_codes": sorted({
+                code for item in reports
+                for code in (item.get("reason_codes") or [])}),
         }
+        if status == "match":
+            return _envelope(
+                "eu4_capture", "ok", value, diagnostic="complete",
+                verdict="equal", evidence="valid", qualified=True,
+                reason="same-backend GL control matched with zero differing "
+                       "pixels")
+        if status == "different":
+            return _envelope(
+                "eu4_capture", "invalid", value, diagnostic="complete",
+                verdict="different", evidence="invalid", qualified=False,
+                reason="same-backend GL control differs; the capture/decoder "
+                       "path is not exact")
+        if status == "invalid":
+            return _envelope(
+                "eu4_capture", "invalid", value, diagnostic="invalid",
+                verdict=None, evidence="invalid", qualified=False,
+                reason="same-backend GL control found corrupt evidence")
         return _envelope(
-            "eu4_capture", "ok" if matched else "invalid", value,
-            diagnostic="complete", verdict="equal" if matched else "different",
-            evidence="valid" if matched else "invalid", qualified=matched,
-            reason=("same-backend GL control matched with zero differing "
-                    "pixels" if matched else
-                    "same-backend GL control differs; the capture/decoder "
-                    "path is not exact"))
+            "eu4_capture", "incomplete", value, diagnostic="incomplete",
+            verdict="unverified", evidence="unverified", qualified=False,
+            reason="same-backend GL control could not establish the copied "
+                   "destination version")
     if args.capture_op == "graph":
         if not args.frame_dir:
             return _envelope("eu4_capture", "error",
@@ -1851,6 +1876,11 @@ def _diagnosis_outcome(report: dict, *, verification_ok: bool = True,
         return "ok", "complete", "different", "valid", False
     if classification == "difference_with_partial_state_coverage":
         return "ok", "partial", "different", "valid", False
+    if classification == "fault_experiment":
+        axes = qualification.get("axes") or {}
+        verdict = "different" if axes.get("pixel_comparison") == "divergent" \
+            else "unverified"
+        return "ok", "partial", verdict, "valid", False
     if classification == "unsupported_state":
         return "ok", "partial", "unverified", "valid", False
     if classification == "invalid_provenance":
@@ -2106,6 +2136,28 @@ def _campaign_outcome(report: dict) -> tuple[str, str, str | None, str | None,
         if row.get("classification") in (
             "qualified_difference", "difference_with_partial_state_coverage")
     }
+    fault_experiment = report.get("fault_injection")
+    if fault_experiment:
+        evidence = report.get("fault_evidence") or {}
+        fired = evidence.get("fired") is True
+        details["fault_experiment"] = {
+            "request": fault_experiment,
+            "fired": fired,
+            "evidence": evidence,
+            "qualified": False,
+            "note": (
+                "a selected fault experiment is never a qualified campaign, "
+                "even when the fault is pixel-neutral or did not fire"),
+        }
+        details["qualified"] = False
+        if first_pixel is not None or first_checkpoint is not None                 or trusted_classifications:
+            diagnostic = ("complete"
+                          if "qualified_difference" in trusted_classifications
+                          else "partial")
+            return "ok", diagnostic, "different", "valid", False, details
+        if fired:
+            return "ok", "complete", "unverified", "valid", False, details
+        return "incomplete", "incomplete", None, "valid", False, details
     # Aggregate from confirmed evidence across every diagnosed frame, not from
     # the earliest classified non-equivalence.  A later verified pixel or
     # checkpoint difference therefore outranks an earlier unsupported state.
@@ -2432,6 +2484,8 @@ def eu4_replay(args: argparse.Namespace) -> dict:
             "validation": report.get("validation"),
             "engine_identity": report.get("engine_identity"),
             "fault_injection": report.get("fault_injection"),
+            "fault_evidence": report.get("fault_evidence"),
+            "fault_experiment": details.get("fault_experiment"),
             "policy": report.get("policy"),
             "frames": rows,
             "unexecuted_frames": report.get("unexecuted_frames") or [],
