@@ -501,5 +501,22 @@
     "first_unqualified_frame": 1,
     "terminal_failure": null,
     "diagnostic_complete": true
+  },
+  "focused_test_run": {
+    "id": "20261117T171357Z-f9feef43",
+    "tests": 313,
+    "duration_seconds": 95.19,
+    "modules": [
+      "tests.test_agent_tools",
+      "tests.test_dsh_native_bridge",
+      "tests.test_gfx_replay_case",
+      "tests.test_gfx_replay_case_sequence",
+      "tests.test_m6_frame",
+      "tests.test_m7_continuous_replay",
+      "tests.test_m7_continuous_supervisor",
+      "tests.test_m7_diagnosis",
+      "tests.test_m7_metal_replay",
+      "tests.test_m7_shadow_receipt"
+    ]
   }
 }

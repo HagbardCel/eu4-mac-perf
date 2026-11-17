@@ -293,9 +293,9 @@ Result: **350 tests passed in 94.79 s** (run
 This includes the new failure-precedence, policy, argument-ownership,
 provenance and negative-case regressions plus real Metal replay.
 
-Second-review focused run after code `293997ca` (same checked interpreter):
-**313 tests passed in 97.40 s** (run
-`20261117T170123Z-95891de9`) across `tests.test_agent_tools`,
+Second-review focused run after code `0ba76ad7` (same checked interpreter):
+**313 tests passed in 95.19 s** (run
+`20261117T171357Z-f9feef43`) across `tests.test_agent_tools`,
 `tests.test_dsh_native_bridge`, `tests.test_gfx_replay_case`,
 `tests.test_gfx_replay_case_sequence`, `tests.test_m6_frame`,
 `tests.test_m7_continuous_replay`, `tests.test_m7_continuous_supervisor`,
