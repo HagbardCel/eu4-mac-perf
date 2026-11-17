@@ -992,22 +992,38 @@ def first_divergence(graph: dict, checkpoints: list[dict],
                 "the copy execution is not established as the cause")
             start_event = (source_previous
                            if source_previous is not None else 0)
-            midpoint = max(int(start_event) + 1,
-                           (int(start_event) + int(event)) // 2)
-            next_checkpoint = {
-                "event": midpoint,
-                "target": source_target,
-                "resource": source_resource,
-                "requires_capture": True,
-                "reason": (
-                    "the copy source already differs; capture a "
-                    f"{source_resource} checkpoint near the midpoint of the "
-                    "unresolved interval to bisect the origin"),
-                "interval": [int(start_event), int(event)],
-                "lower_bound": ("same_resource_match"
-                                if source_previous is not None
-                                else "unbounded"),
-            }
+            if source_previous is not None and source_previous + 1 >= int(event):
+                limitations.append(
+                    "the source resource already matched immediately before "
+                    "the divergent event; no interior checkpoint remains")
+                recommended_action = {
+                    "action": "investigate_event",
+                    "event": event,
+                    "target": first.get("target"),
+                    "resource": first.get("resource"),
+                    "reason": (
+                        "the last matching same-resource checkpoint is "
+                        "immediately before the divergence; there is no "
+                        "interior event to bisect, so inspect this event or "
+                        "capture a finer-grained observation"),
+                }
+            else:
+                midpoint = max(int(start_event) + 1,
+                               (int(start_event) + int(event)) // 2)
+                next_checkpoint = {
+                    "event": midpoint,
+                    "target": source_target,
+                    "resource": source_resource,
+                    "requires_capture": True,
+                    "reason": (
+                        "the copy source already differs; capture a "
+                        f"{source_resource} checkpoint near the midpoint of "
+                        "the unresolved interval to bisect the origin"),
+                    "interval": [int(start_event), int(event)],
+                    "lower_bound": ("same_resource_match"
+                                    if source_previous is not None
+                                    else "unbounded"),
+                }
         elif producer and (event_is_transfer
                            or str(producer.get("kind")) in ("resolve",
                                                             "copy")):

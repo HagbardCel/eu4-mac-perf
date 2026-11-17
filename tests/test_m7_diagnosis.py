@@ -1226,6 +1226,26 @@ class FirstDivergenceSourceEvidenceTests(unittest.TestCase):
         self.assertEqual(value["recommended_checkpoint"]["lower_bound"],
                          "same_resource_match")
 
+    def test_no_interior_checkpoint_stops_bisection(self):
+        checkpoints = [
+            {"event": 283, "target": "0", "resource": "fb:0",
+             "status": "match", "authoritative": True},
+            {"event": 284, "target": "0", "resource": "fb:0",
+             "status": "divergent", "authoritative": True,
+             "statistics": {"mismatched_pixels": 10}},
+        ]
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), checkpoints, {"status": "divergent",
+                                        "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertIsNone(value["next_checkpoint"])
+        self.assertIsNone(value["recommended_checkpoint"])
+        self.assertEqual(value["recommended_action"]["action"],
+                         "investigate_event")
+        self.assertEqual(value["recommended_action"]["event"], 284)
+        self.assertIn("no interior event",
+                      value["recommended_action"]["reason"])
+
     def test_non_default_source_keeps_its_texture_target(self):
         graph = self.graph()
         graph["resources"]["tex:442"]["producers"][0].update({
