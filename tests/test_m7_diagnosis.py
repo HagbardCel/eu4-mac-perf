@@ -1393,6 +1393,7 @@ class FirstDivergenceSourceEvidenceTests(unittest.TestCase):
         self.assertEqual(value["recommended_checkpoint"]["source"],
                          "suggested_checkpoint")
         self.assertEqual(value["recommended_checkpoint"]["target"], "0")
+        self.assertTrue(value["recommended_checkpoint"]["requires_capture"])
 
     def test_missing_evidence_has_no_checkpoint_recommendation(self):
         value = gfx_independent_replay.first_divergence(

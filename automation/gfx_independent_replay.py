@@ -742,6 +742,7 @@ def _suggested_checkpoint(graph: dict, final: dict) -> dict | None:
         "event": event,
         "target": "0" if resource == "fb:0" else resource.split(":", 1)[-1],
         "resource": resource,
+        "requires_capture": True,
         "reason": (
             "checkpoint the last captured event's target; when it is not the "
             "final framebuffer, a checkpoint at or after the last default-"
