@@ -17,7 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import gfx_independent_replay, m7_continuous  # noqa: E402
+from automation import (gfx_independent_replay, gfx_replay_case, m6_frame,
+                        m7_continuous)  # noqa: E402
 
 
 def _sha(data: bytes) -> str:
@@ -331,6 +332,103 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(report["status"], "cancelled")
         self.assertEqual(report["stop_reason"], "cancelled")
 
+    @staticmethod
+    def qualified_diagnosis(**overrides):
+        value = {
+            "schema": gfx_independent_replay.DIAGNOSIS_SCHEMA,
+            "classification": "qualified_match",
+            "qualification": {
+                "axes": {"gpu_execution": "ok",
+                          "pixel_comparison": "match"}},
+            "pixels": {
+                "status": "match",
+                "statistics": {"pixels": 4, "mismatched_pixels": 0},
+            },
+            "checkpoint_validation": {"status": "ok", "divergent": 0},
+            "first_divergence": {"kind": "none"},
+        }
+        value.update(overrides)
+        return value
+
+    def test_duplicate_result_sequence_is_rejected_before_diagnosis(self):
+        rows = self.rows()
+        report, diagnose = self.run_with(
+            [rows[0], dict(rows[0]), rows[2]],
+            [self.qualified_diagnosis()])
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["stop_reason"], "sequence_order")
+        self.assertEqual(report["sequence_order"]["kind"], "duplicate")
+        self.assertEqual(report["sequence_order"]["expected"], 2)
+        self.assertEqual(report["sequence_order"]["received"], 1)
+        self.assertEqual(diagnose.call_count, 1)
+        self.assertEqual([row["sequence"] for row in report["frames"]], [1])
+        self.assertFalse(report["qualified"])
+
+    def test_skipped_result_sequence_is_rejected_before_diagnosis(self):
+        rows = self.rows()
+        report, diagnose = self.run_with(
+            [rows[0], rows[2]], [self.qualified_diagnosis()])
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["stop_reason"], "sequence_order")
+        self.assertEqual(report["sequence_order"]["kind"], "skipped")
+        self.assertEqual(report["sequence_order"]["expected"], 2)
+        self.assertEqual(report["sequence_order"]["received"], 3)
+        self.assertEqual(diagnose.call_count, 1)
+        self.assertFalse(report["qualified"])
+
+    def test_missing_first_result_sequence_is_rejected_before_diagnosis(self):
+        rows = self.rows()
+        report, diagnose = self.run_with(
+            [rows[1], rows[0], rows[2]], [])
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["stop_reason"], "sequence_order")
+        self.assertEqual(report["sequence_order"]["kind"], "skipped")
+        self.assertEqual(report["sequence_order"]["received"], 2)
+        self.assertEqual(diagnose.call_count, 0)
+        self.assertEqual(report["frames"], [])
+        self.assertFalse(report["qualified"])
+
+    def test_valid_result_sequence_is_qualified(self):
+        report, diagnose = self.run_with(
+            self.rows(),
+            [self.qualified_diagnosis() for _ in range(3)],
+            stop=False)
+        self.assertEqual(report["status"], "complete")
+        self.assertNotIn("sequence_order", report)
+        self.assertEqual([row["sequence"] for row in report["frames"]],
+                         [1, 2, 3])
+        self.assertTrue(all(row["diagnostic_completed"]
+                            for row in report["frames"]))
+        self.assertTrue(report["qualified"])
+        self.assertEqual(diagnose.call_count, 3)
+
+    def test_out_of_range_result_is_rejected_before_diagnosis(self):
+        rows = self.rows()
+        beyond = dict(rows[0], sequence=4)
+        report, diagnose = self.run_with([beyond], [])
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["stop_reason"], "sequence_order")
+        self.assertEqual(report["sequence_order"]["kind"], "out_of_range")
+        self.assertEqual(diagnose.call_count, 0)
+
+    def test_gpu_failure_row_never_claims_a_completed_diagnostic(self):
+        rows = self.rows()
+        rows[1]["ok"] = False
+        rows[1]["error"] = "command buffer failed"
+        report, diagnose = self.run_with(
+            rows, [self.qualified_diagnosis()], stop=False)
+        self.assertEqual(report["status"], "stopped")
+        self.assertEqual(report["stop_reason"], "gpu_execution_failure")
+        self.assertEqual(diagnose.call_count, 1)
+        first, failed = report["frames"]
+        self.assertTrue(first["diagnostic_completed"])
+        self.assertTrue(first["diagnostic_report"])
+        self.assertFalse(failed["diagnostic_completed"])
+        self.assertIsNone(failed["diagnostic_report"])
+        self.assertEqual(failed["diagnostic_evidence"]["missing"],
+                         ["diagnosis"])
+        self.assertFalse(report["qualified"])
+
     def test_sequence_identity_is_validated_before_execution(self):
         sequence = json.loads(
             (self.frames[1] / "frame-sequence.json").read_text())
@@ -344,6 +442,96 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(caught.exception.kind, "previous_manifest")
         run.assert_not_called()
 
+    def test_offline_sequence_stops_on_terminal_classification(self):
+        report, diagnose = self.run_with(
+            self.rows(),
+            [{"classification": "qualified_difference",
+              "qualification": {"axes": {}},
+              "first_divergence": {"kind": "final_only"},
+              "pixels": {"statistics": {}},
+              "checkpoint_validation": {"status": "ok"}},
+             {"classification": "invalid_provenance",
+              "qualification": {"axes": {}},
+              "first_divergence": {"kind": "invalid_checkpoint"},
+              "pixels": {"statistics": {}},
+              "checkpoint_validation": {"status": "invalid"}}],
+            stop=False)
+        self.assertEqual(report["status"], "stopped")
+        self.assertEqual(report["stop_reason"], "invalid_provenance")
+        self.assertEqual(report["stopped_at"], 2)
+        self.assertEqual(diagnose.call_count, 2)
+        self.assertEqual([row["sequence"] for row in report["frames"]], [1, 2])
+
+    def test_policy_is_forwarded_and_digest_is_saved(self):
+        import io
+
+        policy = self.root / "policy.json"
+        policy.write_text(json.dumps({
+            "schema": "gfx-frame-comparison-policy/v1",
+            "name": "campaign-policy",
+            "thresholds": {"max_channel_error": 0},
+        }))
+        rows = self.rows()
+        seen = {}
+
+        class FakeProcess:
+            def __init__(self):
+                self.stdout = iter(
+                    json.dumps(row) + "\n" for row in rows)
+                self.stderr = io.StringIO("")
+                self.returncode = 0
+
+            def poll(self):
+                return self.returncode
+
+            def wait(self, timeout=None):
+                return self.returncode
+
+            def terminate(self):
+                self.returncode = 0
+
+            def kill(self):
+                self.returncode = 0
+
+        def diagnose(frame, output, out_dir, selected_policy, **kwargs):
+            seen["policy"] = str(selected_policy)
+            return {"classification": "qualified_match",
+                    "qualification": {"axes": {}},
+                    "first_divergence": {"kind": "none"},
+                    "pixels": {"statistics": {}},
+                    "checkpoint_validation": {"status": "ok"}}
+
+        with mock.patch.object(m7_continuous.m6_frame, "build_replay_host",
+                               return_value=Path("/bin/true")), \
+             mock.patch.object(m7_continuous.subprocess, "Popen",
+                               return_value=FakeProcess()), \
+             mock.patch.object(gfx_independent_replay, "diagnose_frame",
+                               side_effect=diagnose), \
+             mock.patch.object(gfx_replay_case, "package_sequence_diagnosis",
+                               return_value={"case_id": "case",
+                                             "files": [{"bytes": 1}]}):
+            report = m7_continuous.run_campaign(
+                self.frames, self.root / "policy-out", shaders=self.root,
+                policy=policy, stop_on_difference=False)
+        self.assertEqual(report["status"], "complete")
+        self.assertEqual(Path(seen["policy"]).resolve(), policy.resolve())
+        digest = hashlib.sha256(policy.read_bytes()).hexdigest()
+        self.assertEqual(report["policy"]["sha256"], digest)
+        self.assertEqual(report["policy"]["source"], "explicit")
+        saved = json.loads(
+            (self.root / "policy-out" / "campaign-report.json").read_text())
+        self.assertEqual(saved["policy"]["sha256"], digest)
+
+    def test_missing_policy_is_refused_before_execution(self):
+        missing = self.root / "missing-policy.json"
+        with mock.patch.object(m7_continuous.subprocess, "run") as run:
+            with self.assertRaises(m7_continuous.ContinuousError) as caught:
+                m7_continuous.run_campaign(
+                    self.frames, self.root / "missing-policy-out",
+                    shaders=self.root, policy=missing)
+        self.assertEqual(caught.exception.kind, "policy_unavailable")
+        run.assert_not_called()
+
     def test_frame_and_byte_budgets_fail_closed(self):
         with self.assertRaises(m7_continuous.ContinuousError) as caught:
             m7_continuous.validate_sequence(self.frames, max_frames=2)
@@ -351,6 +539,369 @@ class SupervisorTests(unittest.TestCase):
         with self.assertRaises(m7_continuous.ContinuousError) as caught:
             m7_continuous.validate_sequence(self.frames, max_bytes=1)
         self.assertEqual(caught.exception.kind, "byte_budget")
+
+
+class DiagnosticEvidenceTests(unittest.TestCase):
+    """diagnostic_evidence requires the declared evidence, not just labels."""
+
+    @staticmethod
+    def diagnosis(**overrides):
+        value = {
+            "schema": gfx_independent_replay.DIAGNOSIS_SCHEMA,
+            "classification": "qualified_match",
+            "qualification": {"axes": {"pixel_comparison": "match"}},
+            "pixels": {
+                "status": "match",
+                "statistics": {"pixels": 16, "mismatched_pixels": 0},
+            },
+            "checkpoint_validation": {"status": "ok"},
+            "first_divergence": {"kind": "none"},
+        }
+        value.update(overrides)
+        return value
+
+    def test_missing_pixel_statistics_is_incomplete(self):
+        evidence = m7_continuous.diagnostic_evidence(
+            self.diagnosis(pixels={"status": "match"}))
+        self.assertFalse(evidence["completed"])
+        self.assertIn("pixels.statistics", evidence["missing"])
+
+    def test_invalid_pixel_statistics_are_incomplete(self):
+        variants = {
+            "zero_pixels": {"pixels": 0, "mismatched_pixels": 0},
+            "negative": {"pixels": 16, "mismatched_pixels": -1},
+            "over_count": {"pixels": 16, "mismatched_pixels": 17},
+            "non_numeric": {"pixels": "16", "mismatched_pixels": 2},
+        }
+        for name, statistics in variants.items():
+            with self.subTest(variant=name):
+                evidence = m7_continuous.diagnostic_evidence(
+                    self.diagnosis(pixels={
+                        "status": "match", "statistics": statistics}))
+                self.assertFalse(evidence["completed"])
+                self.assertIn("pixels.statistics", evidence["missing"])
+
+    def test_incomplete_checkpoint_evidence_is_not_complete(self):
+        diagnosis = self.diagnosis(
+            classification="incomplete_diagnostics",
+            checkpoint_validation={"status": "incomplete"})
+        evidence = m7_continuous.diagnostic_evidence(diagnosis)
+        self.assertFalse(evidence["completed"])
+        self.assertIn("checkpoint_validation.status", evidence["missing"])
+        self.assertEqual(evidence["checkpoint_status"], "incomplete")
+        # The explicit classification is preserved; it is not rewritten into a
+        # pixel difference.
+        self.assertEqual(diagnosis["classification"], "incomplete_diagnostics")
+
+    def test_invalid_checkpoint_evidence_is_not_complete(self):
+        evidence = m7_continuous.diagnostic_evidence(self.diagnosis(
+            classification="invalid_provenance",
+            checkpoint_validation={"status": "invalid"}))
+        self.assertFalse(evidence["completed"])
+        self.assertEqual(evidence["checkpoint_status"], "invalid")
+
+    def test_complete_evidence_is_complete(self):
+        evidence = m7_continuous.diagnostic_evidence(self.diagnosis())
+        self.assertTrue(evidence["completed"], evidence)
+        self.assertEqual(evidence["mismatched_pixels"], 0)
+
+
+class LiveCoordinatorPackagingTests(unittest.TestCase):
+    """The live coordinator packages the exact per-frame translations it used."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.run = self.root / "run"
+        self.shadow = self.run / "shadow"
+        for index in (1, 2, 3):
+            frame = self.run / "frames" / f"frame-{index:06d}"
+            frame.mkdir(parents=True)
+            shader = self.shadow / f"frame-{index:06d}" / "shaders"
+            shader.mkdir(parents=True)
+            (shader / "shaders.json").write_text(json.dumps({
+                "schema": "gfx-shader-report/v1",
+                "programs": [{"program": index}],
+            }))
+            checkpoint = self.shadow / f"frame-{index:06d}"
+            (checkpoint / "checkpoint-request.json").write_text(
+                json.dumps({"frame": index}))
+            (checkpoint / "shader-receipt.json").write_text(
+                json.dumps({"frame": index}))
+        (self.shadow / "frame-000003" / "diagnostic-report.json").write_text(
+            json.dumps({"classification": "qualified_match"}))
+        self.args = type("Args", (), {
+            "case_dir": "", "case_max_bytes": 0,
+        })()
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def test_packages_all_included_frames_with_their_own_shaders(self):
+        captured = {}
+
+        def package(frames, metal_dir, case_dir, report, **kwargs):
+            captured.update({
+                "frames": [str(item) for item in frames],
+                "metal_dir": str(metal_dir), "case_dir": str(case_dir),
+                "report": report, "kwargs": kwargs,
+            })
+            return {
+                "case_id": "live", "files": [{"bytes": 10}],
+                "reproduction": {"status": "complete",
+                                 "independently_reproducible": True},
+            }
+
+        with mock.patch.object(gfx_replay_case,
+                               "package_sequence_diagnosis",
+                               side_effect=package):
+            value = m6_frame._package_continuous_case(
+                self.run, self.shadow, 3, self.args)
+        self.assertEqual(value["status"], "complete")
+        self.assertEqual(len(captured["frames"]), 3)
+        self.assertEqual(captured["metal_dir"],
+                         str(self.shadow / "frame-000003"))
+        for index, frame in enumerate(captured["frames"], start=1):
+            self.assertEqual(
+                str(captured["kwargs"]["frame_shaders"][frame]),
+                str(self.shadow / f"frame-{index:06d}" / "shaders"))
+            self.assertEqual(
+                str(captured["kwargs"]["checkpoint_sources"][index - 1]),
+                str(self.shadow / f"frame-{index:06d}"))
+        self.assertEqual(captured["kwargs"]["max_bytes"],
+                         512 * 1024 * 1024)
+
+    def test_published_case_is_labeled_with_its_reproduction_scope(self):
+        def package(frames, metal_dir, case_dir, report, **kwargs):
+            path = Path(case_dir)
+            path.mkdir(parents=True, exist_ok=True)
+            (path / "case.json").write_text(json.dumps({
+                "schema": "gfx-strategy-b-case/v2", "case_id": "live",
+            }))
+            return {"case_id": "live", "files": [],
+                    "reproduction": {"status": "incomplete",
+                                     "independently_reproducible": False}}
+
+        with mock.patch.object(gfx_replay_case,
+                               "package_sequence_diagnosis",
+                               side_effect=package):
+            value = m6_frame._package_continuous_case(
+                self.run, self.shadow, 3, self.args,
+                scope="completed_prefix",
+                terminal_failure={"kind": "gpu_execution_failure",
+                                  "frame": 3})
+        self.assertEqual(value["scope"], "completed_prefix")
+        manifest = json.loads(
+            (self.shadow / "case" / "case.json").read_text())
+        self.assertEqual(manifest["reproduction_scope"],
+                         "completed_prefix")
+        self.assertEqual(manifest["terminal_failure"]["kind"],
+                         "gpu_execution_failure")
+
+    def test_continuation_predicate_excludes_terminal_and_ineligible(self):
+        self.assertFalse(m6_frame._continuous_should_continue(
+            "invalid_provenance", 1, True))
+        self.assertFalse(m6_frame._continuous_should_continue(
+            "incomplete_diagnostics", 1, True))
+        self.assertFalse(m6_frame._continuous_should_continue(
+            "qualified_difference", 0, True))
+        self.assertFalse(m6_frame._continuous_should_continue(
+            "unsupported_state", 1, True))
+        self.assertTrue(m6_frame._continuous_should_continue(
+            "qualified_difference", 1, True))
+        self.assertFalse(m6_frame._continuous_should_continue(
+            "qualified_difference", 1, False))
+        self.assertTrue(m6_frame._continuous_should_continue(
+            "qualified_match", 1, False))
+
+    def test_complete_v1_single_frame_package_is_not_mislabelled(self):
+        def package(frames, metal_dir, case_dir, report, **kwargs):
+            path = Path(case_dir)
+            path.mkdir(parents=True, exist_ok=True)
+            (path / "case.json").write_text(json.dumps({
+                "schema": gfx_replay_case.SCHEMA,
+                "case_id": "single-frame",
+                "files": [],
+            }))
+            return {"schema": gfx_replay_case.SCHEMA,
+                    "case_id": "single-frame", "files": []}
+
+        with mock.patch.object(gfx_replay_case,
+                               "package_sequence_diagnosis",
+                               side_effect=package):
+            value = m6_frame._package_continuous_case(
+                self.run, self.shadow, 3, self.args,
+                scope="target_frame")
+        self.assertEqual(value["status"], "complete")
+        self.assertEqual(value["reproduction"]["status"], "complete")
+        self.assertTrue(value["reproduction"]["independently_reproducible"])
+
+    def test_incomplete_reproduction_is_not_claimed_complete(self):
+        with mock.patch.object(
+                gfx_replay_case, "package_sequence_diagnosis",
+                return_value={
+                    "case_id": "live", "files": [],
+                    "reproduction": {
+                        "status": "incomplete",
+                        "independently_reproducible": False,
+                        "reason": "artifact_budget",
+                    },
+                }):
+            value = m6_frame._package_continuous_case(
+                self.run, self.shadow, 3, self.args)
+        self.assertEqual(value["status"], "incomplete")
+        self.assertFalse(value["reproduction"]["independently_reproducible"])
+
+    def test_packaging_refusal_is_structured(self):
+        with mock.patch.object(
+                gfx_replay_case, "package_sequence_diagnosis",
+                side_effect=gfx_replay_case.CaseError(
+                    "missing_predecessor", "no producer")):
+            value = m6_frame._package_continuous_case(
+                self.run, self.shadow, 3, self.args)
+        self.assertEqual(value["status"], "failed")
+        self.assertIn("missing_predecessor", value["reason"])
+
+    def test_continue_on_difference_stops_on_a_hard_failure(self):
+        summaries = [
+            {"sequence": 1, "classification": "qualified_match",
+             "history": 1, "diagnostic_report": "f1.json"},
+            {"sequence": 2,
+             "classification": "difference_with_partial_state_coverage",
+             "history": 1, "diagnostic_report": "f2.json"},
+            {"sequence": 3, "classification": "invalid_provenance",
+             "history": 1, "diagnostic_report": "f3.json"},
+        ]
+        args = type("Args", (), {
+            "run": str(self.run), "shadow_dir": str(self.shadow),
+            "max_frames": 4, "timeout": 30.0, "continue_on_difference": True,
+            "case_dir": "", "case_max_bytes": 0,
+        })()
+        packaged = []
+
+        def coordinator(run, shadow, frame_index, args, deadline):
+            return summaries[frame_index - 1], {"classification": "x"}
+
+        def package(run, shadow, count, args, **kwargs):
+            packaged.append((count, kwargs.get("scope")))
+            return {"status": "incomplete", "scope": kwargs.get("scope"),
+                    "reproduction": {"independently_reproducible": False}}
+
+        with mock.patch.object(m6_frame, "_continuous_frame_coordinator",
+                               side_effect=coordinator), \
+             mock.patch.object(m6_frame, "_package_continuous_case",
+                               side_effect=package):
+            code = m6_frame.shadow_coordinator_continuous(args)
+        self.assertEqual(code, 1)
+        report = json.loads((self.shadow / "coordinator.json").read_text())
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["stop_reason"], "invalid_provenance")
+        self.assertEqual(report["terminal_failure"]["kind"],
+                         "invalid_provenance")
+        self.assertFalse(report["qualified"])
+        self.assertEqual(packaged, [(2, "completed_prefix")])
+
+    def test_continue_on_difference_continues_eligible_differences(self):
+        summaries = [
+            {"sequence": 1,
+             "classification": "difference_with_partial_state_coverage",
+             "history": 1, "diagnostic_report": "f1.json"},
+            {"sequence": 2, "classification": "qualified_match",
+             "history": 1, "diagnostic_report": "f2.json"},
+        ]
+        args = type("Args", (), {
+            "run": str(self.run), "shadow_dir": str(self.shadow),
+            "max_frames": 2, "timeout": 30.0, "continue_on_difference": True,
+            "case_dir": "", "case_max_bytes": 0,
+        })()
+
+        def coordinator(run, shadow, frame_index, args, deadline):
+            return summaries[frame_index - 1], {"classification": "x"}
+
+        with mock.patch.object(m6_frame, "_continuous_frame_coordinator",
+                               side_effect=coordinator), \
+             mock.patch.object(
+                m6_frame, "_package_continuous_case",
+                return_value={"status": "complete",
+                              "scope": "completed_sequence",
+                              "reproduction": {
+                                  "independently_reproducible": True}}):
+            code = m6_frame.shadow_coordinator_continuous(args)
+        self.assertEqual(code, 0)
+        report = json.loads((self.shadow / "coordinator.json").read_text())
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["stop_reason"], "frame_limit")
+        self.assertEqual(len(report["frames"]), 2)
+        self.assertFalse(report["qualified"])
+
+    def test_failed_continuous_report_never_publishes_qualified(self):
+        report = {
+            "schema": "m7-shadow-coordinator/v1", "mode": "continuous",
+            "status": "failed", "stop_reason": "tool_failure",
+            "error": "frame 2 preparation failed",
+            "frames": [{
+                "sequence": 1, "classification": "qualified_match",
+                "history": 1, "diagnostic_report": "f1.json",
+            }],
+        }
+        result = {}
+        failure = m6_frame.apply_shadow_report(result, report)
+        self.assertIn("frame 2 preparation failed", failure)
+        self.assertEqual(result["campaign_execution"], "failed")
+        self.assertEqual(result["classification"], "tool_failure")
+        self.assertEqual(result["terminal_failure"]["kind"], "tool_failure")
+        self.assertFalse(result["qualified"])
+        self.assertFalse(result["diagnostic_complete"])
+
+    def test_successful_continuous_report_can_publish_qualified(self):
+        report = {
+            "schema": "m7-shadow-coordinator/v1", "mode": "continuous",
+            "status": "ok", "stop_reason": "frame_limit",
+            "frames": [{
+                "sequence": 1, "classification": "qualified_match",
+                "history": 1, "diagnostic_report": "f1.json",
+            }],
+        }
+        result = {}
+        self.assertIsNone(m6_frame.apply_shadow_report(result, report))
+        self.assertEqual(result["campaign_execution"], "ok")
+        self.assertTrue(result["qualified"])
+        self.assertTrue(result["diagnostic_complete"])
+
+    def test_stop_and_frame_limit_publish_the_case(self):
+        summaries = [
+            {"sequence": 1, "classification": "qualified_match"},
+            {"sequence": 2, "classification": "qualified_difference"},
+        ]
+
+        def coordinator(run, shadow, frame_index, args, deadline):
+            return summaries[frame_index - 1], {"classification": "x"}
+
+        args = type("Args", (), {
+            "run": str(self.run), "shadow_dir": str(self.shadow),
+            "max_frames": 3, "timeout": 30.0, "continue_on_difference": False,
+            "case_dir": "", "case_max_bytes": 0,
+        })()
+        packaged = []
+
+        def package(run, shadow, count, args, **kwargs):
+            packaged.append(count)
+            return {"status": "complete", "scope": kwargs.get("scope"),
+                    "reproduction": {"independently_reproducible": True}}
+
+        with mock.patch.object(m6_frame, "_continuous_frame_coordinator",
+                               side_effect=coordinator), \
+             mock.patch.object(m6_frame, "_package_continuous_case",
+                               side_effect=package):
+            code = m6_frame.shadow_coordinator_continuous(args)
+        self.assertEqual(code, 0)
+        self.assertEqual(packaged, [2])
+        report = json.loads(
+            (self.shadow / "coordinator.json").read_text())
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["stop_reason"],
+                         "first_qualified_difference")
+        self.assertEqual(report["case"]["status"], "complete")
 
 
 class BoundedWorkerTests(unittest.TestCase):

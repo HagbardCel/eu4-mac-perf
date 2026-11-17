@@ -219,15 +219,91 @@ described below. `--full` restores the raw recorded comparison and first pair.
 ### `eu4_replay`
 
 ```sh
-python3 -m automation.agent_tools eu4_replay case --case <case-dir>
+# v1 single-frame and v2 ordered-prefix Strategy B cases are recognized by the
+# same schema dispatch; omit --out to verify, pass it to replay.
+python3 -m automation.agent_tools eu4_replay verify --case <case-dir>
+python3 -m automation.agent_tools eu4_replay case --case <case-dir> \
+  --out <replay-dir>
+
+# Diagnose already-produced Metal evidence without executing Metal again.
+python3 -m automation.agent_tools eu4_replay diagnose --frame <frame-dir> \
+  --metal <metal-result-dir> --out <diagnosis-dir> --require-seal
+
+# Bounded M7 ordered sequence: one persistent Metal session, one translation
+# per frame, explicit input/case/time budgets.
+python3 -m automation.agent_tools eu4_replay sequence \
+  --frame-dir <frame-1> --frame-dir <frame-2> --frame-dir <frame-3> \
+  --shaders <fallback-shader-dir> --out <campaign-dir> \
+  --max-frames 3 --case-max-bytes 536870912 --frame-timeout 180
+
+# Existing selected-event single-frame replay.
 python3 -m automation.agent_tools eu4_replay frame --frame <trace-dir> \
   --shaders <shader-dir> --out <dir> --only-event 92
 ```
 
-The case comparison is fully offline. A missing NumPy is `unavailable`, never a
+The case path is fully offline. A missing NumPy is `unavailable`, never a
 successful diagnostic; a successful comparison with a difference verdict is
-`ok` with `verdict: "different"`. The frame replay path is the existing
-selected-event replay host; it does not require a new EU4 launch.
+`ok` with `verdict: "different"`. A v2 case whose reproduction is explicitly
+incomplete, or whose verification finds digest/identity/path problems, is
+`incomplete` or `invalid` and is never replayed or marked qualified. An
+unknown `gfx-strategy-b-case/*` version is `invalid`; only the recognized
+legacy image-comparison schema reaches the older comparator. The `sequence`
+and `diagnose` operations are M7 operations; they are not the older
+two-process `eu4_diff_run` workflow.
+
+`--out` after `eu4_replay` names the replay/diagnosis output directory.
+`--envelope-out` is the separate JSON-envelope file and may appear anywhere:
+
+```sh
+python3 -m automation.agent_tools eu4_replay case --case <case> \
+  --out <replay-dir> --envelope-out <envelope.json>
+```
+
+A missing or malformed `--policy` is refused; it never silently falls back to
+the default policy. The campaign and diagnosis evidence record the policy
+path, content SHA-256 and whether it was explicit or the default. A campaign
+with a terminal GPU/resource-history/capture failure is `failed`/`invalid`
+even when an earlier frame reported a rendering difference.
+
+`eu4_replay sequence` requires each replay result to carry exactly the next
+expected sequence number; duplicate, skipped, reversed or out-of-range results
+stop the campaign with a structured `stop_reason: "sequence_order"` before
+diagnosis. `qualified: true` requires every input frame to have been executed
+and diagnosed. The result separates:
+
+- `first_pixel_divergent_frame` — verified divergent final pixels;
+- `first_checkpoint_divergent_frame` — a confirmed authoritative intermediate
+  checkpoint difference;
+- `first_unqualified_frame` — the first frame not classified `qualified_match`;
+- `terminal_failure` — the first execution/history/invalid-capture failure;
+- `first_difference` — the legacy earliest classified non-equivalence, which
+  may be an `unsupported_state`/semantic mismatch and is not necessarily a
+  pixel difference.
+
+`diagnostic_complete` is evidence-based: every processed frame must have
+executed the diagnosis and produced its required evidence. A populated
+`diagnostic_report` path is only a locator; a Metal execution failure row
+reports `diagnostic_report: null` and `diagnostic_completed: false`.
+
+The aggregate `verdict` is derived from confirmed evidence across all trusted,
+diagnosed frames, not only the earliest classified non-equivalence. Only a row
+with `diagnostic_completed=true` can contribute evidence; completion requires a
+usable final-pixel statistics object (positive pixel count and a consistent
+mismatched-pixel count) and an authoritative `ok` checkpoint validation. A
+later verified final-pixel or authoritative checkpoint difference therefore
+yields `different` even when an earlier frame only observed `unsupported_state`;
+terminal failures still override the verdict without erasing the earlier
+observations. Evidence from a terminal, invalid-provenance or incompletely
+diagnosed frame is never promoted into `first_pixel_divergent_frame` or
+`first_checkpoint_divergent_frame`.
+
+Portable v2 case replay (`eu4_replay case --replay-out`) succeeds only when the
+campaign is `complete`, every declared frame was executed and diagnosed, the
+last frame is the declared target, and no terminal GPU/history/provenance/
+identity/infrastructure failure occurred. Pixel equivalence is not required; a
+fully executed divergent campaign is a valid reproduction. A premature stop
+raises a structured `sequence_replay` error and never reuses the last available
+frame's diagnosis.
 
 ### `eu4_case_inspect`
 

@@ -16,6 +16,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "benchmark"
@@ -590,12 +591,17 @@ class AuthenticCanonicalPrefixTests(unittest.TestCase):
         shutil.rmtree(out)
         verified = gfx_replay_case.verify(moved)
         self.assertTrue(verified["ok"], verified["problems"])
-        replay = gfx_replay_case.replay_case(moved, self.base / "replay")
-        self.assertEqual(replay["campaign"]["target_sequence"], 3)
-        self.assertEqual(replay["classification"],
-                         diagnosis["classification"])
-        self.assertGreaterEqual(
-            replay["provenance"]["metal_render_target_bindings"], 1)
+        # The historical canonical capture has no same-process seal, so its
+        # diagnosis is incomplete_diagnostics.  The replay gate must refuse to
+        # promote that executed-but-incomplete campaign into a reproduction
+        # result, even though the target frame itself was reached.
+        self.assertEqual(diagnosis["classification"], "incomplete_diagnostics")
+        with self.assertRaises(gfx_replay_case.CaseError) as caught:
+            gfx_replay_case.replay_case(moved, self.base / "replay")
+        self.assertEqual(caught.exception.kind, "sequence_replay")
+        detail = json.loads(caught.exception.detail)
+        self.assertEqual(detail["last_sequence"], 3)
+        self.assertIn("incomplete_diagnostics", " ".join(detail["reasons"]))
 
 
 @unittest.skipUnless(sys.platform == "darwin", "Metal replay is macOS")
@@ -692,6 +698,39 @@ class PortableSequenceCaseTests(unittest.TestCase):
         # specific operation for this controlled fault; do not invent one.
         self.assertIsNone(
             fault["reproduction"]["earliest_affected_operation"])
+
+    def test_minimal_prefix_preserves_source_receipts_and_verifies(self):
+        out, diagnosis = self.baseline()
+        sources = [out / "checkpoints" / f"frame-{index:03d}"
+                   for index in range(1, 5)]
+        case = self.fixture.base / "prefix-preserved-receipts"
+        manifest = gfx_replay_case.package_sequence_diagnosis(
+            self.frames, out / "out-004", case, diagnosis,
+            shaders=self.shaders, checkpoint_sources=sources,
+            case_id="prefix-preserved-receipts")
+        self.assertTrue(manifest["reproduction"]["independently_reproducible"])
+        sequence = json.loads((case / "sequence.json").read_text())
+        self.assertTrue(sequence["minimal_prefix"])
+        self.assertEqual(sequence["excluded_frames"], 1)
+        self.assertEqual([entry["original_sequence_index"]
+                          for entry in sequence["frames"]], [2, 3, 4])
+        for entry in sequence["frames"]:
+            self.assertTrue(entry["checkpoint_preserved"], entry)
+            self.assertEqual(entry["receipt_origin"],
+                             "preserved_live_receipt")
+            self.assertEqual(entry["checkpoint_preservation"], "preserved")
+        # The live receipts keep their original campaign indices (2..4) while
+        # the portable sequence is renumbered 1..3; verification must accept
+        # both authoritative spellings rather than rejecting the case.
+        receipts = [
+            json.loads((case / "checkpoints" / f"frame-{index:03d}" /
+                        "shader-receipt.json").read_text())
+            for index in (1, 2, 3)
+        ]
+        self.assertEqual([receipt["sequence"] for receipt in receipts],
+                         [2, 3, 4])
+        verified = gfx_replay_case.verify(case)
+        self.assertTrue(verified["ok"], verified["problems"])
 
     def test_verifier_detects_missing_predecessor(self):
         out, diagnosis = self.baseline()
@@ -795,6 +834,19 @@ class PortableSequenceCaseTests(unittest.TestCase):
         sequence = json.loads((case / "sequence.json").read_text())
         self.assertEqual(sequence["target_index"], 3)
         self.assertEqual(sequence["excluded_frames"], 1)
+        self.assertEqual(
+            [entry["original_sequence_index"] for entry in sequence["frames"]],
+            [2, 3, 4])
+        for entry in sequence["frames"]:
+            original = entry["original_sequence_index"]
+            source = out / "checkpoints" / f"frame-{original:03d}" / (
+                "checkpoint-request.json")
+            packaged = case / "checkpoints" / (
+                f"frame-{entry['index']:03d}") / "checkpoint-request.json"
+            self.assertTrue(entry["checkpoint_preserved"], entry)
+            self.assertEqual(entry["checkpoint_preservation"], "preserved")
+            self.assertEqual(sha(packaged.read_bytes()),
+                             sha(source.read_bytes()))
 
     def test_prefix_is_transitively_closed_over_predecessor_carried_outputs(self):
         self.fixture = SequenceFixture(
@@ -990,6 +1042,36 @@ class PortableSequenceCaseTests(unittest.TestCase):
             })
         (case / "case.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
+    def rederive_checkpoint_receipt(self, case: Path, index: int) -> str:
+        """Rebind a derived receipt after intentionally editing shader evidence."""
+        shader_dir = case / "frames" / f"{index:06d}" / "shaders"
+        relative = f"checkpoints/frame-{index:03d}/shader-receipt.json"
+        receipt_path = case / relative
+        receipt = json.loads(receipt_path.read_text())
+        receipt["shaders_json_sha256"] = sha(
+            (shader_dir / "shaders.json").read_bytes())
+        digest = hashlib.sha256()
+        count = 0
+        for path in sorted(shader_dir.rglob("*")):
+            if (not path.is_file()
+                    or path.name in ("ready", "shader-receipt.json")):
+                continue
+            digest.update(str(path.relative_to(shader_dir)).encode())
+            digest.update(b"\0")
+            digest.update(sha(path.read_bytes()).encode())
+            digest.update(b"\n")
+            count += 1
+        receipt["artifacts_sha256"] = digest.hexdigest()
+        receipt["artifact_count"] = count
+        receipt_path.write_text(json.dumps(receipt))
+        sequence_path = case / "sequence.json"
+        sequence = json.loads(sequence_path.read_text())
+        entry = sequence["frames"][index - 1]
+        entry["checkpoint_preserved"] = False
+        entry["receipt_origin"] = "derived_receipt"
+        sequence_path.write_text(json.dumps(sequence))
+        return relative
+
     def test_unreferenced_program_payloads_are_not_required(self):
         out, diagnosis = self.baseline()
         case, _ = self.package(out, diagnosis)
@@ -1000,7 +1082,9 @@ class PortableSequenceCaseTests(unittest.TestCase):
         extra["stages"]["pixel"]["glsl_file"] = "missing-extra.glsl"
         report["programs"].append(extra)
         (case / relative).write_text(json.dumps(report))
+        receipt_relative = self.rederive_checkpoint_receipt(case, 1)
         self.refresh(case, relative, update_sequence_entry=True)
+        self.refresh(case, receipt_relative)
         verified = gfx_replay_case.verify(case)
         self.assertTrue(verified["ok"], verified["problems"])
 
@@ -1322,6 +1406,269 @@ class HeterogeneousShaderSequenceTests(unittest.TestCase):
         self.assertEqual(replay["pixels"]["statistics"]["mismatched_pixels"],
                          0)
 
+    def test_live_layout_uses_per_frame_shaders_and_preserves_checkpoints(self):
+        """A live-style layout has no frame-local shaders; the mapping is used.
+
+        The production continuous coordinator keeps each translation beside
+        that frame's Metal output, not in ``<frame>/shaders``.  Packaging must
+        resolve every included frame's translation and copy the coordinator's
+        checkpoint request/receipt, then relocate and replay without the
+        original campaign.
+        """
+        saved = {}
+        for index, frame in enumerate(self.frames, start=1):
+            destination = self.fixture.base / "live-shaders" / str(index)
+            shutil.copytree(frame / "shaders", destination)
+            saved[str(frame)] = destination
+            shutil.rmtree(frame / "shaders")
+        checkpoint_sources = [
+            self.out / "checkpoints" / f"frame-{index:03d}"
+            for index in range(1, len(self.frames) + 1)]
+        case = self.fixture.base / "live-case"
+        manifest = gfx_replay_case.package_sequence_diagnosis(
+            self.frames, self.out / "out-003", case, self.diagnosis,
+            shaders=None, frame_shaders=saved,
+            checkpoint_sources=checkpoint_sources,
+            case_id="live-layout")
+        self.assertTrue(manifest["reproduction"]["independently_reproducible"])
+        sequence = json.loads((case / "sequence.json").read_text())
+        self.assertEqual(len(sequence["frames"]), 3)
+        programs = []
+        for entry in sequence["frames"]:
+            report = json.loads(
+                (case / entry["shader_dir"] / "shaders.json").read_text())
+            programs.append(sorted(
+                item["program"] for item in report["programs"]))
+            index = entry["index"]
+            self.assertEqual(
+                sha((case / "checkpoints" / f"frame-{index:03d}" /
+                     "shader-receipt.json").read_bytes()),
+                sha((checkpoint_sources[index - 1] /
+                     "shader-receipt.json").read_bytes()))
+        self.assertEqual(programs, [[1], [3], [2]], programs)
+        moved = self.fixture.base / "live-relocated"
+        shutil.copytree(case, moved)
+        shutil.rmtree(self.fixture.base / "campaign")
+        shutil.rmtree(self.out)
+        verified = gfx_replay_case.verify(moved)
+        self.assertTrue(verified["ok"], verified["problems"])
+        replay = gfx_replay_case.replay_case(
+            moved, self.fixture.base / "live-replay")
+        self.assertEqual(replay["classification"], "qualified_match", replay)
+        self.assertEqual(replay["campaign"]["target_sequence"], 3)
+        self.assertEqual(replay["campaign"]["frames"], 3)
+        self.assertEqual((replay.get("history") or {}).get("status"), "ok")
+        self.assertGreaterEqual(
+            (replay.get("history") or {}).get("carried_bindings") or 0, 1)
+
+    def test_live_mapping_is_authoritative_over_stale_frame_shaders(self):
+        """A live mapping wins over a stale frame-local translation."""
+        mapping = {}
+        stale_source = self.fixture.base / "stale-shaders"
+        shutil.copytree(self.fixture.frame_shaders[3], stale_source)
+        for index, frame in enumerate(self.frames, start=1):
+            live = self.fixture.base / "live-shaders" / str(index)
+            shutil.copytree(self.fixture.frame_shaders[index], live)
+            mapping[str(frame)] = live
+            shutil.rmtree(frame / "shaders")
+            # A stale offline translation that cannot serve this frame's draws.
+            shutil.copytree(stale_source, frame / "shaders")
+        case = self.fixture.base / "live-mapping-case"
+        manifest = gfx_replay_case.package_sequence_diagnosis(
+            self.frames, self.out / "out-003", case, self.diagnosis,
+            shaders=None, frame_shaders=mapping, case_id="live-mapping")
+        self.assertTrue(manifest["reproduction"]["independently_reproducible"])
+        sequence = json.loads((case / "sequence.json").read_text())
+        self.assertEqual([entry["shader_source"] for entry in
+                          sequence["frames"]],
+                         ["live_coordinator_mapping"] * 3)
+        self.assertEqual([entry["shader_programs"] for entry in
+                          sequence["frames"]], [[1], [3], [2]])
+        verified = gfx_replay_case.verify(case)
+        self.assertTrue(verified["ok"], verified["problems"])
+
+    def test_single_frame_budget_incomplete_is_verified_incomplete(self):
+        target = self.frames[0]
+        diagnosis = json.loads(
+            (self.out / "out-001" / "diagnostic-report.json").read_text())
+        complete = self.fixture.base / "single-complete"
+        gfx_replay_case.package_diagnosis(
+            target, self.out / "out-001", complete, diagnosis,
+            shaders=self.fixture.frame_shaders[1],
+            case_id="single-complete", max_bytes=0)
+        complete_verified = gfx_replay_case.verify(complete)
+        self.assertTrue(complete_verified["ok"],
+                        complete_verified["problems"])
+        self.assertTrue(complete_verified["independently_reproducible"])
+        size = sum(path.stat().st_size for path in complete.rglob("*")
+                   if path.is_file())
+        incomplete = self.fixture.base / "single-incomplete"
+        manifest = gfx_replay_case.package_diagnosis(
+            target, self.out / "out-001", incomplete, diagnosis,
+            shaders=self.fixture.frame_shaders[1],
+            case_id="single-incomplete", max_bytes=size - 1)
+        self.assertEqual(manifest["schema"], gfx_replay_case.SCHEMA)
+        self.assertEqual(manifest["reproduction"]["status"], "incomplete")
+        verified = gfx_replay_case.verify(incomplete)
+        self.assertFalse(verified["ok"])
+        self.assertEqual(verified["reproduction_status"], "incomplete")
+        # An intentionally budget-limited v1 summary is not independently
+        # reproducible, while remaining distinguishable from corruption.
+        self.assertFalse(verified["independently_reproducible"])
+        self.assertEqual(verified["problems"],
+                         ["reproduction is explicitly incomplete"])
+        with self.assertRaises(gfx_replay_case.CaseError):
+            gfx_replay_case.replay_case(
+                incomplete, self.fixture.base / "single-incomplete-out")
+
+        # Additional integrity corruption is invalid and can never inherit
+        # independent reproducibility from the otherwise complete v1 case.
+        graph = complete / "graph.json"
+        graph.write_text(graph.read_text() + "\n")
+        corrupted = gfx_replay_case.verify(complete)
+        self.assertFalse(corrupted["ok"])
+        self.assertFalse(corrupted["independently_reproducible"])
+        self.assertTrue(any("drift" in problem
+                            for problem in corrupted["problems"]),
+                        corrupted["problems"])
+
+    def test_unusable_live_mapping_refuses_complete_packaging(self):
+        mapping = {str(frame): self.fixture.frame_shaders[index]
+                   for index, frame in enumerate(self.frames, start=1)}
+        shutil.rmtree(mapping[str(self.frames[0])])
+        case = self.fixture.base / "missing-live-mapping"
+        with self.assertRaises(gfx_replay_case.CaseError) as caught:
+            gfx_replay_case.package_sequence_diagnosis(
+                self.frames, self.out / "out-003", case, self.diagnosis,
+                shaders=None, frame_shaders=mapping,
+                case_id="missing-live-mapping")
+        self.assertEqual(caught.exception.kind, "shaders_missing")
+
+    def test_single_frame_mapping_is_authoritative(self):
+        target = self.frames[0]
+        live = self.fixture.base / "single-live-shaders"
+        shutil.copytree(self.fixture.frame_shaders[1], live)
+        stale = self.fixture.base / "single-stale-shaders"
+        shutil.copytree(self.fixture.frame_shaders[3], stale)
+        shutil.rmtree(target / "shaders")
+        shutil.copytree(stale, target / "shaders")
+        diagnosis = json.loads(
+            (self.out / "out-001" / "diagnostic-report.json").read_text())
+        case = self.fixture.base / "single-frame-case"
+        manifest = gfx_replay_case.package_sequence_diagnosis(
+            [target], self.out / "out-001", case, diagnosis,
+            shaders=None, frame_shaders={str(target): live},
+            case_id="single-frame-mapping")
+        self.assertEqual(manifest["schema"], gfx_replay_case.SCHEMA)
+        self.assertEqual(manifest["shader_source"],
+                         "live_coordinator_mapping")
+        shader_report = json.loads(
+            (case / "shaders" / "shaders.json").read_text())
+        self.assertEqual(
+            sorted(item["program"] for item in shader_report["programs"]),
+            [1])
+        verified = gfx_replay_case.verify(case)
+        self.assertTrue(verified["ok"], verified["problems"])
+
+    def test_missing_checkpoint_source_half_is_reported(self):
+        sources = [self.out / "checkpoints" / f"frame-{index:03d}"
+                   for index in range(1, 4)]
+        (sources[0] / "shader-receipt.json").unlink()
+        case = self.fixture.base / "checkpoint-incomplete"
+        gfx_replay_case.package_sequence_diagnosis(
+            self.frames, self.out / "out-003", case, self.diagnosis,
+            shaders=None, checkpoint_sources=sources,
+            case_id="checkpoint-incomplete")
+        sequence = json.loads((case / "sequence.json").read_text())
+        self.assertFalse(sequence["frames"][0]["checkpoint_preserved"])
+        self.assertEqual(sequence["frames"][0]["checkpoint_preservation"],
+                         "source_incomplete")
+
+    def test_checkpoint_source_mismatch_is_recorded_and_regenerated(self):
+        sources = [self.out / "checkpoints" / f"frame-{index:03d}"
+                   for index in range(1, 4)]
+        receipt = json.loads(
+            (sources[1] / "shader-receipt.json").read_text())
+        receipt["checkpoint_request_sha256"] = "0" * 64
+        (sources[1] / "shader-receipt.json").write_text(json.dumps(receipt))
+        case = self.fixture.base / "checkpoint-mismatch"
+        manifest = gfx_replay_case.package_sequence_diagnosis(
+            self.frames, self.out / "out-003", case, self.diagnosis,
+            shaders=None, checkpoint_sources=sources,
+            case_id="checkpoint-mismatch")
+        self.assertTrue(manifest["reproduction"]["independently_reproducible"])
+        sequence = json.loads((case / "sequence.json").read_text())
+        # The pristine sources are preserved; the mutated one is regenerated
+        # with an explicit reason instead of being copied.
+        self.assertTrue(sequence["frames"][0]["checkpoint_preserved"])
+        self.assertTrue(sequence["frames"][2]["checkpoint_preserved"])
+        self.assertFalse(sequence["frames"][1]["checkpoint_preserved"])
+        self.assertEqual(sequence["frames"][0]["checkpoint_preservation"],
+                         "preserved")
+        self.assertEqual(sequence["frames"][1]["checkpoint_preservation"],
+                         "source_receipt_request_mismatch")
+        self.assertEqual(sequence["frames"][2]["checkpoint_preservation"],
+                         "preserved")
+        verified = gfx_replay_case.verify(case)
+        self.assertTrue(verified["ok"], verified["problems"])
+
+    def test_checkpoint_receipt_identity_corruption_is_rejected(self):
+        relative = "checkpoints/frame-002/shader-receipt.json"
+        corruptions = {
+            "capture_frame_id": 999,
+            "pid": 999,
+            "session_id": "another-session",
+            "trace_manifest_sha256": "0" * 64,
+            "event_stream_sha256": "1" * 64,
+            "event_stream_bytes": 1,
+            "checkpoint_request_file": "another-request.json",
+            "checkpoint_count": -1,
+            "shaders_json_sha256": "2" * 64,
+            "artifacts_sha256": "3" * 64,
+            "artifact_count": 0,
+        }
+        for field, value in corruptions.items():
+            with self.subTest(field=field):
+                case = self.fixture.base / f"receipt-{field}"
+                self.package(case)
+                receipt = json.loads((case / relative).read_text())
+                self.assertIn(field, receipt)
+                receipt[field] = value
+                (case / relative).write_text(json.dumps(receipt))
+                self.refresh(case, relative)
+                verified = gfx_replay_case.verify(case)
+                self.assertFalse(verified["ok"], verified)
+                self.assertTrue(
+                    any("checkpoint receipt identity" in problem
+                        and field in problem
+                        for problem in verified["problems"]),
+                    verified["problems"])
+
+    def test_checkpoint_source_identity_mismatch_is_not_preserved(self):
+        sources = [self.out / "checkpoints" / f"frame-{index:03d}"
+                   for index in range(1, 4)]
+        receipt_path = sources[1] / "shader-receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["event_stream_bytes"] = int(
+            receipt["event_stream_bytes"]) + 1
+        receipt_path.write_text(json.dumps(receipt))
+        case = self.fixture.base / "checkpoint-identity-mismatch"
+        manifest = gfx_replay_case.package_sequence_diagnosis(
+            self.frames, self.out / "out-003", case, self.diagnosis,
+            shaders=None, checkpoint_sources=sources,
+            case_id="checkpoint-identity-mismatch")
+        self.assertTrue(manifest["reproduction"]["independently_reproducible"])
+        sequence = json.loads((case / "sequence.json").read_text())
+        self.assertFalse(sequence["frames"][1]["checkpoint_preserved"])
+        self.assertEqual(sequence["frames"][1]["checkpoint_preservation"],
+                         "source_receipt_identity_mismatch")
+        self.assertIn("event_stream_bytes",
+                      sequence["frames"][1]["checkpoint_preservation_detail"])
+        # The regenerated receipt still describes the packaged evidence, so
+        # the case remains verifiable and replayable.
+        verified = gfx_replay_case.verify(case)
+        self.assertTrue(verified["ok"], verified["problems"])
+
     def test_verifier_detects_missing_frame_shader_artifact(self):
         case = self.fixture.base / "case-missing"
         self.package(case)
@@ -1591,6 +1938,164 @@ class HeterogeneousShaderSequenceTests(unittest.TestCase):
         self.assertEqual(missing[0]["frame"], 2)
         self.assertEqual(manifest["replay_command"], [])
         self.assertFalse(gfx_replay_case.verify(case)["ok"])
+
+
+class SequenceReplayGateTests(unittest.TestCase):
+    """A portable sequence replay may only succeed at its declared target."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.base = Path(self.temporary.name)
+        self.case = self.base / "case"
+        for index in (1, 2, 3):
+            (self.case / "frames" / f"{index:06d}").mkdir(parents=True)
+        (self.case / "sequence.json").write_text(json.dumps({
+            "schema": gfx_replay_case.SEQUENCE_MANIFEST_SCHEMA,
+            "session_id": "gate-session",
+            "pid": 7,
+            "target_index": 3,
+            "frames": [
+                {"index": index, "dir": f"frames/{index:06d}",
+                 "capture_frame_id": index}
+                for index in (1, 2, 3)
+            ],
+        }))
+        self.out = self.base / "out"
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def diagnosis(self, index, classification, *, mismatched=0):
+        path = self.out / f"out-{index:03d}" / "diagnostic-report.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "schema": "gfx-frame-diagnosis/v1",
+            "classification": classification,
+            "qualification": {
+                "axes": {"pixel_comparison": (
+                    "divergent" if mismatched else "match")}},
+            "pixels": {"status": "divergent" if mismatched else "match",
+                       "statistics": {"pixels": 16,
+                                      "mismatched_pixels": mismatched}},
+            "checkpoint_validation": {"status": "ok", "divergent": 0},
+            "first_divergence": {
+                "kind": ("final_only" if mismatched else "none")},
+        }))
+        return str(path)
+
+    def row(self, index, classification, *, ok=True, history_status=1,
+            diagnostic_completed=True, mismatched=0,
+            diagnostic_report=None):
+        return {
+            "sequence": index,
+            "output_dir": str(self.out / f"out-{index:03d}"),
+            "ok": ok,
+            "history_status": history_status,
+            "classification": classification,
+            "diagnostic_completed": diagnostic_completed,
+            "diagnostic_report": (
+                diagnostic_report if diagnostic_report is not None
+                else self.diagnosis(index, classification,
+                                    mismatched=mismatched)),
+            "pixels": {"pixels": 16, "mismatched_pixels": mismatched},
+            "axes": {"pixel_comparison": (
+                "divergent" if mismatched else "match")},
+            "checkpoint_validation": {"status": "ok", "divergent": 0},
+            "first_divergence": {
+                "kind": ("final_only" if mismatched else "none")},
+        }
+
+    def replay(self, report):
+        from automation import m7_continuous
+
+        with mock.patch.object(m7_continuous, "run_campaign",
+                               return_value=report) as run:
+            value = gfx_replay_case._replay_sequence_case(
+                self.case, self.out)
+        run.assert_called_once()
+        return value
+
+    def assert_gate_failure(self, report, *needles):
+        with self.assertRaises(gfx_replay_case.CaseError) as caught:
+            self.replay(report)
+        self.assertEqual(caught.exception.kind, "sequence_replay")
+        detail = json.loads(caught.exception.detail)
+        self.assertEqual(detail["target_index"], 3)
+        self.assertLess(detail["executed_frames"], 3)
+        joined = " ".join(detail["reasons"])
+        for needle in needles:
+            self.assertIn(needle, joined)
+        return detail
+
+    def test_complete_divergent_sequence_reproduces_the_target(self):
+        report = {
+            "status": "complete", "stop_reason": "frame_limit",
+            "frames": [
+                self.row(1, "difference_with_partial_state_coverage",
+                         mismatched=4),
+                self.row(2, "difference_with_partial_state_coverage",
+                         mismatched=5),
+                self.row(3, "difference_with_partial_state_coverage",
+                         mismatched=6),
+            ],
+        }
+        value = self.replay(report)
+        self.assertEqual(value["status"], "ok")
+        self.assertEqual(value["classification"],
+                         "difference_with_partial_state_coverage")
+        self.assertEqual(value["campaign"]["target_sequence"], 3)
+        self.assertEqual(value["reproduction"]["target_sequence"], 3)
+        self.assertEqual(value["final"]["sequence"], 3)
+
+    def test_complete_sequence_with_matching_target_is_valid(self):
+        report = {
+            "status": "complete", "stop_reason": "frame_limit",
+            "frames": [
+                self.row(1, "qualified_difference", mismatched=3),
+                self.row(2, "qualified_match"),
+                self.row(3, "qualified_match"),
+            ],
+        }
+        value = self.replay(report)
+        self.assertEqual(value["final"]["sequence"], 3)
+        self.assertEqual(value["classification"], "qualified_match")
+        self.assertEqual(value["reproduction"]["earliest_affected_frame"], 1)
+
+    def test_premature_history_stop_is_not_a_reproduction(self):
+        detail = self.assert_gate_failure({
+            "status": "stopped", "stop_reason": "history_invalid",
+            "stopped_at": 2,
+            "frames": [
+                self.row(1, "qualified_match"),
+                self.row(2, "qualified_match", history_status=0),
+            ],
+        }, "campaign status", "history_status=0", "not the declared target")
+        self.assertEqual(detail["stop_reason"], "history_invalid")
+
+    def test_premature_provenance_stop_is_not_a_reproduction(self):
+        detail = self.assert_gate_failure({
+            "status": "stopped", "stop_reason": "invalid_provenance",
+            "stopped_at": 2,
+            "frames": [
+                self.row(1, "qualified_match"),
+                self.row(2, "invalid_provenance"),
+            ],
+        }, "invalid_provenance", "not the declared target")
+        self.assertEqual(detail["stop_reason"], "invalid_provenance")
+
+    def test_gpu_failure_at_frame_two_is_not_a_reproduction(self):
+        detail = self.assert_gate_failure({
+            "status": "stopped", "stop_reason": "gpu_execution_failure",
+            "stopped_at": 2,
+            "frames": [
+                self.row(1, "qualified_match"),
+                self.row(2, "gpu_execution_failure", ok=False,
+                         diagnostic_completed=False,
+                         diagnostic_report=""),
+            ],
+        }, "GPU execution failed", "no completed diagnostic",
+           "not the declared target")
+        self.assertEqual(detail["last_sequence"], 2)
 
 
 if __name__ == "__main__":

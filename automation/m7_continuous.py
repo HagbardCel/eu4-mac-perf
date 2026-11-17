@@ -222,8 +222,88 @@ def validate_sequence(frames: list[Path], *, max_frames: int = 64,
     }
 
 
+def _receipt_shader_identity(shader_dir: Path | str | None) -> dict:
+    """Canonical shader-report and shader-artifact identity for a receipt."""
+    if shader_dir is None:
+        return {"shaders_json_sha256": "", "artifacts_sha256": "",
+                "artifact_count": 0}
+    directory = Path(shader_dir)
+    report = directory / "shaders.json"
+    if not directory.is_dir() or not report.is_file():
+        return {"shaders_json_sha256": "", "artifacts_sha256": "",
+                "artifact_count": 0}
+    artifacts_sha256, artifact_count = m6_frame.artifact_digest(directory)
+    return {
+        "shaders_json_sha256": _sha(report),
+        "artifacts_sha256": artifacts_sha256,
+        "artifact_count": artifact_count,
+    }
+
+
+def diagnostic_evidence(diagnosis: dict | None) -> dict:
+    """Report whether a diagnostic executed and carries required evidence.
+
+    A populated report path is a locator, never proof that the analysis ran.
+    Completion requires the diagnosis schema, a classification, the
+    qualification axes, the pixel-comparison verdict and statistics, checkpoint
+    validation and a localized first divergence.
+    """
+    if not isinstance(diagnosis, dict) or not diagnosis:
+        return {
+            "completed": False,
+            "missing": ["diagnosis"],
+            "reason": "the diagnostic did not execute",
+        }
+    missing: list[str] = []
+    if diagnosis.get("schema") != gfx_independent_replay.DIAGNOSIS_SCHEMA:
+        missing.append("schema")
+    classification = diagnosis.get("classification")
+    if not isinstance(classification, str) or not classification:
+        missing.append("classification")
+    qualification = diagnosis.get("qualification")
+    axes = qualification.get("axes") if isinstance(qualification, dict) else None
+    if not isinstance(axes, dict) or not axes:
+        missing.append("qualification.axes")
+    pixels = diagnosis.get("pixels")
+    pixel_status = pixels.get("status") if isinstance(pixels, dict) else None
+    if pixel_status not in ("match", "divergent"):
+        missing.append("pixels.status")
+    statistics = pixels.get("statistics") if isinstance(pixels, dict) else None
+    statistics_ok = False
+    if isinstance(statistics, dict):
+        total = statistics.get("pixels")
+        mismatched = statistics.get("mismatched_pixels")
+        if (isinstance(total, int) and not isinstance(total, bool)
+                and total > 0
+                and isinstance(mismatched, int)
+                and not isinstance(mismatched, bool)
+                and 0 <= mismatched <= total):
+            statistics_ok = True
+    if not statistics_ok:
+        missing.append("pixels.statistics")
+    checkpoints = diagnosis.get("checkpoint_validation")
+    if (not isinstance(checkpoints, dict)
+            or checkpoints.get("status") != "ok"):
+        missing.append("checkpoint_validation.status")
+    divergence = diagnosis.get("first_divergence")
+    if not isinstance(divergence, dict) or not divergence.get("kind"):
+        missing.append("first_divergence.kind")
+    return {
+        "completed": not missing,
+        "missing": missing,
+        "classification": classification,
+        "pixels": pixel_status,
+        "checkpoint_status": (
+            checkpoints.get("status") if isinstance(checkpoints, dict) else None),
+        "mismatched_pixels": (
+            int(statistics.get("mismatched_pixels") or 0)
+            if statistics_ok else 0),
+    }
+
+
 def prepare_sequence_checkpoints(frames: list[Path], out_dir: Path,
-                                  validation: dict) -> dict:
+                                  validation: dict,
+                                  shaders: Path | str | None = None) -> dict:
     """Publish one bound checkpoint request and receipt per sequence frame.
 
     The request is derived from the validated capture graph (not from the
@@ -281,11 +361,12 @@ def prepare_sequence_checkpoints(frames: list[Path], out_dir: Path,
                 "event_stream_sha256": seal.get("event_stream_sha256"),
                 "event_stream_bytes": seal.get("event_stream_bytes"),
             })
+        shader_dir = (_effective_frame_shaders(frame, shaders)
+                      if shaders is not None else frame / "shaders")
         receipt = {
             "schema": "m7-shadow-shader-receipt/v1",
             **identity,
-            "artifacts_sha256": "",
-            "artifact_count": 0,
+            **_receipt_shader_identity(shader_dir),
             "checkpoint_request_file": request_path.name,
             "checkpoint_request_sha256": request_sha,
             "checkpoint_count": len(request.get("checkpoints") or []),
@@ -342,6 +423,19 @@ def _percentile(values: list[float], fraction: float) -> float:
     return ordered[index]
 
 
+def _effective_frame_shaders(frame: Path, fallback: Path | str) -> Path:
+    """Resolve the translation directory the sequence CLI uses for a frame.
+
+    The native sequence host prefers ``<frame>/shaders`` and falls back to its
+    single ``--shaders`` argument.  Diagnosis must inspect the same translation
+    that produced the frame, not the target's directory for every frame.
+    """
+    local = frame / "shaders"
+    if (local / "shaders.json").is_file():
+        return local.resolve()
+    return Path(fallback).expanduser().resolve()
+
+
 def run_campaign(frames: list[Path], out_dir: Path, *,
                  shaders: Path | str,
                  policy: Path | str | None = None,
@@ -355,6 +449,7 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
                  cancel=None,
                  timeout: float = 3600.0,
                  frame_timeout: float = 120.0,
+                 case_max_bytes: int = 0,
                  stderr_limit: int = 1_000_000) -> dict:
     """Execute, diagnose and supervise one bounded ordered frame sequence."""
     if max_pending < 1:
@@ -364,13 +459,19 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
             "timeout", "frame_timeout and timeout must be positive")
     started = time.monotonic()
     frames = [Path(frame).expanduser().resolve() for frame in frames]
+    try:
+        _policy_value, policy_evidence = gfx_independent_replay.load_policy(
+            policy)
+    except gfx_independent_replay.ReplayError as exc:
+        raise ContinuousError(exc.kind, exc.detail) from exc
     out_dir = prepare_output(Path(out_dir), frames)
     validation = validate_sequence(frames, max_frames=max_frames,
                                    max_bytes=max_bytes)
     host_path = Path(host).expanduser() if host else m6_frame.build_replay_host()
     control_dir = out_dir / "control"
     control_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_setup = prepare_sequence_checkpoints(frames, out_dir, validation)
+    checkpoint_setup = prepare_sequence_checkpoints(
+        frames, out_dir, validation, shaders=shaders)
     command = [
         str(host_path), "--sequence", ",".join(map(str, frames)),
         "--shaders", str(Path(shaders).expanduser().resolve()),
@@ -389,6 +490,7 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
         "max_frames": max_frames,
         "max_bytes": max_bytes,
         "stop_on_difference": stop_on_difference,
+        "policy": policy_evidence,
         "validation": validation,
         "frames": [],
         "stop_reason": None,
@@ -422,15 +524,43 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
             stopped_during_execution = True
             return False
         sequence = int(row.get("sequence") or 0)
+        expected = len(result["frames"]) + 1
+        executed = {int(item.get("sequence") or 0)
+                    for item in result["frames"]}
+        order_failure = None
         if sequence < 1 or sequence > len(frames):
+            order_failure = "out_of_range"
+        elif sequence < expected:
+            order_failure = ("duplicate" if sequence in executed
+                             else "reversed")
+        elif sequence > expected:
+            order_failure = "skipped"
+        if order_failure is not None:
+            # Reject duplicate, missing, skipped, reversed and out-of-range
+            # results before diagnosis.  Every input frame must be executed
+            # exactly once and in order before any result can be qualified.
             result["status"] = "failed"
-            result["stop_reason"] = "frame_identity"
+            result["stop_reason"] = "sequence_order"
+            result["stopped_at"] = expected
+            result["sequence_order"] = {
+                "status": "failed",
+                "kind": order_failure,
+                "expected": expected,
+                "received": sequence,
+                "executed": sorted(executed),
+                "input_frames": len(frames),
+                "detail": (
+                    f"expected frame {expected}, received {sequence} "
+                    f"({order_failure}); refusing to diagnose an out-of-order "
+                    "result"),
+            }
             stopped_during_execution = True
             return False
         frame = frames[sequence - 1]
         output = Path(str(row.get("output_dir") or
                           out_dir / f"out-{sequence:03d}")).resolve()
         diagnosis_started = time.monotonic()
+        effective_shaders = _effective_frame_shaders(frame, shaders)
         if not row.get("ok"):
             diagnosis = {
                 "classification": "gpu_execution_failure",
@@ -442,11 +572,19 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
                 "pixels": {"statistics": None},
                 "checkpoint_validation": {"status": "incomplete"},
             }
+            evidence = diagnostic_evidence(None)
+            evidence["reason"] = str(
+                row.get("error") or "Metal execution failed")
+            report_path = None
         else:
             diagnosis = gfx_independent_replay.diagnose_frame(
                 frame, output, output, policy,
-                shaders=Path(shaders).expanduser().resolve(),
+                shaders=effective_shaders,
                 require_seal=bool(validation.get("sealed")))
+            diagnosis["campaign_policy"] = policy_evidence
+            diagnosis["policy"] = policy_evidence
+            evidence = diagnostic_evidence(diagnosis)
+            report_path = output / "diagnostic-report.json"
         diagnosis_seconds = time.monotonic() - diagnosis_started
         diagnosis_times.append(diagnosis_seconds)
         replay_times.append(float(row.get("duration_ns") or 0) / 1e9)
@@ -470,12 +608,20 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
             "first_divergence": diagnosis.get("first_divergence"),
             "pixels": (diagnosis.get("pixels") or {}).get("statistics"),
             "checkpoint_validation": diagnosis.get("checkpoint_validation"),
-            "diagnostic_report": str(output / "diagnostic-report.json"),
+            "diagnostic_report": (str(report_path)
+                                  if report_path is not None else None),
+            "diagnostic_completed": bool(evidence.get("completed")),
+            "diagnostic_evidence": evidence,
+            "shader_dir": str(effective_shaders),
             "diagnosis_seconds": diagnosis_seconds,
         }
         result["frames"].append(entry)
+        terminal_classification = classification in (
+            "gpu_execution_failure", "invalid_provenance",
+            "incomplete_capture")
         hard_stop = (not row.get("ok")
-                     or row.get("history_status") not in (1, None))
+                     or row.get("history_status") not in (1, None)
+                     or terminal_classification)
         soft_stop = (classification in STOP_CLASSIFICATIONS
                      or classification != "qualified_match")
         stop = hard_stop or (stop_on_difference and soft_stop)
@@ -489,15 +635,27 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
             result["stopped_at"] = sequence
             try:
                 case = Path(package_dir) if package_dir else (out_dir / "case")
+                package_kwargs = {
+                    "shaders": Path(shaders).expanduser().resolve(),
+                    "case_id": f"m7-continuous-frame-{sequence:06d}",
+                    "checkpoint_sources": [
+                        out_dir / "checkpoints" / f"frame-{index:03d}"
+                        for index in range(1, sequence + 1)],
+                }
+                if case_max_bytes > 0:
+                    package_kwargs["max_bytes"] = case_max_bytes
                 manifest = gfx_replay_case.package_sequence_diagnosis(
                     frames[:sequence], output, case, diagnosis,
-                    shaders=Path(shaders).expanduser().resolve(),
-                    case_id=f"m7-continuous-frame-{sequence:06d}")
+                    **package_kwargs)
+                reproduction = manifest.get("reproduction") or {}
                 entry["case"] = {
                     "case_id": manifest.get("case_id"),
                     "files": len(manifest.get("files") or []),
                     "bytes": sum(item["bytes"]
                                  for item in manifest.get("files") or []),
+                    "reproduction": reproduction,
+                    "independently_reproducible": reproduction.get(
+                        "independently_reproducible"),
                 }
             except (gfx_replay_case.CaseError, OSError) as exc:
                 entry["case_error"] = str(exc)
@@ -660,7 +818,9 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
             result["stop_reason"] = "frame_limit"
     result["qualified"] = bool(
         result["status"] == "complete"
+        and len(result["frames"]) == len(frames)
         and all(item.get("classification") == "qualified_match"
+                and item.get("diagnostic_completed") is True
                 for item in result["frames"]))
     result["metrics"] = {
         "frames": len(result["frames"]),

@@ -354,6 +354,49 @@ paths).  Report:
 Independent review of the per-frame shader correction is required; automerge is
 disabled.
 
+## M7 Phase A/B — v2 agent dispatch and live portable packaging (2026-11-16)
+
+The v2 ordered-prefix Strategy B case is now a first-class agent case.
+`eu4_replay case` and `eu4_case_inspect` dispatch on `CASE_SCHEMAS` instead of
+the v1 schema only, and the tool surface adds bounded M7 `sequence`,
+`diagnose` and `verify` operations. Invalid, unsupported and explicitly
+incomplete evidence is returned as `invalid`/`incomplete` with
+`outcome.qualified=false`; it is never replayed as a qualified result.
+`eu4_diff_run` remains the separate two-process workflow.
+
+The production continuous shadow coordinator now packages the diagnosed
+prefix through the existing `package_sequence_diagnosis`. Packaging resolves
+each included frame's exact translation (`shadow/frame-NNNNNN/shaders`), copies
+the coordinator's checkpoint request/receipt only when it is identical to the
+deterministic request for the copied graph, and preserves predecessor
+lifecycle/capture identity. The live case budget is explicit; an over-budget
+reproduction is published as a bounded incomplete summary with no replay
+command.
+
+PR #206 review remediation made campaign failure precedence terminal-first,
+forwarded and digested the selected comparison policy, gave replay `--out`
+back to the replay subcommand, distinguished malformed/unsupported/legacy/
+verifier-exception/incomplete cases, made live shader mappings authoritative
+over stale frame-local translations, and kept continue-on-difference limited
+to eligible rendering differences. A failed live campaign can no longer
+publish `qualified` from a matched prefix.
+
+Focused validation: the 186 affected native/offline tests passed in 47.24 s
+(`test_agent_tools`, `test_m7_continuous_supervisor`,
+`test_gfx_replay_case_sequence`), and the DSH plugin's 9 tests passed; a real v2 case was inspected, verified and replayed
+through the JavaScript bridge after relocation and deletion of the original
+campaign. The
+existing authentic sealed follow-up A capture (three frames, session
+`c66b3625…`, pid 27780) was also cloned, packaged under a 2 GiB budget,
+relocated, deleted at the source, verified and replayed: the
+`difference_with_partial_state_coverage` verdict and all final pixel
+statistics were unchanged (1,163,584 / 1,930,176 mismatched, max 72), with
+history ok and 274 Metal render-target bindings. A 512 MiB budget published a
+bounded `artifact_budget` incomplete summary instead. No new EU4 launch was
+made. Report:
+[Phase A/B](../analysis/m7/phase-ab-agent-bridge.md),
+[authentic receipt](../analysis/m7/phase-ab-authentic-receipt.json).
+
 ## Strategy B — independent replay (2026-11-14)
 
 Capture once, replay independently. A canonical authentic OpenGL title frame

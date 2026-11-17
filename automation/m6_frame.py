@@ -729,6 +729,11 @@ def capture(args: argparse.Namespace) -> int:
                   if continuous else []),
                 *(["--continue-on-difference"]
                   if getattr(args, "continue_on_difference", False) else []),
+                *(["--case-max-bytes", str(getattr(
+                    args, "case_max_bytes", 512 * 1024 * 1024))]
+                  if continuous else []),
+                *(["--case-dir", str(args.case_dir)]
+                  if continuous and getattr(args, "case_dir", "") else []),
             ],
             cwd=str(ROOT),
             stdout=subprocess.PIPE,
@@ -1549,6 +1554,66 @@ def shadow_failure_detail(report: dict) -> str:
     return error
 
 
+_CONTINUOUS_RENDERING_DIFFERENCES = {
+    "qualified_difference", "difference_with_partial_state_coverage",
+}
+_CONTINUOUS_TERMINAL_CLASSIFICATIONS = {
+    "gpu_execution_failure", "invalid_provenance", "incomplete_capture",
+    "incomplete_diagnostics",
+}
+
+
+def _continuous_should_continue(classification: str | None,
+                                    history_status,
+                                    continue_on_difference: bool) -> bool:
+    """Single continuation predicate for the native decision and supervisor."""
+    if history_status not in (1, None):
+        return False
+    if classification in _CONTINUOUS_TERMINAL_CLASSIFICATIONS:
+        return False
+    if classification == "qualified_match":
+        return True
+    if classification in _CONTINUOUS_RENDERING_DIFFERENCES:
+        return bool(continue_on_difference)
+    return False
+
+
+def _continuous_terminal_failure(report: dict) -> dict | None:
+    """Return a terminal live-campaign failure, if one exists."""
+    rows = [row for row in report.get("frames") or []
+            if isinstance(row, dict)]
+    for row in rows:
+        if row.get("history") not in (1, None):
+            return {
+                "kind": "resource_history_failure",
+                "frame": row.get("sequence"),
+                "detail": f"history={row.get('history')}",
+            }
+        classification = row.get("classification")
+        if classification in _CONTINUOUS_TERMINAL_CLASSIFICATIONS:
+            return {
+                "kind": str(classification),
+                "frame": row.get("sequence"),
+                "detail": str(classification),
+            }
+    if report.get("status") not in ("ok", "running", None):
+        return {
+            "kind": str(report.get("stop_reason") or report.get("status")),
+            "frame": report.get("stopped_at"),
+            "detail": str(report.get("error") or report.get("stop_reason")
+                          or report.get("status")),
+        }
+    stop_reason = report.get("stop_reason")
+    if stop_reason in ("tool_failure", "gpu_execution_failure",
+                       "history_invalid", "host_failure", "frame_timeout"):
+        return {
+            "kind": str(stop_reason),
+            "frame": report.get("stopped_at"),
+            "detail": str(report.get("error") or stop_reason),
+        }
+    return None
+
+
 def apply_shadow_report(result: dict, shadow_report: dict) -> str | None:
     """Copy the coordinator report into the final capture summary.
 
@@ -1562,13 +1627,30 @@ def apply_shadow_report(result: dict, shadow_report: dict) -> str | None:
     if shadow_report.get("mode") == "continuous":
         frames = list(shadow_report.get("frames") or [])
         last = frames[-1] if frames else {}
+        terminal = _continuous_terminal_failure(shadow_report)
+        campaign_ok = shadow_report.get("status") == "ok" and terminal is None
         result["continuous"] = shadow_report
         result["pixel_verdict"] = last.get("classification")
-        result["classification"] = last.get("classification")
+        result["campaign_execution"] = (
+            "ok" if campaign_ok else
+            "failed" if shadow_report.get("status") == "failed" else
+            "incomplete")
+        result["terminal_failure"] = terminal
+        result["classification"] = (
+            terminal.get("kind") if terminal else last.get("classification"))
         result["first_divergence"] = last.get("first_divergence")
         result["qualified"] = bool(
-            frames and all(item.get("classification") == "qualified_match"
-                           for item in frames))
+            campaign_ok and frames
+            and all(item.get("classification") == "qualified_match"
+                    and item.get("history") in (1, None) for item in frames))
+        result["diagnostic_complete"] = bool(
+            campaign_ok and frames
+            and all(item.get("diagnostic_report") for item in frames))
+        result["case"] = shadow_report.get("case")
+        result["reproduction"] = shadow_report.get("reproduction")
+        result["reproduction_complete"] = bool(
+            isinstance(result["reproduction"], dict)
+            and result["reproduction"].get("independently_reproducible"))
         result["diagnostic"] = {
             "mode": "continuous",
             "frames": len(frames),
@@ -1577,7 +1659,7 @@ def apply_shadow_report(result: dict, shadow_report: dict) -> str | None:
             "diagnostic_reports": [item.get("diagnostic_report")
                                    for item in frames],
         }
-        if shadow_report.get("status") == "ok":
+        if shadow_report.get("status") == "ok" and terminal is None:
             return None
         return shadow_failure_detail(shadow_report)
     failure = shadow_report.get("failure")
@@ -1983,7 +2065,15 @@ def _wait_for_path(path: Path, deadline: float) -> bool:
     return path.is_file()
 
 
-def _artifact_digest(directory: Path) -> tuple[str, int]:
+def artifact_digest(directory: Path) -> tuple[str, int]:
+    """Canonical digest of a translated shader directory.
+
+    Every regular payload is ordered by relative path and hashed as
+    ``relative-path \\0 sha256 \\n``.  The publish markers ``ready`` and
+    ``shader-receipt.json`` are bookkeeping, not shader artifacts, so they are
+    excluded.  The same contract is used by the live receipt writer, the
+    sequence checkpoint setup and portable-case verification.
+    """
     digest = hashlib.sha256()
     count = 0
     for path in sorted(directory.rglob("*")):
@@ -1995,6 +2085,10 @@ def _artifact_digest(directory: Path) -> tuple[str, int]:
         digest.update(b"\n")
         count += 1
     return digest.hexdigest(), count
+
+
+# Backwards-compatible private alias for callers in this module.
+_artifact_digest = artifact_digest
 
 
 def _continuous_frame_coordinator(
@@ -2091,12 +2185,12 @@ def _continuous_frame_coordinator(
         frame_dir, output, output, args.policy,
         shaders=shader_dir)
     classification = diagnosis.get("classification")
-    hard_stop = report.get("history_status") not in (1, None)
-    stop = hard_stop or (classification != "qualified_match" and
-                         not args.continue_on_difference)
+    history_status = report.get("history_status")
+    should_continue = _continuous_should_continue(
+        classification, history_status, args.continue_on_difference)
     temp = output / "decision.json.tmp"
     temp.write_text(json.dumps({
-        "continue": not stop,
+        "continue": should_continue,
         "classification": classification,
         "sequence": frame_index,
     }) + "\n")
@@ -2124,6 +2218,112 @@ def _continuous_frame_coordinator(
         "diagnostic_report": str(output / "diagnostic-report.json"),
     }
     return summary, diagnosis
+
+
+def _package_continuous_case(run: Path, shadow: Path, count: int,
+                             args: argparse.Namespace, *,
+                             scope: str = "target_frame",
+                             terminal_failure: dict | None = None) -> dict:
+    """Package the diagnosed ordered prefix from the live coordinator.
+
+    The live layout keeps each frame's capture under ``run/frames`` and that
+    frame's exact translation under ``shadow/frame-NNNNNN/shaders``.  Both the
+    per-frame shader mapping and the published checkpoint request/receipt are
+    passed to the existing v2 packager, so predecessor history, lifecycle
+    records, capture identity and the target diagnosis remain authoritative.
+    """
+    if count < 1:
+        return {"status": "unavailable", "reason": "no diagnosed frame"}
+    from automation import gfx_replay_case
+
+    frames = [run / "frames" / f"frame-{index:06d}"
+              for index in range(1, count + 1)]
+    last_output = shadow / f"frame-{count:06d}"
+    diagnosis = _read_json(last_output / "diagnostic-report.json") if (
+        last_output / "diagnostic-report.json").is_file() else {}
+    if not diagnosis:
+        return {"status": "incomplete", "reason": "target diagnosis missing"}
+    frame_shaders = {
+        str(frame): shadow / f"frame-{index:06d}" / "shaders"
+        for index, frame in enumerate(frames, start=1)
+    }
+    checkpoint_sources = [
+        shadow / f"frame-{index:06d}" for index in range(1, count + 1)]
+    case_dir = (Path(getattr(args, "case_dir", "") or "").expanduser().resolve()
+                if getattr(args, "case_dir", "") else shadow / "case")
+    max_bytes = int(getattr(args, "case_max_bytes", 0) or 0)
+    if max_bytes <= 0:
+        max_bytes = 512 * 1024 * 1024
+    try:
+        manifest = gfx_replay_case.package_sequence_diagnosis(
+            frames, last_output, case_dir, diagnosis,
+            shaders=last_output / "shaders",
+            frame_shaders=frame_shaders,
+            checkpoint_sources=checkpoint_sources,
+            case_id=f"m7-live-frame-{count:06d}",
+            max_bytes=max_bytes,
+        )
+    except (gfx_replay_case.CaseError, OSError, ValueError,
+            TypeError, KeyError) as exc:
+        return {
+            "status": "failed",
+            "reason": str(exc),
+            "case_dir": str(case_dir),
+        }
+    reproduction = manifest.get("reproduction") or {}
+    if (not reproduction
+            and manifest.get("schema") == gfx_replay_case.SCHEMA):
+        # A complete single-frame package is the v1 schema, which has no
+        # ``reproduction`` member.  Normalise it instead of mislabelling a
+        # verified package as incomplete.
+        reproduction = {
+            "status": "complete",
+            "independently_reproducible": True,
+            "kind": "single_frame_v1",
+        }
+    # Label the published case itself, not only the coordinator summary, so a
+    # completed-prefix reproduction cannot be mistaken for the terminal frame.
+    case_manifest_path = case_dir / "case.json"
+    try:
+        case_manifest = _read_json(case_manifest_path)
+        case_manifest["reproduction_scope"] = scope
+        case_manifest["terminal_failure"] = terminal_failure
+        case_manifest_path.write_text(
+            json.dumps(case_manifest, indent=2) + "\n")
+    except (FrameError, OSError, ValueError, json.JSONDecodeError):
+        pass
+    return {
+        "status": ("complete" if reproduction.get(
+            "independently_reproducible") else "incomplete"),
+        "scope": scope,
+        "terminal_failure": terminal_failure,
+        "case_id": manifest.get("case_id"),
+        "case_dir": str(case_dir),
+        "files": len(manifest.get("files") or []),
+        "bytes": sum(item.get("bytes", 0)
+                     for item in manifest.get("files") or []),
+        "reproduction": reproduction,
+        "replay_command": manifest.get("replay_command"),
+        "verify_command": manifest.get("verify_command"),
+    }
+
+
+def _continuous_summary_terminal(summary: dict) -> dict | None:
+    """Terminal failure from one live frame summary, if any."""
+    if summary.get("history") not in (1, None):
+        return {
+            "kind": "resource_history_failure",
+            "frame": summary.get("sequence"),
+            "detail": f"history={summary.get('history')}",
+        }
+    classification = summary.get("classification")
+    if classification in _CONTINUOUS_TERMINAL_CLASSIFICATIONS:
+        return {
+            "kind": str(classification),
+            "frame": summary.get("sequence"),
+            "detail": str(classification),
+        }
+    return None
 
 
 def shadow_coordinator_continuous(args: argparse.Namespace) -> int:
@@ -2163,24 +2363,73 @@ def shadow_coordinator_continuous(args: argparse.Namespace) -> int:
             result["status"] = "failed"
             result["error"] = str(exc)
             result["stop_reason"] = "tool_failure"
+            result["qualified"] = False
+            result["diagnostic_complete"] = False
+            result["terminal_failure"] = {
+                "kind": "tool_failure", "frame": frame_index,
+                "detail": str(exc),
+            }
+            if result["frames"]:
+                result["case"] = _package_continuous_case(
+                    run, shadow, len(result["frames"]), args,
+                    scope="completed_prefix",
+                    terminal_failure=result["terminal_failure"])
+                result["reproduction"] = result["case"].get("reproduction")
             (shadow / "coordinator.json").write_text(
                 json.dumps(result, indent=2) + "\n")
             return 1
         result["frames"].append(summary)
         classification = summary.get("classification")
-        if (not args.continue_on_difference and
-                classification != "qualified_match"):
+        terminal = _continuous_summary_terminal(summary)
+        if terminal is not None:
+            result["status"] = "failed"
+            result["qualified"] = False
+            result["terminal_failure"] = terminal
+            result["stop_reason"] = terminal["kind"]
+            result["stopped_at"] = frame_index
+            result["diagnostic_complete"] = False
+            result["case"] = _package_continuous_case(
+                run, shadow, max(0, frame_index - 1), args,
+                scope="completed_prefix", terminal_failure=terminal)
+            result["reproduction"] = result["case"].get("reproduction")
+            (shadow / "coordinator.json").write_text(
+                json.dumps(result, indent=2) + "\n")
+            return 1
+        continue_campaign = _continuous_should_continue(
+            classification, summary.get("history"),
+            args.continue_on_difference)
+        if not continue_campaign:
             result["status"] = "ok"
             result["stop_reason"] = (
                 "first_qualified_difference"
                 if classification == "qualified_difference"
                 else f"stop_{classification}")
             result["stopped_at"] = frame_index
+            result["qualified"] = False
+            result["diagnostic_complete"] = bool(
+                result["frames"] and all(
+                    item.get("diagnostic_report")
+                    for item in result["frames"]))
+            result["case"] = _package_continuous_case(
+                run, shadow, frame_index, args, scope="target_frame")
+            result["reproduction"] = result["case"].get("reproduction")
             (shadow / "coordinator.json").write_text(
                 json.dumps(result, indent=2) + "\n")
             return 0
     result["status"] = "ok"
     result["stop_reason"] = "frame_limit"
+    result["qualified"] = bool(
+        result["frames"] and all(
+            item.get("classification") == "qualified_match"
+            and item.get("history") in (1, None)
+            for item in result["frames"]))
+    result["diagnostic_complete"] = bool(
+        result["frames"] and all(
+            item.get("diagnostic_report") for item in result["frames"]))
+    result["case"] = _package_continuous_case(
+        run, shadow, len(result["frames"]), args,
+        scope="completed_sequence")
+    result["reproduction"] = result["case"].get("reproduction")
     (shadow / "coordinator.json").write_text(
         json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))
@@ -2268,6 +2517,10 @@ def _parser() -> argparse.ArgumentParser:
     cap.add_argument("--max-frames", type=int, default=3)
     cap.add_argument("--max-pending", type=int, default=4)
     cap.add_argument("--max-bytes", type=int, default=512 * 1024 * 1024)
+    cap.add_argument("--case-max-bytes", type=int, default=512 * 1024 * 1024,
+                     help="bounded reproduction-case budget for a continuous run")
+    cap.add_argument("--case-dir", default="",
+                     help="explicit reproduction case directory (continuous)")
     cap.add_argument("--continue-on-difference", action="store_true")
     cap.add_argument("--async", action="store_true",
                      help="use the bounded asynchronous Metal worker queue")
@@ -2301,6 +2554,9 @@ def _parser() -> argparse.ArgumentParser:
     coord.add_argument("--continuous", action="store_true")
     coord.add_argument("--max-frames", type=int, default=3)
     coord.add_argument("--continue-on-difference", action="store_true")
+    coord.add_argument("--case-max-bytes", type=int,
+                       default=512 * 1024 * 1024)
+    coord.add_argument("--case-dir", default="")
     # The PR3 diagnosis always includes the shared comparison.  The old
     # --no-compare switch could not skip it without discarding qualification
     # evidence, so it is removed rather than silently ignored.

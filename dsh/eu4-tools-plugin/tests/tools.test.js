@@ -39,6 +39,10 @@ test('mounts exactly the seven logical tools with typed schemas', () => {
   const re = ctx.registered[0]
   assert.ok(re.parameters.properties.op.enum.includes('resolve'))
   assert.deepEqual(re.parameters.required, ['op'])
+  const replay = ctx.registered.find((tool) => tool.name === 'eu4_replay')
+  assert.deepEqual(replay.parameters.properties.op.enum,
+    ['case', 'frame', 'independent', 'sequence', 'diagnose', 'verify'])
+  assert.equal(replay.parameters.properties.frame_dirs.type, 'array')
 })
 
 test('execute passes the typed object to the shared runner', async () => {
@@ -93,6 +97,24 @@ test('argument mapping covers each tool', () => {
     '--temporal-window', '2'])
   assert.deepEqual(buildArgs('eu4_replay', { op: 'case', case: '/c' }),
     ['eu4_replay', 'case', '--case', '/c'])
+  assert.deepEqual(buildArgs('eu4_replay', { op: 'verify', case: '/c' }),
+    ['eu4_replay', 'verify', '--case', '/c'])
+  assert.deepEqual(buildArgs('eu4_replay', {
+    op: 'sequence', frame_dirs: ['/f1', '/f2'], shaders: '/s', replay_out: '/o',
+    max_frames: 2, max_bytes: 4096, case_max_bytes: 8192, max_seconds: 30,
+    frame_timeout: 10, timeout: 60, continue_on_difference: true,
+    package_dir: '/case',
+  }), ['eu4_replay', 'sequence', '--frame-dir', '/f1', '--frame-dir', '/f2',
+    '--shaders', '/s', '--replay-out', '/o', '--max-frames', '2',
+    '--max-bytes', '4096', '--case-max-bytes', '8192', '--max-seconds', '30',
+    '--frame-timeout', '10', '--timeout', '60', '--continue-on-difference',
+    '--package-dir', '/case'])
+  assert.deepEqual(buildArgs('eu4_replay', {
+    op: 'diagnose', frame: '/f', metal: '/m', shaders: '/s', replay_out: '/o',
+    policy: '/p', require_seal: true,
+  }), ['eu4_replay', 'diagnose', '--frame', '/f', '--metal', '/m',
+    '--shaders', '/s', '--replay-out', '/o', '--policy', '/p',
+    '--require-seal'])
   assert.deepEqual(buildArgs('eu4_capture', { op: 'graph', frame_dir: '/f' }),
     ['eu4_capture', 'graph', '--frame-dir', '/f'])
   assert.deepEqual(buildArgs('eu4_replay', {

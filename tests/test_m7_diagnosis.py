@@ -748,6 +748,40 @@ class DiagnosisContractTests(unittest.TestCase):
         self.assertEqual(report["classification"], "qualified_match")
         self.assertIn("gl_dither", report["state_coverage"]["proven_equivalent"])
 
+    def test_custom_policy_changes_state_coverage_and_records_digest(self):
+        self.fixture.write_frame(dither=True)
+        default = self.fixture.diagnose()
+        self.assertEqual(default["classification"], "unsupported_state")
+        policy = self.fixture.root / "custom-policy.json"
+        document = json.loads(
+            gfx_independent_replay.DEFAULT_POLICY.read_text())
+        document["name"] = "custom-state-equivalence"
+        document["state_equivalence"] = {
+            "gl_dither": {
+                "state": "gl_dither", "status": "proven_equivalent",
+                "evidence": "focused regression fixture, not production evidence",
+            },
+        }
+        policy.write_text(json.dumps(document))
+        report = self.fixture.diagnose(policy=policy)
+        self.assertEqual(report["classification"], "qualified_match", report)
+        self.assertEqual(report["state_coverage"]["status"], "complete")
+        self.assertEqual(report["policy"]["source"], "explicit")
+        self.assertEqual(report["policy"]["sha256"],
+                         sha(policy.read_bytes()))
+        self.assertEqual(report["policy"]["path"], str(policy.resolve()))
+
+    def test_missing_or_invalid_policy_fails_closed(self):
+        missing = self.fixture.root / "missing-policy.json"
+        with self.assertRaises(gfx_independent_replay.ReplayError) as caught:
+            self.fixture.diagnose(policy=missing)
+        self.assertEqual(caught.exception.kind, "policy_unavailable")
+        invalid = self.fixture.root / "invalid-policy.json"
+        invalid.write_text("{not json")
+        with self.assertRaises(gfx_independent_replay.ReplayError) as caught:
+            self.fixture.diagnose(policy=invalid)
+        self.assertEqual(caught.exception.kind, "policy_invalid")
+
     def test_exit_codes_are_distinguishable(self):
         report = self.fixture.diagnose()
         self.assertEqual(gfx_independent_replay.diagnosis_exit_code(report), 0)

@@ -1179,10 +1179,37 @@ def _optional_json(path: Path) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
+def load_policy(policy_path: Path | str | None) -> tuple[dict, dict]:
+    """Load a comparison policy and its content identity, fail closed.
+
+    An explicitly requested policy is never allowed to fall back to the
+    default.  The returned evidence is embedded in diagnosis/campaign reports
+    so a saved result names the exact policy bytes that produced it.
+    """
+    path = Path(policy_path or DEFAULT_POLICY).expanduser().resolve()
+    source = "explicit" if policy_path is not None else "default"
+    try:
+        payload = path.read_bytes()
+    except OSError as exc:
+        raise ReplayError("policy_unavailable", f"{path}: {exc}") from exc
+    try:
+        value = json.loads(payload)
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ReplayError("policy_invalid", f"{path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ReplayError("policy_invalid", f"{path}: policy is not an object")
+    return value, {
+        "path": str(path),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "bytes": len(payload),
+        "source": source,
+        "schema": value.get("schema"),
+        "name": value.get("name"),
+    }
+
+
 def _load_policy(policy_path: Path | str | None) -> dict:
-    path = Path(policy_path or DEFAULT_POLICY)
-    value = _optional_json(path)
-    return value if value is not None else {}
+    return load_policy(policy_path)[0]
 
 
 def _capture_error_class(message: str) -> str:
@@ -1775,7 +1802,7 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
     """
     frame_dir = Path(frame_dir).expanduser().resolve()
     metal_dir = Path(metal_result_dir).expanduser().resolve()
-    policy_value = _load_policy(policy)
+    policy_value, policy_evidence = load_policy(policy)
     state_evidence = {}
     configured = policy_value.get("state_equivalence")
     if isinstance(configured, dict):
@@ -2029,6 +2056,7 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
         "first_divergence": divergence,
         "qualification": qualification,
         "graph": graph,
+        "policy": policy_evidence,
         "artifacts": {
             "replay_json": str(metal_dir / "replay.json"),
             "provenance": str(metal_dir / "replay-provenance.jsonl"),
