@@ -100,7 +100,8 @@ def prepare_output(out_dir: Path, inputs: list[Path]) -> Path:
 
 
 def validate_sequence(frames: list[Path], *, max_frames: int = 64,
-                      max_bytes: int = 0) -> dict:
+                      max_bytes: int = 0,
+                      require_engine_identity: bool = False) -> dict:
     """Validate ordered identity without executing Metal."""
     if not frames:
         raise ContinuousError("empty_sequence")
@@ -113,6 +114,8 @@ def validate_sequence(frames: list[Path], *, max_frames: int = 64,
     session_id = None
     pid = None
     total_bytes = 0
+    engine_frames: list[dict] = []
+    expected_present = None
     for index, frame in enumerate(frames, start=1):
         frame = frame.expanduser().resolve()
         if not (frame / "frame-trace.json").is_file():
@@ -158,6 +161,7 @@ def validate_sequence(frames: list[Path], *, max_frames: int = 64,
             raise ContinuousError("reference_digest", str(frame))
         seal_path = frame / "frame-seal.json"
         sealed_frames.append(seal_path.is_file())
+        seal = None
         if seal_path.is_file():
             try:
                 seal = m6_frame.load_seal(frame)
@@ -171,6 +175,40 @@ def validate_sequence(frames: list[Path], *, max_frames: int = 64,
             if seal.get("reference_sha256") != sequence.get(
                     "reference_sha256"):
                 raise ContinuousError("seal_reference", str(frame))
+        present_index = sequence.get("present_index")
+        scene_index = sequence.get("scene_index")
+        if (present_index is None) != (scene_index is None):
+            raise ContinuousError(
+                "engine_identity_partial",
+                f"{frame} declares only one of present_index/scene_index")
+        if present_index is not None:
+            if (not isinstance(present_index, int)
+                    or isinstance(present_index, bool)
+                    or present_index <= 0
+                    or not isinstance(scene_index, int)
+                    or isinstance(scene_index, bool)
+                    or scene_index <= 0):
+                raise ContinuousError(
+                    "engine_identity_invalid",
+                    f"{frame} has an invalid engine frame identity")
+            if seal is not None:
+                for field in ("present_index", "scene_index"):
+                    if seal.get(field) != sequence.get(field):
+                        raise ContinuousError(
+                            "engine_identity_seal_mismatch",
+                            f"{frame} {field} disagrees with the seal")
+            if expected_present is not None and present_index != expected_present + 1:
+                raise ContinuousError(
+                    "engine_frame_gap",
+                    f"{frame} present_index {present_index} does not follow "
+                    f"{expected_present}; the captured engine frames are not "
+                    "gap-free")
+            expected_present = present_index
+            engine_frames.append({
+                "sequence": index,
+                "present_index": present_index,
+                "scene_index": scene_index,
+            })
         if previous_identity is not None:
             previous = sequence.get("previous")
             if not isinstance(previous, dict):
@@ -191,6 +229,8 @@ def validate_sequence(frames: list[Path], *, max_frames: int = 64,
             "sequence": index,
             "frame_dir": str(frame),
             "capture_frame_id": capture_id,
+            "present_index": sequence.get("present_index"),
+            "scene_index": sequence.get("scene_index"),
             "manifest_sha256": manifest_sha,
             "event_stream_sha256": events_sha,
             "reference_sha256": sequence.get("reference_sha256"),
@@ -208,6 +248,20 @@ def validate_sequence(frames: list[Path], *, max_frames: int = 64,
             "mixed_seals",
             "some frames are sealed and others are not; a continuous "
             "campaign must be uniformly sealed or explicitly synthetic")
+    engine_status = (
+        "gap_free" if len(engine_frames) == len(frames)
+        else "unavailable" if not engine_frames
+        else "partial")
+    if require_engine_identity and engine_status != "gap_free":
+        raise ContinuousError(
+            "engine_identity_required",
+            "the sequence does not carry consecutive engine present/scene "
+            "frame indices, so gap-free monitoring cannot be claimed")
+    if engine_status == "partial":
+        raise ContinuousError(
+            "engine_identity_partial",
+            "some frames carry engine present/scene indices and others do "
+            "not; the ordered sequence is not uniformly identified")
     if max_bytes > 0 and total_bytes > max_bytes:
         raise ContinuousError(
             "byte_budget", f"{total_bytes} > {max_bytes}")
@@ -219,6 +273,19 @@ def validate_sequence(frames: list[Path], *, max_frames: int = 64,
         "frames": records,
         "bytes": total_bytes,
         "sealed": bool(sealed_frames) and all(sealed_frames),
+        "engine_identity": {
+            "status": engine_status,
+            "gap_free": engine_status == "gap_free",
+            "present_indices": [item["present_index"]
+                                for item in engine_frames],
+            "scene_indices": [item["scene_index"]
+                              for item in engine_frames],
+            "frames": engine_frames,
+            "note": (
+                "consecutive engine present indices prove no captured frame "
+                "was skipped; a missing identity is reported as unavailable, "
+                "never inferred"),
+        },
     }
 
 
@@ -450,6 +517,8 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
                  timeout: float = 3600.0,
                  frame_timeout: float = 120.0,
                  case_max_bytes: int = 0,
+                 require_engine_identity: bool = False,
+                 fault: dict | None = None,
                  stderr_limit: int = 1_000_000) -> dict:
     """Execute, diagnose and supervise one bounded ordered frame sequence."""
     if max_pending < 1:
@@ -465,8 +534,9 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
     except gfx_independent_replay.ReplayError as exc:
         raise ContinuousError(exc.kind, exc.detail) from exc
     out_dir = prepare_output(Path(out_dir), frames)
-    validation = validate_sequence(frames, max_frames=max_frames,
-                                   max_bytes=max_bytes)
+    validation = validate_sequence(
+        frames, max_frames=max_frames, max_bytes=max_bytes,
+        require_engine_identity=require_engine_identity)
     host_path = Path(host).expanduser() if host else m6_frame.build_replay_host()
     control_dir = out_dir / "control"
     control_dir.mkdir(parents=True, exist_ok=True)
@@ -492,6 +562,8 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
         "stop_on_difference": stop_on_difference,
         "policy": policy_evidence,
         "validation": validation,
+        "engine_identity": validation.get("engine_identity"),
+        "fault_injection": dict(fault or {}) or None,
         "frames": [],
         "stop_reason": None,
         "returncode": None,
@@ -499,8 +571,22 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
     }
     replay_times = []
     diagnosis_times = []
+    env = None
+    if fault:
+        env = dict(os.environ)
+        if fault.get("sampler_shift") is not None:
+            env["EU4_FRAME_REPLAY_SAMPLER_SHIFT"] = str(
+                fault["sampler_shift"])
+            if fault.get("sampler_shift_min") is not None:
+                env["EU4_FRAME_REPLAY_SAMPLER_SHIFT_MIN"] = str(
+                    fault["sampler_shift_min"])
+        if fault.get("frame") is not None:
+            env["EU4_FRAME_REPLAY_FAULT_FRAME"] = str(fault["frame"])
+        if fault.get("event") is not None:
+            env["EU4_FRAME_REPLAY_FAULT_EVENT"] = str(fault["event"])
     process = subprocess.Popen(
-        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env=env)
     stopped_during_execution = False
 
     def decide(continue_running: bool, reason: str, sequence: int) -> None:
@@ -561,6 +647,7 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
                           out_dir / f"out-{sequence:03d}")).resolve()
         diagnosis_started = time.monotonic()
         effective_shaders = _effective_frame_shaders(frame, shaders)
+        applied_fault = None
         if not row.get("ok"):
             diagnosis = {
                 "classification": "gpu_execution_failure",
@@ -577,10 +664,13 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
                 row.get("error") or "Metal execution failed")
             report_path = None
         else:
+            applied_fault = (
+                fault if fault and fault.get("frame") == sequence else None)
             diagnosis = gfx_independent_replay.diagnose_frame(
                 frame, output, output, policy,
                 shaders=effective_shaders,
-                require_seal=bool(validation.get("sealed")))
+                require_seal=bool(validation.get("sealed")),
+                faults=applied_fault)
             diagnosis["campaign_policy"] = policy_evidence
             diagnosis["policy"] = policy_evidence
             evidence = diagnostic_evidence(diagnosis)
@@ -589,9 +679,12 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
         diagnosis_times.append(diagnosis_seconds)
         replay_times.append(float(row.get("duration_ns") or 0) / 1e9)
         classification = diagnosis.get("classification")
+        sequence_record = _read_json(frame / "frame-sequence.json")
         entry = {
             "sequence": sequence,
             "frame_dir": str(frame),
+            "present_index": sequence_record.get("present_index"),
+            "scene_index": sequence_record.get("scene_index"),
             "output_dir": str(output),
             "ok": bool(row.get("ok")),
             "events": row.get("events"),
@@ -611,6 +704,8 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
             "diagnostic_report": (str(report_path)
                                   if report_path is not None else None),
             "diagnostic_completed": bool(evidence.get("completed")),
+            "fault_injection": (dict(applied_fault)
+                                if applied_fault else None),
             "diagnostic_evidence": evidence,
             "shader_dir": str(effective_shaders),
             "diagnosis_seconds": diagnosis_seconds,

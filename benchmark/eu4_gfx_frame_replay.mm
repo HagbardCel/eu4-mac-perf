@@ -2354,6 +2354,25 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
         const char *shift_min_env = getenv("EU4_FRAME_REPLAY_SAMPLER_SHIFT_MIN");
         NSInteger shift_min = shift_min_env != NULL
             ? (NSInteger)strtol(shift_min_env, NULL, 10) : 7;
+        /* A controlled later-frame divergence is scoped to one frame and,
+           optionally, one captured event.  A missing or zero selector leaves
+           the fault active for every frame/event, preserving the historical
+           single-frame fault behaviour. */
+        const char *fault_frame_env = getenv("EU4_FRAME_REPLAY_FAULT_FRAME");
+        if (fault_frame_env != NULL) {
+            NSInteger fault_frame = (NSInteger)strtol(fault_frame_env, NULL, 10);
+            if (fault_frame > 0 && g_frame_sequence != (uint64_t)fault_frame) {
+                sampler_shift = 0;
+            }
+        }
+        const char *fault_event_env = getenv("EU4_FRAME_REPLAY_FAULT_EVENT");
+        if (fault_event_env != NULL && sampler_shift != 0) {
+            NSInteger fault_event = (NSInteger)strtol(fault_event_env, NULL, 10);
+            NSInteger event_index = (NSInteger)number(event[@"index"], 0);
+            if (fault_event >= 0 && event_index != fault_event) {
+                sampler_shift = 0;
+            }
+        }
         for (NSString *stage_name in @[@"vertex", @"pixel"]) {
             NSDictionary *stage = [stage_name isEqualToString:@"vertex"] ? vs : fs;
             for (NSDictionary *binding in stage[@"msl_samplers"] ?: @[]) {

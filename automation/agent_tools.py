@@ -795,6 +795,50 @@ def _read_frames(run: Path, *, role: str | None, requested: list[int],
 
 
 def eu4_capture(args: argparse.Namespace) -> dict:
+    if args.capture_op == "gl-control":
+        from automation import gfx_gl_control
+
+        frame_dirs = []
+        if args.frame_dir:
+            frame_dirs = [Path(args.frame_dir)]
+        elif args.run:
+            run = Path(args.run).expanduser().resolve()
+            frames = sorted((run / "frames").glob("frame-*"))
+            frame_dirs = [item for item in frames if item.is_dir()]
+            if not frame_dirs and (run / "frame-events.jsonl").is_file():
+                frame_dirs = [run]
+        if not frame_dirs:
+            return _envelope(
+                "eu4_capture", "error",
+                reason="gl-control requires --frame-dir or a run with frames")
+        reports = []
+        for frame in frame_dirs:
+            try:
+                reports.append(gfx_gl_control.control_frame(frame))
+            except gfx_gl_control.ControlError as exc:
+                return _envelope(
+                    "eu4_capture", "invalid",
+                    {"frames": [str(item) for item in frame_dirs],
+                     "kind": exc.kind, "reports": reports},
+                    diagnostic="complete", verdict="unverified",
+                    evidence="invalid", qualified=False,
+                    reason=str(exc))
+        matched = all(item["qualified"] for item in reports)
+        value = {
+            "schema": "gfx-gl-control-run/v1",
+            "frames": reports,
+            "status": "match" if matched else "different",
+            "qualified": matched,
+            "scope": "captured_transfer",
+        }
+        return _envelope(
+            "eu4_capture", "ok" if matched else "invalid", value,
+            diagnostic="complete", verdict="equal" if matched else "different",
+            evidence="valid" if matched else "invalid", qualified=matched,
+            reason=("same-backend GL control matched with zero differing "
+                    "pixels" if matched else
+                    "same-backend GL control differs; the capture/decoder "
+                    "path is not exact"))
     if args.capture_op == "graph":
         if not args.frame_dir:
             return _envelope("eu4_capture", "error",
@@ -2009,6 +2053,18 @@ def _campaign_outcome(report: dict) -> tuple[str, str, str | None, str | None,
         (row.get("sequence") for row in rows
          if row.get("classification") != "qualified_match"), None)
     terminal = _campaign_terminal_failure(report)
+    identities = {
+        int(row.get("sequence")): {
+            "present_index": row.get("present_index"),
+            "scene_index": row.get("scene_index"),
+        }
+        for row in rows
+        if isinstance(row.get("sequence"), int)
+    }
+
+    def identity_for(sequence):
+        return identities.get(sequence) if sequence is not None else None
+
     details = {
         "campaign_status": report.get("status"),
         "campaign_execution": "ok",
@@ -2016,8 +2072,14 @@ def _campaign_outcome(report: dict) -> tuple[str, str, str | None, str | None,
         "stopped_at": report.get("stopped_at"),
         "first_difference": first_difference,
         "first_pixel_divergent_frame": first_pixel,
+        "first_pixel_divergent_frame_identity": identity_for(first_pixel),
         "first_checkpoint_divergent_frame": first_checkpoint,
+        "first_checkpoint_divergent_frame_identity": identity_for(
+            first_checkpoint),
         "first_unqualified_frame": first_unqualified,
+        "first_unqualified_frame_identity": identity_for(first_unqualified),
+        "frame_identities": identities,
+        "engine_identity": report.get("engine_identity"),
         "terminal_failure": terminal,
         "sequence_order": report.get("sequence_order"),
         "qualified": False,
@@ -2285,6 +2347,20 @@ def eu4_replay(args: argparse.Namespace) -> dict:
         if max_frames > 64:
             return _envelope("eu4_replay", "refused",
                              reason="--max-frames is bounded to 64")
+        fault = None
+        fault_frame = getattr(args, "fault_frame", None)
+        if fault_frame is not None:
+            if fault_frame < 1 or fault_frame > max_frames:
+                return _envelope(
+                    "eu4_replay", "refused",
+                    reason="--fault-frame must select an executed frame")
+            fault = {"frame": int(fault_frame), "kind": "sampler_shift",
+                     "sampler_shift": int(getattr(args, "sampler_shift", 1)
+                                          or 1),
+                     "sampler_shift_min": int(
+                         getattr(args, "sampler_shift_min", 7))}
+            if getattr(args, "fault_event", None) is not None:
+                fault["event"] = int(args.fault_event)
         try:
             report = m7_continuous.run_campaign(
                 frame_dirs, Path(args.replay_out), shaders=shaders,
@@ -2299,6 +2375,9 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                 frame_timeout=float(getattr(args, "frame_timeout", 180.0)
                                     or 180.0),
                 case_max_bytes=int(getattr(args, "case_max_bytes", 0) or 0),
+                require_engine_identity=bool(
+                    getattr(args, "require_engine_identity", False)),
+                fault=fault,
             )
         except m7_continuous.ContinuousError as exc:
             policy_failure = exc.kind in ("policy_unavailable", "policy_invalid")
@@ -2328,9 +2407,17 @@ def eu4_replay(args: argparse.Namespace) -> dict:
             "first_difference": details["first_difference"],
             "first_pixel_divergent_frame":
                 details["first_pixel_divergent_frame"],
+            "first_pixel_divergent_frame_identity":
+                details["first_pixel_divergent_frame_identity"],
             "first_checkpoint_divergent_frame":
                 details["first_checkpoint_divergent_frame"],
+            "first_checkpoint_divergent_frame_identity":
+                details["first_checkpoint_divergent_frame_identity"],
             "first_unqualified_frame": details["first_unqualified_frame"],
+            "first_unqualified_frame_identity":
+                details["first_unqualified_frame_identity"],
+            "frame_identities": details["frame_identities"],
+            "engine_identity": details["engine_identity"],
             "pixel_verdict": (details["first_difference"] or {}).get(
                 "classification"),
             "terminal_failure": details["terminal_failure"],
@@ -2343,6 +2430,8 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                 rows and all(row.get("diagnostic_completed") is True
                              for row in rows)),
             "validation": report.get("validation"),
+            "engine_identity": report.get("engine_identity"),
+            "fault_injection": report.get("fault_injection"),
             "policy": report.get("policy"),
             "frames": rows,
             "unexecuted_frames": report.get("unexecuted_frames") or [],
@@ -2558,7 +2647,7 @@ def _parser() -> argparse.ArgumentParser:
                          help="ISO-8601 lower bound on the recorded finish time")
 
     capture = sub.add_parser("eu4_capture")
-    capture.add_argument("capture_op", choices=("health", "frames", "request", "probe", "graph"))
+    capture.add_argument("capture_op", choices=("health", "frames", "request", "probe", "graph", "gl-control"))
     capture.add_argument("--frame-dir", type=Path, default=None)
     capture.add_argument("--run", type=Path, default=None)
     capture.add_argument("--role", choices=("reference", "candidate"), default=None)
@@ -2649,6 +2738,17 @@ def _parser() -> argparse.ArgumentParser:
     replay.add_argument("--disable-render-target-vflip", action="store_true")
     replay.add_argument("--sampler-shift", type=int, default=None)
     replay.add_argument("--sampler-shift-min", type=int, default=7)
+    replay.add_argument(
+        "--require-engine-identity", action="store_true",
+        help="refuse an M7 sequence without consecutive engine present/scene "
+             "frame indices")
+    replay.add_argument(
+        "--fault-frame", type=int, default=None,
+        help="controlled divergence: apply the sampler fault in this 1-based "
+             "frame only (diagnostic experiment, never qualified)")
+    replay.add_argument(
+        "--fault-event", type=int, default=None,
+        help="controlled divergence: restrict the fault to this event index")
 
     case = sub.add_parser("eu4_case_inspect")
     case.add_argument("--case", required=True, type=Path)

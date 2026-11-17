@@ -117,6 +117,8 @@ test('argument mapping covers each tool', () => {
     '--require-seal'])
   assert.deepEqual(buildArgs('eu4_capture', { op: 'graph', frame_dir: '/f' }),
     ['eu4_capture', 'graph', '--frame-dir', '/f'])
+  assert.deepEqual(buildArgs('eu4_capture', { op: 'gl-control', run: '/r' }),
+    ['eu4_capture', 'gl-control', '--run', '/r'])
   assert.deepEqual(buildArgs('eu4_replay', {
     op: 'independent', frame: '/f', shaders: '/s', replay_out: '/o',
     disable_render_target_vflip: true, sampler_shift: -1, sampler_shift_min: 7,

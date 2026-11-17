@@ -912,16 +912,36 @@ def capture(args: argparse.Namespace) -> int:
             result["seal_error"] = str(exc)
             status = 6
     if continuous:
+        campaign_frames = (result.get("campaign") or {}).get("frames") or []
+        present_indices = [item.get("present_index")
+                           for item in campaign_frames]
+        identity_complete = all(isinstance(item, int) and item > 0
+                                for item in present_indices)
+        identity_gap_free = bool(
+            identity_complete
+            and all(present_indices[index] == present_indices[index - 1] + 1
+                    for index in range(1, len(present_indices))))
         result["seal"] = {
             "mode": "continuous",
+            "engine_identity": {
+                "status": ("gap_free" if identity_gap_free
+                           else "gap" if identity_complete
+                           else "unavailable"),
+                "gap_free": identity_gap_free,
+                "present_indices": present_indices,
+                "scene_indices": [item.get("scene_index")
+                                  for item in campaign_frames],
+            },
             "frames": [
                 {
                     "sequence": item.get("sequence"),
                     "capture_frame_id": item.get("capture_frame_id"),
+                    "present_index": item.get("present_index"),
+                    "scene_index": item.get("scene_index"),
                     "manifest_sha256": item.get("manifest_sha256"),
                     "reference_sha256": item.get("reference_sha256"),
                 }
-                for item in (result.get("campaign") or {}).get("frames") or []
+                for item in campaign_frames
             ],
         }
     (output / "capture-report.json").write_text(json.dumps(result, indent=2) + "\n")
@@ -2199,6 +2219,8 @@ def _continuous_frame_coordinator(
     summary = {
         "sequence": frame_index,
         "capture_frame_id": seal.get("capture_frame_id"),
+        "present_index": seal.get("present_index"),
+        "scene_index": seal.get("scene_index"),
         "frame_dir": str(frame_dir),
         "output_dir": str(output),
         "operation_count": seal.get("operation_count"),

@@ -128,14 +128,17 @@ class ContinuousReplayHistoryTests(unittest.TestCase):
         (frame / "frame-sequence.json").write_text(json.dumps(value))
         return value
 
-    def run_sequence(self, frames):
+    def run_sequence(self, frames, env=None):
         out = self.base / "out"
         if out.exists():
             shutil.rmtree(out)
+        environment = dict(os.environ)
+        environment.update(env or {})
         ran = subprocess.run(
             [str(self.host), "--sequence", ",".join(map(str, frames)),
              "--shaders", str(self.shaders), "--out", str(out)],
-            capture_output=True, text=True, check=False, timeout=300)
+            capture_output=True, text=True, check=False, timeout=300,
+            env=environment)
         rows = []
         for line in ran.stdout.splitlines():
             line = line.strip()
@@ -470,3 +473,65 @@ class ContinuousReplayHistoryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class ControlledFrameFaultTests(ContinuousReplayHistoryTests):
+    def test_frame_scoped_fault_only_changes_the_selected_frame(self):
+        frame1 = self.make_frame("fault-1")
+        frame2 = self.make_frame("fault-2")
+        self.write_sequence(frame1, 1, render_targets=("443",))
+        self.write_sequence(frame2, 2, previous=frame1, carried=("443",))
+        baseline, rows, out = self.run_sequence([frame1, frame2])
+        self.assertEqual(baseline.returncode, 0, baseline.stderr[-1000:])
+        first = (out / "out-001" / "metal-frame.bgra").read_bytes()
+        second = (out / "out-002" / "metal-frame.bgra").read_bytes()
+        faulted, fault_rows, fault_out = self.run_sequence(
+            [frame1, frame2],
+            env={
+                "EU4_FRAME_REPLAY_SAMPLER_SHIFT": "1",
+                "EU4_FRAME_REPLAY_SAMPLER_SHIFT_MIN": "0",
+                "EU4_FRAME_REPLAY_FAULT_FRAME": "2",
+                "EU4_FRAME_REPLAY_FAULT_EVENT": "291",
+            })
+        self.assertEqual(faulted.returncode, 0, faulted.stderr[-1000:])
+        self.assertEqual(
+            first, (fault_out / "out-001" / "metal-frame.bgra").read_bytes(),
+            "the fault must not change an earlier frame")
+        self.assertNotEqual(
+            second, (fault_out / "out-002" / "metal-frame.bgra").read_bytes(),
+            "the selected later frame must carry the controlled difference")
+        self.assertEqual(self.row_fault_count(rows), 0)
+        self.assertEqual(len(fault_rows), 2)
+
+    def test_diagnosis_reports_the_selected_frame_and_fault_event(self):
+        frame1 = self.make_frame("diag-fault-1")
+        frame2 = self.make_frame("diag-fault-2")
+        self.write_sequence(frame1, 1, render_targets=("433",))
+        self.write_sequence(frame2, 2, previous=frame1)
+        out = self.base / "fault-campaign"
+        if out.exists():
+            shutil.rmtree(out)
+        report = m7_continuous.run_campaign(
+            [frame1, frame2], out, shaders=self.shaders,
+            stop_on_difference=False,
+            fault={"frame": 2, "event": 1, "sampler_shift": 1,
+                   "sampler_shift_min": 0})
+        self.assertEqual(report["status"], "complete", report)
+        self.assertEqual(report["fault_injection"], {
+            "frame": 2, "event": 1, "sampler_shift": 1,
+            "sampler_shift_min": 0})
+        self.assertFalse(report["qualified"])
+        self.assertEqual(len(report["frames"]), 2)
+        first = report["frames"][0]
+        second = report["frames"][1]
+        self.assertIsNone(
+            (first.get("first_divergence") or {}).get("fault"))
+        self.assertEqual(second["fault_injection"]["frame"], 2)
+        divergence = second["first_divergence"]
+        self.assertEqual(divergence["kind"], "semantic")
+        self.assertEqual(divergence["event"], 1)
+        self.assertEqual(divergence["fault"]["frame"], 2)
+        self.assertEqual(divergence["fault"]["event"], 1)
+
+    @staticmethod
+    def row_fault_count(rows):
+        return sum(1 for row in rows if row.get("faulted"))

@@ -96,7 +96,7 @@ export function definitions(run) {
       'eu4_capture',
       'Inspect frame observations/health for a run, request bounded frame dumps, or run one targeted live checkpoint probe.',
       {
-        op: { type: 'string', enum: ['health', 'frames', 'request', 'probe', 'graph'], description: 'capture operation' },
+        op: { type: 'string', enum: ['health', 'frames', 'request', 'probe', 'graph', 'gl-control'], description: 'capture operation' },
         run: string('run or session directory'),
         frame_dir: string('frame trace directory for the graph operation'),
         role: { type: 'string', enum: ['reference', 'candidate'], description: 'backend role' },

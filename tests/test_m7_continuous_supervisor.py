@@ -68,6 +68,65 @@ def make_frame(root: Path, index: int, previous: Path | None) -> Path:
     return frame
 
 
+class EngineIdentityTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.frames = []
+        previous = None
+        for index in (1, 2, 3):
+            frame = make_frame(self.root, index, previous)
+            self.frames.append(frame)
+            previous = frame
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def identify(self, indices):
+        for frame, present in zip(self.frames, indices):
+            path = frame / "frame-sequence.json"
+            value = json.loads(path.read_text())
+            value["present_index"] = present
+            value["scene_index"] = present
+            path.write_text(json.dumps(value))
+
+    def test_consecutive_engine_indices_are_gap_free(self):
+        self.identify((616, 617, 618))
+        validation = m7_continuous.validate_sequence(self.frames)
+        self.assertEqual(validation["engine_identity"]["status"], "gap_free")
+        self.assertTrue(validation["engine_identity"]["gap_free"])
+        self.assertEqual(
+            validation["engine_identity"]["present_indices"],
+            [616, 617, 618])
+
+    def test_a_skipped_engine_frame_fails_closed(self):
+        self.identify((616, 618, 619))
+        with self.assertRaises(m7_continuous.ContinuousError) as raised:
+            m7_continuous.validate_sequence(self.frames)
+        self.assertEqual(raised.exception.kind, "engine_frame_gap")
+
+    def test_missing_identity_is_unavailable_but_required_fails(self):
+        validation = m7_continuous.validate_sequence(self.frames)
+        self.assertEqual(validation["engine_identity"]["status"],
+                         "unavailable")
+        self.assertFalse(validation["engine_identity"]["gap_free"])
+        with self.assertRaises(m7_continuous.ContinuousError) as raised:
+            m7_continuous.validate_sequence(
+                self.frames, require_engine_identity=True)
+        self.assertEqual(raised.exception.kind,
+                         "engine_identity_required")
+
+    def test_partial_identity_fails_closed(self):
+        self.identify((616, 617, 618))
+        path = self.frames[1] / "frame-sequence.json"
+        value = json.loads(path.read_text())
+        value.pop("present_index")
+        path.write_text(json.dumps(value))
+        with self.assertRaises(m7_continuous.ContinuousError) as raised:
+            m7_continuous.validate_sequence(self.frames)
+        self.assertEqual(raised.exception.kind, "engine_identity_partial")
+
+
 class SupervisorTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
