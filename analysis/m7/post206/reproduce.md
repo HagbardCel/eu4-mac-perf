@@ -16,7 +16,8 @@ python3 -m automation.m6_frame capture \
   --shadow-timeout-ms 120000 --shadow-wait-ms 180000
 ```
 
-`--max-draws 512` is required for the 325-event title frame. `--max-bytes` and
+`--max-draws 512` is now the command default; it covers the 325-event title
+frame and prevents the former 256-event `draw_cap` failure. `--max-bytes` and
 `--case-max-bytes` are the explicit 2 GiB case budget; a 512 MiB budget
 publishes an explicit incomplete summary instead of dropping evidence.
 
@@ -105,3 +106,25 @@ python3 -m automation.agent_tools eu4_replay diagnose \
 
 `diagnose-compact/agent-diagnosis.json` is the bounded projection; the full
 `diagnostic-report.json` remains authoritative.
+
+## Artifact retrieval
+
+The authentic portable case is **not committed** (1,348,032,569 logical bytes,
+3,811 files) and this environment has no external artifact store. The durable
+artifacts are:
+
+- the manifest hashes and file inventory in
+  [`evidence.json`](evidence.json);
+- the local case at
+  `.local/m7/phase-c-authentic-v2/phase-c-authentic-case-v2`;
+- the reproduction procedure above, which rebuilds the case from the sealed
+  frames and translations.
+
+Check the local case before citing it:
+
+```sh
+python3 -m automation.agent_tools eu4_replay verify   --case .local/m7/phase-c-authentic-v2/phase-c-authentic-case-v2
+```
+
+A missing `.local` case is reported as absent; it is never reconstructed from
+this report alone.

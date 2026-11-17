@@ -78,8 +78,10 @@ was fetched and `f13602e4` is the merged #206 baseline.
    attempted (`20261117T193147Z-12db1d13`) and deliberately stopped when it
    reached an interactive live-EU4 benchmark prompt; it is **not** a completed
    full-suite pass. `tests.test_trace_tr3` was already excluded because it
-   contains a live authorization path. No EU4 process remained and the launch
-   lease was free afterwards.
+   contains a live authorization path. Treat the frame-counter/benchmark
+   modules as live-capable and keep them outside the routine offline gate until
+   their isolation is fixed. No EU4 process remained and the launch lease was
+   free afterwards.
 6. **Native DSH tool invocation in this session.** The plugin tests and the
    native bridge test pass, but this preparation session used the Python CLI
    through the DSH bash surface. The native tool list was not mounted in the
@@ -105,9 +107,14 @@ derived fixtures remain in `tests/`.
 - Baseline focused set (`test_agent_tools`, `test_m7_continuous_supervisor`,
   `test_gfx_replay_case_sequence`, `test_m7_diagnosis`): **232 passed, 1
   skipped, 0 failures** in 49.2 s (`20261117T184907Z-a54c1e2b`).
-- Phase C focused set (same four plus continuous replay, GL control and pixel
-  diagnostics): **230 passed, 1 skipped, 0 failures** in 118.8 s
-  (`20261117T190914Z-318c7096`).
+- PR #207 focused set: **356 passed, 1 skipped, 0 failures** (supervisor,
+  continuous replay, agent tools, GL control, diagnosis, case sequence, native
+  bridge, frame capture).
+- PR #208 focused set: **312 passed, 1 skipped, 0 failures** (diagnosis, pixel
+  diagnostics, agent tools, supervisor, continuous replay, case sequence).
+- PR #209 final focused set: **407 passed, 1 skipped, 0 failures** across the
+  capture, efficiency, agent, supervisor, replay, GL control, diagnosis, pixel,
+  case and checkpoint modules.
 - DSH tools plugin: **9 passed, 0 failed**.
 - Known pre-existing/non-offline limit: `tests.test_trace_tr3` contains an
   interactive live-EU4 authorization path; it is excluded from the offline
@@ -118,3 +125,13 @@ derived fixtures remain in `tests/`.
 The authentic capture and replay are recorded in
 [`phase-c-qualification.md`](phase-c-qualification.md); the machine-readable
 bundle is [`evidence.json`](evidence.json).
+
+### Review remediation and cost controls
+
+The review remediation is summarized in
+[`review-remediation.md`](review-remediation.md). Cost controls applied here:
+the capture default event budget is now 512 (the previous 256 default caused the
+`draw_cap` failure), the compact diagnosis is bounded and selected causally,
+the authentic case remains outside CI, and CI is checked with bounded
+completion (`gh pr checks --watch`) rather than fixed sleeps. The full offline
+run remains a separate gate with live modules excluded.

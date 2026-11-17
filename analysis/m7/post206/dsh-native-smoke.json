@@ -1,0 +1,68 @@
+{
+  "schema": "m7-dsh-native-smoke/v1",
+  "generated_utc": "2026-11-17T20:18:20.200206+00:00",
+  "mounted_session": {
+    "status": "blocked",
+    "profile": "headless + temporary eu4-tools overlay",
+    "session_id": "session-aabf8bbe-4fff-4bb6-8ef9-e3d1a611c834",
+    "error_code": "MISSING_CREDENTIAL",
+    "error": "llm-deepseek: no API key for provider route \"deepseek-official\"; the headless profile does not mount the credentials service and DEEPSEEK_API_KEY is not in the launching environment.",
+    "tool_call_reached": false,
+    "eu4_launched": false,
+    "note": "The plugin itself mounted (7 tools registered), but the model turn failed before any tool call. This is a session-credentials limitation, not a plugin failure."
+  },
+  "plugin_bridge": {
+    "status": "passed",
+    "note": "Direct execution through the plugin bridge (the same runTool path a mounted DSH session uses), not a model-driven mounted session.",
+    "tools": [
+      "eu4_re_query",
+      "eu4_session",
+      "eu4_capture",
+      "eu4_diff_run",
+      "eu4_diff_inspect",
+      "eu4_replay",
+      "eu4_case_inspect"
+    ],
+    "capture": {
+      "ok": true,
+      "status": "ok",
+      "outcome": {
+        "execution": "ok",
+        "diagnostic": "complete",
+        "diagnostic_complete": true,
+        "verdict": "equal",
+        "evidence": "valid",
+        "qualified": true
+      },
+      "result_status": "match",
+      "frames": [
+        {
+          "status": "match",
+          "checks": [
+            {
+              "event": 284,
+              "destination_event": 286,
+              "status": "match",
+              "mismatched": 0
+            }
+          ]
+        }
+      ]
+    },
+    "query": {
+      "ok": true,
+      "status": "ok",
+      "matches": [
+        {
+          "name": "_GfxResolveTexture",
+          "rva": "0x15ece63"
+        },
+        {
+          "name": "_GfxResolve",
+          "rva": "0x15ece13"
+        }
+      ]
+    }
+  },
+  "conclusion": "Native tool implementations, argument mapping and evidence access pass; unattended mounted-session readiness is downgraded because the available headless profile cannot authenticate and the current Web session does not expose the eu4-tools plugin."
+}

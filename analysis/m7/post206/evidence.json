@@ -41,17 +41,27 @@
       "errors": 0,
       "seconds": 49.247
     },
-    "phase_c_focused": {
-      "id": "20261117T190914Z-318c7096",
-      "ran": 230,
+    "pr207_focused": {
+      "ran": 356,
       "skipped": 1,
       "failures": 0,
-      "errors": 0,
-      "seconds": 118.764
+      "errors": 0
+    },
+    "pr208_focused": {
+      "ran": 312,
+      "skipped": 1,
+      "failures": 0,
+      "errors": 0
+    },
+    "pr209_focused": {
+      "ran": 407,
+      "skipped": 1,
+      "failures": 0,
+      "errors": 0
     },
     "dsh_plugin": {
       "tests": 9,
-      "fail": 0
+      "failed": 0
     }
   },
   "capture": {
@@ -138,6 +148,7 @@
   },
   "gl_control": {
     "scope": "captured_transfer",
+    "status": "match",
     "checks": [
       {
         "sequence": 1,
@@ -179,7 +190,7 @@
         "destination_sha256": "931aaf9cd5819554fc81f88b8e98aa91aa96a417acc2cde5e9c00bcb9542b888"
       }
     ],
-    "status": "match"
+    "qualified": true
   },
   "portable_case": {
     "case_id": "m7-phase-c-authentic-3frame",
@@ -209,7 +220,7 @@
           617
         ]
       },
-      "seconds": 1.79
+      "seconds": 1.93
     },
     "replay": {
       "status": "complete",
@@ -219,7 +230,7 @@
       "history_sequence": 3,
       "mismatched_pixels": 1162904,
       "max_channel_error": 73,
-      "seconds": 19.97
+      "seconds": 21.56
     }
   },
   "diagnostics": [
@@ -343,6 +354,36 @@
       "sampler_shift_min": 0,
       "event": 1
     },
+    "campaign_evidence": {
+      "schema": "gfx-fault-campaign-evidence/v1",
+      "requested": {
+        "frame": 2,
+        "kind": "sampler_shift",
+        "sampler_shift": 1,
+        "sampler_shift_min": 0,
+        "event": 1
+      },
+      "fired": true,
+      "frames": [
+        {
+          "schema": "gfx-fault-evidence/v1",
+          "requested": {
+            "frame": 2,
+            "kind": "sampler_shift",
+            "sampler_shift": 1,
+            "sampler_shift_min": 0,
+            "event": 1
+          },
+          "fired": true,
+          "shifted_bindings": 3,
+          "events": [
+            1
+          ],
+          "reason": "the replay provenance records at least one substituted sampler binding"
+        }
+      ],
+      "reason": "the selected fault fired in at least one frame"
+    },
     "frame_1_fault": null,
     "frame_2_fault": {
       "frame": 2,
@@ -351,247 +392,12 @@
       "sampler_shift_min": 0,
       "event": 1
     },
+    "frame_2_classification": "fault_experiment",
     "frame_2_first_divergence": {
-      "schema": "gfx-first-divergence/v1",
-      "frame_id": 2,
       "kind": "semantic",
       "event": 1,
-      "target": "tex:433",
       "operation": "draw",
-      "entry": "_GfxDrawIndexed",
-      "caller_rva": "0x10d4e50",
-      "program": 310,
-      "inputs": [
-        {
-          "resource": "tex:370",
-          "unit": 2,
-          "sampler": "tex2"
-        },
-        {
-          "resource": "tex:386",
-          "unit": 0,
-          "sampler": "tex0"
-        },
-        {
-          "resource": "tex:369",
-          "unit": 1,
-          "sampler": "tex1"
-        }
-      ],
-      "render_target": "tex:433",
-      "dependent_resources": [],
-      "state": {
-        "blend": {
-          "enabled": false,
-          "src_rgb": "0x1",
-          "dst_rgb": "0x0",
-          "src_alpha": "0x1",
-          "dst_alpha": "0x0",
-          "equation_rgb": "0x8006",
-          "equation_alpha": "0x8006"
-        },
-        "depth": {
-          "test": true,
-          "func": "0x203",
-          "write": true
-        },
-        "stencil": {
-          "test": false,
-          "func": "0x207",
-          "ref": 0,
-          "value_mask": -1,
-          "fail": "0x1e00",
-          "zfail": "0x1e00",
-          "zpass": "0x1e00",
-          "write_mask": -1
-        },
-        "cull": {
-          "enabled": true,
-          "mode": "0x405",
-          "front": "0x901"
-        },
-        "polygon": {
-          "mode": [
-            "0x1b02",
-            "0x1b02"
-          ],
-          "offset_fill": false,
-          "offset_factor": 0,
-          "offset_units": 0
-        },
-        "alpha_test": {
-          "enabled": false,
-          "func": "0x206",
-          "ref": 1
-        },
-        "scissor": {
-          "enabled": false,
-          "box": [
-            0,
-            0,
-            1728,
-            1117
-          ]
-        },
-        "viewport": [
-          0,
-          0,
-          1728,
-          1117
-        ],
-        "color_mask": [
-          1,
-          1,
-          1,
-          1
-        ],
-        "dither": true,
-        "multisample": true
-      },
-      "semantic": {
-        "event": 1,
-        "kind": "wrong_texture_selected",
-        "sampler": "tex1",
-        "shader_unit": 0,
-        "engine_unit": 2,
-        "expected_texture": "369",
-        "selected_texture": "370",
-        "shift": 1
-      },
-      "intermediate": {
-        "event": 284,
-        "target": "0",
-        "resource": "fb:0",
-        "width": 1728,
-        "height": 1117,
-        "format": "BGRA8",
-        "producer_events": [],
-        "metal_file": ".local/m7/phase-c-authentic-v2/replay-fault-frame2/out-002/intermediate-event284-tex0.bgra",
-        "reference_file": ".local/m7/phase-c-authentic-v2/frames/frame-000002/blobs/copy-source-547.bgra",
-        "authoritative": true,
-        "requested": true,
-        "normalization": {
-          "channel_swap": null,
-          "row_origin": "declared_lower_left"
-        },
-        "statistics": {
-          "pixels": 1930176,
-          "mismatched_pixels": 1273682,
-          "mismatched_fraction": 0.6598786846380849,
-          "alpha_different_pixels": 6,
-          "max_channel_error": 104,
-          "mean_abs_error": [
-            0.652505782,
-            0.715002673,
-            0.738494832,
-            3.109e-06
-          ],
-          "mean_max_channel_error": 1.16398401,
-          "first_differing_pixel": {
-            "x": 0,
-            "y": 0,
-            "offset": 0
-          },
-          "differing_bounds": {
-            "x": 0,
-            "y": 0,
-            "width": 1728,
-            "height": 1117
-          }
-        },
-        "worst_regions": [
-          {
-            "row": 1,
-            "column": 0,
-            "x": 0,
-            "y": 139,
-            "width": 216,
-            "height": 139,
-            "mean_max_channel_error": 4.23912
-          },
-          {
-            "row": 3,
-            "column": 0,
-            "x": 0,
-            "y": 418,
-            "width": 216,
-            "height": 139,
-            "mean_max_channel_error": 3.973479
-          },
-          {
-            "row": 2,
-            "column": 0,
-            "x": 0,
-            "y": 279,
-            "width": 216,
-            "height": 139,
-            "mean_max_channel_error": 3.905642
-          },
-          {
-            "row": 0,
-            "column": 0,
-            "x": 0,
-            "y": 0,
-            "width": 216,
-            "height": 139,
-            "mean_max_channel_error": 3.180159
-          }
-        ],
-        "metal_sha256": "1c88ea6c4a8ab2ee1f83621e8bd6e5ded915c0dbc2f8b11e4c2865019da34413",
-        "reference_sha256": "7adfe4a85b3be3a1f5c3a59102e8fc2df2ab811c1a0cbe432e7998cacf1933a3",
-        "status": "divergent"
-      },
-      "final": "divergent",
-      "fault": {
-        "frame": 2,
-        "kind": "sampler_shift",
-        "sampler_shift": 1,
-        "sampler_shift_min": 0,
-        "event": 1
-      },
-      "unsupported_state": [
-        "gl_dither",
-        "multisample"
-      ],
-      "confidence": "confirmed",
-      "root_cause": "not_established",
-      "authoritative_because": "the replay's own binding provenance disagrees with the captured shader/texture contract at this event",
-      "reason": "the earliest confirmed difference is a binding/state mismatch; its pixel effect may be overdrawn later",
-      "present_index": 616,
-      "scene_index": 616
-    },
-    "frame_2_classification": "invalid_provenance",
-    "engine_identity": {
-      "status": "gap_free",
-      "gap_free": true,
-      "present_indices": [
-        615,
-        616,
-        617
-      ],
-      "scene_indices": [
-        615,
-        616,
-        617
-      ],
-      "frames": [
-        {
-          "sequence": 1,
-          "present_index": 615,
-          "scene_index": 615
-        },
-        {
-          "sequence": 2,
-          "present_index": 616,
-          "scene_index": 616
-        },
-        {
-          "sequence": 3,
-          "present_index": 617,
-          "scene_index": 617
-        }
-      ],
-      "note": "consecutive engine present indices prove no captured frame was skipped; a missing identity is reported as unavailable, never inferred"
+      "target": "tex:433"
     }
   },
   "pilot": {
@@ -720,5 +526,45 @@
     "gl_dither and multisample remain unsupported; renderer equivalence is not claimed",
     "the causal origin inside the 13-284 event interval is not established",
     "one successful authentic EU4 launch and one failed draw-cap launch were used; the pilot did not launch EU4 again"
-  ]
+  ],
+  "artifact_retrieval": {
+    "status": "local_only",
+    "path": ".local/m7/phase-c-authentic-v2/phase-c-authentic-case-v2",
+    "files": 3811,
+    "logical_bytes": 1348032569,
+    "case_json_sha256": "b226fbf4c48732c5574cb971b6c63ce821fd9c83f8caa67efd00700b8f5e1f34",
+    "sequence_json_sha256": "b3c549ab5fd7b5736e77ad81160346f9e973e01e53e82b063c00e5fe7e962a34",
+    "external_store": "none configured",
+    "reproduction": "analysis/m7/post206/reproduce.md",
+    "note": "The 1.35 GB case is gitignored and not committed. The manifest hashes and the local reproduction procedure are the durable artifacts; no external artifact store is available in this environment."
+  },
+  "audit": {
+    "checked_utc": "2026-11-17T20:20:11.919902+00:00",
+    "frame_hashes_verified": true,
+    "frame_hash_problems": [],
+    "case_files_verified": true,
+    "case_file_problems": [],
+    "case_files_checked": 3811,
+    "gl_control_match": true,
+    "replay_statistics_unchanged": true
+  },
+  "review": {
+    "prs": {
+      "207": {
+        "head": "a3679852",
+        "status": "awaiting independent review"
+      },
+      "208": {
+        "head": "23f23c51",
+        "status": "awaiting independent review"
+      },
+      "209": {
+        "head": "pending final push",
+        "status": "awaiting independent review"
+      }
+    },
+    "merged": false,
+    "auto_merge": false,
+    "note": "Fresh independent review is required for each latest head; CI passing is not approval."
+  }
 }

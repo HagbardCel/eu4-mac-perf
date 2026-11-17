@@ -1456,3 +1456,11 @@ fragment FOut test_fragment() {
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CaptureBudgetTests(unittest.TestCase):
+    def test_default_event_budget_covers_the_authentic_scene(self):
+        args = m6_frame._parser().parse_args(
+            ["capture", "--output", "/tmp/frame-capture"])
+        self.assertGreaterEqual(args.max_draws, 384)
+        self.assertEqual(args.max_draws, 512)

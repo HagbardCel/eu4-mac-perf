@@ -106,6 +106,36 @@ class EfficiencyTests(unittest.TestCase):
         self.assertIn("<home>", value["session"]["cwd"])
         self.assertIn("<home>", value["long_jobs"]["jobs"][0]["label"])
 
+    def test_shell_failures_and_bash_launches_are_separated(self):
+        events = [
+            {"type": "tool/call", "time": 1000, "data": {
+                "callId": "b1", "name": "bash",
+                "arguments": {"command":
+                              "python3 -m automation.m6_frame capture "
+                              "--output /tmp/cap"}}},
+            {"type": "tool/result", "time": 2000, "data": {
+                "toolCallId": "b1",
+                "message": {"isError": False, "content": [
+                    {"type": "text", "text": "capture_exit=1"}]}}},
+            {"type": "tool/call", "time": 3000, "data": {
+                "callId": "b2", "name": "bash",
+                "arguments": {"command": "true"}}},
+            {"type": "tool/result", "time": 4000, "data": {
+                "toolCallId": "b2",
+                "message": {"isError": False, "content": [
+                    {"type": "text", "text": "exit=0"}]}}},
+        ]
+        value = dsh_efficiency.analyze(events)
+        self.assertEqual(value["calls"]["failed"], 0)
+        self.assertEqual(value["calls"]["shell_commands"], 2)
+        self.assertEqual(value["calls"]["shell_failures"], 1)
+        self.assertEqual(
+            value["calls"]["shell_failure_examples"][0]["exit_code"], 1)
+        self.assertEqual(value["eu4_launches"]["count"], 1)
+        self.assertEqual(value["eu4_launches"]["bash_launches"], 1)
+        self.assertEqual(
+            value["eu4_launches"]["command_evidence"][0]["kind"], "bash")
+
     def test_zstd_export_is_read_transparently(self):
         if not shutil.which("zstd"):
             self.skipTest("zstd is not available")

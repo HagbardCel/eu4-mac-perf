@@ -103,15 +103,15 @@ snapshot:
 | Metric | Value |
 | --- | --- |
 | Session | `session-67b86ef2…`, start 2026-11-17T18:43:58Z |
-| Tool calls | 329 total: 311 bash, 6 write, 8 job_output, 1 job_kill, 1 job_list, 1 create_goal, 1 todo_write |
-| Tool-level failures | 0 reported by the adapter; command-level failures are listed below |
-| Long jobs | 10; capture 250.4 s and 248.8 s, the stopped full run 153.2 s, focused suites 127.2/126.7/118.8/49.4 s, four ~20–39 s replays |
-| Test invocations | 8 distinct, no duplicate suite runs; the module-list full run is not counted as a completed full-suite pass |
-| Tool wait | 1,030.6 s of 3,596.6 s elapsed (28.7%) |
-| Output volume | 933,504 chars; 12 oversized outputs, 1 truncated |
-| Tokens | 86.9 M total; 86.3 M cache-read (99.3%) |
+| Tool calls | 467 total: 445 bash, 6 write, 8 job_output, 2 create_goal, 2 todo_write, 1 get_goal, 1 update_goal, 1 job_kill, 1 job_list |
+| Tool-level failures | 0 adapter errors; 15 shell commands with a nonzero exit marker (including deliberate negative tests) |
+| Long jobs | 10; captures 250.4 s and 248.8 s, the stopped full run 153.2 s, focused suites 127.8/127.2/126.7/124.8/123.3/121.7 s, ~20–39 s replays |
+| Test invocations | 29 invocations / 16 distinct commands; 13 focused re-runs; the module-list full run is not counted as a completed full-suite pass |
+| Tool wait | 1,785.5 s of 5,998.5 s elapsed (29.8%) |
+| Output volume | 1,180,485 chars; 15 oversized outputs, 3 truncated |
+| Tokens | 159.9 M total; 159.0 M cache-read (99.4%) |
 | Human interventions | 1 approval-policy event; 0 user questions |
-| EU4 launches | 2 total: one failed `draw_cap` capture, one successful 3-frame capture; 0 for the pilot |
+| EU4 launches | 3 capture command invocations, 2 actual EU4 process starts (one failed `draw_cap`, one successful 3-frame capture); 0 for the pilot |
 
 The exact final trace is refreshed in
 [`dsh-efficiency.json`](dsh-efficiency.json).

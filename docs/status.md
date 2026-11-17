@@ -23,9 +23,12 @@ the copy source at event 284, with the unresolved interval 13–284 and a
 bisection recommendation at event 148. The Phase E0 pilot rejected copy
 execution, constant bias, simple Bayer dither, fast-math and edge/MSAA as the
 dominant cause; the residual is content-dependent and dominated by 1 LSB, so
-the root cause is not established. Readiness is **READY WITH LIMITATIONS**:
-bounded diagnostic/migration work may begin, but full renderer equivalence,
-full-frame GL/GL replay and the `gl_dither`/`multisample` states remain open.
+the root cause is not established. Readiness is **READY WITH LIMITATIONS for bounded offline diagnostics**, but
+**not ready for fully unattended migration**: full renderer equivalence,
+full-frame GL/GL replay and the `gl_dither`/`multisample` states remain open,
+and the available mounted DSH headless session could not authenticate
+(`MISSING_CREDENTIAL`). The proposed next task is M7-P0, a separate capture of
+a default-framebuffer checkpoint near event 148, not a dithering migration.
 Evidence: [gap analysis](../analysis/m7/post206/gap-analysis.md),
 [Phase C](../analysis/m7/post206/phase-c-qualification.md),
 [Phase D](../analysis/m7/post206/phase-d-diagnostics.md),

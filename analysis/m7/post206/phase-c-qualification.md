@@ -65,9 +65,11 @@ _GfxResolve:
   glBindTexture(GL_TEXTURE_2D, 0);
 ```
 
-The same-backend control compares the captured GL default-framebuffer source
-(BGRA8) with the captured GL destination texture (RGBA8) under the declared
-`bgra_to_rgba` channel swap and zero row flip. For all three frames:
+The same-backend control now verifies that the first sample of the destination
+is still the version produced by the selected copy. It compares the captured
+GL default-framebuffer source (BGRA8) with that captured GL destination
+texture (RGBA8) under the declared `bgra_to_rgba` channel swap and zero row
+flip. For all three frames:
 
 ```text
 status=match  checked=1930176  mismatched=0  max_channel_error=0
@@ -84,6 +86,10 @@ python3 -m automation.agent_tools eu4_capture gl-control \
 {"status": "ok", "outcome": {"verdict": "equal", "evidence": "valid",
  "qualified": true}}
 ```
+
+The report records the selected copy event (284), the first consumer (286),
+and `provenance.first_consumer_event`; a later copy, write, clear, lifecycle
+mutation or missing lifecycle record is `unavailable`, not `different`.
 
 **Scope limitation:** this is a same-backend control of the captured copy and
 readback path. It does not re-execute the full 325-operation frame through
@@ -147,9 +153,9 @@ The case is outside routine CI (`.local`, gitignored).
 Verification and replay, with no EU4 launch:
 
 ```text
-verify: ok=true, problems=[], 1.79 s
+verify: ok=true, problems=[], 1.93 s
 engine_identity: gap_free (615, 616, 617)
-replay: campaign complete, target sequence 3, 19.97 s
+replay: campaign complete, target sequence 3, 21.56 s
 history: ok, sequence 3, missing=0, stale=0
 portable target: 1,162,904 / 1,930,176 mismatched, max 73
 ```
