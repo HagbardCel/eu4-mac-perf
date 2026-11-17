@@ -516,6 +516,44 @@ class LiveCoordinatorPackagingTests(unittest.TestCase):
         self.assertEqual(manifest["terminal_failure"]["kind"],
                          "gpu_execution_failure")
 
+    def test_continuation_predicate_excludes_terminal_and_ineligible(self):
+        self.assertFalse(m6_frame._continuous_should_continue(
+            "invalid_provenance", 1, True))
+        self.assertFalse(m6_frame._continuous_should_continue(
+            "incomplete_diagnostics", 1, True))
+        self.assertFalse(m6_frame._continuous_should_continue(
+            "qualified_difference", 0, True))
+        self.assertFalse(m6_frame._continuous_should_continue(
+            "unsupported_state", 1, True))
+        self.assertTrue(m6_frame._continuous_should_continue(
+            "qualified_difference", 1, True))
+        self.assertFalse(m6_frame._continuous_should_continue(
+            "qualified_difference", 1, False))
+        self.assertTrue(m6_frame._continuous_should_continue(
+            "qualified_match", 1, False))
+
+    def test_complete_v1_single_frame_package_is_not_mislabelled(self):
+        def package(frames, metal_dir, case_dir, report, **kwargs):
+            path = Path(case_dir)
+            path.mkdir(parents=True, exist_ok=True)
+            (path / "case.json").write_text(json.dumps({
+                "schema": gfx_replay_case.SCHEMA,
+                "case_id": "single-frame",
+                "files": [],
+            }))
+            return {"schema": gfx_replay_case.SCHEMA,
+                    "case_id": "single-frame", "files": []}
+
+        with mock.patch.object(gfx_replay_case,
+                               "package_sequence_diagnosis",
+                               side_effect=package):
+            value = m6_frame._package_continuous_case(
+                self.run, self.shadow, 3, self.args,
+                scope="target_frame")
+        self.assertEqual(value["status"], "complete")
+        self.assertEqual(value["reproduction"]["status"], "complete")
+        self.assertTrue(value["reproduction"]["independently_reproducible"])
+
     def test_incomplete_reproduction_is_not_claimed_complete(self):
         with mock.patch.object(
                 gfx_replay_case, "package_sequence_diagnosis",

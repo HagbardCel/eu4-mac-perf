@@ -1563,6 +1563,21 @@ _CONTINUOUS_TERMINAL_CLASSIFICATIONS = {
 }
 
 
+def _continuous_should_continue(classification: str | None,
+                                    history_status,
+                                    continue_on_difference: bool) -> bool:
+    """Single continuation predicate for the native decision and supervisor."""
+    if history_status not in (1, None):
+        return False
+    if classification in _CONTINUOUS_TERMINAL_CLASSIFICATIONS:
+        return False
+    if classification == "qualified_match":
+        return True
+    if classification in _CONTINUOUS_RENDERING_DIFFERENCES:
+        return bool(continue_on_difference)
+    return False
+
+
 def _continuous_terminal_failure(report: dict) -> dict | None:
     """Return a terminal live-campaign failure, if one exists."""
     rows = [row for row in report.get("frames") or []
@@ -2158,12 +2173,12 @@ def _continuous_frame_coordinator(
         frame_dir, output, output, args.policy,
         shaders=shader_dir)
     classification = diagnosis.get("classification")
-    hard_stop = report.get("history_status") not in (1, None)
-    stop = hard_stop or (classification != "qualified_match" and
-                         not args.continue_on_difference)
+    history_status = report.get("history_status")
+    should_continue = _continuous_should_continue(
+        classification, history_status, args.continue_on_difference)
     temp = output / "decision.json.tmp"
     temp.write_text(json.dumps({
-        "continue": not stop,
+        "continue": should_continue,
         "classification": classification,
         "sequence": frame_index,
     }) + "\n")
@@ -2244,6 +2259,16 @@ def _package_continuous_case(run: Path, shadow: Path, count: int,
             "case_dir": str(case_dir),
         }
     reproduction = manifest.get("reproduction") or {}
+    if (not reproduction
+            and manifest.get("schema") == gfx_replay_case.SCHEMA):
+        # A complete single-frame package is the v1 schema, which has no
+        # ``reproduction`` member.  Normalise it instead of mislabelling a
+        # verified package as incomplete.
+        reproduction = {
+            "status": "complete",
+            "independently_reproducible": True,
+            "kind": "single_frame_v1",
+        }
     # Label the published case itself, not only the coordinator summary, so a
     # completed-prefix reproduction cannot be mistaken for the terminal frame.
     case_manifest_path = case_dir / "case.json"
@@ -2358,11 +2383,9 @@ def shadow_coordinator_continuous(args: argparse.Namespace) -> int:
             (shadow / "coordinator.json").write_text(
                 json.dumps(result, indent=2) + "\n")
             return 1
-        eligible_difference = (
-            classification in _CONTINUOUS_RENDERING_DIFFERENCES)
-        continue_campaign = (
-            classification == "qualified_match"
-            or (eligible_difference and args.continue_on_difference))
+        continue_campaign = _continuous_should_continue(
+            classification, summary.get("history"),
+            args.continue_on_difference)
         if not continue_campaign:
             result["status"] = "ok"
             result["stop_reason"] = (

@@ -57,13 +57,17 @@ architecture:
    Missing/unusable mappings refuse complete packaging. Checkpoint sources
    record why they were preserved or regenerated; a substituted receipt is
    never copied.
-6. **Live failure reporting.** `continue-on-difference` applies only to
-   eligible rendering differences, not hard failures. A failed coordinator
-   cannot publish `qualified` from a matched prefix, and a packaged prefix is
-   scoped as `completed_prefix`, separate from the terminal failure,
-   reproduction completeness and diagnostic completeness. The scope and
-   terminal failure are written into the published `case.json`, not only the
-   coordinator summary.
+6. **Live failure reporting.** A single continuation predicate is used both
+   for the native per-frame `decision.json` and the supervisor loop, so a
+   terminal classification never publishes `continue=true`. The predicate
+   continues only eligible rendering differences (when requested) or a
+   qualified match. A failed coordinator cannot publish `qualified` from a
+   matched prefix, and a packaged prefix is scoped as `completed_prefix`,
+   separate from the terminal failure, reproduction completeness and
+   diagnostic completeness. The scope and terminal failure are written into
+   the published `case.json`, not only the coordinator summary. A complete
+   single-frame v1 package is normalized as complete, not mislabelled as
+   incomplete merely because v1 has no `reproduction` member.
 
 ## Phase A — integration defects
 
@@ -210,8 +214,8 @@ Focused native/offline suite (the checked interpreter,
   --module tests.test_dsh_profile
 ```
 
-Result: **343 tests passed in 94.67 s** (run
-`20261117T060603Z-7f7219cc`, after rebasing onto merged `main` `2bab6cc0`).
+Result: **345 tests passed in 94.29 s** (run
+`20261117T061052Z-770d77e8`, after rebasing onto merged `main` `2bab6cc0`).
 This includes the new failure-precedence, policy, argument-ownership,
 provenance and negative-case regressions plus real Metal replay.
 
