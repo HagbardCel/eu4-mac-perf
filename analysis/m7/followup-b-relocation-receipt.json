@@ -1,0 +1,265 @@
+{
+  "schema": "m7-followup-b-relocation-receipt/v1",
+  "kind": "authentic_captured_frames_with_synthetic_ordered_packaging",
+  "fixture": "canonical menu-occ300 captured frame content",
+  "tested_head": "2d15252c",
+  "case": {
+    "schema": "gfx-strategy-b-case/v2",
+    "case_id": "canonical-prefix",
+    "sequence_file_sha256": "c3dcbb7d650ec1d91639abbb0062402981315f3258910b9651e1a558b9f9f71d",
+    "case_json_sha256": "791c20bc450785f1d080d05219dc4329691874e39163719cb81ab0f06e739bac",
+    "frames": [
+      {
+        "index": 1,
+        "capture_frame_id": 1,
+        "original_sequence_index": 1,
+        "manifest_sha256": "c935b3c3391d92b048b8a3a58efaeda0d5e4f9a3e11715e9251ddcdcbd0f2da3",
+        "event_stream_sha256": "47bda04c18194365d9cce66f3ffbe0901f40d0e1e2c81839e387cee016618b30",
+        "reference_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15"
+      },
+      {
+        "index": 2,
+        "capture_frame_id": 2,
+        "original_sequence_index": 2,
+        "manifest_sha256": "760e7e0b8727ae663f5b011b4d469abbd340ba42dc7b272e1d3e3a59cbcac8ff",
+        "event_stream_sha256": "b6415ae6d6749adf24908413586d53083a6d0f23b2e771f54d8d54b9501292c9",
+        "reference_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15"
+      },
+      {
+        "index": 3,
+        "capture_frame_id": 3,
+        "original_sequence_index": 3,
+        "manifest_sha256": "760e7e0b8727ae663f5b011b4d469abbd340ba42dc7b272e1d3e3a59cbcac8ff",
+        "event_stream_sha256": "b6415ae6d6749adf24908413586d53083a6d0f23b2e771f54d8d54b9501292c9",
+        "reference_sha256": "ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15"
+      }
+    ],
+    "frame_count": 3,
+    "file_count": 3814,
+    "minimal_prefix": false,
+    "prefix_semantics": "conservative contiguous transitive producer closure; not graph-minimal",
+    "excluded_frames": 0,
+    "source_prefix_bytes": 1279168625,
+    "full_source_bytes": 1279168625,
+    "excluded_source_bytes": 0,
+    "bytes_on_disk": 1322029913,
+    "case_digest_path_independent": true,
+    "shader_layout": "one translated directory copied per selected frame into frames/NNNNNN/shaders; case/shaders is the target frame's fallback",
+    "digest_note": "Source-byte metrics are measured with capture-path metadata normalized; copied replay JSON/JSONL artifacts are scrubbed of capture roots. Two captures at different path lengths produce the same case digest.  The recorded digest is for the packaging parameters above (case_id and title are part of case.json and therefore the digest).",
+    "title": "M7 cross-frame differential diagnosis",
+    "packaging_parameters": {
+      "function": "package_sequence_diagnosis",
+      "case_id": "canonical-prefix",
+      "title": "M7 cross-frame differential diagnosis",
+      "shaders": "canonical menu-occ300 translated directory (explicit fallback)",
+      "max_bytes": 0
+    }
+  },
+  "relocation": {
+    "verified": true,
+    "problems": [],
+    "original_campaign_removed": true,
+    "independently_reproducible": true
+  },
+  "replay": {
+    "classification": "incomplete_diagnostics",
+    "target_sequence": 3,
+    "campaign_status": "complete",
+    "history_status": "ok",
+    "carried_bindings": 1,
+    "missing_history": 0,
+    "stale_history": 0,
+    "metal_render_target_bindings": 273,
+    "pixels": {
+      "pixels": 1930176,
+      "mismatched_pixels": 0,
+      "mismatched_fraction": 0.0,
+      "alpha_different_pixels": 0,
+      "max_channel_error": 0,
+      "mean_abs_error": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "mean_max_channel_error": 0.0
+    },
+    "first_divergence": {
+      "schema": "gfx-first-divergence/v1",
+      "frame_id": null,
+      "kind": "none",
+      "event": null,
+      "diagnostic_checkpoints": [
+        {
+          "event": 272,
+          "target": "433",
+          "statistics": {
+            "pixels": 1930176,
+            "mismatched_pixels": 797545,
+            "mismatched_fraction": 0.4131980710567327,
+            "alpha_different_pixels": 224169,
+            "max_channel_error": 255,
+            "mean_abs_error": [
+              0.067393336,
+              0.153155464,
+              0.154367788,
+              29.615483251
+            ],
+            "mean_max_channel_error": 29.914925375
+          }
+        }
+      ],
+      "semantic": null,
+      "intermediate": null,
+      "unsupported_state": [
+        "gl_dither",
+        "multisample"
+      ],
+      "confidence": "none",
+      "root_cause": "none_observed",
+      "reason": "all authoritative checkpoints and the final output match",
+      "fault": null
+    },
+    "reproduction": {
+      "earliest_affected_frame": null,
+      "earliest_affected_event": null,
+      "earliest_affected_operation": null,
+      "first_divergent_frame": null,
+      "target_sequence": 3
+    }
+  },
+  "synthetic_cases": {
+    "four_frame": {
+      "selected_original_frames": [
+        2,
+        3,
+        4
+      ],
+      "target_index": 3,
+      "excluded_frames": 1,
+      "carried_resources": [
+        "500"
+      ],
+      "producing_frames": [
+        2
+      ],
+      "source_prefix_bytes": 10763,
+      "full_source_bytes": 13684,
+      "excluded_source_bytes": 2921,
+      "case_file_count": 70,
+      "case_bytes": 72568,
+      "shader_layout": "shared explicit translation copied per frame",
+      "case_id": "four-frame",
+      "title": "M7 cross-frame differential diagnosis",
+      "size_note": "case bytes depend on case_id/title (case.json content); 72,568 is for case_id four-frame"
+    },
+    "transitive_five_frame": {
+      "selected_original_frames": [
+        2,
+        3,
+        4,
+        5
+      ],
+      "target_index": 4,
+      "excluded_frames": 1,
+      "carried_resources": [
+        "500",
+        "600"
+      ],
+      "producing_frames": [
+        2,
+        3
+      ],
+      "source_prefix_bytes": 15025,
+      "full_source_bytes": 17946,
+      "excluded_source_bytes": 2921,
+      "case_file_count": 88,
+      "case_bytes": 84704,
+      "conservative_note": "Interior cleanup/target frames are retained because the predecessor digest chain and cumulative carried snapshots bind the ordered sequence; selection is not claimed minimal. A target-frame cleanup delete of a carried resource is refused.",
+      "case_id": "transitive",
+      "title": "M7 cross-frame differential diagnosis"
+    },
+    "heterogeneous_shader_frames": {
+      "frames": 3,
+      "programs_per_frame": [
+        [
+          1
+        ],
+        [
+          3
+        ],
+        [
+          2
+        ]
+      ],
+      "shader_dirs": [
+        "frames/000001/shaders",
+        "frames/000002/shaders",
+        "frames/000003/shaders"
+      ],
+      "case_fallback_programs": [
+        2
+      ],
+      "case_file_count": 54,
+      "case_bytes": 62743,
+      "case_json_sha256": "987966a1466be048dd93b2d9ec63525a0279acd7afc367c25971076d1d59b6ec",
+      "relocated_verify": "ok",
+      "replay": "qualified_match, one persistent session, target sequence 3, 0/16 mismatched pixels, history ok, carried_bindings 1, metal_render_target_bindings 1, sampled 600 source=metal_render_target and no external_capture binding",
+      "negative_cases": [
+        "missing MSL file -> shader_artifact_unavailable",
+        "corrupt shader report -> shader_artifact_unavailable",
+        "program status error -> shader_artifact_unavailable",
+        "missing GLSL payload -> shader_artifact_unavailable",
+        "dropped captured program -> verify failure",
+        "tampered translated identity -> verify failure",
+        "omitted translated source_sha256 -> verify failure",
+        "missing captured vertex hash -> shader_identity_unavailable",
+        "missing captured pixel hash -> shader_identity_unavailable",
+        "missing captured stage entry -> shader_identity_unavailable",
+        "conflicting captured hashes -> shader_identity_unavailable",
+        "missing captured identity in a packaged case -> verify failure before replay",
+        "unavailable frame translation -> shader_artifact_unavailable",
+        "v1 single-frame: missing captured vertex identity -> incomplete/shader_identity_unavailable",
+        "v1 single-frame: missing captured pixel identity -> incomplete/shader_identity_unavailable",
+        "v1 single-frame: empty translated report -> incomplete/shader_artifact_unavailable",
+        "v1 single-frame: translated mismatch -> incomplete/shader_identity_unavailable",
+        "v1 packaged case with a removed captured identity -> verify failure before replay",
+        "unreferenced program with a missing declared payload -> verify still ok",
+        "forged shader_programs list -> verify failure"
+      ],
+      "case_id": "heterogeneous-shaders",
+      "title": "M7 cross-frame differential diagnosis",
+      "shader_identity_validation": {
+        "captured": "64-hex sha256 required for vertex and pixel stage of every draw program",
+        "translated": "source_sha256 required for both stages and must equal captured identity",
+        "shared_validator": true,
+        "incomplete_reasons": {
+          "shader_artifact_unavailable": "missing/corrupt translation, MSL/GLSL/SPV payload, status error",
+          "shader_identity_unavailable": "missing/malformed/conflicting captured identity or translated mismatch"
+        },
+        "historical_missing_identity": "preserved as diagnostic-only incomplete evidence; not reconstructed or independently reproducible",
+        "schemas": "v1 single-frame and v2 sequence packaging/verification use the same validator",
+        "parity": "inventory requires payloads only for draw-referenced programs; sequence.json shader_programs is bound to the frame draw programs"
+      }
+    }
+  },
+  "budget": {
+    "probe_case_id": "budget",
+    "complete_package_bytes": 72560,
+    "complete_package_files": 70,
+    "at_budget": "complete and verifiable",
+    "one_byte_below": "incomplete summary of 30,196 bytes, no replay command, verify fails",
+    "one_byte_budget": "explicit case_budget error, destination and staging absent",
+    "source_inputs_unchanged": true
+  },
+  "canonical_determinism": {
+    "capture_paths_tested": 2,
+    "case_json_sha256_reproduced": "791c20bc450785f1d080d05219dc4329691874e39163719cb81ab0f06e739bac",
+    "note": "The same captured content packaged at two different capture/case path lengths produces the same case.json digest; a synthetic regression also varies the capture path."
+  },
+  "tested_head_note": "Measurements were produced from this code commit.  A documentation-only commit updates the report, status and this receipt; replay-critical code is unchanged.",
+  "limitations": [
+    "Historical captures without captured stage identities remain diagnostic-only; identities are not reconstructed.",
+    "Case digests are independent of capture/case paths; copied policy/shader provenance may retain checkout paths."
+  ]
+}

@@ -194,8 +194,25 @@ class DiagnosisFixture:
         (self.blobs / name).write_bytes(payload)
 
     def write_shaders(self):
+        (self.shaders / "v.metal").write_text("// vertex\n")
+        (self.shaders / "f.metal").write_text("// pixel\n")
+        def stage(stage_name, msl_file, entry):
+            return {
+                "stage": stage_name, "msl_file": msl_file,
+                "msl_entry": entry, "msl_uniform_buffer": None,
+                "msl_samplers": [], "uniforms": [], "attributes": [],
+                "source_sha256": sha(SHADER),
+            }
         (self.shaders / "shaders.json").write_text(json.dumps({
-            "schema": "gfx-shader-translation/v1", "programs": []}))
+            "schema": "gfx-shader-translation/v1",
+            "programs": [{
+                "program": program, "status": "ok",
+                "stages": {
+                    "vertex": stage("vertex", "v.metal", "vmain"),
+                    "pixel": stage("pixel", "f.metal", "fmain"),
+                },
+            } for program in (1, 2, 3)],
+        }))
 
     # -- produced Metal result -------------------------------------------
     def write_metal(self, *, candidate=None, checkpoints=True,
@@ -820,6 +837,82 @@ class DiagnosisPackageTests(unittest.TestCase):
         self.assertFalse(tampered["ok"])
         self.assertTrue(any("digest drift" in item
                             for item in tampered["problems"]))
+
+    def test_single_frame_packaging_refuses_missing_shader_identity(self):
+        report = self.fixture.diagnose()
+        case = self.fixture.root / "identity-case"
+        report_path = self.fixture.shaders / "shaders.json"
+        original_report = report_path.read_text()
+        original_events = [dict(event) for event in self.fixture.events]
+
+        def package():
+            return gfx_replay_case.package_diagnosis(
+                self.fixture.frame, self.fixture.metal, case, report,
+                case_id="identity")
+
+        variants = {}
+        # Missing captured vertex identity.
+        self.fixture.events[1]["program"]["shaders"][0].pop("sha256", None)
+        self.fixture.write_frame()
+        variants["missing-vertex"] = package()
+        self.fixture.events = [dict(event) for event in original_events]
+        self.fixture.write_frame()
+        # Missing captured pixel identity.
+        self.fixture.events[1]["program"]["shaders"][1].pop("sha256", None)
+        self.fixture.write_frame()
+        variants["missing-pixel"] = package()
+        self.fixture.events = [dict(event) for event in original_events]
+        self.fixture.write_frame()
+        # Empty translated report.
+        report_path.write_text(json.dumps({
+            "schema": "gfx-shader-translation/v1", "programs": []}))
+        variants["empty-report"] = package()
+        report_path.write_text(original_report)
+        # Translated identity disagrees.
+        document = json.loads(original_report)
+        document["programs"][0]["stages"]["pixel"]["source_sha256"] = "0" * 64
+        report_path.write_text(json.dumps(document))
+        variants["mismatch"] = package()
+        report_path.write_text(original_report)
+
+        for name, manifest in variants.items():
+            with self.subTest(variant=name):
+                self.assertEqual(manifest["reproduction"]["status"],
+                                 "incomplete")
+                self.assertFalse(
+                    manifest["reproduction"]["independently_reproducible"])
+                self.assertEqual(manifest["replay_command"], [])
+                self.assertIn(manifest["reproduction"]["reason"],
+                              ("shader_identity_unavailable",
+                               "shader_artifact_unavailable"))
+
+    def test_verifier_rejects_packaged_case_missing_captured_identity(self):
+        report = self.fixture.diagnose()
+        case = self.fixture.root / "verify-case"
+        gfx_replay_case.package_diagnosis(
+            self.fixture.frame, self.fixture.metal, case, report,
+            case_id="identity")
+        self.assertTrue(gfx_replay_case.verify(case)["ok"])
+        events_path = case / "capture" / "frame-events.jsonl"
+        events = [json.loads(line)
+                  for line in events_path.read_text().splitlines() if line]
+        draw = next(event for event in events if event.get("kind") == "draw")
+        draw["program"]["shaders"][0].pop("sha256", None)
+        events_path.write_text(
+            "\n".join(json.dumps(event) for event in events) + "\n")
+        manifest = json.loads((case / "case.json").read_text())
+        for item in manifest["files"]:
+            if item["path"] == "capture/frame-events.jsonl":
+                item["bytes"] = events_path.stat().st_size
+                item["sha256"] = sha(events_path.read_bytes())
+                break
+        (case / "case.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        verified = gfx_replay_case.verify(case)
+        self.assertFalse(verified["ok"], verified)
+        self.assertTrue(any("has no valid captured sha256 identity" in problem
+                            for problem in verified["problems"]), verified)
+        with self.assertRaises(gfx_replay_case.CaseError):
+            gfx_replay_case.replay_case(case, self.fixture.root / "refused")
 
     def test_packaged_case_is_self_diagnosable_after_relocation(self):
         report = self.fixture.diagnose(package=True)

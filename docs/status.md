@@ -288,8 +288,71 @@ replayed in one session with `history_status=ok`; readback/sealing cost
 CPU texture mutation and sampled no carried output, so those branches remain
 synthetic evidence.  Report:
 [follow-up A](../analysis/m7/followup-a-capture-lifecycle.md),
-[evidence](../analysis/m7/followup-a-evidence.json).  Independent review and merge
-authorization are pending; automerge is disabled.
+[evidence](../analysis/m7/followup-a-evidence.json).  Merged as PR #204 at
+`096c76ae`; the independent review receipt is tied to head `98f7e25c`.
+## M7 follow-up B — portable cross-frame reproduction (2026-11-16)
+
+A continuous campaign can now preserve the minimal ordered frame prefix needed
+to reproduce a frame that samples Metal state produced earlier.  The packager
+finds the last producer of every carried renderer output, copies only that
+contiguous prefix, renumbers the sequence container while retaining every
+authoritative capture identity and digest, and writes a case-level
+`sequence.json` bound to the original session and order.  Immutable payloads are
+hard-linked and mutable sequence/seal metadata is copied.  Each selected frame's
+effective translation directory is copied into `frames/NNNNNN/shaders` (the
+sequence CLI's per-frame override), so frames that use different programs replay
+without a shared union; `sequence.json` records each frame's shader directory,
+report digest and captured programs.  A deterministic three-frame fixture whose
+frames require programs 1, 3 and 2 respectively packages per-frame translations
+at `frames/00000{1,2,3}/shaders` (case fallback: program 2), relocates after
+deleting the originals, and replays through one persistent Metal session to
+`qualified_match` with 0/16 pixel difference, one carried binding and no
+external-capture binding.
+
+The verifier detects missing/reordered predecessors, corrupt payloads, wrong
+session identity, missing lifecycle/mutation records, wrong generations,
+nonportable paths and stale/substituted checkpoint requests.  A complete v2
+package must also declare every required payload (per-frame shader reports and
+MSL files, checkpoints, frame data) in its SHA-256 inventory; it requires every
+program a frame's draws reference, a captured 64-hex identity for each vertex
+and pixel stage, and a matching translated `source_sha256`; missing, malformed,
+conflicting or mismatched identities are refused before replay; single-frame (v1) packaging and
+verification apply the same validator, so a one-frame case cannot bypass it; undeclared files, duplicate entries, absolute
+paths, `..` traversal and symlink escapes are rejected before replay.
+
+The artifact budget now bounds the whole generated package on every packaging
+path.  A package is staged and measured before publication; when the required
+history does not fit, a bounded summary with
+`reproduction.status=incomplete`, `independently_reproducible=false`, a
+structured reason and the missing dependency (or required byte estimate) is
+published with no replay command.  If even a budget summary cannot fit,
+packaging fails with an explicit `case_budget` error and leaves source inputs
+untouched.  A frame whose required translation is unavailable is published as
+incomplete with reason `shader_artifact_unavailable`; a frame without complete
+captured stage identities is published as incomplete with reason
+`shader_identity_unavailable` and is not claimed independently reproducible.
+Unreferenced translated programs do not require payloads, and a forged
+`shader_programs` list fails verification.
+
+A deterministic four-frame fixture (producer, carried, target) relocates and
+reproduces a controlled cross-frame divergence at the target's draw after the
+original campaign directory is removed.  The required contiguous prefix is
+10,763 source bytes versus 13,684 for the full four-frame sequence (21.4%
+excluded, 70 files, 72,568 bytes).  Prefix selection is conservative rather than provably minimal:
+it keeps the contiguous run from the earliest transitive producer because the
+predecessor digest chain and frame-start carried snapshots bind the sequence.
+A three-frame prefix
+built from the canonical authentic capture relocates with
+`carried_bindings=1`, `history=ok`, 273 Metal render-target bindings and 0 final
+pixel differences; it remains `incomplete_diagnostics` because the historical
+capture has no same-process seal.  Case manifest `791c20bc…`, 3,814 files /
+1,322,029,913 bytes, with a case digest independent of the capture/case
+directory path (copied shader translation metadata retains its own provenance
+paths).  Report:
+[follow-up B](../analysis/m7/followup-b-portable-reproduction.md),
+[relocation receipt](../analysis/m7/followup-b-relocation-receipt.json).
+Independent review of the per-frame shader correction is required; automerge is
+disabled.
 
 ## Strategy B — independent replay (2026-11-14)
 

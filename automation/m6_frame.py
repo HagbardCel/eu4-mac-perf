@@ -224,16 +224,31 @@ def load_seal(
         raise FrameError("frame seal identity is invalid")
     declared_dir = Path(str(seal.get("capture_dir") or ""))
     portable_capture = False
-    if frame_dir.name == "capture":
-        case_path = frame_dir.parent / "case.json"
-        try:
-            case = json.loads(case_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            case = None
-        portable_capture = (
-            isinstance(case, dict)
-            and case.get("schema") == "gfx-strategy-b-case/v1"
-            and case.get("capture") == "capture")
+    case_dir = (frame_dir.parent.parent
+                if frame_dir.parent.name == "frames"
+                else frame_dir.parent)
+    case_path = case_dir / "case.json"
+    try:
+        case = json.loads(case_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        case = None
+    if isinstance(case, dict):
+        schema = case.get("schema")
+        if (schema == "gfx-strategy-b-case/v1"
+                and case.get("capture") == "capture"
+                and frame_dir.name == "capture"):
+            portable_capture = True
+        elif (schema == "gfx-strategy-b-case/v2"
+              and frame_dir.parent.name == "frames"
+              and not declared_dir.is_absolute()):
+            try:
+                relative = frame_dir.resolve().relative_to(
+                    case_dir.resolve())
+            except ValueError:
+                relative = None
+            if (relative is not None
+                    and declared_dir.as_posix() == relative.as_posix()):
+                portable_capture = True
     if not portable_capture and (
             not declared_dir.is_absolute()
             or declared_dir.resolve() != frame_dir.resolve()):
