@@ -76,16 +76,13 @@ def _read_lifecycle(
     if not isinstance(lifecycle, list):
         return None, "invalid_lifecycle_provenance", set()
     covered = set()
-    for key in ("render_targets", "carried_renderer_outputs"):
-        for name in document.get(key) or []:
-            covered.add(str(name))
     for item in lifecycle:
         names = item.get("names")
         if not isinstance(names, list):
             names = [item.get("name")]
         for name in names:
             if name is not None:
-                covered.add(str(name))
+                covered.add((str(name), item.get("event")))
     return lifecycle, None, covered
 
 
@@ -341,13 +338,18 @@ def control_frame(frame_dir: Path | str) -> dict:
                 "event": None,
             }))
             continue
-        if destination not in lifecycle_coverage:
+        coverage_events = [
+            value for name, value in lifecycle_coverage
+            if name == destination and isinstance(value, int)
+            and value <= index
+        ]
+        if not coverage_events:
             checks.append(_unavailable_check(index, event, destination, {
                 "reason_code": "unverified_lifecycle_coverage",
                 "reason": (
-                    f"destination {destination} is not covered by the "
-                    "frame's lifecycle records; a later CPU write cannot be "
-                    "excluded"),
+                    f"destination {destination} has no lifecycle record at or "
+                    "before the selected copy; coverage began too late to "
+                    "exclude an intervening CPU write"),
                 "event": None,
             }))
             continue

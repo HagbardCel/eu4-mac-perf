@@ -72,13 +72,16 @@ def make_frame(root: Path, *, source: bytes, destination: bytes,
     (frame / "frame-events.jsonl").write_text(
         "\n".join(json.dumps(item) for item in events) + "\n")
     if write_sequence:
+        if lifecycle is None:
+            lifecycle = [{"kind": "mutation", "event": -1,
+                          "lifecycle_sequence": 1, "names": ["442"]}]
         (frame / "frame-sequence.json").write_text(json.dumps({
             "schema": "gfx-frame-sequence/v1",
             "session_id": "test", "pid": 1, "sequence_index": 1,
             "capture_frame_id": 1, "complete": True,
             "render_targets": (["442"] if render_targets is None
                                else render_targets),
-            "lifecycle": lifecycle or [],
+            "lifecycle": lifecycle,
         }))
     return frame
 
@@ -162,6 +165,16 @@ class GlTransferControlTests(unittest.TestCase):
         self.assertEqual(report["checks"][0]["reason_code"],
                          "copy_region_out_of_bounds")
 
+    def test_lifecycle_coverage_after_the_copy_is_too_late(self):
+        frame = make_frame(
+            self.root, source=self.source, destination=self.destination,
+            lifecycle=[{"kind": "mutation", "event": 3,
+                        "lifecycle_sequence": 9, "names": ["442"]}])
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "incomplete")
+        self.assertEqual(report["checks"][0]["reason_code"],
+                         "unverified_lifecycle_coverage")
+
     def test_lifecycle_change_at_the_copy_index_is_not_intervening(self):
         frame = make_frame(
             self.root, source=self.source, destination=self.destination,
@@ -175,7 +188,9 @@ class GlTransferControlTests(unittest.TestCase):
     def test_lifecycle_change_at_the_consumer_index_is_unavailable(self):
         frame = make_frame(
             self.root, source=self.source, destination=self.destination,
-            lifecycle=[{"kind": "mutation", "event": 2,
+            lifecycle=[{"kind": "mutation", "event": -1,
+                        "lifecycle_sequence": 1, "names": ["442"]},
+                       {"kind": "mutation", "event": 2,
                         "lifecycle_sequence": 8, "names": ["442"]}])
         report = gfx_gl_control.control_frame(frame)
         self.assertEqual(report["status"], "incomplete")
@@ -206,7 +221,7 @@ class GlTransferControlTests(unittest.TestCase):
     def test_uncovered_copy_destination_is_unavailable(self):
         frame = make_frame(self.root, source=self.source,
                            destination=self.destination,
-                           render_targets=[])
+                           render_targets=[], lifecycle=[])
         report = gfx_gl_control.control_frame(frame)
         self.assertEqual(report["status"], "incomplete")
         self.assertEqual(report["checks"][0]["reason_code"],
@@ -358,7 +373,9 @@ class GlTransferControlTests(unittest.TestCase):
     def test_lifecycle_mutation_between_copy_and_sample_is_unavailable(self):
         frame = make_frame(
             self.root, source=self.source, destination=self.destination,
-            lifecycle=[{"kind": "mutation", "event": 2,
+            lifecycle=[{"kind": "mutation", "event": -1,
+                        "lifecycle_sequence": 1, "names": ["442"]},
+                       {"kind": "mutation", "event": 2,
                         "lifecycle_sequence": 7, "names": ["442"]}])
         report = gfx_gl_control.control_frame(frame)
         self.assertEqual(report["status"], "incomplete")
