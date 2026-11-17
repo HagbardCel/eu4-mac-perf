@@ -162,6 +162,16 @@ class GlTransferControlTests(unittest.TestCase):
         self.assertEqual(report["checks"][0]["reason_code"],
                          "copy_region_out_of_bounds")
 
+    def test_lifecycle_change_at_the_copy_index_is_not_intervening(self):
+        frame = make_frame(
+            self.root, source=self.source, destination=self.destination,
+            lifecycle=[{"kind": "mutation", "event": 1,
+                        "lifecycle_sequence": 6, "names": ["442"]}])
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "match")
+        self.assertEqual(report["checks"][0]["statistics"]["mismatched_pixels"],
+                         0)
+
     def test_lifecycle_change_at_the_consumer_index_is_unavailable(self):
         frame = make_frame(
             self.root, source=self.source, destination=self.destination,
@@ -348,7 +358,7 @@ class GlTransferControlTests(unittest.TestCase):
     def test_lifecycle_mutation_between_copy_and_sample_is_unavailable(self):
         frame = make_frame(
             self.root, source=self.source, destination=self.destination,
-            lifecycle=[{"kind": "mutation", "event": 1,
+            lifecycle=[{"kind": "mutation", "event": 2,
                         "lifecycle_sequence": 7, "names": ["442"]}])
         report = gfx_gl_control.control_frame(frame)
         self.assertEqual(report["status"], "incomplete")

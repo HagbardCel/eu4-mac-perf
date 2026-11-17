@@ -183,7 +183,7 @@ def _lifecycle_write(lifecycle: list[dict], start_event: int,
                      end_event: int, name: str) -> dict | None:
     for item in lifecycle:
         event = item.get("event")
-        if not isinstance(event, int) or event < start_event \
+        if not isinstance(event, int) or event <= start_event \
                 or event > end_event:
             continue
         names = item.get("names")
