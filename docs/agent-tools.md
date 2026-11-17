@@ -245,9 +245,25 @@ The case path is fully offline. A missing NumPy is `unavailable`, never a
 successful diagnostic; a successful comparison with a difference verdict is
 `ok` with `verdict: "different"`. A v2 case whose reproduction is explicitly
 incomplete, or whose verification finds digest/identity/path problems, is
-`incomplete` or `invalid` and is never replayed or marked qualified. The
-`sequence` and `diagnose` operations are M7 operations; they are not the older
+`incomplete` or `invalid` and is never replayed or marked qualified. An
+unknown `gfx-strategy-b-case/*` version is `invalid`; only the recognized
+legacy image-comparison schema reaches the older comparator. The `sequence`
+and `diagnose` operations are M7 operations; they are not the older
 two-process `eu4_diff_run` workflow.
+
+`--out` after `eu4_replay` names the replay/diagnosis output directory.
+`--envelope-out` is the separate JSON-envelope file and may appear anywhere:
+
+```sh
+python3 -m automation.agent_tools eu4_replay case --case <case> \
+  --out <replay-dir> --envelope-out <envelope.json>
+```
+
+A missing or malformed `--policy` is refused; it never silently falls back to
+the default policy. The campaign and diagnosis evidence record the policy
+path, content SHA-256 and whether it was explicit or the default. A campaign
+with a terminal GPU/resource-history/capture failure is `failed`/`invalid`
+even when an earlier frame reported a rendering difference.
 
 ### `eu4_case_inspect`
 

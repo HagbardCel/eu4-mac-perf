@@ -62,7 +62,8 @@
     "verify_ok": true,
     "relocated_verify_ok": true,
     "source_deleted": true,
-    "package_seconds": 2.732
+    "package_seconds": 2.73,
+    "verify_seconds": 1.626
   },
   "sequence": {
     "frames": 3,
@@ -142,7 +143,7 @@
     ]
   },
   "replay": {
-    "seconds": 15.209,
+    "seconds": 14.767,
     "campaign": {
       "schema": "m7-continuous-campaign/v1",
       "status": "complete",
@@ -197,11 +198,23 @@
         "operation": "glCopyTexSubImage2D"
       },
       "target_sequence": 3
-    }
+    },
+    "policy": {
+      "name": "m6-menu-frame",
+      "source": "default",
+      "sha256": "33a7ce61eb1fb95f93b1e4747efc0ce53a749a1448841e655c7264d43f173e64",
+      "bytes": 860,
+      "schema": "gfx-frame-comparison-policy/v1"
+    },
+    "unsupported_states": [
+      "gl_dither",
+      "multisample"
+    ]
   },
   "result": "The relocated case verified and replayed through the existing persistent Metal session with the same classification and identical final pixel statistics as the live target diagnosis.",
   "revalidated_after_rebase": {
-    "pr_205_head": "30f07f9a",
+    "base_sha": "2bab6cc0",
+    "code_sha": "33808d7e",
     "classification_unchanged": true,
     "statistics_unchanged": true,
     "first_divergence": {
@@ -209,6 +222,33 @@
       "target": "442",
       "operation": "glCopyTexSubImage2D",
       "confidence": "confirmed"
+    }
+  },
+  "final_code_sha": "33808d7e",
+  "base_sha": "2bab6cc0",
+  "declared_unsupported_states": [
+    "gl_dither",
+    "multisample",
+    "stencil_test",
+    "polygon_mode",
+    "polygon_offset",
+    "alpha_test"
+  ],
+  "agent_classification": {
+    "case_inspect_complete": {
+      "status": "ok",
+      "qualified": false
+    },
+    "case_verify_complete": {
+      "status": "ok",
+      "evidence": "valid",
+      "qualified": false
+    },
+    "case_inspect_budget_incomplete": {
+      "status": "incomplete",
+      "evidence": "unverified",
+      "qualified": false,
+      "independently_reproducible": false
     }
   }
 }

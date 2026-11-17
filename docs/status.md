@@ -373,8 +373,16 @@ lifecycle/capture identity. The live case budget is explicit; an over-budget
 reproduction is published as a bounded incomplete summary with no replay
 command.
 
-Focused validation: 318 native/offline tests passed after rebasing onto the
-corrected PR #205 head `30f07f9a`, the DSH plugin's 9 tests passed, and a real
+PR #206 review remediation made campaign failure precedence terminal-first,
+forwarded and digested the selected comparison policy, gave replay `--out`
+back to the replay subcommand, distinguished malformed/unsupported/legacy/
+verifier-exception/incomplete cases, made live shader mappings authoritative
+over stale frame-local translations, and kept continue-on-difference limited
+to eligible rendering differences. A failed live campaign can no longer
+publish `qualified` from a matched prefix.
+
+Focused validation: 342 native/offline tests passed after rebasing onto merged
+`main` `2bab6cc0`, the DSH plugin's 9 tests passed, and a real
 v2 case was inspected, verified and replayed through the JavaScript bridge
 after relocation and deletion of the original campaign. The
 existing authentic sealed follow-up A capture (three frames, session

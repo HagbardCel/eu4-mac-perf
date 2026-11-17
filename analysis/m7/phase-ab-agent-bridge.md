@@ -4,16 +4,13 @@ Status: implementation and focused offline/native validation complete;
 independent review and merge authorization pending. No automatic merge is
 enabled.
 
-Base: `origin/main` at `096c76ae` (PR #204) plus PR #205
-(`m7/followup-portable-replay`, head `30f07f9a`). PR #205 is still open in the
-checked-out remote, so this branch is stacked on its corrected head and
-implements the v1-only dispatch correction the task premise assumes was merged.
-The baseline is not a hypothetical hidden `main` commit.
+Base: `origin/main` at `2bab6cc0`, the merge of PR #205
+(`m7/followup-portable-replay`, head `30f07f9a`). The branch was rebased onto
+that merged baseline and PR #206 was retargeted from the #205 branch to `main`.
 
-Implementation commit: `ae409268` (rebased onto `30f07f9a`; 14 files). This
-report is a separate documentation commit so the code identity remains stable.
-The PR is stacked on `m7/followup-portable-replay` and must be retargeted to
-`main` after #205 merges.
+Final code commit for this remediation: `33808d7e`. Documentation and receipt
+updates are a separate commit so the code identity reviewed by CI remains
+stable.
 
 ## Objective
 
@@ -28,6 +25,43 @@ than add another renderer or orchestration layer:
 4. Preserve transitive predecessor history, lifecycle records, per-frame
    translations, checkpoint requests/receipts and capture identity.
 5. Fail closed on invalid, unsupported or incomplete evidence.
+
+## PR #206 review remediation
+
+The reviewed head `4eb7984f` had two Codex findings and additional gaps called
+out by the operator. This revision closes them without changing the
+architecture:
+
+1. **Terminal campaign precedence.** `_campaign_outcome` checks GPU execution,
+   resource history, invalid capture/provenance and infrastructure failures
+   before selecting any pixel classification. Earlier differences remain in
+   `first_difference`/`frames`; the terminal failure supplies the envelope
+   verdict. Cancellation and incomplete execution remain unqualified.
+2. **Policy forwarding.** `eu4_replay sequence` forwards `--policy`;
+   `m7_continuous.run_campaign` validates it before execution, records
+   `{path, sha256, bytes, source, schema, name}` in the campaign and diagnostic
+   evidence, and never falls back from a missing or invalid explicit policy.
+   The diagnosis report embeds the same identity.
+3. **`--out` ownership.** Replay `--out` belongs to the replay subcommand.
+   `--envelope-out` (or parent-level `--out` before the subcommand) is the
+   separate JSON-envelope destination. Envelope writes never target a
+   directory.
+4. **Fail-closed classification.** `_case_schema` distinguishes malformed,
+   unsupported `gfx-strategy-b-case/*`, recognized legacy, missing and
+   Strategy B cases. Only recognized legacy cases reach the old comparator.
+   Verifier exceptions, digest corruption and missing payloads are `invalid`;
+   an explicit budget-limited reproduction is `incomplete`; none can be
+   qualified.
+5. **Live provenance.** A live coordinator shader mapping wins over a stale
+   frame-local translation and is recorded as `shader_source` per frame.
+   Missing/unusable mappings refuse complete packaging. Checkpoint sources
+   record why they were preserved or regenerated; a substituted receipt is
+   never copied.
+6. **Live failure reporting.** `continue-on-difference` applies only to
+   eligible rendering differences, not hard failures. A failed coordinator
+   cannot publish `qualified` from a matched prefix, and a packaged prefix is
+   scoped as `completed_prefix`, separate from the terminal failure,
+   reproduction completeness and diagnostic completeness.
 
 ## Phase A — integration defects
 
@@ -143,6 +177,17 @@ missing dependency list, and no replay command. Required frames are never
 dropped silently; incorrect or unavailable translations produce
 `shader_artifact_unavailable` and are not claimed independently reproducible.
 
+## Issue-to-regression map
+
+| Finding | Regression |
+| --- | --- |
+| Terminal failure vs earlier difference | `StrategyBCaseToolTests.test_terminal_gpu_failure_outranks_an_earlier_difference`; `LiveCoordinatorPackagingTests.test_continue_on_difference_stops_on_a_hard_failure`; `test_failed_continuous_report_never_publishes_qualified` |
+| Policy forwarding and digest | `test_sequence_forwards_the_selected_policy`; `SupervisorTests.test_policy_is_forwarded_and_digest_is_saved`; `DiagnosisContractTests.test_custom_policy_changes_state_coverage_and_records_digest`; `test_missing_or_invalid_policy_fails_closed` |
+| Replay/envelope `--out` ownership | `test_replay_output_aliases_are_not_envelope_destinations`; `test_envelope_destination_is_explicit_and_separate`; `test_sequence_and_diagnose_accept_both_output_aliases` |
+| Fail-closed case classification | `test_unknown_strategy_b_schema_never_reaches_the_legacy_comparator`; `test_malformed_case_manifest_is_invalid_not_legacy`; `test_verifier_exception_is_invalid_not_incomplete`; `test_digest_corruption_is_invalid_and_never_replayed`; `test_missing_required_payload_is_invalid`; `test_budget_incomplete_is_incomplete_and_never_qualified` |
+| Live shader/checkpoint provenance | `test_live_mapping_is_authoritative_over_stale_frame_shaders`; `test_unusable_live_mapping_refuses_complete_packaging`; `test_checkpoint_source_mismatch_is_recorded_and_regenerated`; `test_supervisor_packages_the_prefix_when_it_stops` |
+| Live failure/continue semantics | `test_continue_on_difference_stops_on_a_hard_failure`; `test_continue_on_difference_continues_eligible_differences`; `test_failed_continuous_report_never_publishes_qualified`; `test_successful_continuous_report_can_publish_qualified` |
+
 ## Validation
 
 Focused native/offline suite (the checked interpreter,
@@ -163,10 +208,10 @@ Focused native/offline suite (the checked interpreter,
   --module tests.test_dsh_profile
 ```
 
-Result: **318 tests passed in 95.54 s** (run
-`20261117T051717Z-d88a3971`, after rebasing onto PR #205 head `30f07f9a`).
-This includes the new single-frame captured-identity tests from PR #205 and
-real Metal replay on the available macOS host.
+Result: **342 tests passed in 94.22 s** (run
+`20261117T055504Z-85cecc96`, after rebasing onto merged `main` `2bab6cc0`).
+This includes the new failure-precedence, policy, argument-ownership,
+provenance and negative-case regressions plus real Metal replay.
 
 JS plugin suite:
 
@@ -229,7 +274,7 @@ request/receipt were preserved.
   directory was deleted, and both the original and relocated directories
   verified with no problems.
 - The relocated replay used one persistent Metal session for all three frames:
-  15.2 s, campaign `complete`, `history.status=ok`, zero missing/stale history,
+  14.8 s, campaign `complete`, `history.status=ok`, zero missing/stale history,
   274 Metal render-target bindings, 2,465 external-capture bindings and no
   seeded OpenGL intermediates.
 - Live target and replay both classify as
@@ -239,8 +284,13 @@ request/receipt were preserved.
 - The first authoritative divergence remains event 286 / texture 442
   (`glCopyTexSubImage2D`), with the unresolved interval 13–286 and the next
   checkpoint at the copy source (event 284).
-- Packaging took 2.73 s; the case manifest is portable and contains no
-  absolute capture path.
+- The default comparison policy is recorded in the replay evidence as
+  `source=default`, SHA-256
+  `33a7ce61eb1fb95f93b1e4747efc0ce53a749a1448841e655c7264d43f173e64`
+  (860 bytes). An explicit custom policy stores `source=explicit` with its own
+  digest.
+- Verification took 1.63 s; packaging took 2.73 s; the relocated replay took
+  14.77 s. The case manifest is portable and contains no absolute capture path.
 
 After rebasing onto `30f07f9a`, the relocated authentic case was verified and
 replayed again: verification `ok`, the classification and all final pixel
@@ -297,6 +347,16 @@ original capture directory.
   relocation and replay, not a qualified match. No threshold was changed and
   no A/B experiment attributes the difference to those states; Phase C owns
   that qualification.
+- Remaining declared unsupported states:
+  `gl_dither`, `multisample`, `stencil_test`, `polygon_mode`,
+  `polygon_offset`, `alpha_test`. The authentic target observed only
+  `gl_dither` and `multisample`; the others are unexercised, not inferred.
+- A 512 MiB case budget on the authentic three-frame target publishes
+  `reproduction.status=incomplete`, `independently_reproducible=false`,
+  `reason=artifact_budget`, required 1,310,375,043 bytes and max
+  536,870,912 bytes, with no replay command. A 2 GiB budget publishes the
+  complete 1,317,958,286-byte, 3,810-file case. An incomplete case is never
+  reported as independently reproducible.
 - The older canonical prefix from the historical M6 capture still remains
   `incomplete_diagnostics` because that capture has no same-process frame seal.
   This phase does not synthesize a seal.
