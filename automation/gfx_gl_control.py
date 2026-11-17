@@ -103,6 +103,43 @@ def _swap_red_blue(body: bytes) -> bytes:
     return bytes(swapped)
 
 
+def _copy_region(event: dict, width: int, height: int) -> dict:
+    rect = event.get("source_rect")
+    if not isinstance(rect, list) or len(rect) != 4:
+        rect = [0, 0, int(event.get("width") or width),
+                int(event.get("height") or height)]
+    offset = event.get("destination_offset")
+    if not isinstance(offset, list) or len(offset) != 2:
+        offset = [0, 0]
+    try:
+        sx, sy, sw, sh = (int(value) for value in rect)
+        dx, dy = (int(value) for value in offset)
+    except (TypeError, ValueError) as exc:
+        raise ControlError("copy_region", "copy rectangle is not integral") from exc
+    if sw <= 0 or sh <= 0:
+        raise ControlError("copy_region", "copy rectangle is empty")
+    if sx < 0 or sy < 0 or dx < 0 or dy < 0 \
+            or sx + sw > width or sy + sh > height \
+            or dx + sw > width or dy + sh > height:
+        raise ControlError(
+            "copy_region_out_of_bounds",
+            f"copy rectangle {rect} at offset {offset} exceeds {width}x{height}")
+    return {"source_x": sx, "source_y": sy, "width": sw, "height": sh,
+            "destination_x": dx, "destination_y": dy}
+
+
+def _crop_pixels(body: bytes, width: int, height: int,
+                 x: int, y: int, w: int, h: int) -> bytes:
+    if len(body) != width * height * 4:
+        raise ControlError("invalid_payload", "pixel payload has the wrong size")
+    row_bytes = w * 4
+    out = bytearray()
+    for row in range(y, y + h):
+        start = (row * width + x) * 4
+        out.extend(body[start:start + row_bytes])
+    return bytes(out)
+
+
 def _lifecycle_write(lifecycle: list[dict], start_event: int,
                      end_event: int, name: str) -> dict | None:
     for item in lifecycle:
@@ -375,12 +412,27 @@ def control_frame(frame_dir: Path | str) -> dict:
                 "destination_event": observation["event"],
             })
             continue
+        try:
+            region = _copy_region(event, width, height)
+        except ControlError as exc:
+            checks.append(_unavailable_check(index, event, destination, {
+                "reason_code": exc.kind,
+                "reason": str(exc),
+                "event": observation["event"],
+            }))
+            continue
+        source_region = _crop_pixels(
+            source_bytes, width, height, region["source_x"],
+            region["source_y"], region["width"], region["height"])
+        destination_region = _crop_pixels(
+            destination_bytes, width, height, region["destination_x"],
+            region["destination_y"], region["width"], region["height"])
         candidate = (
-            _swap_red_blue(destination_bytes)
+            _swap_red_blue(destination_region)
             if normalization in ("bgra_to_rgba", "rgba_to_bgra")
-            else destination_bytes)
+            else destination_region)
         statistics = m6_compare.compare_images(
-            source_bytes, candidate, width, height)
+            source_region, candidate, region["width"], region["height"])
         status = "match" if statistics["mismatched_pixels"] == 0 else "different"
         checks.append({
             "event": index,
@@ -397,6 +449,7 @@ def control_frame(frame_dir: Path | str) -> dict:
                 "channel_swap": normalization,
                 "row_origin": "declared_lower_left",
             },
+            "copy_region": region,
             "provenance": {
                 "selected_copy_event": index,
                 "first_consumer_event": observation["event"],

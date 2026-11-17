@@ -1699,7 +1699,8 @@ def classify_diagnosis(*, capture_validity: str, identity: str,
     base_classification = classification
     if fault_experiment and classification not in (
             "gpu_execution_failure", "incomplete_capture",
-            "incomplete_diagnostics"):
+            "incomplete_diagnostics", "invalid_provenance"):
+        # Selecting a fault must not hide unrelated evidence corruption.
         classification = "fault_experiment"
     axes = {
         "capture_validity": capture_validity,

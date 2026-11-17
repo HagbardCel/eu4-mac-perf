@@ -109,6 +109,56 @@ class GlTransferControlTests(unittest.TestCase):
                           "first_consumer_event": 2,
                           "lifecycle": "checked"})
 
+    def test_partial_copy_compares_only_the_copied_region(self):
+        source = bytes((1, 2, 3, 255, 4, 5, 6, 255,
+                        7, 8, 9, 255, 10, 11, 12, 255))
+        # Only destination (0,0) is written; it is the RGBA swap of source
+        # (1,1). The other three destination pixels are unrelated.
+        destination = bytes((12, 11, 10, 255, 99, 99, 99, 255,
+                             88, 88, 88, 255, 77, 77, 77, 255))
+        events = [{
+            "index": 1, "kind": "resolve",
+            "operation": "glCopyTexSubImage2D", "source": "0",
+            "destination": "442",
+            "source_rect": [1, 1, 1, 1],
+            "destination_offset": [0, 0],
+            "width": 2, "height": 2,
+            "source_image": {"file": "copy-source.bgra",
+                             "sha256": _sha(source),
+                             "width": 2, "height": 2},
+        }, _draw(2, textures=[_texture(
+            442, "destination.bin", _sha(destination))])]
+        frame = make_frame(self.root, source=source,
+                           destination=destination, events=events)
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "match")
+        check = report["checks"][0]
+        self.assertEqual(check["copy_region"], {
+            "source_x": 1, "source_y": 1, "width": 1, "height": 1,
+            "destination_x": 0, "destination_y": 0})
+        self.assertEqual(check["statistics"]["pixels"], 1)
+        self.assertEqual(check["statistics"]["mismatched_pixels"], 0)
+
+    def test_out_of_bounds_partial_copy_is_unavailable(self):
+        events = [{
+            "index": 1, "kind": "resolve",
+            "operation": "glCopyTexSubImage2D", "source": "0",
+            "destination": "442",
+            "source_rect": [2, 2, 1, 1],
+            "destination_offset": [0, 0],
+            "width": 2, "height": 2,
+            "source_image": {"file": "copy-source.bgra",
+                             "sha256": _sha(self.source),
+                             "width": 2, "height": 2},
+        }, _draw(2, textures=[_texture(
+            442, "destination.bin", _sha(self.destination))])]
+        frame = make_frame(self.root, source=self.source,
+                           destination=self.destination, events=events)
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "incomplete")
+        self.assertEqual(report["checks"][0]["reason_code"],
+                         "copy_region_out_of_bounds")
+
     def test_two_copies_before_sample_make_the_first_unavailable(self):
         source_a = self.source
         source_b = bytes((21, 22, 23, 255, 24, 25, 26, 255,

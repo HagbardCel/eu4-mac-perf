@@ -1016,6 +1016,11 @@ class FaultExperimentClassificationTests(unittest.TestCase):
         self.assertEqual(classification, "incomplete_diagnostics")
         self.assertFalse(qualification["qualified"])
 
+    def test_fault_does_not_hide_invalid_provenance(self):
+        classification, qualification = self.classify(identity="mismatch")
+        self.assertEqual(classification, "invalid_provenance")
+        self.assertFalse(qualification["qualified"])
+
     def test_fault_does_not_hide_gpu_failure(self):
         classification, qualification = self.classify(execution="failed")
         self.assertEqual(classification, "gpu_execution_failure")
