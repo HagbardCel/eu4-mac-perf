@@ -199,5 +199,16 @@
       "target_sequence": 3
     }
   },
-  "result": "The relocated case verified and replayed through the existing persistent Metal session with the same classification and identical final pixel statistics as the live target diagnosis."
+  "result": "The relocated case verified and replayed through the existing persistent Metal session with the same classification and identical final pixel statistics as the live target diagnosis.",
+  "revalidated_after_rebase": {
+    "pr_205_head": "30f07f9a",
+    "classification_unchanged": true,
+    "statistics_unchanged": true,
+    "first_divergence": {
+      "event": 286,
+      "target": "442",
+      "operation": "glCopyTexSubImage2D",
+      "confidence": "confirmed"
+    }
+  }
 }

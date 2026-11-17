@@ -4,14 +4,16 @@ Status: implementation and focused offline/native validation complete;
 independent review and merge authorization pending. No automatic merge is
 enabled.
 
-Base: `origin/main` at `096c76ae` (PR #204). PR #205
-(`m7/followup-portable-replay`, head `9c645d79`) is still open in the checked
-out remote, so this branch fast-forwards `main` to that head and implements the
-correction the task premise assumes was merged. The v1-only dispatch defect is
-fixed here; the baseline is not a hypothetical hidden `main` commit.
+Base: `origin/main` at `096c76ae` (PR #204) plus PR #205
+(`m7/followup-portable-replay`, head `30f07f9a`). PR #205 is still open in the
+checked-out remote, so this branch is stacked on its corrected head and
+implements the v1-only dispatch correction the task premise assumes was merged.
+The baseline is not a hypothetical hidden `main` commit.
 
-Implementation commit: `53695757` (14 files). This report is a separate
-documentation commit so the code identity remains stable.
+Implementation commit: `ae409268` (rebased onto `30f07f9a`; 14 files). This
+report is a separate documentation commit so the code identity remains stable.
+The PR is stacked on `m7/followup-portable-replay` and must be retargeted to
+`main` after #205 merges.
 
 ## Objective
 
@@ -161,9 +163,10 @@ Focused native/offline suite (the checked interpreter,
   --module tests.test_dsh_profile
 ```
 
-Result: **272 tests passed in 96.99 s** (run
-`20261116T230654Z-beeb397d`). This includes real Metal replay on the available
-macOS host.
+Result: **318 tests passed in 95.54 s** (run
+`20261117T051717Z-d88a3971`, after rebasing onto PR #205 head `30f07f9a`).
+This includes the new single-frame captured-identity tests from PR #205 and
+real Metal replay on the available macOS host.
 
 JS plugin suite:
 
@@ -239,7 +242,11 @@ request/receipt were preserved.
 - Packaging took 2.73 s; the case manifest is portable and contains no
   absolute capture path.
 
-The agent surface was run against the relocated authentic case:
+After rebasing onto `30f07f9a`, the relocated authentic case was verified and
+replayed again: verification `ok`, the classification and all final pixel
+statistics were unchanged, and the first divergence remained event 286 /
+texture 442. The agent surface was also run against the relocated authentic
+case:
 
 ```sh
 python3 -m automation.agent_tools eu4_case_inspect \

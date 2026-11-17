@@ -373,9 +373,10 @@ lifecycle/capture identity. The live case budget is explicit; an over-budget
 reproduction is published as a bounded incomplete summary with no replay
 command.
 
-Focused validation: 272 native/offline tests passed, the DSH plugin's 9 tests
-passed, and a real v2 case was inspected, verified and replayed through the
-JavaScript bridge after relocation and deletion of the original campaign. The
+Focused validation: 318 native/offline tests passed after rebasing onto the
+corrected PR #205 head `30f07f9a`, the DSH plugin's 9 tests passed, and a real
+v2 case was inspected, verified and replayed through the JavaScript bridge
+after relocation and deletion of the original campaign. The
 existing authentic sealed follow-up A capture (three frames, session
 `c66b3625…`, pid 27780) was also cloned, packaged under a 2 GiB budget,
 relocated, deleted at the source, verified and replayed: the
