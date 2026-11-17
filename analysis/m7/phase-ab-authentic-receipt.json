@@ -1,7 +1,7 @@
 {
   "schema": "m7-phase-b-authentic-receipt/v1",
   "generated_utc": "2026-11-17T17:05:09Z",
-  "code_sha": "293997ca",
+  "code_sha": "0ba76ad7",
   "base_sha": "2bab6cc0",
   "source_capture": ".local/m7/followup-a-live-3",
   "source_capture_mode": "existing authentic sealed capture; cloned, packaged, then the clone was deleted",
@@ -489,5 +489,17 @@
   ],
   "result": "The relocated case verified and replayed through the existing persistent Metal session with the same classification, identical final pixel statistics, the same resource-history verdict and the same first authoritative intermediate divergence as the live target diagnosis. All three checkpoint receipts were preserved from the live capture.",
   "previous_case_digest": "d7f648339e93593032e17d407fada4a047c824b1494b9fb3c7c9182cc3593929",
-  "case_digest_note": "The digest changed because regenerated/preserved receipts now bind the canonical shader-report and shader-artifact identity; capture frames, shaders and replay artifacts are unchanged."
+  "case_digest_note": "The digest changed because regenerated/preserved receipts now bind the canonical shader-report and shader-artifact identity; capture frames, shaders and replay artifacts are unchanged.",
+  "sequence_outcome": {
+    "status": "ok",
+    "diagnostic": "partial",
+    "verdict": "different",
+    "evidence": "valid",
+    "qualified": false,
+    "first_pixel_divergent_frame": 1,
+    "first_checkpoint_divergent_frame": 1,
+    "first_unqualified_frame": 1,
+    "terminal_failure": null,
+    "diagnostic_complete": true
+  }
 }

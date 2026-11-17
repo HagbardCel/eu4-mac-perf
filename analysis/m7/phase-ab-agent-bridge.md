@@ -8,7 +8,8 @@ Base: `origin/main` at `2bab6cc0`, the merge of PR #205
 (`m7/followup-portable-replay`, head `30f07f9a`). The branch was rebased onto
 that merged baseline and PR #206 was retargeted from the #205 branch to `main`.
 
-Final code commit for this remediation: `293997ca`. Documentation and receipt
+Final code commit for this remediation: `0ba76ad7` (`293997ca` plus the
+pixel-axis correction found while validating the authentic campaign). Documentation and receipt
 updates are a separate commit so the code identity reviewed by CI remains
 stable.
 
@@ -78,7 +79,8 @@ architecture:
 
 ## Second review remediation — exact order, evidence and receipt identity
 
-Code commit `293997ca` closes the remaining Phase A/B correctness findings.
+Code commits `293997ca` and `0ba76ad7` close the remaining Phase A/B
+correctness findings.
 Documentation and receipt updates are a separate commit so the code identity
 reviewed by CI stays stable.
 
@@ -93,8 +95,10 @@ reviewed by CI stays stable.
    `diagnostic_completed=true`.
 2. **Pixel divergence is separate from qualification (P1).**
    `_campaign_outcome` now exposes:
-   - `first_pixel_divergent_frame`: first row whose diagnosis pixel axis is
-     `divergent` and whose final mismatched-pixel statistic is positive;
+   - `first_pixel_divergent_frame`: first row whose authoritative
+     qualification axis `pixel_comparison` is `divergent` and whose final
+     mismatched-pixel statistic is positive (the axis name was corrected and
+     re-checked against the authentic campaign);
    - `first_checkpoint_divergent_frame`: first row with
      `checkpoint_validation.status=ok` and an authoritative divergent
      checkpoint;
@@ -407,7 +411,7 @@ full-suite run; the focused native/offline suite above is the applicable gate
 for this phase. A full run belongs at the later qualification gate, after the
 live-test authorization policy is handled deliberately.
 
-### Second-review authentic revalidation (code `293997ca`)
+### Second-review authentic revalidation (code `0ba76ad7`)
 
 The same existing sealed capture was cloned again, packaged, relocated, and
 replayed without launching EU4. The receipt now binds the canonical shader
@@ -440,6 +444,12 @@ identity for every receipt and records preserved-live-receipt origin.
 - The first authoritative divergence remains event 286 / texture 442
   (`glCopyTexSubImage2D`, producer event 284), with the same unresolved
   interval and next-checkpoint recommendation.
+- The authentic campaign evaluated through `_campaign_outcome` reports
+  `status=ok`, `diagnostic=partial`, `verdict=different`,
+  `first_pixel_divergent_frame=1`, `first_checkpoint_divergent_frame=1`,
+  `first_unqualified_frame=1`, no terminal failure and evidence-based
+  `diagnostic_complete=true`. This exercises the real `pixel_comparison`
+  qualification axis, not a synthetic key.
 - `gl_dither` and `multisample` remain declared unsupported and are not
   declared equivalent.
 
