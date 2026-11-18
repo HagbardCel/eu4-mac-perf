@@ -3554,6 +3554,12 @@ static void finish_capture_ex(const char *reason, int allow_reference) {
     if (g.checkpoint_event >= 0 && !g.checkpoint_captured) {
         fail_capture_locked("default_checkpoint_missed");
     }
+    /* A checkpoint captured at a boundary that finalizes before the selected
+       event record is emitted has no event to attach to.  Never publish an
+       unreferenced blob as if it belonged to the selected event. */
+    if (g.checkpoint_event >= 0 && g.checkpoint_json[0] != 0) {
+        fail_capture_locked("default_checkpoint_unattached");
+    }
     /* The manifest is published only after the event stream has been closed
        and validated.  A write/flush failure, malformed record, missing record
        or count mismatch therefore cannot produce complete=true. */
