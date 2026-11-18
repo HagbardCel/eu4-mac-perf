@@ -87,6 +87,54 @@ class DependencyClosureTests(unittest.TestCase):
                          replay_host_dependencies.relative_dependencies())
 
 
+class SnapshotIdentityTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name).resolve()
+        self.host = self.root / "gfx_frame_replay"
+        self.host.write_bytes(b"binary-a")
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def test_snapshot_tracks_executable_actually_run(self):
+        calls = []
+        first = hashlib.sha256(b"binary-a").hexdigest()
+        second = hashlib.sha256(b"binary-b").hexdigest()
+
+        def producer(path):
+            calls.append(str(path))
+            if len(calls) == 1:
+                self.host.write_bytes(b"binary-b")
+                return {"executable": str(self.host),
+                        "executable_sha256": first,
+                        "build_fingerprint": "a" * 64}
+            return {"executable": str(self.host),
+                    "executable_sha256": second,
+                    "build_fingerprint": "b" * 64}
+
+        with mock.patch.object(m6_frame, "replay_host_producer",
+                               side_effect=producer):
+            snapshot, value = m6_frame.snapshot_replay_host(self.host)
+        try:
+            self.assertEqual(value["executable_sha256"],
+                             hashlib.sha256(snapshot.read_bytes()).hexdigest())
+            self.assertEqual(value["executable_sha256"], second)
+            self.assertEqual(len(calls), 2)
+        finally:
+            snapshot.unlink()
+
+    def test_snapshot_refuses_a_stale_producer_identity(self):
+        stale = {"executable": str(self.host),
+                 "executable_sha256": hashlib.sha256(b"binary-a").hexdigest(),
+                 "build_fingerprint": "a" * 64}
+        self.host.write_bytes(b"binary-b")
+        with mock.patch.object(m6_frame, "replay_host_producer",
+                               return_value=stale):
+            with self.assertRaises(m6_frame.FrameError):
+                m6_frame.snapshot_replay_host(self.host, attempts=2)
+
+
 class IncrementalBuildTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()

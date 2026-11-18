@@ -25,6 +25,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -1040,6 +1041,43 @@ def replay_host_producer(host: Path | str | None = None) -> dict:
         "build_stamp_sha256": _sha256(stamp),
         "build_dependencies": identity["dependencies"],
     }
+
+
+def snapshot_replay_host(host: Path | str | None = None,
+                        *, attempts: int = 3) -> tuple[Path, dict]:
+    """Create an immutable per-run executable snapshot of the replay host.
+
+    The producer identity is read first, the bytes are copied, and the copy is
+    hashed.  If a concurrent build replaced the shared host between those
+    steps, the snapshot digest will not match the identity and the operation
+    retries.  The returned receipt describes the snapshot that will actually be
+    executed, not merely the shared path.
+    """
+    host = Path(host) if host is not None else REPLAY_HOST
+    for _attempt in range(max(1, attempts)):
+        producer = replay_host_producer(host)
+        descriptor, name = tempfile.mkstemp(prefix="gfx-frame-replay-host.")
+        os.close(descriptor)
+        snapshot = Path(name)
+        try:
+            shutil.copyfile(host, snapshot)
+            os.chmod(snapshot, host.stat().st_mode & 0o777)
+            digest = _sha256(snapshot)
+            if digest != producer.get("executable_sha256"):
+                snapshot.unlink()
+                continue
+            value = dict(producer)
+            value["executable"] = str(snapshot)
+            value["executable_sha256"] = digest
+            return snapshot, value
+        except BaseException:
+            try:
+                snapshot.unlink()
+            except FileNotFoundError:
+                pass
+            raise
+    raise FrameError(
+        "replay host changed repeatedly while creating the per-run snapshot")
 
 
 def build_replay_host(force: bool = False) -> Path:

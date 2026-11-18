@@ -2524,13 +2524,18 @@ def verify_producer_receipt(case_dir: Path, manifest: dict) -> dict:
         receipt.get("result"), dict) else {}
     replay_path = case_dir / "replay" / "replay.json"
     metal_path = case_dir / "replay" / "metal-frame.bgra"
-    try:
-        replay = _json(replay_path)
-    except (OSError, UnicodeError, json.JSONDecodeError, CaseError):
+    replay_exists = replay_path.is_file()
+    if not replay_exists:
         replay = {}
-        problems.append("producer receipt has no readable replay.json")
-    if result.get("replay_json_sha256") != _sha(replay_path):
-        problems.append("producer receipt does not bind replay.json")
+        problems.append("producer receipt has no replay.json")
+    else:
+        try:
+            replay = _json(replay_path)
+        except (OSError, UnicodeError, json.JSONDecodeError, CaseError):
+            replay = {}
+            problems.append("producer receipt has no readable replay.json")
+        if result.get("replay_json_sha256") != _sha(replay_path):
+            problems.append("producer receipt does not bind replay.json")
     metal_sha = _sha(metal_path) if metal_path.is_file() else None
     if result.get("metal_frame_sha256") != metal_sha:
         problems.append("producer receipt does not bind the Metal readback")

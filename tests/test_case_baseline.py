@@ -206,6 +206,26 @@ class BaselineIdentityTests(unittest.TestCase):
         self.assertIn("benchmark/eu4_gfx_replay_semantics.h", first)
         self.assertNotEqual(first, second)
 
+    def test_missing_replay_json_is_invalid_not_an_exception(self):
+        from automation import gfx_replay_case
+
+        (self.case / "replay" / "replay.json").unlink()
+        manifest = json.loads((self.case / "case.json").read_text())
+        result = gfx_replay_case.verify_producer_receipt(self.case, manifest)
+        self.assertEqual(result["status"], "invalid")
+        self.assertTrue(any("no replay.json" in problem
+                            for problem in result["problems"]), result)
+
+    def test_external_replay_override_cannot_be_reused(self):
+        case_baseline.record(self.case, self.baseline)
+        external = self.root / "external-replay"
+        import shutil
+        shutil.copytree(self.case / "replay", external)
+        with self.assertRaises(case_baseline.BaselineError) as caught:
+            case_baseline.load_check(self.case, self.baseline,
+                                     replay_dir=external)
+        self.assertEqual(caught.exception.kind, "external_replay_override")
+
     def test_producer_receipt_must_bind_the_replay_output(self):
         receipt_path = self.case / "replay" / "producer-receipt.json"
         receipt = json.loads(receipt_path.read_text())

@@ -244,6 +244,16 @@ def identity(case_dir: Path | str, *,
             "(session_id/capture_frame_id/event_stream_sha256)")
     replay = (Path(replay_dir).expanduser().resolve()
               if replay_dir is not None else case_dir / "replay")
+    expected_replay = (case_dir / "replay").resolve()
+    if replay != expected_replay:
+        # The producer receipt and capture binding live with the packaged
+        # replay.  Accepting an arbitrary external directory would decouple the
+        # verified case from the result being reused, so reject it rather than
+        # inventing a second provenance system.
+        raise BaselineError(
+            "external_replay_override",
+            f"replay directory {replay} is not the verified case replay "
+            f"{expected_replay}; external replay overrides are not supported")
     replay_result = _replay_evidence(replay)
     report_path = case_dir / str(
         manifest.get("diagnostic_report") or "diagnostic-report.json")

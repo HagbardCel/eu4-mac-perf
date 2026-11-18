@@ -3245,11 +3245,11 @@ def replay(
         graph, out_dir / "checkpoint-request.json")
     host = m6_frame.build_replay_host()
     try:
-        producer = m6_frame.replay_host_producer(host)
+        snapshot, producer = m6_frame.snapshot_replay_host(host)
     except m6_frame.FrameError as exc:
         raise ReplayError("producer_identity", str(exc)) from exc
     command = [
-        str(host), "--frame", str(frame_dir), "--shaders", str(shader_dir),
+        str(snapshot), "--frame", str(frame_dir), "--shaders", str(shader_dir),
         "--out", str(out_dir), "--checkpoints",
         str(out_dir / "checkpoint-request.json"),
     ]
@@ -3264,13 +3264,24 @@ def replay(
         if faults.get("sampler_shift_min") is not None:
             env["EU4_FRAME_REPLAY_SAMPLER_SHIFT_MIN"] = str(
                 faults["sampler_shift_min"])
-    ran = subprocess.run(
-        command, capture_output=True, text=True, check=False, env=env,
-        timeout=timeout,
-    )
+    try:
+        ran = subprocess.run(
+            command, capture_output=True, text=True, check=False, env=env,
+            timeout=timeout,
+        )
+    except BaseException:
+        try:
+            snapshot.unlink()
+        except FileNotFoundError:
+            pass
+        raise
     result_path = out_dir / "replay.json"
     if result_path.is_file():
         write_producer_receipt(out_dir, frame_dir, producer, result_path)
+    try:
+        snapshot.unlink()
+    except FileNotFoundError:
+        pass
     if ran.returncode != 0 or not result_path.is_file():
         diagnosis = analyse_frame(
             frame_dir, out_dir, policy, graph=graph, request=request,

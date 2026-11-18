@@ -3,10 +3,10 @@
   "base_commit": "246d7e08",
   "branch": "m7/p2-infra-hardening",
   "case": {
-    "case_id": "m7-p2-producer-bound-v3",
-    "case_json_sha256": "316741aa1aae2e57fbd6d73ace9805f846f3c4e886838c8f1f4b7d5fe9fe80bf",
+    "case_id": "m7-p2-producer-bound-v4",
+    "case_json_sha256": "5f0ca23fd84bb6c7989c342c9c31d97621ead756b2c2eba62e08fb4cf3315451",
     "seal_sha256": "794c482d49767b0b0aa356f5fc28919b9c2a57a33c88f7112152efd8c07d0ca6",
-    "baseline_fingerprint": "f58dc630a811167f395f5b615a6c98b36d2ce67366e6fbc8d89fc29429c3eef4",
+    "baseline_fingerprint": "92780751ae27f926c166d11ab4187a5ea4870b936076d285612f8717223b66ea",
     "capture": {
       "session_id": "a3111e0d-9b76-4b23-910d-38bd48c9aa93",
       "capture_frame_id": 1,
@@ -25,8 +25,8 @@
       "renderer_semantics_included": true,
       "renderer_source_count": 5,
       "shader_inputs": 104,
-      "producer_executable_sha256": "35a5df818280b78785d2e8788b965a66681022fdf9b219a165c9c8446b6f20c7",
-      "current_executable_sha256": "35a5df818280b78785d2e8788b965a66681022fdf9b219a165c9c8446b6f20c7",
+      "producer_executable_sha256": "f91ac9e5ba2aa6b34d06d7c6ff2265b1fd8a95b3b8ce5a40de1fb66d34df3b78",
+      "current_executable_sha256": "f91ac9e5ba2aa6b34d06d7c6ff2265b1fd8a95b3b8ce5a40de1fb66d34df3b78",
       "build_fingerprint": "63cf3649220bea66deb3ebfae2f6243c6f3588f069e90a5ef58a064f965ad3ca",
       "current_build_fingerprint": "63cf3649220bea66deb3ebfae2f6243c6f3588f069e90a5ef58a064f965ad3ca",
       "payload_pass": "gfx_replay_case.verify() (single authoritative pass)"
@@ -154,15 +154,15 @@
     "No EU4 launch and no replay were performed for this evidence; the existing verified baseline is reused."
   ],
   "offline_gate": {
-    "run_id": "20261118T201152Z-8d66b734",
+    "run_id": "20261118T210920Z-db418469",
     "profile": "offline",
     "min_tests": 3000,
-    "tests_ran": 3750,
-    "tests_executed": 3708,
+    "tests_ran": 3754,
+    "tests_executed": 3712,
     "skipped": 42,
     "failures": 0,
     "errors": 0,
-    "duration_seconds": 1640.099,
+    "duration_seconds": 936.187,
     "exit_code": 0,
     "eu4_launches": 0,
     "notes": [
@@ -211,7 +211,10 @@
     "replay_stage": "a reusable baseline requires replay stage=complete, status=ok and readback=true",
     "mandatory_test_execution": "test_profiles verify executes each required test id and rejects dynamic skips",
     "compact_essential_cap": "if essential identity/causal fields cannot fit, the envelope fails explicitly with output_cap_exceeded rather than silently dropping them",
-    "native_harness_stability": "live-capture harness startup waits and deadline were widened; this is test-only timing robustness under external machine load, not a behavioral change"
+    "native_harness_stability": "live-capture harness startup waits and deadline were widened; this is test-only timing robustness under external machine load, not a behavioral change",
+    "external_replay_override": "case_baseline rejects a replay directory other than the verified packaged replay/",
+    "execution_snapshot": "replay() launches an immutable SHA-256-validated snapshot; receipts describe the executed bytes",
+    "missing_receipt_artifact": "missing replay.json/readback yields structured invalid evidence, not an exception"
   },
   "replay_host_dependency_correction": {
     "shared_module": "automation/replay_host_dependencies.py",
@@ -234,9 +237,9 @@
     "overlap_test": "tests.test_replay_host_dependencies.IncrementalBuildTests.test_overlapping_builds_serialize_under_one_lock"
   },
   "focused_verification": {
-    "command": "python3.14 -m unittest tests.test_case_baseline tests.test_test_profiles tests.test_m7_evidence_identity tests.test_failure_taxonomy tests.test_p2_workflow tests.test_gfx_session tests.test_replay_host_dependencies tests.test_gfx_live_capture tests.test_gfx_replay_case",
-    "tests": 135,
-    "skipped": 2,
+    "command": "python3.14 -m unittest tests.test_case_baseline tests.test_gfx_replay_case tests.test_replay_host_dependencies tests.test_p2_workflow",
+    "tests": 48,
+    "skipped": 0,
     "failures": 0,
     "result": "OK"
   },
@@ -271,7 +274,7 @@
   },
   "producer_identity": {
     "receipt_schema": "gfx-replay-producer-receipt/v1",
-    "receipt": ".local/m7/p2/producer-case-v3/replay/producer-receipt.json",
+    "receipt": ".local/m7/p2/producer-case-v4/replay/producer-receipt.json",
     "verification": "verified",
     "legacy_case_rejection": {
       "ok": false,

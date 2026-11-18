@@ -138,7 +138,19 @@ Final correction round:
    receipt's executable and build fingerprint to match the current candidate
    renderer. Legacy cases without a receipt remain historical evidence but are
    rejected for reuse (`producer_identity_missing`).
-12. **Build publication is atomic and locked.** The replay host is compiled to a
+12. **Replay execution uses an immutable per-run snapshot.** `replay()` copies
+    the validated replay-host bytes to a private temporary executable, re-hashes
+    the copy, and executes that snapshot; the producer receipt describes the
+    snapshot bytes actually launched. If a concurrent build replaces the shared
+    host between identity read and copy, the digest mismatch forces a retry
+    rather than mislabelling the result.
+13. **External replay overrides are rejected.** `case_baseline` binds reuse to
+    the verified packaged `replay/` directory; a `--replay-dir` pointing
+    elsewhere is `external_replay_override`, not a second provenance system.
+14. **Missing receipt-bound artifacts fail closed.** A producer receipt without
+    `replay.json`/Metal readback returns structured invalid evidence instead of
+    an unhandled filesystem exception.
+15. **Build publication is atomic and locked.** The replay host is compiled to a
    private temporary path, validated, atomically renamed, and stamped with its
    binary SHA-256. An exclusive process lock plus an in-process lock serialize
    overlapping builds; failed/timeout/interrupted builds remove the binary and
@@ -153,7 +165,7 @@ receipt**. It remains historical evidence, but baseline reuse is rejected with
 renderer output.
 
 One bounded offline replay of that same capture (no EU4 launch) produced a
-producer-bound case, `.local/m7/p2/producer-case-v3` (`m7-p2-producer-bound-v3`),
+producer-bound case, `.local/m7/p2/producer-case-v4` (`m7-p2-producer-bound-v4`),
 which verifies with `producer_identity=verified`. All reported statistics below
 are from that producer-bound case; the first divergence and pixel result are
 unchanged.
@@ -203,10 +215,10 @@ still required before claiming end-to-end efficiency.
 
 ## Offline gate
 
-The final offline gate (`20261118T201152Z-8d66b734`) ran with
+The final offline gate (`20261118T210920Z-db418469`) ran with
 `EU4_TEST_PROFILE=offline` / `EU4_OFFLINE_ONLY=1` and `--min-tests 3000`:
-**3,750 tests ran, 3,708 executed, 42 skipped, 0 failures, 0 errors,
-1,640.1 s**. The floor counts executed tests, so classified skips cannot satisfy
+**3,754 tests ran, 3,712 executed, 42 skipped, 0 failures, 0 errors,
+936.2 s**. The floor counts executed tests, so classified skips cannot satisfy
 it. The skips are the live-only module, platform-only hosts and 11 optional-QBDI
 TR3 tests; QBDI remains non-mandatory. No EU4 process was started. The same gate
 is configured as the required `portable` check; GitHub Actions `portable` passed
