@@ -3,6 +3,7 @@
   "base_commit": "0a33c2278858dd3230839b10825cbc7275acc77e",
   "implementation_commit": "6f545dc6fc706a6e0bcf5aff00609fc47fa5fe55",
   "hardening_commit": "be480fd316ba50c76b11794c52f96e9aa3ea3f11",
+  "clear_boundary_fix_commit": "85d5c50bc5bf545005362d52dd2665d161f007fb",
   "final_head": "the report commit that adds this file; exact SHA in the PR description",
   "branch": "m7/p0-checkpoint-bisection",
   "authentic_experiment": {
@@ -178,14 +179,27 @@
     "identity_axis": "unverified_session",
     "identity_limitation": "standalone single-frame case replay has no in-process shadow identity report; classified incomplete_diagnostics, not a qualified match"
   },
+  "clear_boundary_ordering": {
+    "commit": "85d5c50bc5bf545005362d52dd2665d161f007fb",
+    "defect": "the checkpoint hook ran before boundary_fb handling; an opening clear skipped event 0 and a closing clear could read back an operation that was never recorded",
+    "fix": "moved the hook after boundary processing and before clear emission; the opening clear arms first and captures event 0, the closing clear sees a disarmed capture and performs no readback, and the missed/unattached guards remain",
+    "regressions": [
+      "opening boundary clear selected as event 0: complete sealed frame with the checkpoint on clear record 0",
+      "selected last recorded event: checkpoint survives the following closing clear, no extra checkpoint",
+      "selected closing clear: explicit default_checkpoint_missed with no blob and no sealed frame"
+    ]
+  },
   "tests": {
-    "focused": {"record": "20261118T091236Z-7c65b1bd", "tests": 213, "status": "passed", "seconds": 8.4},
+    "post_fix_writer": {"record": "20261118T093457Z-7e9eed2a", "tests": 48, "status": "passed", "seconds": 0.7},
+    "post_fix_affected": {"record": "20261118T093503Z-6f13babb", "tests": 169, "status": "passed", "seconds": 7.4},
+    "pre_fix_focused": {"record": "20261118T091236Z-7c65b1bd", "tests": 213, "status": "passed", "seconds": 8.4},
     "portable_sequence": {"record": "20261118T084857Z-7d0a57c3", "tests": 55, "status": "passed", "seconds": 136.7},
     "dependent": {"record": "20261118T085152Z-ad0b9dff", "status": "passed", "seconds": 181.7},
     "seal_history": {"record": "20261118T090503Z-e17b7585", "status": "passed", "seconds": 10.2},
     "pixel_diagnostics": {"record": "20261118T090709Z-03825f5f", "tests": 2, "status": "passed"},
     "native_state_host": "trace_state=1 pending=0x500 after=0x500 reference=1 checkpoint=1",
-    "native_scenario_host": "draw/clear/copy indexing, missed, duplicate, out-of-range, disabled, operation-count preservation",
+    "native_scenario_host": "draw/clear/copy indexing, missed, duplicate, out-of-range, disabled, operation-count preservation, opening/closing boundary clear",
+    "ci": "portable workflow .github/workflows/profiler.yml on the final head; status in PR checks",
     "full_interactive_suite": "not run per M7-P0 instruction not to launch the interactive EU4 test set"
   },
   "artifacts": {

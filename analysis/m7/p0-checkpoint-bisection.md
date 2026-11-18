@@ -9,6 +9,7 @@ complete. This report is evidence, not a merge authorization.
   post-#209 merge).
 - Implementation commit: `6f545dc6fc706a6e0bcf5aff00609fc47fa5fe55`
   (capture, graph/diagnosis integration and offline regressions).
+- Clear-boundary ordering fix: `85d5c50bc5bf545005362d52dd2665d161f007fb`.
 - Final head: the report commit that contains this file. Its exact SHA is
   recorded in the PR description; a commit cannot embed its own hash.
 
@@ -67,6 +68,35 @@ Changed files:
 | [`tests/gfx_frame_trace_scenarios.c`](../../tests/gfx_frame_trace_scenarios.c) | offline native draw/clear/copy/missed/duplicate/out-of-range scenarios |
 | [`tests/gfx_trace_state_host.m`](../../tests/gfx_trace_state_host.m) | real-GL checkpoint readback state-restoration and pixel check |
 | [`tests/test_gfx_frame_trace_writer.py`](../../tests/test_gfx_frame_trace_writer.py), [`test_gfx_frame_graph.py`](../../tests/test_gfx_frame_graph.py), [`test_m7_diagnosis.py`](../../tests/test_m7_diagnosis.py), [`test_m6_frame.py`](../../tests/test_m6_frame.py), [`test_gfx_replay_case_sequence.py`](../../tests/test_gfx_replay_case_sequence.py) | focused regressions |
+
+### Clear-boundary ordering fix
+
+The previous hook order captured the checkpoint **before** the
+`boundary_fb` handling in `eu4_gfx_frame_trace_clear_entry()`. That had two
+consequences:
+
+- An **opening** boundary clear armed the capture only after the checkpoint
+  hook had already run, so a selected event 0 was missed.
+- A **closing** boundary clear could capture a checkpoint for an operation that
+  was never recorded. With the unattached guard this failed as
+  `default_checkpoint_unattached`; without it, it could publish a complete
+  frame whose event stream did not contain the requested checkpoint.
+
+The hook now runs after the boundary block and before the clear event is
+emitted or executes:
+
+- opening clear: the boundary block arms the new frame, then the hook captures
+  event 0 and the clear record carries the checkpoint;
+- closing clear: the boundary block finalizes the armed frame, the hook sees
+  the capture disarmed, and no readback is performed; a selected closing event
+  remains `default_checkpoint_missed`, and the `default_checkpoint_unattached`
+  guard is retained for any other unattached blob;
+- normal clear, draw, copy and scene-boundary behavior are unchanged.
+
+The test-only boundary model uses the default framebuffer without a GL context;
+production still queries the real draw framebuffer. The authentic event-142
+experiment used `--boundary scene` (`boundary_fb = -1`), so the boundary block
+was skipped and the historical checkpoint data is unchanged.
 
 ## Authentic experiment
 
@@ -190,11 +220,31 @@ Focused and dependent suites (via `automation.test_runner`):
 
 | Run | Modules | Result |
 | --- | --- | --- |
-| `20261118T091236Z-7c65b1bd` | `test_gfx_frame_trace_writer`, `test_gfx_frame_graph`, `test_m7_diagnosis`, `test_m6_frame` | 213 tests, passed, 8.4 s |
+| `20261118T093457Z-7e9eed2a` | `test_gfx_frame_trace_writer` (post-fix) | 48 tests, passed, 0.7 s |
+| `20261118T093503Z-6f13babb` | `test_gfx_frame_graph`, `test_m6_frame`, `test_m7_diagnosis` (post-fix) | 169 tests, passed, 7.4 s |
 | `20261118T084857Z-7d0a57c3` | `test_gfx_replay_case_sequence` | 55 tests, passed, 136.7 s |
 | `20261118T085152Z-ad0b9dff` | `test_m7_continuous_replay`, `test_m7_continuous_supervisor`, `test_m7_shadow_receipt`, `test_gfx_gl_control`, `test_gfx_replay_case` | passed, 181.7 s |
 | `20261118T090503Z-e17b7585` | `test_m7_canonical_diagnosis`, `test_m7_frame_seal`, `test_m7_frame_history` | passed, 10.2 s |
 | `20261118T090709Z-03825f5f` | `test_m7_pixel_diagnostics` | 2 tests, passed |
+
+The portable/replay rows predate the clear-entry ordering fix; that fix only
+changes the `boundary_fb` clear path, which those suites do not exercise. The
+post-fix native writer and the three directly affected modules were rerun.
+
+The native boundary regressions are:
+
+- opening boundary clear selected as event 0: complete sealed frame, clear
+  record 0 carries the checkpoint;
+- selected last recorded draw: complete sealed frame, checkpoint stays on the
+  last event when the following boundary clear closes the frame;
+- selected closing clear: explicit `default_checkpoint_missed`, no blob, no
+  sealed frame. Before the ordering fix this was `default_checkpoint_unattached`
+  with a blob for an unrecorded operation.
+
+Portable CI gate: the `.github/workflows/profiler.yml` `portable` job runs on
+the final PR head (Ubuntu, full portable `unittest discover` plus the repository
+checks). Its status is reported in the PR checks; the native macOS-only tests
+skip there as usual.
 
 The native state host prints `trace_state=1 pending=0x500 after=0x500
 reference=1 checkpoint=1`, proving the checkpoint readback preserves the FBO,
@@ -276,7 +326,12 @@ Committed evidence:
   `verified`.
 - The broad interactive full suite was not run, per the M7-P0 instruction not
   to launch the interactive EU4 test set. Focused and dependent offline suites,
-  native hosts and portable verification were run instead.
+  native hosts, the portable CI workflow and portable verification were run
+  instead.
+- Native boundary-clear coverage is single-frame. The authentic continuous run
+  uses the scene boundary, and the existing continuous tests cover that path
+  unchanged; continuous `boundary_fb` rearm is not exercised by the native
+  host.
 
 ## Next action
 
