@@ -150,5 +150,7 @@
       "Executed with EU4_TEST_PROFILE=offline and EU4_OFFLINE_ONLY=1.",
       "The 40 skips include the classified live-only module, platform-only hosts and 11 optional-QBDI TR3 tests; QBDI is not mandatory."
     ]
-  }
+  },
+  "pull_request": 212,
+  "initial_head": "f7e3e0b5655882fea9edfbb1afcc8e537e75784d"
 }

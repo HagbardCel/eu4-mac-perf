@@ -6,8 +6,9 @@ Operational commands live in [profiler and benchmark operations](reference/profi
 ## M7-P2 — reliability, compact diagnostics and efficiency (2026-11-18)
 
 P0 (PR #210) and P1 (PR #211) are merged and are the accepted P2 base. P2 is
-implemented on `m7/p2-infra-hardening` from merge `246d7e08`; its final head has
-not yet received the independent approval required before merge.
+[PR #212](https://github.com/HagbardCel/eu4-mac-perf/pull/212) on
+`m7/p2-infra-hardening` from merge `246d7e08`; its final head has not yet
+received the independent approval required before merge.
 
 **Test profiles.** `offline` is the default and cannot launch EU4: an explicit
 `EU4_TEST_PROFILE=offline` (or durable `EU4_OFFLINE_ONLY=1`) makes the

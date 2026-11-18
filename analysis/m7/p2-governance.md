@@ -1,7 +1,8 @@
 # M7-P2 — qualification and review gates
 
-Status: branch protection is enabled on `main`. The P2 implementation branch
-still requires a fresh independent approval of its final head before merge.
+Status: branch protection is enabled on `main`. P2 is
+[PR #212](https://github.com/HagbardCel/eu4-mac-perf/pull/212); it still requires
+a fresh independent approval of its final head before merge.
 
 ## Enforced on `main`
 
