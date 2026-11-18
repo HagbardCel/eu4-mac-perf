@@ -177,7 +177,7 @@ class SequenceFixture:
 
     def frame(self, index: int, events: list[dict], reference: bytes, *,
               previous: Path | None = None, render_targets=(),
-              carried=(), lifecycle=()) -> Path:
+              carried=(), lifecycle=(), checkpoint=None) -> Path:
         frame = self.base / "frames" / f"frame-{index:04d}"
         (frame / "blobs").mkdir(parents=True)
         (frame / "blobs" / "v.metal").write_bytes(b"vertex")
@@ -210,6 +210,18 @@ class SequenceFixture:
                         "pixel_format": "RGB8", "sha256": sha(bytes(64)),
                         "file": "tex500.bin",
                     }]
+        if checkpoint is not None:
+            event_index, payload = checkpoint
+            checkpoint_name = "default-checkpoint-test.bin"
+            (frame / "blobs" / checkpoint_name).write_bytes(payload)
+            events[event_index]["default_checkpoint"] = {
+                "schema": "gfx-default-framebuffer-checkpoint/v1",
+                "event": event_index, "target": "0", "resource": "fb:0",
+                "width": WIDTH, "height": HEIGHT, "bytes": len(payload),
+                "file": checkpoint_name, "sha256": sha(payload),
+                "pixel_format": "BGRA8", "origin": "lower_left",
+                "timing": "pre_event", "status": "captured",
+            }
         (frame / "frame-events.jsonl").write_text(
             "\n".join(json.dumps(event) for event in events) + "\n")
         (frame / "frame-reference.bgra").write_bytes(reference)
@@ -277,6 +289,26 @@ class SequenceFixture:
         self.frame(4, [draw(2, target(), textures=[sampled])],
                    expected_image(), previous=self.frames[-1],
                    carried=("500",))
+        return self.frames
+
+    def build_with_checkpoint(self):
+        """The same four-frame sequence with one selected fb:0 checkpoint."""
+        black = bytes([0, 0, 0, 255]) * (WIDTH * HEIGHT)
+        self.frame(1, [draw(3, target())], black)
+        self.frame(2, [draw(1, target("500")), draw(3, target())], black,
+                   previous=self.frames[-1], render_targets=("500",))
+        self.frame(3, [draw(3, target())], black,
+                   previous=self.frames[-1], carried=("500",))
+        sampled = {
+            "name": 500, "sampler_name": "tex0", "unit": 0,
+            "width": WIDTH, "height": HEIGHT, "internal_format": "RGB8",
+            "levels": [],
+        }
+        self.frame(4, [draw(2, target(), textures=[sampled])],
+                   expected_image(), previous=self.frames[-1],
+                   carried=("500",),
+                   checkpoint=(0, bytes([0, 0, 0, 255]) *
+                               (WIDTH * HEIGHT)))
         return self.frames
 
     def build_transitive(self):
@@ -698,6 +730,33 @@ class PortableSequenceCaseTests(unittest.TestCase):
         # specific operation for this controlled fault; do not invent one.
         self.assertIsNone(
             fault["reproduction"]["earliest_affected_operation"])
+
+    def test_selected_default_checkpoint_is_preserved_in_the_portable_case(self):
+        self.fixture = SequenceFixture(
+            self.base / (self.id().split(".")[-1] + "-checkpoint"),
+            self.host)
+        self.frames = self.fixture.build_with_checkpoint()
+        self.shaders = self.fixture.shaders
+        out, diagnosis = self.baseline()
+        self.assertEqual(diagnosis["checkpoint_validation"]["status"], "ok",
+                         diagnosis["checkpoint_validation"])
+        self.assertTrue(any(
+            item.get("event") == 0 and str(item.get("target")) == "0"
+            for item in diagnosis["checkpoints"]), diagnosis["checkpoints"])
+        case, _ = self.package(out, diagnosis)
+        # The minimal prefix excludes frame 1, so original frame 4 is case
+        # frame 3.
+        request = json.loads(
+            (case / "checkpoints" / "frame-003" /
+             "checkpoint-request.json").read_text())
+        item = next(item for item in request["checkpoints"]
+                    if item["event"] == 0 and item["target"] == "0")
+        blob = case / "frames" / "000003" / "blobs" / item["reference_file"]
+        self.assertTrue(blob.is_file())
+        self.assertEqual(sha(blob.read_bytes()), item["reference_sha256"])
+        self.assertEqual(item["resource"], "fb:0")
+        verified = gfx_replay_case.verify(case)
+        self.assertTrue(verified["ok"], verified["problems"])
 
     def test_minimal_prefix_preserves_source_receipts_and_verifies(self):
         out, diagnosis = self.baseline()

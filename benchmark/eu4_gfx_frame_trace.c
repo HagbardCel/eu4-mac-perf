@@ -82,6 +82,10 @@ static void load_sampler_queries(void) {
 #define FTRACE_MAX_LIFECYCLE 64
 #define FTRACE_MAX_TEX_BYTES (256u * 1024u * 1024u)
 #define FTRACE_MAX_BLOB_BYTES (512u * 1024u * 1024u)
+/* One selected pre-operation framebuffer checkpoint is bounded by the same
+   maximum drawable extent the readback itself enforces (8192x8192 BGRA8). */
+#define FTRACE_MAX_CHECKPOINT_BYTES (256u * 1024u * 1024u)
+#define FTRACE_CHECKPOINT_MAX_NS (10ull * 1000ull * 1000ull * 1000ull)
 #define FTRACE_NAME 96
 
 #define GL_TEXTURE_MAX_ANISOTROPY 0x84FE
@@ -175,6 +179,15 @@ static struct {
     size_t reference_bytes;
     uint32_t reference_width;
     uint32_t reference_height;
+
+    /* Exactly one opt-in default-framebuffer checkpoint, captured immediately
+       before the selected event executes.  -1 means the feature is disabled
+       and no additional GPU readback is performed. */
+    int checkpoint_event;
+    int checkpoint_captured;
+    uint64_t checkpoint_ns;
+    char checkpoint_file[FTRACE_NAME];
+    char checkpoint_json[768];
 
     char gl_vendor[256];
     char gl_renderer[256];
@@ -615,6 +628,10 @@ static void finish_capture_ex(const char *reason, int allow_reference);
 static int capture_timed_out_locked(void);
 static void continuous_write_campaign(const char *status,
                                       const char *reason);
+static int maybe_capture_default_checkpoint_locked(void);
+static int capture_default_checkpoint_pixels_locked(const uint8_t *pixels,
+                                                    uint32_t width,
+                                                    uint32_t height);
 
 static void fail_capture_locked(const char *reason) {
     g.capture_failed = 1;
@@ -687,6 +704,12 @@ int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event) {
         pthread_mutex_unlock(&g_lock);
         return 0;
     }
+    /* The copy interposer calls this function before the real GL copy, so this
+       is the selected event's pre-execution observation boundary. */
+    if (maybe_capture_default_checkpoint_locked() < 0) {
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
     int destination_width = event->destination_width;
     int destination_height = event->destination_height;
     int internal_format = event->destination_internal_format;
@@ -705,6 +728,11 @@ int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event) {
         internal_format = queried_format;
     }
     char source_image[512] = "";
+    char checkpoint_image[800] = "";
+    if (g.checkpoint_json[0] != 0) {
+        snprintf(checkpoint_image, sizeof(checkpoint_image),
+                 ",\"default_checkpoint\":%s", g.checkpoint_json);
+    }
     if (g.armed && event->source_framebuffer == 0) {
         const char *capture_source = getenv(
             "EU4_GFX_FRAME_TRACE_CAPTURE_COPY_SOURCE");
@@ -760,7 +788,7 @@ int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event) {
         "\"destination_offset\":[%d,%d],\"width\":%d,\"height\":%d,"
         "\"destination_width\":%d,\"destination_height\":%d,"
         "\"internal_format\":%d,\"sequence\":%llu,\"pid\":%d,"
-        "\"scene\":%d,\"present\":%d,\"captured_frame\":%d%s}",
+        "\"scene\":%d,\"present\":%d,\"captured_frame\":%d%s%s}",
         event->is_blit ? "glBlitFramebuffer" : "glCopyTexSubImage2D",
         bool_text(event->is_blit), event->source_framebuffer,
         event->read_buffer, event->draw_buffer, event->double_buffered,
@@ -774,13 +802,15 @@ int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event) {
         event->width, event->height, event->dx, event->dy,
         event->width, event->height, destination_width, destination_height,
         internal_format, (unsigned long long)++g.timeline_seq, (int)getpid(),
-        g.scene_index, g.present_index, g.capturing_frame, source_image);
+        g.scene_index, g.present_index, g.capturing_frame, source_image,
+        checkpoint_image);
     if (length <= 0 || (size_t)length >= sizeof body) {
         fail_capture_locked("copy_event_oversized");
     } else if (emit_event(body)) {
         g.event_count++;
         g.copy_events++;
         accepted = 1;
+        g.checkpoint_json[0] = 0;
     }
     pthread_mutex_unlock(&g_lock);
     return accepted;
@@ -1155,6 +1185,7 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
     memcpy(g.session_id, preserved_session_id, sizeof(g.session_id));
     g.at_frame = UINT64_MAX;
     g.boundary_fb = -1;
+    g.checkpoint_event = -1;
     const char *dir = getenv("EU4_GFX_FRAME_TRACE_DIR");
     const char *boundary_fb = getenv("EU4_GFX_FRAME_TRACE_BOUNDARY_FB");
     const char *boundary = getenv("EU4_GFX_FRAME_TRACE_BOUNDARY");
@@ -1167,6 +1198,8 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
     const char *after_ms = getenv("EU4_GFX_FRAME_TRACE_AFTER_MS");
     const char *max_draws = getenv("EU4_GFX_FRAME_TRACE_MAX_DRAWS");
     const char *max_frame_draws = getenv("EU4_GFX_FRAME_TRACE_MAX_FRAME_DRAWS");
+    const char *default_checkpoint_event =
+        getenv("EU4_GFX_FRAME_TRACE_DEFAULT_CHECKPOINT_EVENT");
     const char *timeline = getenv("EU4_GFX_FRAME_TRACE_TIMELINE");
     const char *timeout_ms = getenv("EU4_GFX_FRAME_TRACE_TIMEOUT_MS");
     const char *seal = getenv("EU4_GFX_FRAME_SEAL");
@@ -1304,6 +1337,20 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
             return -1;
         }
         g.max_frame_draws = (uint32_t)value; /* 0 means unlimited */
+    }
+    if (default_checkpoint_event != NULL &&
+        default_checkpoint_event[0] != 0) {
+        uint64_t value = 0;
+        if (parse_u64(default_checkpoint_event, &value) != 0 ||
+            value > (uint64_t)INT_MAX) {
+            return -1;
+        }
+        if (value >= (uint64_t)g.max_draws) {
+            /* A selected event at or beyond the event budget can never be
+               recorded and can never be observed pre-execution. */
+            return -1;
+        }
+        g.checkpoint_event = (int)value;
     }
     if (timeout_ms != NULL) {
         uint64_t value = 0;
@@ -2890,6 +2937,12 @@ static int write_frame_manifest(int complete, const char *reason) {
     fprintf(file, "\"scene_index\":%d,",
             g.boundary_scene ? g.capturing_frame : g.scene_index);
     fprintf(file, "\"events\":%d,", g.event_count);
+    if (g.checkpoint_event < 0) {
+        fputs("\"default_checkpoint_event\":null,", file);
+    } else {
+        fprintf(file, "\"default_checkpoint_event\":%d,",
+                g.checkpoint_event);
+    }
     fprintf(file, "\"capacity_exceeded\":%s,", bool_text(g.capacity_exceeded));
     fprintf(file, "\"capacity_limit\":\"%s\",", g.capacity_limit);
     fprintf(file, "\"texture_cache\":{\"reads\":%llu,\"hits\":%llu,"
@@ -3496,6 +3549,17 @@ static void finish_capture_ex(const char *reason, int allow_reference) {
            does not claim a reference image. */
         capture_dimensions_only(&g.reference_width, &g.reference_height);
     }
+    /* A requested checkpoint that never reached a supported pre-operation
+       boundary is a capture failure, not a frame that can be qualified. */
+    if (g.checkpoint_event >= 0 && !g.checkpoint_captured) {
+        fail_capture_locked("default_checkpoint_missed");
+    }
+    /* A checkpoint captured at a boundary that finalizes before the selected
+       event record is emitted has no event to attach to.  Never publish an
+       unreferenced blob as if it belonged to the selected event. */
+    if (g.checkpoint_event >= 0 && g.checkpoint_json[0] != 0) {
+        fail_capture_locked("default_checkpoint_unattached");
+    }
     /* The manifest is published only after the event stream has been closed
        and validated.  A write/flush failure, malformed record, missing record
        or count mismatch therefore cannot produce complete=true. */
@@ -3751,6 +3815,10 @@ static void start_capture_at_frame(int next_frame) {
     g.draw_events = 0;
     g.clear_events = 0;
     g.copy_events = 0;
+    g.checkpoint_captured = 0;
+    g.checkpoint_ns = 0;
+    g.checkpoint_file[0] = 0;
+    g.checkpoint_json[0] = 0;
     g.truncated = 0;
     g.capture_failed = 0;
     g.stream_validated = 0;
@@ -3967,6 +4035,157 @@ int eu4_gfx_frame_trace_test_reference(const char *directory) {
         return -1;
     }
     return capture_reference();
+}
+
+/* Publish one already-read BGRA8 image as the additive default-framebuffer
+   checkpoint of the selected event.  The blob is content-addressed and joins
+   the ordinary blob registry, so normal trace verification and the portable
+   case inventory see it exactly like every other captured payload. */
+static int capture_default_checkpoint_pixels_locked(const uint8_t *pixels,
+                                                    uint32_t width,
+                                                    uint32_t height) {
+    if (pixels == NULL || width == 0 || height == 0 || width > 8192 ||
+        height > 8192) {
+        fail_capture_locked("default_checkpoint_dimensions");
+        return -1;
+    }
+    if ((uint64_t)width * (uint64_t)height > (uint64_t)(SIZE_MAX / 4u)) {
+        fail_capture_locked("default_checkpoint_size");
+        return -1;
+    }
+    size_t bytes = (size_t)width * (size_t)height * 4u;
+    if (bytes == 0 || bytes / 4u / width != height ||
+        bytes > (size_t)FTRACE_MAX_CHECKPOINT_BYTES) {
+        fail_capture_locked("default_checkpoint_size");
+        return -1;
+    }
+    char file[FTRACE_NAME];
+    char sha[65];
+    if (put_blob(pixels, bytes, "default-checkpoint", file, sha) != 0) {
+        return -1;
+    }
+    snprintf(g.checkpoint_file, sizeof(g.checkpoint_file), "%s", file);
+    snprintf(
+        g.checkpoint_json, sizeof(g.checkpoint_json),
+        "{\"schema\":\"gfx-default-framebuffer-checkpoint/v1\","
+        "\"event\":%d,\"target\":\"0\",\"resource\":\"fb:0\","
+        "\"width\":%u,\"height\":%u,\"bytes\":%zu,"
+        "\"file\":\"%s\",\"sha256\":\"%s\","
+        "\"pixel_format\":\"BGRA8\",\"origin\":\"lower_left\","
+        "\"timing\":\"pre_event\",\"status\":\"captured\","
+        "\"readback_ns\":%llu}",
+        g.checkpoint_event, width, height, bytes, file, sha,
+        (unsigned long long)g.checkpoint_ns);
+    g.checkpoint_captured = 1;
+    return 0;
+}
+
+/* Observe the default framebuffer immediately before the selected event.  This
+   runs from the draw/clear entry hooks and from the pre-execution copy event,
+   never from an exit hook, so the captured image matches Metal's pre-event
+   checkpoint semantics.  Returns 1 after a capture, 0 when this is not the
+   selected event, and -1 when the requested checkpoint could not be produced. */
+static int maybe_capture_default_checkpoint_locked(void) {
+    if (g.checkpoint_event < 0 || !g.armed || g.events == NULL) {
+        return 0;
+    }
+    if (g.event_count != g.checkpoint_event) {
+        return 0;
+    }
+    if (g.event_count >= (int)g.max_draws) {
+        fail_capture_locked("default_checkpoint_event_not_recorded");
+        return -1;
+    }
+    if (g.checkpoint_captured) {
+        fail_capture_locked("default_checkpoint_duplicate");
+        return -1;
+    }
+    uint64_t started = now_ns();
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint8_t *pixels = NULL;
+    if (g.test_only) {
+        /* The offline writer host has no GL context.  It still exercises the
+           production blob/metadata/finalize path with a bounded synthetic
+           image; the real readback below is shared with the final reference. */
+        width = 4;
+        height = 4;
+        pixels = malloc((size_t)width * height * 4u);
+        if (pixels != NULL) {
+            for (size_t i = 0; i < (size_t)width * height * 4u; i++) {
+                pixels[i] = (uint8_t)(i * 37u);
+            }
+        }
+    } else if (read_drawable_bgra(&width, &height, &pixels) != 0) {
+        free(pixels);
+        fail_capture_locked("default_checkpoint_read");
+        return -1;
+    }
+    if (pixels == NULL) {
+        fail_capture_locked("default_checkpoint_read");
+        return -1;
+    }
+    g.checkpoint_ns = now_ns() - started;
+    int result =
+        capture_default_checkpoint_pixels_locked(pixels, width, height);
+    free(pixels);
+    if (result == 0 && g.checkpoint_ns > FTRACE_CHECKPOINT_MAX_NS) {
+        fail_capture_locked("default_checkpoint_time");
+        return -1;
+    }
+    return result == 0 ? 1 : -1;
+}
+
+/* Host-test only: run the production readback/writer for one selected event,
+   without an event stream, so the GL state-restoration host can assert that
+   the real readback left the driver state untouched. */
+int eu4_gfx_frame_trace_test_checkpoint(const char *directory, int event,
+                                        char *out_file, size_t out_size) {
+    if (directory == NULL || directory[0] != '/' || event < 0) {
+        return -1;
+    }
+    snprintf(g.dir, sizeof(g.dir), "%s", directory);
+    if (mkdir_p(g.dir) != 0) {
+        return -1;
+    }
+    char blobs[FTRACE_PATH];
+    snprintf(blobs, sizeof(blobs), "%s/blobs", g.dir);
+    if (mkdir_p(blobs) != 0) {
+        return -1;
+    }
+    g.checkpoint_event = event;
+    g.checkpoint_captured = 0;
+    g.checkpoint_file[0] = 0;
+    g.checkpoint_json[0] = 0;
+    uint64_t started = now_ns();
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint8_t *pixels = NULL;
+    if (read_drawable_bgra(&width, &height, &pixels) != 0) {
+        free(pixels);
+        return -1;
+    }
+    g.checkpoint_ns = now_ns() - started;
+    int result =
+        capture_default_checkpoint_pixels_locked(pixels, width, height);
+    free(pixels);
+    if (result != 0) {
+        return -1;
+    }
+    if (out_file != NULL && out_size > 0) {
+        snprintf(out_file, out_size, "%s", g.checkpoint_file);
+    }
+    return 0;
+}
+
+/* Host-test only: invoke the selected-event hook directly so the duplicate
+   guard can be exercised before the draw/clear/copy boundary runs it. */
+int eu4_gfx_frame_trace_test_checkpoint_hook(void) {
+    return maybe_capture_default_checkpoint_locked();
+}
+
+int eu4_gfx_frame_trace_test_checkpoint_captured(void) {
+    return g.checkpoint_captured;
 }
 
 void eu4_gfx_frame_trace_boundary_entry(eu4_gfx_capture_frame *frame,
@@ -4284,7 +4503,11 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
     }
     if (g.boundary_fb >= 0) {
         GLint draw_framebuffer = 0;
-        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_framebuffer);
+        if (!g.test_only) {
+            glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_framebuffer);
+        }
+        /* The offline writer host has no GL context.  Its boundary model is
+           the default framebuffer; production keeps the real query above. */
         if (draw_framebuffer == g.boundary_fb) {
             if (g.armed) {
                 finish_capture("boundary_clear");
@@ -4302,6 +4525,18 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
             frame_reset();
         }
     }
+    /* Observe the selected clear only after boundary handling has decided
+       whether this clear opens, continues or closes the capture.  An opening
+       boundary clear arms the frame above, so the selected event is then event
+       0 of the new frame.  A closing clear has already finalized that frame
+       and is not recorded, so it must not trigger a readback.  The clear
+       itself still executes before the event record is emitted, matching the
+       Metal pre-event checkpoint semantics. */
+    if (maybe_capture_default_checkpoint_locked() < 0) {
+        pthread_mutex_unlock(&g_lock);
+        eu4_gfx_frame_sealed_dispatch();
+        return;
+    }
     if (g.armed && g.events != NULL && g.event_count >= (int)g.max_draws) {
         g.truncated = 1;
     }
@@ -4309,15 +4544,18 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
         g.event_count < (int)g.max_draws) {
         /* The offline writer host has no GL context; keep the ordered stream
            shape without querying the driver. */
-        char body[192];
+        char body[1024];
         int length = snprintf(
             body, sizeof body,
             "{\"kind\":\"clear\",\"before_first_draw\":%s,\"flags\":%d,"
-            "\"test\":true}",
-            bool_text(g.event_count == 0), (int)frame->rsi);
+            "\"test\":true%s%s}",
+            bool_text(g.event_count == 0), (int)frame->rsi,
+            g.checkpoint_json[0] != 0 ? ",\"default_checkpoint\":" : "",
+            g.checkpoint_json);
         if (length > 0 && (size_t)length < sizeof body && emit_event(body)) {
             g.event_count++;
             g.clear_events++;
+            g.checkpoint_json[0] = 0;
         }
         pthread_mutex_unlock(&g_lock);
         eu4_gfx_frame_sealed_dispatch();
@@ -4347,12 +4585,17 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
                     (double)color[0], (double)color[1], (double)color[2],
                     (double)color[3], (double)depth, stencil);
             capture_target(&out, NULL, NULL);
+            if (g.checkpoint_json[0] != 0) {
+                jprintf(&out, ",\"default_checkpoint\":%s",
+                        g.checkpoint_json);
+            }
             jprintf(&out, "}");
             fclose(memory);
             if (!out.failed && buffer != NULL) {
                 emit_event(buffer);
                 g.event_count++;
                 g.clear_events++;
+                g.checkpoint_json[0] = 0;
             } else {
                 g.capture_failed = 1;
             }
@@ -4381,6 +4624,13 @@ static void draw_entry_common(eu4_gfx_capture_frame *frame,
     }
     pthread_mutex_lock(&g_lock);
     if (capture_timed_out_locked()) {
+        pthread_mutex_unlock(&g_lock);
+        eu4_gfx_frame_sealed_dispatch();
+        return;
+    }
+    /* Draw records are emitted on exit; the checkpoint must observe the
+       framebuffer before the selected draw executes, so it belongs here. */
+    if (maybe_capture_default_checkpoint_locked() < 0) {
         pthread_mutex_unlock(&g_lock);
         eu4_gfx_frame_sealed_dispatch();
         return;
@@ -4514,16 +4764,20 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
             if (g.event_count >= (int)g.max_draws) {
                 g.truncated = 1;
             } else {
-                char body[256];
+                char body[1024];
                 int length = snprintf(
                     body, sizeof body,
                     "{\"kind\":\"draw\",\"index\":%d,\"test\":true,"
-                    "\"draw\":{\"entry\":\"_GfxDraw\",\"caller_rva\":\"0x%llx\"}}",
-                    g.event_count, (unsigned long long)call->caller_rva);
+                    "\"draw\":{\"entry\":\"_GfxDraw\",\"caller_rva\":\"0x%llx\"}%s%s}",
+                    g.event_count, (unsigned long long)call->caller_rva,
+                    g.checkpoint_json[0] != 0 ? ",\"default_checkpoint\":"
+                                              : "",
+                    g.checkpoint_json);
                 if (length > 0 && (size_t)length < sizeof body &&
                     emit_event(body)) {
                     g.event_count++;
                     g.draw_events++;
+                    g.checkpoint_json[0] = 0;
                 }
             }
         }
@@ -4541,6 +4795,10 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
         if (memory != NULL) {
             json_out out = {memory, 0};
             jprintf(&out, "{\"kind\":\"draw\",\"index\":%d", g.event_count);
+            if (g.checkpoint_json[0] != 0) {
+                jprintf(&out, ",\"default_checkpoint\":%s",
+                        g.checkpoint_json);
+            }
             if (!g.seed_emitted && g.seed_json[0] != 0) {
                 const char *seed = g.seed_json;
                 size_t length = strlen(seed);
@@ -4576,6 +4834,7 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
                 emit_event(buffer);
                 g.event_count++;
                 g.draw_events++;
+                g.checkpoint_json[0] = 0;
             } else {
                 fail_capture_locked(g_capture_failure_reason != NULL
                                         ? g_capture_failure_reason

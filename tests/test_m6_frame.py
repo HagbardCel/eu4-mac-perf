@@ -1464,3 +1464,21 @@ class CaptureBudgetTests(unittest.TestCase):
             ["capture", "--output", "/tmp/frame-capture"])
         self.assertGreaterEqual(args.max_draws, 384)
         self.assertEqual(args.max_draws, 512)
+
+    def test_default_checkpoint_option_is_opt_in(self):
+        args = m6_frame._parser().parse_args(
+            ["capture", "--output", "/tmp/frame-capture"])
+        self.assertIsNone(args.default_checkpoint_event)
+        args = m6_frame._parser().parse_args(
+            ["capture", "--output", "/tmp/frame-capture",
+             "--default-checkpoint-event", "142"])
+        self.assertEqual(args.default_checkpoint_event, 142)
+
+    def test_default_checkpoint_selection_is_validated(self):
+        self.assertIsNone(m6_frame.checkpoint_selection_error(142, 512))
+        self.assertIn("non-negative",
+                      m6_frame.checkpoint_selection_error(-1, 512))
+        self.assertIn("below",
+                      m6_frame.checkpoint_selection_error(512, 512))
+        self.assertIn("below",
+                      m6_frame.checkpoint_selection_error(513, 512))

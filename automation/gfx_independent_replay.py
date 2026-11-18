@@ -1084,6 +1084,62 @@ def first_divergence(graph: dict, checkpoints: list[dict],
                                     if source_previous is not None
                                     else "unbounded"),
                 }
+        elif str(divergent_resource) == "fb:0":
+            # The captured default-framebuffer checkpoint before a draw or
+            # clear already differs.  The only valid lower bound is an earlier
+            # matching fb:0 observation; never manufacture one from another
+            # resource.
+            if previous is not None and previous + 1 >= int(event):
+                limitations.append(
+                    "the default framebuffer matched immediately before the "
+                    "divergent checkpoint; no interior checkpoint remains")
+                recommended_action = {
+                    "action": "investigate_event",
+                    "event": previous,
+                    "observation_event": int(event),
+                    "target": first.get("target"),
+                    "resource": first.get("resource"),
+                    "reason": (
+                        "the last matching default-framebuffer checkpoint is "
+                        "immediately before the divergence; checkpoints "
+                        "observe state before their event, so operation "
+                        f"{previous} is the candidate and event {event} only "
+                        "observes the result"),
+                }
+            elif previous is None and int(event) == 0:
+                limitations.append(
+                    "the default framebuffer is already divergent at event 0; "
+                    "no earlier captured operation exists to bisect")
+                recommended_action = {
+                    "action": "investigate_initial_state",
+                    "event": 0,
+                    "observation_event": 0,
+                    "target": first.get("target"),
+                    "resource": first.get("resource"),
+                    "reason": (
+                        "the default framebuffer is already divergent at the "
+                        "first captured event; inspect the initial state "
+                        "rather than recapturing event 0"),
+                }
+            else:
+                midpoint = ((int(event) // 2) if previous is None else
+                            max(int(previous) + 1,
+                                (int(previous) + int(event)) // 2))
+                next_checkpoint = {
+                    "event": midpoint,
+                    "target": "0",
+                    "resource": "fb:0",
+                    "requires_capture": True,
+                    "reason": (
+                        "the default framebuffer differs at the first "
+                        "divergent checkpoint; capture an fb:0 checkpoint "
+                        "near the midpoint of the unresolved interval to "
+                        "bisect the origin"),
+                    "interval": [previous if previous is not None else 0,
+                                 int(event)],
+                    "lower_bound": ("same_resource_match"
+                                    if previous is not None else "unbounded"),
+                }
         elif copy_case and producer:
             if source_status == "match":
                 limitations.append(

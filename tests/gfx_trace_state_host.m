@@ -199,6 +199,13 @@ int main(int argc, char **argv) {
     if (eu4_gfx_frame_trace_test_reference(argv[1]) != 0) {
         ok = 0;
     }
+    /* The selected-event checkpoint uses the same readback contract.  It must
+       preserve the same state and must not drain the pending error. */
+    char checkpoint_file[256] = "";
+    if (eu4_gfx_frame_trace_test_checkpoint(
+            argv[1], 142, checkpoint_file, sizeof(checkpoint_file)) != 0) {
+        ok = 0;
+    }
     int after = glGetError();
     if (after != pending) {
         ok = 0;
@@ -244,7 +251,31 @@ int main(int argc, char **argv) {
     if (!reference_ok) {
         ok = 0;
     }
-    printf("trace_state=%d pending=0x%x after=0x%x reference=%d\n", ok,
-           pending, after, reference_ok);
+
+    char checkpoint_path[1024];
+    snprintf(checkpoint_path, sizeof(checkpoint_path), "%s/blobs/%s", argv[1],
+             checkpoint_file);
+    FILE *checkpoint = checkpoint_file[0] != 0 ? fopen(checkpoint_path, "rb")
+                                               : NULL;
+    int checkpoint_ok = 0;
+    if (checkpoint != NULL) {
+        uint8_t pixels[4 * 4 * 4];
+        size_t got = fread(pixels, 1, sizeof(pixels), checkpoint);
+        int extra = fgetc(checkpoint);
+        fclose(checkpoint);
+        checkpoint_ok = got == sizeof(pixels) && extra == EOF;
+        for (size_t i = 0; checkpoint_ok && i < 16; i++) {
+            const uint8_t expected[4] = {191, 128, 64, 255};
+            if (memcmp(pixels + i * 4, expected, 4) != 0) {
+                checkpoint_ok = 0;
+            }
+        }
+    }
+    if (!checkpoint_ok) {
+        ok = 0;
+    }
+    printf("trace_state=%d pending=0x%x after=0x%x reference=%d "
+           "checkpoint=%d\n",
+           ok, pending, after, reference_ok, checkpoint_ok);
     return ok ? 0 : 1;
 }

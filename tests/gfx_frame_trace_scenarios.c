@@ -122,6 +122,7 @@ static void reset_env(void) {
     unsetenv("EU4_GFX_FRAME_TRACE_MAX_FRAMES");
     unsetenv("EU4_GFX_FRAME_TRACE_MAX_PENDING");
     unsetenv("EU4_GFX_FRAME_TRACE_MAX_BYTES");
+    unsetenv("EU4_GFX_FRAME_TRACE_DEFAULT_CHECKPOINT_EVENT");
 }
 
 static int configure(const char *directory) {
@@ -361,6 +362,174 @@ static void clear_one(void) {
     eu4_gfx_frame_trace_clear_exit(&frame, &call, NULL);
 }
 
+
+static int configure_checkpoint(const char *directory, const char *event) {
+    reset_env();
+    setenv("EU4_GFX_FRAME_TRACE_DIR", directory, 1);
+    setenv("EU4_GFX_FRAME_TRACE_TEST_ONLY", "1", 1);
+    setenv("EU4_GFX_FRAME_TRACE_DEFAULT_CHECKPOINT_EVENT", event, 1);
+    return eu4_gfx_frame_trace_configure_from_env();
+}
+
+/* The selected checkpoint is captured on entry, before the draw record (which
+   is emitted on exit) and before the draw itself. */
+static int scenario_checkpoint_draw(const char *directory) {
+    if (configure_checkpoint(directory, "1") <= 0) {
+        return 2;
+    }
+    arm_via_present();
+    draw(true, 0x1000);
+    draw(false, 0x1000);
+    if (eu4_gfx_frame_trace_test_checkpoint_captured()) {
+        return 4;
+    }
+    draw(true, 0x1000);
+    if (!eu4_gfx_frame_trace_test_checkpoint_captured()) {
+        return 5;
+    }
+    draw(false, 0x1000);
+    finish_via_present();
+    return 0;
+}
+
+static int scenario_checkpoint_clear(const char *directory) {
+    if (configure_checkpoint(directory, "1") <= 0) {
+        return 2;
+    }
+    arm_via_present();
+    draw(true, 0x1000);
+    draw(false, 0x1000);
+    if (eu4_gfx_frame_trace_test_checkpoint_captured()) {
+        return 4;
+    }
+    clear_one();
+    if (!eu4_gfx_frame_trace_test_checkpoint_captured()) {
+        return 5;
+    }
+    finish_via_present();
+    return 0;
+}
+
+static int scenario_checkpoint_copy(const char *directory) {
+    if (configure_checkpoint(directory, "1") <= 0) {
+        return 2;
+    }
+    arm_via_present();
+    draw(true, 0x1000);
+    draw(false, 0x1000);
+    if (eu4_gfx_frame_trace_test_checkpoint_captured()) {
+        return 4;
+    }
+    valid_copy(442);
+    if (!eu4_gfx_frame_trace_test_checkpoint_captured()) {
+        return 5;
+    }
+    finish_via_present();
+    return 0;
+}
+
+static int scenario_checkpoint_missed(const char *directory) {
+    if (configure_checkpoint(directory, "5") <= 0) {
+        return 2;
+    }
+    arm_via_present();
+    draw(true, 0x1000);
+    draw(false, 0x1000);
+    finish_via_present();
+    return 0;
+}
+
+static int scenario_checkpoint_duplicate(const char *directory) {
+    if (configure_checkpoint(directory, "0") <= 0) {
+        return 2;
+    }
+    arm_via_present();
+    if (eu4_gfx_frame_trace_test_checkpoint_hook() != 1) {
+        return 4;
+    }
+    draw(true, 0x1000);
+    draw(false, 0x1000);
+    finish_via_present();
+    return 0;
+}
+
+/* The boundary-clear capture is armed by one clear of the configured
+   framebuffer and finalized by the next one.  The pre-draw satisfies min_draws
+   before the opening clear; it is not part of the captured event stream. */
+static int setup_boundary_checkpoint(const char *directory, const char *event) {
+    reset_env();
+    setenv("EU4_GFX_FRAME_TRACE_DIR", directory, 1);
+    setenv("EU4_GFX_FRAME_TRACE_TEST_ONLY", "1", 1);
+    setenv("EU4_GFX_FRAME_SEAL", "1", 1);
+    setenv("EU4_GFX_FRAME_TRACE_BOUNDARY_FB", "0", 1);
+    setenv("EU4_GFX_FRAME_TRACE_MIN_DRAWS", "1", 1);
+    setenv("EU4_GFX_FRAME_TRACE_DEFAULT_CHECKPOINT_EVENT", event, 1);
+    return eu4_gfx_frame_trace_configure_from_env();
+}
+
+static void pre_draw_for_selection(void) {
+    draw(true, 0x1000);
+    draw(false, 0x1000);
+}
+
+static int scenario_checkpoint_opening_clear(const char *directory) {
+    if (setup_boundary_checkpoint(directory, "0") <= 0) {
+        return 2;
+    }
+    pre_draw_for_selection();
+    /* This clear opens the capture; the selected event is the clear itself and
+       must be observed as event 0, after the frame has been armed. */
+    clear_one();
+    if (!eu4_gfx_frame_trace_test_checkpoint_captured()) {
+        return 4;
+    }
+    draw(true, 0x1000);
+    draw(false, 0x1000);
+    /* This clear closes the capture and is not recorded. */
+    clear_one();
+    return 0;
+}
+
+static int scenario_checkpoint_closing_clear(const char *directory) {
+    if (setup_boundary_checkpoint(directory, "1") <= 0) {
+        return 2;
+    }
+    pre_draw_for_selection();
+    clear_one(); /* opening clear, event 0 */
+    draw(true, 0x1000);
+    draw(false, 0x1000); /* last recorded event, selected here */
+    if (!eu4_gfx_frame_trace_test_checkpoint_captured()) {
+        return 4;
+    }
+    clear_one(); /* closing clear finalizes the frame, no event 2 */
+    return 0;
+}
+
+static int scenario_checkpoint_closing_clear_selected(const char *directory) {
+    if (setup_boundary_checkpoint(directory, "2") <= 0) {
+        return 2;
+    }
+    pre_draw_for_selection();
+    clear_one(); /* opening clear, event 0 */
+    draw(true, 0x1000);
+    draw(false, 0x1000); /* event 1 */
+    if (eu4_gfx_frame_trace_test_checkpoint_captured()) {
+        return 4;
+    }
+    clear_one(); /* closing clear would be event 2 but is not recorded */
+    return 0;
+}
+
+static int scenario_checkpoint_out_of_range(const char *directory) {
+    reset_env();
+    setenv("EU4_GFX_FRAME_TRACE_DIR", directory, 1);
+    setenv("EU4_GFX_FRAME_TRACE_TEST_ONLY", "1", 1);
+    setenv("EU4_GFX_FRAME_TRACE_MAX_DRAWS", "4", 1);
+    setenv("EU4_GFX_FRAME_TRACE_DEFAULT_CHECKPOINT_EVENT", "4", 1);
+    int configured = eu4_gfx_frame_trace_configure_from_env();
+    printf("configure_rejected=%d\n", configured);
+    return configured < 0 ? 0 : 4;
+}
 
 static int scenario_continuous(const char *directory, int max_frames,
                                int max_bytes) {
@@ -814,6 +983,33 @@ int main(int argc, char **argv) {
     }
     if (strcmp(scenario, "copy-valid") == 0) {
         return scenario_copy(directory, 0);
+    }
+    if (strcmp(scenario, "checkpoint-draw") == 0) {
+        return scenario_checkpoint_draw(directory);
+    }
+    if (strcmp(scenario, "checkpoint-clear") == 0) {
+        return scenario_checkpoint_clear(directory);
+    }
+    if (strcmp(scenario, "checkpoint-copy") == 0) {
+        return scenario_checkpoint_copy(directory);
+    }
+    if (strcmp(scenario, "checkpoint-missed") == 0) {
+        return scenario_checkpoint_missed(directory);
+    }
+    if (strcmp(scenario, "checkpoint-duplicate") == 0) {
+        return scenario_checkpoint_duplicate(directory);
+    }
+    if (strcmp(scenario, "checkpoint-opening-clear") == 0) {
+        return scenario_checkpoint_opening_clear(directory);
+    }
+    if (strcmp(scenario, "checkpoint-closing-clear") == 0) {
+        return scenario_checkpoint_closing_clear(directory);
+    }
+    if (strcmp(scenario, "checkpoint-closing-clear-selected") == 0) {
+        return scenario_checkpoint_closing_clear_selected(directory);
+    }
+    if (strcmp(scenario, "checkpoint-out-of-range") == 0) {
+        return scenario_checkpoint_out_of_range(directory);
     }
     if (strcmp(scenario, "flush-fail") == 0) {
         return scenario_flush_fail(directory);

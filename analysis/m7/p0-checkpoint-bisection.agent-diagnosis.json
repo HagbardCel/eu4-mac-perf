@@ -1,0 +1,248 @@
+{
+  "schema": "gfx-agent-diagnosis/v1",
+  "classification": "difference_with_partial_state_coverage",
+  "qualified": false,
+  "axes": {
+    "capture_validity": "valid",
+    "frame_shader_identity": "verified",
+    "gpu_execution": "ok",
+    "resource_provenance": "verified",
+    "operation_coverage": "complete",
+    "rendering_state_coverage": "partial",
+    "pixel_comparison": "divergent",
+    "first_divergence_confidence": "intermediate"
+  },
+  "frame": {
+    "capture_frame_id": 1,
+    "present_index": 617,
+    "scene_index": 617,
+    "events": 325,
+    "sealed": true
+  },
+  "execution": {
+    "status": "ok",
+    "events": 325,
+    "encoded": 325,
+    "failed": 0,
+    "command_status": 4,
+    "stage": "complete",
+    "error": null
+  },
+  "first_divergence": {
+    "kind": "intermediate",
+    "event": 142,
+    "target": "0",
+    "resource": "fb:0",
+    "operation": "draw",
+    "entry": "_GfxDrawIndexed",
+    "caller_rva": "0x10ce96e",
+    "program": 331,
+    "producer_event": 141,
+    "producer_program": 331,
+    "producer_entry": "_GfxDrawIndexed",
+    "producer_caller_rva": "0x10ce96e",
+    "confidence": "confirmed",
+    "root_cause": "not_established",
+    "reason": "the earliest authoritative intermediate checkpoint differs; its inputs are not necessarily the cause",
+    "pixel_location": {
+      "x": 360,
+      "y": 0,
+      "offset": 360
+    },
+    "differing_bounds": {
+      "x": 0,
+      "y": 0,
+      "width": 1728,
+      "height": 1117
+    },
+    "unresolved_interval": {
+      "start_event": null,
+      "end_event": 142,
+      "lower_bound": "unbounded",
+      "search_start_event": 0,
+      "note": "the first confirmed divergent checkpoint; the lower bound is the last matching checkpoint for the same resource when one exists, otherwise it is unbounded. Event 0 is only an operational search start, not observed matching evidence"
+    },
+    "next_checkpoint": {
+      "event": 71,
+      "target": "0",
+      "resource": "fb:0",
+      "requires_capture": true,
+      "reason": "the default framebuffer differs at the first divergent checkpoint; capture an fb:0 checkpoint near the midpoint of the unresolved interval to bisect the origin",
+      "interval": [
+        0,
+        142
+      ],
+      "lower_bound": "unbounded"
+    },
+    "suggested_checkpoint": null,
+    "recommended_action": null,
+    "unsupported_state": [
+      "gl_dither",
+      "multisample"
+    ],
+    "limitations": [
+      "the earliest observed differing event is not a proven root cause; earlier operations in the unresolved interval were not checkpointed",
+      "captured state not implemented by Metal: gl_dither, multisample; no A/B experiment attributes the difference to it"
+    ],
+    "copy_source_evidence": null,
+    "recommended_checkpoint": {
+      "event": 71,
+      "target": "0",
+      "resource": "fb:0",
+      "requires_capture": true,
+      "reason": "the default framebuffer differs at the first divergent checkpoint; capture an fb:0 checkpoint near the midpoint of the unresolved interval to bisect the origin",
+      "source": "next_checkpoint",
+      "interval": [
+        0,
+        142
+      ],
+      "lower_bound": "unbounded"
+    }
+  },
+  "inputs": [
+    {
+      "resource": "tex:2",
+      "unit": 7,
+      "sampler": "tex7"
+    },
+    {
+      "resource": "tex:384",
+      "unit": 2,
+      "sampler": "tex2"
+    },
+    {
+      "resource": "tex:387",
+      "unit": 8,
+      "sampler": "tex8"
+    },
+    {
+      "resource": "tex:382",
+      "unit": 0,
+      "sampler": "tex0"
+    },
+    {
+      "resource": "tex:369",
+      "unit": 6,
+      "sampler": "tex6"
+    },
+    {
+      "resource": "tex:374",
+      "unit": 4,
+      "sampler": "tex4"
+    },
+    {
+      "resource": "tex:371",
+      "unit": 5,
+      "sampler": "tex5"
+    },
+    {
+      "resource": "tex:383",
+      "unit": 1,
+      "sampler": "tex1"
+    },
+    {
+      "resource": "tex:431",
+      "unit": 9,
+      "sampler": "tex9"
+    },
+    {
+      "resource": "tex:385",
+      "unit": 3,
+      "sampler": "tex3"
+    }
+  ],
+  "checkpoints": [
+    {
+      "event": 11,
+      "target": "431",
+      "resource": "tex:431",
+      "status": "match",
+      "authoritative": true,
+      "mismatched_pixels": 0,
+      "max_channel_error": 0,
+      "selected_because": [
+        "first_observation"
+      ]
+    },
+    {
+      "event": 142,
+      "target": "0",
+      "resource": "fb:0",
+      "status": "divergent",
+      "authoritative": true,
+      "mismatched_pixels": 871620,
+      "max_channel_error": 103,
+      "selected_because": [
+        "first_divergent",
+        "resource_predecessor"
+      ]
+    },
+    {
+      "event": 290,
+      "target": "443",
+      "resource": "tex:443",
+      "status": "divergent",
+      "authoritative": true,
+      "mismatched_pixels": 316170,
+      "max_channel_error": 46,
+      "selected_because": [
+        "last_observation"
+      ]
+    }
+  ],
+  "checkpoint_selection": {
+    "total": 8,
+    "selected": 3,
+    "bounded": 32,
+    "eligible_for_selection": 3
+  },
+  "final": {
+    "status": "divergent",
+    "statistics": {
+      "pixels": 1930176,
+      "mismatched_pixels": 1160291,
+      "mismatched_fraction": 0.6011322283563779,
+      "alpha_different_pixels": 0,
+      "max_channel_error": 70,
+      "mean_abs_error": [
+        0.399108164,
+        0.517144551,
+        0.656033439,
+        0.0
+      ],
+      "mean_max_channel_error": 0.867346812,
+      "first_differing_pixel": {
+        "x": 0,
+        "y": 0,
+        "offset": 0
+      },
+      "differing_bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 1728,
+        "height": 1117
+      }
+    }
+  },
+  "checkpoint_validation": {
+    "status": "ok",
+    "requested": 8,
+    "returned": 8,
+    "matched": 2,
+    "diagnostic": 1,
+    "divergent": 5,
+    "invalid": 0,
+    "problems": []
+  },
+  "artifacts": {
+    "replay_json": "replay.json",
+    "provenance": "replay-provenance.jsonl",
+    "metal_frame": "metal-frame.bgra",
+    "checkpoint_request": "checkpoint-request.json",
+    "shadow_report": "shadow-report.json",
+    "shaders": "shaders",
+    "policy": "comparison-policy.json",
+    "diagnostic_report": "diagnostic-report.json"
+  },
+  "next_action": "the default framebuffer differs at the first divergent checkpoint; capture an fb:0 checkpoint near the midpoint of the unresolved interval to bisect the origin"
+}
