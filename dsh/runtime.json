@@ -9,7 +9,7 @@
     "version": "v26.13.1"
   },
   "pnpm": {
-    "version": "12.18.0"
+    "version": "12.21.0"
   },
   "required_plugins": {
     "goal": {
