@@ -34,6 +34,7 @@ review still required. No PR is merged.
   channels, missing source, missing sample, digest corruption, lifecycle
   mutation and clear.
 - The authentic frame-1 transfer control still matches 0/1,930,176; frames 2/3 are `unavailable` because the historical capture lacks copy-only lifecycle coverage. This is an explicit limitation, not a difference.
+- The internal-format table no longer mislabels enum 33327 as `RGB10_A2`; it is `GL_RG16F`, whose captured RGBA8 readback has a zero blue channel and opaque alpha. It now fails closed as `unsupported_internal_format` instead of fabricating a difference. Regression: `test_rg16f_destination_is_not_mistaken_for_rgb10_a2`.
 
 ## PR #208 — Phase D
 
@@ -136,9 +137,9 @@ remains opt-in and is not a correction.
 
 | PR | Focused result |
 | --- | --- |
-| #207 | 416 passed, 1 skipped, 0 failures |
+| #207 | 417 passed, 1 skipped, 0 failures |
 | #208 | 321 passed, 1 skipped, 0 failures |
-| #209 | 482 passed, 1 skipped, 0 failures |
+| #209 | 483 passed, 1 skipped, 0 failures |
 | plugin | 9 passed, 0 failed |
 
 The portable CI workflow must be re-run on each new head. The authentic case is
