@@ -98,16 +98,22 @@ review still required. No PR is merged.
 - A copied-destination divergence is bounded by destination observations, not
   by a source observation after the transfer. Source matches used for source
   localisation are bounded before the transfer.
+- When the source interval is unbounded, event 0 is a valid new capture
+  (event 1 recommends event 0), while a divergence already observed at event
+  0 is an initial-state investigation, not a recapture of 0.
 - Compact checkpoint selection applies the same rule: `last_matching` comes
-  from same-resource matches only, and `copy_source` selects the actual
+  from same-resource matches only, `copy_source` selects the actual
   checkpoint identity recorded in `copy_source_evidence` (including a
-  non-default `tex:N` source), not a hardcoded framebuffer target.
+  non-default `tex:N` source), and a final-only divergence retains the
+  same-resource checkpoint that establishes `unresolved_interval.start_event`.
 - Regressions: `CausalLowerBoundTests` covers unrelated texture before a
   draw-produced framebuffer divergence, a genuine same-resource match,
   final-only unrelated matches, final-only same-resource match, a
   post-transfer source match before a destination divergence, compact label
-  hygiene and non-default source selection. The authentic copy-source path
-  and its event-142 recommendation are unchanged.
+  hygiene, non-default source selection, event-zero capture for an unbounded
+  interval, event-0 initial-state handling and final-only lower-bound
+  retention. The authentic copy-source path and its event-142 recommendation
+  are unchanged.
 
 ## PR #209 — evidence, integration and readiness
 
@@ -170,8 +176,8 @@ is 142.
 | PR | Focused result |
 | --- | --- |
 | #207 | 419 passed, 1 skipped, 0 failures |
-| #208 | 330 passed, 1 skipped, 0 failures |
-| #209 | 494 passed, 1 skipped, 0 failures |
+| #208 | 333 passed, 1 skipped, 0 failures |
+| #209 | 497 passed, 1 skipped, 0 failures |
 | plugin | 9 passed, 0 failed |
 
 The portable CI workflow must be re-run on each new head. The authentic case is
