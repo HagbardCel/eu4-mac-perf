@@ -1139,6 +1139,100 @@ class CompactAgentDiagnosisTests(unittest.TestCase):
             self.assertEqual(value["schema"], "gfx-agent-diagnosis/v1")
 
 
+class CompactSourceEvidenceDigestTests(unittest.TestCase):
+    REFERENCE_SHA = "a" * 64
+    METAL_SHA = "b" * 64
+
+    def report(self, checkpoint=True):
+        if checkpoint:
+            evidence = {
+                "status": "match",
+                "reason": "the copy-source checkpoint was independently "
+                          "observed to match",
+                "event": 284,
+                "target": "0",
+                "checkpoint": {
+                    "event": 284,
+                    "target": "0",
+                    "resource": "fb:0",
+                    "status": "match",
+                    "authoritative": True,
+                    "statistics": {"mismatched_pixels": 0,
+                                   "max_channel_error": 0},
+                    "reference_sha256": self.REFERENCE_SHA,
+                    "metal_sha256": self.METAL_SHA,
+                },
+            }
+        else:
+            evidence = {
+                "status": "unobserved",
+                "reason": "no copy-source checkpoint was captured at the "
+                          "producer event",
+                "event": 284,
+                "target": "0",
+            }
+        return {
+            "classification": "difference_with_partial_state_coverage",
+            "qualification": {"qualified": False, "axes": {}},
+            "frame": {"capture_frame_id": 1},
+            "execution": {"status": "ok"},
+            "first_divergence": {
+                "kind": "intermediate",
+                "event": 286,
+                "target": "442",
+                "resource": "tex:442",
+                "producer_event": 284,
+                "copy_source_evidence": evidence,
+                "recommended_action": {
+                    "action": "investigate_transfer",
+                    "event": 284,
+                    "observation_event": 286,
+                    "reason": "the source checkpoint matches",
+                },
+            },
+            "checkpoints": [],
+            "pixels": {"status": "divergent"},
+            "checkpoint_validation": {"status": "ok"},
+            "artifacts": {},
+        }
+
+    def test_compact_source_evidence_preserves_both_digests(self):
+        report = self.report()
+        compact = gfx_independent_replay.compact_diagnosis(report)
+        evidence = compact["first_divergence"]["copy_source_evidence"]
+        source = report["first_divergence"]["copy_source_evidence"]
+        checkpoint = evidence["checkpoint"]
+        authoritative = source["checkpoint"]
+        # The reference digest is authoritative and must survive projection.
+        self.assertEqual(checkpoint["gl_sha256"], self.REFERENCE_SHA)
+        self.assertEqual(checkpoint["gl_sha256"],
+                         authoritative["reference_sha256"])
+        # The Metal digest is preserved independently.
+        self.assertEqual(checkpoint["metal_sha256"], self.METAL_SHA)
+        self.assertEqual(checkpoint["metal_sha256"],
+                         authoritative["metal_sha256"])
+        # Both digests still name the source checkpoint, not the divergent one.
+        self.assertEqual(checkpoint["event"], 284)
+        self.assertEqual(checkpoint["target"], "0")
+        self.assertEqual(checkpoint["resource"], "fb:0")
+        self.assertEqual(checkpoint["status"], "match")
+        self.assertEqual(compact["first_divergence"]["event"], 286)
+        self.assertEqual(compact["first_divergence"]["event"],
+                         report["first_divergence"]["event"])
+
+    def test_missing_source_checkpoint_stays_explicitly_missing(self):
+        report = self.report(checkpoint=False)
+        compact = gfx_independent_replay.compact_diagnosis(report)
+        evidence = compact["first_divergence"]["copy_source_evidence"]
+        self.assertEqual(evidence["status"], "unobserved")
+        self.assertIn("no copy-source checkpoint", evidence["reason"])
+        self.assertIsNone(evidence["checkpoint"])
+        self.assertIsNone(evidence["gl_sha256"])
+        self.assertIsNone(evidence["metal_sha256"])
+        self.assertEqual(evidence["event"], 284)
+        self.assertEqual(evidence["target"], "0")
+
+
 class FirstDivergenceSourceEvidenceTests(unittest.TestCase):
     def graph(self):
         return {

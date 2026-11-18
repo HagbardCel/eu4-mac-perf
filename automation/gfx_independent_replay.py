@@ -2453,6 +2453,9 @@ def _compact_source_evidence(evidence: dict | None) -> dict | None:
             "reason": evidence.get("reason"),
             "event": evidence.get("event"),
             "target": evidence.get("target"),
+            "checkpoint": None,
+            "gl_sha256": None,
+            "metal_sha256": None,
         }
     statistics = checkpoint.get("statistics") or {}
     return {
@@ -2463,10 +2466,18 @@ def _compact_source_evidence(evidence: dict | None) -> dict | None:
         "checkpoint": {
             "event": checkpoint.get("event"),
             "target": checkpoint.get("target"),
+            "resource": checkpoint.get("resource"),
             "status": checkpoint.get("status"),
+            "authoritative": checkpoint.get("authoritative"),
             "mismatched_pixels": statistics.get("mismatched_pixels"),
             "max_channel_error": statistics.get("max_channel_error"),
-            "gl_sha256": checkpoint.get("gl_sha256"),
+            # ``reconcile_checkpoints()`` names the authoritative captured
+            # reference digest ``reference_sha256``.  The compact evidence
+            # keeps publishing it as ``gl_sha256`` so agents can independently
+            # verify the source-side comparison; the Metal digest already has
+            # its own field.  A missing digest stays explicitly null.
+            "gl_sha256": (checkpoint.get("reference_sha256")
+                          or checkpoint.get("gl_sha256")),
             "metal_sha256": checkpoint.get("metal_sha256"),
         },
     }
