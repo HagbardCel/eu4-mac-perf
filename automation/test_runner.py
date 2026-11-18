@@ -39,6 +39,8 @@ import time
 import uuid
 from pathlib import Path
 
+from automation import test_profiles
+
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = "eu4-test-run/v1"
 COMPARE_SCHEMA = "eu4-test-compare/v1"
@@ -65,7 +67,8 @@ def _state_dir(value: str | os.PathLike[str] | None = None) -> Path:
     return DEFAULT_STATE
 
 
-def _suite(modules: list[str], pattern: str | None, cwd: Path) -> dict:
+def _suite(modules: list[str], pattern: str | None, cwd: Path,
+           profile: str = test_profiles.OFFLINE) -> dict:
     modules = list(modules)
     if modules:
         kind = "focused"
@@ -77,12 +80,13 @@ def _suite(modules: list[str], pattern: str | None, cwd: Path) -> dict:
             kind = "pattern"
             argv += ["-p", pattern]
     key = hashlib.sha256(json.dumps(
-        {"argv": argv, "cwd": str(cwd)}, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+        {"argv": argv, "cwd": str(cwd), "profile": profile},
+        sort_keys=True).encode("utf-8")).hexdigest()[:16]
     # Cwd is deliberately not part of the selection identity: the same modules
     # may legitimately run in separate worktrees.  The executable selection is
     # what a base/candidate comparison must match.
     selection = {"kind": kind, "modules": sorted(modules),
-                 "pattern": pattern or None}
+                 "pattern": pattern or None, "profile": profile}
     return {"kind": kind, "modules": modules, "pattern": pattern,
             "argv": argv, "key": key, "selection": selection}
 
@@ -227,13 +231,25 @@ def run_suite(
     base_ref: str | None = None,
     timeout: float = 3600.0,
     compare_to: str | None = None,
+    profile: str = test_profiles.OFFLINE,
+    min_tests: int = 1,
 ) -> dict:
     """Run one focused unittest invocation, or return the in-flight duplicate."""
+    if profile not in test_profiles.PROFILES:
+        raise ValueError(
+            f"unknown test profile: {profile!r}; expected one of "
+            f"{', '.join(test_profiles.PROFILES)}")
+    if profile == test_profiles.LIVE and not (modules or pattern):
+        raise ValueError(
+            "the live profile must name an explicit module or pattern; it is "
+            "never selected implicitly for a full-suite run")
+    if type(min_tests) is not int or min_tests < 1:
+        raise ValueError("min_tests must be a positive integer")
     state = _state_dir(state_dir)
     workdir = Path(cwd).expanduser().resolve() if cwd else ROOT
     if not workdir.is_dir():
         raise ValueError(f"cwd is not a directory: {workdir}")
-    suite = _suite(list(modules or []), pattern, workdir)
+    suite = _suite(list(modules or []), pattern, workdir, profile)
     duplicate = _running(state, suite["key"])
     if duplicate is not None:
         return _pending_envelope(
@@ -253,6 +269,7 @@ def run_suite(
         "modules": suite["modules"],
         "pattern": suite["pattern"],
         "selection": suite["selection"],
+        "profile": profile,
         "argv": suite["argv"],
         "cwd": str(workdir),
         "label": label,
@@ -294,6 +311,9 @@ def run_suite(
         started = time.monotonic()
         environment = dict(os.environ)
         environment.pop("EU4_DSH_PYTHON", None)
+        if profile == test_profiles.LIVE:
+            environment.pop(test_profiles.OFFLINE_ONLY_ENV, None)
+        environment.update(test_profiles.profile_environment(profile))
         existing_path = environment.get("PYTHONPATH", "")
         environment["PYTHONPATH"] = os.pathsep.join(
             item for item in (str(workdir), existing_path) if item)
@@ -355,9 +375,9 @@ def run_suite(
         parsed = _parse_log(text)
         if timed_out:
             status = "timeout"
-        elif parsed["counts"]["ran"] == 0:
-            # A process can exit 0 while executing nothing (for example a
-            # custom loader or a filtered suite).  That is not a passing run.
+        elif parsed["counts"]["ran"] < min_tests:
+            # A process can exit 0 while executing nothing (or fewer tests than
+            # the requested gate floor).  That is not a passing run.
             status = "incomplete"
         elif exit_code == 0:
             status = "passed"
@@ -365,21 +385,34 @@ def run_suite(
             status = "failed"
         else:
             status = "errored"
+        failure_kind = {
+            "passed": None,
+            "failed": "test_failure",
+            "errored": "test_error",
+            "timeout": "execution_timeout",
+            "incomplete": "test_not_executed",
+        }.get(status, "runner_failure")
         record.update({
             "status": status,
             "pending": False,
             "completed": True,
+            "failure_kind": failure_kind,
             "exit_code": exit_code,
             "selection": suite["selection"],
             "finished_utc": _now(),
             "duration_seconds": round(time.monotonic() - started, 3),
             "counts": parsed["counts"],
+            "min_tests": min_tests,
             "unittest_duration_seconds": parsed["duration_seconds"],
             "failures": parsed["failures"],
             "reason": ("" if status in ("passed", "failed")
                        else ("unittest executed zero tests"
                              if parsed["counts"]["ran"] == 0
-                             else f"test run ended as {status}")),
+                             else (f"unittest executed {parsed['counts']['ran']} "
+                                   f"test(s), below the required floor of "
+                                   f"{min_tests}"
+                                   if parsed["counts"]["ran"] < min_tests
+                                   else f"test run ended as {status}"))),
             "timed_out": timed_out,
             "log_bytes": log_path.stat().st_size if log_path.is_file() else 0,
         })
@@ -444,7 +477,9 @@ def list_runs(*, state_dir: str | os.PathLike[str] | None = None,
         page.append({
             "id": row.get("id"),
             "status": row.get("status"),
+            "failure_kind": row.get("failure_kind"),
             "kind": row.get("kind"),
+            "profile": row.get("profile"),
             "modules": row.get("modules"),
             "exit_code": row.get("exit_code"),
             "started_utc": row.get("started_utc"),
@@ -483,6 +518,7 @@ def _selection(record: dict) -> dict | None:
             "kind": str(selection["kind"]),
             "modules": sorted(str(item) for item in modules),
             "pattern": selection.get("pattern") or None,
+            "profile": selection.get("profile") or test_profiles.OFFLINE,
         }
     kind = record.get("kind")
     modules = record.get("modules")
@@ -492,6 +528,7 @@ def _selection(record: dict) -> dict | None:
         "kind": kind,
         "modules": sorted(str(item) for item in modules),
         "pattern": record.get("pattern") or None,
+        "profile": record.get("profile") or test_profiles.OFFLINE,
     }
 
 
@@ -601,6 +638,12 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--state-dir", dest="state_dir_run", default=None)
     run.add_argument("--compare-to", default=None,
                      help="base run id or record path to compare failures with")
+    run.add_argument("--profile", choices=test_profiles.PROFILES,
+                     default=test_profiles.OFFLINE,
+                     help="offline (default, never launches EU4) or an explicit "
+                          "live module/pattern")
+    run.add_argument("--min-tests", type=int, default=1,
+                     help="fail closed when fewer tests execute than this floor")
 
     show = sub.add_parser("status")
     show.add_argument("--id", default=None)
@@ -627,7 +670,8 @@ def main(argv: list[str] | None = None) -> int:
                 modules=args.module, pattern=args.pattern, cwd=args.cwd,
                 state_dir=args.state_dir, label=args.label,
                 base_ref=args.base_ref, timeout=args.timeout,
-                compare_to=args.compare_to)
+                compare_to=args.compare_to, profile=args.profile,
+                min_tests=args.min_tests)
         except (OSError, ValueError) as exc:
             print(json.dumps({"schema": SCHEMA, "ok": False, "status": "error",
                               "reason": f"{type(exc).__name__}: {exc}"}))

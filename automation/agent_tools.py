@@ -151,6 +151,51 @@ def _runtime_block() -> dict:
     }
 
 
+def _classify_failure(status: str, reason: str, diagnostic: str,
+                      verdict: str | None) -> dict:
+    """Separate operational failures from a completed comparison.
+
+    A differing-pixel replay is a completed diagnostic, not a tool failure.  A
+    timeout, missing credential, unavailable graphics capability and invalid
+    evidence are distinct so a caller cannot report one as a successful
+    qualification.  ``None`` means the operation produced a usable outcome.
+    """
+    lowered = (reason or "").lower()
+    if status in ("ok", "pass", "match") and diagnostic in (
+            "complete", "partial", "not_applicable"):
+        if verdict == "different":
+            return {"kind": None, "class": "comparison",
+                    "detail": "completed comparison reported a difference"}
+        if verdict == "unqualified":
+            return {"kind": None, "class": "comparison",
+                    "detail": "completed comparison remained unqualified"}
+        return {"kind": None, "class": "diagnostic", "detail": ""}
+    if any(token in lowered for token in (
+            "credential", "unauthorized", "authentication", "api key")):
+        return {"kind": "missing_credential", "class": "blocker",
+                "detail": reason or "credentials are required"}
+    if "timed out" in lowered or "timeout" in lowered:
+        return {"kind": "execution_timeout", "class": "failure",
+                "detail": reason or "the operation timed out"}
+    if any(token in lowered for token in (
+            "numpy", "graphics", "gpu", "metal", "betterdisplay", "rosetta",
+            "no display", "display is unavailable")):
+        return {"kind": "graphics_unavailable", "class": "blocker",
+                "detail": reason or "a graphics dependency is unavailable"}
+    if diagnostic in ("invalid", "unverified") or status in (
+            "invalid", "incomplete", "partial") and verdict is None:
+        return {"kind": "evidence_invalid", "class": "failure",
+                "detail": reason or "evidence did not qualify"}
+    if status == "not_found":
+        return {"kind": "evidence_missing", "class": "blocker",
+                "detail": reason or "the requested evidence is missing"}
+    if status == "refused":
+        return {"kind": "policy_refusal", "class": "blocker",
+                "detail": reason or "the operation was refused"}
+    return {"kind": "tool_failure", "class": "failure",
+            "detail": reason or f"operation ended as {status}"}
+
+
 def _envelope(tool: str, status: str, result=None, *, reason: str = "",
               exit_code: int | None = None, diagnostic: str | None = None,
               verdict: str | None = None, evidence: str | None = None,
@@ -159,6 +204,7 @@ def _envelope(tool: str, status: str, result=None, *, reason: str = "",
     execution = "error" if status == "error" else "ok"
     complete = state == "complete"
     ok = execution == "ok" and state in _COMPLETE_DIAGNOSTIC
+    failure = _classify_failure(status, reason, state, verdict)
     value = {
         "schema": SCHEMA,
         "tool": tool,
@@ -173,7 +219,10 @@ def _envelope(tool: str, status: str, result=None, *, reason: str = "",
             "verdict": verdict,
             "evidence": evidence,
             "qualified": qualified,
+            "failure_kind": failure["kind"],
+            "failure_class": failure["class"],
         },
+        "failure": failure,
         "runtime": _runtime_block(),
     }
     if exit_code is not None:
@@ -1824,6 +1873,203 @@ def _case_sequence_view(case_path: Path) -> dict:
     }
 
 
+COMPACT_OUTPUT_CAP = 8192
+COMPACT_CHECKPOINT_LIMIT = 8
+COMPACT_INPUT_LIMIT = 6
+
+
+def _diagnosis_report(case_path: Path, manifest: dict) -> dict:
+    """Load the existing diagnostic report; never synthesize one."""
+    relative = manifest.get("diagnostic_report")
+    names = [relative] if isinstance(relative, str) and relative else [
+        "diagnostic-report.json", "report.json"]
+    for name in names:
+        path = case_path / str(name)
+        if path.is_file():
+            value = _optional_json(path)
+            if value:
+                return value
+    return {}
+
+
+def _artifact_view(case_path: Path) -> dict:
+    """Names and sizes only; full artifacts stay on disk."""
+    artifacts = {}
+    for name in ("diagnostic-report.json", "agent-diagnosis.json",
+                 "replay/replay.json", "replay/metal-frame.bgra",
+                 "difference.bgra", "graph.json"):
+        path = case_path / name
+        if path.is_file():
+            artifacts[name] = {
+                "bytes": path.stat().st_size,
+                "path": name,
+            }
+    return artifacts
+
+
+def _case_capture_identity(case_path: Path) -> dict:
+    seal = _optional_json(case_path / "capture" / "frame-seal.json")
+    return {
+        key: seal.get(key) for key in
+        ("session_id", "capture_frame_id", "present_index", "scene_index",
+         "event_stream_sha256", "reference_sha256")
+    } if seal else {}
+
+
+def _compact_case_view(case_path: Path, schema: str, manifest: dict,
+                       verification: dict) -> dict:
+    """Bounded case summary for a routine agent read.
+
+    The full report, command streams and screenshots remain on disk.  This
+    projection carries only identity, qualification, the first divergence, the
+    selected checkpoint statistics, the next actionable checkpoint and
+    artifact names/sizes.  It never promotes incomplete evidence.
+    """
+    report = _diagnosis_report(case_path, manifest)
+    if report:
+        diagnosis = gfx_independent_replay.compact_diagnosis(report)
+        diagnosis["inputs"] = (diagnosis.get("inputs") or [])[
+            :COMPACT_INPUT_LIMIT]
+        diagnosis["checkpoints"] = (diagnosis.get("checkpoints") or [])[
+            :COMPACT_CHECKPOINT_LIMIT]
+        if isinstance(diagnosis.get("checkpoint_selection"), dict):
+            diagnosis["checkpoint_selection"] = {
+                key: diagnosis["checkpoint_selection"].get(key)
+                for key in ("total", "selected", "bounded")
+            }
+        diagnosis.pop("artifacts", None)
+        first = diagnosis.get("first_divergence")
+        if isinstance(first, dict):
+            for key in ("recommended_checkpoint", "suggested_checkpoint",
+                        "recommended_action", "cross_capture_excluded",
+                        "copy_source_evidence", "reason"):
+                first.pop(key, None)
+            interval = first.get("unresolved_interval")
+            if isinstance(interval, dict):
+                interval["note"] = (
+                    "search_start_event is an operational search bound, not "
+                    "a matching observation")
+    else:
+        diagnosis = {
+            "schema": "gfx-agent-diagnosis/unavailable",
+            "classification": manifest.get("classification"),
+            "qualified": None,
+            "reason": "the case has no readable diagnostic report",
+        }
+    value = {
+        "schema": schema,
+        "view_schema": "gfx-agent-case/v1",
+        "case_id": manifest.get("case_id"),
+        "title": manifest.get("title"),
+        "verification": {
+            "ok": verification.get("ok"),
+            "case_id": verification.get("case_id"),
+            "problems": (verification.get("problems") or [])[:6],
+            "files": verification.get("files"),
+            "graph_status": verification.get("graph_status"),
+            "reproduction_status": verification.get("reproduction_status"),
+            "verifier_exception": bool(verification.get("verifier_exception")),
+            "independently_reproducible": verification.get(
+                "independently_reproducible"),
+        },
+        "capture": _case_capture_identity(case_path),
+        "diagnosis": diagnosis,
+        "terminal_failure": manifest.get("terminal_failure"),
+        "artifacts": _artifact_view(case_path),
+        "files": len(manifest.get("files") or []),
+        "next": ("repair the case evidence before replay"
+                 if not verification.get("ok")
+                 else "reuse the verified case; do not recapture for the same "
+                      "identity"),
+    }
+    if schema == gfx_replay_case.SEQUENCE_SCHEMA:
+        sequence = _case_sequence_view(case_path)
+        frames = []
+        for frame in (sequence.get("frames") or [])[:4]:
+            frames.append({
+                key: frame.get(key) for key in
+                ("index", "dir", "capture_frame_id",
+                 "original_sequence_index", "event_stream_sha256",
+                 "checkpoint_count", "graph_status")
+            })
+        value["sequence"] = {
+            "session_id": sequence.get("session_id"),
+            "target_index": sequence.get("target_index"),
+            "frames": frames,
+            "minimal_prefix": sequence.get("minimal_prefix"),
+            "excluded_frames": sequence.get("excluded_frames"),
+            "carried_resources": (sequence.get("carried_resources") or [])[:8],
+        }
+    value["truncated"] = False
+    value["output_cap_bytes"] = COMPACT_OUTPUT_CAP
+    return value
+
+
+def _bounded_envelope(value: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict:
+    """Cap one compact envelope and state the truncation explicitly.
+
+    The result is reduced in a deterministic order: long lists first, then
+    long strings.  Identity, status, outcome and the recommended next action
+    survive the reduction.  A caller that needs complete evidence asks for
+    ``--full`` or reads the artifact on disk.
+    """
+    original = len(json.dumps(value, indent=2))
+    if original <= cap:
+        value.setdefault("result", {})
+        if isinstance(value["result"], dict):
+            value["result"]["output_bytes"] = original
+        return value
+    reduced = json.loads(json.dumps(value))
+    result = reduced.get("result")
+    diagnosis = {}
+    if isinstance(result, dict):
+        for key in ("checkpoints", "inputs", "artifacts", "problems"):
+            if isinstance(result.get(key), list):
+                result[key] = result[key][:4]
+        diagnosis = result.get("diagnosis")
+        if isinstance(diagnosis, dict):
+            for key in ("checkpoints", "inputs", "problems"):
+                if isinstance(diagnosis.get(key), list):
+                    diagnosis[key] = diagnosis[key][:4]
+            selection = diagnosis.get("checkpoint_selection")
+            if isinstance(selection, dict):
+                selection["truncated"] = True
+    if len(json.dumps(reduced, indent=2)) <= cap:
+        reduced["truncated"] = True
+        reduced["output_cap_bytes"] = cap
+        reduced["output_bytes_before_cap"] = original
+        if isinstance(result, dict):
+            result["truncated"] = True
+            result["output_bytes"] = len(json.dumps(reduced, indent=2))
+        return reduced
+    # Last resort: keep the stable contract and the actionable diagnosis head.
+    minimal = {
+        key: reduced.get(key) for key in
+        ("schema", "tool", "ok", "status", "reason", "outcome", "failure",
+         "runtime")
+    }
+    minimal["result"] = {
+        "schema": (result or {}).get("schema") if isinstance(result, dict) else None,
+        "case_id": (result or {}).get("case_id") if isinstance(result, dict) else None,
+        "diagnosis": {
+            "classification": (diagnosis or {}).get("classification")
+            if isinstance(diagnosis, dict) else None,
+            "first_divergence": (diagnosis or {}).get("first_divergence")
+            if isinstance(diagnosis, dict) else None,
+            "next_action": (diagnosis or {}).get("next_action")
+            if isinstance(diagnosis, dict) else None,
+        },
+        "artifacts": (result or {}).get("artifacts")
+        if isinstance(result, dict) else None,
+        "truncated": True,
+    }
+    minimal["truncated"] = True
+    minimal["output_cap_bytes"] = cap
+    minimal["output_bytes_before_cap"] = original
+    minimal["result"]["output_bytes"] = len(json.dumps(minimal, indent=2))
+    return minimal
+
+
 def _case_diagnosis_view(case_path: Path, manifest: dict) -> dict:
     report = _optional_json(case_path / "diagnostic-report.json")
     if not report:
@@ -2251,9 +2497,22 @@ def _case_invalid_envelope(tool: str, case_path: Path, kind: str,
 
 
 def _strategy_b_verify_result(case_path: Path, schema: str,
-                              manifest: dict, verification: dict) -> dict:
+                              manifest: dict, verification: dict,
+                              *, compact: bool = True) -> dict:
     status, diagnostic, evidence = _case_verification_outcome(
         verification, schema)
+    if compact:
+        value = _compact_case_view(case_path, schema, manifest, verification)
+        value["execution"] = "not_run"
+        value["next"] = ("pass --replay-out to re-execute this Strategy B case"
+                         if verification.get("ok")
+                         else "repair the case evidence before replay")
+        value["verification_full"] = False
+        return _bounded_envelope(_envelope(
+            "eu4_replay", status, value,
+            reason="; ".join(str(item) for item in
+                             (verification.get("problems") or [])),
+            diagnostic=diagnostic, evidence=evidence, qualified=False))
     value = {
         "schema": schema,
         "case_id": manifest.get("case_id"),
@@ -2348,8 +2607,9 @@ def eu4_replay(args: argparse.Namespace) -> dict:
             return _case_invalid_envelope(
                 "eu4_replay", case_path, kind, schema, detail)
         verification = _strategy_b_verify(case_path)
-        return _strategy_b_verify_result(case_path, schema, manifest,
-                                         verification)
+        return _strategy_b_verify_result(
+            case_path, schema, manifest, verification,
+            compact=not bool(getattr(args, "full", False)))
     if args.replay_op == "diagnose":
         if not args.frame or not args.metal or not args.replay_out:
             return _envelope(
@@ -2618,6 +2878,13 @@ def eu4_case_inspect(args: argparse.Namespace) -> dict:
         verification = _strategy_b_verify(path)
         status, diagnostic, evidence = _case_verification_outcome(
             verification, schema)
+        if not bool(getattr(args, "full", False)):
+            value = _compact_case_view(path, schema, manifest, verification)
+            return _bounded_envelope(_envelope(
+                "eu4_case_inspect", status, value,
+                reason="; ".join(str(item) for item in
+                                 (verification.get("problems") or [])),
+                diagnostic=diagnostic, evidence=evidence, qualified=False))
         value = {
             "schema": schema,
             "case_id": manifest.get("case_id"),
@@ -2806,6 +3073,9 @@ def _parser() -> argparse.ArgumentParser:
 
     case = sub.add_parser("eu4_case_inspect")
     case.add_argument("--case", required=True, type=Path)
+    case.add_argument("--full", action="store_true",
+                      help="return the complete manifest/report view instead "
+                           "of the bounded agent projection")
     return parser
 
 

@@ -1768,6 +1768,13 @@ def probe(args: argparse.Namespace) -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"probe unavailable: {exc}", file=sys.stderr)
         return EXIT_UNAVAILABLE
+    from automation import test_profiles
+
+    try:
+        test_profiles.ensure_live_launch("live_gfx probe")
+    except test_profiles.LiveProfileError as exc:
+        print(f"probe refused: {exc}", file=sys.stderr)
+        return EXIT_INCOMPLETE
     try:
         identity = bench_base.gog_identity()
     except (OSError, RuntimeError, ValueError) as exc:

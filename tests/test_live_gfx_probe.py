@@ -339,7 +339,8 @@ class PinnedProbeClaimTests(unittest.TestCase):
         import sys
         benchmark = self.root / "benchmark"
         benchmark.mkdir()
-        with patch.dict(sys.modules, {
+        with patch("automation.test_profiles.live_allowed", return_value=True), \
+             patch.dict(sys.modules, {
             "eu4_benchmark": bench,
             "eu4_metal_boot": types.SimpleNamespace(
                 build_library=lambda arch="x86_64": library,
@@ -355,7 +356,8 @@ class PinnedProbeClaimTests(unittest.TestCase):
         self.assertEqual(code, live_gfx.EXIT_COMPLETE)
         self.assertEqual(len(launched), 1)
         self.assertEqual(envs[0]["EU4_GFX_CHECKPOINT_CALLER_RVA"], "0")
-        with patch.dict(sys.modules, {
+        with patch("automation.test_profiles.live_allowed", return_value=True), \
+             patch.dict(sys.modules, {
             "eu4_benchmark": bench,
             "eu4_metal_boot": types.SimpleNamespace(
                 build_library=lambda arch="x86_64": library,

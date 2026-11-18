@@ -496,6 +496,12 @@ def run_ops(
         raise StartupError("--timeout must be between 1 and 600 seconds")
     if until_target_draw and target_caller_rva is None:
         raise StartupError("--until-target-draw requires --caller-rva")
+    # This is the single process-spawn choke point for the trace/capture paths.
+    # Tests that replace ``run_ops`` with a fake never reach it; an explicit
+    # offline profile cannot launch EU4 through this path.
+    from automation import test_profiles
+
+    test_profiles.ensure_live_launch("eu4_gfx_startup_trace.run_ops")
     evidence = evidence or preflight_ops(
         targets,
         max_events=max_events,

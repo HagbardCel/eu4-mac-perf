@@ -86,6 +86,28 @@ class EfficiencyTests(unittest.TestCase):
         self.assertEqual(self.value["goal"]["outcome"], "completed")
         self.assertEqual(self.value["goal"]["operations"], ["create", "complete"])
 
+    def test_execution_summary_separates_native_and_shell_calls(self):
+        summary = self.value["summary"]
+        self.assertEqual(summary["schema"], "dsh-execution-summary/v1")
+        self.assertEqual(summary["tool_calls"]["total"], 5)
+        self.assertEqual(summary["tool_calls"]["native"], 2)
+        self.assertEqual(summary["tool_calls"]["shell"], 2)
+        self.assertEqual(summary["eu4_launches"], 1)
+        self.assertEqual(summary["tests"]["executions"], 2)
+        self.assertEqual(summary["tests"]["repetitions"], 1)
+        self.assertEqual(summary["diagnostics"]["returned_chars"],
+                         self.value["output"]["total_chars"])
+        self.assertEqual(summary["execution"]["wall_seconds"],
+                         self.value["window"]["elapsed_seconds"])
+
+    def test_execution_summary_does_not_invent_unmeasured_values(self):
+        summary = self.value["summary"]
+        self.assertIsNone(summary["replays"]["gl"])
+        self.assertIsNone(summary["replays"]["metal"])
+        self.assertIsNone(summary["gpu_work"]["checkpoint_readbacks"])
+        self.assertIsNone(summary["diagnostics"]["artifact_bytes"])
+        self.assertIn("not in the export", summary["diagnostics"]["note"])
+
     def test_turn_filter_is_a_real_window(self):
         other = dsh_efficiency.filter_turn(self.events, 2)
         value = dsh_efficiency.analyze(other)

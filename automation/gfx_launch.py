@@ -214,6 +214,12 @@ def spawn(role: str, config: LaunchConfig, run_dir: Path, *, lease: launch_lease
           session: gfx_session.Session, token: str = "",
           libraries: dict | None = None,
           backend: str | None = None) -> Launched:
+    from automation import test_profiles
+
+    try:
+        test_profiles.ensure_live_launch("gfx_launch.spawn")
+    except test_profiles.LiveProfileError as exc:
+        raise LaunchError("test_profile", str(exc)) from exc
     if backend is None:
         backend = "opengl" if role == "reference" else "metal"
     env, run_dir, observe = prepare(role, config, run_dir, libraries, backend=backend)
