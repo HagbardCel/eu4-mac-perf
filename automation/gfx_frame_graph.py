@@ -57,6 +57,13 @@ def _target_resource(target: dict) -> tuple[str, dict]:
         target = {}
     attachment = target.get("color_attachment")
     if isinstance(attachment, dict) and _name(attachment.get("name")):
+        # Renderbuffers and textures occupy different GL namespaces.  A
+        # renderbuffer colour attachment is part of the framebuffer, not a
+        # sampleable texture; keying it as ``tex:N`` would alias a texture
+        # that happens to share the numeric name.
+        if str(attachment.get("type") or "") == "renderbuffer":
+            framebuffer = target.get("framebuffer", 0)
+            return f"fb:{framebuffer}", {}
         return f"tex:{_name(attachment.get('name'))}", attachment
     framebuffer = target.get("framebuffer", 0)
     return f"fb:{framebuffer}", {}

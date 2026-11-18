@@ -42,6 +42,7 @@ CLASSIFICATIONS = (
     "unsupported_state",
     "gpu_execution_failure",
     "incomplete_diagnostics",
+    "fault_experiment",
 )
 
 # What the Metal replay host actually implements.  ``implemented`` means the
@@ -557,6 +558,41 @@ def binding_audit(replay: dict) -> dict:
         "earliest_event": mismatches[0]["event"] if mismatches else None,
         "mismatches": mismatches[:256],
         "ok": not mismatches,
+    }
+
+
+def fault_evidence(provenance: list[dict], request: dict | None) -> dict | None:
+    """Separate the selected fault request from evidence that it fired.
+
+    The native replay records ``fault_sampler_shift`` on every binding it
+    actually substituted.  A request that targets a missing event, or a draw
+    with no eligible sampler above the threshold, leaves every recorded shift
+    at zero.  A fired fault can still be pixel-neutral when the affected draw
+    is overdrawn.  Neither case may be reported as a qualified campaign.
+    """
+    if not request:
+        return None
+    shifted = [
+        row for row in provenance
+        if int(row.get("fault_sampler_shift") or 0) != 0
+        or (row.get("fault_missing_engine_unit") is not None
+            and int(row.get("fault_missing_engine_unit")) >= 0)
+    ]
+    events = sorted({
+        int(row.get("event")) for row in shifted
+        if row.get("event") is not None
+    })
+    return {
+        "schema": "gfx-fault-evidence/v1",
+        "requested": dict(request),
+        "fired": bool(shifted),
+        "shifted_bindings": len(shifted),
+        "events": events[:32],
+        "reason": (
+            "the replay provenance records at least one substituted sampler "
+            "binding" if shifted else
+            "the replay provenance records no substituted sampler binding; "
+            "the selected fault did not fire"),
     }
 
 
@@ -1618,7 +1654,9 @@ def classify_diagnosis(*, capture_validity: str, identity: str,
                        execution: str, provenance: str,
                        operation_coverage: str, state_cov: str,
                        pixels: str, divergence: str,
-                       checkpoint_validation: dict) -> tuple[str, dict]:
+                       checkpoint_validation: dict,
+                       fault_experiment: bool = False,
+                       fault_status: str | None = None) -> tuple[str, dict]:
     """Apply the PR3 qualification contract to independent evidence axes.
 
     Missing evidence fails closed into ``incomplete_*``; it is never promoted
@@ -1658,6 +1696,12 @@ def classify_diagnosis(*, capture_validity: str, identity: str,
         classification = "unsupported_state"
     else:
         classification = "qualified_match"
+    base_classification = classification
+    if fault_experiment and classification not in (
+            "gpu_execution_failure", "incomplete_capture",
+            "incomplete_diagnostics", "invalid_provenance"):
+        # Selecting a fault must not hide unrelated evidence corruption.
+        classification = "fault_experiment"
     axes = {
         "capture_validity": capture_validity,
         "frame_shader_identity": identity,
@@ -1668,6 +1712,9 @@ def classify_diagnosis(*, capture_validity: str, identity: str,
         "pixel_comparison": pixels,
         "first_divergence_confidence": divergence,
     }
+    if fault_experiment:
+        axes["fault_experiment"] = fault_status or "requested"
+        axes["base_classification"] = base_classification
     qualified_match = classification == "qualified_match"
     return classification, {
         "schema": "m7-qualification-contract/v1",
@@ -1675,7 +1722,10 @@ def classify_diagnosis(*, capture_validity: str, identity: str,
         "classification": classification,
         "qualified": qualified_match,
         "diagnostic_qualified": classification in (
-            "qualified_match", "qualified_difference"),
+            "qualified_match", "qualified_difference")
+        or (classification == "fault_experiment"
+            and base_classification in ("qualified_match",
+                                        "qualified_difference")),
         "renderer_equivalence": qualified_match,
         "claim": {
             "qualified_match": "complete evidence, no observed difference",
@@ -1692,6 +1742,10 @@ def classify_diagnosis(*, capture_validity: str, identity: str,
             "incomplete_diagnostics": (
                 "required diagnostic evidence is missing; this is not a "
                 "renderer difference"),
+            "fault_experiment": (
+                "a selected fault experiment; it is never a qualified "
+                "campaign, even when the fault is pixel-neutral or does not "
+                "fire"),
         }.get(classification, ""),
     }
 
@@ -1930,6 +1984,8 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
             "the replay did not publish the checkpoint request that produced "
             "its results; qualification fails closed")
     audit = binding_audit(replay)
+    fault_record = fault_evidence(
+        replay.get("_provenance_samples") or [], faults)
     states = state_coverage(frame_dir, trace=trace, evidence=state_evidence)
     final = final_comparison_report(frame_dir, metal_dir, policy)
     frame_info = trace.get("frame") or {}
@@ -2003,6 +2059,10 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
         pixels=pixels,
         divergence=str(divergence.get("kind")),
         checkpoint_validation=validation,
+        fault_experiment=bool(faults),
+        fault_status=(
+            "fired" if fault_record and fault_record.get("fired")
+            else "not_fired" if fault_record else None),
     )
     report = {
         "schema": DIAGNOSIS_SCHEMA,
@@ -2010,6 +2070,8 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
         "metal_result_dir": str(metal_dir),
         "status": classification,
         "classification": classification,
+        "fault_evidence": fault_record,
+        "faults": faults or {},
         "frame": {
             "capture_frame_id": frame_id,
             "boundary": (seal or {}).get("boundary"),

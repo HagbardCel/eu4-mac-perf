@@ -3370,7 +3370,9 @@ static int continuous_write_frame_sequence(
             "{\"schema\":\"gfx-frame-sequence/v1\","
             "\"session_id\":\"%s\",\"pid\":%d,"
             "\"sequence_index\":%u,\"campaign_frames\":%u,"
-            "\"capture_frame_id\":%llu,\"complete\":%s,"
+            "\"capture_frame_id\":%llu,"
+            "\"present_index\":%u,\"scene_index\":%u,"
+            "\"complete\":%s,"
             "\"boundary\":\"%s\",\"reason\":\"%s\","
             "\"previous\":%s,"
             "\"render_targets\":[%s],"
@@ -3386,6 +3388,7 @@ static int continuous_write_frame_sequence(
             g.session_id, (int)getpid(), g.continuous_frames_completed + 1,
             g.continuous_max_frames,
             (unsigned long long)descriptor->capture_frame_id,
+            descriptor->present_index, descriptor->scene_index,
             complete ? "true" : "false", descriptor->boundary,
             reason ? reason : "", previous, targets, carried, lifecycle,
             (unsigned long long)g.texture_cache_reads,
@@ -3429,12 +3432,14 @@ static void continuous_record_frame(
         snprintf(g.campaign_records[g.campaign_record_count],
                  sizeof(g.campaign_records[0]),
                  "{\"sequence\":%u,\"capture_frame_id\":%llu,"
+                 "\"present_index\":%u,\"scene_index\":%u,"
                  "\"dir\":\"%s\",\"manifest_sha256\":\"%s\","
                  "\"event_stream_sha256\":\"%s\","
                  "\"reference_sha256\":\"%s\",\"operations\":%llu,"
                  "\"draws\":%llu,\"clears\":%llu,\"copies\":%llu}",
                  g.continuous_frames_completed + 1,
-                 (unsigned long long)descriptor->capture_frame_id, g.dir,
+                 (unsigned long long)descriptor->capture_frame_id,
+                 descriptor->present_index, descriptor->scene_index, g.dir,
                  descriptor->manifest_sha256,
                  descriptor->event_stream_sha256,
                  descriptor->reference_sha256,

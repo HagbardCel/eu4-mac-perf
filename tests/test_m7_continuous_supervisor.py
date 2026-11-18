@@ -68,6 +68,65 @@ def make_frame(root: Path, index: int, previous: Path | None) -> Path:
     return frame
 
 
+class EngineIdentityTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.frames = []
+        previous = None
+        for index in (1, 2, 3):
+            frame = make_frame(self.root, index, previous)
+            self.frames.append(frame)
+            previous = frame
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def identify(self, indices):
+        for frame, present in zip(self.frames, indices):
+            path = frame / "frame-sequence.json"
+            value = json.loads(path.read_text())
+            value["present_index"] = present
+            value["scene_index"] = present
+            path.write_text(json.dumps(value))
+
+    def test_consecutive_engine_indices_are_gap_free(self):
+        self.identify((616, 617, 618))
+        validation = m7_continuous.validate_sequence(self.frames)
+        self.assertEqual(validation["engine_identity"]["status"], "gap_free")
+        self.assertTrue(validation["engine_identity"]["gap_free"])
+        self.assertEqual(
+            validation["engine_identity"]["present_indices"],
+            [616, 617, 618])
+
+    def test_a_skipped_engine_frame_fails_closed(self):
+        self.identify((616, 618, 619))
+        with self.assertRaises(m7_continuous.ContinuousError) as raised:
+            m7_continuous.validate_sequence(self.frames)
+        self.assertEqual(raised.exception.kind, "engine_frame_gap")
+
+    def test_missing_identity_is_unavailable_but_required_fails(self):
+        validation = m7_continuous.validate_sequence(self.frames)
+        self.assertEqual(validation["engine_identity"]["status"],
+                         "unavailable")
+        self.assertFalse(validation["engine_identity"]["gap_free"])
+        with self.assertRaises(m7_continuous.ContinuousError) as raised:
+            m7_continuous.validate_sequence(
+                self.frames, require_engine_identity=True)
+        self.assertEqual(raised.exception.kind,
+                         "engine_identity_required")
+
+    def test_partial_identity_fails_closed(self):
+        self.identify((616, 617, 618))
+        path = self.frames[1] / "frame-sequence.json"
+        value = json.loads(path.read_text())
+        value.pop("present_index")
+        path.write_text(json.dumps(value))
+        with self.assertRaises(m7_continuous.ContinuousError) as raised:
+            m7_continuous.validate_sequence(self.frames)
+        self.assertEqual(raised.exception.kind, "engine_identity_partial")
+
+
 class SupervisorTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -105,7 +164,7 @@ class SupervisorTests(unittest.TestCase):
         return base
 
     def run_with(self, rows, diagnoses, *, stop=True, cancel=None,
-                 max_frames=64):
+                 max_frames=64, fault=None):
         import io
 
         class FakeProcess:
@@ -141,7 +200,7 @@ class SupervisorTests(unittest.TestCase):
             report = m7_continuous.run_campaign(
                 self.frames, self.root / "out",
                 shaders=self.root, stop_on_difference=stop,
-                cancel=cancel, max_frames=max_frames)
+                cancel=cancel, max_frames=max_frames, fault=fault)
         return report, diagnose
 
     def test_sequence_checkpoints_are_published_and_passed_to_the_core(self):
@@ -1053,3 +1112,167 @@ class BoundedWorkerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class FaultCampaignTests(SupervisorTests):
+    """A selected fault experiment is never a qualified campaign."""
+
+    def diagnoses(self, *, fired, divergent=False, fault_evidence=None):
+        base = self.qualified_diagnosis()
+        if divergent:
+            base = {
+                "schema": gfx_independent_replay.DIAGNOSIS_SCHEMA,
+                "classification": "qualified_difference",
+                "qualification": {
+                    "axes": {"gpu_execution": "ok",
+                             "pixel_comparison": "divergent"}},
+                "pixels": {"status": "divergent",
+                           "statistics": {"pixels": 4,
+                                          "mismatched_pixels": 4}},
+                "checkpoint_validation": {"status": "ok", "divergent": 0},
+                "first_divergence": {"kind": "final_only", "event": 4},
+                "diagnostic_completed": True,
+            }
+        evidence = fault_evidence if fault_evidence is not None else {
+            "schema": "gfx-fault-evidence/v1",
+            "fired": fired,
+            "shifted_bindings": 1 if fired else 0,
+            "reason": "fired" if fired else "did not fire",
+        }
+        first = dict(base)
+        second = dict(base, fault_evidence=evidence)
+        third = dict(base)
+        return [first, second, third]
+
+    def test_fault_that_changes_pixels_is_never_qualified(self):
+        report, _ = self.run_with(
+            self.rows(),
+            self.diagnoses(fired=True, divergent=True),
+            stop=False,
+            fault={"frame": 2, "event": 1, "sampler_shift": 1,
+                   "sampler_shift_min": 0})
+        self.assertEqual(report["status"], "complete")
+        self.assertFalse(report["qualified"])
+        self.assertTrue(report["fault_evidence"]["fired"])
+        self.assertEqual(report["fault_evidence"]["requested"]["frame"], 2)
+
+    def test_nonexistent_fault_event_does_not_qualify(self):
+        report, _ = self.run_with(
+            self.rows(),
+            self.diagnoses(fired=False),
+            stop=False,
+            fault={"frame": 2, "event": 99999, "sampler_shift": 1,
+                   "sampler_shift_min": 0})
+        self.assertEqual(report["status"], "complete")
+        self.assertFalse(report["qualified"])
+        self.assertFalse(report["fault_evidence"]["fired"])
+        self.assertIn("did not fire", report["fault_evidence"]["reason"])
+
+    def test_effective_but_pixel_neutral_fault_does_not_qualify(self):
+        report, _ = self.run_with(
+            self.rows(),
+            self.diagnoses(fired=True),
+            stop=False,
+            fault={"frame": 2, "event": 1, "sampler_shift": 1,
+                   "sampler_shift_min": 0})
+        self.assertEqual(report["status"], "complete")
+        self.assertFalse(report["qualified"])
+        self.assertTrue(report["fault_evidence"]["fired"])
+        self.assertTrue(any(record["fired"] for record in
+                            report["fault_evidence"]["frames"]))
+
+    def test_fault_free_campaign_still_qualifies(self):
+        report, _ = self.run_with(
+            self.rows(),
+            [self.qualified_diagnosis(),
+             self.qualified_diagnosis(),
+             self.qualified_diagnosis()],
+            stop=False)
+        self.assertEqual(report["status"], "complete")
+        self.assertTrue(report["qualified"])
+        self.assertIsNone(report["fault_injection"])
+        self.assertFalse(report["fault_evidence"]["fired"])
+
+
+class FaultCampaignOutcomeTests(unittest.TestCase):
+    def row(self, **overrides):
+        value = {
+            "sequence": 1,
+            "classification": "qualified_match",
+            "diagnostic_completed": True,
+            "axes": {"capture_validity": "valid",
+                     "resource_provenance": "verified",
+                     "gpu_execution": "ok",
+                     "pixel_comparison": "match"},
+            "pixels": {"mismatched_pixels": 0},
+            "checkpoint_validation": {"status": "ok", "divergent": 0},
+        }
+        value.update(overrides)
+        return value
+
+    def outcome(self, report):
+        from automation.agent_tools import _campaign_outcome
+        return _campaign_outcome(report)
+
+    def test_fault_campaign_never_reports_qualified(self):
+        report = {
+            "status": "complete",
+            "qualified": False,
+            "fault_injection": {"frame": 2, "event": 1},
+            "fault_evidence": {"fired": True},
+            "frames": [self.row(sequence=1), self.row(sequence=2)],
+        }
+        status, diagnostic, verdict, evidence, qualified, details = (
+            self.outcome(report))
+        self.assertFalse(qualified)
+        self.assertFalse(details["qualified"])
+        self.assertEqual(details["fault_experiment"]["fired"], True)
+        self.assertEqual(verdict, "unverified")
+
+    def test_unfired_fault_is_incomplete_not_qualified(self):
+        report = {
+            "status": "complete",
+            "qualified": False,
+            "fault_injection": {"frame": 2, "event": 99999},
+            "fault_evidence": {"fired": False},
+            "frames": [self.row(sequence=1), self.row(sequence=2)],
+        }
+        status, diagnostic, verdict, evidence, qualified, details = (
+            self.outcome(report))
+        self.assertFalse(qualified)
+        self.assertEqual(status, "incomplete")
+        self.assertEqual(diagnostic, "incomplete")
+
+    def test_fault_with_pixels_is_different_but_not_qualified(self):
+        report = {
+            "status": "complete",
+            "qualified": False,
+            "fault_injection": {"frame": 2, "event": 1},
+            "fault_evidence": {"fired": True},
+            "frames": [
+                self.row(sequence=1),
+                self.row(sequence=2,
+                         classification="qualified_difference",
+                         axes={"capture_validity": "valid",
+                               "resource_provenance": "verified",
+                               "gpu_execution": "ok",
+                               "pixel_comparison": "divergent"},
+                         pixels={"mismatched_pixels": 4}),
+            ],
+        }
+        status, diagnostic, verdict, evidence, qualified, details = (
+            self.outcome(report))
+        self.assertFalse(qualified)
+        self.assertEqual(verdict, "different")
+
+    def test_fault_free_qualified_campaign_still_qualifies(self):
+        report = {
+            "status": "complete",
+            "qualified": True,
+            "fault_injection": None,
+            "fault_evidence": {"fired": False},
+            "frames": [self.row(sequence=1), self.row(sequence=2)],
+        }
+        status, diagnostic, verdict, evidence, qualified, details = (
+            self.outcome(report))
+        self.assertTrue(qualified)
+        self.assertEqual(verdict, "equal")

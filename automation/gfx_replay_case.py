@@ -871,6 +871,25 @@ def package_diagnosis(frame_dir: Path | str, metal_dir: Path | str,
     ``reproduction.status=incomplete`` is published instead of an oversized
     case.
     """
+    if report.get("faults") or report.get("fault_evidence") \
+            or report.get("fault_injection"):
+        return _incomplete_case(
+            Path(case_dir).expanduser().resolve(),
+            metal_dir=Path(metal_dir).expanduser().resolve(),
+            report=report,
+            missing=[{
+                "kind": "fault_experiment",
+                "reason": (
+                    "the selected fault is scoped to the source replay and "
+                    "cannot be replayed by the portable case"),
+            }],
+            schema=SCHEMA,
+            case_id=case_id,
+            title=title,
+            inputs=[],
+            reason="fault_experiment_not_portable",
+            max_bytes=max_bytes,
+        )
     frame_dir = Path(frame_dir).expanduser().resolve()
     metal_dir = Path(metal_dir).expanduser().resolve()
     destination = Path(case_dir).expanduser().resolve()
@@ -1502,6 +1521,10 @@ def package_sequence_diagnosis(
     and they are renumbered as a relocatable ordered sequence while retaining
     every authoritative capture identity and digest.
 
+    A selected fault experiment is never published as an independently
+    reproducible sequence: its replay path cannot know the scoped fault, and a
+    fault case must not advertise an unfaulted replay as equivalent.
+
     ``max_bytes`` bounds the complete generated package: captured frames,
     shaders, replay/checkpoint artifacts and manifests.  The sequence path does
     not generate a difference image; the single-frame path budgets one.
@@ -1511,6 +1534,25 @@ def package_sequence_diagnosis(
     (never a valid reproduction command); if even that summary cannot fit, an
     explicit ``case_budget`` error is raised.
     """
+    if report.get("faults") or report.get("fault_evidence") \
+            or report.get("fault_injection"):
+        return _incomplete_case(
+            Path(case_dir).expanduser().resolve(),
+            metal_dir=Path(metal_dir).expanduser().resolve(),
+            report=report,
+            missing=[{
+                "kind": "fault_experiment",
+                "reason": (
+                    "the selected fault is scoped to the source campaign and "
+                    "cannot be replayed by the portable case"),
+            }],
+            schema=SEQUENCE_SCHEMA,
+            case_id=case_id,
+            title=title,
+            inputs=[],
+            reason="fault_experiment_not_portable",
+            max_bytes=max_bytes,
+        )
     frames = [Path(frame).expanduser().resolve() for frame in frames]
     metal_dir = Path(metal_dir).expanduser().resolve()
     destination = Path(case_dir).expanduser().resolve()
@@ -1745,6 +1787,8 @@ def package_sequence_diagnosis(
                 "index": index,
                 "dir": f"frames/{index:06d}",
                 "capture_frame_id": sequence.get("capture_frame_id"),
+                "present_index": sequence.get("present_index"),
+                "scene_index": sequence.get("scene_index"),
                 "original_sequence_index": int(
                     original.get("sequence_index") or 0),
                 "session_id": sequence.get("session_id"),
@@ -1767,9 +1811,25 @@ def package_sequence_diagnosis(
                     "preservation_detail"),
                 "receipt_origin": checkpoint.get("receipt_origin"),
             })
+        present_indices = [entry.get("present_index") for entry in entries]
+        identity_complete = all(isinstance(item, int) and item > 0
+                                for item in present_indices)
+        identity_gap_free = bool(
+            identity_complete
+            and all(present_indices[index] == present_indices[index - 1] + 1
+                    for index in range(1, len(present_indices))))
         sequence_manifest = {
             "schema": SEQUENCE_MANIFEST_SCHEMA,
             "session_id": entries[-1]["session_id"],
+            "engine_identity": {
+                "status": ("gap_free" if identity_gap_free
+                           else "gap" if identity_complete
+                           else "unavailable"),
+                "gap_free": identity_gap_free,
+                "present_indices": present_indices,
+                "scene_indices": [entry.get("scene_index")
+                                  for entry in entries],
+            },
             "pid": _json(copied[-1] / "frame-sequence.json").get("pid"),
             "target_index": len(entries),
             "frames": entries,
@@ -1897,6 +1957,17 @@ def _verify_sequence(case_dir: Path, manifest: dict) -> tuple[list[str], dict]:
         if sequence_record.get("capture_frame_id") != entry.get(
                 "capture_frame_id"):
             problems.append(f"frame {index} capture identity is substituted")
+        for field in ("present_index", "scene_index"):
+            if entry.get(field) != sequence_record.get(field):
+                problems.append(
+                    f"frame {index} engine {field} is substituted")
+        if isinstance(entry.get("present_index"), int):
+            if (previous_sequence is not None
+                    and isinstance(previous_sequence.get("present_index"), int)
+                    and entry["present_index"]
+                    != previous_sequence["present_index"] + 1):
+                problems.append(
+                    f"frame {index} engine present index is not consecutive")
         if entry.get("original_sequence_index") not in (
                 sequence_record.get("portable_original_sequence_index"),
                 sequence_record.get("sequence_index")):
@@ -2053,8 +2124,13 @@ def _verify_sequence(case_dir: Path, manifest: dict) -> tuple[list[str], dict]:
                 "producer")
     if previous_dir is None:
         problems.append("target frame is missing")
+    identity = sequence.get("engine_identity")
+    if isinstance(identity, dict) and identity.get("status") == "gap":
+        problems.append("engine frame sequence is not gap-free")
     summary = {
         "schema": SEQUENCE_MANIFEST_SCHEMA,
+        "engine_identity": identity or {
+            "status": "unavailable", "gap_free": False},
         "status": "verified" if not problems else "invalid",
         "frames": len(entries),
         "target_index": sequence.get("target_index"),
@@ -2068,7 +2144,7 @@ def _verify_sequence(case_dir: Path, manifest: dict) -> tuple[list[str], dict]:
 
 _REPLAY_TERMINAL_CLASSIFICATIONS = {
     "gpu_execution_failure", "invalid_provenance", "incomplete_capture",
-    "incomplete_diagnostics",
+    "incomplete_diagnostics", "fault_experiment",
 }
 _REPLAY_INFRASTRUCTURE_REASONS = {
     "host_failure", "frame_timeout", "overall_timeout", "tool_failure",

@@ -979,3 +979,49 @@ class DiagnosisPackageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FaultExperimentClassificationTests(unittest.TestCase):
+    def classify(self, **overrides):
+        base = dict(
+            capture_validity="valid", identity="verified", execution="ok",
+            provenance="verified", operation_coverage="complete",
+            state_cov="complete", pixels="match", divergence="none",
+            checkpoint_validation={"status": "ok"},
+            fault_experiment=True, fault_status="fired")
+        base.update(overrides)
+        return gfx_independent_replay.classify_diagnosis(**base)
+
+    def test_pixel_neutral_fault_is_a_fault_experiment_not_a_match(self):
+        classification, qualification = self.classify()
+        self.assertEqual(classification, "fault_experiment")
+        self.assertFalse(qualification["qualified"])
+        self.assertFalse(qualification["renderer_equivalence"])
+        self.assertTrue(qualification["diagnostic_qualified"])
+        self.assertEqual(qualification["axes"]["base_classification"],
+                         "qualified_match")
+        self.assertEqual(qualification["axes"]["fault_experiment"], "fired")
+
+    def test_unfired_fault_is_still_not_qualified(self):
+        classification, qualification = self.classify(
+            fault_status="not_fired")
+        self.assertEqual(classification, "fault_experiment")
+        self.assertFalse(qualification["qualified"])
+        self.assertEqual(qualification["axes"]["fault_experiment"],
+                         "not_fired")
+
+    def test_fault_does_not_hide_incomplete_evidence(self):
+        classification, qualification = self.classify(
+            pixels="unavailable")
+        self.assertEqual(classification, "incomplete_diagnostics")
+        self.assertFalse(qualification["qualified"])
+
+    def test_fault_does_not_hide_invalid_provenance(self):
+        classification, qualification = self.classify(identity="mismatch")
+        self.assertEqual(classification, "invalid_provenance")
+        self.assertFalse(qualification["qualified"])
+
+    def test_fault_does_not_hide_gpu_failure(self):
+        classification, qualification = self.classify(execution="failed")
+        self.assertEqual(classification, "gpu_execution_failure")
+        self.assertFalse(qualification["qualified"])
