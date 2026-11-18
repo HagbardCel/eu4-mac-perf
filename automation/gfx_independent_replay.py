@@ -236,8 +236,63 @@ def _invalid_checkpoint(item: dict, graph: dict, reason: str,
     }
 
 
+def capture_identity(seal: dict | None, trace: dict,
+                     replay: dict | None = None) -> dict | None:
+    """Authoritative identity of the one sealed frame a result belongs to.
+
+    Causal bounds may only be derived from checkpoints observed in the same
+    capture.  ``session_id`` changes on every EU4 launch, ``capture_frame_id``
+    disambiguates frames in one continuous session and
+    ``event_stream_sha256`` binds the observation to the exact ordered event
+    stream.  A capture that cannot supply these fields is reported as
+    ``None`` rather than guessed.
+    """
+    trace = trace or {}
+    frame = trace.get("frame") or {}
+    seal = seal or {}
+    identity = {
+        "session_id": seal.get("session_id"),
+        "capture_frame_id": seal.get("capture_frame_id"),
+        "present_index": seal.get("present_index", trace.get("present_index")),
+        "scene_index": seal.get("scene_index", trace.get("scene_index")),
+        "event_stream_sha256": seal.get("event_stream_sha256"),
+        "reference_sha256": (seal.get("reference_sha256")
+                             or frame.get("reference_sha256")),
+        "manifest_sha256": seal.get("manifest_sha256"),
+    }
+    if all(value is None for value in identity.values()):
+        return None
+    return identity
+
+
+def _capture_key(value) -> tuple[str, str, str] | None:
+    if not isinstance(value, dict):
+        return None
+    parts = (value.get("session_id"), value.get("capture_frame_id"),
+             value.get("event_stream_sha256"))
+    if any(part is None for part in parts):
+        return None
+    return tuple(str(part) for part in parts)
+
+
+def _checkpoint_capture_matches(left, right) -> bool:
+    """True only when two observations provably come from the same capture.
+
+    Unknown identity is not a wildcard: if either side names a capture and the
+    other does not, they cannot bound each other.  Legacy hand-built fixtures
+    that carry no capture identity at all remain comparable, which keeps the
+    offline unit contract unchanged without weakening the sealed path.
+    """
+    left_key = _capture_key(left)
+    right_key = _capture_key(right)
+    if left_key is None and right_key is None:
+        return True
+    return left_key is not None and left_key == right_key
+
+
 def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
-                          frame_dir: Path, out_dir: Path
+                          frame_dir: Path, out_dir: Path,
+                          capture: dict | None = None
                           ) -> tuple[list[dict], dict]:
     """Reconcile every requested checkpoint with exactly one replay result.
 
@@ -461,6 +516,12 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
 
     results.sort(key=lambda item: (item.get("event") or 0,
                                    item.get("target") or ""))
+    if capture is not None:
+        # Every reconciled observation belongs to the one capture whose frame
+        # and replay produced it.  Stamping here makes a later cross-capture
+        # combination detectable instead of silently trusted.
+        for item in results:
+            item.setdefault("capture", capture)
     validation = {
         "schema": "gfx-checkpoint-validation/v1",
         "status": "ok" if not problems else "invalid",
@@ -955,18 +1016,33 @@ def first_divergence(graph: dict, checkpoints: list[dict],
             graph, producer.get("event") if producer else event)
         divergent_resource = first.get("resource")
         divergent_target = first.get("target")
-        matching = [
-            int(item["event"]) for item in checkpoints
-            if item.get("status") == "match"
-            and item.get("event") is not None
-            and int(item["event"]) < int(event or 0)
-            and _checkpoint_matches_resource(
-                item, divergent_resource, divergent_target)
-        ]
+        divergent_capture = first.get("capture")
+        matching: list[int] = []
+        foreign_capture: list[int] = []
+        for item in checkpoints:
+            if (item.get("status") != "match"
+                    or item.get("event") is None
+                    or int(item["event"]) >= int(event or 0)
+                    or not _checkpoint_matches_resource(
+                        item, divergent_resource, divergent_target)):
+                continue
+            if _checkpoint_capture_matches(item.get("capture"),
+                                           divergent_capture):
+                matching.append(int(item["event"]))
+            else:
+                # A match observed in another frame/session may describe a
+                # different engine state.  It is not a causal bound for this
+                # observation, even when the scene parameters look alike.
+                foreign_capture.append(int(item["event"]))
         previous = matching[-1] if matching else None
         event_kind = str(context.get("kind") or "")
         event_is_transfer = event_kind in ("resolve", "copy")
         limitations: list[str] = []
+        if foreign_capture:
+            limitations.append(
+                "a same-resource matching checkpoint from a different "
+                "capture was excluded from the causal bound; checkpoints "
+                "only bound an interval within one sealed frame")
         next_checkpoint = None
         recommended_action = None
         producer_event = producer.get("event") if producer else None
@@ -1008,14 +1084,25 @@ def first_divergence(graph: dict, checkpoints: list[dict],
         # destination divergence must not treat a post-transfer source match
         # as evidence about the destination version.
         source_bound = event if event_is_transfer else producer_event
-        source_matching = [
-            int(item["event"]) for item in checkpoints
-            if item.get("status") == "match"
-            and item.get("event") is not None
-            and int(item["event"]) < int(source_bound or event or 0)
-            and (str(item.get("resource")) == source_resource
-                 or str(item.get("target")) == source_target)
-        ]
+        source_matching = []
+        source_foreign: list[int] = []
+        for item in checkpoints:
+            if (item.get("status") != "match"
+                    or item.get("event") is None
+                    or int(item["event"]) >= int(source_bound or event or 0)
+                    or not (str(item.get("resource")) == source_resource
+                            or str(item.get("target")) == source_target)):
+                continue
+            if _checkpoint_capture_matches(item.get("capture"),
+                                           divergent_capture):
+                source_matching.append(int(item["event"]))
+            else:
+                source_foreign.append(int(item["event"]))
+        if source_foreign and copy_case:
+            limitations.append(
+                "a same-resource copy-source match from a different capture "
+                "was excluded; it cannot establish the source matched in "
+                "this frame")
         source_previous = max(source_matching) if source_matching else None
         if not copy_case:
             # A draw/clear producer is not a transfer.  Its output checkpoint
@@ -1277,6 +1364,13 @@ def first_divergence(graph: dict, checkpoints: list[dict],
             },
             "next_checkpoint": next_checkpoint,
             "copy_source_evidence": (source_evidence if copy_case else None),
+            "cross_capture_excluded": {
+                "capture_matches": sorted(foreign_capture),
+                "copy_source_matches": sorted(source_foreign),
+                "note": (
+                    "same-resource matches from another capture were excluded "
+                    "from this interval; they cannot bound a sealed frame"),
+            },
             "recommended_action": recommended_action,
             "recommended_checkpoint": _normalise_checkpoint(
                 next_checkpoint, "next_checkpoint"),
@@ -2271,6 +2365,7 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
         request_source = request_source or "provided"
         request_problems = []
     trace_events = len(trace.get("_events") or [])
+    capture = capture_identity(seal, trace, replay)
     identity = _identity_check(seal, trace, replay, shadow,
                                require_seal=require_seal)
     if (identity.get("status") == "unsealed"
@@ -2318,10 +2413,25 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
         }
     else:
         checkpoints, validation = reconcile_checkpoints(
-            graph, request, replay, frame_dir, metal_dir)
+            graph, request, replay, frame_dir, metal_dir, capture=capture)
         validation = dict(validation)
         validation["request_source"] = request_source
         validation["request_binding"] = request_binding
+        captured_keys = {
+            key for key in (_capture_key(item.get("capture"))
+                            for item in checkpoints)
+            if key is not None
+        }
+        if len(captured_keys) > 1:
+            # Observations from two captures must never be combined into one
+            # causal interval, even if a caller assembled them by hand.
+            validation["status"] = "invalid"
+            validation["problems"] = list(validation.get("problems") or []) + [{
+                "kind": "cross_capture_checkpoints",
+                "detail": (
+                    "checkpoints were reconciled from more than one capture "
+                    "identity; a causal interval requires one sealed frame")}]
+            validation["problems_count"] = len(validation["problems"])
     kinds = {str(item.get("kind")) for item in validation.get("problems") or []}
     if validation.get("status") == "invalid" and kinds and kinds <= {
             "missing_result"}:
@@ -2452,6 +2562,7 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
         },
         "capture": {
             "validity": capture_validity,
+            "identity": capture,
             "seal": {
                 "status": "verified" if seal is not None and not seal_error
                 else ("invalid" if seal_error else "absent"),
@@ -2780,7 +2891,8 @@ def compact_diagnosis(report: dict) -> dict:
                             "reason", "pixel_location", "differing_bounds",
                             "unresolved_interval", "next_checkpoint",
                             "suggested_checkpoint", "recommended_action",
-                            "unsupported_state", "limitations")
+                            "unsupported_state", "limitations",
+                            "cross_capture_excluded")
             },
             "copy_source_evidence": _compact_source_evidence(
                 divergence.get("copy_source_evidence")),

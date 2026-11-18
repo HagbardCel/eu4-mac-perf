@@ -1,0 +1,434 @@
+{
+  "schema": "m7-p1-autonomous-pilot/v1",
+  "branch": "m7/p1-dsh-autonomous-pilot",
+  "base_commit": "b4a1f3109880e7661eb0b343ab9d47cf168cf84f",
+  "environment": {
+    "preflight": {
+      "ok": true,
+      "profile": "eu4-web",
+      "dsh_version": "0.2.2-rc.1",
+      "node": "v26.13.1",
+      "python_version": "3.14.10",
+      "skill_sha256": "2c2a14e60cc26a238dc9cfe99919dd8658cb94622ecf3234dcfa6b5d5f0d64df"
+    },
+    "python": "3.14.10",
+    "numpy": "2.5.5",
+    "dsh_version": "0.2.2-rc.1",
+    "node": "v26.13.1",
+    "pnpm": "12.21.0",
+    "provider": "opencode-go",
+    "model": "deepseek-v4.1-flash",
+    "credentials": "present in the dedicated DSH home (value never printed)",
+    "native_tools_confirmed_in_request_header": [
+      "eu4_capture",
+      "eu4_case_inspect",
+      "eu4_diff_inspect",
+      "eu4_diff_run",
+      "eu4_re_query",
+      "eu4_replay",
+      "eu4_session"
+    ],
+    "ghidra": "corpus index resolves via eu4_re_query; no GHIDRA_INSTALL/JAVA_HOME and no ghidra_project.json in this worktree"
+  },
+  "model_turn_proof": {
+    "session_id": "session-8eb3073d-a77c-40f4-9384-757ee2eeb69b",
+    "tool_calls": [
+      "eu4_case_inspect"
+    ],
+    "final_text": "case_id=m7-live-frame-000001 verification_ok=true",
+    "export": "<dsh-home>/sessions/<workspace-slug>/session-8eb3073d-a77c-40f4-9384-757ee2eeb69b/session.v4.jsonl.zstd",
+    "export_sha256": "f813d37c2353c316ac52c05627329eb0d11748b01ab41d785d3addd4b1b4d21e"
+  },
+  "case": {
+    "case_id": "m7-live-frame-000001",
+    "verification_ok": true,
+    "files": 1247,
+    "graph_status": "complete",
+    "independently_reproducible": true,
+    "case_json_sha256": "7c00ba56d66e11ed50099620085bc828456e2fa0d2839c0cfd05c885d9192283",
+    "sealed_frame": {
+      "session_id": "a3111e0d-9b76-4b23-910d-38bd48c9aa93",
+      "capture_frame_id": 1,
+      "present_index": 617,
+      "scene_index": 617,
+      "events": 325,
+      "event_stream_sha256": "62cfdae407ecf38cbed0c98a956c5115203de12a85d46fd9b92e3d1c2dd9778c",
+      "reference_sha256": "52322629c9d2e63e0f66c97a2ec2d79cf439377417f572fed688b3f6d7f5d1fb"
+    },
+    "seal_sha256": "794c482d49767b0b0aa356f5fc28919b9c2a57a33c88f7112152efd8c07d0ca6",
+    "verified_receipt": {
+      "case_manifest_sha256": "7c00ba56d66e11ed50099620085bc828456e2fa0d2839c0cfd05c885d9192283",
+      "seal_sha256": "794c482d49767b0b0aa356f5fc28919b9c2a57a33c88f7112152efd8c07d0ca6",
+      "payload_inventory_sha256": "61f53bfc388f6d003791a508afeaff5311906ab70ab9691c2cd106d9f8b47b26",
+      "capture": {
+        "capture_frame_id": 1,
+        "event_stream_sha256": "62cfdae407ecf38cbed0c98a956c5115203de12a85d46fd9b92e3d1c2dd9778c",
+        "session_id": "a3111e0d-9b76-4b23-910d-38bd48c9aa93"
+      },
+      "matches_conclusion": true,
+      "verification": {
+        "ok": true,
+        "files": 1247,
+        "graph_status": "complete",
+        "independently_reproducible": true
+      }
+    },
+    "payload_inventory_sha256": "61f53bfc388f6d003791a508afeaff5311906ab70ab9691c2cd106d9f8b47b26"
+  },
+  "baseline_reproduction": {
+    "command": "python3.14 -m automation.agent_tools eu4_replay case --case .local/m7/p0-checkpoint-142/shadow/case --replay-out .local/p1-pilot/baseline",
+    "classification": "incomplete_diagnostics",
+    "frame_shader_identity": "unverified_session",
+    "first_divergence_event": 142,
+    "first_divergence_resource": "fb:0",
+    "event142": {
+      "mismatched_pixels": 871620,
+      "max_channel_error": 103,
+      "exactly_1_lsb": 821783,
+      "at_least_3": 631,
+      "at_least_8": 162
+    },
+    "final": {
+      "mismatched_pixels": 1160291,
+      "max_channel_error": 70
+    },
+    "note": "the standalone case replay reports unverified_session by design; the in-process P0 diagnosis is verified and both reproduce the same pixel statistics"
+  },
+  "pilot": {
+    "session_id": "session-fd42d127-1706-47d6-acb1-d40bfaa3e91b",
+    "outcome": "requires_additional_evidence",
+    "hypotheses": [
+      {
+        "id": "H1",
+        "status": "refuted"
+      },
+      {
+        "id": "H2",
+        "status": "insufficient"
+      },
+      {
+        "id": "H3",
+        "status": "supported"
+      }
+    ],
+    "starting_diagnosis": {
+      "classification": "difference_with_partial_state_coverage",
+      "first_divergence": {
+        "event": 142,
+        "resource": "fb:0"
+      },
+      "root_cause": "not_established"
+    },
+    "evidence_request": {
+      "reason": "The sealed case contains no fb:0 observation between the event-7 full color+depth+stencil clear and the event-142 pre-draw checkpoint. Event 7 is an operational search boundary, not a matching checkpoint. The only matched checkpoints (events 11 and 13) are all-white pre-draw images of the ping-pong shadow-blur buffers, so they validate neither the post-clear fb:0 nor any drawn map content. The first producer of the confirmed difference therefore cannot be placed between the post-clear program-301 map pass (events 14-19) and the 122 program-331 water draws (events 20-141); the land-region differences in H2 show the water pass alone cannot explain it.",
+      "frame_scope": "new_capture",
+      "cross_frame_caveat": "A new capture has a new session_id, capture_frame_id and event_stream_sha256. Its checkpoints cannot be combined with event 142 of sealed frame 1 even if the scene parameters match, and no cross-capture causal interval may be formed. The new frame must independently reproduce the divergence (its own final-frame comparison) and must be analyzed entirely within its own seal.",
+      "checkpoints": [
+        {
+          "event": 14,
+          "resource": "fb:0",
+          "why": "Pre-draw observation of the default framebuffer at the first content draw after the event-7 full color+depth+stencil clear. It decides whether the post-clear fb:0 already diverges before the program-301 map pass, which is the earliest possible producer compatible with the event-142 observation."
+        },
+        {
+          "event": 20,
+          "resource": "fb:0",
+          "why": "Pre-draw observation at the first program-331 water draw. Together with event 14 it separates the program-301 pass (events 14-19) from the 122-draw water pass (20-141) that contains the candidate producer event 141."
+        },
+        {
+          "event": 71,
+          "resource": "fb:0",
+          "why": "Midpoint bisection inside the water pass and the checkpoint recommended by agent-diagnosis.json first_divergence.next_checkpoint; needed only if the event-14 and event-20 observations both match."
+        }
+      ],
+      "evaluation_scope": "Each requested checkpoint is compared only with the GL reference captured in the same new sealed frame, within that frame's own seal. No checkpoint from one capture bounds another, and the new frame must reproduce the divergence in its own final-frame comparison."
+    },
+    "correction": null,
+    "remaining_uncertainty": [
+      "The lower bound of the causal interval is unobserved: event 7 is a full clear used only as an operational search boundary, not a matching checkpoint, and no fb:0 observation exists between it and event 142. Event 141 is therefore not established as the producer; the interval remains unbounded with a post-clear search start of 7.",
+      "The edge-localized residual (631 pixels at >=3 LSB, 162 at >=8, max 103) is not explained by the 1-LSB mechanism; derivative/LOD selection, coverage or an edge-specific translation defect remain candidates, but no experiment isolates one.",
+      "The sampler cache key in benchmark/eu4_gfx_frame_replay.mm omits lodMinClamp, lodMaxClamp, wrap_r, compare mode/function and anisotropy. On the event-142 path the only collision is tex:385 (8 levels, max_lod 7) reusing the tex:374/371 sampler (max_lod 10); that is equivalent because tex:385 has only 8 levels, but the key remains incomplete for other frames.",
+      "gl_dither and multisample are still captured-but-unimplemented and remain unattributed by an A/B toggle; this pilot excludes only positional/ordered dithering and coverage-edge-confined MSAA signatures as the dominant cause, not the states themselves.",
+      "The tex:433 checkpoint is classified diagnostic (RGB8 internal format versus the BGRA8 render-target emulation); its post-normalization statistics are supplementary only, are not an authoritative first-divergence observation, and are not used to bound the interval.",
+      "The Metal replay records target/transfer/provenance and per-draw bindings, but not the applied per-draw blend/depth/stencil pipeline state, so a state-level mismatch cannot be excluded from the replay artifact alone."
+    ],
+    "next_experiment": "Capture one new sealed frame of the identical selection with a pre-event fb:0 checkpoint at event 14, replay it through the existing metal replay path, and compare it against its own GL reference within its own capture identity; if event 14 matches, repeat with event 20 to separate the program-301 pass from the program-331 water pass, then event 71 for midpoint bisection.",
+    "conclusion_validation": {
+      "checks": {
+        "case_id": "m7-live-frame-000001",
+        "correction": false,
+        "evidence_request": true,
+        "has_interval": false,
+        "hypotheses": 3,
+        "outcome": "requires_additional_evidence",
+        "sealed_frame": {
+          "capture_frame_id": 1,
+          "event_stream_sha256": "62cfdae407ecf38cbed0c98a956c5115203de12a85d46fd9b92e3d1c2dd9778c",
+          "session_id": "a3111e0d-9b76-4b23-910d-38bd48c9aa93"
+        }
+      },
+      "ok": true,
+      "problems": [],
+      "problems_count": 0,
+      "schema": "gfx-pilot-validation/v1"
+    },
+    "conclusion_sha256": "77595334e35ed690fd965f6c4aa5d6379cc825e70e90361387778b9d1991f983",
+    "export": "<dsh-home>/sessions/<workspace-slug>/session-fd42d127-1706-47d6-acb1-d40bfaa3e91b/session.v4.jsonl.zstd",
+    "export_sha256": "367259111660f7e15d5168344d77d50aa957d9180e29c23e3cc79c06c4cc9121"
+  },
+  "efficiency": {
+    "turns": 1,
+    "model_calls": 72,
+    "elapsed_seconds": 1220.13,
+    "tool_calls_total": 80,
+    "calls_by_tool": {
+      "bash": 66,
+      "create_goal": 1,
+      "edit": 2,
+      "eu4_case_inspect": 1,
+      "eu4_replay": 1,
+      "get_goal": 1,
+      "read_image": 6,
+      "update_goal": 1,
+      "write": 1
+    },
+    "failed_tool_calls": 0,
+    "shell_nonzero_exit": 3,
+    "repeated_calls": [],
+    "output_chars": 400666,
+    "oversized_results": 6,
+    "truncated_results": 2,
+    "tool_wait_seconds": 34.131,
+    "tool_wait_share": 0.028,
+    "test_invocations": 0,
+    "full_suite_invocations": 0,
+    "eu4_launches": 0,
+    "tokens": {
+      "cache_read": 9790976,
+      "cache_read_share_of_total": 0.9709,
+      "cache_write": 0,
+      "effective_input": 10014418,
+      "input": 223442,
+      "output": 70285,
+      "total": 10084703
+    },
+    "goal": {
+      "active": false,
+      "last_operation": "complete",
+      "last_phase": "complete",
+      "last_turn_reason": "completed",
+      "operations": [
+        "create",
+        "complete"
+      ],
+      "outcome": "completed",
+      "terminal": true,
+      "turn_end_reasons": [
+        "completed"
+      ]
+    },
+    "replay_seconds": 0,
+    "replay_note": "the existing verified baseline replay was reused; the pilot executed no Metal replay and no EU4 launch"
+  },
+  "independent_verification": {
+    "method": "recomputed the event-142 and final histograms directly from the sealed GL blob and the Metal readback, parsed the event stream and replay provenance",
+    "event142_matches_pilot": true,
+    "final_matches_pilot": true,
+    "provenance_bindings": 2739,
+    "binding_substitutions": 0,
+    "event7_clear": {
+      "framebuffer": 0,
+      "flags": 7
+    },
+    "program_301_events": [
+      14,
+      19
+    ],
+    "program_331_events": [
+      20,
+      71,
+      141,
+      142
+    ],
+    "edge_metric_note": "the pilot's exact edge-correlation fractions use its own gradient metric; an independent luma-gradient proxy also shows strong enrichment of the >=8-LSB tail (48.8% vs 3.8% at gradient>=16)"
+  },
+  "verification": {
+    "new_focused_modules": {
+      "modules": [
+        "tests.test_dsh_pilot",
+        "tests.test_m7_checkpoint_provenance"
+      ],
+      "tests": 65,
+      "status": "passed"
+    },
+    "dependent_modules": {
+      "modules": [
+        "tests.test_dsh_pilot",
+        "tests.test_m7_checkpoint_provenance",
+        "tests.test_m7_diagnosis",
+        "tests.test_gfx_replay_checkpoints",
+        "tests.test_agent_tools",
+        "tests.test_dsh_native_bridge"
+      ],
+      "tests": 280,
+      "skipped": 1,
+      "seconds": 4.4,
+      "status": "passed"
+    },
+    "full_suite": {
+      "record": "20261118T120425Z-a5e93e6b",
+      "tests": 3641,
+      "skipped": 28,
+      "failures": 11,
+      "status": "failed_with_preexisting_qbdi_unavailable",
+      "failures_explained": {
+        "preexisting_qbdi_unavailable": 11
+      },
+      "environment_limitation": "QBDI x86-64 release not found at ~/.cache/eu4-mac-perf/qbdi/0.12.1",
+      "scope_note": "recorded before the final case-verification change; the portable CI run on the exact final head is the full-suite gate"
+    },
+    "base_comparison": {
+      "verdict": "no_new_failures",
+      "base": "20261118T112030Z-e6c14e90",
+      "candidate": "20261118T112910Z-06b2a74e",
+      "preexisting": 11,
+      "new": 0
+    },
+    "dsh_plugin_tests": {
+      "goal": 34,
+      "tools": 9
+    },
+    "portable_checks": [
+      "compileall",
+      "forbidden tracked paths",
+      "doc links",
+      "git diff --check"
+    ],
+    "authentic_pilot_regate": {
+      "native_executed": [
+        "eu4_case_inspect",
+        "eu4_replay"
+      ],
+      "launch_count": 0,
+      "launch_count_is_integer": true,
+      "case_verified": true,
+      "case_files": 1247,
+      "case_independently_reproducible": true,
+      "authoritative_checkpoints": 8,
+      "case_receipt_matches": true,
+      "conclusion_ok": true,
+      "problems": []
+    },
+    "module_comparison": {
+      "base": "20261118T112030Z-e6c14e90",
+      "candidate": "20261118T123600Z-bae625e3",
+      "selection": [
+        "tests.test_gfx_session",
+        "tests.test_trace_tr3"
+      ],
+      "verdict": "no_new_failures",
+      "preexisting": 11,
+      "new": 0,
+      "note": "the recorded full-suite selection has no matching base full-suite record; the failing modules were compared directly and are identical"
+    }
+  },
+  "native_gate": {
+    "failed": [],
+    "native_executed": [
+      "eu4_case_inspect",
+      "eu4_replay"
+    ],
+    "ok": true,
+    "problems": [],
+    "problems_count": 0,
+    "required": [],
+    "schema": "gfx-pilot-native-gate/v1",
+    "supported_native_tools": [
+      "eu4_capture",
+      "eu4_case_inspect",
+      "eu4_diff_inspect",
+      "eu4_diff_run",
+      "eu4_re_query",
+      "eu4_replay",
+      "eu4_session"
+    ],
+    "unfinished": []
+  },
+  "case_receipt": {
+    "capture": {
+      "capture_frame_id": 1,
+      "event_stream_sha256": "62cfdae407ecf38cbed0c98a956c5115203de12a85d46fd9b92e3d1c2dd9778c",
+      "session_id": "a3111e0d-9b76-4b23-910d-38bd48c9aa93"
+    },
+    "case_id": "m7-live-frame-000001",
+    "case_manifest_sha256": "7c00ba56d66e11ed50099620085bc828456e2fa0d2839c0cfd05c885d9192283",
+    "payload_inventory_sha256": "61f53bfc388f6d003791a508afeaff5311906ab70ab9691c2cd106d9f8b47b26",
+    "present_index": 617,
+    "scene_index": 617,
+    "schema": "gfx-pilot-case-receipt/v1",
+    "seal_sha256": "794c482d49767b0b0aa356f5fc28919b9c2a57a33c88f7112152efd8c07d0ca6"
+  },
+  "review_findings": {
+    "native_tool_proof": {
+      "finding": "summarize_run and the launcher accepted any nonempty tool name, so a bash-only run passed",
+      "fix": "gate reads events.jsonl, pairs tool_call with a completed tool_result, filters against automation.agent_tools.TOOLS, and fails on bash/image/goal-only runs; launch count must be present, numeric and zero",
+      "tests": [
+        "NativeGateTests",
+        "PilotSummaryTests"
+      ]
+    },
+    "causal_interval_basis": {
+      "finding": "_valid_basis validated entries independently, so a tex:431 match could bound an fb:0 divergence",
+      "fix": "require authoritative same-resource match/divergent endpoints at start/end, same sealed capture, consistent target, no duplicates/contradictions, generation agreement; unbounded intervals need only the divergent upper observation",
+      "tests": [
+        "CausalIntervalBasisTests",
+        "PilotConclusionTests"
+      ]
+    },
+    "case_verification": {
+      "finding": "summarize_run accepted the conclusion's own verification_ok flag and did not verify the case",
+      "fix": "summarize_run now requires a case directory, runs gfx_replay_case.verify (or a digest-bound receipt), requires ok/problems empty/independently reproducible/complete graph, and checks case_id, capture identity, manifest and seal digests against the conclusion",
+      "tests": [
+        "PilotSummaryTests"
+      ]
+    },
+    "authoritative_interval": {
+      "finding": "a fabricated same-capture checkpoint could be promoted to a causal bound",
+      "fix": "validate_conclusion looks claimed endpoints up in the case's verified diagnostic report; bounded intervals without authoritative same-resource match/divergent endpoints are interval_unverified",
+      "tests": [
+        "PilotConclusionTests"
+      ]
+    },
+    "receipt_payload_integrity": {
+      "finding": "a cached case receipt was not bound to current payload bytes; editing or deleting an inventoried file (including diagnostic-report.json) left the receipt valid",
+      "fix": "before reusing a receipt, hash every declared payload against its declared size/sha256; require the diagnostic report to be a declared payload; reject missing/modified files",
+      "tests": [
+        "PilotSummaryTests.test_modified_payload_after_receipt_is_rejected",
+        "test_deleted_payload_after_receipt_is_rejected",
+        "test_fabricated_interval_via_edited_report_is_rejected"
+      ]
+    }
+  },
+  "case_verification": {
+    "case_id": "m7-live-frame-000001",
+    "files": 1247,
+    "graph_status": "complete",
+    "independently_reproducible": true,
+    "ok": true,
+    "problems": [],
+    "replay_status": null,
+    "reproduction_reason": null,
+    "reproduction_status": null,
+    "schema": "gfx-strategy-b-case-verification/v1",
+    "sequence": {}
+  },
+  "authoritative_evidence": {
+    "capture": {
+      "capture_frame_id": 1,
+      "event_stream_sha256": "62cfdae407ecf38cbed0c98a956c5115203de12a85d46fd9b92e3d1c2dd9778c",
+      "session_id": "a3111e0d-9b76-4b23-910d-38bd48c9aa93"
+    },
+    "checkpoints": 8,
+    "report_sha256": "2e05d0f1cd9a40f61cdbb3c50521b81be760743cc5290c9d1dd71db90ae29d13",
+    "schema": "gfx-pilot-authoritative-checkpoints/v1"
+  }
+}
