@@ -42,17 +42,20 @@ _TEST_COMMAND = re.compile(
 _FULL_SUITE = re.compile(r"discover\s+-s\s+tests\b")
 # A launch is an invocation at command position, not a mention of the word in
 # a heredoc or a grep. This keeps report edits out of the launch count.
+_COMMAND_BOUNDARY = r"(?:^|[\n;&|]\s*)"
 _EU4_COMMAND = re.compile(
-    r"(?:^|[;&|]\s*)(?:[A-Za-z0-9_./-]*/)?(?:python[\d.]*\s+-m\s+)?"
-    r"(?:automation\.)?(eu4_diff_run|gfx_dual_run|live_gfx)\b"
-    r"|(?:open\s+-a\s+[\"']?[^\s\"']*(?:EU4|Europa))"
-    r"|(?:[A-Za-z0-9_./ -]*Europa Universalis[^\s\"']*\.app)"
-    r"|(?:[A-Za-z0-9_./ -]*eu4\.[A-Za-z0-9_]+\.exe)",
-    re.IGNORECASE)
+    _COMMAND_BOUNDARY
+    + r"(?:(?:[A-Za-z0-9_./-]*/)?(?:python[\d.]*\s+-m\s+)?"
+      r"(?:automation\.)?(?:eu4_diff_run|gfx_dual_run|live_gfx)\b"
+      r"|(?:open\s+-a\s+[\"']?[^\s\"']*(?:EU4|Europa))"
+      r"|(?:[A-Za-z0-9_./ -]*Europa Universalis[^\s\"']*\.app)"
+      r"|(?:[A-Za-z0-9_./ -]*eu4\.[A-Za-z0-9_]+\.exe))",
+    re.IGNORECASE | re.MULTILINE)
 _CAPTURE_COMMAND = re.compile(
-    r"(?:^|[;&|]\s*)(?:[A-Za-z0-9_./-]*/)?"
-    r"(?:python[\d.]*\s+-m\s+(?:automation\.)?m6_frame\s+capture)\b",
-    re.IGNORECASE)
+    _COMMAND_BOUNDARY
+    + r"(?:[A-Za-z0-9_./-]*/)?"
+      r"(?:python[\d.]*\s+-m\s+(?:automation\.)?m6_frame\s+capture)\b",
+    re.IGNORECASE | re.MULTILINE)
 _SPILL = ("dsh-spill", "use read with offset/limit", "[truncated", "(truncated")
 
 
@@ -449,11 +452,17 @@ def analyze(
                                  "excerpt": _sanitize(_excerpt(call["arguments"]))})
             continue
         command = _command_without_heredoc(command) if command else command
-        if command and (_EU4_COMMAND.search(command)
-                        or _CAPTURE_COMMAND.search(command)):
-            bash_launches += 1
-            launches.append({"kind": "bash",
-                             "excerpt": _sanitize(command[:200])})
+        if command:
+            matches = list(_CAPTURE_COMMAND.finditer(command))
+            matches.extend(_EU4_COMMAND.finditer(command))
+            for match in matches:
+                bash_launches += 1
+                launches.append({
+                    "kind": "bash",
+                    "excerpt": _sanitize(
+                        command[max(0, match.start() - 20):
+                                match.start() + 160]),
+                })
 
     wall_seconds = (max(timestamps) - min(timestamps)) if timestamps else 0.0
     input_tokens = tokens["inputTokens"]

@@ -186,3 +186,58 @@ class EfficiencyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LaunchCommandBoundaryTests(unittest.TestCase):
+    def analyze(self, *commands):
+        events = []
+        for index, command in enumerate(commands):
+            call_id = f"c{index}"
+            events.append({"type": "tool/call", "time": 1000 + index, "data": {
+                "callId": call_id, "name": "bash",
+                "arguments": {"command": command}}})
+            events.append({"type": "tool/result", "time": 2000 + index, "data": {
+                "toolCallId": call_id,
+                "message": {"isError": False, "content": [
+                    {"type": "text", "text": "ok"}]}}})
+        return dsh_efficiency.analyze(events)
+
+    def test_command_at_string_start(self):
+        value = self.analyze(
+            "python3 -m automation.m6_frame capture --output /tmp/a")
+        self.assertEqual(value["eu4_launches"]["count"], 1)
+
+    def test_command_after_and_semicolon_and_newline(self):
+        value = self.analyze(
+            "cd /tmp && python3 -m automation.m6_frame capture --output /tmp/a\n"
+            "echo hi; python3 -m automation.m6_frame capture --output /tmp/b")
+        self.assertEqual(value["eu4_launches"]["count"], 2)
+
+    def test_multiple_real_invocations_in_one_script(self):
+        value = self.analyze(
+            "python3 -m automation.m6_frame capture --output /tmp/a; "
+            "python3 -m automation.m6_frame capture --output /tmp/b; "
+            "python3 -m automation.m6_frame capture --output /tmp/c")
+        self.assertEqual(value["eu4_launches"]["count"], 3)
+
+    def test_documentation_search_and_printed_command_are_not_launches(self):
+        value = self.analyze(
+            "rg 'python3 -m automation.m6_frame capture' "
+            "analysis/m7/post206/reproduce.md\n"
+            "echo 'python3 -m automation.m6_frame capture --output /tmp/a'")
+        self.assertEqual(value["eu4_launches"]["count"], 0)
+
+    def test_heredoc_source_text_is_not_a_launch(self):
+        value = self.analyze(
+            "cat > /tmp/note.txt <<'PY'\n"
+            "python3 -m automation.m6_frame capture --output /tmp/a\n"
+            "PY")
+        self.assertEqual(value["eu4_launches"]["count"], 0)
+
+    def test_real_command_after_heredoc_is_counted(self):
+        value = self.analyze(
+            "cat > /tmp/note.txt <<'PY'\n"
+            "python3 -m automation.m6_frame capture --output /tmp/a\n"
+            "PY\n"
+            "python3 -m automation.m6_frame capture --output /tmp/b")
+        self.assertEqual(value["eu4_launches"]["count"], 1)
