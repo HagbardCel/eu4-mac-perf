@@ -115,7 +115,9 @@ def _swap_red_blue(body: bytes) -> bytes:
 _INTERNAL_FORMATS = {
     32849: "RGB8", 32856: "RGBA8", 6407: "RGB", 6408: "RGBA",
     32852: "RGB16", 34843: "RGB16F", 34836: "RGBA32F",
-    33327: "RGB10_A2",
+    # 33327 is GL_RG16F (0x822F), not RGB10_A2; the captured RGBA8
+    # readback supplies a zero blue channel and opaque alpha, so admitting
+    # it without a declared channel conversion would fabricate a difference.
 }
 
 

@@ -265,6 +265,31 @@ class GlTransferControlTests(unittest.TestCase):
         self.assertEqual(report["checks"][0]["reason_code"],
                          "unsupported_internal_format")
 
+    def test_rg16f_destination_is_not_mistaken_for_rgb10_a2(self):
+        # Enum 33327 is GL_RG16F (0x822F), not GL_RGB10_A2 (0x8059).  The
+        # captured RGBA8 readback fills blue with 0 and alpha with 255, so
+        # admitting the format without a declared channel conversion would
+        # fabricate a difference.  It must fail closed instead.
+        source = bytes((1, 2, 200, 255, 4, 5, 201, 255,
+                        7, 8, 202, 255, 10, 11, 203, 255))
+        events = [{
+            "index": 1, "kind": "resolve",
+            "operation": "glCopyTexSubImage2D", "source": "0",
+            "destination": "442", "internal_format": 33327,
+            "source_image": {"file": "copy-source.bgra",
+                             "sha256": _sha(source),
+                             "width": 2, "height": 2},
+        }, _draw(2, textures=[_texture(
+            442, "destination.bin", _sha(self.destination))])]
+        frame = make_frame(self.root, source=source,
+                           destination=self.destination, events=events)
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "incomplete")
+        self.assertFalse(report["qualified"])
+        self.assertEqual(report["checks"][0]["status"], "unavailable")
+        self.assertEqual(report["checks"][0]["reason_code"],
+                         "unsupported_internal_format")
+
     def test_two_copies_before_sample_make_the_first_unavailable(self):
         source_a = self.source
         source_b = bytes((21, 22, 23, 255, 24, 25, 26, 255,
