@@ -244,11 +244,11 @@
     "workflow": "Portable profiler correctness",
     "job": "portable",
     "conclusion": "success",
-    "duration_seconds": 269,
-    "run_id": 44365110079,
-    "job_id": 135016629479,
-    "url": "https://github.com/HagbardCel/eu4-mac-perf/actions/runs/44365110079/job/135016629479",
-    "head": "04cc19392597b8bc1e94d5461384db2fcbf078ce",
+    "duration_seconds": 266,
+    "run_id": 44385664273,
+    "job_id": 135089400983,
+    "url": "https://github.com/HagbardCel/eu4-mac-perf/actions/runs/44385664273/job/135089400983",
+    "head": "fcafb20434b59bc282636bebb46a4813c8027761",
     "notes": [
       "CI is necessary but not independent approval; the PR remains blocked on review."
     ]
