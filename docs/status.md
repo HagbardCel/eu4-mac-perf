@@ -3,6 +3,45 @@
 Authoritative summary of what is established, qualified, and in flight.
 Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
 
+## M7-P1 — autonomous differential-debugging pilot (2026-11-18)
+
+One real model-driven DSH session investigated the authentic M7-P0 event-142
+divergence **offline**, from the sealed case, without launching EU4. Session
+`session-fd42d127…` (provider `opencode-go`, model `deepseek-v4.1-flash`, all
+seven native `eu4_*` tools in the request header) created a native goal,
+verified the 1,247-file case, and tested three falsifiable hypotheses. It
+**refuted** dither/multisample as the dominant cause (94.28% of differing
+pixels are exactly 1 LSB, unstructured in position; 162 pixels ≥8 LSB are
+edge-localized), found the program-331 water-pass producer **insufficient**
+(2,739/2,739 bindings correct; reference-land regions differ, which water draws
+cannot paint; no `fb:0` checkpoint between the event-7 clear and event 142), and
+**supported** only a dominant 1-LSB numeric-pipeline component, already present
+in `tex:433`. The goal completed with `requires_additional_evidence` and a
+precise request: capture a new sealed frame with `fb:0` checkpoints at events
+14, 20 and then 71, explicitly not combining it with event 142 of the existing
+frame. No patch was made and no causal interval was claimed.
+
+The pilot cost 80 tool calls / 72 model calls / 20.3 minutes / 10.08 M tokens
+(97.1% cache read), with zero EU4 launches, zero replays (the verified baseline
+was reused), zero repeated calls and 2.8% tool wait. The two native calls
+returned ~50 KB and were truncated; a compact-by-default native projection is
+the next efficiency change.
+
+Integration corrections: same-capture causal bounds fail closed (capture
+identity is stamped on every reconciled checkpoint; foreign-capture matches are
+excluded and mixed captures invalidate the diagnosis),
+`automation.dsh_pilot` validates the pilot conclusion and summary
+(cross-capture intervals, unresolved-claim, correction evidence), and
+`dsh/scripts/run-pilot.sh` runs and evidences one headless turn. Base
+`b4a1f310` (PR #210); branch `m7/p1-dsh-autonomous-pilot`. Report:
+[M7-P1 pilot](../analysis/m7/p1-autonomous-pilot.md),
+[evidence](../analysis/m7/p1-autonomous-pilot-evidence.json),
+[conclusion](../analysis/m7/p1-autonomous-pilot-conclusion.json). Remaining limits:
+the edge-localized residual is unexplained, dither/multisample have no A/B
+toggle, event 71 still has no GL reference, and the replay artifact does not
+record applied per-draw blend/depth state. Independent review of the exact head
+is the merge gate.
+
 ## M7 post-PR-#206 preparation (2026-11-17)
 
 Prepared from merged `main` `f13602e4` (PR #206). The existing Phase A/B
