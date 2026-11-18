@@ -18,6 +18,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -443,6 +444,7 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
                     "pixels", "mismatched_pixels", "mismatched_fraction",
                     "alpha_different_pixels", "max_channel_error",
                     "mean_abs_error", "mean_max_channel_error",
+                    "first_differing_pixel", "differing_bounds",
                 )
             },
             "worst_regions": statistics["regions"][:4],
@@ -599,7 +601,7 @@ def fault_evidence(provenance: list[dict], request: dict | None) -> dict | None:
 _FINAL_STATISTICS = (
     "pixels", "mismatched_pixels", "mismatched_fraction",
     "alpha_different_pixels", "max_channel_error", "mean_abs_error",
-    "mean_max_channel_error",
+    "mean_max_channel_error", "first_differing_pixel", "differing_bounds",
 )
 
 
@@ -741,12 +743,113 @@ def _suggested_checkpoint(graph: dict, final: dict) -> dict | None:
         "event": event,
         "target": "0" if resource == "fb:0" else resource.split(":", 1)[-1],
         "resource": resource,
+        "requires_capture": True,
         "reason": (
             "checkpoint the last captured event's target; when it is not the "
             "final framebuffer, a checkpoint at or after the last default-"
             "framebuffer write is required to separate the final pass"),
         "final_statistics": final.get("statistics"),
     }
+
+
+def _copy_source_evidence(checkpoints: list[dict],
+                          producer_event: int | None,
+                          source_target: str = "0") -> dict:
+    """Return independent evidence for a copy source checkpoint.
+
+    Destination ``captured_versions`` are not source evidence.  The only
+    source evidence is a checkpoint whose event is the copy producer and
+    whose target is the actual source resource (``0`` for the default
+    framebuffer, the texture name for an attachment copy).
+    """
+    if producer_event is None:
+        return {"status": "unobserved",
+                "reason": "the copy producer event is unknown"}
+    matching = [
+        item for item in checkpoints
+        if item.get("event") == producer_event
+        and str(item.get("target")) == str(source_target)
+    ]
+    if not matching:
+        return {
+            "status": "unobserved",
+            "reason": (
+                "no copy-source checkpoint was captured at the producer "
+                "event"),
+            "event": producer_event,
+            "target": str(source_target),
+        }
+    invalid = [item for item in matching if item.get("status") == "invalid"]
+    if invalid:
+        return {
+            "status": "invalid",
+            "reason": "the copy-source checkpoint is invalid",
+            "checkpoint": invalid[0],
+        }
+    divergent = [item for item in matching
+                 if item.get("status") == "divergent"
+                 and item.get("authoritative")]
+    if divergent:
+        return {
+            "status": "divergent",
+            "reason": "the copy-source checkpoint was independently observed "
+                      "to differ",
+            "checkpoint": divergent[0],
+            "event": producer_event,
+            "target": str(source_target),
+        }
+    diagnostic = [item for item in matching
+                  if item.get("status") == "divergent_diagnostic"]
+    if diagnostic:
+        return {
+            "status": "unverified",
+            "reason": (
+                "the copy-source checkpoint is only a non-authoritative "
+                "diagnostic observation"),
+            "checkpoint": diagnostic[0],
+        }
+    if all(item.get("status") == "match" for item in matching):
+        return {
+            "status": "match",
+            "reason": "the copy-source checkpoint was independently observed "
+                      "to match",
+            "checkpoint": matching[0],
+        }
+    return {
+        "status": "unobserved",
+        "reason": "the copy-source checkpoint has no usable status",
+        "checkpoint": matching[0],
+    }
+
+
+def _normalise_checkpoint(value: dict | None,
+                          source: str) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    return {
+        "event": value.get("event"),
+        "target": value.get("target"),
+        "resource": value.get("resource"),
+        "requires_capture": bool(value.get("requires_capture")),
+        "reason": str(value.get("reason") or ""),
+        "source": source,
+        "interval": value.get("interval"),
+        "lower_bound": value.get("lower_bound"),
+    }
+
+
+def _checkpoint_matches_resource(item: dict, resource, target) -> bool:
+    """True when a checkpoint observes the same relevant resource.
+
+    Checkpoints produced by ``reconcile_checkpoints()`` carry ``resource``
+    (``fb:0``/``tex:N``); older hand-built fixtures may carry only ``target``.
+    A matching observation of an unrelated texture must never bound a
+    framebuffer divergence.
+    """
+    item_resource = item.get("resource")
+    if item_resource is not None and resource is not None:
+        return str(item_resource) == str(resource)
+    return str(item.get("target") or "") == str(target or "")
 
 
 def first_divergence(graph: dict, checkpoints: list[dict],
@@ -778,6 +881,11 @@ def first_divergence(graph: dict, checkpoints: list[dict],
                 "required checkpoint evidence is missing or unusable; "
                 "this is an instrumentation failure, not a Metal difference"),
             "better_checkpoint_validation": validation,
+            "recommended_checkpoint": None,
+            "recommended_action": {
+                "action": "repair_evidence",
+                "reason": "repair or recapture the missing checkpoint evidence",
+            },
             "fault": fault,
         }
     audit = binding_audit or {}
@@ -821,6 +929,15 @@ def first_divergence(graph: dict, checkpoints: list[dict],
             "authoritative_because": (
                 "the replay's own binding provenance disagrees with the "
                 "captured shader/texture contract at this event"),
+            "recommended_checkpoint": None,
+            "recommended_action": {
+                "action": "investigate_binding",
+                "event": semantic_event,
+                "reason": (
+                    "the binding/state mismatch is the earliest confirmed "
+                    "difference; inspect that event before choosing another "
+                    "checkpoint"),
+            },
             "reason": (
                 "the earliest confirmed difference is a binding/state mismatch; "
                 "its pixel effect may be overdrawn later"),
@@ -836,35 +953,188 @@ def first_divergence(graph: dict, checkpoints: list[dict],
         context = _event_context(graph, event)
         producer_context = _event_context(
             graph, producer.get("event") if producer else event)
+        divergent_resource = first.get("resource")
+        divergent_target = first.get("target")
         matching = [
             int(item["event"]) for item in checkpoints
             if item.get("status") == "match"
             and item.get("event") is not None
             and int(item["event"]) < int(event or 0)
+            and _checkpoint_matches_resource(
+                item, divergent_resource, divergent_target)
         ]
         previous = matching[-1] if matching else None
         event_kind = str(context.get("kind") or "")
         event_is_transfer = event_kind in ("resolve", "copy")
         limitations: list[str] = []
         next_checkpoint = None
-        if producer and str(producer.get("kind")) in ("resolve", "copy"):
+        recommended_action = None
+        producer_event = producer.get("event") if producer else None
+        copy_case = bool(
+            event_is_transfer
+            or (producer and str(producer.get("kind")) in ("resolve", "copy")))
+        source_resource = "fb:0"
+        if producer:
             source = str(producer.get("source") or "")
             source_fbo = producer.get("source_framebuffer")
             source_resource = ("fb:0" if source in ("", "0")
                                or source_fbo == 0 else f"tex:{source}")
-            if not resource.get("captured_versions"):
+        source_target = ("0" if source_resource == "fb:0"
+                         else source_resource.split(":", 1)[-1])
+        if event_is_transfer:
+            observed_target = str(first.get("target") or "0")
+            source_target = observed_target
+            source_resource = ("fb:0" if observed_target == "0"
+                               else f"tex:{observed_target}")
+        source_lookup_event = (
+            event if event_is_transfer
+            else producer_event if producer is not None else event)
+        source_evidence = _copy_source_evidence(
+            checkpoints, source_lookup_event, source_target)
+        if event_is_transfer and str(first.get("target")) == "0":
+            # This checkpoint is itself the copy source.  It is independent
+            # source evidence, not a destination-version proxy.
+            source_evidence = {
+                "status": "divergent",
+                "reason": (
+                    "the earliest authoritative divergent checkpoint is the "
+                    "copy source"),
+                "checkpoint": first,
+                "event": event,
+                "target": source_target,
+            }
+        source_status = source_evidence.get("status")
+        # Localise the source using observations before the transfer.  A
+        # destination divergence must not treat a post-transfer source match
+        # as evidence about the destination version.
+        source_bound = event if event_is_transfer else producer_event
+        source_matching = [
+            int(item["event"]) for item in checkpoints
+            if item.get("status") == "match"
+            and item.get("event") is not None
+            and int(item["event"]) < int(source_bound or event or 0)
+            and (str(item.get("resource")) == source_resource
+                 or str(item.get("target")) == source_target)
+        ]
+        source_previous = max(source_matching) if source_matching else None
+        if not copy_case:
+            # A draw/clear producer is not a transfer.  Its output checkpoint
+            # is not copy-source evidence; do not emit a copy-source block or
+            # a copy-source limitation for it.
+            source_evidence = None
+            source_status = None
+            source_previous = None
+        if copy_case and source_status == "divergent":
+            limitations.append(
+                "the copy source was independently observed to differ; "
+                "the copy execution is not established as the cause")
+            start_event = (source_previous
+                           if source_previous is not None else 0)
+            if source_previous is not None and source_previous + 1 >= int(event):
+                limitations.append(
+                    "the source resource already matched immediately before "
+                    "the divergent event; no interior checkpoint remains")
+                recommended_action = {
+                    "action": "investigate_event",
+                    "event": source_previous,
+                    "observation_event": event,
+                    "target": first.get("target"),
+                    "resource": first.get("resource"),
+                    "reason": (
+                        "the last matching same-resource checkpoint is "
+                        "immediately before the divergence; checkpoints "
+                        "observe state before their event, so operation "
+                        f"{source_previous} is the candidate and event "
+                        f"{event} only observes the result"),
+                }
+            elif source_previous is None and int(event) == 0:
+                limitations.append(
+                    "the divergence is already present at event 0; no "
+                    "earlier captured operation exists to bisect")
+                recommended_action = {
+                    "action": "investigate_initial_state",
+                    "event": 0,
+                    "observation_event": 0,
+                    "target": first.get("target"),
+                    "resource": first.get("resource"),
+                    "reason": (
+                        "the source is already divergent at the first "
+                        "captured event; inspect the initial state rather "
+                        "than recapturing event 0"),
+                }
+            else:
+                if source_previous is None:
+                    # Event 0 is operational search scope, not observed
+                    # matching evidence.  It is a valid new checkpoint.
+                    midpoint = int(event) // 2
+                else:
+                    midpoint = max(int(start_event) + 1,
+                                   (int(start_event) + int(event)) // 2)
+                next_checkpoint = {
+                    "event": midpoint,
+                    "target": source_target,
+                    "resource": source_resource,
+                    "requires_capture": True,
+                    "reason": (
+                        "the copy source already differs; capture a "
+                        f"{source_resource} checkpoint near the midpoint of "
+                        "the unresolved interval to bisect the origin"),
+                    "interval": [int(start_event), int(event)],
+                    "lower_bound": ("same_resource_match"
+                                    if source_previous is not None
+                                    else "unbounded"),
+                }
+        elif copy_case and producer:
+            if source_status == "match":
+                limitations.append(
+                    "the copy source was independently observed to match; "
+                    "the difference is at or after the transfer")
+                recommended_action = {
+                    "action": "investigate_transfer",
+                    "event": producer_event,
+                    "observation_event": event,
+                    "target": first.get("target"),
+                    "resource": first.get("resource"),
+                    "reason": (
+                        "the source checkpoint matches, so do not bisect "
+                        "upstream; inspect the copy operation or the "
+                        "destination consumer"),
+                }
+            elif source_status == "invalid":
+                next_checkpoint = {
+                    "event": source_lookup_event,
+                    "target": source_target,
+                    "resource": source_resource,
+                    "requires_capture": True,
+                    "reason": (
+                        "the copy-source checkpoint is invalid; repair or "
+                        "recapture the source before choosing an upstream "
+                        "interval"),
+                }
+            else:
                 limitations.append(
                     "the copy source has no independent captured checkpoint; "
-                    "the difference may originate before the copy")
-            next_checkpoint = {
-                "event": producer.get("event"),
-                "target": ("0" if source_resource == "fb:0"
-                           else source_resource.split(":", 1)[-1]),
-                "resource": source_resource,
-                "reason": (
-                    "checkpoint the copy source immediately before the "
-                    "transfer to separate source contents from copy execution"),
-            }
+                    "the difference may originate before the copy, but "
+                    "upstream bisection is not yet justified")
+                next_checkpoint = {
+                    "event": source_lookup_event,
+                    "target": source_target,
+                    "resource": source_resource,
+                    "requires_capture": True,
+                    "reason": (
+                        "capture the copy source immediately before the "
+                        "transfer to establish whether the source or the "
+                        "copy execution differs"),
+                }
+        interval_start = (source_previous
+                          if copy_case and event_is_transfer else previous)
+        if (copy_case and source_evidence is not None
+                and source_evidence.get("status") == "unobserved"
+                and not (event_is_transfer
+                         and str(first.get("target")) == "0")):
+            limitations.append(
+                "no independent copy-source evidence exists; the next "
+                "checkpoint must capture it")
         limitations.append(
             "the earliest observed differing event is not a proven root "
             "cause; earlier operations in the unresolved interval were not "
@@ -915,6 +1185,10 @@ def first_divergence(graph: dict, checkpoints: list[dict],
             "gl_sha256": first.get("reference_sha256"),
             "metal_sha256": first.get("metal_sha256"),
             "statistics": first.get("statistics"),
+            "pixel_location": (
+                (first.get("statistics") or {}).get("first_differing_pixel")),
+            "differing_bounds": (
+                (first.get("statistics") or {}).get("differing_bounds")),
             "upstream_checkpoints": [
                 {"event": row.get("event"), "target": row.get("target"),
                  "status": next(
@@ -931,13 +1205,25 @@ def first_divergence(graph: dict, checkpoints: list[dict],
             "semantic": first_semantic,
             "final": final.get("status"),
             "unresolved_interval": {
-                "start_event": previous,
+                "start_event": interval_start,
                 "end_event": event,
+                "lower_bound": ("same_resource_match"
+                                if interval_start is not None
+                                else "unbounded"),
+                "search_start_event": (interval_start
+                                       if interval_start is not None else 0),
                 "note": (
-                    "the first confirmed divergent checkpoint; earlier "
-                    "operations in this interval were not checkpointed"),
+                    "the first confirmed divergent checkpoint; the lower "
+                    "bound is the last matching checkpoint for the same "
+                    "resource when one exists, otherwise it is unbounded. "
+                    "Event 0 is only an operational search start, not "
+                    "observed matching evidence"),
             },
             "next_checkpoint": next_checkpoint,
+            "copy_source_evidence": (source_evidence if copy_case else None),
+            "recommended_action": recommended_action,
+            "recommended_checkpoint": _normalise_checkpoint(
+                next_checkpoint, "next_checkpoint"),
             "diagnostic_checkpoints": [
                 {"event": item.get("event"), "target": item.get("target"),
                  "statistics": item.get("statistics"),
@@ -971,6 +1257,13 @@ def first_divergence(graph: dict, checkpoints: list[dict],
     if final.get("status") == "divergent":
         events = list(graph.get("events") or [])
         last_event = max((_event_index(row) for row in events), default=-1)
+        final_matching = [
+            int(item["event"]) for item in checkpoints
+            if item.get("status") == "match"
+            and item.get("event") is not None
+            and _checkpoint_matches_resource(item, "fb:0", "0")
+        ]
+        final_previous = max(final_matching) if final_matching else None
         return {
             "schema": "gfx-first-divergence/v1",
             "frame_id": frame_id,
@@ -978,18 +1271,28 @@ def first_divergence(graph: dict, checkpoints: list[dict],
             "event": None,
             "last_event": last_event if last_event >= 0 else event_count,
             "statistics": final.get("statistics"),
+            "pixel_location": (
+                (final.get("statistics") or {}).get("first_differing_pixel")),
+            "differing_bounds": (
+                (final.get("statistics") or {}).get("differing_bounds")),
             "semantic": first_semantic,
             "intermediate": None,
             "suggested_checkpoint": _suggested_checkpoint(graph, final),
+            "recommended_checkpoint": _normalise_checkpoint(
+                _suggested_checkpoint(graph, final), "suggested_checkpoint"),
             "unresolved_interval": {
-                "start_event": max(
-                    [int(item["event"]) for item in checkpoints
-                     if item.get("status") == "match"
-                     and item.get("event") is not None] or [0]),
+                "start_event": final_previous,
                 "end_event": last_event if last_event >= 0 else event_count,
+                "lower_bound": ("same_resource_match"
+                                if final_previous is not None
+                                else "unbounded"),
+                "search_start_event": (final_previous
+                                       if final_previous is not None else 0),
                 "note": (
                     "the final image differs but no authoritative intermediate "
-                    "checkpoint did; the responsible pass is unresolved"),
+                    "checkpoint did; an unrelated resource match cannot bound "
+                    "the default-framebuffer interval, so the lower bound is "
+                    "unbounded unless a matching fb:0 observation exists"),
             },
             "unsupported_state": unsupported,
             "confidence": "final_only",
@@ -1015,6 +1318,8 @@ def first_divergence(graph: dict, checkpoints: list[dict],
         "unsupported_state": unsupported,
         "confidence": "none",
         "root_cause": "none_observed",
+        "recommended_checkpoint": None,
+        "recommended_action": None,
         "reason": "all authoritative checkpoints and the final output match",
         "fault": fault,
     }
@@ -1990,11 +2295,16 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
     final = final_comparison_report(frame_dir, metal_dir, policy)
     frame_info = trace.get("frame") or {}
     frame_id = (seal or {}).get("capture_frame_id")
+    present_index = (seal or {}).get("present_index",
+                                     trace.get("present_index"))
+    scene_index = (seal or {}).get("scene_index", trace.get("scene_index"))
     divergence = first_divergence(
         graph, checkpoints, final, binding_audit=audit,
         fault=faults or None, checkpoint_validation=validation,
         frame_id=frame_id, state_coverage_report=states,
         event_count=trace_events)
+    divergence["present_index"] = present_index
+    divergence["scene_index"] = scene_index
     encoded = replay.get("encoded")
     failed = replay.get("failed")
     command_status = replay.get("command_status")
@@ -2074,6 +2384,8 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
         "faults": faults or {},
         "frame": {
             "capture_frame_id": frame_id,
+            "present_index": present_index,
+            "scene_index": scene_index,
             "boundary": (seal or {}).get("boundary"),
             "width": frame_info.get("width"),
             "height": frame_info.get("height"),
@@ -2188,6 +2500,267 @@ def _default_case_destination(frame_dir: Path, metal_dir: Path,
         "directories is available")
 
 
+def _compact_recommendation(divergence: dict) -> dict | None:
+    value = divergence.get("recommended_checkpoint")
+    if isinstance(value, dict):
+        return dict(value)
+    value = _normalise_checkpoint(
+        divergence.get("next_checkpoint"), "next_checkpoint")
+    if value is not None:
+        return value
+    return _normalise_checkpoint(
+        divergence.get("suggested_checkpoint"), "suggested_checkpoint")
+
+
+def _compact_source_evidence(evidence: dict | None) -> dict | None:
+    if not isinstance(evidence, dict):
+        return None
+    checkpoint = evidence.get("checkpoint")
+    if not isinstance(checkpoint, dict):
+        return {
+            "status": evidence.get("status"),
+            "reason": evidence.get("reason"),
+            "event": evidence.get("event"),
+            "target": evidence.get("target"),
+            "checkpoint": None,
+            "gl_sha256": None,
+            "metal_sha256": None,
+        }
+    statistics = checkpoint.get("statistics") or {}
+    return {
+        "status": evidence.get("status"),
+        "reason": evidence.get("reason"),
+        "event": evidence.get("event"),
+        "target": evidence.get("target"),
+        "checkpoint": {
+            "event": checkpoint.get("event"),
+            "target": checkpoint.get("target"),
+            "resource": checkpoint.get("resource"),
+            "status": checkpoint.get("status"),
+            "authoritative": checkpoint.get("authoritative"),
+            "mismatched_pixels": statistics.get("mismatched_pixels"),
+            "max_channel_error": statistics.get("max_channel_error"),
+            # ``reconcile_checkpoints()`` names the authoritative captured
+            # reference digest ``reference_sha256``.  The compact evidence
+            # keeps publishing it as ``gl_sha256`` so agents can independently
+            # verify the source-side comparison; the Metal digest already has
+            # its own field.  A missing digest stays explicitly null.
+            "gl_sha256": (checkpoint.get("reference_sha256")
+                          or checkpoint.get("gl_sha256")),
+            "metal_sha256": checkpoint.get("metal_sha256"),
+        },
+    }
+
+
+def _compact_checkpoints(report: dict) -> tuple[list[dict], dict]:
+    """Select a bounded, causally relevant checkpoint subset.
+
+    The selection is deterministic and prioritises the first divergent
+    checkpoint, the last matching checkpoint, the divergent resource's
+    producer/predecessor events, the recommended next checkpoint, and the
+    first/last observations.  It never simply returns the first 32 rows.
+    """
+    items = [item for item in (report.get("checkpoints") or [])
+             if isinstance(item, dict)]
+    divergence = report.get("first_divergence") or {}
+    recommended = _compact_recommendation(divergence) or {}
+    selected: list[dict] = []
+    reasons: dict[tuple, list[str]] = {}
+
+    def key(item: dict):
+        return (item.get("event"), str(item.get("target") or ""))
+
+    def add(item: dict | None, reason: str) -> None:
+        if not isinstance(item, dict):
+            return
+        item_key = key(item)
+        if not any(key(existing) == item_key for existing in selected):
+            selected.append(item)
+        reasons.setdefault(item_key, []).append(reason)
+
+    div_event = divergence.get("event")
+    div_target = str(divergence.get("target") or "")
+    if div_event is not None:
+        add(next((item for item in items
+                  if item.get("event") == div_event
+                  and str(item.get("target") or "") == div_target), None),
+            "first_divergent")
+        div_resource = divergence.get("resource")
+        matching = [
+            item for item in items
+            if item.get("status") == "match"
+            and isinstance(item.get("event"), int)
+            and item["event"] < int(div_event)
+            and _checkpoint_matches_resource(item, div_resource, div_target)
+        ]
+        if matching:
+            add(max(matching, key=lambda item: item["event"]), "last_matching")
+        producer_event = divergence.get("producer_event")
+        source_evidence = divergence.get("copy_source_evidence")
+        if producer_event is not None and isinstance(source_evidence, dict):
+            source_checkpoint = source_evidence.get("checkpoint")
+            if isinstance(source_checkpoint, dict):
+                add(next((item for item in items
+                          if item.get("event") == source_checkpoint.get("event")
+                          and str(item.get("target") or "")
+                          == str(source_checkpoint.get("target") or "")), None),
+                    "copy_source")
+        for prior in divergence.get("prior_producers") or []:
+            event = prior.get("event") if isinstance(prior, dict) else None
+            if event is not None:
+                add(next((item for item in items
+                          if item.get("event") == event), None),
+                    "resource_predecessor")
+        resource = divergence.get("resource")
+        if resource:
+            related = [item for item in items
+                       if item.get("resource") == resource
+                       and isinstance(item.get("event"), int)
+                       and (div_event is None
+                            or item["event"] <= int(div_event))]
+            for item in related[-4:]:
+                add(item, "resource_predecessor")
+    else:
+        start_event = (divergence.get("unresolved_interval") or {}).get(
+            "start_event")
+        if isinstance(start_event, int):
+            add(next((item for item in items
+                      if item.get("event") == start_event
+                      and _checkpoint_matches_resource(item, "fb:0", "0")),
+                     None),
+                "last_matching")
+    if recommended.get("event") is not None:
+        add(next((item for item in items
+                  if item.get("event") == recommended["event"]), None),
+            "recommended_next")
+    if items:
+        add(items[0], "first_observation")
+        add(items[-1], "last_observation")
+    selected.sort(key=lambda item: (
+        item.get("event") if isinstance(item.get("event"), int) else -1,
+        str(item.get("target") or "")))
+    bounded = selected[:32]
+    projected = []
+    for item in bounded:
+        statistics = item.get("statistics") or {}
+        projected.append({
+            "event": item.get("event"),
+            "target": item.get("target"),
+            "resource": item.get("resource"),
+            "status": item.get("status"),
+            "authoritative": item.get("authoritative"),
+            "mismatched_pixels": statistics.get("mismatched_pixels"),
+            "max_channel_error": statistics.get("max_channel_error"),
+            "selected_because": reasons.get(key(item), []),
+        })
+    return projected, {
+        "total": len(items),
+        "selected": len(projected),
+        "bounded": 32,
+        "eligible_for_selection": len(selected),
+    }
+
+
+def _sanitize_compact_paths(value):
+    """Recursively replace absolute path tokens with their basenames.
+
+    The compact diagnosis is handed to an agent and must not leak host paths.
+    Checkpoint problems and native execution errors can embed absolute paths,
+    so the whole projection is sanitized, not just the artifact map.
+    """
+    if isinstance(value, dict):
+        return {key: _sanitize_compact_paths(item)
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_compact_paths(item) for item in value]
+    if isinstance(value, str):
+        return _ABSOLUTE_PATH_RE.sub(
+            lambda match: Path(match.group(0)).name or match.group(0), value)
+    return value
+
+
+_ABSOLUTE_PATH_RE = re.compile(r"(?<![/\w<:>])/(?:[^\s\",',;:]+)")
+
+
+def compact_diagnosis(report: dict) -> dict:
+    """A bounded, machine-readable diagnosis for an autonomous coding agent.
+
+    The full ``diagnostic-report.json`` keeps the dependency graph and raw
+    evidence.  This projection carries only the fields needed to choose the
+    next diagnostic action, so an agent does not need to parse a multi-megabyte
+    report or infer the causal interval from prose.
+    """
+    qualification = report.get("qualification") or {}
+    divergence = report.get("first_divergence") or {}
+    checkpoints, selection = _compact_checkpoints(report)
+    recommendation = _compact_recommendation(divergence)
+    action = divergence.get("recommended_action")
+    next_action = (
+        (recommendation or {}).get("reason")
+        or (action or {}).get("reason")
+        or "no further checkpoint is recommended by this diagnosis")
+    compact = {
+        "schema": "gfx-agent-diagnosis/v1",
+        "classification": report.get("classification"),
+        "qualified": qualification.get("qualified"),
+        "axes": qualification.get("axes"),
+        "frame": {
+            key: (report.get("frame") or {}).get(key)
+            for key in ("capture_frame_id", "present_index", "scene_index",
+                        "events", "sealed")
+        },
+        "execution": {
+            key: (report.get("execution") or {}).get(key)
+            for key in ("status", "events", "encoded", "failed",
+                        "command_status", "stage", "error")
+        },
+        "first_divergence": {
+            **{
+                key: divergence.get(key)
+                for key in ("kind", "event", "target", "resource", "operation",
+                            "entry", "caller_rva", "program", "producer_event",
+                            "producer_program", "producer_entry",
+                            "producer_caller_rva", "confidence", "root_cause",
+                            "reason", "pixel_location", "differing_bounds",
+                            "unresolved_interval", "next_checkpoint",
+                            "suggested_checkpoint", "recommended_action",
+                            "unsupported_state", "limitations")
+            },
+            "copy_source_evidence": _compact_source_evidence(
+                divergence.get("copy_source_evidence")),
+            "recommended_checkpoint": recommendation,
+        },
+        "inputs": (divergence.get("inputs") or [])[:16],
+        "checkpoints": checkpoints,
+        "checkpoint_selection": selection,
+        "final": {
+            "status": (report.get("pixels") or {}).get("status"),
+            "statistics": ((report.get("pixels") or {}).get("final")
+                           or {}).get("statistics"),
+        },
+        "checkpoint_validation": {
+            key: (report.get("checkpoint_validation") or {}).get(key)
+            for key in ("status", "requested", "returned", "matched",
+                        "diagnostic", "divergent", "invalid", "problems")
+        },
+        "artifacts": {
+            key: (Path(value).name
+                  if isinstance(value, str) and Path(value).is_absolute()
+                  else value)
+            for key, value in (report.get("artifacts") or {}).items()
+        },
+        "next_action": next_action,
+    }
+    return _sanitize_compact_paths(compact)
+
+
+def write_compact_diagnosis(out_dir: Path | str, report: dict) -> Path:
+    path = Path(out_dir) / "agent-diagnosis.json"
+    path.write_text(json.dumps(compact_diagnosis(report), indent=2) + "\n",
+                    encoding="utf-8")
+    return path
+
+
 def diagnose_frame(frame_dir: Path | str, metal_result_dir: Path | str,
                    output_dir: Path | str,
                    policy: Path | str | None = None, *,
@@ -2213,6 +2786,8 @@ def diagnose_frame(frame_dir: Path | str, metal_result_dir: Path | str,
     report["artifacts"]["diagnostic_report"] = str(report_path)
     report_path.write_text(json.dumps(report, indent=2) + "\n",
                            encoding="utf-8")
+    compact_path = write_compact_diagnosis(out_dir, report)
+    report["artifacts"]["agent_diagnosis"] = str(compact_path)
     if package:
         from automation import gfx_replay_case
 

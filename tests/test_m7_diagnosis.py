@@ -387,7 +387,11 @@ class DiagnosisContractTests(unittest.TestCase):
         self.assertIsNotNone(divergence["gl_sha256"])
         self.assertIsNotNone(divergence["metal_sha256"])
         self.assertEqual(divergence["root_cause"], "not_established")
-        self.assertEqual(len(divergence["unresolved_interval"]), 3)
+        interval = divergence["unresolved_interval"]
+        self.assertEqual(interval["end_event"], 4)
+        self.assertIsNone(interval["start_event"])
+        self.assertEqual(interval["lower_bound"], "unbounded")
+        self.assertEqual(interval["search_start_event"], 0)
 
     def test_missing_checkpoint_result_is_incomplete_diagnostics(self):
         replay = json.loads((self.fixture.metal / "replay.json").read_text())
@@ -1025,3 +1029,812 @@ class FaultExperimentClassificationTests(unittest.TestCase):
         classification, qualification = self.classify(execution="failed")
         self.assertEqual(classification, "gpu_execution_failure")
         self.assertFalse(qualification["qualified"])
+
+
+class CompactAgentDiagnosisTests(unittest.TestCase):
+    def test_compact_projection_is_bounded_and_actionable(self):
+        report = {
+            "classification": "difference_with_partial_state_coverage",
+            "qualification": {"qualified": False,
+                              "axes": {"pixel_comparison": "divergent"}},
+            "frame": {"capture_frame_id": 3, "present_index": 617,
+                      "scene_index": 617, "events": 325, "sealed": True},
+            "execution": {"status": "ok", "events": 325, "encoded": 325,
+                          "failed": 0, "command_status": 4},
+            "first_divergence": {
+                "kind": "intermediate", "event": 286, "target": "442",
+                "resource": "tex:442", "operation": "glCopyTexSubImage2D",
+                "producer_event": 283, "producer_program": 346,
+                "confidence": "confirmed", "root_cause": "not_established",
+                "unresolved_interval": {"start_event": 13,
+                                        "end_event": 284},
+                "next_checkpoint": {"event": 148, "target": "0",
+                                    "resource": "fb:0",
+                                    "requires_capture": True,
+                                    "reason": "bisect the interval"},
+                "pixel_location": {"x": 0, "y": 0, "offset": 0},
+                "differing_bounds": {"x": 0, "y": 0, "width": 8,
+                                     "height": 8},
+                "inputs": [{"resource": "tex:428"}] * 40,
+                "limitations": ["not a root cause"],
+            },
+            "checkpoints": [{"event": index, "target": "442",
+                             "status": "divergent" if index == 286 else "match",
+                             "statistics": {"mismatched_pixels": index,
+                                            "max_channel_error": 1}}
+                            for index in range(1, 300)],
+            "pixels": {"status": "divergent",
+                       "final": {"statistics": {"mismatched_pixels": 10}}},
+            "checkpoint_validation": {"status": "ok", "requested": 7,
+                                      "returned": 7},
+            "graph": {"large": "not projected"},
+            "artifacts": {"diagnostic_report": "/tmp/diagnostic-report.json"},
+        }
+        compact = gfx_independent_replay.compact_diagnosis(report)
+        self.assertEqual(compact["schema"], "gfx-agent-diagnosis/v1")
+        self.assertEqual(compact["first_divergence"]["event"], 286)
+        self.assertEqual(compact["first_divergence"]["next_checkpoint"]["event"],
+                         148)
+        self.assertLessEqual(len(compact["checkpoints"]), 32)
+        self.assertGreater(compact["checkpoint_selection"]["total"], 32)
+        selected_events = {item["event"] for item in compact["checkpoints"]}
+        self.assertIn(286, selected_events)
+        self.assertIn(285, selected_events)
+        self.assertIn(148, selected_events)
+        self.assertIn(1, selected_events)
+        self.assertIn(299, selected_events)
+        self.assertEqual(compact["checkpoints"][0]["selected_because"],
+                         ["first_observation"])
+        self.assertIn("bisect", compact["next_action"])
+        self.assertEqual(compact["first_divergence"]["recommended_checkpoint"]
+                         ["source"], "next_checkpoint")
+
+    def test_selection_is_deterministic_and_causally_bounded(self):
+        report = {
+            "classification": "difference_with_partial_state_coverage",
+            "qualification": {"qualified": False, "axes": {}},
+            "frame": {"capture_frame_id": 1},
+            "execution": {"status": "ok"},
+            "first_divergence": {
+                "kind": "intermediate", "event": 150, "target": "442",
+                "resource": "tex:442", "producer_event": 148,
+                "recommended_checkpoint": {
+                    "event": 190, "target": "0", "resource": "fb:0",
+                    "requires_capture": True, "reason": "next bisection",
+                    "source": "next_checkpoint"},
+            },
+            "checkpoints": [{
+                "event": index, "target": "442",
+                "resource": "tex:442",
+                "status": "divergent" if index == 150 else "match",
+                "statistics": {"mismatched_pixels": 1},
+            } for index in range(1, 201)],
+            "pixels": {"status": "divergent"},
+            "checkpoint_validation": {"status": "ok"},
+        }
+        first = gfx_independent_replay.compact_diagnosis(report)
+        second = gfx_independent_replay.compact_diagnosis(report)
+        self.assertEqual(first["checkpoints"], second["checkpoints"])
+        events = {item["event"] for item in first["checkpoints"]}
+        self.assertLessEqual(len(first["checkpoints"]), 32)
+        for expected in (1, 149, 150, 190, 200):
+            self.assertIn(expected, events)
+        self.assertNotIn(50, events)
+        self.assertIn("150", str(first["checkpoints"]))
+        selected = {item["event"]: item["selected_because"]
+                    for item in first["checkpoints"]}
+        self.assertIn("first_divergent", selected[150])
+        self.assertIn("last_matching", selected[149])
+        self.assertIn("recommended_next", selected[190])
+
+    def test_compact_diagnosis_sanitizes_absolute_paths(self):
+        report = {
+            "classification": "invalid_provenance",
+            "qualification": {"qualified": False, "axes": {}},
+            "frame": {"capture_frame_id": 1},
+            "execution": {
+                "status": "failed",
+                "error": "open /Users/operator/evidence/replay.json failed",
+            },
+            "first_divergence": {
+                "kind": "intermediate",
+                "event": 4,
+                "target": "10",
+                "resource": "tex:10",
+                "reason": "checkpoint /private/tmp/metal/capture.bgra is invalid",
+                "limitations": ["read /var/folders/x/stage.bin failed"],
+            },
+            "checkpoints": [],
+            "pixels": {"status": "unavailable"},
+            "checkpoint_validation": {
+                "status": "invalid",
+                "problems": [{
+                    "kind": "invalid_result",
+                    "event": 4,
+                    "target": "10",
+                    "reason": (
+                        "checkpoint_size: /private/var/folders/x/metal/"
+                        "intermediate-event4-tex10.bgra is 7 bytes, expected "
+                        "256"),
+                }],
+            },
+            "artifacts": {"diagnostic_report": "/tmp/out/diagnostic-report.json"},
+        }
+        compact = gfx_independent_replay.compact_diagnosis(report)
+        text = json.dumps(compact)
+        for leaked in ("/private/", "/Users/", "/var/", "/tmp/"):
+            self.assertNotIn(leaked, text)
+        self.assertIn("intermediate-event4-tex10.bgra", text)
+        self.assertIn("replay.json", text)
+        self.assertIn("diagnostic-report.json", text)
+
+    def test_compact_diagnosis_is_written_next_to_the_report(self):
+        report = {
+            "classification": "qualified_match",
+            "qualification": {"qualified": True, "axes": {}},
+            "frame": {"capture_frame_id": 1},
+            "first_divergence": {"kind": "none"},
+            "artifacts": {},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = gfx_independent_replay.write_compact_diagnosis(
+                directory, report)
+            self.assertTrue(path.is_file())
+            value = json.loads(path.read_text())
+            self.assertEqual(value["schema"], "gfx-agent-diagnosis/v1")
+
+
+class CompactSourceEvidenceDigestTests(unittest.TestCase):
+    REFERENCE_SHA = "a" * 64
+    METAL_SHA = "b" * 64
+
+    def report(self, checkpoint=True):
+        if checkpoint:
+            evidence = {
+                "status": "match",
+                "reason": "the copy-source checkpoint was independently "
+                          "observed to match",
+                "event": 284,
+                "target": "0",
+                "checkpoint": {
+                    "event": 284,
+                    "target": "0",
+                    "resource": "fb:0",
+                    "status": "match",
+                    "authoritative": True,
+                    "statistics": {"mismatched_pixels": 0,
+                                   "max_channel_error": 0},
+                    "reference_sha256": self.REFERENCE_SHA,
+                    "metal_sha256": self.METAL_SHA,
+                },
+            }
+        else:
+            evidence = {
+                "status": "unobserved",
+                "reason": "no copy-source checkpoint was captured at the "
+                          "producer event",
+                "event": 284,
+                "target": "0",
+            }
+        return {
+            "classification": "difference_with_partial_state_coverage",
+            "qualification": {"qualified": False, "axes": {}},
+            "frame": {"capture_frame_id": 1},
+            "execution": {"status": "ok"},
+            "first_divergence": {
+                "kind": "intermediate",
+                "event": 286,
+                "target": "442",
+                "resource": "tex:442",
+                "producer_event": 284,
+                "copy_source_evidence": evidence,
+                "recommended_action": {
+                    "action": "investigate_transfer",
+                    "event": 284,
+                    "observation_event": 286,
+                    "reason": "the source checkpoint matches",
+                },
+            },
+            "checkpoints": [],
+            "pixels": {"status": "divergent"},
+            "checkpoint_validation": {"status": "ok"},
+            "artifacts": {},
+        }
+
+    def test_compact_source_evidence_preserves_both_digests(self):
+        report = self.report()
+        compact = gfx_independent_replay.compact_diagnosis(report)
+        evidence = compact["first_divergence"]["copy_source_evidence"]
+        source = report["first_divergence"]["copy_source_evidence"]
+        checkpoint = evidence["checkpoint"]
+        authoritative = source["checkpoint"]
+        # The reference digest is authoritative and must survive projection.
+        self.assertEqual(checkpoint["gl_sha256"], self.REFERENCE_SHA)
+        self.assertEqual(checkpoint["gl_sha256"],
+                         authoritative["reference_sha256"])
+        # The Metal digest is preserved independently.
+        self.assertEqual(checkpoint["metal_sha256"], self.METAL_SHA)
+        self.assertEqual(checkpoint["metal_sha256"],
+                         authoritative["metal_sha256"])
+        # Both digests still name the source checkpoint, not the divergent one.
+        self.assertEqual(checkpoint["event"], 284)
+        self.assertEqual(checkpoint["target"], "0")
+        self.assertEqual(checkpoint["resource"], "fb:0")
+        self.assertEqual(checkpoint["status"], "match")
+        self.assertEqual(compact["first_divergence"]["event"], 286)
+        self.assertEqual(compact["first_divergence"]["event"],
+                         report["first_divergence"]["event"])
+
+    def test_missing_source_checkpoint_stays_explicitly_missing(self):
+        report = self.report(checkpoint=False)
+        compact = gfx_independent_replay.compact_diagnosis(report)
+        evidence = compact["first_divergence"]["copy_source_evidence"]
+        self.assertEqual(evidence["status"], "unobserved")
+        self.assertIn("no copy-source checkpoint", evidence["reason"])
+        self.assertIsNone(evidence["checkpoint"])
+        self.assertIsNone(evidence["gl_sha256"])
+        self.assertIsNone(evidence["metal_sha256"])
+        self.assertEqual(evidence["event"], 284)
+        self.assertEqual(evidence["target"], "0")
+
+
+class CausalLowerBoundTests(unittest.TestCase):
+    def graph(self):
+        return {
+            "events": [{
+                "event": 4, "kind": "draw", "target": "fb:0",
+                "entry": "_GfxDraw", "program": 7,
+            }],
+            "resources": {
+                "fb:0": {
+                    "producers": [{"event": 4, "kind": "draw",
+                                   "entry": "_GfxDraw", "program": 7}],
+                },
+            },
+        }
+
+    def divergent(self):
+        return {
+            "event": 4, "target": "0", "resource": "fb:0",
+            "status": "divergent", "authoritative": True,
+            "statistics": {"mismatched_pixels": 4},
+        }
+
+    def test_unrelated_texture_match_does_not_bound_framebuffer(self):
+        checkpoints = [
+            {"event": 3, "target": "10", "resource": "tex:10",
+             "status": "match", "authoritative": True},
+            self.divergent(),
+        ]
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), checkpoints,
+            {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["kind"], "intermediate")
+        interval = value["unresolved_interval"]
+        self.assertIsNone(interval["start_event"])
+        self.assertEqual(interval["lower_bound"], "unbounded")
+        self.assertEqual(interval["search_start_event"], 0)
+
+    def test_same_resource_match_bounds_the_framebuffer(self):
+        checkpoints = [
+            {"event": 3, "target": "0", "resource": "fb:0",
+             "status": "match", "authoritative": True},
+            self.divergent(),
+        ]
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), checkpoints,
+            {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        interval = value["unresolved_interval"]
+        self.assertEqual(interval["start_event"], 3)
+        self.assertEqual(interval["lower_bound"], "same_resource_match")
+
+    def test_final_only_ignores_unrelated_matching_observations(self):
+        checkpoints = [
+            {"event": 3, "target": "10", "resource": "tex:10",
+             "status": "match", "authoritative": True},
+            {"event": 5, "target": "11", "resource": "tex:11",
+             "status": "match", "authoritative": True},
+        ]
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), checkpoints,
+            {"status": "divergent",
+             "statistics": {"mismatched_pixels": 4}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["kind"], "final_only")
+        interval = value["unresolved_interval"]
+        self.assertIsNone(interval["start_event"])
+        self.assertEqual(interval["lower_bound"], "unbounded")
+        self.assertEqual(interval["search_start_event"], 0)
+
+    def test_final_only_same_resource_match_bounds_the_interval(self):
+        checkpoints = [
+            {"event": 2, "target": "0", "resource": "fb:0",
+             "status": "match", "authoritative": True},
+        ]
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), checkpoints,
+            {"status": "divergent",
+             "statistics": {"mismatched_pixels": 4}},
+            checkpoint_validation={"status": "ok"})
+        interval = value["unresolved_interval"]
+        self.assertEqual(interval["start_event"], 2)
+        self.assertEqual(interval["lower_bound"], "same_resource_match")
+
+    def test_destination_interval_does_not_use_post_transfer_source_match(self):
+        graph = {
+            "events": [
+                {"event": 284, "kind": "resolve",
+                 "operation": "glCopyTexSubImage2D", "target": "fb:0"},
+                {"event": 286, "kind": "draw", "target": "tex:442",
+                 "entry": "_GfxDraw", "program": 352,
+                 "samples": [{"resource": "tex:442"}]},
+            ],
+            "resources": {
+                "tex:442": {
+                    "producers": [{
+                        "event": 284, "kind": "resolve",
+                        "operation": "glCopyTexSubImage2D",
+                        "source": "0", "source_framebuffer": 0,
+                    }],
+                    "consumers": [{"event": 286, "unit": 0,
+                                   "sampler": "tex0"}],
+                },
+            },
+        }
+        checkpoints = [
+            # A source observation after the transfer must not bound the
+            # destination version.
+            {"event": 285, "target": "0", "resource": "fb:0",
+             "status": "match", "authoritative": True},
+            {"event": 286, "target": "442", "resource": "tex:442",
+             "status": "divergent", "authoritative": True,
+             "statistics": {"mismatched_pixels": 4}},
+        ]
+        value = gfx_independent_replay.first_divergence(
+            graph, checkpoints, {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["event"], 286)
+        interval = value["unresolved_interval"]
+        self.assertIsNone(interval["start_event"])
+        self.assertEqual(interval["lower_bound"], "unbounded")
+        self.assertEqual(interval["search_start_event"], 0)
+
+    def test_compact_selects_the_recorded_copy_source_identity(self):
+        report = {
+            "classification": "difference_with_partial_state_coverage",
+            "qualification": {"qualified": False, "axes": {}},
+            "frame": {"capture_frame_id": 1},
+            "first_divergence": {
+                "kind": "intermediate", "event": 286, "target": "442",
+                "resource": "tex:442", "producer_event": 284,
+                "copy_source_evidence": {
+                    "status": "match",
+                    "checkpoint": {
+                        "event": 284, "target": "123",
+                        "resource": "tex:123", "status": "match",
+                    },
+                },
+            },
+            "checkpoints": [
+                {"event": 284, "target": "0", "resource": "fb:0",
+                 "status": "match", "authoritative": True},
+                {"event": 284, "target": "123", "resource": "tex:123",
+                 "status": "match", "authoritative": True},
+                {"event": 286, "target": "442", "resource": "tex:442",
+                 "status": "divergent", "authoritative": True,
+                 "statistics": {"mismatched_pixels": 4}},
+            ],
+            "pixels": {"status": "divergent"},
+            "checkpoint_validation": {"status": "ok"},
+        }
+        compact = gfx_independent_replay.compact_diagnosis(report)
+        reasons = {(item["event"], str(item["target"])):
+                   item["selected_because"]
+                   for item in compact["checkpoints"]}
+        self.assertIn("copy_source", reasons[(284, "123")])
+        self.assertNotIn("copy_source", reasons[(284, "0")])
+
+    def test_source_divergence_at_event_one_can_capture_event_zero(self):
+        graph = {
+            "events": [{"event": 1, "kind": "resolve",
+                        "operation": "glCopyTexSubImage2D",
+                        "target": "fb:0"}],
+            "resources": {"fb:0": {"producers": []}},
+        }
+        checkpoints = [{
+            "event": 1, "target": "0", "resource": "fb:0",
+            "status": "divergent", "authoritative": True,
+            "statistics": {"mismatched_pixels": 4},
+        }]
+        value = gfx_independent_replay.first_divergence(
+            graph, checkpoints, {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        checkpoint = value["next_checkpoint"]
+        self.assertEqual(checkpoint["event"], 0)
+        self.assertTrue(checkpoint["requires_capture"])
+        self.assertEqual(checkpoint["interval"], [0, 1])
+        self.assertEqual(checkpoint["lower_bound"], "unbounded")
+        self.assertEqual(value["unresolved_interval"]["lower_bound"],
+                         "unbounded")
+
+    def test_source_divergence_at_event_zero_is_initial_state(self):
+        graph = {
+            "events": [{"event": 0, "kind": "resolve",
+                        "operation": "glCopyTexSubImage2D",
+                        "target": "fb:0"}],
+            "resources": {"fb:0": {"producers": []}},
+        }
+        checkpoints = [{
+            "event": 0, "target": "0", "resource": "fb:0",
+            "status": "divergent", "authoritative": True,
+            "statistics": {"mismatched_pixels": 4},
+        }]
+        value = gfx_independent_replay.first_divergence(
+            graph, checkpoints, {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertIsNone(value["next_checkpoint"])
+        self.assertEqual(value["recommended_action"]["action"],
+                         "investigate_initial_state")
+        self.assertEqual(value["recommended_action"]["event"], 0)
+        self.assertIn("event 0", value["recommended_action"]["reason"])
+
+    def test_compact_final_only_retains_lower_bound_checkpoint(self):
+        report = {
+            "classification": "difference_with_partial_state_coverage",
+            "qualification": {"qualified": False, "axes": {}},
+            "frame": {"capture_frame_id": 1},
+            "first_divergence": {
+                "kind": "final_only", "event": None,
+                "unresolved_interval": {
+                    "start_event": 5, "end_event": 9,
+                    "lower_bound": "same_resource_match",
+                },
+            },
+            "checkpoints": [
+                {"event": 2, "target": "10", "resource": "tex:10",
+                 "status": "match", "authoritative": True},
+                {"event": 5, "target": "0", "resource": "fb:0",
+                 "status": "match", "authoritative": True},
+                {"event": 7, "target": "11", "resource": "tex:11",
+                 "status": "match", "authoritative": True},
+            ],
+            "pixels": {"status": "divergent"},
+            "checkpoint_validation": {"status": "ok"},
+        }
+        compact = gfx_independent_replay.compact_diagnosis(report)
+        reasons = {(item["event"], str(item["target"])):
+                   item["selected_because"]
+                   for item in compact["checkpoints"]}
+        self.assertIn("last_matching", reasons[(5, "0")])
+
+    def test_compact_selection_does_not_label_unrelated_match(self):
+        report = {
+            "classification": "difference_with_partial_state_coverage",
+            "qualification": {"qualified": False, "axes": {}},
+            "frame": {"capture_frame_id": 1},
+            "first_divergence": {
+                "kind": "intermediate", "event": 4, "target": "0",
+                "resource": "fb:0", "producer_event": 3,
+                "copy_source_evidence": None,
+            },
+            "checkpoints": [
+                {"event": 2, "target": "0", "resource": "fb:0",
+                 "status": "match", "authoritative": True},
+                {"event": 3, "target": "10", "resource": "tex:10",
+                 "status": "match", "authoritative": True},
+                {"event": 4, "target": "0", "resource": "fb:0",
+                 "status": "divergent", "authoritative": True,
+                 "statistics": {"mismatched_pixels": 4}},
+            ],
+            "pixels": {"status": "divergent"},
+            "checkpoint_validation": {"status": "ok"},
+        }
+        compact = gfx_independent_replay.compact_diagnosis(report)
+        reasons = {item["event"]: item["selected_because"]
+                   for item in compact["checkpoints"]}
+        self.assertIn("last_matching", reasons[2])
+        self.assertNotIn("last_matching", reasons.get(3, []))
+        labels = {label for values in reasons.values() for label in values}
+        self.assertNotIn("copy_source", labels)
+
+
+class FirstDivergenceSourceEvidenceTests(unittest.TestCase):
+    def graph(self):
+        return {
+            "events": [
+                {"event": 284, "kind": "resolve",
+                 "operation": "glCopyTexSubImage2D", "target": "fb:0"},
+                {"event": 286, "kind": "draw", "target": "tex:442",
+                 "entry": "_GfxDraw", "program": 352,
+                 "samples": [{"resource": "tex:442"}]},
+            ],
+            "resources": {
+                "tex:442": {
+                    "producers": [{
+                        "event": 284, "kind": "resolve",
+                        "operation": "glCopyTexSubImage2D",
+                        "source": "0", "source_framebuffer": 0,
+                    }],
+                    "consumers": [{"event": 286, "unit": 0,
+                                   "sampler": "tex0"}],
+                    # Destination captures must never be used as source
+                    # evidence.
+                    "captured_versions": [{
+                        "event": 286, "file": "destination.bin",
+                        "sha256": "d" * 64,
+                    }],
+                },
+            },
+        }
+
+    def divergent(self, event=286, target="442", resource="tex:442"):
+        return {
+            "event": event, "target": target, "resource": resource,
+            "status": "divergent", "authoritative": True,
+            "statistics": {"mismatched_pixels": 10},
+        }
+
+    def test_independent_divergent_source_justifies_upstream_bisection(self):
+        checkpoints = [{
+            "event": 284, "target": "0", "resource": "fb:0",
+            "status": "divergent", "authoritative": True,
+            "statistics": {"mismatched_pixels": 10},
+        }]
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), checkpoints, {"status": "divergent",
+                                        "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["event"], 284)
+        self.assertEqual(value["copy_source_evidence"]["status"], "divergent")
+        self.assertTrue(value["recommended_checkpoint"]["requires_capture"])
+        self.assertEqual(value["recommended_checkpoint"]["event"], 142)
+        self.assertIn("copy source already differs",
+                      value["recommended_checkpoint"]["reason"])
+
+    def test_unrelated_matching_checkpoint_does_not_tighten_the_interval(self):
+        checkpoints = [
+            {"event": 280, "target": "10", "resource": "tex:10",
+             "status": "match", "authoritative": True},
+            {"event": 284, "target": "0", "resource": "fb:0",
+             "status": "divergent", "authoritative": True,
+             "statistics": {"mismatched_pixels": 10}},
+        ]
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), checkpoints, {"status": "divergent",
+                                        "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertIsNone(value["unresolved_interval"]["start_event"])
+        self.assertEqual(value["recommended_checkpoint"]["event"], 142)
+        self.assertEqual(value["recommended_checkpoint"]["lower_bound"],
+                         "unbounded")
+
+    def test_same_resource_match_sets_the_bisection_lower_bound(self):
+        checkpoints = [
+            {"event": 280, "target": "0", "resource": "fb:0",
+             "status": "match", "authoritative": True},
+            {"event": 284, "target": "0", "resource": "fb:0",
+             "status": "divergent", "authoritative": True,
+             "statistics": {"mismatched_pixels": 10}},
+        ]
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), checkpoints, {"status": "divergent",
+                                        "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["unresolved_interval"]["start_event"], 280)
+        self.assertEqual(value["recommended_checkpoint"]["event"], 282)
+        self.assertEqual(value["recommended_checkpoint"]["lower_bound"],
+                         "same_resource_match")
+
+    def test_no_interior_checkpoint_stops_bisection(self):
+        checkpoints = [
+            {"event": 283, "target": "0", "resource": "fb:0",
+             "status": "match", "authoritative": True},
+            {"event": 284, "target": "0", "resource": "fb:0",
+             "status": "divergent", "authoritative": True,
+             "statistics": {"mismatched_pixels": 10}},
+        ]
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), checkpoints, {"status": "divergent",
+                                        "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertIsNone(value["next_checkpoint"])
+        self.assertIsNone(value["recommended_checkpoint"])
+        self.assertEqual(value["recommended_action"]["action"],
+                         "investigate_event")
+        self.assertEqual(value["recommended_action"]["event"], 283)
+        self.assertEqual(value["recommended_action"]["observation_event"], 284)
+        self.assertIn("observes the result",
+                      value["recommended_action"]["reason"])
+
+    def test_transfer_source_evidence_uses_the_transfer_event(self):
+        graph = {
+            "events": [
+                {"event": 280, "kind": "draw", "target": "tex:123",
+                 "entry": "_GfxDraw", "program": 1},
+                {"event": 284, "kind": "resolve",
+                 "operation": "glCopyTexSubImage2D", "target": "fb:0"},
+                {"event": 286, "kind": "draw", "target": "tex:442",
+                 "entry": "_GfxDraw", "program": 2},
+            ],
+            "resources": {
+                "tex:123": {
+                    "producers": [{"event": 280, "kind": "draw",
+                                   "entry": "_GfxDraw"}],
+                    "consumers": [{"event": 284, "unit": 0,
+                                   "sampler": "resolve"}],
+                },
+                "tex:442": {
+                    "producers": [{"event": 284, "kind": "resolve",
+                                   "operation": "glCopyTexSubImage2D",
+                                   "source": "123", "source_framebuffer": 1}],
+                    "consumers": [{"event": 286, "unit": 0,
+                                   "sampler": "tex0"}],
+                },
+            },
+        }
+        checkpoints = [{
+            "event": 284, "target": "123", "resource": "tex:123",
+            "status": "divergent", "authoritative": True,
+            "statistics": {"mismatched_pixels": 10},
+        }, {
+            "event": 286, "target": "442", "resource": "tex:442",
+            "status": "divergent", "authoritative": True,
+            "statistics": {"mismatched_pixels": 10},
+        }]
+        value = gfx_independent_replay.first_divergence(
+            graph, checkpoints, {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["event"], 284)
+        self.assertEqual(value["copy_source_evidence"]["status"], "divergent")
+        self.assertEqual(value["copy_source_evidence"]["target"], "123")
+        self.assertNotIn("no copy-source checkpoint",
+                         value["copy_source_evidence"]["reason"])
+
+    def test_non_default_source_keeps_its_texture_target(self):
+        graph = self.graph()
+        graph["resources"]["tex:442"]["producers"][0].update({
+            "source": "123", "source_framebuffer": 1})
+        checkpoints = [{
+            "event": 286, "target": "442", "resource": "tex:442",
+            "status": "divergent", "authoritative": True,
+            "statistics": {"mismatched_pixels": 10},
+        }]
+        # The source checkpoint must use the actual source target.
+        checkpoints.insert(0, {
+            "event": 284, "target": "123", "resource": "tex:123",
+            "status": "match", "authoritative": True,
+        })
+        value = gfx_independent_replay.first_divergence(
+            graph, checkpoints, {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["copy_source_evidence"]["status"], "match")
+        self.assertEqual(value["recommended_action"]["action"],
+                         "investigate_transfer")
+
+    def test_non_default_divergent_source_recommends_the_same_target(self):
+        graph = self.graph()
+        graph["resources"]["tex:442"]["producers"][0].update({
+            "source": "123", "source_framebuffer": 1})
+        checkpoints = [{
+            "event": 284, "target": "123", "resource": "tex:123",
+            "status": "divergent", "authoritative": True,
+            "statistics": {"mismatched_pixels": 10},
+        }, {
+            "event": 286, "target": "442", "resource": "tex:442",
+            "status": "divergent", "authoritative": True,
+            "statistics": {"mismatched_pixels": 10},
+        }]
+        value = gfx_independent_replay.first_divergence(
+            graph, checkpoints, {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["copy_source_evidence"]["status"], "divergent")
+        self.assertEqual(value["recommended_checkpoint"]["target"], "123")
+        self.assertEqual(value["recommended_checkpoint"]["resource"],
+                         "tex:123")
+
+    def test_matching_source_recommends_transfer_investigation(self):
+        checkpoints = [
+            {"event": 284, "target": "0", "status": "match",
+             "authoritative": True},
+            self.divergent(),
+        ]
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), checkpoints, {"status": "divergent",
+                                        "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["event"], 286)
+        self.assertEqual(value["copy_source_evidence"]["status"], "match")
+        self.assertIsNone(value["next_checkpoint"])
+        self.assertIsNone(value["recommended_checkpoint"])
+        self.assertEqual(value["recommended_action"]["action"],
+                         "investigate_transfer")
+        self.assertEqual(value["recommended_action"]["event"], 284)
+        self.assertEqual(value["recommended_action"]["observation_event"], 286)
+        self.assertIn("do not bisect upstream",
+                      value["recommended_action"]["reason"])
+
+    def test_destination_captures_do_not_substitute_for_source_evidence(self):
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), [self.divergent()],
+            {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["copy_source_evidence"]["status"], "unobserved")
+        self.assertEqual(value["next_checkpoint"]["event"], 284)
+        self.assertEqual(value["next_checkpoint"]["target"], "0")
+        self.assertTrue(value["next_checkpoint"]["requires_capture"])
+        self.assertEqual(value["recommended_checkpoint"]["source"],
+                         "next_checkpoint")
+
+    def test_draw_producer_does_not_emit_copy_source_evidence(self):
+        graph = self.graph()
+        producer = graph["resources"]["tex:442"]["producers"][0]
+        producer["kind"] = "draw"
+        producer["entry"] = "_GfxDraw"
+        producer.pop("source", None)
+        producer.pop("source_framebuffer", None)
+        value = gfx_independent_replay.first_divergence(
+            graph, [self.divergent()],
+            {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        # A draw output is not a transfer source: no copy-source block and no
+        # false "capture the copy source" limitation may be emitted.
+        self.assertIsNone(value["copy_source_evidence"])
+        self.assertFalse(any("copy-source" in str(item)
+                             for item in value["limitations"]))
+        self.assertIsNone(value["next_checkpoint"])
+        self.assertIsNone(value["recommended_checkpoint"])
+
+    def test_invalid_source_recommends_repair(self):
+        checkpoints = [
+            {"event": 284, "target": "0", "status": "invalid",
+             "authoritative": False},
+            self.divergent(),
+        ]
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), checkpoints, {"status": "divergent",
+                                        "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["copy_source_evidence"]["status"], "invalid")
+        self.assertTrue(value["next_checkpoint"]["requires_capture"])
+        self.assertIn("invalid", value["next_checkpoint"]["reason"])
+
+    def test_final_only_normalizes_suggested_checkpoint(self):
+        graph = self.graph()
+        graph["events"].append({
+            "event": 290, "kind": "draw", "target": "fb:0",
+            "entry": "_GfxDraw", "program": 1,
+        })
+        value = gfx_independent_replay.first_divergence(
+            graph, [], {"status": "divergent",
+                        "statistics": {"mismatched_pixels": 4}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["kind"], "final_only")
+        self.assertIsNotNone(value["suggested_checkpoint"])
+        self.assertEqual(value["recommended_checkpoint"]["event"], 290)
+        self.assertEqual(value["recommended_checkpoint"]["source"],
+                         "suggested_checkpoint")
+        self.assertEqual(value["recommended_checkpoint"]["target"], "0")
+        self.assertTrue(value["recommended_checkpoint"]["requires_capture"])
+
+    def test_missing_evidence_has_no_checkpoint_recommendation(self):
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), [], {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "incomplete"})
+        self.assertIsNone(value["recommended_checkpoint"])
+        self.assertEqual(value["recommended_action"]["action"],
+                         "repair_evidence")
+
+    def test_unsupported_state_retains_the_final_recommendation(self):
+        graph = self.graph()
+        graph["events"].append({
+            "event": 290, "kind": "draw", "target": "fb:0",
+            "entry": "_GfxDraw", "program": 1,
+        })
+        value = gfx_independent_replay.first_divergence(
+            graph, [], {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"},
+            state_coverage_report={"unsupported": ["gl_dither"]})
+        self.assertEqual(value["unsupported_state"], ["gl_dither"])
+        self.assertEqual(value["recommended_checkpoint"]["event"], 290)
