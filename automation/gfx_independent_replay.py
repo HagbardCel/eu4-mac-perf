@@ -1004,11 +1004,15 @@ def first_divergence(graph: dict, checkpoints: list[dict],
                 "target": source_target,
             }
         source_status = source_evidence.get("status")
+        # Localise the source using observations before the transfer.  A
+        # destination divergence must not treat a post-transfer source match
+        # as evidence about the destination version.
+        source_bound = event if event_is_transfer else producer_event
         source_matching = [
             int(item["event"]) for item in checkpoints
             if item.get("status") == "match"
             and item.get("event") is not None
-            and int(item["event"]) < int(event or 0)
+            and int(item["event"]) < int(source_bound or event or 0)
             and (str(item.get("resource")) == source_resource
                  or str(item.get("target")) == source_target)
         ]
@@ -1102,7 +1106,8 @@ def first_divergence(graph: dict, checkpoints: list[dict],
                         "transfer to establish whether the source or the "
                         "copy execution differs"),
                 }
-        interval_start = source_previous if copy_case else previous
+        interval_start = (source_previous
+                          if copy_case and event_is_transfer else previous)
         if (copy_case and source_evidence is not None
                 and source_evidence.get("status") == "unobserved"
                 and not (event_is_transfer
@@ -2571,11 +2576,15 @@ def _compact_checkpoints(report: dict) -> tuple[list[dict], dict]:
         if matching:
             add(max(matching, key=lambda item: item["event"]), "last_matching")
         producer_event = divergence.get("producer_event")
-        if producer_event is not None and divergence.get("copy_source_evidence"):
-            add(next((item for item in items
-                      if item.get("event") == producer_event
-                      and str(item.get("target") or "") == "0"), None),
-                "copy_source")
+        source_evidence = divergence.get("copy_source_evidence")
+        if producer_event is not None and isinstance(source_evidence, dict):
+            source_checkpoint = source_evidence.get("checkpoint")
+            if isinstance(source_checkpoint, dict):
+                add(next((item for item in items
+                          if item.get("event") == source_checkpoint.get("event")
+                          and str(item.get("target") or "")
+                          == str(source_checkpoint.get("target") or "")), None),
+                    "copy_source")
         for prior in divergence.get("prior_producers") or []:
             event = prior.get("event") if isinstance(prior, dict) else None
             if event is not None:
