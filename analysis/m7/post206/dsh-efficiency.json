@@ -1,21 +1,21 @@
 {
   "calls": {
     "by_tool": {
-      "bash": 683,
+      "bash": 695,
       "create_goal": 3,
-      "get_goal": 2,
+      "get_goal": 3,
       "job_kill": 2,
       "job_list": 1,
       "job_output": 8,
       "todo_write": 3,
-      "update_goal": 2,
+      "update_goal": 3,
       "write": 6
     },
     "failed": 0,
     "failed_by_tool": {},
     "failure_rate": 0.0,
     "note": "failed counts tool-level errors; shell_failures counts bash commands whose result text reports a nonzero exit code",
-    "shell_commands": 683,
+    "shell_commands": 695,
     "shell_failure_examples": [
       {
         "command_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_infra && timeout 25 git fetch origin 2>&1 | tail -20; echo \\\"exit=${PIPESTATUS[0]}\\\"; git log\u2026",
@@ -59,7 +59,7 @@
       }
     ],
     "shell_failures": 21,
-    "total": 710
+    "total": 724
   },
   "eu4_launches": {
     "bash_launches": 3,
@@ -83,20 +83,22 @@
     "process_starts_estimate": 6
   },
   "goal": {
-    "active": true,
-    "last_operation": "create",
-    "last_phase": "active",
+    "active": false,
+    "last_operation": "complete",
+    "last_phase": "complete",
     "last_turn_reason": "completed",
     "operations": [
       "create",
       "complete",
       "create",
       "complete",
-      "create"
+      "create",
+      "complete"
     ],
-    "outcome": "active",
-    "terminal": false,
+    "outcome": "completed",
+    "terminal": true,
     "turn_end_reasons": [
+      "completed",
       "completed",
       "completed"
     ]
@@ -109,7 +111,7 @@
     "user_messages": 3
   },
   "long_jobs": {
-    "count": 60,
+    "count": 62,
     "jobs": [
       {
         "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && /opt/homebrew/bin/python3 -m automation.test_runner run --module tests.test_m6_frame --module tests.tes",
@@ -169,7 +171,7 @@
     "oversized": [],
     "oversized_count": 0,
     "threshold_chars": 12000,
-    "total_chars": 1048347,
+    "total_chars": 1054253,
     "truncated": [
       {
         "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && /opt/homebrew/bin/python3 - <<'PY'\\nfrom pathlib import Path\\np=Path('tests/test_m\u2026",
@@ -221,6 +223,11 @@
       "tool": "bash"
     },
     {
+      "argument_excerpt": "{}",
+      "count": 3,
+      "tool": "get_goal"
+    },
+    {
       "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr208 && /opt/homebrew/bin/python3 -m unittest tests.test_m7_diagnosis 2>&1 | grep -E '^(Ran|\u2026",
       "count": 3,
       "tool": "bash"
@@ -229,11 +236,6 @@
       "argument_excerpt": "{\"job_id\":\"bash-0fecc3d493684091\"}",
       "count": 2,
       "tool": "job_output"
-    },
-    {
-      "argument_excerpt": "{}",
-      "count": 2,
-      "tool": "get_goal"
     },
     {
       "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && git fetch origin 2>&1 | tail -2 && git rebase origin/m7/phase-d-diagnostics 2>&1 | t\u2026",
@@ -296,45 +298,45 @@
     "test_invocations": 55
   },
   "tokens": {
-    "cache_read": 328857088,
-    "cache_read_share_of_total": 0.9896,
+    "cache_read": 339279872,
+    "cache_read_share_of_total": 0.9899,
     "cache_write": 0,
-    "effective_input": 331939960,
-    "input": 3082872,
-    "output": 362008,
-    "total": 332301968
+    "effective_input": 342371519,
+    "input": 3091647,
+    "output": 368584,
+    "total": 342740103
   },
   "turn": null,
   "wait": {
     "by_tool": {
-      "bash": 1512757.604,
+      "bash": 1513074.7,
       "create_goal": 0.037,
-      "get_goal": 0.018,
+      "get_goal": 0.028,
       "job_kill": 0.019,
       "job_list": 0.012,
       "job_output": 0.053,
       "todo_write": 0.021,
-      "update_goal": 0.021,
+      "update_goal": 0.031,
       "write": 0.095
     },
     "calls_measured": {
-      "bash": 682,
+      "bash": 695,
       "create_goal": 3,
-      "get_goal": 2,
+      "get_goal": 3,
       "job_kill": 2,
       "job_list": 1,
       "job_output": 8,
       "todo_write": 3,
-      "update_goal": 2,
+      "update_goal": 3,
       "write": 6
     },
-    "share_of_elapsed": 39.1224,
-    "tool_wait_seconds": 1512757.88
+    "share_of_elapsed": 38.7107,
+    "tool_wait_seconds": 1513074.996
   },
   "window": {
-    "elapsed_seconds": 38667.264,
-    "end_utc": "2026-11-18T05:28:25.428000+00:00",
-    "model_calls": 673,
+    "elapsed_seconds": 39086.689,
+    "end_utc": "2026-11-18T05:35:24.853000+00:00",
+    "model_calls": 688,
     "start_utc": "2026-11-17T18:43:58.164000+00:00",
     "turns": 3
   }

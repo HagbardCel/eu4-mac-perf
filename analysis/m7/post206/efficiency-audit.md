@@ -9,12 +9,12 @@ the export, not estimated.
 
 | Metric | Value | Interpretation |
 | --- | --- | --- |
-| Elapsed / model calls | 38,667 s / 673 | Wall-clock spans a multi-hour unattended gap between remediation turns; it is not active work |
-| Tool calls | 710 total (683 bash; 0 native tool-level failures) | The adapter reports no failed tool calls |
-| Shell commands / shell failures | 683 / 21 | `calls.failed` only counts tool-adapter errors; `shell_failures` counts bash results with a nonzero exit marker. The 21 include intentional diagnostic/test failures and negative tests. |
+| Elapsed / model calls | 39,087 s / 688 | Wall-clock spans a multi-hour unattended gap between remediation turns; it is not active work |
+| Tool calls | 724 total (695 bash; 0 native tool-level failures) | The adapter reports no failed tool calls |
+| Shell commands / shell failures | 695 / 21 | `calls.failed` only counts tool-adapter errors; `shell_failures` counts bash results with a nonzero exit marker. The 21 include intentional diagnostic/test failures and negative tests. |
 | Tool wait | not meaningful across the gap | The raw call/result span sum is inflated by the unattended pause (about 1.5 Ms); do not use it as active wait |
-| Tokens | 332.3 M total, 99.0% cache-read | Cache-heavy long session |
-| Output volume | 1,048,347 chars; 0 oversized, 5 truncated | Bounded reads kept oversized output at zero |
+| Tokens | 342.7 M total, 99.0% cache-read | Cache-heavy long session |
+| Output volume | 1,054,253 chars; 0 oversized, 5 truncated | Bounded reads kept oversized output at zero |
 
 ## EU4 launches: reconciliation
 
@@ -54,8 +54,8 @@ about 30 command invocations without losing coverage.
 
 ## Goal status
 
-The export contains `create → complete → create → complete`: the first goal
-and the PR-remediation goal both completed. The final snapshot records
+The export contains three `create → complete` cycles: the first goal, the
+PR-remediation goal and the final evidence goal all completed. The final snapshot records
 `goal.terminal=true` and `goal.outcome=completed`; the earlier `active` state
 was only an intermediate snapshot.
 
@@ -64,7 +64,9 @@ was only an intermediate snapshot.
 1. **Capture budget:** the default is now 512 events. The previous 256 default
    caused a real `draw_cap` failure; the successful capture used 325 events.
 2. **Compact diagnosis:** the authentic `agent-diagnosis.json` is 6,274 bytes
-   versus approximately 3.0 MB for the full report (3,011,036 bytes at the
+   when regenerated with the final #208 projection (the historical local
+   artifact is 6,201 bytes and predates the source-digest fix), versus
+   approximately 3.0 MB for the full report (3,011,036 bytes at the
    recorded output path, about 99.8% smaller), and it contains a causally
    selected checkpoint subset, not the first 32 rows.
 3. **Authentic case outside CI:** 1.348 GB is never part of routine CI; a

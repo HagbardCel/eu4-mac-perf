@@ -36,11 +36,14 @@ qualification path.
   "producer_program": 346,
   "pixel_location": {"x": 0, "y": 0, "offset": 0},
   "differing_bounds": {"x": 0, "y": 0, "width": 1728, "height": 1117},
-  "unresolved_interval": {"start_event": 13, "end_event": 284},
+  "unresolved_interval": {"start_event": null, "end_event": 284,
+                          "lower_bound": "unbounded"},
   "next_checkpoint": {
-    "event": 148,
+    "event": 142,
     "target": "0",
     "requires_capture": true,
+    "interval": [0, 284],
+    "lower_bound": "unbounded",
     "reason": "the copy source already differs; capture a default-framebuffer checkpoint near the midpoint of the unresolved interval to bisect the origin"
   },
   "confidence": "confirmed",
@@ -58,13 +61,15 @@ exact.
 1. Frame-level result: classify the three frames; stop at the first
    non-qualified frame by default or continue only under an explicit policy.
 2. Pass/draw range: the first divergent checkpoint is the copy source at event
-   284; the last matching authoritative checkpoint is event 13, so the
-   unresolved interval is 13–284.
+   284. Event 13 matches, but it observes `tex:432`, not the copy source
+   `fb:0`, so it cannot bound the source bisection. There is no earlier
+   matching `fb:0` checkpoint; the lower bound is unbounded and the bisection
+   interval is 0–284.
 3. State, shaders and resources: report the producer draw (283, `_GfxDraw`,
    program 346), its captured inputs (`tex:428`) and the unsupported states.
 4. Targeted checkpoints: recommend a default-framebuffer checkpoint at event
-   148 (midpoint), with `requires_capture=true`; do not promise an event that
-   the current evidence cannot compare.
+   142 (midpoint of 0–284), with `requires_capture=true`; do not promise an
+   event that the current evidence cannot compare.
 5. Compact package: write `agent-diagnosis.json` beside the full
    `diagnostic-report.json`.
 
@@ -79,7 +84,7 @@ For the authentic frame 1 report:
 | Artifact | Size |
 | --- | --- |
 | `diagnostic-report.json` | ~3.0 MB (3,011,036 bytes at the recorded path; path-dependent) |
-| `agent-diagnosis.json` | 6,274 bytes |
+| `agent-diagnosis.json` | 6,274 bytes (regenerated at the final #208 head) |
 
 The projection keeps only the frame identity, execution status, first
 divergence, up to 16 inputs, up to 32 checkpoints, final statistics,
@@ -101,9 +106,9 @@ authoritative evidence.
 
 ## Remaining gap
 
-The event-148 checkpoint cannot be produced from the existing capture: the
+The event-142 checkpoint cannot be produced from the existing capture: the
 current capture records the copy source and the first-consumer checkpoints, but
 not an arbitrary default-framebuffer image at a chosen event. The actionable
-next step is a bounded capture option for `--default-checkpoint-event 148`
+next step is a bounded capture option for `--default-checkpoint-event 142`
 (or an equivalent capture-side feature), followed by one re-capture. This is
 deliberately not faked from the final reference.

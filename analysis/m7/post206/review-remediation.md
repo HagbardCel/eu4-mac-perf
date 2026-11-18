@@ -35,6 +35,8 @@ review still required. No PR is merged.
   mutation and clear.
 - The authentic frame-1 transfer control still matches 0/1,930,176; frames 2/3 are `unavailable` because the historical capture lacks copy-only lifecycle coverage. This is an explicit limitation, not a difference.
 - The internal-format table no longer mislabels enum 33327 as `RGB10_A2`; it is `GL_RG16F`, whose captured RGBA8 readback has a zero blue channel and opaque alpha. It now fails closed as `unsupported_internal_format` instead of fabricating a difference. Regression: `test_rg16f_destination_is_not_mistaken_for_rgb10_a2`.
+- A copy event without a captured `source_image` is now an `unavailable` check (`missing_copy_source`), not a silent skip, so a frame cannot report a qualified match while some transfers were never controlled. Regression: `test_copy_without_a_captured_source_image_is_unavailable`.
+- The single-frame `package_diagnosis()` path now refuses a fault experiment exactly like the sequence path; it never publishes an unfaulted reproduction command. Regression: `test_single_frame_fault_experiment_is_not_published`.
 
 ## PR #208 — Phase D
 
@@ -64,8 +66,8 @@ review still required. No PR is merged.
   the first divergent checkpoint, last matching checkpoint, copy-source/
   predecessor events, the recommended next event, and first/last observations,
   deterministically, with `selected_because` reasons.
-- The authentic compact artifact is 6,274 bytes, has no absolute paths and
-  retains the actionable event-148 recommendation.
+- The authentic compact artifact is 6,274 bytes when regenerated at the final #208 head, has no absolute paths and
+  retains the actionable event-142 recommendation.
 
 ### D4. Compact copy-source provenance
 
@@ -81,6 +83,8 @@ review still required. No PR is merged.
   checkpoint, and that missing evidence stays missing. The authentic frame-1
   artifact confirms the projected GL digest `abd4ad6b…` equals the source
   checkpoint's `reference_sha256`, and `c1c35604…` equals its Metal digest.
+- The compact projection now sanitizes every string in the bounded payload, not just artifact paths, so checkpoint-problem reasons and native execution errors cannot leak host paths. Regression: `test_compact_diagnosis_sanitizes_absolute_paths`.
+- Copy-source evidence and the "capture the copy source" limitation are emitted only when the producer is an actual transfer (`resolve`/`copy`). A draw-produced texture divergence no longer claims a missing copy source. Regression: `test_draw_producer_does_not_emit_copy_source_evidence`.
 
 ## PR #209 — evidence, integration and readiness
 
@@ -92,7 +96,9 @@ strips heredoc bodies so edited test text is not counted as a launch, reports
 duplicate test invocations and represents an active goal as `active` rather
 than inheriting a stale turn-end reason. The final JSON is
 [`dsh-efficiency.json`](dsh-efficiency.json); the reconciliation is in
-[`efficiency-audit.md`](efficiency-audit.md).
+[`efficiency-audit.md`](efficiency-audit.md). The JSON was regenerated from
+the final export (724 tool calls / 695 bash, 39,087 s, 342.7 M tokens,
+`goal.terminal=true`), replacing the earlier 05:28 snapshot.
 
 ### E2. DSH integration
 
@@ -120,8 +126,11 @@ than inheriting a stale turn-end reason. The final JSON is
 [`readiness.md`](readiness.md) now separates **offline diagnostic readiness**
 (READY WITH LIMITATIONS) from **fully unattended migration readiness** (NOT
 READY). The proposed next task is **M7-P0**, a separate default-framebuffer
-checkpoint near event 148, not a `gl_dither` migration. The precise-math switch
-remains opt-in and is not a correction.
+checkpoint near event 142, not a `gl_dither` migration. The precise-math switch
+remains opt-in and is not a correction. Event 142, not the earlier 148, follows
+from the same-resource bisection rule: event 13 matches but observes `tex:432`,
+not `fb:0`, so the source lower bound is unbounded and the midpoint of 0–284
+is 142.
 
 ### E5. Cost controls
 
@@ -137,9 +146,9 @@ remains opt-in and is not a correction.
 
 | PR | Focused result |
 | --- | --- |
-| #207 | 417 passed, 1 skipped, 0 failures |
-| #208 | 321 passed, 1 skipped, 0 failures |
-| #209 | 483 passed, 1 skipped, 0 failures |
+| #207 | 419 passed, 1 skipped, 0 failures |
+| #208 | 323 passed, 1 skipped, 0 failures |
+| #209 | 487 passed, 1 skipped, 0 failures |
 | plugin | 9 passed, 0 failed |
 
 The portable CI workflow must be re-run on each new head. The authentic case is
@@ -149,7 +158,7 @@ not part of routine CI.
 
 - Full-frame GL/GL replay is absent; the control is transfer-scoped.
 - `gl_dither` and `multisample` remain unsupported.
-- The causal interval 13–284 is unresolved; M7-P0 owns the next bisection.
+- The causal interval is unbounded at the lower end (0–284 for bisection); M7-P0 owns the next bisection.
 - The mounted DSH headless session cannot authenticate in this environment.
 - One authentic capture and one stopped full-suite attempt; no broader live
   qualification is claimed.

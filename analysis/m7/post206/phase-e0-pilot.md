@@ -48,8 +48,8 @@ event: 284
 target: 0 (default framebuffer)
 operation: glCopyTexSubImage2D
 producer: draw 283, _GfxDraw, program 346
-unresolved interval: 13..284
-next checkpoint: event 148, target 0, requires_capture=true
+unresolved interval: unbounded..284 (event 13 is an unrelated tex:432 match)
+next checkpoint: event 142, target 0, requires_capture=true
 ```
 
 The GL/GL control compares the captured GL source with the captured GL copy
@@ -81,7 +81,7 @@ required.
 
 | Hypothesis | Test | Result |
 | --- | --- | --- |
-| Copy execution is wrong | GL source vs GL destination, all 3 frames | **rejected**: 0 differing pixels after declared channel swap |
+| Copy execution is wrong | GL source vs GL destination, frame 1 only | **rejected for frame 1**: 0 differing pixels after the declared swap; frames 2/3 are `unavailable` (no copy-only lifecycle coverage), so no three-frame claim is made |
 | Constant channel bias | Add ±1 to B/G/R/all | **rejected**: mismatch rises from 1,234,947 to 1,747,123–1,928,591 |
 | Simple 4×4/8×8 Bayer dither | Add ±1 Bayer patterns to Metal output | **not supported**: mismatch rises to 1,244,082–1,598,720; per-cell means are nearly uniform |
 | Metal fast-math translation | Recompile all MSL with `fastMathEnabled=NO` | **rejected as dominant**: only 253 of 1,160,152 final mismatches change (1,159,899 remain) |
@@ -93,23 +93,22 @@ are exactly 1 LSB, the error sign agrees at the same coordinates across
 different frames only 68.6–75.4% of the time, and no static screen-space
 pattern or constant bias explains it. `gl_dither` and `multisample` remain
 unsupported, but the pilot evidence does not establish either as the exclusive
-cause. Root cause is **not established**; the unresolved interval is 13–284.
+cause. Root cause is **not established**; the source-resource lower bound is unbounded (0–284 for bisection).
 
 ## DSH trace (measured)
 
-`automation.dsh_efficiency analyze` on the live session export at the 20:25
-snapshot:
+`automation.dsh_efficiency analyze` on the final session export:
 
 | Metric | Value |
 | --- | --- |
 | Session | `session-67b86ef2…`, start 2026-11-17T18:43:58Z |
-| Tool calls | 710 total: 683 bash, 0 native tool-level failures |
-| Tool-level failures | 0 adapter errors; 15 shell commands with a nonzero exit marker at this snapshot (the final export reports 21, including deliberate negative tests) |
-| Long jobs | 10; captures 250.4 s and 248.8 s, the stopped full run 153.2 s, focused suites 127.8/127.2/126.7/124.8/123.3/121.7 s, ~20–39 s replays |
+| Tool calls | 724 total: 695 bash, 0 native tool-level failures |
+| Tool-level failures | 0 adapter errors; 21 shell commands with a nonzero exit marker (including deliberate negative tests) |
+| Long jobs | 62; captures 250.4 s and 248.8 s, the stopped full run 153.2 s, focused suites 127.8/127.2/126.7/124.8/123.3/121.7 s, ~20–39 s replays |
 | Test invocations | 55 invocations / 25 distinct commands; 30 focused re-runs; the module-list full run is not counted as a completed full-suite pass |
 | Tool wait | not meaningful across the multi-hour unattended gap |
-| Output volume | 1,048,347 chars; 0 oversized, 5 truncated |
-| Tokens | 332.3 M total; 99.0% cache-read |
+| Output volume | 1,054,253 chars; 0 oversized, 5 truncated |
+| Tokens | 342.7 M total; 99.0% cache-read |
 | Human interventions | 1 approval-policy event; 0 user questions |
 | EU4 launches | 3 capture command invocations, 2 actual EU4 process starts (one failed `draw_cap`, one successful 3-frame capture); 0 for the pilot |
 
@@ -140,7 +139,7 @@ The exact final trace is refreshed in
 - **Would earlier visual comparison or targeted diagnostics have helped?**
   Yes for the copy question: the GL/GL control is cheap and decisive and
   should run immediately whenever a first divergence is a copy. It was added
-  in Phase C. For the remaining 13–284 interval, the current diagnostic
+  in Phase C. For the remaining unbounded–284 interval, the current diagnostic
   already names the correct next checkpoint; no additional visual comparison
   would narrow it without a new capture-side checkpoint.
 - **Did Ghidra provide evidence efficiently?** Yes. A single `eu4_re_query
@@ -165,7 +164,7 @@ The exact final trace is refreshed in
   not differences. The authoritative summary is in
   [`evidence.json`](evidence.json); the earlier frame-2/3 `match` fields in
   those local files predate the lifecycle-coverage gate and are superseded.
-- `agent-diagnosis.json` — compact 6,274-byte projection for frame 1.
+- `agent-diagnosis.json` — compact ~6.3 KB projection for frame 1.
 - Portable case under `.local/m7/phase-c-authentic-v2/phase-c-authentic-case-v2`
   (gitignored); manifest hashes in `evidence.json`.
 
@@ -174,6 +173,6 @@ The exact final trace is refreshed in
 The pilot demonstrates the workflow on real evidence and rejects the obvious
 infrastructure explanations. It does **not** establish the root cause. The
 single highest-value next experiment is a capture-side default-framebuffer
-checkpoint at event 148, which bisects the 13–284 interval; if that is not
-available, capture at event 148 in a bounded re-capture and repeat the same
+checkpoint at event 142, the midpoint of 0–284, which bisects the unbounded–284 interval; if that is not
+available, capture at event 142 in a bounded re-capture and repeat the same
 diagnosis. No production correction is authorized by this pilot.

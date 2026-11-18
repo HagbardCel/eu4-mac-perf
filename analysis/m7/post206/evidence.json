@@ -1,6 +1,6 @@
 {
   "schema": "m7-post206-preparation-evidence/v1",
-  "generated_utc": "2026-11-18T06:03:17.810109+00:00",
+  "generated_utc": "2026-11-18T06:24:21.181574+00:00",
   "baseline": {
     "repository": "HagbardCel/eu4-mac-perf",
     "commit": "f13602e4eede1418e92dee1042ac4b857a239926",
@@ -42,30 +42,30 @@
       "seconds": 49.247
     },
     "pr207_focused": {
-      "ran": 417,
+      "ran": 419,
       "skipped": 1,
       "failures": 0,
       "errors": 0,
       "run_ids": [
-        "20261118T055836Z-771fda38"
+        "20261118T062141Z-1693659f"
       ]
     },
     "pr208_focused": {
-      "ran": 321,
+      "ran": 323,
       "skipped": 1,
       "failures": 0,
       "errors": 0,
       "run_ids": [
-        "20261118T060106Z-185148fa"
+        "20261118T062141Z-f6c33df4"
       ]
     },
     "pr209_focused": {
-      "ran": 483,
+      "ran": 487,
       "skipped": 1,
       "failures": 0,
       "errors": 0,
       "run_ids": [
-        "20261118T055836Z-2c7ae0ed"
+        "20261118T062141Z-0b431b62"
       ]
     },
     "dsh_plugin": {
@@ -258,11 +258,35 @@
           "height": 1117
         },
         "unresolved_interval": {
-          "start_event": 13,
+          "start_event": null,
           "end_event": 284,
-          "note": "the first confirmed divergent checkpoint; earlier operations in this interval were not checkpointed"
+          "note": "the first confirmed divergent checkpoint; the lower bound is the last matching checkpoint for the same resource when one exists, otherwise it is unbounded"
         },
-        "next_checkpoint": null
+        "next_checkpoint": {
+          "event": 142,
+          "target": "0",
+          "resource": "fb:0",
+          "requires_capture": true,
+          "reason": "the copy source already differs; capture a fb:0 checkpoint near the midpoint of the unresolved interval to bisect the origin",
+          "interval": [
+            0,
+            284
+          ],
+          "lower_bound": "unbounded"
+        },
+        "recommended_checkpoint": {
+          "event": 142,
+          "target": "0",
+          "resource": "fb:0",
+          "requires_capture": true,
+          "reason": "the copy source already differs; capture a fb:0 checkpoint near the midpoint of the unresolved interval to bisect the origin",
+          "interval": [
+            0,
+            284
+          ],
+          "lower_bound": "unbounded",
+          "source": "next_checkpoint"
+        }
       },
       "final": {
         "mismatched_pixels": 1160152,
@@ -295,11 +319,35 @@
           "height": 1117
         },
         "unresolved_interval": {
-          "start_event": 13,
+          "start_event": null,
           "end_event": 284,
-          "note": "the first confirmed divergent checkpoint; earlier operations in this interval were not checkpointed"
+          "note": "the first confirmed divergent checkpoint; the lower bound is the last matching checkpoint for the same resource when one exists, otherwise it is unbounded"
         },
-        "next_checkpoint": null
+        "next_checkpoint": {
+          "event": 142,
+          "target": "0",
+          "resource": "fb:0",
+          "requires_capture": true,
+          "reason": "the copy source already differs; capture a fb:0 checkpoint near the midpoint of the unresolved interval to bisect the origin",
+          "interval": [
+            0,
+            284
+          ],
+          "lower_bound": "unbounded"
+        },
+        "recommended_checkpoint": {
+          "event": 142,
+          "target": "0",
+          "resource": "fb:0",
+          "requires_capture": true,
+          "reason": "the copy source already differs; capture a fb:0 checkpoint near the midpoint of the unresolved interval to bisect the origin",
+          "interval": [
+            0,
+            284
+          ],
+          "lower_bound": "unbounded",
+          "source": "next_checkpoint"
+        }
       },
       "final": {
         "mismatched_pixels": 1163953,
@@ -332,11 +380,35 @@
           "height": 1117
         },
         "unresolved_interval": {
-          "start_event": 13,
+          "start_event": null,
           "end_event": 284,
-          "note": "the first confirmed divergent checkpoint; earlier operations in this interval were not checkpointed"
+          "note": "the first confirmed divergent checkpoint; the lower bound is the last matching checkpoint for the same resource when one exists, otherwise it is unbounded"
         },
-        "next_checkpoint": null
+        "next_checkpoint": {
+          "event": 142,
+          "target": "0",
+          "resource": "fb:0",
+          "requires_capture": true,
+          "reason": "the copy source already differs; capture a fb:0 checkpoint near the midpoint of the unresolved interval to bisect the origin",
+          "interval": [
+            0,
+            284
+          ],
+          "lower_bound": "unbounded"
+        },
+        "recommended_checkpoint": {
+          "event": 142,
+          "target": "0",
+          "resource": "fb:0",
+          "requires_capture": true,
+          "reason": "the copy source already differs; capture a fb:0 checkpoint near the midpoint of the unresolved interval to bisect the origin",
+          "interval": [
+            0,
+            284
+          ],
+          "lower_bound": "unbounded",
+          "source": "next_checkpoint"
+        }
       },
       "final": {
         "mismatched_pixels": 1162904,
@@ -512,17 +584,22 @@
       "end_event": 284
     },
     "next_checkpoint": {
-      "event": 148,
+      "event": 142,
       "target": "0",
       "requires_capture": true,
-      "reason": "capture a default-framebuffer checkpoint near the midpoint to bisect the first 13-284 interval"
+      "reason": "capture a default-framebuffer checkpoint near the midpoint to bisect the first unbounded-284 interval",
+      "interval": [
+        0,
+        284
+      ],
+      "lower_bound": "unbounded"
     },
-    "conclusion": "The copy path is exact; the difference is already present in the default framebuffer before the copy. The residual is content-dependent and dominated by 1 LSB, so the next step is an event-148 default-framebuffer checkpoint, not a copy or fast-math change."
+    "conclusion": "For frame 1, the copy path is exact; frames 2/3 are unavailable, so no three-frame copy claim is made. The difference is already present in the default framebuffer before the copy. The residual is content-dependent and dominated by 1 LSB, so the next step is an event-142 default-framebuffer checkpoint, not a copy or fast-math change."
   },
   "limitations": [
     "full-frame GL/GL replay is not implemented; the GL/GL control covers the captured copy/readback transfer path only",
     "gl_dither and multisample remain unsupported; renderer equivalence is not claimed",
-    "the causal origin inside the 13-284 event interval is not established",
+    "the causal origin before event 284 is not established; the same-resource lower bound is unbounded",
     "one successful authentic EU4 launch and one failed draw-cap launch were used; the pilot did not launch EU4 again"
   ],
   "artifact_retrieval": {
@@ -544,16 +621,17 @@
     "case_file_problems": [],
     "case_files_checked": 3811,
     "gl_control_match": true,
-    "replay_statistics_unchanged": true
+    "replay_statistics_unchanged": true,
+    "gl_control_note": "frame 1 transfer match only; aggregate gl_control status is incomplete because frames 2/3 are unavailable"
   },
   "review": {
     "prs": {
       "207": {
-        "head": "f19c2be1",
+        "head": "52a3da5c",
         "status": "awaiting independent review"
       },
       "208": {
-        "head": "d80919fc",
+        "head": "58d0a70e",
         "status": "awaiting independent review"
       },
       "209": {

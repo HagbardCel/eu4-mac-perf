@@ -20,8 +20,8 @@ One authentic EU4 process captured three gap-free frames (present indices
 through one Metal session. The portable case is 1,348,032,569 bytes / 3,811
 files and requires the explicit 2 GiB budget; the 512 MiB default correctly
 publishes an incomplete summary. The first authoritative divergence moved to
-the copy source at event 284, with the unresolved interval 13–284 and a
-bisection recommendation at event 148. The Phase E0 pilot rejected copy
+the copy source at event 284, with the lower bound unbounded (0–284 for bisection) and a
+bisection recommendation at event 142. The Phase E0 pilot rejected copy
 execution, constant bias, simple Bayer dither, fast-math and edge/MSAA as the
 dominant cause; the residual is content-dependent and dominated by 1 LSB, so
 the root cause is not established. Readiness is **READY WITH LIMITATIONS for bounded offline diagnostics**, but
@@ -29,7 +29,7 @@ the root cause is not established. Readiness is **READY WITH LIMITATIONS for bou
 full-frame GL/GL replay and the `gl_dither`/`multisample` states remain open,
 and the available mounted DSH headless session could not authenticate
 (`MISSING_CREDENTIAL`). The proposed next task is M7-P0, a separate capture of
-a default-framebuffer checkpoint near event 148, not a dithering migration.
+a default-framebuffer checkpoint near event 142, not a dithering migration.
 Evidence: [gap analysis](../analysis/m7/post206/gap-analysis.md),
 [Phase C](../analysis/m7/post206/phase-c-qualification.md),
 [Phase D](../analysis/m7/post206/phase-d-diagnostics.md),

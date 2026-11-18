@@ -35,6 +35,11 @@ for i in 1 2 3; do
 done
 ```
 
+The sequence command uses a single `--shaders` directory (frame 1). The
+per-frame translations are used by the packaging step below; in this capture
+all three `shaders.json` files are byte-identical (`ad29576a…`), so the shared
+directory is equivalent for the sequence replay.
+
 ## 3. Same-backend GL control
 
 ```sh
