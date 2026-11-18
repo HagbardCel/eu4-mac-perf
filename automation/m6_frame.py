@@ -538,6 +538,22 @@ def coverage_report(trace: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def checkpoint_selection_error(event, max_draws) -> str | None:
+    """Reject an invalid or unobservable default-framebuffer checkpoint.
+
+    The selected event must be a non-negative index that the captured event
+    stream can contain; the native tracer also fails closed when the event
+    never reaches a draw/clear/copy pre-operation boundary.
+    """
+    if event is None:
+        return None
+    if event < 0:
+        return "default checkpoint event must be non-negative"
+    if max_draws <= 0 or event >= max_draws:
+        return "default checkpoint event must be below --max-draws"
+    return None
+
+
 def capture(args: argparse.Namespace) -> int:
     import eu4_gfx_startup_trace as startup
     from automation import live_gfx
@@ -587,6 +603,12 @@ def capture(args: argparse.Namespace) -> int:
     if args.boundary not in ("", "scene"):
         print(f"capture refused: unknown boundary {args.boundary!r}", file=sys.stderr)
         return 2
+    checkpoint_event = getattr(args, "default_checkpoint_event", None)
+    checkpoint_problem = checkpoint_selection_error(
+        checkpoint_event, args.max_draws)
+    if checkpoint_problem is not None:
+        print(f"capture refused: {checkpoint_problem}", file=sys.stderr)
+        return 2
     env_extra = {
         "EU4_GFX_FRAME_TRACE_DIR": str(frame_dir),
         "EU4_GFX_FRAME_TRACE_CALLERS": args.callers or "",
@@ -616,6 +638,9 @@ def capture(args: argparse.Namespace) -> int:
         env_extra["EU4_GFX_COPY_TRACE_LIMIT"] = "4096"
     if getattr(args, "copy_source", False):
         env_extra["EU4_GFX_FRAME_TRACE_CAPTURE_COPY_SOURCE"] = "1"
+    if checkpoint_event is not None:
+        env_extra["EU4_GFX_FRAME_TRACE_DEFAULT_CHECKPOINT_EVENT"] = str(
+            checkpoint_event)
     shadow_enabled = bool(getattr(args, "shadow", False))
     continuous = bool(getattr(args, "continuous", False))
     asynchronous = bool(getattr(args, "async", False))
@@ -788,6 +813,8 @@ def capture(args: argparse.Namespace) -> int:
             "boundary_fb": args.boundary_fb,
             "boundary": args.boundary,
             "pre_post_callers": args.pre_post_callers,
+            "default_checkpoint_event": getattr(
+                args, "default_checkpoint_event", None),
         },
     }
     status = 0
@@ -2532,6 +2559,13 @@ def _parser() -> argparse.ArgumentParser:
                      help="bounded full-copy trace for one destination texture")
     cap.add_argument("--copy-source", action="store_true",
                      help="capture the default-framebuffer pixels of in-frame copies")
+    cap.add_argument(
+        "--default-checkpoint-event", type=int, default=None,
+        metavar="EVENT",
+        help="capture one full default-framebuffer checkpoint immediately "
+             "before this captured event index executes (opt-in; draw, clear "
+             "and the recorded copy have pre-execution hooks, any other event "
+             "fails closed)")
     cap.add_argument("--seal", action="store_true",
                      help="publish the authoritative frame-seal/v1 handoff")
     cap.add_argument("--shadow", action="store_true",

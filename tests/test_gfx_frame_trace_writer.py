@@ -87,6 +87,97 @@ class FrameTraceWriterTests(unittest.TestCase):
             self.assertEqual(copy["source_rect"], [1, 1, 2, 2])
             self.assertEqual(copy["destination_offset"], [1, 1])
 
+    def _checkpoint(self, directory: Path) -> tuple[dict, dict]:
+        manifest = self._manifest(directory)
+        events = self._events(directory)
+        self.assertTrue(manifest["complete"], manifest)
+        self.assertEqual(manifest["default_checkpoint_event"], 1)
+        self.assertEqual(len(events), 2)
+        self.assertNotIn("default_checkpoint", events[0])
+        checkpoint = events[1]["default_checkpoint"]
+        self.assertEqual(checkpoint["schema"],
+                         "gfx-default-framebuffer-checkpoint/v1")
+        self.assertEqual(checkpoint["event"], 1)
+        self.assertEqual(checkpoint["target"], "0")
+        self.assertEqual(checkpoint["resource"], "fb:0")
+        self.assertEqual(checkpoint["timing"], "pre_event")
+        self.assertEqual(checkpoint["status"], "captured")
+        self.assertEqual(checkpoint["width"], 4)
+        self.assertEqual(checkpoint["height"], 4)
+        self.assertEqual(checkpoint["bytes"], 4 * 4 * 4)
+        blob = directory / "blobs" / checkpoint["file"]
+        self.assertTrue(blob.is_file())
+        self.assertEqual(blob.stat().st_size, checkpoint["bytes"])
+        self.assertEqual(hashlib.sha256(blob.read_bytes()).hexdigest(),
+                         checkpoint["sha256"])
+        return manifest, checkpoint
+
+    def test_selected_checkpoint_attaches_to_the_draw_event_before_it_runs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            self._run("checkpoint-draw", directory)
+            _, checkpoint = self._checkpoint(directory)
+            # The checkpoint is metadata on the existing event, not a synthetic
+            # operation: the stream still has exactly the original two events.
+            self.assertEqual([event["kind"] for event in self._events(directory)],
+                             ["draw", "draw"])
+            self.assertEqual(checkpoint["event"], 1)
+
+    def test_selected_checkpoint_attaches_to_the_clear_event(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            self._run("checkpoint-clear", directory)
+            _, checkpoint = self._checkpoint(directory)
+            events = self._events(directory)
+            self.assertEqual([event["kind"] for event in events],
+                             ["draw", "clear"])
+            self.assertEqual(checkpoint["event"], 1)
+
+    def test_selected_checkpoint_attaches_to_the_copy_event(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            self._run("checkpoint-copy", directory)
+            _, checkpoint = self._checkpoint(directory)
+            events = self._events(directory)
+            self.assertEqual([event["kind"] for event in events],
+                             ["draw", "resolve"])
+            self.assertEqual(checkpoint["event"], 1)
+            self.assertEqual(events[1]["operation"], "glCopyTexSubImage2D")
+
+    def test_missed_selected_checkpoint_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            self._run("checkpoint-missed", directory)
+            manifest = self._manifest(directory)
+            self.assertFalse(manifest["complete"], manifest)
+            self.assertEqual(manifest["reason"], "default_checkpoint_missed")
+            self.assertEqual(manifest["events"], 1)
+            for event in self._events(directory):
+                self.assertNotIn("default_checkpoint", event)
+
+    def test_duplicate_selected_checkpoint_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            self._run("checkpoint-duplicate", directory)
+            manifest = self._manifest(directory)
+            self.assertFalse(manifest["complete"], manifest)
+            self.assertEqual(manifest["reason"], "default_checkpoint_duplicate")
+
+    def test_out_of_range_selected_checkpoint_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            result = self._run("checkpoint-out-of-range", directory)
+            self.assertIn("configure_rejected=-1", result.stdout)
+
+    def test_disabled_checkpoint_adds_no_metadata_or_readback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            self._run("copy-valid", directory)
+            manifest = self._manifest(directory)
+            self.assertIsNone(manifest["default_checkpoint_event"])
+            for event in self._events(directory):
+                self.assertNotIn("default_checkpoint", event)
+
     def test_copy_exceeding_capacity_invalidates_frame(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary) / "capture"

@@ -94,6 +94,96 @@ def _resource(resources: dict, key: str, *, kind: str, width=None, height=None,
     return value
 
 
+DEFAULT_CHECKPOINT_SCHEMA = "gfx-default-framebuffer-checkpoint/v1"
+
+
+def _is_sha256(value) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def default_checkpoint_problems(value, index: int,
+                                frame_dir: Path | None = None) -> list[str]:
+    """Validate one additive default-framebuffer checkpoint record.
+
+    A checkpoint is authoritative reference evidence only when it names the
+    exact pre-execution event, the ``fb:0`` resource, the full BGRA8 image and
+    a readable blob.  Anything else is an instrumentation failure, never a
+    match.
+    """
+    if not isinstance(value, dict):
+        return [f"default checkpoint at event {index} is not an object"]
+    problems: list[str] = []
+    if value.get("schema") != DEFAULT_CHECKPOINT_SCHEMA:
+        problems.append(
+            f"default checkpoint at event {index} has an unsupported schema")
+    if value.get("status") != "captured":
+        problems.append(
+            f"default checkpoint at event {index} was not captured")
+    if value.get("event") != index:
+        problems.append(
+            f"default checkpoint at event {index} names event "
+            f"{value.get('event')!r}")
+    if str(value.get("target")) != "0":
+        problems.append(
+            f"default checkpoint at event {index} targets "
+            f"{value.get('target')!r}, not the default framebuffer")
+    if value.get("resource") != "fb:0":
+        problems.append(
+            f"default checkpoint at event {index} has resource "
+            f"{value.get('resource')!r}, not fb:0")
+    if value.get("pixel_format") != "BGRA8":
+        problems.append(
+            f"default checkpoint at event {index} is not BGRA8")
+    if value.get("origin") != "lower_left":
+        problems.append(
+            f"default checkpoint at event {index} is not lower-left origin")
+    if value.get("timing") != "pre_event":
+        problems.append(
+            f"default checkpoint at event {index} is not a pre-event "
+            "observation")
+    width = value.get("width")
+    height = value.get("height")
+    if (not isinstance(width, int) or isinstance(width, bool)
+            or not 0 < width <= 8192):
+        problems.append(
+            f"default checkpoint at event {index} has invalid width")
+        width = None
+    if (not isinstance(height, int) or isinstance(height, bool)
+            or not 0 < height <= 8192):
+        problems.append(
+            f"default checkpoint at event {index} has invalid height")
+        height = None
+    declared_bytes = value.get("bytes")
+    if (width is not None and height is not None
+            and declared_bytes != width * height * 4):
+        problems.append(
+            f"default checkpoint at event {index} byte count does not match "
+            "its dimensions")
+    name = value.get("file")
+    if (not isinstance(name, str) or not name
+            or Path(name).name != name or "/" in name):
+        problems.append(
+            f"default checkpoint at event {index} has an invalid blob name")
+    elif frame_dir is not None:
+        path = Path(frame_dir) / "blobs" / name
+        if not path.is_file():
+            problems.append(
+                f"default checkpoint at event {index} blob is absent")
+        elif (isinstance(declared_bytes, int)
+              and path.stat().st_size != declared_bytes):
+            problems.append(
+                f"default checkpoint at event {index} blob size does not "
+                "match its declaration")
+    if not _is_sha256(value.get("sha256")):
+        problems.append(
+            f"default checkpoint at event {index} has an invalid sha256")
+    return problems
+
+
 COPY_OPERATION = "glCopyTexSubImage2D"
 COPY_REQUIRED_FIELDS = (
     "operation",
@@ -490,6 +580,30 @@ def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
     event_rows: list[dict] = []
     unknown_events: list[dict] = []
     contract_problems: list[str] = []
+    default_checkpoints: list[dict] = []
+
+    # Additive selected-event metadata.  It stays part of the event record, so
+    # the operation count and replay stream are unchanged.
+    for index, event in enumerate(events):
+        value = event.get("default_checkpoint")
+        if value is None:
+            continue
+        problems = default_checkpoint_problems(value, index, frame_dir)
+        if problems:
+            contract_problems.extend(problems)
+            continue
+        default_checkpoints.append({
+            "event": index,
+            "target": "0",
+            "resource": "fb:0",
+            "reference_file": value["file"],
+            "reference_sha256": value["sha256"],
+            "reference_width": value["width"],
+            "reference_height": value["height"],
+        })
+    if len(default_checkpoints) > 1:
+        contract_problems.append(
+            "frame declares more than one selected default checkpoint")
 
     # First pass: every logical texture name that is ever written.
     for event in events:
@@ -875,6 +989,7 @@ def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
         },
         "resources": resources,
         "events": event_rows,
+        "default_checkpoints": default_checkpoints,
         "counts": {
             "events": len(events),
             "draws": sum(1 for event in events if event.get("kind") == "draw"),
@@ -970,6 +1085,25 @@ def checkpoint_plan(graph: dict) -> list[dict]:
                 "reference_height": image.get("height"),
                 "producer_events": [],
             })
+    # The opt-in capture-side checkpoint is authoritative reference evidence for
+    # the default framebuffer immediately before its event.  It is never a
+    # texture uploaded into Metal.
+    existing = {(int(item["event"]), str(item["target"])) for item in plan}
+    for item in graph.get("default_checkpoints") or []:
+        key = (int(item["event"]), str(item["target"]))
+        if key in existing:
+            continue
+        existing.add(key)
+        plan.append({
+            "event": int(item["event"]),
+            "target": "0",
+            "resource": "fb:0",
+            "reference_file": item["reference_file"],
+            "reference_sha256": item["reference_sha256"],
+            "reference_width": item["reference_width"],
+            "reference_height": item["reference_height"],
+            "producer_events": [],
+        })
     plan.sort(key=lambda item: (item["event"], item["target"]))
     return plan
 

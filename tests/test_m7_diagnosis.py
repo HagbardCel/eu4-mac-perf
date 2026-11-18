@@ -1540,6 +1540,130 @@ class CausalLowerBoundTests(unittest.TestCase):
         self.assertNotIn("copy_source", labels)
 
 
+class CheckpointBisectionTests(unittest.TestCase):
+    """Selected fb:0 checkpoints narrow the causal interval truthfully."""
+
+    def graph(self):
+        return {
+            "events": [
+                {"event": 142, "kind": "draw", "target": "fb:0",
+                 "entry": "_GfxDraw", "program": 346},
+                {"event": 284, "kind": "resolve",
+                 "operation": "glCopyTexSubImage2D", "target": "fb:0"},
+                {"event": 286, "kind": "draw", "target": "tex:442",
+                 "entry": "_GfxDraw", "program": 352,
+                 "samples": [{"resource": "tex:442"}]},
+            ],
+            "resources": {
+                "fb:0": {"producers": [{
+                    "event": 142, "kind": "draw", "entry": "_GfxDraw",
+                    "program": 346}]},
+                "tex:442": {
+                    "producers": [{
+                        "event": 284, "kind": "resolve",
+                        "operation": "glCopyTexSubImage2D",
+                        "source": "0", "source_framebuffer": 0}],
+                    "consumers": [{"event": 286, "unit": 0,
+                                   "sampler": "tex0"}],
+                },
+            },
+        }
+
+    def checkpoint(self, event, status, *, resource="fb:0", target="0",
+                   mismatched=0):
+        return {
+            "event": event, "target": target, "resource": resource,
+            "status": status, "authoritative": True,
+            "statistics": {"mismatched_pixels": mismatched},
+        }
+
+    def test_matching_142_and_divergent_284_narrow_to_142_284(self):
+        value = gfx_independent_replay.first_divergence(
+            self.graph(),
+            [self.checkpoint(142, "match"),
+             self.checkpoint(284, "divergent", mismatched=4)],
+            {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["kind"], "intermediate")
+        self.assertEqual(value["event"], 284)
+        interval = value["unresolved_interval"]
+        self.assertEqual(interval["start_event"], 142)
+        self.assertEqual(interval["end_event"], 284)
+        self.assertEqual(interval["lower_bound"], "same_resource_match")
+        self.assertEqual(interval["search_start_event"], 142)
+        checkpoint = value["next_checkpoint"]
+        self.assertEqual(checkpoint["event"], 213)
+        self.assertEqual(checkpoint["target"], "0")
+        self.assertEqual(checkpoint["resource"], "fb:0")
+        self.assertTrue(checkpoint["requires_capture"])
+        self.assertEqual(checkpoint["interval"], [142, 284])
+        self.assertEqual(checkpoint["lower_bound"], "same_resource_match")
+
+    def test_divergent_142_is_unbounded_and_recommends_71(self):
+        value = gfx_independent_replay.first_divergence(
+            self.graph(),
+            [self.checkpoint(142, "divergent", mismatched=4)],
+            {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["kind"], "intermediate")
+        self.assertEqual(value["event"], 142)
+        interval = value["unresolved_interval"]
+        self.assertIsNone(interval["start_event"])
+        self.assertEqual(interval["end_event"], 142)
+        self.assertEqual(interval["lower_bound"], "unbounded")
+        self.assertEqual(interval["search_start_event"], 0)
+        checkpoint = value["next_checkpoint"]
+        self.assertEqual(checkpoint["event"], 71)
+        self.assertEqual(checkpoint["interval"], [0, 142])
+        self.assertEqual(checkpoint["lower_bound"], "unbounded")
+        self.assertEqual(value["confidence"], "confirmed")
+        self.assertEqual(value["root_cause"], "not_established")
+
+    def test_unrelated_texture_match_does_not_bound_divergent_142(self):
+        value = gfx_independent_replay.first_divergence(
+            self.graph(),
+            [self.checkpoint(140, "match", resource="tex:5", target="5"),
+             self.checkpoint(142, "divergent", mismatched=4)],
+            {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        interval = value["unresolved_interval"]
+        self.assertIsNone(interval["start_event"])
+        self.assertEqual(interval["lower_bound"], "unbounded")
+        self.assertEqual(value["next_checkpoint"]["event"], 71)
+
+    def test_adjacent_match_candidate_is_the_operation_after_it(self):
+        value = gfx_independent_replay.first_divergence(
+            self.graph(),
+            [self.checkpoint(141, "match"),
+             self.checkpoint(142, "divergent", mismatched=4)],
+            {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertIsNone(value["next_checkpoint"])
+        self.assertIsNone(value["recommended_checkpoint"])
+        action = value["recommended_action"]
+        self.assertEqual(action["action"], "investigate_event")
+        self.assertEqual(action["event"], 141)
+        self.assertEqual(action["observation_event"], 142)
+        self.assertIn("observes the result", action["reason"])
+
+    def test_unavailable_checkpoint_does_not_narrow(self):
+        for status in ("incomplete", "invalid"):
+            value = gfx_independent_replay.first_divergence(
+                self.graph(), [],
+                {"status": "divergent", "statistics": {}},
+                checkpoint_validation={
+                    "status": status,
+                    "problems": [{"kind": "missing_result", "event": 142}]})
+            self.assertEqual(
+                value["kind"],
+                "invalid_checkpoint" if status == "invalid"
+                else "incomplete_checkpoint")
+            self.assertIsNone(value["recommended_checkpoint"])
+            self.assertEqual(value["recommended_action"]["action"],
+                             "repair_evidence")
+            self.assertIn("instrumentation failure", value["reason"])
+
+
 class FirstDivergenceSourceEvidenceTests(unittest.TestCase):
     def graph(self):
         return {

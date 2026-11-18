@@ -4,6 +4,7 @@
 #include "eu4_gfx_frame_seal.h"
 #include "eu4_gfx_observe.h"
 
+#include <stddef.h>
 #include <stdint.h>
 
 /* Complete-frame original-GL trace for differential Metal validation.
@@ -26,6 +27,13 @@
  *   EU4_GFX_FRAME_TRACE_OCCURRENCE selecting frame to capture (default 1)
  *   EU4_GFX_FRAME_TRACE_AT_FRAME   capture this present index directly
  *   EU4_GFX_FRAME_TRACE_MAX_DRAWS  hard draw cap inside a captured frame
+ *   EU4_GFX_FRAME_TRACE_DEFAULT_CHECKPOINT_EVENT
+ *                                  optional single event index whose
+ *                                  default-framebuffer contents are captured
+ *                                  immediately before it executes.  Only draw,
+ *                                  clear and the recorded copy expose this
+ *                                  pre-execution boundary; an event that never
+ *                                  reaches one fails the capture closed.
  *   EU4_GFX_FRAME_TRACE_TIMEOUT_MS bounded time from arming to finish; an
  *                                  expired frame is published as an explicit
  *                                  incomplete result
@@ -73,6 +81,14 @@ void eu4_gfx_frame_trace_test_reset_seal(void);
    Returns 0 only when the reference was written and its digest/size checks
    passed. */
 int eu4_gfx_frame_trace_test_reference(const char *directory);
+/* Host-test only: run the production default-framebuffer checkpoint readback
+   and writer without an event stream.  ``out_file`` receives the content-
+   addressed blob name. */
+int eu4_gfx_frame_trace_test_checkpoint(const char *directory, int event,
+                                        char *out_file, size_t out_size);
+/* Host-test only: invoke the selected-event hook directly (duplicate guard). */
+int eu4_gfx_frame_trace_test_checkpoint_hook(void);
+int eu4_gfx_frame_trace_test_checkpoint_captured(void);
 
 /* Effective state of one glCopyTexSubImage2D/glBlitFramebuffer call.  The
    source attachment and the default framebuffer's read buffer are part of the

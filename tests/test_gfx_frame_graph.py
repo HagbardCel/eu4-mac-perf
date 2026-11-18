@@ -397,6 +397,115 @@ def fake_replay(**overrides):
     return value
 
 
+class DefaultCheckpointGraphTests(unittest.TestCase):
+    """Additive selected-event metadata feeds the existing checkpoint plan."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.fixture = FrameFixture(Path(self.temporary.name))
+        self.payload = bytes(range(WIDTH * HEIGHT * 4))
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def attach(self, event_index=4, payload=None, **overrides):
+        payload = self.payload if payload is None else payload
+        name = "default-checkpoint-test.bin"
+        (self.fixture.frame / "blobs" / name).write_bytes(payload)
+        value = {
+            "schema": "gfx-default-framebuffer-checkpoint/v1",
+            "event": event_index, "target": "0", "resource": "fb:0",
+            "width": WIDTH, "height": HEIGHT, "bytes": len(payload),
+            "file": name, "sha256": sha(payload),
+            "pixel_format": "BGRA8", "origin": "lower_left",
+            "timing": "pre_event", "status": "captured",
+        }
+        value.update(overrides)
+        self.fixture.events[event_index]["default_checkpoint"] = value
+        self.fixture.write()
+        return value
+
+    def test_captured_checkpoint_joins_the_deterministic_request(self):
+        self.attach(4)
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        self.assertEqual(graph["status"], "complete", graph["reasons"])
+        self.assertEqual(len(graph["default_checkpoints"]), 1)
+        checkpoint = graph["default_checkpoints"][0]
+        self.assertEqual(checkpoint["event"], 4)
+        self.assertEqual(checkpoint["resource"], "fb:0")
+        plan = gfx_frame_graph.checkpoint_plan(graph)
+        selected = [item for item in plan
+                    if item["event"] == 4 and item["target"] == "0"]
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected[0]["reference_sha256"], sha(self.payload))
+        request = gfx_frame_graph.checkpoint_request(graph)
+        item = next(item for item in request["checkpoints"]
+                    if item["event"] == 4 and item["target"] == "0")
+        self.assertEqual(item["resource"], "fb:0")
+        self.assertEqual(item["file"], "intermediate-event4-tex0.bgra")
+        self.assertEqual(item["reference_file"],
+                         "default-checkpoint-test.bin")
+        self.assertEqual(item["reference_sha256"], sha(self.payload))
+        self.assertEqual(item["reference_width"], WIDTH)
+        self.assertEqual(item["reference_height"], HEIGHT)
+
+    def test_checkpoint_request_is_stable_and_ordered(self):
+        self.attach(4)
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        first = gfx_frame_graph.checkpoint_request(graph)
+        second = gfx_frame_graph.checkpoint_request(graph)
+        self.assertEqual(first, second)
+        keys = [(item["event"], item["target"])
+                for item in first["checkpoints"]]
+        self.assertEqual(keys, sorted(keys))
+
+    def test_checkpoint_naming_a_different_event_is_invalid(self):
+        self.attach(4, event=3)
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        self.assertEqual(graph["status"], "invalid")
+        self.assertTrue(any("names event" in reason
+                            for reason in graph["reasons"]), graph["reasons"])
+
+    def test_checkpoint_for_another_resource_is_invalid(self):
+        self.attach(4, target="10", resource="tex:10")
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        self.assertEqual(graph["status"], "invalid")
+        self.assertTrue(any("default framebuffer" in reason
+                            for reason in graph["reasons"]), graph["reasons"])
+
+    def test_multiple_selected_checkpoints_are_invalid(self):
+        self.attach(4)
+        self.fixture.events[1]["default_checkpoint"] = dict(
+            self.fixture.events[4]["default_checkpoint"], event=1)
+        self.fixture.write()
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        self.assertEqual(graph["status"], "invalid")
+        self.assertTrue(any("more than one" in reason
+                            for reason in graph["reasons"]), graph["reasons"])
+
+    def test_missing_checkpoint_blob_is_invalid(self):
+        value = self.attach(4)
+        (self.fixture.frame / "blobs" / value["file"]).unlink()
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        self.assertEqual(graph["status"], "invalid")
+        self.assertTrue(any("missing blob" in reason or "blob is absent" in reason
+                            for reason in graph["reasons"]), graph["reasons"])
+
+    def test_checkpoint_blob_digest_mismatch_is_invalid(self):
+        self.attach(4, sha256="0" * 64)
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        self.assertEqual(graph["status"], "invalid")
+        self.assertTrue(any("digest mismatch" in reason
+                            for reason in graph["reasons"]), graph["reasons"])
+
+    def test_checkpoint_byte_count_mismatch_is_invalid(self):
+        self.attach(4, bytes=1)
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        self.assertEqual(graph["status"], "invalid")
+        self.assertTrue(any("byte count" in reason
+                            for reason in graph["reasons"]), graph["reasons"])
+
+
 class ReplayContractTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
