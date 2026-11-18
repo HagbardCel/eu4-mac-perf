@@ -3,10 +3,10 @@
   "base_commit": "246d7e08",
   "branch": "m7/p2-infra-hardening",
   "case": {
-    "case_id": "m7-p2-producer-bound",
-    "case_json_sha256": "9a362e067ed8bc7afe3723428ca3cd3cc0b509603b658b25c3bd2cd87e526d84",
+    "case_id": "m7-p2-producer-bound-v2",
+    "case_json_sha256": "d58cf25688e10295b69a22fda7e0e509a749d7dab8e682654c994659259ad8e5",
     "seal_sha256": "794c482d49767b0b0aa356f5fc28919b9c2a57a33c88f7112152efd8c07d0ca6",
-    "baseline_fingerprint": "c01973833c3a4ccf6e9f42e0aaa9f1cb14c06e18266c98544a75a9d7265cd126",
+    "baseline_fingerprint": "b28ca01e36add2daf0b06ae27d602c2ac9e0293c0ec53bde81889e4814e8761e",
     "capture": {
       "session_id": "a3111e0d-9b76-4b23-910d-38bd48c9aa93",
       "capture_frame_id": 1,
@@ -25,8 +25,8 @@
       "renderer_semantics_included": true,
       "renderer_source_count": 5,
       "shader_inputs": 104,
-      "producer_executable_sha256": "ae7b609c24247f4e3d2b799c2435a055d2a343d733dbfca20145b2659434ef97",
-      "current_executable_sha256": "ae7b609c24247f4e3d2b799c2435a055d2a343d733dbfca20145b2659434ef97",
+      "producer_executable_sha256": "9c9d7a564623e632ecfd71bbe50d05ffb06727a4094c6a8a2fcce07a0b4db8ba",
+      "current_executable_sha256": "9c9d7a564623e632ecfd71bbe50d05ffb06727a4094c6a8a2fcce07a0b4db8ba",
       "build_fingerprint": "63cf3649220bea66deb3ebfae2f6243c6f3588f069e90a5ef58a064f965ad3ca",
       "current_build_fingerprint": "63cf3649220bea66deb3ebfae2f6243c6f3588f069e90a5ef58a064f965ad3ca",
       "payload_pass": "gfx_replay_case.verify() (single authoritative pass)"
@@ -54,16 +54,16 @@
     "commands": [
       {
         "tool": "eu4_case_inspect",
-        "bytes": 7994,
+        "bytes": 8003,
         "verification_included": true,
         "producer_identity": "verified"
       },
       {
         "tool": "case_baseline check",
-        "bytes": 1892
+        "bytes": 1760
       }
     ],
-    "returned_chars": 9886,
+    "returned_chars": 9763,
     "native_calls": 2,
     "shell_calls": 0,
     "eu4_launches": 0,
@@ -74,9 +74,9 @@
     "reused_baseline": true,
     "interface_reduction_vs_p1_output": {
       "p1_returned_chars": 400666,
-      "p2_returned_chars": 9886,
-      "reduction_chars": 390780,
-      "reduction_fraction": 0.9753,
+      "p2_returned_chars": 9763,
+      "reduction_chars": 390903,
+      "reduction_fraction": 0.9756,
       "note": "compares interface output volume only; it does not replace the P1 agent's 80 tool calls or reasoning"
     }
   },
@@ -154,7 +154,7 @@
     "No EU4 launch and no replay were performed for this evidence; the existing verified baseline is reused."
   ],
   "offline_gate": {
-    "run_id": "20261118T192941Z-422feced",
+    "run_id": "20261118T201152Z-8d66b734",
     "profile": "offline",
     "min_tests": 3000,
     "tests_ran": 3750,
@@ -162,7 +162,7 @@
     "skipped": 42,
     "failures": 0,
     "errors": 0,
-    "duration_seconds": 1478.985,
+    "duration_seconds": 1640.099,
     "exit_code": 0,
     "eu4_launches": 0,
     "notes": [
@@ -271,7 +271,7 @@
   },
   "producer_identity": {
     "receipt_schema": "gfx-replay-producer-receipt/v1",
-    "receipt": ".local/m7/p2/producer-case/replay/producer-receipt.json",
+    "receipt": ".local/m7/p2/producer-case-v2/replay/producer-receipt.json",
     "verification": "verified",
     "legacy_case_rejection": {
       "ok": false,

@@ -153,7 +153,7 @@ receipt**. It remains historical evidence, but baseline reuse is rejected with
 renderer output.
 
 One bounded offline replay of that same capture (no EU4 launch) produced a
-producer-bound case, `.local/m7/p2/producer-case` (`m7-p2-producer-bound`),
+producer-bound case, `.local/m7/p2/producer-case-v2` (`m7-p2-producer-bound-v2`),
 which verifies with `producer_identity=verified`. All reported statistics below
 are from that producer-bound case; the first divergence and pixel result are
 unchanged.
@@ -165,8 +165,8 @@ unchanged.
 | Causal interval unchanged | `start_event: null`, `lower_bound: unbounded`; `search_start_event: 0` is explicitly not matching evidence |
 | Next checkpoint | event 71, `fb:0`, `requires_capture: true` |
 | Baseline reuse | identity check `reusable=true`; no recomputation |
-| Compact inspect | 7,994 emitted bytes (was 479,719 bytes full) |
-| Reuse check | 1,892 bytes |
+| Compact inspect | 8,003 emitted bytes (was 479,719 bytes full) |
+| Reuse check | 1,760 bytes |
 | Producer receipt | executable SHA-256, build fingerprint, capture identity and replay/readback digests verified |
 | Separate verify (not routine) | 8,061 bytes when independent verification is explicitly needed |
 | Synthetic substitution | tampered payload fails `verify()` and invalidates the baseline (regression test) |
@@ -189,7 +189,7 @@ Three different things are deliberately separated:
 | Metric | P1 autonomous session | P2 interface demonstration |
 |---|---|---|
 | Tool calls | 80 (2 native, 66 shell) | 2 native, 0 shell |
-| Returned output | 400,666 chars | 9,886 bytes |
+| Returned output | 400,666 chars | 9,763 bytes |
 | Oversized / truncated results | 6 / 2 | 0 / 0 |
 | EU4 launches | 0 | 0 |
 | Replays | 1 | 0 (baseline reused) |
@@ -203,10 +203,10 @@ still required before claiming end-to-end efficiency.
 
 ## Offline gate
 
-The final offline gate (`20261118T192941Z-422feced`) ran with
+The final offline gate (`20261118T201152Z-8d66b734`) ran with
 `EU4_TEST_PROFILE=offline` / `EU4_OFFLINE_ONLY=1` and `--min-tests 3000`:
 **3,750 tests ran, 3,708 executed, 42 skipped, 0 failures, 0 errors,
-1,479.0 s**. The floor counts executed tests, so classified skips cannot satisfy
+1,640.1 s**. The floor counts executed tests, so classified skips cannot satisfy
 it. The skips are the live-only module, platform-only hosts and 11 optional-QBDI
 TR3 tests; QBDI remains non-mandatory. No EU4 process was started. The same gate
 is configured as the required `portable` check; GitHub Actions `portable` passed

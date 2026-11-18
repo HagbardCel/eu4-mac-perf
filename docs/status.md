@@ -67,16 +67,16 @@ builds leave no valid receipt.
 **Verified capabilities.** The historical P0 case (`m7-live-frame-000001`,
 seal `794c482d…`, session `a3111e0d…`) verifies offline but has no producer
 receipt; baseline reuse is correctly rejected as `producer_identity_missing`.
-One bounded offline replay of that capture produced `m7-p2-producer-bound`,
+One bounded offline replay of that capture produced `m7-p2-producer-bound-v2`,
 which verifies with `producer_identity=verified`. Compact inspection returns the
 unchanged first divergence at event 142 `fb:0` (program 331, producer 141),
 final 1,160,291 / 1,930,176 differing pixels (max 70), an unbounded lower bound,
 and the recommended event-71 checkpoint. The routine interface path is two
-native reads (`eu4_case_inspect` 7,994 bytes plus baseline reuse 1,892 bytes)
+native reads (`eu4_case_inspect` 8,003 bytes plus baseline reuse 1,760 bytes)
 with zero shell calls, zero new replays and a verified producer; this is an
 interface-level demonstration, not a replacement measurement for the P1 agent's
 80 calls. End-to-end P2 efficiency is **not yet measured** because no provider
-credential is available. The final offline gate (`20261118T192941Z-422feced`)
+credential is available. The final offline gate (`20261118T201152Z-8d66b734`)
 ran 3,750 tests, 3,708 executed, 42 classified skips, 0 failures. The replay-host
 build and baseline identity share `automation.replay_host_dependencies`; the
 build is atomically published under a lock with a binary digest, a
