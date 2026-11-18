@@ -35,7 +35,8 @@ default-framebuffer checkpoint:
 - The image is rejected if the event is negative/out of range, missed,
   duplicated, unreadable, oversized (>256 MiB) or too slow (>10 s). A requested
   event with no pre-execution hook is reported as `default_checkpoint_missed`;
-  no checkpoint is invented.
+  a checkpoint captured at a boundary that finalizes before its selected record
+  is emitted is `default_checkpoint_unattached`. No checkpoint is invented.
 - When the option is absent no extra readback occurs and the manifest records
   `"default_checkpoint_event": null`.
 
@@ -189,7 +190,7 @@ Focused and dependent suites (via `automation.test_runner`):
 
 | Run | Modules | Result |
 | --- | --- | --- |
-| `20261118T090651Z-f2e90ec4` | `test_gfx_frame_trace_writer`, `test_gfx_frame_graph`, `test_m7_diagnosis`, `test_m6_frame` | 213 tests, passed, 8.4 s |
+| `20261118T091236Z-7c65b1bd` | `test_gfx_frame_trace_writer`, `test_gfx_frame_graph`, `test_m7_diagnosis`, `test_m6_frame` | 213 tests, passed, 8.4 s |
 | `20261118T084857Z-7d0a57c3` | `test_gfx_replay_case_sequence` | 55 tests, passed, 136.7 s |
 | `20261118T085152Z-ad0b9dff` | `test_m7_continuous_replay`, `test_m7_continuous_supervisor`, `test_m7_shadow_receipt`, `test_gfx_gl_control`, `test_gfx_replay_case` | passed, 181.7 s |
 | `20261118T090503Z-e17b7585` | `test_m7_canonical_diagnosis`, `test_m7_frame_seal`, `test_m7_frame_history` | passed, 10.2 s |
