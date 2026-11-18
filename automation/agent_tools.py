@@ -151,18 +151,50 @@ def _runtime_block() -> dict:
     }
 
 
+def _nested_evidence_state(result) -> str | None:
+    """Detect invalid/incomplete evidence carried inside a result payload.
+
+    Some tools return a verification or diagnosis object whose own status is
+    weaker than the top-level envelope.  A nested invalid verification can
+    never be promoted to a qualified result merely because the outer call
+    completed.
+    """
+    if not isinstance(result, dict):
+        return None
+    verification = result.get("verification")
+    if isinstance(verification, dict):
+        if verification.get("verifier_exception") is True:
+            return "invalid"
+        if verification.get("ok") is False:
+            return "invalid"
+    diagnosis = result.get("diagnosis")
+    if isinstance(diagnosis, dict):
+        classification = str(diagnosis.get("classification") or "")
+        if classification in ("invalid_provenance", "incomplete_capture"):
+            return "invalid"
+        if classification == "incomplete_diagnostics":
+            return "incomplete"
+        axes = diagnosis.get("axes")
+        if isinstance(axes, dict) and axes.get("capture_validity") == "invalid":
+            return "invalid"
+    return None
+
+
 def _classify_failure(status: str, reason: str, diagnostic: str,
-                      verdict: str | None) -> dict:
+                      verdict: str | None,
+                      result=None) -> dict:
     """Separate operational failures from a completed comparison.
 
-    A differing-pixel replay is a completed diagnostic, not a tool failure.  A
-    timeout, missing credential, unavailable graphics capability and invalid
-    evidence are distinct so a caller cannot report one as a successful
-    qualification.  ``None`` means the operation produced a usable outcome.
+    Classification is driven by the explicit status/diagnostic first.  Text is
+    only a tie-breaker for named dependency or capability failures.  In
+    particular, the word "Metal" is not evidence that a GPU is unavailable: a
+    shader/replay correctness error is a tool failure, while invalid evidence
+    always takes precedence over generic dependency wording.
     """
     lowered = (reason or "").lower()
+    nested = _nested_evidence_state(result)
     if status in ("ok", "pass", "match") and diagnostic in (
-            "complete", "partial", "not_applicable"):
+            "complete", "partial", "not_applicable") and nested is None:
         if verdict == "different":
             return {"kind": None, "class": "comparison",
                     "detail": "completed comparison reported a difference"}
@@ -170,20 +202,17 @@ def _classify_failure(status: str, reason: str, diagnostic: str,
             return {"kind": None, "class": "comparison",
                     "detail": "completed comparison remained unqualified"}
         return {"kind": None, "class": "diagnostic", "detail": ""}
-    if any(token in lowered for token in (
-            "credential", "unauthorized", "authentication", "api key")):
-        return {"kind": "missing_credential", "class": "blocker",
-                "detail": reason or "credentials are required"}
+    if nested == "invalid":
+        return {"kind": "evidence_invalid", "class": "failure",
+                "detail": "nested verification/diagnosis is invalid"}
     if "timed out" in lowered or "timeout" in lowered:
         return {"kind": "execution_timeout", "class": "failure",
                 "detail": reason or "the operation timed out"}
     if any(token in lowered for token in (
-            "numpy", "graphics", "gpu", "metal", "betterdisplay", "rosetta",
-            "no display", "display is unavailable")):
-        return {"kind": "graphics_unavailable", "class": "blocker",
-                "detail": reason or "a graphics dependency is unavailable"}
-    if diagnostic in ("invalid", "unverified") or status in (
-            "invalid", "incomplete", "partial") and verdict is None:
+            "credential", "unauthorized", "authentication", "api key")):
+        return {"kind": "missing_credential", "class": "blocker",
+                "detail": reason or "credentials are required"}
+    if status == "invalid" or diagnostic == "invalid":
         return {"kind": "evidence_invalid", "class": "failure",
                 "detail": reason or "evidence did not qualify"}
     if status == "not_found":
@@ -192,6 +221,26 @@ def _classify_failure(status: str, reason: str, diagnostic: str,
     if status == "refused":
         return {"kind": "policy_refusal", "class": "blocker",
                 "detail": reason or "the operation was refused"}
+    if diagnostic == "unavailable":
+        if any(token in lowered for token in (
+                "no metal device", "metal device is unavailable",
+                "mtlcreatesystemdefaultdevice", "unsupported gpu",
+                "graphics unavailable", "no gpu", "no display",
+                "display is unavailable", "betterdisplay", "rosetta")):
+            return {"kind": "graphics_unavailable", "class": "blocker",
+                    "detail": reason or "a graphics capability is unavailable"}
+        if any(token in lowered for token in (
+                "numpy", "import", "dependency", "missing module")):
+            return {"kind": "dependency_unavailable", "class": "blocker",
+                    "detail": reason or "a required dependency is unavailable"}
+        return {"kind": "unavailable", "class": "blocker",
+                "detail": reason or "the operation is unavailable"}
+    if nested == "incomplete" or diagnostic in ("incomplete", "unverified"):
+        return {"kind": "evidence_invalid", "class": "failure",
+                "detail": reason or "evidence did not qualify"}
+    if status == "partial" and verdict is None:
+        return {"kind": "evidence_invalid", "class": "failure",
+                "detail": reason or "evidence did not qualify"}
     return {"kind": "tool_failure", "class": "failure",
             "detail": reason or f"operation ended as {status}"}
 
@@ -202,9 +251,22 @@ def _envelope(tool: str, status: str, result=None, *, reason: str = "",
               qualified: bool | None = None) -> dict:
     state = diagnostic or _DIAGNOSTIC_BY_STATUS.get(status, "incomplete")
     execution = "error" if status == "error" else "ok"
+    nested = _nested_evidence_state(result)
+    if nested == "invalid" and status in (
+            "ok", "pass", "complete", "partial", "match"):
+        status = "invalid"
+        state = "invalid"
+        execution = "ok"
+        verdict = None
+        evidence = "invalid"
+        qualified = False
+    elif nested == "incomplete" and state == "complete":
+        state = "incomplete"
+        evidence = "unverified"
+        qualified = False
     complete = state == "complete"
     ok = execution == "ok" and state in _COMPLETE_DIAGNOSTIC
-    failure = _classify_failure(status, reason, state, verdict)
+    failure = _classify_failure(status, reason, state, verdict, result)
     value = {
         "schema": SCHEMA,
         "tool": tool,
@@ -2005,68 +2067,223 @@ def _compact_case_view(case_path: Path, schema: str, manifest: dict,
     return value
 
 
-def _bounded_envelope(value: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict:
-    """Cap one compact envelope and state the truncation explicitly.
+def _json_text(value) -> str:
+    """The exact envelope serialization used on stdout (UTF-8, no escaping)."""
+    return json.dumps(value, indent=2, ensure_ascii=False) + "\n"
 
-    The result is reduced in a deterministic order: long lists first, then
-    long strings.  Identity, status, outcome and the recommended next action
-    survive the reduction.  A caller that needs complete evidence asks for
-    ``--full`` or reads the artifact on disk.
+
+def _utf8_len(value) -> int:
+    return len(_json_text(value).encode("utf-8"))
+
+
+def _emit_text(value) -> str:
+    """Serialize the emitted envelope and report its exact UTF-8 size."""
+    text = _json_text(value)
+    result = value.get("result") if isinstance(value.get("result"), dict) else None
+    if result is None or "output_bytes" not in result:
+        return text
+    for _attempt in range(4):
+        size = len(text.encode("utf-8"))
+        if result.get("output_bytes") == size:
+            break
+        result["output_bytes"] = size
+        text = _json_text(value)
+    return text
+
+
+def _essential_compact(result: dict, original: int, cap: int) -> dict:
+    """Smallest projection that still carries the evidence contract.
+
+    Identity, verification state, qualification, first divergence, unresolved
+    interval, recommended checkpoint and artifact references are never removed.
+    Only descriptions, selected inputs/checkpoints and optional axes are shed.
     """
-    original = len(json.dumps(value, indent=2))
-    if original <= cap:
+    diagnosis = result.get("diagnosis") if isinstance(
+        result.get("diagnosis"), dict) else {}
+    first = diagnosis.get("first_divergence") if isinstance(
+        diagnosis.get("first_divergence"), dict) else {}
+    interval = first.get("unresolved_interval") if isinstance(
+        first.get("unresolved_interval"), dict) else {}
+    next_checkpoint = first.get("next_checkpoint")
+    artifacts = result.get("artifacts")
+    if isinstance(artifacts, dict):
+        artifacts = {
+            name: {"bytes": value.get("bytes"), "path": value.get("path")}
+            if isinstance(value, dict) else value
+            for name, value in list(artifacts.items())[:6]
+        }
+    verification = result.get("verification") if isinstance(
+        result.get("verification"), dict) else {}
+    minimal_first = {
+        "event": first.get("event"),
+        "resource": first.get("resource"),
+        "target": first.get("target"),
+        "operation": first.get("operation"),
+        "program": first.get("program"),
+        "producer_event": first.get("producer_event"),
+        "confidence": first.get("confidence"),
+        "root_cause": first.get("root_cause"),
+        "unresolved_interval": {
+            "start_event": interval.get("start_event"),
+            "end_event": interval.get("end_event"),
+            "lower_bound": interval.get("lower_bound"),
+            "search_start_event": interval.get("search_start_event"),
+        },
+        "next_checkpoint": next_checkpoint,
+    }
+    if isinstance(first.get("limitations"), list):
+        minimal_first["limitations"] = first["limitations"][:2]
+    value = {
+        "schema": result.get("schema"),
+        "case_id": result.get("case_id"),
+        "capture": result.get("capture") or {},
+        "verification": {
+            "ok": verification.get("ok"),
+            "case_id": verification.get("case_id"),
+            "independently_reproducible": verification.get(
+                "independently_reproducible"),
+            "graph_status": verification.get("graph_status"),
+            "problems": (verification.get("problems") or [])[:2],
+        },
+        "diagnosis": {
+            "schema": diagnosis.get("schema"),
+            "classification": diagnosis.get("classification"),
+            "qualified": diagnosis.get("qualified"),
+            "first_divergence": minimal_first,
+            "final": diagnosis.get("final"),
+            "next_action": diagnosis.get("next_action"),
+        },
+        "artifacts": artifacts,
+        "files": result.get("files"),
+        "truncated": True,
+        "output_bytes_before_cap": original,
+        "output_cap_bytes": cap,
+    }
+    return value
+
+
+def _bounded_envelope(value: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict:
+    """Cap one compact envelope in emitted UTF-8 bytes, explicitly.
+
+    Reduction is progressive and never removes the evidence contract:
+    identity, verification state, qualification, first divergence, unresolved
+    interval, recommended checkpoint and artifact references survive.  When
+    detail is removed the envelope says so and names what was truncated.
+    """
+    original = _utf8_len(value)
+    # Reserve room for the exact output_bytes field added on the way out.
+    limit = max(1, cap - 64)
+    if original <= limit:
         value.setdefault("result", {})
         if isinstance(value["result"], dict):
             value["result"]["output_bytes"] = original
         return value
     reduced = json.loads(json.dumps(value))
-    result = reduced.get("result")
-    diagnosis = {}
-    if isinstance(result, dict):
-        for key in ("checkpoints", "inputs", "artifacts", "problems"):
-            if isinstance(result.get(key), list):
-                result[key] = result[key][:4]
-        diagnosis = result.get("diagnosis")
-        if isinstance(diagnosis, dict):
-            for key in ("checkpoints", "inputs", "problems"):
-                if isinstance(diagnosis.get(key), list):
-                    diagnosis[key] = diagnosis[key][:4]
-            selection = diagnosis.get("checkpoint_selection")
-            if isinstance(selection, dict):
-                selection["truncated"] = True
-    if len(json.dumps(reduced, indent=2)) <= cap:
+    result = reduced.get("result") if isinstance(
+        reduced.get("result"), dict) else {}
+    removed: list[str] = []
+    diagnosis = result.get("diagnosis") if isinstance(
+        result.get("diagnosis"), dict) else {}
+    if isinstance(diagnosis.get("checkpoints"), list) and diagnosis["checkpoints"]:
+        removed.append("diagnosis.checkpoints")
+        diagnosis["checkpoints"] = diagnosis["checkpoints"][:2]
+    if isinstance(diagnosis.get("inputs"), list) and diagnosis["inputs"]:
+        removed.append("diagnosis.inputs")
+        diagnosis["inputs"] = diagnosis["inputs"][:2]
+    if diagnosis.pop("checkpoint_selection", None) is not None:
+        removed.append("diagnosis.checkpoint_selection")
+    if diagnosis.pop("execution", None) is not None:
+        removed.append("diagnosis.execution")
+    first = diagnosis.get("first_divergence")
+    if isinstance(first, dict):
+        for key in ("recommended_checkpoint", "suggested_checkpoint",
+                    "recommended_action", "cross_capture_excluded",
+                    "copy_source_evidence", "reason"):
+            if key in first:
+                removed.append(f"first_divergence.{key}")
+                first.pop(key, None)
+    if _utf8_len(reduced) <= limit:
         reduced["truncated"] = True
         reduced["output_cap_bytes"] = cap
         reduced["output_bytes_before_cap"] = original
+        reduced["truncated_fields"] = removed
         if isinstance(result, dict):
             result["truncated"] = True
-            result["output_bytes"] = len(json.dumps(reduced, indent=2))
+            result["output_bytes"] = _utf8_len(reduced)
         return reduced
-    # Last resort: keep the stable contract and the actionable diagnosis head.
     minimal = {
         key: reduced.get(key) for key in
         ("schema", "tool", "ok", "status", "reason", "outcome", "failure",
          "runtime")
     }
-    minimal["result"] = {
-        "schema": (result or {}).get("schema") if isinstance(result, dict) else None,
-        "case_id": (result or {}).get("case_id") if isinstance(result, dict) else None,
-        "diagnosis": {
-            "classification": (diagnosis or {}).get("classification")
-            if isinstance(diagnosis, dict) else None,
-            "first_divergence": (diagnosis or {}).get("first_divergence")
-            if isinstance(diagnosis, dict) else None,
-            "next_action": (diagnosis or {}).get("next_action")
-            if isinstance(diagnosis, dict) else None,
-        },
-        "artifacts": (result or {}).get("artifacts")
-        if isinstance(result, dict) else None,
-        "truncated": True,
-    }
+    minimal["result"] = _essential_compact(result, original, cap)
+
+    def shrink() -> None:
+        diagnosis_value = minimal["result"]["diagnosis"]
+        first_value = diagnosis_value.get("first_divergence") or {}
+        if diagnosis_value.get("final") is not None:
+            diagnosis_value.pop("final", None)
+            removed.append("diagnosis.final")
+            return
+        if first_value.get("limitations"):
+            first_value.pop("limitations", None)
+            removed.append("first_divergence.limitations")
+            return
+        if minimal["result"].get("files") is not None:
+            minimal["result"].pop("files", None)
+            removed.append("files")
+            return
+        next_checkpoint = first_value.get("next_checkpoint")
+        if isinstance(next_checkpoint, dict) and isinstance(
+                next_checkpoint.get("reason"), str) and len(
+                    next_checkpoint["reason"]) > 80:
+            next_checkpoint["reason"] = next_checkpoint["reason"][:80] + "…"
+            removed.append("next_checkpoint.reason")
+            return
+        if minimal["result"]["verification"].get("problems"):
+            minimal["result"]["verification"]["problems"] = [
+                str(item)[:80] for item in
+                minimal["result"]["verification"]["problems"]]
+            removed.append("verification.problems")
+            return
+        if isinstance(minimal["result"].get("artifacts"), dict):
+            paths = [name for name in minimal["result"]["artifacts"]][:4]
+            minimal["result"]["artifacts"] = {"paths": paths}
+            removed.append("artifact_sizes")
+            return
+        if diagnosis_value.get("next_action") is not None:
+            diagnosis_value["next_action"] = None
+            removed.append("diagnosis.next_action")
+            return
+        if isinstance(minimal.get("reason"), str) and len(
+                minimal["reason"]) > 120:
+            minimal["reason"] = minimal["reason"][:120] + "…"
+            removed.append("reason")
+            return
+
+    for _attempt in range(12):
+        if _utf8_len(minimal) <= limit:
+            break
+        before = _utf8_len(minimal)
+        shrink()
+        if _utf8_len(minimal) >= before:
+            break
+    if _utf8_len(minimal) > limit:
+        # Absolute floor: the causal and identity fields are already short.
+        # Keep their names and values but drop every remaining description.
+        minimal["result"]["diagnosis"]["next_action"] = None
+        minimal["result"]["diagnosis"]["first_divergence"].pop(
+            "limitations", None)
+        minimal["result"]["artifacts"] = {"paths": [
+            name for name in (minimal["result"].get("artifacts", {}))
+            if isinstance(name, str)][:2]}
+        removed.extend(["artifact_sizes", "diagnosis.next_action"])
     minimal["truncated"] = True
     minimal["output_cap_bytes"] = cap
     minimal["output_bytes_before_cap"] = original
-    minimal["result"]["output_bytes"] = len(json.dumps(minimal, indent=2))
+    minimal["truncated_fields"] = removed
+    minimal["result"]["truncated"] = True
+    minimal["result"]["output_bytes"] = _utf8_len(minimal)
     return minimal
 
 
@@ -3119,7 +3336,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 - one JSON envelope, always
         value = _envelope(args.tool, "error", reason=f"{type(exc).__name__}: {exc}")
         code = 3
-    text = json.dumps(value, indent=2, sort_keys=False) + "\n"
+    text = _emit_text(value)
     if args.out is not None:
         envelope_path = Path(args.out)
         if envelope_path.exists() and envelope_path.is_dir():
@@ -3128,7 +3345,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.tool, "error",
                 reason=(f"envelope destination is a directory, not a file: "
                         f"{envelope_path}"))
-            text = json.dumps(value, indent=2, sort_keys=False) + "\n"
+            text = _emit_text(value)
         else:
             envelope_path.parent.mkdir(parents=True, exist_ok=True)
             envelope_path.write_text(text, encoding="utf-8")

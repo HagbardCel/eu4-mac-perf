@@ -33,6 +33,19 @@ OFFLINE_ONLY_ENV = "EU4_OFFLINE_ONLY"
 # renaming one of these qualification suites fails a normal test instead of
 # quietly shrinking coverage.  A module may be added here only when it is
 # deterministic, portable and does not start EU4.
+MANDATORY_OFFLINE_TEST_IDS = (
+    "tests.test_case_baseline.BaselineIdentityTests."
+    "test_record_and_check_reuses_the_same_identity",
+    "tests.test_failure_taxonomy.FailureTaxonomyTests."
+    "test_timeout_is_not_success",
+    "tests.test_m7_evidence_identity.CompactEvidenceTests."
+    "test_compact_case_stays_bounded_and_keeps_next_checkpoint",
+    "tests.test_p2_workflow.P2WorkflowTests."
+    "test_compact_case_read_is_under_the_cap_and_actionable",
+    "tests.test_test_profiles.OfflineGateTests."
+    "test_mandatory_manifest_modules_exist",
+)
+
 MANDATORY_OFFLINE_MODULES = (
     "tests.test_agent_tools",
     "tests.test_case_baseline",
@@ -128,6 +141,7 @@ def requires_live(reason: str):
                     f"{PROFILE_ENV}={LIVE} and run this module explicitly")
             return function(*args, **kwargs)
 
+        wrapped.__live_only__ = True
         return wrapped
 
     return decorate
@@ -135,6 +149,105 @@ def requires_live(reason: str):
 
 def mandatory_modules() -> tuple[str, ...]:
     return MANDATORY_OFFLINE_MODULES
+
+
+def verify_live_case(case_dir: Path | str) -> dict:
+    """Validate the case a live test will use with the portable verifier.
+
+    A path and a ``case.json`` are not evidence.  The live gate accepts only a
+    case that verifies, has no problems and is independently reproducible.
+    """
+    case_dir = Path(case_dir).expanduser().resolve()
+    problems: list[dict] = []
+    if not (case_dir / "case.json").is_file():
+        return {
+            "ok": False,
+            "case": str(case_dir),
+            "problems": [{"code": "missing_case_json",
+                          "detail": f"{case_dir}/case.json is missing"}],
+            "problems_count": 1,
+        }
+    try:
+        from automation import gfx_replay_case
+
+        verification = gfx_replay_case.verify(case_dir)
+    except Exception as exc:  # noqa: BLE001 - every verifier failure is closed
+        return {
+            "ok": False,
+            "case": str(case_dir),
+            "problems": [{"code": "case_verification_failed",
+                          "detail": f"{type(exc).__name__}: {exc}"}],
+            "problems_count": 1,
+        }
+    if verification.get("ok") is not True:
+        for problem in verification.get("problems") or ["unknown"]:
+            problems.append({"code": "case_invalid", "detail": str(problem)})
+    if verification.get("independently_reproducible") is not True:
+        problems.append({"code": "case_not_reproducible",
+                         "detail": "the live case is not independently "
+                                   "reproducible"})
+    return {
+        "ok": not problems,
+        "case": str(case_dir),
+        "verification": verification,
+        "problems": problems,
+        "problems_count": len(problems),
+    }
+
+
+def _test_inventory(module) -> dict:
+    """Count offline-executable tests in one mandatory module."""
+    total = 0
+    skipped = 0
+    live = 0
+    for _name, value in vars(module).items():
+        if not isinstance(value, type) or not issubclass(value, unittest.TestCase):
+            continue
+        if value.__module__ != module.__name__:
+            continue
+        class_skip = bool(getattr(value, "__unittest_skip__", False))
+        for attribute in dir(value):
+            if not attribute.startswith("test"):
+                continue
+            method = getattr(value, attribute, None)
+            if not callable(method):
+                continue
+            total += 1
+            if class_skip or getattr(method, "__unittest_skip__", False):
+                skipped += 1
+            elif getattr(method, "__live_only__", False):
+                live += 1
+    return {"total": total, "skipped": skipped, "live_only": live,
+            "offline_executable": total - skipped - live}
+
+
+def _mandatory_test_problems() -> list[dict]:
+    problems: list[dict] = []
+    for dotted in MANDATORY_OFFLINE_TEST_IDS:
+        parts = dotted.split(".")
+        if len(parts) < 3:
+            problems.append({"code": "mandatory_test_invalid",
+                             "detail": dotted})
+            continue
+        class_name = parts[-2]
+        method_name = parts[-1]
+        module_name = ".".join(parts[:-2])
+        try:
+            module = importlib.import_module(module_name)
+            cls = getattr(module, class_name)
+            method = getattr(cls, method_name)
+        except (ImportError, AttributeError) as exc:
+            problems.append({"code": "mandatory_test_missing",
+                             "detail": f"{dotted}: {exc}"})
+            continue
+        if getattr(cls, "__unittest_skip__", False) or getattr(
+                method, "__unittest_skip__", False):
+            problems.append({"code": "mandatory_test_skipped",
+                             "detail": dotted})
+        elif getattr(method, "__live_only__", False):
+            problems.append({"code": "mandatory_test_live_only",
+                             "detail": dotted})
+    return problems
 
 
 def verify_offline_gate() -> dict:
@@ -153,8 +266,14 @@ def verify_offline_gate() -> dict:
             if not path.is_file():
                 problems.append({"code": "missing_test_module",
                                  "detail": f"{name} has no source file"})
+            inventory = _test_inventory(module)
+            if inventory["offline_executable"] < 1:
+                problems.append({
+                    "code": "mandatory_module_has_no_executable_test",
+                    "detail": f"{name} has no offline-executable test "
+                              f"({inventory})"})
             modules.append({"module": name, "path": str(path),
-                            "present": path.is_file()})
+                            "present": path.is_file(), **inventory})
         except Exception as exc:  # noqa: BLE001 - report the import failure
             problems.append({"code": "unimportable_test_module",
                              "detail": f"{name}: {type(exc).__name__}: {exc}"})
@@ -163,6 +282,8 @@ def verify_offline_gate() -> dict:
         problems.append({"code": "duplicate_mandatory_module",
                          "detail": "the mandatory offline manifest repeats a "
                                    "module"})
+    mandatory_tests = _mandatory_test_problems()
+    problems.extend(mandatory_tests)
     try:
         profile = active_profile()
     except ValueError as exc:
@@ -175,6 +296,7 @@ def verify_offline_gate() -> dict:
         "offline_default": profile == OFFLINE,
         "live_allowed": live_allowed(),
         "mandatory_modules": modules,
+        "mandatory_tests": list(MANDATORY_OFFLINE_TEST_IDS),
         "problems": problems,
         "problems_count": len(problems),
     }

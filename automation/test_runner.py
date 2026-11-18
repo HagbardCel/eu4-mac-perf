@@ -68,7 +68,8 @@ def _state_dir(value: str | os.PathLike[str] | None = None) -> Path:
 
 
 def _suite(modules: list[str], pattern: str | None, cwd: Path,
-           profile: str = test_profiles.OFFLINE) -> dict:
+           profile: str = test_profiles.OFFLINE,
+           min_tests: int = 1) -> dict:
     modules = list(modules)
     if modules:
         kind = "focused"
@@ -80,13 +81,15 @@ def _suite(modules: list[str], pattern: str | None, cwd: Path,
             kind = "pattern"
             argv += ["-p", pattern]
     key = hashlib.sha256(json.dumps(
-        {"argv": argv, "cwd": str(cwd), "profile": profile},
+        {"argv": argv, "cwd": str(cwd), "profile": profile,
+         "min_tests": min_tests},
         sort_keys=True).encode("utf-8")).hexdigest()[:16]
     # Cwd is deliberately not part of the selection identity: the same modules
     # may legitimately run in separate worktrees.  The executable selection is
     # what a base/candidate comparison must match.
     selection = {"kind": kind, "modules": sorted(modules),
-                 "pattern": pattern or None, "profile": profile}
+                 "pattern": pattern or None, "profile": profile,
+                 "min_tests": min_tests}
     return {"kind": kind, "modules": modules, "pattern": pattern,
             "argv": argv, "key": key, "selection": selection}
 
@@ -178,7 +181,8 @@ def _normalize_owner(owner: str) -> str:
 
 
 def _parse_log(text: str) -> dict:
-    counts = {"ran": 0, "failures": 0, "errors": 0, "skipped": 0}
+    counts = {"ran": 0, "executed": 0, "failures": 0, "errors": 0,
+              "skipped": 0}
     failures: list[dict] = []
     duration = None
     for line in text.splitlines():
@@ -210,6 +214,7 @@ def _parse_log(text: str) -> dict:
                 "owner": owner,
                 "id": identifier or name,
             })
+    counts["executed"] = max(0, counts["ran"] - counts["skipped"])
     return {"counts": counts, "duration_seconds": duration, "failures": failures}
 
 
@@ -249,7 +254,8 @@ def run_suite(
     workdir = Path(cwd).expanduser().resolve() if cwd else ROOT
     if not workdir.is_dir():
         raise ValueError(f"cwd is not a directory: {workdir}")
-    suite = _suite(list(modules or []), pattern, workdir, profile)
+    suite = _suite(list(modules or []), pattern, workdir, profile,
+                   min_tests)
     duplicate = _running(state, suite["key"])
     if duplicate is not None:
         return _pending_envelope(
@@ -270,6 +276,7 @@ def run_suite(
         "pattern": suite["pattern"],
         "selection": suite["selection"],
         "profile": profile,
+        "min_tests": min_tests,
         "argv": suite["argv"],
         "cwd": str(workdir),
         "label": label,
@@ -375,9 +382,10 @@ def run_suite(
         parsed = _parse_log(text)
         if timed_out:
             status = "timeout"
-        elif parsed["counts"]["ran"] < min_tests:
+        elif parsed["counts"]["executed"] < min_tests:
             # A process can exit 0 while executing nothing (or fewer tests than
-            # the requested gate floor).  That is not a passing run.
+            # the requested gate floor).  Skips are classified but do not count
+            # toward the executed floor.
             status = "incomplete"
         elif exit_code == 0:
             status = "passed"
@@ -407,11 +415,12 @@ def run_suite(
             "failures": parsed["failures"],
             "reason": ("" if status in ("passed", "failed")
                        else ("unittest executed zero tests"
-                             if parsed["counts"]["ran"] == 0
-                             else (f"unittest executed {parsed['counts']['ran']} "
-                                   f"test(s), below the required floor of "
-                                   f"{min_tests}"
-                                   if parsed["counts"]["ran"] < min_tests
+                             if parsed["counts"]["executed"] == 0
+                             else (f"unittest executed "
+                                   f"{parsed['counts']['executed']} test(s), "
+                                   f"below the required floor of {min_tests} "
+                                   f"({parsed['counts']['skipped']} skipped)"
+                                   if parsed["counts"]["executed"] < min_tests
                                    else f"test run ended as {status}"))),
             "timed_out": timed_out,
             "log_bytes": log_path.stat().st_size if log_path.is_file() else 0,
@@ -480,6 +489,8 @@ def list_runs(*, state_dir: str | os.PathLike[str] | None = None,
             "failure_kind": row.get("failure_kind"),
             "kind": row.get("kind"),
             "profile": row.get("profile"),
+            "min_tests": row.get("min_tests"),
+            "counts": row.get("counts"),
             "modules": row.get("modules"),
             "exit_code": row.get("exit_code"),
             "started_utc": row.get("started_utc"),
@@ -519,6 +530,7 @@ def _selection(record: dict) -> dict | None:
             "modules": sorted(str(item) for item in modules),
             "pattern": selection.get("pattern") or None,
             "profile": selection.get("profile") or test_profiles.OFFLINE,
+            "min_tests": selection.get("min_tests") or 1,
         }
     kind = record.get("kind")
     modules = record.get("modules")
@@ -529,6 +541,7 @@ def _selection(record: dict) -> dict | None:
         "modules": sorted(str(item) for item in modules),
         "pattern": record.get("pattern") or None,
         "profile": record.get("profile") or test_profiles.OFFLINE,
+        "min_tests": record.get("min_tests") or 1,
     }
 
 
@@ -546,7 +559,7 @@ def _incomparable_reason(record: dict, label: str) -> str | None:
     counts = record.get("counts")
     if not isinstance(counts, dict) or type(counts.get("ran")) is not int:
         return f"{label} has no test-count summary"
-    if counts.get("ran", 0) <= 0:
+    if counts.get("executed", counts.get("ran", 0)) <= 0:
         return f"{label} executed zero tests"
     if not isinstance(record.get("failures"), list):
         return f"{label} has no failure list"

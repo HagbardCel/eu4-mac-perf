@@ -12,34 +12,47 @@ received the independent approval required before merge.
 
 **Test profiles.** `offline` is the default and cannot launch EU4: an explicit
 `EU4_TEST_PROFILE=offline` (or durable `EU4_OFFLINE_ONLY=1`) makes the
-`gfx_launch`, `m6_frame capture`, `live_gfx capture` and `live_gfx probe`
+`gfx_launch.spawn`, `eu4_gfx_startup_trace.run_ops` and `live_gfx probe`
 entry points refuse a real launch. `automation.test_runner run --profile
 offline` is the routine gate; `--profile live` requires an explicit module and
 a real case and is never selected implicitly. A mandatory offline manifest
-(`automation.test_profiles verify --profile offline`) and a minimum executed-test
-floor make a silently shrunken gate fail. CI runs the manifest and the complete
+(`automation.test_profiles verify --profile offline`) names required module and
+test ids. The floor counts executed tests (`ran - skipped`), and duplicate-run
+identity includes the profile and floor, so classified skips or a weaker
+in-flight run cannot satisfy a stricter request. CI runs the manifest and the complete
 offline discovery under the offline profile. `tests.test_live_qualification`
-is the classified live-only placeholder; it skips with a reason offline and
-fails closed live without `EU4_LIVE_CASE`. The TR3 tests that need the optional
+is the classified live-only placeholder; it skips with a reason offline and,
+under the live profile, requires `EU4_LIVE_CASE` to pass `gfx_replay_case.verify()`
+and be independently reproducible. The TR3 tests that need the optional
 QBDI x86-64 release are classified skips with the missing-dependency reason,
 not environment failures; QBDI remains non-mandatory. The exact offline/live
 split is in [M7 test profiles](m7-test-profiles.md).
 
 **Failure handling.** Every `eu4-agent-tool/v2` result separates a completed
 comparison from operational failure: `execution_timeout`,
-`missing_credential`, `graphics_unavailable`, `evidence_invalid`,
-`evidence_missing`, `policy_refusal`, `tool_failure`, or `null` for a usable
-result. Timeouts and exceptions cannot report `ok`. The test runner preserves
+`missing_credential`, `graphics_unavailable`, `dependency_unavailable`,
+`evidence_invalid`, `evidence_missing`, `policy_refusal`, `tool_failure`, or
+`null` for a usable comparison. Invalid evidence takes precedence over generic
+dependency wording; a shader/replay correctness failure is a tool failure, not
+a GPU-capability failure; and a nested invalid verification/diagnosis cannot
+appear qualified. Timeouts and exceptions cannot report `ok`. The test runner preserves
 its log and record after failure and reports `failure_kind`.
 
 **Compact diagnostics.** `eu4_case_inspect` and `eu4_replay verify` return a
 bounded `gfx-agent-case/v1` projection by default (case/capture identity,
 verification, axes, first divergence, checkpoint statistics, next checkpoint,
-artifact names/sizes, next action); `--full` restores the complete view. The
-cap is 8,192 emitted bytes with explicit truncation metadata. Full reports stay
-on disk. `automation.case_baseline` records/checks one complete identity for an
-existing verified case and replay baseline; a changed payload, shader, renderer
-source, policy or backend forces recomputation.
+artifact names/sizes, next action); `--full` restores the complete view.
+`eu4_case_inspect` is the preferred single routine read because it verifies
+internally; a separate `eu4_replay verify` is for explicit independent
+qualification or error investigation. The cap is 8,192 exact emitted UTF-8
+bytes; truncation is explicit and identity, verification, first divergence,
+unresolved interval, recommended checkpoint and artifact references are
+preserved. Full reports stay on disk. `automation.case_baseline` records an
+identity only after `gfx_replay_case.verify()` passes, every declared payload
+is re-hashed from disk, and the replay readback is complete. The identity
+includes the renderer include closure (`eu4_gfx_replay_semantics.h` and peers),
+replay binary/source, shaders, policy and platform; a matching fingerprint
+alone is not sufficient for reuse.
 
 **Verified capabilities.** The authentic P0 case (`m7-live-frame-000001`,
 manifest `7c00ba56…`, seal `794c482d…`, session `a3111e0d…`) still verifies
@@ -47,9 +60,11 @@ offline (1,247 files, graph complete, independently reproducible). Compact
 inspection returns the unchanged first divergence at event 142 `fb:0`
 (program 331, producer 141), final 1,160,291 / 1,930,176 differing pixels
 (max 70), an unbounded lower bound, and the recommended event-71 checkpoint.
-The compact inspect/verify/reuse path returns 19,505 bytes versus 400,666 chars
-in the preserved P1 session, with zero shell calls and zero new replays; the
-baseline identity is reused. See [P2 efficiency](../analysis/m7/p2-efficiency.md)
+The routine interface path is two native reads (`eu4_case_inspect` 8,018 bytes
+plus baseline reuse 2,355 bytes) with zero shell calls, zero new replays and a
+verified baseline; this is an interface-level demonstration, not a replacement
+measurement for the P1 agent's 80 calls. End-to-end P2 efficiency is **not yet
+measured** because no provider credential is available. See [P2 efficiency](../analysis/m7/p2-efficiency.md)
 and [evidence](../analysis/m7/p2-evidence.json).
 
 **Offline vs live.** The offline gate covers portable Python/native-harness
@@ -59,8 +74,8 @@ capture. Live qualification is explicit, bounded and separate; it requires an
 already-captured case or an operator-authorized launch and retains diagnostics.
 
 **Remaining limits.** No new model-driven P2 session was run because no
-provider credential is available in this environment, so the efficiency
-comparison is the native-interface path against the preserved P1 export.
+provider credential is available in this environment; only interface-level
+efficiency is measured. End-to-end efficiency remains unmeasured.
 `gl_dither` and `multisample` remain unsupported, the pre-event-142 causal
 interval is unresolved, and a multi-checkpoint same-frame capture remains the
 justified next instrumentation step. Branch protection and the independent

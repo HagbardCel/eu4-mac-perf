@@ -15,25 +15,31 @@ renderer, tracing framework, orchestrator or speculative OpenGL/Metal fix.
 
 - **Explicit test profiles.** `automation.test_profiles` defines `offline`
   (default) and `live`. `EU4_TEST_PROFILE=offline` and the durable
-  `EU4_OFFLINE_ONLY=1` marker make `gfx_launch.spawn`, `m6_frame capture`,
-  `live_gfx capture` and `live_gfx probe` refuse a real launch. Production
-  (unset profile) is unchanged. `automation.test_runner run` accepts
+  `EU4_OFFLINE_ONLY=1` marker make `gfx_launch.spawn`,
+  `eu4_gfx_startup_trace.run_ops` and `live_gfx probe` refuse a real launch.
+  Production (unset profile) is unchanged. `automation.test_runner run` accepts
   `--profile` and `--min-tests`; the live profile requires an explicit module
   and is never selected for the full suite.
-- **Mandatory offline manifest.** `automation.test_profiles verify
-  --profile offline` imports every mandatory qualification module. Deleting or
-  renaming one fails the manifest, and a test-run that executes fewer tests than
-  its floor is `incomplete`, not passed. CI runs the manifest and the complete
-  offline discovery with `EU4_TEST_PROFILE=offline`.
+- **Executed-test floor and mandatory tests.** The floor counts executed tests
+  (`ran - skipped`), so a suite of classified skips is `incomplete`. The
+  mandatory manifest also names required test ids and rejects a skipped or
+  missing mandatory test. Duplicate-run identity includes the profile **and**
+  the floor; a running `min_tests=1` invocation cannot satisfy a stricter
+  request.
 - **Classified live tests.** `tests.test_live_qualification` is decorated with
-  `requires_live`; it skips with a reason in the offline gate and fails closed
-  under the live profile when no real case is supplied. Known platform skips in
-  the existing suite remain explicit (`skipUnless(..., reason)`).
+  `requires_live`; it skips with a reason in the offline gate and, under the
+  live profile, requires the named case to pass `gfx_replay_case.verify()` and
+  be independently reproducible. Known platform skips in the existing suite
+  remain explicit (`skipUnless(..., reason)`).
 - **Failure taxonomy.** Every `eu4-agent-tool/v2` envelope now carries
   `failure.kind` / `outcome.failure_kind`: `execution_timeout`,
-  `missing_credential`, `graphics_unavailable`, `evidence_invalid`,
-  `evidence_missing`, `policy_refusal` or `tool_failure`, separate from
-  `failure_class: comparison` for a completed differing-pixel result. A
+  `missing_credential`, `graphics_unavailable`, `dependency_unavailable`,
+  `evidence_invalid`, `evidence_missing`, `policy_refusal`, `tool_failure` or
+  `null` for a comparison. Classification is driven by explicit
+  status/diagnostic first: invalid evidence wins over dependency wording, a
+  Metal shader/replay correctness error is a tool failure (not
+  `graphics_unavailable`), a completed differing-pixel result is a comparison,
+  and a nested invalid verification/diagnosis cannot appear qualified. A
   timeout or tool exception cannot report `ok`. The test runner records a
   `failure_kind` for passed/failed/timeout/incomplete outcomes and preserves
   the full log and record on failure.
@@ -55,14 +61,46 @@ command streams and screenshots stay on disk. `--full` restores the complete
 view. The compact envelope is capped at 8,192 emitted bytes and reports
 `truncated`, `output_cap_bytes` and `output_bytes_before_cap` when reduced.
 
-`automation.case_baseline` records one identity for an existing verified case
-and replay baseline (manifest/payload inventory, seal, diagnostic report, graph,
-replay result/readback, shaders, renderer sources, policy, platform) and checks
-reuse fail-closed. It is a single identity receipt, not a persistent cache.
+`automation.case_baseline` records one identity for an existing baseline only
+after the current case passes `gfx_replay_case.verify()` and every declared
+payload is re-hashed from disk. Reuse also requires a completed replay result
+and readback. The identity covers the seal, diagnostic report, graph, replay
+result/readback, translated shader inputs, the actual renderer include closure
+(including `eu4_gfx_replay_semantics.h`), the replay binary/source, the
+comparison policy and the platform. A matching stored fingerprint is necessary
+but not sufficient: an invalid current identity is never reusable. It is a
+single identity receipt, not a persistent cache.
 `automation.dsh_efficiency` now emits a compact execution-summary block for the
 required P2 metrics; values the session export cannot support are explicit
 `null`s with a reason (GL/Metal replay split, GPU checkpoint overhead, artifact
 bytes), never measured-looking zeros.
+
+## Review-round corrections
+
+The first reviewed head (`10087c33`) was corrected in five places:
+
+1. **Baseline reuse is verification-bound.** Record/check now require
+   `gfx_replay_case.verify()`, re-hash every declared payload from disk,
+   require a completed replay/readback, and include the renderer include
+   closure (including `eu4_gfx_replay_semantics.h`), shader inputs, replay
+   binary/source, policy and platform. A matching fingerprint alone is not
+   reusable; an invalid current case is rejected.
+2. **The test floor counts executed tests**, not ran tests. Mandatory module
+   and test ids are checked; duplicate-run identity includes profile and floor;
+   a live case must pass `gfx_replay_case.verify()` and be independently
+   reproducible.
+3. **Failure classification is explicit.** Invalid evidence wins over generic
+   dependency terms; shader/replay correctness failures are `tool_failure`;
+   genuine capability failures are `graphics_unavailable`; dependency failures
+   are `dependency_unavailable`; nested invalid evidence cannot look qualified.
+4. **Compact output is enforced in exact emitted UTF-8 bytes** (8,192), not JSON
+   characters. Essential identity, verification, first divergence, unresolved
+   interval, recommended checkpoint and artifact references survive; truncation
+   names what was removed.
+5. **Inspection is a single native read by default.** `eu4_case_inspect`
+   verifies internally; an immediate `eu4_replay verify` is redundant for a
+   routine read and is reserved for independent qualification/error work. The
+   efficiency evidence now separates interface-level and end-to-end claims.
 
 ## Authentic demonstration (C1)
 
@@ -73,49 +111,55 @@ were performed.
 
 | Check | Result |
 |---|---|
-| Offline verification | `eu4_replay verify` ok; graph complete; independently reproducible |
+| Offline verification | `eu4_case_inspect` runs `gfx_replay_case.verify()` internally: ok, graph complete, independently reproducible |
 | First divergence unchanged | event 142, `fb:0`, `_GfxDrawIndexed`, program 331; final 1,160,291 / 1,930,176, max 70 |
 | Causal interval unchanged | `start_event: null`, `lower_bound: unbounded`; `search_start_event: 0` is explicitly not matching evidence |
 | Next checkpoint | event 71, `fb:0`, `requires_capture: true` |
 | Baseline reuse | identity check `reusable=true`; no recomputation |
-| Compact inspect | 8,018 bytes (was 479,719 bytes full) |
-| Compact verify | 8,061 bytes (was 477,163 bytes full) |
-| Reuse check | 3,426 bytes |
+| Compact inspect | 8,018 emitted bytes (was 479,719 bytes full) |
+| Reuse check | 2,355 bytes |
+| Separate verify (not routine) | 8,061 bytes when independent verification is explicitly needed |
 | Synthetic substitution | tampered payload fails `verify()` and invalidates the baseline (regression test) |
 | Failure/unavailable outcomes | explicit taxonomy tests; timeout cannot be `ok` |
 | Agent interface consumption | deterministic P2 workflow test reads identity, divergence, interval and next checkpoint from the compact envelope |
 
-### P1 versus P2 operational overhead
+### Efficiency evidence scope
 
-The P1 reference is the preserved P1 session export
-(`session-fd42d127-…`, one model turn). The P2 figure is the deterministic
-native-interface workflow on the same verified case, not a new model turn (no
-provider key is available in this environment).
+Three different things are deliberately separated:
 
-| Metric | P1 | P2 interface path |
+1. **P1 autonomous session** (`session-fd42d127-…`): one model turn, 72 model
+   calls, 80 tool calls (2 native, 66 shell), 400,666 returned characters,
+   1,220 s. It reached `requires_additional_evidence`.
+2. **P2 deterministic interface demonstration**: the two routine native reads
+   below, with no model turn. It proves the interface contract and output size,
+   not the end-to-end cost of an investigation.
+3. **P2 autonomous session**: not run. `OPENCODE_GO_API_KEY` is absent in this
+   environment, so end-to-end efficiency is **not yet measured**.
+
+| Metric | P1 autonomous session | P2 interface demonstration |
 |---|---|---|
-| Tool calls | 80 total (2 native, 66 shell) | 3 native, 0 shell |
-| Returned output | 400,666 chars | 19,505 chars (–95.13%) |
+| Tool calls | 80 (2 native, 66 shell) | 2 native, 0 shell |
+| Returned output | 400,666 chars | 10,373 bytes |
 | Oversized / truncated results | 6 / 2 | 0 / 0 |
 | EU4 launches | 0 | 0 |
 | Replays | 1 | 0 (baseline reused) |
-| Tests run by the agent | 0 | 0 |
-| Turns / elapsed | 1 / 1,220 s | not applicable (deterministic) |
+| Model calls / elapsed | 72 / 1,220 s | 0 / not applicable |
+| End-to-end comparable? | — | **No; interface-level only** |
 
-The P1 model session did the investigation and reached
-`requires_additional_evidence`; P2 does not claim to have re-run that reasoning.
-It demonstrates that the routine evidence path is smaller, needs no shell, does
-not replay an unchanged baseline and keeps the same qualified diagnostic
-conclusions. Full per-session model overhead remains to be measured once
-credentials are available.
+The interface path is a genuine reduction in routine diagnostic bytes and
+shell work, but it is **not** a replacement measurement for the P1 agent's
+reasoning. A bounded P2 autonomous session against the same verified case is
+still required before claiming end-to-end efficiency.
 
 ## Offline gate
 
-The final offline gate (`20261118T135839Z-d1948266`) ran with
-`EU4_TEST_PROFILE=offline` / `EU4_OFFLINE_ONLY=1`: **3,701 tests, 40 skipped, 0
-failures, 0 errors, 663.9 s**. The skips are classified: the live-only module,
-platform-only hosts and 11 optional-QBDI TR3 tests. No EU4 process was started.
-The same gate is configured as the required `portable` check.
+The final offline gate (`20261118T162742Z-35ac5960`) ran with
+`EU4_TEST_PROFILE=offline` / `EU4_OFFLINE_ONLY=1` and `--min-tests 3000`:
+**3,731 tests ran, 3,690 executed, 41 skipped, 0 failures, 0 errors, 691.7 s**.
+The floor counts executed tests, so classified skips cannot satisfy it. The
+skips are the live-only module, platform-only hosts and 11 optional-QBDI TR3
+tests; QBDI remains non-mandatory. No EU4 process was started. The same gate is
+configured as the required `portable` check.
 
 ## Evidence
 

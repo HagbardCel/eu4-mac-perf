@@ -49,12 +49,15 @@ result, not a traceback.
 | `outcome.verdict` | `different`, `equal`, `unverified`, a GPU verdict, `null` | the comparison/rendering conclusion, if any |
 | `outcome.evidence` | `valid`, `invalid`, `unverified`, `null` | is the evidence the operation used trustworthy? |
 | `outcome.qualified` | `true`, `false`, `null` | the separate qualification outcome |
-| `outcome.failure_kind` | `null`, `execution_timeout`, `missing_credential`, `graphics_unavailable`, `evidence_invalid`, `evidence_missing`, `policy_refusal`, `tool_failure` | the operational failure class, separate from a comparison difference |
+| `outcome.failure_kind` | `null`, `execution_timeout`, `missing_credential`, `graphics_unavailable`, `dependency_unavailable`, `evidence_invalid`, `evidence_missing`, `policy_refusal`, `tool_failure` | the operational failure class, separate from a comparison difference |
 
 A completed comparison that finds different pixels has no `failure_kind`; a
-timeout, missing credential, unavailable graphics capability, invalid evidence
-and genuine mismatch are distinct outcomes. No failure class can be promoted to
-a successful qualification.
+timeout, missing credential, unavailable graphics capability, missing
+dependency, invalid evidence and genuine mismatch are distinct outcomes. A
+shader or replay correctness failure is a tool failure, not a GPU-capability
+failure, and invalid evidence wins over generic dependency wording. A nested
+invalid verification/diagnosis downgrades the envelope. No failure class can be
+promoted to a successful qualification.
 
 `ok` is true only when execution succeeded and the diagnostic is complete or
 explicitly bounded (`partial`). Consequences:
@@ -241,9 +244,12 @@ identity, verification status, qualification axes, first divergence, selected
 checkpoint statistics, the next recommended checkpoint, artifact names/sizes
 and the next action. The full manifest, dependency graph, command stream and
 diagnostic report stay on disk. The projection is capped at 8,192 emitted bytes
-and reports `truncated`, `output_cap_bytes` and `output_bytes_before_cap` when
-the cap is reached. Pass `--full` only when a specific missing field requires
-the complete report view.
+and reports `truncated`, `output_cap_bytes`, `output_bytes_before_cap` and
+`truncated_fields` when the cap is reached. The cap is measured on the exact
+emitted UTF-8 bytes (including the trailing newline), not JSON character
+counts. Essential identity, verification, first-divergence, unresolved-interval,
+recommended-checkpoint and artifact references are never removed. Pass
+`--full` only when a specific missing field requires the complete report view.
 
 ```sh
 python3 -m automation.agent_tools eu4_case_inspect --case <case>
@@ -253,12 +259,13 @@ python3 -m automation.agent_tools eu4_replay verify --case <case>
 
 ### Baseline reuse
 
-`automation.case_baseline` records one identity for an existing verified case
-and its replay baseline, then checks whether a later run may reuse it. The
-identity covers the case manifest and declared payloads, frame seal, diagnostic
-report, graph, replay result/readback, shaders, renderer sources,
-comparison policy and platform. It is not a result cache: a mismatch forces a
-recomputation.
+`automation.case_baseline` records one identity for an existing case only after
+`gfx_replay_case.verify()` passes, every declared payload is re-hashed from
+disk, and the replay result/readback is complete. The identity covers the frame
+seal, diagnostic report, graph, replay result/readback, translated shader
+inputs, the renderer include closure (including `eu4_gfx_replay_semantics.h`),
+the replay binary/source, comparison policy and platform. It is not a result
+cache: a mismatch or an unverified current case forces a recomputation.
 
 ```sh
 python3 -m automation.case_baseline record --case <case> --baseline <out>.json

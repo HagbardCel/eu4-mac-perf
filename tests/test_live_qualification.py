@@ -11,6 +11,7 @@ the wrong profile or a missing case.
 
 from __future__ import annotations
 
+import json
 import os
 import unittest
 from pathlib import Path
@@ -29,12 +30,15 @@ class LiveQualificationTests(unittest.TestCase):
 
     @test_profiles.requires_live(
         "a real EU4 capture and its sealed case are required")
-    def test_live_case_is_named_and_present(self):
+    def test_live_case_verifies_with_the_portable_verifier(self):
         raw = os.environ.get(CASE_ENV)
         self.assertTrue(raw, f"{CASE_ENV} must name the already-captured case")
         case = Path(raw).expanduser()
-        self.assertTrue((case / "case.json").is_file(),
-                        f"{case}/case.json is missing")
+        result = test_profiles.verify_live_case(case)
+        self.assertTrue(
+            result["ok"],
+            "live case failed verification: "
+            + json.dumps(result.get("problems") or []))
 
 
 if __name__ == "__main__":

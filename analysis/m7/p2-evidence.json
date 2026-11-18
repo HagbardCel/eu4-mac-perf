@@ -6,7 +6,7 @@
     "case_id": "m7-live-frame-000001",
     "case_json_sha256": "7c00ba56d66e11ed50099620085bc828456e2fa0d2839c0cfd05c885d9192283",
     "seal_sha256": "794c482d49767b0b0aa356f5fc28919b9c2a57a33c88f7112152efd8c07d0ca6",
-    "baseline_fingerprint": "232715d9c0ebaab9878f79c98b07e20fcb29b7bdf7b93a75451bf3bdaea1c905",
+    "baseline_fingerprint": "3731567446977c5b672f7b3866f22bce11c905b22dc38695262163e4af63bb96",
     "capture": {
       "session_id": "a3111e0d-9b76-4b23-910d-38bd48c9aa93",
       "capture_frame_id": 1,
@@ -14,6 +14,16 @@
       "scene_index": 617,
       "event_stream_sha256": "62cfdae407ecf38cbed0c98a956c5115203de12a85d46fd9b92e3d1c2dd9778c",
       "reference_sha256": "52322629c9d2e63e0f66c97a2ec2d79cf439377417f572fed688b3f6d7f5d1fb"
+    },
+    "baseline_identity": {
+      "verified": true,
+      "independently_reproducible": true,
+      "payload_validation": "ok",
+      "payload_count": 1247,
+      "renderer_semantics_included": true,
+      "renderer_source_count": 7,
+      "shader_inputs": 104,
+      "renderer_binary_sha256": "4f9804933989d4c064da13333b3c8d5361c6c81da20ca17bc692079f5d9fcd96"
     }
   },
   "p1_reference": {
@@ -33,23 +43,21 @@
     "tests": 0
   },
   "p2_deterministic_workflow": {
-    "description": "compact case inspection + verification + identity-bound baseline reuse; no shell, no replay, no EU4 launch",
+    "scope": "interface-level deterministic demonstration only; not an autonomous model session",
+    "description": "single compact case inspection (which verifies internally) plus identity-bound baseline reuse; no separate verification call, shell, replay or EU4 launch",
     "commands": [
       {
         "tool": "eu4_case_inspect",
-        "bytes": 8018
-      },
-      {
-        "tool": "eu4_replay verify",
-        "bytes": 8061
+        "bytes": 8018,
+        "verification_included": true
       },
       {
         "tool": "case_baseline check",
-        "bytes": 3426
+        "bytes": 2355
       }
     ],
-    "returned_chars": 19505,
-    "native_calls": 3,
+    "returned_chars": 10373,
+    "native_calls": 2,
     "shell_calls": 0,
     "eu4_launches": 0,
     "replays": 0,
@@ -57,11 +65,12 @@
     "oversized_results": 0,
     "truncated_results": 0,
     "reused_baseline": true,
-    "reduction": {
-      "returned_chars": 381161,
-      "returned_chars_fraction": 0.9513,
-      "shell_calls": 66,
-      "replays": 1
+    "interface_reduction_vs_p1_output": {
+      "p1_returned_chars": 400666,
+      "p2_returned_chars": 10373,
+      "reduction_chars": 390293,
+      "reduction_fraction": 0.9741,
+      "note": "compares interface output volume only; it does not replace the P1 agent's 80 tool calls or reasoning"
     }
   },
   "correctness": {
@@ -137,20 +146,57 @@
     "No EU4 launch and no replay were performed for this evidence; the existing verified baseline is reused."
   ],
   "offline_gate": {
-    "run_id": "20261118T135839Z-d1948266",
+    "run_id": "20261118T162742Z-35ac5960",
     "profile": "offline",
-    "tests_executed": 3701,
-    "skipped": 40,
+    "min_tests": 3000,
+    "tests_ran": 3731,
+    "tests_executed": 3690,
+    "skipped": 41,
     "failures": 0,
     "errors": 0,
-    "duration_seconds": 663.931,
+    "duration_seconds": 691.651,
     "exit_code": 0,
     "eu4_launches": 0,
     "notes": [
       "Executed with EU4_TEST_PROFILE=offline and EU4_OFFLINE_ONLY=1.",
-      "The 40 skips include the classified live-only module, platform-only hosts and 11 optional-QBDI TR3 tests; QBDI is not mandatory."
+      "The floor is applied to executed tests (ran - skipped).",
+      "The 41 skips include the classified live-only module, platform-only hosts and optional-QBDI TR3 tests; QBDI is not mandatory."
     ]
   },
   "pull_request": 212,
-  "initial_head": "f7e3e0b5655882fea9edfbb1afcc8e537e75784d"
+  "initial_head": "f7e3e0b5655882fea9edfbb1afcc8e537e75784d",
+  "efficiency_scope": {
+    "p1_original_autonomous_session": {
+      "session_id": "session-fd42d127-1706-47d6-acb1-d40bfaa3e91b",
+      "turns": 1,
+      "model_calls": 72,
+      "tool_calls": 80,
+      "elapsed_seconds": 1220.123,
+      "measured": true
+    },
+    "p2_deterministic_interface_demonstration": {
+      "native_calls": 2,
+      "shell_calls": 0,
+      "elapsed_seconds": null,
+      "model_calls": 0,
+      "measured": true,
+      "end_to_end": false
+    },
+    "p2_autonomous_session": {
+      "executed": false,
+      "reason": "OPENCODE_GO_API_KEY is absent in this environment",
+      "tool_calls": null,
+      "returned_bytes": null,
+      "elapsed_seconds": null,
+      "outcome": null
+    },
+    "end_to_end_efficiency": "not_measured"
+  },
+  "corrections": {
+    "baseline_reuse": "record/check now require gfx_replay_case.verify(), actual on-disk payload validation, a completed replay/readback and the renderer include closure",
+    "compact_output": "UTF-8 byte cap including the emitted newline; essential identity/causal fields preserved; exact output_bytes reported",
+    "failure_classification": "explicit status precedence; shader/replay correctness failures are tool failures; dependency_unavailable is separate from graphics_unavailable",
+    "test_floor": "counts executed tests (ran - skipped) and includes profile/min_tests in the dedup identity",
+    "live_gate": "live case must pass gfx_replay_case.verify() and be independently reproducible"
+  }
 }

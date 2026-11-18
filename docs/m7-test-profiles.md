@@ -30,7 +30,12 @@ software/hardware checks that the historical suite already relies on.
   manifest. Removing or renaming one of those modules fails
   `tests.test_test_profiles`.
 - `automation.test_runner --min-tests N` makes a suite that executes fewer than
-  `N` tests `incomplete`; CI uses a floor of 3,000.
+  `N` tests `incomplete`. Executed means `ran - skipped`; classified skips do
+  not satisfy the floor. CI uses a floor of 3,000.
+- The mandatory manifest also names required test ids. A skipped, missing or
+  live-only mandatory test fails the manifest.
+- Duplicate-run identity includes the profile and the test floor, so a weaker
+  in-flight run cannot satisfy a stricter request.
 - Platform/hardware skips remain explicit `skipUnless(..., reason)`:
   Darwin-only OpenGL/Metal hosts, Rosetta x86-64 execution and similar.
 - The optional QBDI x86-64 release is **not mandatory**. On a Mac without it,
@@ -51,8 +56,9 @@ Rules:
 
 - `--profile live` requires an explicit module or pattern; it is never selected
   implicitly by a full-suite run.
-- `EU4_LIVE_CASE` must name an already-captured, verified case. The module does
-  not launch EU4 by itself.
+- `EU4_LIVE_CASE` must name an already-captured case that passes
+  `gfx_replay_case.verify()` and is independently reproducible. A path with a
+  `case.json` is not sufficient. The module does not launch EU4 by itself.
 - A real launch still needs its operator authorization/ledger and the existing
   capture timeout/cleanup/artifact retention. `EU4_TEST_PROFILE=live` only
   removes the offline refusal; it is not authorization.

@@ -8,11 +8,19 @@ and that the mandatory offline suite manifest cannot silently shrink.
 from __future__ import annotations
 
 import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from automation import test_profiles, test_runner
+from tests.test_case_baseline import _write_case
+
+
+class _SkippedMandatoryTest(unittest.TestCase):
+    @unittest.skip("deliberate negative fixture")
+    def test_skipped(self):
+        pass
 
 
 class ProfileSelectionTests(unittest.TestCase):
@@ -146,6 +154,127 @@ class TestRunnerProfileTests(unittest.TestCase):
     def test_nonpositive_test_floor_is_refused(self):
         with self.assertRaises(ValueError):
             test_runner.run_suite(min_tests=0)
+
+
+class ExecutedFloorTests(unittest.TestCase):
+    def _tiny_module(self, root: Path, body: str) -> Path:
+        path = root / "runner_tiny.py"
+        path.write_text(body)
+        return root
+
+    def test_skipped_tests_do_not_satisfy_the_floor(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._tiny_module(root, """import unittest
+class Tiny(unittest.TestCase):
+    @unittest.skip("classified")
+    def test_skipped(self):
+        pass
+""")
+            value = test_runner.run_suite(
+                modules=["runner_tiny"], cwd=root,
+                state_dir=root / "state", min_tests=1, timeout=60)
+        self.assertEqual(value["status"], "incomplete")
+        self.assertEqual(value["counts"]["executed"], 0)
+        self.assertEqual(value["counts"]["skipped"], 1)
+        self.assertEqual(value["failure_kind"], "test_not_executed")
+
+    def test_executed_test_satisfies_the_floor(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._tiny_module(root, """import unittest
+class Tiny(unittest.TestCase):
+    def test_runs(self):
+        self.assertTrue(True)
+""")
+            value = test_runner.run_suite(
+                modules=["runner_tiny"], cwd=root,
+                state_dir=root / "state", min_tests=1, timeout=60)
+        self.assertEqual(value["status"], "passed")
+        self.assertEqual(value["counts"]["executed"], 1)
+
+    def test_duplicate_identity_includes_the_floor(self):
+        base = test_runner._suite(["tests.test_agent_tools"], None,
+                                  Path.cwd(), "offline", 1)
+        stricter = test_runner._suite(["tests.test_agent_tools"], None,
+                                      Path.cwd(), "offline", 500)
+        self.assertNotEqual(base["key"], stricter["key"])
+        self.assertEqual(stricter["selection"]["min_tests"], 500)
+
+    def test_duplicate_identity_includes_the_profile(self):
+        offline = test_runner._suite(["tests.test_agent_tools"], None,
+                                     Path.cwd(), "offline", 1)
+        live = test_runner._suite(["tests.test_agent_tools"], None,
+                                  Path.cwd(), "live", 1)
+        self.assertNotEqual(offline["key"], live["key"])
+
+    def test_suite_floor_mismatch_is_incomparable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            record = {
+                "id": "r", "status": "passed", "exit_code": 0,
+                "completed": True,
+                "counts": {"ran": 2, "executed": 2, "skipped": 0},
+                "failures": [],
+                "selection": {"kind": "focused", "modules": ["x"],
+                              "pattern": None, "profile": "offline",
+                              "min_tests": 1},
+            }
+            other = dict(record)
+            other["selection"] = dict(record["selection"], min_tests=500)
+            self.assertNotEqual(test_runner._selection(record),
+                                test_runner._selection(other))
+
+
+class MandatoryTestCoverageTests(unittest.TestCase):
+    def test_mandatory_modules_have_offline_executable_tests(self):
+        value = test_profiles.verify_offline_gate()
+        self.assertTrue(value["ok"], value["problems"])
+        for module in value["mandatory_modules"]:
+            self.assertGreater(module["offline_executable"], 0, module)
+
+    def test_skipped_mandatory_test_is_reported(self):
+        dotted = ("tests.test_test_profiles._SkippedMandatoryTest."
+                  "test_skipped")
+        with mock.patch.object(test_profiles, "MANDATORY_OFFLINE_TEST_IDS",
+                               (dotted,)):
+            value = test_profiles.verify_offline_gate()
+        self.assertFalse(value["ok"])
+        self.assertTrue(any(problem["code"] == "mandatory_test_skipped"
+                            for problem in value["problems"]))
+
+    def test_missing_mandatory_test_is_reported(self):
+        with mock.patch.object(
+                test_profiles, "MANDATORY_OFFLINE_TEST_IDS",
+                ("tests.test_test_profiles.NoSuchTest.test_nope",)):
+            value = test_profiles.verify_offline_gate()
+        self.assertFalse(value["ok"])
+        self.assertTrue(any(problem["code"] == "mandatory_test_missing"
+                            for problem in value["problems"]))
+
+
+class LiveCaseVerificationTests(unittest.TestCase):
+    def test_valid_live_case_passes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            case = _write_case(Path(temporary))
+            result = test_profiles.verify_live_case(case)
+        self.assertTrue(result["ok"], result["problems"])
+        self.assertTrue(result["verification"]["independently_reproducible"])
+
+    def test_missing_case_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            result = test_profiles.verify_live_case(Path(temporary) / "absent")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["problems"][0]["code"], "missing_case_json")
+
+    def test_corrupt_live_case_is_rejected_even_with_an_artifact_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            case = _write_case(Path(temporary))
+            (case / "replay" / "metal-frame.bgra").write_bytes(b"\1" * 16)
+            result = test_profiles.verify_live_case(case)
+        self.assertFalse(result["ok"])
+        self.assertTrue(any("digest drift" in problem["detail"]
+                            for problem in result["problems"]))
 
 
 if __name__ == "__main__":

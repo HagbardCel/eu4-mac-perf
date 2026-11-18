@@ -37,9 +37,12 @@ class P2WorkflowTests(unittest.TestCase):
             "event_stream_sha256": "a" * 64,
             "present_index": 617, "scene_index": 617,
         }).encode())
+        add("capture/frame-trace.json", json.dumps({"complete": True}).encode())
+        add("capture/frame-events.jsonl", b"")
         add("shaders/shaders.json", b"{}")
         add("replay/replay.json", json.dumps({
-            "status": "ok", "events": 3, "encoded": 3}).encode())
+            "status": "ok", "stage": "complete", "readback": True,
+            "events": 3, "encoded": 3}).encode())
         add("replay/metal-frame.bgra", b"\0" * 16)
         add("diagnostic-report.json", json.dumps({
             "schema": "gfx-frame-diagnosis/v1",
@@ -67,6 +70,7 @@ class P2WorkflowTests(unittest.TestCase):
                                "max_channel_error": 2},
             }],
         }).encode())
+        add("dependency-graph.json", json.dumps({"status": "complete"}).encode())
         add("graph.json", json.dumps({"status": "complete"}).encode())
         add("case.json", json.dumps({
             "schema": "gfx-strategy-b-case/v1", "case_id": "p2-case",
@@ -91,7 +95,7 @@ class P2WorkflowTests(unittest.TestCase):
                 value = agent_tools.eu4_case_inspect(
                     agent_tools._parser().parse_args(
                         ["eu4_case_inspect", "--case", str(case)]))
-        encoded = json.dumps(value, indent=2)
+        encoded = agent_tools._emit_text(value).encode("utf-8")
         self.assertLessEqual(len(encoded), agent_tools.COMPACT_OUTPUT_CAP)
         diagnosis = value["result"]["diagnosis"]
         self.assertEqual(diagnosis["first_divergence"]["event"], 142)
@@ -122,8 +126,8 @@ class P2WorkflowTests(unittest.TestCase):
             baseline = root / "baseline.json"
             case_baseline.record(case, baseline)
             (case / "replay" / "metal-frame.bgra").write_bytes(b"\1" * 16)
-            checked = case_baseline.load_check(case, baseline)
-        self.assertFalse(checked["reusable"])
+            with self.assertRaises(case_baseline.BaselineError):
+                case_baseline.load_check(case, baseline)
 
     def test_synthetic_substitution_is_not_accepted_by_the_case_verifier(self):
         with tempfile.TemporaryDirectory() as temporary:

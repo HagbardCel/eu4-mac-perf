@@ -17,31 +17,40 @@ file is not a merge authorization.
 ## What must be reviewed
 
 1. **Launch isolation.** `automation/test_profiles` plus the guards in
-   `gfx_launch.spawn`, `m6_frame.capture`, `live_gfx.capture`/
-   `live_gfx.probe`. Verify that production (unset profile) is unchanged and
-   that an explicit offline profile cannot launch EU4.
+   `gfx_launch.spawn`, `eu4_gfx_startup_trace.run_ops` and `live_gfx.probe`.
+   Verify that production (unset profile) is unchanged and that an explicit
+   offline profile cannot launch EU4.
 2. **Fail-closed gate.** `automation.test_runner --profile offline
-   --min-tests`; the mandatory module manifest; the CI change. Verify that a
-   zero/short run is `incomplete` and that the live profile requires an explicit
-   module.
-3. **Failure taxonomy.** `agent_tools._classify_failure`. Verify that a
-   differing-pixel comparison stays `comparison`, while timeout, credential,
-   graphics, invalid evidence and missing evidence are distinct and never
-   `ok`.
-4. **Compact evidence.** `_compact_case_view`, `_bounded_envelope`, the
-   `gfx-agent-case/v1` shape and `--full`. Verify that identity, qualification,
-   first divergence, next checkpoint and artifacts survive; that truncation is
-   explicit; and that no unsupported evidence is promoted.
-5. **Reuse identity.** `automation/case_baseline`. Verify that changed
-   payloads, shaders, renderer sources, policy, backend or seal invalidate the
-   baseline and that the module is not a general cache.
+   --min-tests`; the mandatory module/test manifest; the CI change. Verify that
+   the floor counts executed tests, a classified-skip-only suite is
+   `incomplete`, skipped/missing mandatory tests fail, and deduplication
+   distinguishes profile and floor.
+3. **Failure taxonomy.** `agent_tools._classify_failure` and
+   `_nested_evidence_state`. Verify that a differing-pixel comparison stays
+   `comparison`, shader/replay correctness failures are `tool_failure`, named
+   GPU-capability failures are `graphics_unavailable`, dependency failures are
+   `dependency_unavailable`, invalid evidence wins, and nested invalid evidence
+   cannot look qualified.
+4. **Compact evidence.** `_compact_case_view`, `_bounded_envelope`,
+   `_emit_text`, the `gfx-agent-case/v1` shape and `--full`. Verify that the
+   limit is exact emitted UTF-8 bytes, identity/verification/first
+   divergence/unresolved interval/next checkpoint/artifacts survive, and
+   truncation is explicit.
+5. **Reuse identity.** `automation/case_baseline`. Verify that record/check
+   require `gfx_replay_case.verify()`, re-hash every declared payload, require a
+   completed replay/readback, and include the renderer include closure
+   (especially `eu4_gfx_replay_semantics.h`), shader inputs, binary/source,
+   policy and platform. Verify that an unverified current case is never
+   reusable merely because a fingerprint matches, and that this remains a
+   single receipt, not a cache.
 6. **Causal narrowing.** The compact diagnosis retains the existing
    `unresolved_interval` and `next_checkpoint`; a lower bound is `null` and
    `search_start_event` is not evidence. Verify that no cross-capture or
    unrelated-resource observation can bound the interval.
 7. **Efficiency evidence.** `analysis/m7/p2-efficiency.md` and
-   `analysis/m7/p2-evidence.json`. Verify the P1 comparison is not presented as
-   a new model session and that unmeasured metrics are null, not zero.
+   `analysis/m7/p2-evidence.json`. Verify that the P1 autonomous session, the
+   two-call P2 interface demonstration and the absent P2 autonomous session are
+   distinguished, and that end-to-end efficiency is marked not measured.
 8. **Governance.** `analysis/m7/p2-governance.md`. The repository settings are
    enforced; the independent approval is still outstanding.
 
@@ -58,8 +67,9 @@ python3.14 -m automation.test_runner run --profile offline --label p2-focused \
   --module tests.test_agent_tools \
   --module tests.test_m7_diagnosis \
   --module tests.test_dsh_efficiency \
-  --module tests.test_gfx_frame_trace_writer
-python3.14 -m automation.test_runner run --profile offline --label p2-full
+  --module tests.test_trace_tr3
+python3.14 -m automation.test_runner run --profile offline --label p2-full \
+  --min-tests 3000
 ```
 
 The authentic-case commands are in
@@ -69,8 +79,8 @@ or replay is required.
 ## Known limits to carry into review
 
 - No new model-driven session was run (no provider credential in this
-  environment); the operational comparison is deterministic plus the preserved
-  P1 export.
+  environment); only interface-level efficiency is measured. End-to-end P2
+  efficiency is explicitly not measured.
 - `gl_dither`/`multisample` remain unsupported and are not blamed.
 - The pre-event-142 interval is unresolved; event 71 needs a new capture and
   cannot bound the existing frame.

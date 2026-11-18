@@ -40,12 +40,13 @@ a precise evidence request. Do not force a patch.
 
 ## Method (bounded loop)
 
-1. `eu4_case_inspect --case <case>`: read only the compact projection. Record
-   the case/capture identity, verification, qualification axes, first
-   divergence and next checkpoint.
-2. `eu4_replay verify --case <case>`: confirm the case verifies. Do not replay
-   the baseline if it verifies and the baseline identity still matches.
-3. Check reuse: `python3.14 -m automation.case_baseline check --case <case>
+1. `eu4_case_inspect --case <case>`: read only the compact projection. It runs
+   the portable verifier internally and returns the verification state,
+   case/capture identity, qualification axes, first divergence and next
+   checkpoint. Do **not** immediately call `eu4_replay verify` for a routine
+   read; use it only when you need the independent verification command or are
+   investigating a verification error.
+2. Check reuse: `python3.14 -m automation.case_baseline check --case <case>
    --baseline .local/m7/p2/authentic-baseline.json`. A mismatch means recompute
    the affected result; do not silently use the old one.
 4. Examine the current causal interval and only the relevant operations,

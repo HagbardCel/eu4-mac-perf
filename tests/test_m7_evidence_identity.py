@@ -161,6 +161,86 @@ class CompactEvidenceTests(unittest.TestCase):
         self.assertLessEqual(len(envelope["result"]["diagnosis"]["checkpoints"]),
                              agent_tools.COMPACT_CHECKPOINT_LIMIT)
 
+    def test_cap_is_measured_in_utf8_bytes_and_preserves_contract(self):
+        long_text = "divergence " + ("é" * 4096)
+        checkpoints = [{
+            "event": index, "resource": "fb:0", "target": "0",
+            "status": "divergent", "authoritative": True,
+            "statistics": {"mismatched_pixels": index,
+                           "max_channel_error": 1},
+        } for index in range(64)]
+        result = {
+            "schema": "gfx-strategy-b-case/v1",
+            "case_id": "utf8-case",
+            "capture": {"session_id": "session-a", "capture_frame_id": 1,
+                        "event_stream_sha256": "a" * 64},
+            "verification": {"ok": True, "case_id": "utf8-case",
+                             "independently_reproducible": True,
+                             "graph_status": "complete",
+                             "problems": ["é" * 400]},
+            "diagnosis": {
+                "schema": "gfx-agent-diagnosis/v1",
+                "classification": "difference_with_partial_state_coverage",
+                "qualified": False,
+                "axes": {"pixel_comparison": "divergent"},
+                "first_divergence": {
+                    "event": 142, "resource": "fb:0", "target": "0",
+                    "operation": "draw", "program": 331,
+                    "producer_event": 141, "confidence": "confirmed",
+                    "root_cause": "not_established",
+                    "unresolved_interval": {
+                        "start_event": None, "end_event": 142,
+                        "lower_bound": "unbounded", "search_start_event": 0},
+                    "next_checkpoint": {
+                        "event": 71, "resource": "fb:0", "target": "0",
+                        "requires_capture": True, "reason": long_text},
+                    "limitations": [long_text],
+                },
+                "checkpoints": checkpoints,
+                "inputs": [{"resource": "tex:1", "sampler": long_text}],
+                "final": {"status": "divergent",
+                          "statistics": {"mismatched_pixels": 4}},
+                "next_action": long_text,
+            },
+            "artifacts": {f"artifact-{index}.json": {
+                "bytes": index, "path": f"artifact-{index}.json"}
+                for index in range(20)},
+        }
+        envelope = agent_tools._envelope(
+            "eu4_case_inspect", "ok", result)
+        bounded = agent_tools._bounded_envelope(envelope)
+        emitted = agent_tools._emit_text(bounded)
+        encoded = emitted.encode("utf-8")
+        self.assertLessEqual(len(encoded), agent_tools.COMPACT_OUTPUT_CAP)
+        self.assertEqual(bounded["result"]["output_bytes"], len(encoded))
+        self.assertTrue(bounded["truncated"])
+        self.assertEqual(
+            bounded["result"]["capture"]["session_id"], "session-a")
+        self.assertTrue(bounded["result"]["verification"]["ok"])
+        first = bounded["result"]["diagnosis"]["first_divergence"]
+        self.assertEqual(first["event"], 142)
+        self.assertEqual(first["resource"], "fb:0")
+        self.assertIsNone(first["unresolved_interval"]["start_event"])
+        self.assertEqual(first["unresolved_interval"]["lower_bound"],
+                         "unbounded")
+        self.assertEqual(first["next_checkpoint"]["event"], 71)
+        self.assertIn("artifacts", bounded["result"])
+        self.assertTrue(bounded["truncated_fields"])
+
+    def test_malformed_nested_evidence_cannot_look_qualified(self):
+        envelope = agent_tools._envelope(
+            "eu4_case_inspect", "ok",
+            {"verification": {"ok": False, "problems": ["missing seal"]},
+             "diagnosis": {"classification": "qualified_match",
+                           "qualified": True}},
+            diagnostic="complete", verdict="equal", evidence="valid",
+            qualified=True)
+        self.assertFalse(envelope["ok"])
+        self.assertEqual(envelope["status"], "invalid")
+        self.assertFalse(envelope["outcome"]["qualified"])
+        self.assertIsNone(envelope["outcome"]["verdict"])
+        self.assertEqual(envelope["failure"]["kind"], "evidence_invalid")
+
     def test_output_cap_reports_truncation(self):
         value = agent_tools._envelope(
             "eu4_case_inspect", "ok",
@@ -171,6 +251,8 @@ class CompactEvidenceTests(unittest.TestCase):
         self.assertTrue(reduced.get("truncated"))
         self.assertEqual(reduced["output_cap_bytes"], 2000)
         self.assertGreater(reduced["output_bytes_before_cap"], 2000)
+        self.assertLessEqual(
+            len(agent_tools._emit_text(reduced).encode("utf-8")), 2000)
         self.assertLessEqual(reduced["result"]["output_bytes"], 2000)
         self.assertEqual(reduced["result"]["diagnosis"]["next_action"],
                          "capture event 71")

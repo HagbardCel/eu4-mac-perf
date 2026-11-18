@@ -198,10 +198,22 @@ class ProcessIdentity:
         current = self.current()
         if current is None:
             return False
+        # proc_pidpath can transiently fail under heavy process load while the
+        # libproc start time remains available.  An unreadable executable path
+        # is not evidence of PID reuse; the stable start time still guards it.
+        def normalized(path: str) -> str:
+            try:
+                return os.path.realpath(path) if path else ""
+            except OSError:
+                return path
+
+        executable_ok = (
+            not current.get("executable")
+            or normalized(current["executable"]) == normalized(self.executable))
         return (
             current["start_seconds"] == self.start_seconds
             and current["start_microseconds"] == self.start_microseconds
-            and current["executable"] == self.executable
+            and executable_ok
         )
 
     def as_dict(self) -> dict:
@@ -260,7 +272,21 @@ def terminate_owned(
     (``pgid == pid``).  Otherwise only the exact PID is signalled, so a caller
     can never take down an unrelated process that shares a group.
     """
-    if not identity.matches():
+    # A libproc / /proc read can fail transiently under load.  Retry briefly,
+    # but never signal when a readable identity definitively differs; a
+    # readable process that already exited needs no signal either.
+    matched = False
+    for _attempt in range(5):
+        if identity.matches():
+            matched = True
+            break
+        if process is not None and process.poll() is not None:
+            return Termination(identity.role, identity.pid, "already_exited",
+                               returncode=process.returncode)
+        if identity.current() is not None:
+            break
+        time.sleep(0.02)
+    if not matched:
         return Termination(identity.role, identity.pid, "identity_mismatch",
                            reason="PID was reused or the executable changed; not signalled")
     if process is not None and process.poll() is not None:
