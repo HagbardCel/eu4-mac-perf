@@ -37,9 +37,12 @@ identity is stamped on every reconciled checkpoint; foreign-capture matches are
 excluded and mixed captures invalidate the diagnosis),
 `automation.dsh_pilot` validates the pilot conclusion and summary (actual
 invocation records from `events.jsonl` must show an executed native EU4 tool;
-a claimed bounded interval needs same-resource authoritative endpoints in one
-sealed capture; the launch count must be a present integer zero; the summary is
-bound to the case receipt and capture identity), and
+case verification is mandatory and reuses the existing portable verifier
+rather than the conclusion's own flag; a claimed bounded interval needs
+same-resource authoritative endpoints in one sealed capture, looked up in the
+case's verified diagnostic report; the launch count must be a present integer
+zero; the summary is bound to the case manifest/seal digests and capture
+identity), and
 `dsh/scripts/run-pilot.sh` runs and evidences one headless turn. Base
 `b4a1f310` (PR #210); branch `m7/p1-dsh-autonomous-pilot`. Report:
 [M7-P1 pilot](../analysis/m7/p1-autonomous-pilot.md),

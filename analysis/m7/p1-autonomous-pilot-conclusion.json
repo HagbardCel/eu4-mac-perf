@@ -7,7 +7,9 @@
       "session_id": "a3111e0d-9b76-4b23-910d-38bd48c9aa93",
       "capture_frame_id": 1,
       "event_stream_sha256": "62cfdae407ecf38cbed0c98a956c5115203de12a85d46fd9b92e3d1c2dd9778c"
-    }
+    },
+    "case_manifest_sha256": "7c00ba56d66e11ed50099620085bc828456e2fa0d2839c0cfd05c885d9192283",
+    "seal_sha256": "794c482d49767b0b0aa356f5fc28919b9c2a57a33c88f7112152efd8c07d0ca6"
   },
   "starting_diagnosis": {
     "classification": "difference_with_partial_state_coverage",

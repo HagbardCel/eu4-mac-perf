@@ -43,7 +43,14 @@ validated the launcher's export lookup and `dsh_efficiency` integration.
 ## P1.2 — verified diagnostic case
 
 `.local/m7/p0-checkpoint-142/shadow/case` verifies: `ok=true`, no problems,
-1,247 files, graph `complete`, `independently_reproducible=true`.
+1,247 files, graph `complete`, `independently_reproducible=true`. Acceptance
+now requires that verification rather than the conclusion's own
+`verification_ok` flag: `summarize_run()` runs the existing
+`gfx_replay_case.verify()` (or consumes an independently produced,
+digest-bound receipt), requires valid/complete/independently reproducible
+evidence, and checks the case ID, sealed capture identity, and the
+`case.json` / `capture/frame-seal.json` digests against the conclusion.
+Case manifest `7c00ba56…`, frame seal `794c482d…`.
 
 The standalone `eu4_replay case` baseline reproduces the P0 statistics — first
 divergence event 142 `fb:0`, 871,620 / 1,930,176 differing pixels (max 103), and
@@ -149,16 +156,23 @@ Interpretation:
    or contradictory entries (an unrelated texture match cannot bound `fb:0`;
    resource generations must agree when present). Unbounded intervals are
    reported with a null `start_event` and only the divergent upper
-   observation. The same module also requires a correction's before/after
+   observation. Beyond the structural contract, every claimed endpoint is
+   looked up in the verified case's existing `diagnostic-report.json`
+   checkpoints; a fabricated event-71 match is `interval_unverified`, never a
+   causal bound. The same module also requires a correction's before/after
    statistics and preserved exact-match regressions, and an evidence request
    with a frame scope and a cross-frame caveat for a new capture.
-3. **Actual-invocation native gate.** `automation.dsh_pilot gate` reads the
-   launcher's `events.jsonl` and pairs each `tool_call` with a completed
-   `tool_result`. Only the seven supported native EU4 tools (reused from
-   `automation.agent_tools.TOOLS`) count; a bash-only, image-read-only or
-   goal-management-only run fails. `summarize` uses the same gate, requires the
-   EU4 launch count to be a present integer exactly zero, and binds the
-   conclusion to the verified case receipt and capture identity.
+3. **Mandatory case verification and actual-invocation native gate.**
+   `summarize_run()` requires a case directory, runs the existing
+   `gfx_replay_case.verify()` (or a digest-bound receipt), and rejects absent,
+   incomplete, corrupt, identity-mismatched or non-reproducible cases; the
+   conclusion's own `verification_ok` flag is not independent proof.
+   `automation.dsh_pilot gate` reads the launcher's `events.jsonl` and pairs
+   each `tool_call` with a completed `tool_result`. Only the seven supported
+   native EU4 tools (reused from `automation.agent_tools.TOOLS`) count; a
+   bash-only, image-read-only or goal-management-only run fails. `summarize`
+   uses the same gate and requires the EU4 launch count to be a present integer
+   exactly zero.
 4. **One-turn pilot launcher.** `dsh/scripts/run-pilot.sh` composes the shipped
    headless profile with the eu4-tools overlay, requires the provider key in
    the environment, preserves `events.jsonl`, `session.json`,
@@ -170,30 +184,36 @@ Interpretation:
 
 ## Verification
 
-- New focused regressions: 50 tests (`tests.test_dsh_pilot` 43,
+- New focused regressions: 62 tests (`tests.test_dsh_pilot` 55,
   `tests.test_m7_checkpoint_provenance` 7). They cover native-only,
   bash-only, mixed, empty, failed-native and required-tool traces; launch
-  count missing/non-numeric/non-zero; case-receipt and capture-identity
-  binding; and bounded/unbounded causal intervals with mixed resources,
-  cross-capture observations, missing or wrong endpoints, non-authoritative
-  observations, duplicates and generation mismatches.
-- Requested focused/dependent set: 265 tests, 1 skipped, passed in 4.1 s
+  count missing/non-numeric/non-zero; missing/self-asserted/corrupt/
+  identity-mismatched cases; digest-bound receipt reuse; fabricated
+  same-capture endpoints; and bounded/unbounded causal intervals with mixed
+  resources, cross-capture observations, missing or wrong endpoints,
+  non-authoritative observations, duplicates and generation mismatches.
+- Requested focused/dependent set: 277 tests, 1 skipped, passed in 4.5 s
   (`test_dsh_pilot`, `test_m7_checkpoint_provenance`, `test_m7_diagnosis`,
   `test_gfx_replay_checkpoints`, `test_agent_tools`,
   `test_dsh_native_bridge`).
-- Full suite at the final gate: 3,641 tests, 28 skipped, 11 failures. All
-  eleven are the pre-existing QBDI-unavailable `test_trace_tr3` failures; a
-  base run in the untouched worktree reproduces exactly those eleven and
-  `automation.test_runner compare` reports `no_new_failures`. An earlier run
-  also hit the load-sensitive
-  `test_gfx_session.test_only_owned_process_is_terminated`; it passes focused
-  in both the base and this branch and did not recur in the final run.
+- Recorded full-suite result `20261118T120425Z-a5e93e6b`: 3,641 tests, 28
+  skipped, 11 failures, recorded before the final case-verification change.
+  All eleven are the pre-existing QBDI-unavailable `test_trace_tr3` failures
+  (QBDI x86-64 release absent at `~/.cache/eu4-mac-perf/qbdi/0.12.1`). The
+  full-suite selection has no matching base full-suite record, so the previous
+  reference was corrected: the affected modules were compared directly
+  (`test_gfx_session` + `test_trace_tr3`) against the base checkout and
+  `automation.test_runner compare` reports **`no_new_failures`** (11
+  pre-existing, 0 new). The final portable CI run on the exact head is the
+  full-suite gate.
 - Portable checks: `compileall`, 34 goal-plugin tests, 9 tools-plugin tests,
   forbidden-tracked-paths, doc links and `git diff --check` pass.
-- The authentic pilot still passes the strengthened gates: its actual
+- The authentic pilot still passes the strengthened gates: the case verifies
+  (1,247 files, complete, independently reproducible), its actual
   `events.jsonl` shows `eu4_case_inspect` and `eu4_replay` executed, the
-  summary binds to `case.json` / `frame-seal.json` digests and the matching
-  capture identity, and the launch count is the integer `0`.
+  summary binds to the case manifest/seal digests and matching capture
+  identity, all 8 authoritative checkpoints are present, and the launch count
+  is the integer `0`.
 - Authentic integration check: diagnosing the packaged P0 Metal result now
   reports `capture.identity` and stamps all 8 checkpoints with the same capture;
   the first divergence remains event 142 with no cross-capture exclusions.

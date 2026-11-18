@@ -59,13 +59,21 @@
     "verified_receipt": {
       "case_manifest_sha256": "7c00ba56d66e11ed50099620085bc828456e2fa0d2839c0cfd05c885d9192283",
       "seal_sha256": "794c482d49767b0b0aa356f5fc28919b9c2a57a33c88f7112152efd8c07d0ca6",
+      "payload_inventory_sha256": "61f53bfc388f6d003791a508afeaff5311906ab70ab9691c2cd106d9f8b47b26",
       "capture": {
         "capture_frame_id": 1,
         "event_stream_sha256": "62cfdae407ecf38cbed0c98a956c5115203de12a85d46fd9b92e3d1c2dd9778c",
         "session_id": "a3111e0d-9b76-4b23-910d-38bd48c9aa93"
       },
-      "matches_conclusion": true
-    }
+      "matches_conclusion": true,
+      "verification": {
+        "ok": true,
+        "files": 1247,
+        "graph_status": "complete",
+        "independently_reproducible": true
+      }
+    },
+    "payload_inventory_sha256": "61f53bfc388f6d003791a508afeaff5311906ab70ab9691c2cd106d9f8b47b26"
   },
   "baseline_reproduction": {
     "command": "python3.14 -m automation.agent_tools eu4_replay case --case .local/m7/p0-checkpoint-142/shadow/case --replay-out .local/p1-pilot/baseline",
@@ -163,7 +171,7 @@
       "problems_count": 0,
       "schema": "gfx-pilot-validation/v1"
     },
-    "conclusion_sha256": "38e792bd2ddb6622d65a9d35c57177533ec059d9f6b6533ed515310afe140a9b",
+    "conclusion_sha256": "77595334e35ed690fd965f6c4aa5d6379cc825e70e90361387778b9d1991f983",
     "export": "<dsh-home>/sessions/<workspace-slug>/session-fd42d127-1706-47d6-acb1-d40bfaa3e91b/session.v4.jsonl.zstd",
     "export_sha256": "367259111660f7e15d5168344d77d50aa957d9180e29c23e3cc79c06c4cc9121"
   },
@@ -249,7 +257,7 @@
         "tests.test_dsh_pilot",
         "tests.test_m7_checkpoint_provenance"
       ],
-      "tests": 50,
+      "tests": 62,
       "status": "passed"
     },
     "dependent_modules": {
@@ -261,9 +269,9 @@
         "tests.test_agent_tools",
         "tests.test_dsh_native_bridge"
       ],
-      "tests": 265,
+      "tests": 277,
       "skipped": 1,
-      "seconds": 4.1,
+      "seconds": 4.5,
       "status": "passed"
     },
     "full_suite": {
@@ -273,10 +281,10 @@
       "failures": 11,
       "status": "failed_with_preexisting_qbdi_unavailable",
       "failures_explained": {
-        "preexisting_qbdi_unavailable": 11,
-        "flaky_gfx_session": 0
+        "preexisting_qbdi_unavailable": 11
       },
-      "base_comparison": "no_new_failures (11 pre-existing trace_tr3; focused gfx_session passes in base and branch)"
+      "environment_limitation": "QBDI x86-64 release not found at ~/.cache/eu4-mac-perf/qbdi/0.12.1",
+      "scope_note": "recorded before the final case-verification change; the portable CI run on the exact final head is the full-suite gate"
     },
     "base_comparison": {
       "verdict": "no_new_failures",
@@ -302,9 +310,25 @@
       ],
       "launch_count": 0,
       "launch_count_is_integer": true,
+      "case_verified": true,
+      "case_files": 1247,
+      "case_independently_reproducible": true,
+      "authoritative_checkpoints": 8,
       "case_receipt_matches": true,
       "conclusion_ok": true,
       "problems": []
+    },
+    "module_comparison": {
+      "base": "20261118T112030Z-e6c14e90",
+      "candidate": "20261118T123600Z-bae625e3",
+      "selection": [
+        "tests.test_gfx_session",
+        "tests.test_trace_tr3"
+      ],
+      "verdict": "no_new_failures",
+      "preexisting": 11,
+      "new": 0,
+      "note": "the recorded full-suite selection has no matching base full-suite record; the failing modules were compared directly and are identical"
     }
   },
   "native_gate": {
@@ -337,6 +361,7 @@
     },
     "case_id": "m7-live-frame-000001",
     "case_manifest_sha256": "7c00ba56d66e11ed50099620085bc828456e2fa0d2839c0cfd05c885d9192283",
+    "payload_inventory_sha256": "61f53bfc388f6d003791a508afeaff5311906ab70ab9691c2cd106d9f8b47b26",
     "present_index": 617,
     "scene_index": 617,
     "schema": "gfx-pilot-case-receipt/v1",
@@ -358,6 +383,43 @@
         "CausalIntervalBasisTests",
         "PilotConclusionTests"
       ]
+    },
+    "case_verification": {
+      "finding": "summarize_run accepted the conclusion's own verification_ok flag and did not verify the case",
+      "fix": "summarize_run now requires a case directory, runs gfx_replay_case.verify (or a digest-bound receipt), requires ok/problems empty/independently reproducible/complete graph, and checks case_id, capture identity, manifest and seal digests against the conclusion",
+      "tests": [
+        "PilotSummaryTests"
+      ]
+    },
+    "authoritative_interval": {
+      "finding": "a fabricated same-capture checkpoint could be promoted to a causal bound",
+      "fix": "validate_conclusion looks claimed endpoints up in the case's verified diagnostic report; bounded intervals without authoritative same-resource match/divergent endpoints are interval_unverified",
+      "tests": [
+        "PilotConclusionTests"
+      ]
     }
+  },
+  "case_verification": {
+    "case_id": "m7-live-frame-000001",
+    "files": 1247,
+    "graph_status": "complete",
+    "independently_reproducible": true,
+    "ok": true,
+    "problems": [],
+    "replay_status": null,
+    "reproduction_reason": null,
+    "reproduction_status": null,
+    "schema": "gfx-strategy-b-case-verification/v1",
+    "sequence": {}
+  },
+  "authoritative_evidence": {
+    "capture": {
+      "capture_frame_id": 1,
+      "event_stream_sha256": "62cfdae407ecf38cbed0c98a956c5115203de12a85d46fd9b92e3d1c2dd9778c",
+      "session_id": "a3111e0d-9b76-4b23-910d-38bd48c9aa93"
+    },
+    "checkpoints": 8,
+    "report_sha256": "2e05d0f1cd9a40f61cdbb3c50521b81be760743cc5290c9d1dd71db90ae29d13",
+    "schema": "gfx-pilot-authoritative-checkpoints/v1"
   }
 }
