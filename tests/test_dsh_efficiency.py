@@ -106,6 +106,63 @@ class EfficiencyTests(unittest.TestCase):
         self.assertIn("<home>", value["session"]["cwd"])
         self.assertIn("<home>", value["long_jobs"]["jobs"][0]["label"])
 
+    def test_shell_failures_and_bash_launches_are_separated(self):
+        events = [
+            {"type": "tool/call", "time": 1000, "data": {
+                "callId": "b1", "name": "bash",
+                "arguments": {"command":
+                              "python3 -m automation.m6_frame capture "
+                              "--output /tmp/cap"}}},
+            {"type": "tool/result", "time": 2000, "data": {
+                "toolCallId": "b1",
+                "message": {"isError": False, "content": [
+                    {"type": "text", "text": "capture_exit=1"}]}}},
+            {"type": "tool/call", "time": 3000, "data": {
+                "callId": "b2", "name": "bash",
+                "arguments": {"command": "true"}}},
+            {"type": "tool/result", "time": 4000, "data": {
+                "toolCallId": "b2",
+                "message": {"isError": False, "content": [
+                    {"type": "text", "text": "exit=0"}]}}},
+        ]
+        value = dsh_efficiency.analyze(events)
+        self.assertEqual(value["calls"]["failed"], 0)
+        self.assertEqual(value["calls"]["shell_commands"], 2)
+        self.assertEqual(value["calls"]["shell_failures"], 1)
+        self.assertEqual(
+            value["calls"]["shell_failure_examples"][0]["exit_code"], 1)
+        self.assertEqual(value["eu4_launches"]["count"], 1)
+        self.assertEqual(value["eu4_launches"]["bash_launches"], 1)
+        self.assertEqual(
+            value["eu4_launches"]["command_evidence"][0]["kind"], "bash")
+
+    def test_documentation_search_is_not_counted_as_a_launch(self):
+        events = [
+            {"type": "tool/call", "data": {
+                "callId": "search", "name": "bash",
+                "arguments": {"command":
+                              "rg 'python3 -m automation.m6_frame capture' "
+                              "analysis/m7/post206/reproduce.md"}}},
+            {"type": "tool/result", "data": {
+                "toolCallId": "search",
+                "message": {"isError": False, "content": [
+                    {"type": "text", "text": "match"}]}}},
+            {"type": "tool/call", "data": {
+                "callId": "launch", "name": "bash",
+                "arguments": {"command":
+                              "cd /tmp && python3 -m automation.m6_frame "
+                              "capture --output /tmp/x"}}},
+            {"type": "tool/result", "data": {
+                "toolCallId": "launch",
+                "message": {"isError": False, "content": [
+                    {"type": "text", "text": "capture_exit=1"}]}}},
+        ]
+        value = dsh_efficiency.analyze(events)
+        self.assertEqual(value["eu4_launches"]["count"], 1)
+        self.assertEqual(value["eu4_launches"]["bash_launches"], 1)
+        self.assertEqual(
+            value["eu4_launches"]["command_evidence"][0]["kind"], "bash")
+
     def test_zstd_export_is_read_transparently(self):
         if not shutil.which("zstd"):
             self.skipTest("zstd is not available")
@@ -129,3 +186,58 @@ class EfficiencyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LaunchCommandBoundaryTests(unittest.TestCase):
+    def analyze(self, *commands):
+        events = []
+        for index, command in enumerate(commands):
+            call_id = f"c{index}"
+            events.append({"type": "tool/call", "time": 1000 + index, "data": {
+                "callId": call_id, "name": "bash",
+                "arguments": {"command": command}}})
+            events.append({"type": "tool/result", "time": 2000 + index, "data": {
+                "toolCallId": call_id,
+                "message": {"isError": False, "content": [
+                    {"type": "text", "text": "ok"}]}}})
+        return dsh_efficiency.analyze(events)
+
+    def test_command_at_string_start(self):
+        value = self.analyze(
+            "python3 -m automation.m6_frame capture --output /tmp/a")
+        self.assertEqual(value["eu4_launches"]["count"], 1)
+
+    def test_command_after_and_semicolon_and_newline(self):
+        value = self.analyze(
+            "cd /tmp && python3 -m automation.m6_frame capture --output /tmp/a\n"
+            "echo hi; python3 -m automation.m6_frame capture --output /tmp/b")
+        self.assertEqual(value["eu4_launches"]["count"], 2)
+
+    def test_multiple_real_invocations_in_one_script(self):
+        value = self.analyze(
+            "python3 -m automation.m6_frame capture --output /tmp/a; "
+            "python3 -m automation.m6_frame capture --output /tmp/b; "
+            "python3 -m automation.m6_frame capture --output /tmp/c")
+        self.assertEqual(value["eu4_launches"]["count"], 3)
+
+    def test_documentation_search_and_printed_command_are_not_launches(self):
+        value = self.analyze(
+            "rg 'python3 -m automation.m6_frame capture' "
+            "analysis/m7/post206/reproduce.md\n"
+            "echo 'python3 -m automation.m6_frame capture --output /tmp/a'")
+        self.assertEqual(value["eu4_launches"]["count"], 0)
+
+    def test_heredoc_source_text_is_not_a_launch(self):
+        value = self.analyze(
+            "cat > /tmp/note.txt <<'PY'\n"
+            "python3 -m automation.m6_frame capture --output /tmp/a\n"
+            "PY")
+        self.assertEqual(value["eu4_launches"]["count"], 0)
+
+    def test_real_command_after_heredoc_is_counted(self):
+        value = self.analyze(
+            "cat > /tmp/note.txt <<'PY'\n"
+            "python3 -m automation.m6_frame capture --output /tmp/a\n"
+            "PY\n"
+            "python3 -m automation.m6_frame capture --output /tmp/b")
+        self.assertEqual(value["eu4_launches"]["count"], 1)

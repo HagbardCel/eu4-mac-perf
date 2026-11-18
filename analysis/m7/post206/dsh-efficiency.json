@@ -1,0 +1,343 @@
+{
+  "calls": {
+    "by_tool": {
+      "bash": 695,
+      "create_goal": 3,
+      "get_goal": 3,
+      "job_kill": 2,
+      "job_list": 1,
+      "job_output": 8,
+      "todo_write": 3,
+      "update_goal": 3,
+      "write": 6
+    },
+    "failed": 0,
+    "failed_by_tool": {},
+    "failure_rate": 0.0,
+    "note": "failed counts tool-level errors; shell_failures counts bash commands whose result text reports a nonzero exit code",
+    "shell_commands": 695,
+    "shell_failure_examples": [
+      {
+        "command_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_infra && timeout 25 git fetch origin 2>&1 | tail -20; echo \\\"exit=${PIPESTATUS[0]}\\\"; git log\u2026",
+        "exit_code": 127
+      },
+      {
+        "command_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_infra && python3 - <<'PY'\\nimport json\\np='.local/m7/followup-a-live-3/frames/frame-000001/fr\u2026",
+        "exit_code": 1
+      },
+      {
+        "command_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_infra && /opt/homebrew/bin/python3 - <<'PY'\\nimport numpy as np, json, hashlib\\nW,H=1728,1117\u2026",
+        "exit_code": 1
+      },
+      {
+        "command_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_infra && /opt/homebrew/bin/python3 - <<'PY'\\nimport json\\np='.local/m6/frames/menu-occ300/fra\u2026",
+        "exit_code": 1
+      },
+      {
+        "command_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && /opt/homebrew/bin/python3 - <<'PY'\\nimport json\\nd=json.load(open('.local/m7/phase\u2026",
+        "exit_code": 1
+      },
+      {
+        "command_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && /opt/homebrew/bin/python3 - <<'PY'\\nimport json\\nd=json.load(open('.local/m7/phase\u2026",
+        "exit_code": 1
+      },
+      {
+        "command_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && rm -rf .local/m7/phase-c-authentic-case-v2 && /opt/homebrew/bin/python3 - <<'PY'\\n\u2026",
+        "exit_code": 1
+      },
+      {
+        "command_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && /opt/homebrew/bin/python3 -m automation.agent_tools eu4_replay verify --case .loca\u2026",
+        "exit_code": 2
+      },
+      {
+        "command_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && rm -rf .local/m7/phase-c-authentic-v2/replay-fault-frame2 && /opt/homebrew/bin/pyt\u2026",
+        "exit_code": 2
+      },
+      {
+        "command_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && rm -rf .local/m7/phase-c-authentic-v2/replay-fault-frame2 && /opt/homebrew/bin/pyt\u2026",
+        "exit_code": 2
+      }
+    ],
+    "shell_failures": 21,
+    "total": 724
+  },
+  "eu4_launches": {
+    "bash_launches": 3,
+    "command_evidence": [
+      {
+        "excerpt": " 2>/dev/null || true; /opt/homebrew/bin/python3 -m automation.m6_frame capture --output .local/m7/phase-c-authentic --callers 0x103b3c8 --min-draws 1 --occurrence 300 --boundary sc",
+        "kind": "bash"
+      },
+      {
+        "excerpt": "lisIV/eu4' || true && /opt/homebrew/bin/python3 -m automation.m6_frame capture --output .local/m7/phase-c-authentic --callers 0x103b3c8 --min-draws 1 --occurrence 300 --boundary sc",
+        "kind": "bash"
+      },
+      {
+        "excerpt": "salisIV/eu4' || true; /opt/homebrew/bin/python3 -m automation.m6_frame capture --output .local/m7/phase-c-authentic-v2 --callers 0x103b3c8 --min-draws 1 --occurrence 300 --boundary",
+        "kind": "bash"
+      }
+    ],
+    "count": 3,
+    "count_semantics": "command invocations detected in the session; a command can fail before the game process starts",
+    "launch_tool_calls": 0,
+    "process_starts_estimate": 6
+  },
+  "goal": {
+    "active": false,
+    "last_operation": "complete",
+    "last_phase": "complete",
+    "last_turn_reason": "completed",
+    "operations": [
+      "create",
+      "complete",
+      "create",
+      "complete",
+      "create",
+      "complete"
+    ],
+    "outcome": "completed",
+    "terminal": true,
+    "turn_end_reasons": [
+      "completed",
+      "completed",
+      "completed"
+    ]
+  },
+  "human": {
+    "approval_interventions": 1,
+    "approval_policy_events": 2,
+    "ask_user_question_calls": 0,
+    "permission_commands": 1,
+    "user_messages": 3
+  },
+  "long_jobs": {
+    "count": 62,
+    "jobs": [
+      {
+        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && /opt/homebrew/bin/python3 -m automation.test_runner run --module tests.test_m6_frame --module tests.tes",
+        "seconds": 1983.525,
+        "status": "completed"
+      },
+      {
+        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && gh pr checks 207 --watch --interval 10 2>&1 | tail -3",
+        "seconds": 283.974,
+        "status": "completed"
+      },
+      {
+        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && gh pr checks 208 --watch --interval 10 2>&1 | tail -3",
+        "seconds": 283.805,
+        "status": "completed"
+      },
+      {
+        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && sleep 20; gh pr checks 209 --watch --interval 10 2>&1 | tail -3",
+        "seconds": 272.582,
+        "status": "completed"
+      },
+      {
+        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && gh pr checks 207 --watch --interval 10 2>&1 | tail -3",
+        "seconds": 262.819,
+        "status": "completed"
+      },
+      {
+        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && gh pr checks 207 --watch --interval 10 2>&1 | tail -4",
+        "seconds": 262.516,
+        "status": "completed"
+      },
+      {
+        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && gh pr checks 208 --watch --interval 10 2>&1 | tail -4",
+        "seconds": 252.922,
+        "status": "completed"
+      },
+      {
+        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && gh pr checks 209 --watch --interval 10 2>&1 | tail -6",
+        "seconds": 251.562,
+        "status": "completed"
+      },
+      {
+        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && mkdir -p .local/m7 && pgrep -fl 'EuropaUniversalisIV/eu4' || true && /opt/homebrew/bin/python3 -m aut",
+        "seconds": 250.401,
+        "status": "completed"
+      },
+      {
+        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && pgrep -fl 'EuropaUniversalisIV/eu4' || true; /opt/homebrew/bin/python3 -m automation.m6_frame capture",
+        "seconds": 248.751,
+        "status": "completed"
+      }
+    ],
+    "threshold_seconds": 20.0
+  },
+  "output": {
+    "max_chars": 8169,
+    "oversized": [],
+    "oversized_count": 0,
+    "threshold_chars": 12000,
+    "total_chars": 1054253,
+    "truncated": [
+      {
+        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && /opt/homebrew/bin/python3 - <<'PY'\\nfrom pathlib import Path\\np=Path('tests/test_m\u2026",
+        "chars": 5159,
+        "tool": "bash"
+      },
+      {
+        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && sed -n 1,140p automation/dsh_efficiency.py && grep -n \\\"def analyze\\\\|eu4_launch\\\\|f\u2026",
+        "chars": 5717,
+        "tool": "bash"
+      },
+      {
+        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && sed -n 45,75p automation/dsh_efficiency.py\",\"description\":\"Inspect launch regex\"}",
+        "chars": 1385,
+        "tool": "bash"
+      },
+      {
+        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && sed -n 43,62p automation/dsh_efficiency.py\",\"description\":\"Inspect broken regex\"}",
+        "chars": 929,
+        "tool": "bash"
+      },
+      {
+        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && sed -n 40,75p automation/dsh_efficiency.py && sed -n 380,430p automation/dsh_efficie\u2026",
+        "chars": 3723,
+        "tool": "bash"
+      }
+    ],
+    "truncated_count": 5
+  },
+  "repeated_calls": [
+    {
+      "argument_excerpt": "{\"job_id\":\"bash-965cc7c37d544833\"}",
+      "count": 5,
+      "tool": "job_output"
+    },
+    {
+      "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && gh pr checks 208 --watch --interval 10 2>&1 | tail -3\",\"description\":\"Watch PR208 CI\u2026",
+      "count": 5,
+      "tool": "bash"
+    },
+    {
+      "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && gh pr checks 209 --watch --interval 10 2>&1 | tail -3\",\"description\":\"Watch PR209 CI\u2026",
+      "count": 5,
+      "tool": "bash"
+    },
+    {
+      "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && gh pr checks 207 --watch --interval 10 2>&1 | tail -3\",\"description\":\"Watch PR207 CI\u2026",
+      "count": 4,
+      "tool": "bash"
+    },
+    {
+      "argument_excerpt": "{}",
+      "count": 3,
+      "tool": "get_goal"
+    },
+    {
+      "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr208 && /opt/homebrew/bin/python3 -m unittest tests.test_m7_diagnosis 2>&1 | grep -E '^(Ran|\u2026",
+      "count": 3,
+      "tool": "bash"
+    },
+    {
+      "argument_excerpt": "{\"job_id\":\"bash-0fecc3d493684091\"}",
+      "count": 2,
+      "tool": "job_output"
+    },
+    {
+      "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && git fetch origin 2>&1 | tail -2 && git rebase origin/m7/phase-d-diagnostics 2>&1 | t\u2026",
+      "count": 2,
+      "tool": "bash"
+    },
+    {
+      "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && gh pr checks 208 --watch --interval 10 2>&1 | tail -4\",\"description\":\"Watch PR208 CI\u2026",
+      "count": 2,
+      "tool": "bash"
+    },
+    {
+      "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && gh pr checks 209 --watch --interval 10 2>&1 | tail -4\",\"description\":\"Watch PR209 CI\u2026",
+      "count": 2,
+      "tool": "bash"
+    }
+  ],
+  "schema": "dsh-efficiency/v1",
+  "session": {
+    "created_utc": "2026-11-17T18:43:58.157000+00:00",
+    "cwd": "<home>/Projects/MiniProjects/eu4-mac-perf/wt_infra",
+    "id": "session-67b86ef2-53a9-4388-bd8d-fa63872f69a0"
+  },
+  "tests": {
+    "distinct_commands": 25,
+    "duplicate_invocations": 30,
+    "duplicates": [
+      {
+        "command": "cd <path> && cat > tests<path> <<'PY' PY <path> -m unittest tests.test_gfx_gl_control -v 2>&1 | tail -12",
+        "count": 10,
+        "signature": "unittest tests.test_gfx_gl_control"
+      },
+      {
+        "command": "cd <path> && <path> - <<'PY' PY <path> -m py_compile automation<path> && <path> -m unittest tests.test_dsh_efficiency -v 2>&1 | tail -15",
+        "count": 7,
+        "signature": "unittest tests.test_dsh_efficiency"
+      },
+      {
+        "command": "cd <path> && cat >> tests<path> <<'PY' PY <path> -m unittest tests.test_m7_diagnosis.CompactAgentDiagnosisTests -v 2>&1 | tail -10",
+        "count": 6,
+        "signature": "unittest tests.test_m7_diagnosis.CompactAgentDiagnosisTests"
+      },
+      {
+        "command": "cd <path> && <path> -m unittest tests.test_m7_diagnosis -v 2>&1 | tail -20",
+        "count": 6,
+        "signature": "unittest tests.test_m7_diagnosis"
+      },
+      {
+        "command": "cd <path> && cat >> tests<path> <<'PY' PY <path> -m unittest tests.test_m7_diagnosis.FirstDivergenceSourceEvidenceTests -v 2>&1 | tail -25",
+        "count": 5,
+        "signature": "unittest tests.test_m7_diagnosis.FirstDivergenceSourceEvidenceTests"
+      },
+      {
+        "command": "cd <path> && <path> - <<'PY' PY <path> -m unittest tests.test_m7_diagnosis.FirstDivergenceSourceEvidenceTests.test_transfer_source_evidence_uses_the_transfer_event -v 2>&1 | tail -10",
+        "count": 2,
+        "signature": "unittest tests.test_m7_diagnosis.FirstDivergenceSourceEvidenceTests.test_transfer_source_evidence_uses_the_transfer_event"
+      }
+    ],
+    "full_suite_invocations": 0,
+    "test_invocations": 55
+  },
+  "tokens": {
+    "cache_read": 339279872,
+    "cache_read_share_of_total": 0.9899,
+    "cache_write": 0,
+    "effective_input": 342371519,
+    "input": 3091647,
+    "output": 368584,
+    "total": 342740103
+  },
+  "turn": null,
+  "wait": {
+    "by_tool": {
+      "bash": 1513074.7,
+      "create_goal": 0.037,
+      "get_goal": 0.028,
+      "job_kill": 0.019,
+      "job_list": 0.012,
+      "job_output": 0.053,
+      "todo_write": 0.021,
+      "update_goal": 0.031,
+      "write": 0.095
+    },
+    "calls_measured": {
+      "bash": 695,
+      "create_goal": 3,
+      "get_goal": 3,
+      "job_kill": 2,
+      "job_list": 1,
+      "job_output": 8,
+      "todo_write": 3,
+      "update_goal": 3,
+      "write": 6
+    },
+    "share_of_elapsed": 38.7107,
+    "tool_wait_seconds": 1513074.996
+  },
+  "window": {
+    "elapsed_seconds": 39086.689,
+    "end_utc": "2026-11-18T05:35:24.853000+00:00",
+    "model_calls": 688,
+    "start_utc": "2026-11-17T18:43:58.164000+00:00",
+    "turns": 3
+  }
+}

@@ -1,6 +1,41 @@
 # Current project status
 
-Authoritative summary of what is established, qualified, and in flight. Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
+Authoritative summary of what is established, qualified, and in flight.
+Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
+
+## M7 post-PR-#206 preparation (2026-11-17)
+
+Prepared from merged `main` `f13602e4` (PR #206). The existing Phase A/B
+infrastructure was extended, not replaced: engine `present_index`/`scene_index`
+now propagate through native sequence records, validation, campaign rows,
+diagnoses and portable cases, and a skipped/partial identity fails closed. A
+frame/event-scoped sampler fault proves later-frame detection. A reusable
+same-backend GL/GL control compares the captured copy source with the captured
+GL destination. Frame 1 matches exactly (0/1,930,176); frames 2/3 are
+`unavailable` because the historical capture has no lifecycle coverage for
+copy-only destination 442. It is transfer-scoped, not a full-frame GL replay.
+
+One authentic EU4 process captured three gap-free frames (present indices
+615/616/617, 325 operations each, copy source included) and replayed them
+through one Metal session. The portable case is 1,348,032,569 bytes / 3,811
+files and requires the explicit 2 GiB budget; the 512 MiB default correctly
+publishes an incomplete summary. The first authoritative divergence moved to
+the copy source at event 284, with the lower bound unbounded (0–284 for bisection) and a
+bisection recommendation at event 142. The Phase E0 pilot rejected copy
+execution, constant bias, simple Bayer dither, fast-math and edge/MSAA as the
+dominant cause; the residual is content-dependent and dominated by 1 LSB, so
+the root cause is not established. Readiness is **READY WITH LIMITATIONS for bounded offline diagnostics**, but
+**not ready for fully unattended migration**: full renderer equivalence,
+full-frame GL/GL replay and the `gl_dither`/`multisample` states remain open,
+and the available mounted DSH headless session could not authenticate
+(`MISSING_CREDENTIAL`). The proposed next task is M7-P0, a separate capture of
+a default-framebuffer checkpoint near event 142, not a dithering migration.
+Evidence: [gap analysis](../analysis/m7/post206/gap-analysis.md),
+[Phase C](../analysis/m7/post206/phase-c-qualification.md),
+[Phase D](../analysis/m7/post206/phase-d-diagnostics.md),
+[Phase E0](../analysis/m7/post206/phase-e0-pilot.md),
+[readiness](../analysis/m7/post206/readiness.md),
+[bundle](../analysis/m7/post206/evidence.json). No PR is merged.
 
 ## M7 diagnostic infrastructure (2026-11-15)
 

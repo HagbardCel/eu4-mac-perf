@@ -1,0 +1,648 @@
+{
+  "schema": "m7-post206-preparation-evidence/v1",
+  "generated_utc": "2026-11-18T07:20:15.898770+00:00",
+  "baseline": {
+    "repository": "HagbardCel/eu4-mac-perf",
+    "commit": "f13602e4eede1418e92dee1042ac4b857a239926",
+    "commit_subject": "Merge pull request #206 from HagbardCel/m7/phase-ab-agent-live",
+    "pr_206_merged_at": "2026-11-17T18:46:16Z",
+    "preparation_branch": "m7/prep-post206",
+    "worktree": "<home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep"
+  },
+  "environment": {
+    "platform": "macOS arm64",
+    "python": "3.15.2",
+    "numpy": "2.5.5",
+    "dsh": "0.2.2-rc.1",
+    "node": "v26.13.1",
+    "npm": "11.20.0",
+    "ghidra": "/opt/homebrew/opt/ghidra",
+    "eu4_executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "betterdisplay_display": {
+      "name": "EU4 Test",
+      "display_id": 12,
+      "width": 1920,
+      "height": 1200,
+      "main": false
+    },
+    "primary_display": {
+      "name": "Built-in Display",
+      "width": 1728,
+      "height": 1117,
+      "hidpi": true
+    }
+  },
+  "tests": {
+    "baseline_focused": {
+      "id": "20261117T184907Z-a54c1e2b",
+      "ran": 232,
+      "skipped": 1,
+      "failures": 0,
+      "errors": 0,
+      "seconds": 49.247
+    },
+    "pr207_focused": {
+      "ran": 419,
+      "skipped": 1,
+      "failures": 0,
+      "errors": 0,
+      "run_ids": [
+        "20261118T062141Z-1693659f"
+      ]
+    },
+    "pr208_focused": {
+      "ran": 333,
+      "skipped": 1,
+      "failures": 0,
+      "errors": 0,
+      "run_ids": [
+        "20261118T071748Z-78c9f9a0"
+      ]
+    },
+    "pr209_focused": {
+      "ran": 497,
+      "skipped": 1,
+      "failures": 0,
+      "errors": 0,
+      "run_ids": [
+        "20261118T071748Z-91163583"
+      ]
+    },
+    "dsh_plugin": {
+      "tests": 9,
+      "failed": 0
+    }
+  },
+  "capture": {
+    "session_id": "7ee7b098-c097-4d03-946a-b7eb05a05236",
+    "pid": 84477,
+    "status": "complete",
+    "reason": "frame_limit",
+    "frames_completed": 3,
+    "wall_seconds_approx": 247,
+    "engine_identity": {
+      "status": "gap_free",
+      "present_indices": [
+        615,
+        616,
+        617
+      ],
+      "scene_indices": [
+        615,
+        616,
+        617
+      ]
+    },
+    "frames": [
+      {
+        "sequence": 1,
+        "capture_frame_id": 1,
+        "present_index": 615,
+        "scene_index": 615,
+        "manifest_sha256": "fd7ad829a2275b88305b33a336ec4e6a0f1193f2f8aa7ecdfd5d0f0f2c26e1e7",
+        "event_stream_sha256": "c75fc472891f357fb68325c34f3dbbb90728bf8f3da602317e4bb509b993a77c",
+        "reference_sha256": "c69e1a3ab9675edec86da9a3845c051744e266e6f166fea997153b5103619b50",
+        "operations": 325,
+        "draws": 315,
+        "clears": 9,
+        "copies": 1,
+        "seal_ns": 40945000,
+        "readback_ns": 23401000,
+        "finalize_ns": 17540000,
+        "event_stream_bytes": 6392725,
+        "reference_bytes": 7720704
+      },
+      {
+        "sequence": 2,
+        "capture_frame_id": 2,
+        "present_index": 616,
+        "scene_index": 616,
+        "manifest_sha256": "8f6ff05d689ffad6911eafd1802fe11f899d3fdac9c57faffc80bb9678db63c4",
+        "event_stream_sha256": "3ab4a5a74bba694369815ff6f9be31f8b55e4bd2a3266be095e7e3841a001fc3",
+        "reference_sha256": "2396c9e1939d3e365536b52b14304df59217a9bcd39572dd9ce66e4ae2dc2d3b",
+        "operations": 325,
+        "draws": 315,
+        "clears": 9,
+        "copies": 1,
+        "seal_ns": 38958000,
+        "readback_ns": 21778000,
+        "finalize_ns": 17179000,
+        "event_stream_bytes": 6392725,
+        "reference_bytes": 7720704
+      },
+      {
+        "sequence": 3,
+        "capture_frame_id": 3,
+        "present_index": 617,
+        "scene_index": 617,
+        "manifest_sha256": "6e5cce908cba8fc755c1c8830b5fa532a5dfe867119871be412619ca32df610d",
+        "event_stream_sha256": "f97b253a6f63807c07d9c3815fb4fedb71a973e72dff407cb9bceca531e1df80",
+        "reference_sha256": "2f588b788703847c9d6036d5fea1ab5d46385234b0619787f98a028e90846acb",
+        "operations": 325,
+        "draws": 315,
+        "clears": 9,
+        "copies": 1,
+        "seal_ns": 39037000,
+        "readback_ns": 21687000,
+        "finalize_ns": 17349000,
+        "event_stream_bytes": 6392725,
+        "reference_bytes": 7720704
+      }
+    ],
+    "display_restore": {
+      "restored": true,
+      "reason": "already_original",
+      "settings_sha256": "62b4902a3a999ad3e623dd92800c3406359b44e60497491393e6b191836dd496"
+    }
+  },
+  "gl_control": {
+    "scope": "captured_transfer",
+    "status": "incomplete",
+    "qualified": false,
+    "checks": [
+      {
+        "sequence": 1,
+        "status": "match",
+        "event": 284,
+        "destination_event": 286,
+        "reason_code": null,
+        "reason": null,
+        "mismatched_pixels": 0
+      },
+      {
+        "sequence": 2,
+        "status": "unavailable",
+        "event": 284,
+        "destination_event": null,
+        "reason_code": "unverified_lifecycle_coverage",
+        "reason": "destination 442 is not covered by the frame's lifecycle records; a later CPU write cannot be excluded",
+        "mismatched_pixels": null
+      },
+      {
+        "sequence": 3,
+        "status": "unavailable",
+        "event": 284,
+        "destination_event": null,
+        "reason_code": "unverified_lifecycle_coverage",
+        "reason": "destination 442 is not covered by the frame's lifecycle records; a later CPU write cannot be excluded",
+        "mismatched_pixels": null
+      }
+    ],
+    "note": "Frame 1 matches exactly; frames 2/3 are unavailable because the historical capture has no lifecycle coverage for copy-only destination 442. The control fails closed rather than reporting a false difference."
+  },
+  "portable_case": {
+    "case_id": "m7-phase-c-authentic-3frame",
+    "case_json_sha256": "b226fbf4c48732c5574cb971b6c63ce821fd9c83f8caa67efd00700b8f5e1f34",
+    "sequence_json_sha256": "b3c549ab5fd7b5736e77ad81160346f9e973e01e53e82b063c00e5fe7e962a34",
+    "files": 3811,
+    "logical_bytes": 1348032569,
+    "reproduction": {
+      "status": "complete",
+      "independently_reproducible": true,
+      "missing": []
+    },
+    "verify": {
+      "ok": true,
+      "problems": [],
+      "engine_identity": {
+        "status": "gap_free",
+        "gap_free": true,
+        "present_indices": [
+          615,
+          616,
+          617
+        ],
+        "scene_indices": [
+          615,
+          616,
+          617
+        ]
+      },
+      "seconds": 1.93
+    },
+    "replay": {
+      "status": "complete",
+      "frames": 3,
+      "target_sequence": 3,
+      "history_status": "ok",
+      "history_sequence": 3,
+      "mismatched_pixels": 1162904,
+      "max_channel_error": 73,
+      "seconds": 21.56
+    }
+  },
+  "diagnostics": [
+    {
+      "sequence": 1,
+      "capture_frame_id": 1,
+      "present_index": 615,
+      "classification": "difference_with_partial_state_coverage",
+      "first_divergence": {
+        "kind": "intermediate",
+        "event": 284,
+        "target": "0",
+        "operation": "glCopyTexSubImage2D",
+        "producer_event": 283,
+        "producer_program": 346,
+        "mismatched_pixels": 1234947,
+        "max_channel_error": 104,
+        "pixel_location": {
+          "x": 0,
+          "y": 0,
+          "offset": 0
+        },
+        "differing_bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1728,
+          "height": 1117
+        },
+        "unresolved_interval": {
+          "start_event": null,
+          "end_event": 284,
+          "note": "the first confirmed divergent checkpoint; the lower bound is the last matching checkpoint for the same resource when one exists, otherwise it is unbounded"
+        },
+        "next_checkpoint": {
+          "event": 142,
+          "target": "0",
+          "resource": "fb:0",
+          "requires_capture": true,
+          "reason": "the copy source already differs; capture a fb:0 checkpoint near the midpoint of the unresolved interval to bisect the origin",
+          "interval": [
+            0,
+            284
+          ],
+          "lower_bound": "unbounded"
+        },
+        "recommended_checkpoint": {
+          "event": 142,
+          "target": "0",
+          "resource": "fb:0",
+          "requires_capture": true,
+          "reason": "the copy source already differs; capture a fb:0 checkpoint near the midpoint of the unresolved interval to bisect the origin",
+          "interval": [
+            0,
+            284
+          ],
+          "lower_bound": "unbounded",
+          "source": "next_checkpoint"
+        }
+      },
+      "final": {
+        "mismatched_pixels": 1160152,
+        "max_channel_error": 78
+      }
+    },
+    {
+      "sequence": 2,
+      "capture_frame_id": 2,
+      "present_index": 616,
+      "classification": "difference_with_partial_state_coverage",
+      "first_divergence": {
+        "kind": "intermediate",
+        "event": 284,
+        "target": "0",
+        "operation": "glCopyTexSubImage2D",
+        "producer_event": 283,
+        "producer_program": 346,
+        "mismatched_pixels": 1238329,
+        "max_channel_error": 104,
+        "pixel_location": {
+          "x": 0,
+          "y": 0,
+          "offset": 0
+        },
+        "differing_bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1728,
+          "height": 1117
+        },
+        "unresolved_interval": {
+          "start_event": null,
+          "end_event": 284,
+          "note": "the first confirmed divergent checkpoint; the lower bound is the last matching checkpoint for the same resource when one exists, otherwise it is unbounded"
+        },
+        "next_checkpoint": {
+          "event": 142,
+          "target": "0",
+          "resource": "fb:0",
+          "requires_capture": true,
+          "reason": "the copy source already differs; capture a fb:0 checkpoint near the midpoint of the unresolved interval to bisect the origin",
+          "interval": [
+            0,
+            284
+          ],
+          "lower_bound": "unbounded"
+        },
+        "recommended_checkpoint": {
+          "event": 142,
+          "target": "0",
+          "resource": "fb:0",
+          "requires_capture": true,
+          "reason": "the copy source already differs; capture a fb:0 checkpoint near the midpoint of the unresolved interval to bisect the origin",
+          "interval": [
+            0,
+            284
+          ],
+          "lower_bound": "unbounded",
+          "source": "next_checkpoint"
+        }
+      },
+      "final": {
+        "mismatched_pixels": 1163953,
+        "max_channel_error": 67
+      }
+    },
+    {
+      "sequence": 3,
+      "capture_frame_id": 3,
+      "present_index": 617,
+      "classification": "difference_with_partial_state_coverage",
+      "first_divergence": {
+        "kind": "intermediate",
+        "event": 284,
+        "target": "0",
+        "operation": "glCopyTexSubImage2D",
+        "producer_event": 283,
+        "producer_program": 346,
+        "mismatched_pixels": 1238080,
+        "max_channel_error": 101,
+        "pixel_location": {
+          "x": 0,
+          "y": 0,
+          "offset": 0
+        },
+        "differing_bounds": {
+          "x": 0,
+          "y": 0,
+          "width": 1728,
+          "height": 1117
+        },
+        "unresolved_interval": {
+          "start_event": null,
+          "end_event": 284,
+          "note": "the first confirmed divergent checkpoint; the lower bound is the last matching checkpoint for the same resource when one exists, otherwise it is unbounded"
+        },
+        "next_checkpoint": {
+          "event": 142,
+          "target": "0",
+          "resource": "fb:0",
+          "requires_capture": true,
+          "reason": "the copy source already differs; capture a fb:0 checkpoint near the midpoint of the unresolved interval to bisect the origin",
+          "interval": [
+            0,
+            284
+          ],
+          "lower_bound": "unbounded"
+        },
+        "recommended_checkpoint": {
+          "event": 142,
+          "target": "0",
+          "resource": "fb:0",
+          "requires_capture": true,
+          "reason": "the copy source already differs; capture a fb:0 checkpoint near the midpoint of the unresolved interval to bisect the origin",
+          "interval": [
+            0,
+            284
+          ],
+          "lower_bound": "unbounded",
+          "source": "next_checkpoint"
+        }
+      },
+      "final": {
+        "mismatched_pixels": 1162904,
+        "max_channel_error": 73
+      }
+    }
+  ],
+  "fault_injection": {
+    "campaign": {
+      "frame": 2,
+      "kind": "sampler_shift",
+      "sampler_shift": 1,
+      "sampler_shift_min": 0,
+      "event": 1
+    },
+    "campaign_evidence": {
+      "schema": "gfx-fault-campaign-evidence/v1",
+      "requested": {
+        "frame": 2,
+        "kind": "sampler_shift",
+        "sampler_shift": 1,
+        "sampler_shift_min": 0,
+        "event": 1
+      },
+      "fired": true,
+      "frames": [
+        {
+          "schema": "gfx-fault-evidence/v1",
+          "requested": {
+            "frame": 2,
+            "kind": "sampler_shift",
+            "sampler_shift": 1,
+            "sampler_shift_min": 0,
+            "event": 1
+          },
+          "fired": true,
+          "shifted_bindings": 3,
+          "events": [
+            1
+          ],
+          "reason": "the replay provenance records at least one substituted sampler binding"
+        }
+      ],
+      "reason": "the selected fault fired in at least one frame"
+    },
+    "frame_1_fault": null,
+    "frame_2_fault": {
+      "frame": 2,
+      "kind": "sampler_shift",
+      "sampler_shift": 1,
+      "sampler_shift_min": 0,
+      "event": 1
+    },
+    "frame_2_classification": "fault_experiment",
+    "frame_2_first_divergence": {
+      "kind": "semantic",
+      "event": 1,
+      "operation": "draw",
+      "target": "tex:433"
+    }
+  },
+  "pilot": {
+    "schema": "m7-e0-pilot-analysis/v1",
+    "frame": {
+      "sequence": 1,
+      "present_index": 615,
+      "capture_frame_id": 1
+    },
+    "source": "blobs/copy-source-546.bgra",
+    "source_sha256": "abd4ad6b88c9d1043df75d9b8cf0132bf3d485efa627114dd9127a4efb1bb9d7",
+    "metal_sha256": "c1c35604e3058fea9bb5ad61dab8bbe9c0a6ae18514cb027091791c0932526a5",
+    "difference": {
+      "pixels": 1930176,
+      "mismatched_pixels": 1234947,
+      "mismatched_fraction": 0.639810566,
+      "max_channel_error": 104,
+      "mean_abs_error": [
+        0.443596,
+        0.599732,
+        0.716002
+      ],
+      "one_lsb_share": 0.752938,
+      "histogram_0_to_7": [
+        695229,
+        929839,
+        158033,
+        66751,
+        35785,
+        17888,
+        10528,
+        5904
+      ]
+    },
+    "edge_statistics": {
+      "edge_fraction": 0.050673,
+      "mismatch_on_edge": 0.564162,
+      "mismatch_on_flat": 0.643848,
+      "mean_error_on_edge": 0.783594,
+      "mean_error_on_flat": 0.998376
+    },
+    "cross_frame_sign_agreement": [
+      {
+        "frames": [
+          1,
+          2
+        ],
+        "agreement": 0.717806,
+        "overlap": 1024250
+      },
+      {
+        "frames": [
+          2,
+          3
+        ],
+        "agreement": 0.753748,
+        "overlap": 1061374
+      },
+      {
+        "frames": [
+          1,
+          3
+        ],
+        "agreement": 0.685824,
+        "overlap": 996272
+      }
+    ],
+    "hypotheses": [
+      {
+        "id": "copy_execution",
+        "status": "rejected",
+        "evidence": "Frame 1 GL copy source and destination are byte-identical after the declared BGRA->RGBA channel swap (0/1,930,176). Frames 2/3 are unavailable because the historical capture lacks copy-only lifecycle coverage; they are not reported as differences.",
+        "artifacts": [
+          "gl-control-frame1.json",
+          "gl-control-frame2.json",
+          "gl-control-frame3.json"
+        ]
+      },
+      {
+        "id": "constant_channel_bias",
+        "status": "rejected",
+        "evidence": "Adding +1 to any channel or all channels increases mismatches from 1,234,947 to 1,747,123-1,928,591."
+      },
+      {
+        "id": "simple_bayer_dither",
+        "status": "not_supported",
+        "evidence": "Adding 4x4 or 8x8 Bayer +/-1 patterns increases mismatches (1,244,082-1,598,720); the per-cell error means are nearly uniform."
+      },
+      {
+        "id": "fast_math_translation",
+        "status": "rejected_as_dominant",
+        "evidence": "Recompiling every MSL stage with fastMathEnabled=NO changed the final output but only changed 253 of 1160152 mismatched pixels (1159899 remaining)."
+      },
+      {
+        "id": "multisample_edges",
+        "status": "not_supported",
+        "evidence": "Only 5.07% of pixels are local edges; mismatch is lower on edges (56.4%) than on flat regions (64.4%)."
+      },
+      {
+        "id": "content_dependent_shader_or_filter_precision",
+        "status": "leading_hypothesis",
+        "evidence": "929839/1234947 differing pixels are exactly 1 LSB; error signs agree across different frames at the same coordinates only 71.8-75.4% of the time; the residual is not a static screen-space dither pattern and is not a constant bias."
+      }
+    ],
+    "ghidra": {
+      "query": "eu4_re_query function 0x15ece13",
+      "function": "_GfxResolve",
+      "pseudocode_summary": "_glBindTexture(GL_TEXTURE_2D, dst); _glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, width, height); _glBindTexture(GL_TEXTURE_2D, 0);",
+      "conclusion": "the engine transfer is a plain copy of the default framebuffer; the GL/GL control confirms it is reproduced exactly"
+    },
+    "root_cause": "not_established",
+    "unresolved_interval": {
+      "start_event": null,
+      "end_event": 284,
+      "lower_bound": "unbounded",
+      "note": "event 13 matches tex:432, not the divergent fb:0 source, so it does not bound the source bisection"
+    },
+    "next_checkpoint": {
+      "event": 142,
+      "target": "0",
+      "requires_capture": true,
+      "reason": "capture a default-framebuffer checkpoint near the midpoint to bisect the first unbounded-284 interval",
+      "interval": [
+        0,
+        284
+      ],
+      "lower_bound": "unbounded"
+    },
+    "conclusion": "For frame 1, the copy path is exact; frames 2/3 are unavailable, so no three-frame copy claim is made. The difference is already present in the default framebuffer before the copy. The residual is content-dependent and dominated by 1 LSB, so the next step is an event-142 default-framebuffer checkpoint, not a copy or fast-math change."
+  },
+  "limitations": [
+    "full-frame GL/GL replay is not implemented; the GL/GL control covers the captured copy/readback transfer path only",
+    "gl_dither and multisample remain unsupported; renderer equivalence is not claimed",
+    "the causal origin before event 284 is not established; the same-resource lower bound is unbounded",
+    "one successful authentic EU4 launch and one failed draw-cap launch were used; the pilot did not launch EU4 again"
+  ],
+  "artifact_retrieval": {
+    "status": "local_only",
+    "path": ".local/m7/phase-c-authentic-v2/phase-c-authentic-case-v2",
+    "files": 3811,
+    "logical_bytes": 1348032569,
+    "case_json_sha256": "b226fbf4c48732c5574cb971b6c63ce821fd9c83f8caa67efd00700b8f5e1f34",
+    "sequence_json_sha256": "b3c549ab5fd7b5736e77ad81160346f9e973e01e53e82b063c00e5fe7e962a34",
+    "external_store": "none configured",
+    "reproduction": "analysis/m7/post206/reproduce.md",
+    "note": "The 1.35 GB case is gitignored and not committed. The manifest hashes and the local reproduction procedure are the durable artifacts; no external artifact store is available in this environment."
+  },
+  "audit": {
+    "checked_utc": "2026-11-17T20:20:11.919902+00:00",
+    "frame_hashes_verified": true,
+    "frame_hash_problems": [],
+    "case_files_verified": true,
+    "case_file_problems": [],
+    "case_files_checked": 3811,
+    "gl_control_match": true,
+    "replay_statistics_unchanged": true,
+    "gl_control_note": "frame 1 transfer match only; aggregate gl_control status is incomplete because frames 2/3 are unavailable"
+  },
+  "review": {
+    "prs": {
+      "207": {
+        "head": "52a3da5c",
+        "status": "awaiting independent review"
+      },
+      "208": {
+        "head": "551e581a",
+        "status": "awaiting independent review"
+      },
+      "209": {
+        "head": "latest head of PR #209 (the commit containing this artifact)",
+        "status": "awaiting independent review"
+      }
+    },
+    "merged": false,
+    "auto_merge": false,
+    "note": "Fresh independent review is required for each latest head; CI passing is not approval."
+  }
+}

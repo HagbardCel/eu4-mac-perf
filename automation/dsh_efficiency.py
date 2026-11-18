@@ -42,13 +42,20 @@ _TEST_COMMAND = re.compile(
 _FULL_SUITE = re.compile(r"discover\s+-s\s+tests\b")
 # A launch is an invocation at command position, not a mention of the word in
 # a heredoc or a grep. This keeps report edits out of the launch count.
+_COMMAND_BOUNDARY = r"(?:^|[\n;&|]\s*)"
 _EU4_COMMAND = re.compile(
-    r"(?:^|[;&|]\s*)(?:[A-Za-z0-9_./-]*/)?(?:python[\d.]*\s+-m\s+)?"
-    r"(?:automation\.)?(eu4_diff_run|gfx_dual_run|live_gfx)\b"
-    r"|(?:open\s+-a\s+[\"']?[^\s\"']*(?:EU4|Europa))"
-    r"|(?:[A-Za-z0-9_./ -]*Europa Universalis[^\s\"']*\.app)"
-    r"|(?:[A-Za-z0-9_./ -]*eu4\.[A-Za-z0-9_]+\.exe)",
-    re.IGNORECASE)
+    _COMMAND_BOUNDARY
+    + r"(?:(?:[A-Za-z0-9_./-]*/)?(?:python[\d.]*\s+-m\s+)?"
+      r"(?:automation\.)?(?:eu4_diff_run|gfx_dual_run|live_gfx)\b"
+      r"|(?:open\s+-a\s+[\"']?[^\s\"']*(?:EU4|Europa))"
+      r"|(?:[A-Za-z0-9_./ -]*Europa Universalis[^\s\"']*\.app)"
+      r"|(?:[A-Za-z0-9_./ -]*eu4\.[A-Za-z0-9_]+\.exe))",
+    re.IGNORECASE | re.MULTILINE)
+_CAPTURE_COMMAND = re.compile(
+    _COMMAND_BOUNDARY
+    + r"(?:[A-Za-z0-9_./-]*/)?"
+      r"(?:python[\d.]*\s+-m\s+(?:automation\.)?m6_frame\s+capture)\b",
+    re.IGNORECASE | re.MULTILINE)
 _SPILL = ("dsh-spill", "use read with offset/limit", "[truncated", "(truncated")
 
 
@@ -138,6 +145,26 @@ def _normalize_command(command: str) -> str:
     value = re.sub(r"\s+", " ", command).strip()
     value = re.sub(r"/[^\s'\"]+", "<path>", value)
     return value
+
+
+_HEREDOC = re.compile(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?")
+
+
+def _command_without_heredoc(command: str) -> str:
+    """Drop heredoc bodies so edited source text is not counted as a launch."""
+    output = []
+    marker = None
+    for line in command.splitlines():
+        if marker is None:
+            match = _HEREDOC.search(line)
+            if match:
+                marker = match.group(1)
+            output.append(line)
+            continue
+        if line.strip() == marker:
+            marker = None
+            output.append(line)
+    return "\n".join(output)
 
 
 def _test_signature(command: str) -> str | None:
@@ -247,11 +274,13 @@ def analyze(
             message = data.get("message") if isinstance(data.get("message"), dict) else {}
             call_id = call_id or str((message.get("source") or {}).get("callId") or "")
             text, truncated = _result_text(data)
+            name = (calls.get(call_id) or {}).get("name")
             results[call_id] = {
                 "is_error": bool(message.get("isError")) or bool(data.get("error")),
                 "chars": len(text),
                 "truncated": truncated,
                 "time": moment,
+                "text": text[-2000:] if name == "bash" else "",
             }
         elif kind == "job/registered":
             jobs[str(data.get("jobId"))] = {
@@ -323,6 +352,26 @@ def analyze(
     failures = [call for call in call_order
                 if (results.get(call["id"]) or {}).get("is_error")]
     failures_by_tool = collections.Counter(call["name"] for call in failures)
+    shell_failures = []
+    shell_commands = 0
+    _exit_marker = re.compile(
+        r"(?:\[exit code:\s*([1-9]\d*)\]|(?:^|[\s_])exit(?: code)?[=:]\s*"
+        r"([1-9]\d*)\b)", re.MULTILINE)
+    for call in call_order:
+        if call["name"] != "bash":
+            continue
+        shell_commands += 1
+        result = results.get(call["id"]) or {}
+        text = str(result.get("text") or "")
+        matches = list(_exit_marker.finditer(text))
+        if not matches:
+            continue
+        match = matches[-1]
+        code = int(match.group(1) or match.group(2))
+        shell_failures.append({
+            "exit_code": code,
+            "command_excerpt": _sanitize(_excerpt(call["arguments"])),
+        })
     repeated = collections.Counter()
     repeated_examples: dict[str, dict] = {}
     for call in call_order:
@@ -370,7 +419,8 @@ def analyze(
     test_spellings: dict[str, str] = {}
     full_suite = 0
     for call in call_order:
-        command = str(call["arguments"].get("command") or "")
+        command = _command_without_heredoc(
+            str(call["arguments"].get("command") or ""))
         if not _TEST_COMMAND.search(command):
             continue
         if _FULL_SUITE.search(command):
@@ -389,6 +439,7 @@ def analyze(
 
     launches = []
     launch_tool_calls = 0
+    bash_launches = 0
     for call in call_order:
         command = str(call["arguments"].get("command") or "")
         if call["name"] in ("eu4_diff_run", "eu4_capture"):
@@ -400,9 +451,18 @@ def analyze(
                 launches.append({"kind": "tool", "tool": call["name"],
                                  "excerpt": _sanitize(_excerpt(call["arguments"]))})
             continue
-        if command and _EU4_COMMAND.search(command):
-            launches.append({"kind": "bash",
-                             "excerpt": _sanitize(command[:200])})
+        command = _command_without_heredoc(command) if command else command
+        if command:
+            matches = list(_CAPTURE_COMMAND.finditer(command))
+            matches.extend(_EU4_COMMAND.finditer(command))
+            for match in matches:
+                bash_launches += 1
+                launches.append({
+                    "kind": "bash",
+                    "excerpt": _sanitize(
+                        command[max(0, match.start() - 20):
+                                match.start() + 160]),
+                })
 
     wall_seconds = (max(timestamps) - min(timestamps)) if timestamps else 0.0
     input_tokens = tokens["inputTokens"]
@@ -426,6 +486,12 @@ def analyze(
             "failed": len(failures),
             "failure_rate": round(len(failures) / len(call_order), 4) if call_order else 0.0,
             "failed_by_tool": dict(failures_by_tool.most_common()),
+            "shell_commands": shell_commands,
+            "shell_failures": len(shell_failures),
+            "shell_failure_examples": shell_failures[:top],
+            "note": (
+                "failed counts tool-level errors; shell_failures counts bash "
+                "commands whose result text reports a nonzero exit code"),
         },
         "repeated_calls": [
             {
@@ -461,14 +527,20 @@ def analyze(
         "tests": {
             "test_invocations": sum(test_commands.values()),
             "full_suite_invocations": full_suite,
+            "duplicate_invocations": sum(
+                count - 1 for count in test_commands.values() if count > 1),
             "duplicates": duplicate_tests[:top],
             "distinct_commands": len(test_commands),
         },
         "eu4_launches": {
-            "count": launch_tool_calls,
+            "count": launch_tool_calls + bash_launches,
             "launch_tool_calls": launch_tool_calls,
+            "bash_launches": bash_launches,
             "command_evidence": launches[:top],
-            "process_starts_estimate": launch_tool_calls * 2,
+            "count_semantics": (
+                "command invocations detected in the session; a command can "
+                "fail before the game process starts"),
+            "process_starts_estimate": (launch_tool_calls + bash_launches) * 2,
         },
         "human": {
             "user_messages": human.get("user_messages", 0),
@@ -493,9 +565,16 @@ def analyze(
             "operations": goal_operations,
             "last_operation": last_goal["operation"] if last_goal else None,
             "last_phase": last_goal["phase"] if last_goal else None,
+            "active": bool(last_goal and last_goal["phase"] == "active"),
+            "terminal": bool(last_goal and last_goal["phase"] in (
+                "complete", "completed", "blocked", "cancelled")),
             "turn_end_reasons": turn_end_reasons,
-            "outcome": (turn_end_reasons[-1] if turn_end_reasons
-                        else last_goal["phase"] if last_goal else "unknown"),
+            "last_turn_reason": (turn_end_reasons[-1]
+                                 if turn_end_reasons else None),
+            "outcome": (
+                "active" if last_goal and last_goal["phase"] == "active"
+                else turn_end_reasons[-1] if turn_end_reasons
+                else last_goal["phase"] if last_goal else "unknown"),
         },
     }
 

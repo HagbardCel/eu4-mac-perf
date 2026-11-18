@@ -1709,6 +1709,13 @@ static id<MTLFunction> function_for(NSString *shaderDir, NSDictionary *stage,
     }
     MTLCompileOptions *options = [MTLCompileOptions new];
     options.languageVersion = MTLLanguageVersion2_1;
+    /* Diagnostic A/B: GLSL compilation in the engine does not use Metal's
+       fast-math mode.  This switch lets an offline experiment distinguish a
+       fast-math translation difference from a rendering-state difference. */
+    const char *precise_env = getenv("EU4_FRAME_REPLAY_PRECISE_MATH");
+    if (precise_env != NULL && strcmp(precise_env, "1") == 0) {
+        options.fastMathEnabled = NO;
+    }
     id<MTLLibrary> library = [g_device newLibraryWithSource:source
                                                     options:options
                                                       error:&read_error];

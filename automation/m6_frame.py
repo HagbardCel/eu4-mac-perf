@@ -579,8 +579,10 @@ def capture(args: argparse.Namespace) -> int:
         except live_gfx.LaunchLimit as exc:
             print(f"campaign launch refused: {exc}", file=sys.stderr)
             return 3
-    if args.boundary_fb < -1 or args.after_ms < 0 or args.max_draws < 0:
-        print("capture refused: invalid negative selection value", file=sys.stderr)
+    if args.boundary_fb < -1 or args.after_ms < 0 or args.max_draws < 1:
+        print("capture refused: invalid selection value; --max-draws must be "
+              "positive and the scene budget must cover the complete frame",
+              file=sys.stderr)
         return 2
     if args.boundary not in ("", "scene"):
         print(f"capture refused: unknown boundary {args.boundary!r}", file=sys.stderr)
@@ -2556,7 +2558,11 @@ def _parser() -> argparse.ArgumentParser:
                      help="bounded time from arming to a sealed/incomplete result")
     cap.add_argument("--background", action="store_true")
     cap.add_argument("--game-arg", action="append", default=[])
-    cap.add_argument("--max-draws", type=int, default=256)
+    cap.add_argument(
+        "--max-draws", type=int, default=512,
+        help="bounded captured-event budget; the default covers the authentic "
+             "title scene (325 events) and prevents the former 256-event "
+             "draw_cap failure")
     cap.add_argument("--duration", type=float, default=90.0)
     cap.add_argument("--timeout", type=float, default=180.0)
     cap.set_defaults(handler=capture)
