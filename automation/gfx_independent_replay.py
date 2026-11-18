@@ -838,6 +838,20 @@ def _normalise_checkpoint(value: dict | None,
     }
 
 
+def _checkpoint_matches_resource(item: dict, resource, target) -> bool:
+    """True when a checkpoint observes the same relevant resource.
+
+    Checkpoints produced by ``reconcile_checkpoints()`` carry ``resource``
+    (``fb:0``/``tex:N``); older hand-built fixtures may carry only ``target``.
+    A matching observation of an unrelated texture must never bound a
+    framebuffer divergence.
+    """
+    item_resource = item.get("resource")
+    if item_resource is not None and resource is not None:
+        return str(item_resource) == str(resource)
+    return str(item.get("target") or "") == str(target or "")
+
+
 def first_divergence(graph: dict, checkpoints: list[dict],
                      final: dict, *, binding_audit: dict | None = None,
                      fault: dict | None = None,
@@ -939,11 +953,15 @@ def first_divergence(graph: dict, checkpoints: list[dict],
         context = _event_context(graph, event)
         producer_context = _event_context(
             graph, producer.get("event") if producer else event)
+        divergent_resource = first.get("resource")
+        divergent_target = first.get("target")
         matching = [
             int(item["event"]) for item in checkpoints
             if item.get("status") == "match"
             and item.get("event") is not None
             and int(item["event"]) < int(event or 0)
+            and _checkpoint_matches_resource(
+                item, divergent_resource, divergent_target)
         ]
         previous = matching[-1] if matching else None
         event_kind = str(context.get("kind") or "")
@@ -1164,10 +1182,17 @@ def first_divergence(graph: dict, checkpoints: list[dict],
             "unresolved_interval": {
                 "start_event": interval_start,
                 "end_event": event,
+                "lower_bound": ("same_resource_match"
+                                if interval_start is not None
+                                else "unbounded"),
+                "search_start_event": (interval_start
+                                       if interval_start is not None else 0),
                 "note": (
                     "the first confirmed divergent checkpoint; the lower "
                     "bound is the last matching checkpoint for the same "
-                    "resource when one exists, otherwise it is unbounded"),
+                    "resource when one exists, otherwise it is unbounded. "
+                    "Event 0 is only an operational search start, not "
+                    "observed matching evidence"),
             },
             "next_checkpoint": next_checkpoint,
             "copy_source_evidence": (source_evidence if copy_case else None),
@@ -1207,6 +1232,13 @@ def first_divergence(graph: dict, checkpoints: list[dict],
     if final.get("status") == "divergent":
         events = list(graph.get("events") or [])
         last_event = max((_event_index(row) for row in events), default=-1)
+        final_matching = [
+            int(item["event"]) for item in checkpoints
+            if item.get("status") == "match"
+            and item.get("event") is not None
+            and _checkpoint_matches_resource(item, "fb:0", "0")
+        ]
+        final_previous = max(final_matching) if final_matching else None
         return {
             "schema": "gfx-first-divergence/v1",
             "frame_id": frame_id,
@@ -1224,14 +1256,18 @@ def first_divergence(graph: dict, checkpoints: list[dict],
             "recommended_checkpoint": _normalise_checkpoint(
                 _suggested_checkpoint(graph, final), "suggested_checkpoint"),
             "unresolved_interval": {
-                "start_event": max(
-                    [int(item["event"]) for item in checkpoints
-                     if item.get("status") == "match"
-                     and item.get("event") is not None] or [0]),
+                "start_event": final_previous,
                 "end_event": last_event if last_event >= 0 else event_count,
+                "lower_bound": ("same_resource_match"
+                                if final_previous is not None
+                                else "unbounded"),
+                "search_start_event": (final_previous
+                                       if final_previous is not None else 0),
                 "note": (
                     "the final image differs but no authoritative intermediate "
-                    "checkpoint did; the responsible pass is unresolved"),
+                    "checkpoint did; an unrelated resource match cannot bound "
+                    "the default-framebuffer interval, so the lower bound is "
+                    "unbounded unless a matching fb:0 observation exists"),
             },
             "unsupported_state": unsupported,
             "confidence": "final_only",
@@ -2524,16 +2560,18 @@ def _compact_checkpoints(report: dict) -> tuple[list[dict], dict]:
                   if item.get("event") == div_event
                   and str(item.get("target") or "") == div_target), None),
             "first_divergent")
+        div_resource = divergence.get("resource")
         matching = [
             item for item in items
             if item.get("status") == "match"
             and isinstance(item.get("event"), int)
             and item["event"] < int(div_event)
+            and _checkpoint_matches_resource(item, div_resource, div_target)
         ]
         if matching:
             add(max(matching, key=lambda item: item["event"]), "last_matching")
         producer_event = divergence.get("producer_event")
-        if producer_event is not None:
+        if producer_event is not None and divergence.get("copy_source_evidence"):
             add(next((item for item in items
                       if item.get("event") == producer_event
                       and str(item.get("target") or "") == "0"), None),

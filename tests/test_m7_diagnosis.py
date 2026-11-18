@@ -387,7 +387,11 @@ class DiagnosisContractTests(unittest.TestCase):
         self.assertIsNotNone(divergence["gl_sha256"])
         self.assertIsNotNone(divergence["metal_sha256"])
         self.assertEqual(divergence["root_cause"], "not_established")
-        self.assertEqual(len(divergence["unresolved_interval"]), 3)
+        interval = divergence["unresolved_interval"]
+        self.assertEqual(interval["end_event"], 4)
+        self.assertIsNone(interval["start_event"])
+        self.assertEqual(interval["lower_bound"], "unbounded")
+        self.assertEqual(interval["search_start_event"], 0)
 
     def test_missing_checkpoint_result_is_incomplete_diagnostics(self):
         replay = json.loads((self.fixture.metal / "replay.json").read_text())
@@ -1272,6 +1276,121 @@ class CompactSourceEvidenceDigestTests(unittest.TestCase):
         self.assertIsNone(evidence["metal_sha256"])
         self.assertEqual(evidence["event"], 284)
         self.assertEqual(evidence["target"], "0")
+
+
+class CausalLowerBoundTests(unittest.TestCase):
+    def graph(self):
+        return {
+            "events": [{
+                "event": 4, "kind": "draw", "target": "fb:0",
+                "entry": "_GfxDraw", "program": 7,
+            }],
+            "resources": {
+                "fb:0": {
+                    "producers": [{"event": 4, "kind": "draw",
+                                   "entry": "_GfxDraw", "program": 7}],
+                },
+            },
+        }
+
+    def divergent(self):
+        return {
+            "event": 4, "target": "0", "resource": "fb:0",
+            "status": "divergent", "authoritative": True,
+            "statistics": {"mismatched_pixels": 4},
+        }
+
+    def test_unrelated_texture_match_does_not_bound_framebuffer(self):
+        checkpoints = [
+            {"event": 3, "target": "10", "resource": "tex:10",
+             "status": "match", "authoritative": True},
+            self.divergent(),
+        ]
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), checkpoints,
+            {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["kind"], "intermediate")
+        interval = value["unresolved_interval"]
+        self.assertIsNone(interval["start_event"])
+        self.assertEqual(interval["lower_bound"], "unbounded")
+        self.assertEqual(interval["search_start_event"], 0)
+
+    def test_same_resource_match_bounds_the_framebuffer(self):
+        checkpoints = [
+            {"event": 3, "target": "0", "resource": "fb:0",
+             "status": "match", "authoritative": True},
+            self.divergent(),
+        ]
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), checkpoints,
+            {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        interval = value["unresolved_interval"]
+        self.assertEqual(interval["start_event"], 3)
+        self.assertEqual(interval["lower_bound"], "same_resource_match")
+
+    def test_final_only_ignores_unrelated_matching_observations(self):
+        checkpoints = [
+            {"event": 3, "target": "10", "resource": "tex:10",
+             "status": "match", "authoritative": True},
+            {"event": 5, "target": "11", "resource": "tex:11",
+             "status": "match", "authoritative": True},
+        ]
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), checkpoints,
+            {"status": "divergent",
+             "statistics": {"mismatched_pixels": 4}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["kind"], "final_only")
+        interval = value["unresolved_interval"]
+        self.assertIsNone(interval["start_event"])
+        self.assertEqual(interval["lower_bound"], "unbounded")
+        self.assertEqual(interval["search_start_event"], 0)
+
+    def test_final_only_same_resource_match_bounds_the_interval(self):
+        checkpoints = [
+            {"event": 2, "target": "0", "resource": "fb:0",
+             "status": "match", "authoritative": True},
+        ]
+        value = gfx_independent_replay.first_divergence(
+            self.graph(), checkpoints,
+            {"status": "divergent",
+             "statistics": {"mismatched_pixels": 4}},
+            checkpoint_validation={"status": "ok"})
+        interval = value["unresolved_interval"]
+        self.assertEqual(interval["start_event"], 2)
+        self.assertEqual(interval["lower_bound"], "same_resource_match")
+
+    def test_compact_selection_does_not_label_unrelated_match(self):
+        report = {
+            "classification": "difference_with_partial_state_coverage",
+            "qualification": {"qualified": False, "axes": {}},
+            "frame": {"capture_frame_id": 1},
+            "first_divergence": {
+                "kind": "intermediate", "event": 4, "target": "0",
+                "resource": "fb:0", "producer_event": 3,
+                "copy_source_evidence": None,
+            },
+            "checkpoints": [
+                {"event": 2, "target": "0", "resource": "fb:0",
+                 "status": "match", "authoritative": True},
+                {"event": 3, "target": "10", "resource": "tex:10",
+                 "status": "match", "authoritative": True},
+                {"event": 4, "target": "0", "resource": "fb:0",
+                 "status": "divergent", "authoritative": True,
+                 "statistics": {"mismatched_pixels": 4}},
+            ],
+            "pixels": {"status": "divergent"},
+            "checkpoint_validation": {"status": "ok"},
+        }
+        compact = gfx_independent_replay.compact_diagnosis(report)
+        reasons = {item["event"]: item["selected_because"]
+                   for item in compact["checkpoints"]}
+        self.assertIn("last_matching", reasons[2])
+        self.assertNotIn("last_matching", reasons.get(3, []))
+        labels = {label for values in reasons.values() for label in values}
+        self.assertNotIn("copy_source", labels)
 
 
 class FirstDivergenceSourceEvidenceTests(unittest.TestCase):
