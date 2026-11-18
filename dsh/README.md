@@ -50,7 +50,12 @@ records show a completed call to one of the seven native EU4 tools. It requires
 `OPENCODE_GO_API_KEY` in the environment (the headless profile cannot read the
 stored credentials on 0.2.2-rc.1) and it does not schedule or continue goal
 rounds. A pilot conclusion is validated with
-`python3 -m automation.dsh_pilot validate --conclusion <path>`.
+`python3 -m automation.dsh_pilot validate --conclusion <path>`; pass
+`--case <case-dir>` to verify the case and any claimed causal interval against
+its authoritative checkpoints. The run summary
+(`summarize --run <dir> --conclusion <path> --case <case-dir>`) makes that case
+verification mandatory and accepts an independently produced, digest-bound
+receipt with `--case-receipt` instead of re-running the verifier.
 
 The scripts set `DSH_HOME` themselves from `EU4_DSH_HOME` (default
 `~/.local/share/eu4-dsh`) and **deliberately ignore an inherited `DSH_HOME`**, so

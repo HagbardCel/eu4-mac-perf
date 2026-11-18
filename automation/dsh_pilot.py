@@ -27,6 +27,7 @@ from pathlib import Path
 SCHEMA = "gfx-pilot-conclusion/v1"
 VALIDATION_SCHEMA = "gfx-pilot-validation/v1"
 GATE_SCHEMA = "gfx-pilot-native-gate/v1"
+CASE_RECEIPT_SCHEMA = "gfx-pilot-case-verification-receipt/v1"
 OUTCOMES = ("correction_proposed", "requires_additional_evidence")
 HYPOTHESIS_STATUS = ("supported", "refuted", "insufficient")
 FRAME_SCOPES = ("same_sealed_frame", "new_capture")
@@ -221,7 +222,8 @@ def _valid_basis(interval: dict, problems: list[dict], *,
                 "generations")
 
 
-def validate_conclusion(value) -> dict:
+def validate_conclusion(value, *, authoritative: dict | None = None,
+                        case_digests: dict | None = None) -> dict:
     problems: list[dict] = []
 
     def problem(code: str, detail: str) -> None:
@@ -249,6 +251,15 @@ def validate_conclusion(value) -> dict:
         problem("case_sealed_frame",
                 "case.sealed_frame must name session_id, capture_frame_id and "
                 "event_stream_sha256")
+    if case_digests is not None:
+        if case.get("case_manifest_sha256") != case_digests.get(
+                "case_manifest_sha256"):
+            problem("case_manifest_mismatch",
+                    "case.case_manifest_sha256 does not match the verified "
+                    "case manifest")
+        if case.get("seal_sha256") != case_digests.get("seal_sha256"):
+            problem("case_seal_mismatch",
+                    "case.seal_sha256 does not match the verified frame seal")
 
     diagnosis = (value.get("starting_diagnosis")
                  if isinstance(value.get("starting_diagnosis"), dict) else {})
@@ -320,6 +331,8 @@ def validate_conclusion(value) -> dict:
             _valid_basis(interval, problems,
                          sealed_frame_key=case_frame_key,
                          expected_resource=expected_resource)
+            _verify_interval_evidence(interval, authoritative, problems,
+                                      case_frame_key)
             if outcome == "requires_additional_evidence":
                 if interval.get("start_event") is not None or (
                         interval.get("lower_bound") == "same_resource_match"):
@@ -542,11 +555,16 @@ def case_receipt(case_dir: Path | str) -> dict | None:
         seal = json.loads(seal_bytes)
     except (OSError, ValueError):
         return None
+    inventory = case.get("files") or []
     return {
         "schema": "gfx-pilot-case-receipt/v1",
         "case_id": case.get("case_id"),
         "case_manifest_sha256": hashlib.sha256(case_bytes).hexdigest(),
         "seal_sha256": hashlib.sha256(seal_bytes).hexdigest(),
+        "payload_inventory_sha256": hashlib.sha256(
+            json.dumps(inventory, sort_keys=True,
+                       separators=(",", ":")).encode("utf-8")).hexdigest(),
+        "files": len(inventory),
         "capture": {
             "session_id": seal.get("session_id"),
             "capture_frame_id": seal.get("capture_frame_id"),
@@ -557,15 +575,244 @@ def case_receipt(case_dir: Path | str) -> dict | None:
     }
 
 
+def _verification_complete(verification: dict) -> bool:
+    return bool(
+        verification
+        and verification.get("ok") is True
+        and not verification.get("problems")
+        and verification.get("independently_reproducible") is True
+        and isinstance(verification.get("files"), int)
+        and verification["files"] > 0
+        and verification.get("graph_status") == "complete")
+
+
+def _verify_case(case_dir: Path) -> tuple[dict, list[dict]]:
+    """Run the existing portable-case verifier; never trust a claim."""
+    try:
+        from automation import gfx_replay_case
+    except Exception as exc:  # noqa: BLE001 - fail closed, report the import
+        return {}, [{"code": "case_verify_unavailable",
+                     "detail": f"{type(exc).__name__}: {exc}"}]
+    try:
+        verification = gfx_replay_case.verify(case_dir)
+    except Exception as exc:  # noqa: BLE001 - CaseError and I/O both fail closed
+        return {}, [{"code": "case_verification_failed",
+                     "detail": f"{type(exc).__name__}: {exc}"}]
+    return verification, []
+
+
+def _verification_from_receipt(receipt_path: Path, digests: dict,
+                               ) -> tuple[dict, list[dict]]:
+    """Consume an independently produced receipt bound to these digests."""
+    problems: list[dict] = []
+    try:
+        value = json.loads(Path(receipt_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return {}, [{"code": "case_receipt_unreadable",
+                     "detail": f"{type(exc).__name__}: {exc}"}]
+    if value.get("schema") != CASE_RECEIPT_SCHEMA:
+        problems.append({"code": "case_receipt_schema",
+                         "detail": f"receipt schema must be "
+                                   f"{CASE_RECEIPT_SCHEMA}"})
+    for key in ("case_manifest_sha256", "seal_sha256",
+                "payload_inventory_sha256"):
+        if value.get(key) != digests.get(key):
+            problems.append({"code": "case_receipt_mismatch",
+                             "detail": f"receipt {key} does not match the "
+                                       f"current case"})
+    verification = (value.get("verification")
+                    if isinstance(value.get("verification"), dict) else {})
+    if verification.get("case_id") != digests.get("case_id"):
+        problems.append({"code": "case_receipt_mismatch",
+                         "detail": "receipt case_id does not match the "
+                                   "current case"})
+    if verification.get("files") != digests.get("files"):
+        problems.append({"code": "case_receipt_mismatch",
+                         "detail": "receipt file count does not match the "
+                                   "current case inventory"})
+    if not _verification_complete(verification):
+        problems.append({"code": "case_receipt_incomplete",
+                         "detail": "receipt does not carry complete, "
+                                   "independently reproducible case evidence"})
+    return verification, problems
+
+
+def _authoritative_evidence(case_dir: Path, digests: dict,
+                            ) -> tuple[dict | None, list[dict]]:
+    """Load the case's diagnostic report, bound to its sealed capture.
+
+    The report and its checkpoints are existing evidence: this function does
+    not re-run a comparator or build a dependency graph.  It only refuses a
+    report whose identity is not verified or whose frame does not match the
+    seal.
+    """
+    problems: list[dict] = []
+    case_dir = Path(case_dir)
+    try:
+        manifest = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
+        seal = json.loads((case_dir / "capture" / "frame-seal.json").read_text(
+            encoding="utf-8"))
+        report_relative = str(manifest.get("diagnostic_report")
+                              or "diagnostic-report.json")
+        report_path, problem = _case_relative_path(case_dir, report_relative)
+        if problem is not None:
+            problems.append({"code": "case_diagnostic_unavailable",
+                             "detail": problem})
+            return None, problems
+        report_bytes = report_path.read_bytes()
+        report = json.loads(report_bytes)
+    except (OSError, ValueError) as exc:
+        problems.append({"code": "case_diagnostic_unavailable",
+                         "detail": f"{type(exc).__name__}: {exc}"})
+        return None, problems
+    if report.get("schema") != "gfx-frame-diagnosis/v1":
+        problems.append({"code": "case_diagnostic_schema",
+                         "detail": "diagnostic report has an unexpected schema"})
+        return None, problems
+    identity = report.get("identity") if isinstance(report.get("identity"),
+                                                    dict) else {}
+    if identity.get("status") != "verified":
+        problems.append({"code": "case_diagnostic_unverified",
+                         "detail": "the case diagnostic report is not an "
+                                   "in-process verified result"})
+        return None, problems
+    checks = {item.get("check"): item
+              for item in identity.get("checks") or []
+              if isinstance(item, dict) and item.get("check")}
+    failed = [name for name, item in checks.items()
+              if item.get("ok") is not True]
+    if failed:
+        problems.append({"code": "case_diagnostic_identity_mismatch",
+                         "detail": "failed identity check(s): "
+                                   + ", ".join(sorted(failed))})
+    session_check = checks.get("session_id") or {}
+    if (str(session_check.get("expected")) != str(seal.get("session_id"))
+            or str(session_check.get("actual")) != str(seal.get("session_id"))):
+        problems.append({"code": "case_diagnostic_identity_mismatch",
+                         "detail": "diagnostic session_id does not match the "
+                                   "frame seal"})
+    frame = report.get("frame") if isinstance(report.get("frame"), dict) else {}
+    comparisons = {
+        "capture_frame_id": (frame.get("capture_frame_id"),
+                             seal.get("capture_frame_id")),
+        "present_index": (frame.get("present_index"), seal.get("present_index")),
+        "scene_index": (frame.get("scene_index"), seal.get("scene_index")),
+        "manifest_sha256": (frame.get("manifest_sha256"),
+                            seal.get("manifest_sha256")),
+        "reference_sha256": (frame.get("reference_sha256"),
+                             seal.get("reference_sha256")),
+    }
+    mismatched = [name for name, (actual, expected) in comparisons.items()
+                  if actual != expected]
+    if mismatched:
+        problems.append({"code": "case_diagnostic_identity_mismatch",
+                         "detail": "diagnostic report does not match the "
+                                   "frame seal: " + ", ".join(sorted(mismatched))})
+        return None, problems
+    if problems:
+        return None, problems
+    checkpoints = []
+    for item in report.get("checkpoints") or []:
+        if not isinstance(item, dict):
+            continue
+        checkpoints.append({
+            key: item.get(key) for key in
+            ("event", "resource", "target", "status", "authoritative",
+             "generation")
+        })
+    return {
+        "schema": "gfx-pilot-authoritative-checkpoints/v1",
+        "capture": {
+            "session_id": seal.get("session_id"),
+            "capture_frame_id": seal.get("capture_frame_id"),
+            "event_stream_sha256": seal.get("event_stream_sha256"),
+        },
+        "report_sha256": hashlib.sha256(report_bytes).hexdigest(),
+        "checkpoints": checkpoints,
+    }, problems
+
+
+def _case_relative_path(case_dir: Path, relative: str) -> tuple[Path, str | None]:
+    """Resolve a manifest-relative path without escaping the case."""
+    path = Path(relative)
+    if path.is_absolute() or ".." in path.parts:
+        return case_dir, f"case-relative path is not allowed: {relative}"
+    return case_dir / path, None
+
+
+def _verify_interval_evidence(interval: dict, evidence: dict | None,
+                              problems: list[dict],
+                              sealed_frame_key) -> None:
+    """Require claimed endpoints to exist in the authoritative case evidence.
+
+    The structural contract in ``_valid_basis()`` is not enough: a conclusion
+    could otherwise invent a same-capture matching checkpoint.  This check
+    looks the claimed observations up in the case's existing diagnostic
+    report.  A bounded interval with no authoritative evidence is reported
+    unverified, never accepted.
+    """
+    bounded = interval.get("start_event") is not None
+    if evidence is None:
+        if bounded:
+            problems.append({
+                "code": "interval_unverified",
+                "detail": "no authoritative case diagnostic evidence is "
+                          "available for the claimed bounded interval"})
+        return
+    if _capture_key(evidence.get("capture")) != sealed_frame_key:
+        problems.append({
+            "code": "interval_unverified",
+            "detail": "authoritative checkpoint evidence belongs to a "
+                      "different capture"})
+        return
+    checkpoints = evidence.get("checkpoints") or []
+
+    def claim(event):
+        return next((item for item in interval.get("basis") or []
+                     if isinstance(item, dict)
+                     and item.get("event") == event), None)
+
+    def check(entry, role: str, expected_status: str) -> None:
+        if not isinstance(entry, dict):
+            return  # _valid_basis already reports the structural problem
+        rows = [item for item in checkpoints
+                if isinstance(item, dict)
+                and item.get("event") == entry.get("event")
+                and str(item.get("resource")) == str(entry.get("resource"))
+                and str(item.get("target")) == str(entry.get("target"))]
+        if not rows:
+            problems.append({
+                "code": "interval_unverified",
+                "detail": f"the {role} observation at event "
+                          f"{entry.get('event')} is not in the authoritative "
+                          f"case evidence"})
+            return
+        matches = [item for item in rows
+                   if item.get("authoritative") is True
+                   and item.get("status") == expected_status]
+        if len(matches) != 1:
+            problems.append({
+                "code": "interval_unverified",
+                "detail": f"the authoritative {role} observation at event "
+                          f"{entry.get('event')} is not exactly one "
+                          f"{expected_status} checkpoint"})
+
+    if bounded:
+        check(claim(interval.get("start_event")), "lower", "match")
+    check(claim(interval.get("end_event")), "upper", "divergent")
+
+
 def summarize_run(run_dir: Path | str, conclusion_path: Path | str,
-                  case_dir: Path | str | None = None) -> dict:
+                  case_dir: Path | str, *,
+                  case_receipt_path: Path | str | None = None) -> dict:
     """Combine one pilot run's session, efficiency and conclusion evidence.
 
-    The summary is a bounded projection; it never copies the session export or
-    large artifacts.  A run is only ``ok`` when the conclusion validates, the
-    run-event stream records an executed native EU4 tool, the launch count is
-    present and zero, and (when supplied) the verified case receipt matches the
-    conclusion's sealed capture.
+    Acceptance is fail-closed: the case is verified with the existing portable
+    verifier (or a digest-bound receipt), the conclusion's case/capture
+    identity and manifest/seal digests are checked against it, claimed causal
+    endpoints are looked up in the case's diagnostic report, the run-event
+    stream must record an executed native EU4 tool, and the launch count must
+    be a present integer exactly zero.
     """
     run_dir = Path(run_dir)
     problems: list[dict] = []
@@ -581,9 +828,6 @@ def summarize_run(run_dir: Path | str, conclusion_path: Path | str,
     session = read(run_dir / "session.json", "session")
     efficiency = read(run_dir / "efficiency.json", "efficiency")
     conclusion = read(Path(conclusion_path), "conclusion")
-    validation = validate_conclusion(conclusion) if conclusion else {
-        "schema": VALIDATION_SCHEMA, "ok": False,
-        "problems": [{"code": "missing_conclusion"}], "checks": {}}
 
     events_path = run_dir / "events.jsonl"
     if events_path.is_file():
@@ -612,29 +856,50 @@ def summarize_run(run_dir: Path | str, conclusion_path: Path | str,
     if not efficiency:
         problems.append({"code": "no_efficiency",
                          "detail": "the session export was not analyzed"})
-    if not validation.get("ok"):
-        problems.extend(validation.get("problems") or [])
 
-    receipt = None
-    if case_dir is not None:
-        receipt = case_receipt(case_dir)
-        if receipt is None:
-            problems.append({"code": "missing_case_receipt",
-                             "detail": f"no case.json/frame-seal.json in "
-                                       f"{case_dir}"})
+    digests = case_receipt(case_dir) if case_dir is not None else None
+    verification: dict = {}
+    evidence: dict | None = None
+    if digests is None:
+        problems.append({"code": "missing_case",
+                         "detail": f"no readable case.json/frame-seal.json in "
+                                   f"{case_dir}; the conclusion's own "
+                                   f"verification flag is not evidence"})
+    else:
+        if case_receipt_path is not None:
+            verification, verification_problems = _verification_from_receipt(
+                Path(case_receipt_path), digests)
         else:
-            conclusion_case = (conclusion.get("case")
-                               if isinstance(conclusion.get("case"), dict)
-                               else {})
-            if receipt.get("case_id") != conclusion_case.get("case_id"):
-                problems.append({"code": "case_receipt_mismatch",
-                                 "detail": "the conclusion case_id does not "
-                                           "match the case receipt"})
-            if _capture_key(receipt.get("capture")) != _capture_key(
-                    conclusion_case.get("sealed_frame")):
-                problems.append({"code": "case_capture_mismatch",
-                                 "detail": "the conclusion sealed_frame does "
-                                           "not match the case seal"})
+            verification, verification_problems = _verify_case(Path(case_dir))
+        problems.extend(verification_problems)
+        if not _verification_complete(verification):
+            problems.append({
+                "code": "case_not_verified",
+                "detail": "the case is not valid, complete and independently "
+                          "reproducible"})
+        conclusion_case = (conclusion.get("case")
+                           if isinstance(conclusion.get("case"), dict) else {})
+        if digests.get("case_id") != conclusion_case.get("case_id"):
+            problems.append({"code": "case_receipt_mismatch",
+                             "detail": "the conclusion case_id does not match "
+                                       "the verified case"})
+        if _capture_key(digests.get("capture")) != _capture_key(
+                conclusion_case.get("sealed_frame")):
+            problems.append({"code": "case_capture_mismatch",
+                             "detail": "the conclusion sealed_frame does not "
+                                       "match the case seal"})
+        evidence, evidence_problems = _authoritative_evidence(
+            Path(case_dir), digests)
+        problems.extend(evidence_problems)
+
+    if conclusion:
+        validation = validate_conclusion(
+            conclusion, authoritative=evidence, case_digests=digests)
+        problems.extend(validation.get("problems") or [])
+    else:
+        validation = {"schema": VALIDATION_SCHEMA, "ok": False,
+                      "problems": [{"code": "missing_conclusion"}],
+                      "checks": {}}
 
     calls = efficiency.get("calls") or {}
     tokens = efficiency.get("tokens") or {}
@@ -648,7 +913,14 @@ def summarize_run(run_dir: Path | str, conclusion_path: Path | str,
         "problems": problems,
         "problems_count": len(problems),
         "native_gate": gate,
-        "case_receipt": receipt,
+        "case_verification": verification,
+        "case_receipt": digests,
+        "authoritative_evidence": (None if evidence is None else {
+            "schema": evidence.get("schema"),
+            "report_sha256": evidence.get("report_sha256"),
+            "capture": evidence.get("capture"),
+            "checkpoints": len(evidence.get("checkpoints") or []),
+        }),
         "session": {
             "id": session.get("session_id"),
             "cwd": (efficiency.get("session") or {}).get("cwd"),
@@ -699,6 +971,11 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="operation", required=True)
     validate = sub.add_parser("validate")
     validate.add_argument("--conclusion", required=True, type=Path)
+    validate.add_argument("--case", type=Path, default=None,
+                          help="verified case directory; required for a "
+                               "bounded causal interval")
+    validate.add_argument("--case-receipt", type=Path, default=None,
+                          help="digest-bound verification receipt")
     validate.add_argument("--out", type=Path, default=None)
     gate = sub.add_parser("gate")
     gate.add_argument("--events", required=True, type=Path,
@@ -709,8 +986,12 @@ def _parser() -> argparse.ArgumentParser:
     summary = sub.add_parser("summarize")
     summary.add_argument("--run", required=True, type=Path)
     summary.add_argument("--conclusion", required=True, type=Path)
-    summary.add_argument("--case", type=Path, default=None,
-                         help="verified case directory for the receipt binding")
+    summary.add_argument("--case", required=True, type=Path,
+                         help="verified case directory; acceptance fails "
+                              "without it")
+    summary.add_argument("--case-receipt", type=Path, default=None,
+                         help="digest-bound verification receipt, reused "
+                              "instead of re-running the verifier")
     summary.add_argument("--out", type=Path, default=None)
     return parser
 
@@ -719,7 +1000,8 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     status = 0
     if args.operation == "summarize":
-        result = summarize_run(args.run, args.conclusion, args.case)
+        result = summarize_run(args.run, args.conclusion, args.case,
+                               case_receipt_path=args.case_receipt)
         status = 0 if result.get("ok") else 1
     elif args.operation == "gate":
         try:
@@ -742,7 +1024,38 @@ def main(argv: list[str] | None = None) -> int:
                       "checks": {}}
             status = 1
         else:
-            result = validate_conclusion(value)
+            digests = case_receipt(args.case) if args.case else None
+            verification: dict = {}
+            evidence: dict | None = None
+            case_problems: list[dict] = []
+            if args.case:
+                if digests is None:
+                    case_problems.append({
+                        "code": "missing_case",
+                        "detail": f"no readable case.json/frame-seal.json in "
+                                  f"{args.case}"})
+                else:
+                    if args.case_receipt is not None:
+                        verification, found = _verification_from_receipt(
+                            args.case_receipt, digests)
+                    else:
+                        verification, found = _verify_case(args.case)
+                    case_problems.extend(found)
+                    if not _verification_complete(verification):
+                        case_problems.append({
+                            "code": "case_not_verified",
+                            "detail": "the case is not valid, complete and "
+                                      "independently reproducible"})
+                    evidence, found = _authoritative_evidence(
+                        args.case, digests)
+                    case_problems.extend(found)
+            result = validate_conclusion(
+                value, authoritative=evidence, case_digests=digests)
+            if case_problems:
+                result["problems"] = case_problems + result["problems"]
+                result["problems_count"] = len(result["problems"])
+                result["ok"] = False
+            result["case_verification"] = verification or None
             status = 0 if result.get("ok") else 1
     text = json.dumps(result, indent=2, sort_keys=True) + "\n"
     if args.out is not None:

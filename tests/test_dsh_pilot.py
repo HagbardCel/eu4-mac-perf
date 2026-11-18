@@ -91,6 +91,18 @@ def interval(*, start=71, end=142, resource="fb:0", lower_bound=None,
     }
 
 
+def authoritative_evidence(*, capture=FRAME, checkpoints=None):
+    return {
+        "schema": "gfx-pilot-authoritative-checkpoints/v1",
+        "capture": dict(capture),
+        "report_sha256": "e" * 64,
+        "checkpoints": checkpoints if checkpoints is not None else [
+            endpoint(71, "fb:0", "match"),
+            endpoint(142, "fb:0", "divergent"),
+        ],
+    }
+
+
 def correction_conclusion(interval_value):
     value = conclusion()
     value["outcome"] = "correction_proposed"
@@ -205,17 +217,52 @@ class PilotConclusionTests(unittest.TestCase):
         self.assertIn("correction_files", problem_codes(result))
 
     def test_valid_bounded_interval_supports_a_correction(self):
-        result = dsh_pilot.validate_conclusion(correction_conclusion(interval()))
+        result = dsh_pilot.validate_conclusion(
+            correction_conclusion(interval()),
+            authoritative=authoritative_evidence())
         self.assertTrue(result["ok"], result)
 
     def test_texture_match_cannot_bound_a_framebuffer_divergence(self):
         value = correction_conclusion(interval())
         value["causal_interval"]["basis"][0]["resource"] = "tex:431"
         value["causal_interval"]["basis"][0]["target"] = "431"
-        result = dsh_pilot.validate_conclusion(value)
+        result = dsh_pilot.validate_conclusion(
+            value, authoritative=authoritative_evidence())
         self.assertFalse(result["ok"])
         self.assertIn("mixed_resource_interval", problem_codes(result))
         self.assertIn("interval_resource_mismatch", problem_codes(result))
+
+    def test_bounded_interval_without_authoritative_evidence_is_rejected(self):
+        result = dsh_pilot.validate_conclusion(
+            correction_conclusion(interval()))
+        self.assertFalse(result["ok"])
+        self.assertIn("interval_unverified", problem_codes(result))
+
+    def test_fabricated_same_capture_lower_endpoint_is_rejected(self):
+        # The structural basis is internally consistent, but event 71 is not
+        # in the case's authoritative checkpoint evidence.
+        evidence = authoritative_evidence(checkpoints=[
+            endpoint(142, "fb:0", "divergent")])
+        result = dsh_pilot.validate_conclusion(
+            correction_conclusion(interval()), authoritative=evidence)
+        self.assertFalse(result["ok"])
+        self.assertIn("interval_unverified", problem_codes(result))
+
+    def test_authoritative_status_contradiction_is_rejected(self):
+        evidence = authoritative_evidence(checkpoints=[
+            endpoint(71, "fb:0", "divergent"),
+            endpoint(142, "fb:0", "divergent")])
+        result = dsh_pilot.validate_conclusion(
+            correction_conclusion(interval()), authoritative=evidence)
+        self.assertFalse(result["ok"])
+        self.assertIn("interval_unverified", problem_codes(result))
+
+    def test_authoritative_evidence_from_another_capture_is_rejected(self):
+        evidence = authoritative_evidence(capture=OTHER_FRAME)
+        result = dsh_pilot.validate_conclusion(
+            correction_conclusion(interval()), authoritative=evidence)
+        self.assertFalse(result["ok"])
+        self.assertIn("interval_unverified", problem_codes(result))
 
     def test_cli_exit_codes_follow_the_verdict(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -405,24 +452,61 @@ class NativeGateTests(unittest.TestCase):
 
 
 class PilotSummaryTests(unittest.TestCase):
+    """Acceptance requires verified case evidence, not the conclusion's flag."""
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.run = self.root / "run"
         self.run.mkdir()
-        self.conclusion_path = self.root / "conclusion.json"
-        self.conclusion_path.write_text(json.dumps(conclusion()),
-                                        encoding="utf-8")
         self.case = self.root / "case"
         (self.case / "capture").mkdir(parents=True)
-        (self.case / "case.json").write_text(
-            json.dumps({"case_id": "m7-live-frame-000001"}), encoding="utf-8")
-        (self.case / "capture" / "frame-seal.json").write_text(
-            json.dumps({"session_id": FRAME["session_id"],
-                        "capture_frame_id": FRAME["capture_frame_id"],
-                        "event_stream_sha256": FRAME["event_stream_sha256"],
-                        "present_index": 617, "scene_index": 617}),
-            encoding="utf-8")
+        self.receipt_path = self.root / "case-receipt.json"
+        self.manifest = {
+            "schema": "gfx-strategy-b-case/v1",
+            "case_id": "m7-live-frame-000001",
+            "diagnostic_report": "diagnostic-report.json",
+            "files": [{"path": "payload.bin", "bytes": 1,
+                       "sha256": "a" * 64}],
+        }
+        self.seal = {
+            "session_id": FRAME["session_id"],
+            "capture_frame_id": FRAME["capture_frame_id"],
+            "event_stream_sha256": FRAME["event_stream_sha256"],
+            "manifest_sha256": "9" * 64,
+            "reference_sha256": "8" * 64,
+            "present_index": 617,
+            "scene_index": 617,
+        }
+        self.report = {
+            "schema": "gfx-frame-diagnosis/v1",
+            "identity": {
+                "status": "verified",
+                "checks": [
+                    {"check": "session_id",
+                     "expected": FRAME["session_id"],
+                     "actual": FRAME["session_id"], "ok": True},
+                    {"check": "capture_frame_id", "expected": 1,
+                     "actual": 1, "ok": True},
+                ],
+            },
+            "frame": {
+                "capture_frame_id": 1,
+                "present_index": 617,
+                "scene_index": 617,
+                "manifest_sha256": "9" * 64,
+                "reference_sha256": "8" * 64,
+            },
+            "checkpoints": [
+                {"event": 11, "resource": "tex:431", "target": "431",
+                 "status": "match", "authoritative": True},
+                {"event": 142, "resource": "fb:0", "target": "0",
+                 "status": "divergent", "authoritative": True},
+            ],
+        }
+        self.write_case()
+        self.conclusion_path = self.root / "conclusion.json"
+        self.write_conclusion()
         self.session = {
             "schema": "eu4-dsh-pilot-run/v1",
             "session_id": "session-test",
@@ -447,7 +531,48 @@ class PilotSummaryTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def write(self, tool_names=("eu4_case_inspect", "eu4_replay")):
+    def write_case(self):
+        (self.case / "case.json").write_text(
+            json.dumps(self.manifest), encoding="utf-8")
+        (self.case / "capture" / "frame-seal.json").write_text(
+            json.dumps(self.seal), encoding="utf-8")
+        (self.case / "diagnostic-report.json").write_text(
+            json.dumps(self.report), encoding="utf-8")
+
+    def refresh_binding(self):
+        self.write_case()
+        digests = dsh_pilot.case_receipt(self.case)
+        value = conclusion()
+        value["case"]["case_manifest_sha256"] = digests["case_manifest_sha256"]
+        value["case"]["seal_sha256"] = digests["seal_sha256"]
+        self.conclusion_path.write_text(json.dumps(value), encoding="utf-8")
+        self.write_receipt(digests)
+        return digests
+
+    def write_receipt(self, digests, *, ok=True, files=None,
+                      independent=True):
+        verification = {
+            "schema": "gfx-strategy-b-case-verification/v1",
+            "case_id": digests["case_id"],
+            "ok": ok,
+            "problems": [] if ok else ["simulated problem"],
+            "files": digests["files"] if files is None else files,
+            "graph_status": "complete" if ok else "partial",
+            "independently_reproducible": independent,
+        }
+        receipt = {
+            "schema": "gfx-pilot-case-verification-receipt/v1",
+            "case_manifest_sha256": digests["case_manifest_sha256"],
+            "seal_sha256": digests["seal_sha256"],
+            "payload_inventory_sha256": digests["payload_inventory_sha256"],
+            "verification": verification,
+        }
+        self.receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    def write_conclusion(self):
+        self.refresh_binding()
+
+    def write_run(self, tool_names=("eu4_case_inspect", "eu4_replay")):
         (self.run / "session.json").write_text(
             json.dumps(self.session), encoding="utf-8")
         (self.run / "efficiency.json").write_text(
@@ -456,27 +581,31 @@ class PilotSummaryTests(unittest.TestCase):
             "\n".join(json.dumps(item) for item in events(list(tool_names))),
             encoding="utf-8")
 
-    def test_complete_run_summarizes_with_case_receipt(self):
-        self.write()
-        result = dsh_pilot.summarize_run(
-            self.run, self.conclusion_path, case_dir=self.case)
+    def summarize(self, *, receipt=True, case=None):
+        return dsh_pilot.summarize_run(
+            self.run, self.conclusion_path,
+            case if case is not None else self.case,
+            case_receipt_path=self.receipt_path if receipt else None)
+
+    def test_complete_run_summarizes_with_verified_case_receipt(self):
+        self.write_run()
+        result = self.summarize()
         self.assertTrue(result["ok"], result)
+        self.assertEqual(result["case_verification"]["files"], 1)
+        self.assertTrue(result["case_verification"]["independently_reproducible"])
+        self.assertEqual(result["authoritative_evidence"]["checkpoints"], 2)
         self.assertEqual(result["efficiency"]["eu4_launches"], 0)
         self.assertEqual(result["session"]["native_tool_count"], 2)
-        self.assertEqual(result["case_receipt"]["case_id"],
-                         "m7-live-frame-000001")
 
     def test_bash_only_run_is_a_failure(self):
-        self.write(tool_names=("bash", "read_image"))
-        result = dsh_pilot.summarize_run(
-            self.run, self.conclusion_path, case_dir=self.case)
+        self.write_run(tool_names=("bash", "read_image"))
+        result = self.summarize()
         self.assertFalse(result["ok"])
         self.assertIn("no_native_tool", problem_codes(result))
 
     def test_mixed_run_passes(self):
-        self.write(tool_names=("bash", "eu4_case_inspect"))
-        result = dsh_pilot.summarize_run(
-            self.run, self.conclusion_path, case_dir=self.case)
+        self.write_run(tool_names=("bash", "eu4_case_inspect"))
+        result = self.summarize()
         self.assertTrue(result["ok"], result)
 
     def test_missing_event_records_fail(self):
@@ -484,55 +613,147 @@ class PilotSummaryTests(unittest.TestCase):
             json.dumps(self.session), encoding="utf-8")
         (self.run / "efficiency.json").write_text(
             json.dumps(self.efficiency), encoding="utf-8")
-        result = dsh_pilot.summarize_run(
-            self.run, self.conclusion_path, case_dir=self.case)
+        result = self.summarize()
         self.assertFalse(result["ok"])
         self.assertIn("missing_event_records", problem_codes(result))
 
     def test_launch_is_a_failure(self):
         self.efficiency["eu4_launches"]["count"] = 1
-        self.write()
-        result = dsh_pilot.summarize_run(
-            self.run, self.conclusion_path, case_dir=self.case)
+        self.write_run()
+        result = self.summarize()
         self.assertFalse(result["ok"])
         self.assertIn("eu4_launch", problem_codes(result))
 
     def test_missing_launch_count_is_a_failure(self):
         del self.efficiency["eu4_launches"]
-        self.write()
-        result = dsh_pilot.summarize_run(
-            self.run, self.conclusion_path, case_dir=self.case)
+        self.write_run()
+        result = self.summarize()
         self.assertFalse(result["ok"])
         self.assertIn("launch_count_invalid", problem_codes(result))
 
     def test_nonnumeric_launch_count_is_a_failure(self):
         self.efficiency["eu4_launches"]["count"] = "0"
-        self.write()
-        result = dsh_pilot.summarize_run(
-            self.run, self.conclusion_path, case_dir=self.case)
+        self.write_run()
+        result = self.summarize()
         self.assertFalse(result["ok"])
         self.assertIn("launch_count_invalid", problem_codes(result))
 
+    def test_missing_case_directory_fails(self):
+        self.write_run()
+        result = self.summarize(case=self.root / "absent")
+        self.assertFalse(result["ok"])
+        self.assertIn("missing_case", problem_codes(result))
+
+    def test_self_asserted_verification_ok_without_evidence_fails(self):
+        self.manifest["schema"] = "not-a-case"
+        self.write_case()
+        self.write_run()
+        result = self.summarize(receipt=False)
+        self.assertFalse(result["ok"])
+        self.assertIn("case_verification_failed", problem_codes(result))
+        self.assertIn("case_not_verified", problem_codes(result))
+
+    def test_incomplete_case_payload_fails_verification(self):
+        # The manifest is structurally valid but the required payload files
+        # are absent; the conclusion's verification_ok flag must not rescue it.
+        self.write_run()
+        result = self.summarize(receipt=False)
+        self.assertFalse(result["ok"])
+        self.assertIn("case_not_verified", problem_codes(result))
+
+    def test_receipt_digest_mismatch_fails(self):
+        digests = dsh_pilot.case_receipt(self.case)
+        receipt = {
+            "schema": "gfx-pilot-case-verification-receipt/v1",
+            "case_manifest_sha256": "0" * 64,
+            "seal_sha256": digests["seal_sha256"],
+            "payload_inventory_sha256": digests["payload_inventory_sha256"],
+            "verification": {
+                "case_id": digests["case_id"],
+                "ok": True, "problems": [], "files": digests["files"],
+                "graph_status": "complete",
+                "independently_reproducible": True,
+            },
+        }
+        self.receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+        self.write_run()
+        result = self.summarize()
+        self.assertFalse(result["ok"])
+        self.assertIn("case_receipt_mismatch", problem_codes(result))
+
     def test_case_receipt_mismatch_is_a_failure(self):
-        (self.case / "case.json").write_text(
-            json.dumps({"case_id": "another-case"}), encoding="utf-8")
-        self.write()
-        result = dsh_pilot.summarize_run(
-            self.run, self.conclusion_path, case_dir=self.case)
+        self.manifest["case_id"] = "another-case"
+        self.refresh_binding()
+        self.write_run()
+        result = self.summarize()
         self.assertFalse(result["ok"])
         self.assertIn("case_receipt_mismatch", problem_codes(result))
 
     def test_capture_identity_mismatch_is_a_failure(self):
-        (self.case / "capture" / "frame-seal.json").write_text(
-            json.dumps({"session_id": "another-launch",
-                        "capture_frame_id": 1,
-                        "event_stream_sha256": FRAME["event_stream_sha256"]}),
-            encoding="utf-8")
-        self.write()
-        result = dsh_pilot.summarize_run(
-            self.run, self.conclusion_path, case_dir=self.case)
+        self.seal["session_id"] = "another-launch"
+        self.refresh_binding()
+        self.write_run()
+        result = self.summarize()
         self.assertFalse(result["ok"])
         self.assertIn("case_capture_mismatch", problem_codes(result))
+
+    def test_case_digest_mismatch_in_conclusion_is_a_failure(self):
+        self.write_run()
+        value = conclusion()
+        value["case"]["case_manifest_sha256"] = "0" * 64
+        value["case"]["seal_sha256"] = "0" * 64
+        self.conclusion_path.write_text(json.dumps(value), encoding="utf-8")
+        result = self.summarize()
+        self.assertFalse(result["ok"])
+        self.assertIn("case_manifest_mismatch", problem_codes(result))
+        self.assertIn("case_seal_mismatch", problem_codes(result))
+
+    def test_fabricated_interval_is_rejected_by_acceptance(self):
+        # Structural basis is internally valid, but the case report has no
+        # event-71 match; the self-reported observation must not be promoted.
+        self.report["checkpoints"] = [
+            {"event": 142, "resource": "fb:0", "target": "0",
+             "status": "divergent", "authoritative": True}]
+        self.write_case()
+        digests = dsh_pilot.case_receipt(self.case)
+        value = correction_conclusion(interval())
+        value["case"]["case_manifest_sha256"] = digests["case_manifest_sha256"]
+        value["case"]["seal_sha256"] = digests["seal_sha256"]
+        self.conclusion_path.write_text(json.dumps(value), encoding="utf-8")
+        self.write_run()
+        result = self.summarize()
+        self.assertFalse(result["ok"])
+        self.assertIn("interval_unverified",
+                      {item["code"]
+                       for item in result["conclusion"]["validation"]["problems"]})
+
+    def test_unverified_diagnostic_report_cannot_supply_intervals(self):
+        self.report["identity"]["status"] = "unverified_session"
+        self.write_case()
+        self.write_run()
+        result = self.summarize()
+        self.assertFalse(result["ok"])
+        self.assertIn("case_diagnostic_unverified", problem_codes(result))
+
+    @unittest.skipUnless(
+        (Path(__file__).resolve().parents[1]
+         / ".local/m7/p0-checkpoint-142/shadow/case").is_dir()
+        and (Path(__file__).resolve().parents[1]
+             / ".local/m7/p1/run/events.jsonl").is_file(),
+        "authentic P1 case/run evidence is local-only")
+    def test_authentic_p1_no_fix_conclusion_remains_valid(self):
+        root = Path(__file__).resolve().parents[1]
+        result = dsh_pilot.summarize_run(
+            root / ".local/m7/p1/run",
+            root / "analysis/m7/p1-autonomous-pilot-conclusion.json",
+            root / ".local/m7/p0-checkpoint-142/shadow/case")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["conclusion"]["outcome"],
+                         "requires_additional_evidence")
+        self.assertFalse(result["conclusion"]["has_correction"])
+        self.assertFalse(result["conclusion"]["validation"]["checks"]["has_interval"])
+        self.assertEqual(result["session"]["native_tool_calls"],
+                         ["eu4_case_inspect", "eu4_replay"])
 
 
 if __name__ == "__main__":

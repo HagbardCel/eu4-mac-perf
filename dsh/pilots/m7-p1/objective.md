@@ -116,6 +116,8 @@ Write `.local/m7/p1/pilot-conclusion.json` with exactly this shape:
   "case": {
     "case_id": "m7-live-frame-000001",
     "verification_ok": true,
+    "case_manifest_sha256": "<sha256 of case.json>",
+    "seal_sha256": "<sha256 of capture/frame-seal.json>",
     "sealed_frame": {
       "session_id": "<copy from frame-seal.json>",
       "capture_frame_id": 1,
@@ -173,11 +175,15 @@ sealed capture, with matching `generation` where present. An unbounded interval
 uses `start_event: null`, `lower_bound: "unbounded"`, and only the divergent
 upper observation — do not invent a matching lower checkpoint.
 
-Validate before finishing (iterate until it passes):
+The conclusion must bind to the case receipt: copy `case.json` and
+`capture/frame-seal.json` SHA-256 values into the conclusion. Validate before
+finishing (iterate until it passes; `--case` is required for any claimed
+causal interval):
 
 ```sh
 python3.14 -m automation.dsh_pilot validate \
-  --conclusion .local/m7/p1/pilot-conclusion.json
+  --conclusion .local/m7/p1/pilot-conclusion.json \
+  --case .local/m7/p0-checkpoint-142/shadow/case
 ```
 
 Then call `update_goal complete` with a one-line summary. Finish with a short
