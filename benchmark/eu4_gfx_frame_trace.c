@@ -4501,16 +4501,13 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
         eu4_gfx_frame_sealed_dispatch();
         return;
     }
-    /* glClear's entry observer runs before the clear executes, so the selected
-       clear event is observed on the correct pre-execution boundary. */
-    if (maybe_capture_default_checkpoint_locked() < 0) {
-        pthread_mutex_unlock(&g_lock);
-        eu4_gfx_frame_sealed_dispatch();
-        return;
-    }
     if (g.boundary_fb >= 0) {
         GLint draw_framebuffer = 0;
-        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_framebuffer);
+        if (!g.test_only) {
+            glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_framebuffer);
+        }
+        /* The offline writer host has no GL context.  Its boundary model is
+           the default framebuffer; production keeps the real query above. */
         if (draw_framebuffer == g.boundary_fb) {
             if (g.armed) {
                 finish_capture("boundary_clear");
@@ -4527,6 +4524,18 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
             }
             frame_reset();
         }
+    }
+    /* Observe the selected clear only after boundary handling has decided
+       whether this clear opens, continues or closes the capture.  An opening
+       boundary clear arms the frame above, so the selected event is then event
+       0 of the new frame.  A closing clear has already finalized that frame
+       and is not recorded, so it must not trigger a readback.  The clear
+       itself still executes before the event record is emitted, matching the
+       Metal pre-event checkpoint semantics. */
+    if (maybe_capture_default_checkpoint_locked() < 0) {
+        pthread_mutex_unlock(&g_lock);
+        eu4_gfx_frame_sealed_dispatch();
+        return;
     }
     if (g.armed && g.events != NULL && g.event_count >= (int)g.max_draws) {
         g.truncated = 1;
