@@ -67,7 +67,7 @@ builds leave no valid receipt.
 **Verified capabilities.** The historical P0 case (`m7-live-frame-000001`,
 seal `794c482d…`, session `a3111e0d…`) verifies offline but has no producer
 receipt; baseline reuse is correctly rejected as `producer_identity_missing`.
-One bounded offline replay of that capture produced `m7-p2-producer-bound-v2`,
+One bounded offline replay of that capture produced `m7-p2-producer-bound-v3`,
 which verifies with `producer_identity=verified`. Compact inspection returns the
 unchanged first divergence at event 142 `fb:0` (program 331, producer 141),
 final 1,160,291 / 1,930,176 differing pixels (max 70), an unbounded lower bound,

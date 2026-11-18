@@ -3,10 +3,10 @@
   "base_commit": "246d7e08",
   "branch": "m7/p2-infra-hardening",
   "case": {
-    "case_id": "m7-p2-producer-bound-v2",
-    "case_json_sha256": "d58cf25688e10295b69a22fda7e0e509a749d7dab8e682654c994659259ad8e5",
+    "case_id": "m7-p2-producer-bound-v3",
+    "case_json_sha256": "316741aa1aae2e57fbd6d73ace9805f846f3c4e886838c8f1f4b7d5fe9fe80bf",
     "seal_sha256": "794c482d49767b0b0aa356f5fc28919b9c2a57a33c88f7112152efd8c07d0ca6",
-    "baseline_fingerprint": "b28ca01e36add2daf0b06ae27d602c2ac9e0293c0ec53bde81889e4814e8761e",
+    "baseline_fingerprint": "f58dc630a811167f395f5b615a6c98b36d2ce67366e6fbc8d89fc29429c3eef4",
     "capture": {
       "session_id": "a3111e0d-9b76-4b23-910d-38bd48c9aa93",
       "capture_frame_id": 1,
@@ -25,8 +25,8 @@
       "renderer_semantics_included": true,
       "renderer_source_count": 5,
       "shader_inputs": 104,
-      "producer_executable_sha256": "9c9d7a564623e632ecfd71bbe50d05ffb06727a4094c6a8a2fcce07a0b4db8ba",
-      "current_executable_sha256": "9c9d7a564623e632ecfd71bbe50d05ffb06727a4094c6a8a2fcce07a0b4db8ba",
+      "producer_executable_sha256": "35a5df818280b78785d2e8788b965a66681022fdf9b219a165c9c8446b6f20c7",
+      "current_executable_sha256": "35a5df818280b78785d2e8788b965a66681022fdf9b219a165c9c8446b6f20c7",
       "build_fingerprint": "63cf3649220bea66deb3ebfae2f6243c6f3588f069e90a5ef58a064f965ad3ca",
       "current_build_fingerprint": "63cf3649220bea66deb3ebfae2f6243c6f3588f069e90a5ef58a064f965ad3ca",
       "payload_pass": "gfx_replay_case.verify() (single authoritative pass)"
@@ -271,7 +271,7 @@
   },
   "producer_identity": {
     "receipt_schema": "gfx-replay-producer-receipt/v1",
-    "receipt": ".local/m7/p2/producer-case-v2/replay/producer-receipt.json",
+    "receipt": ".local/m7/p2/producer-case-v3/replay/producer-receipt.json",
     "verification": "verified",
     "legacy_case_rejection": {
       "ok": false,

@@ -153,7 +153,7 @@ receipt**. It remains historical evidence, but baseline reuse is rejected with
 renderer output.
 
 One bounded offline replay of that same capture (no EU4 launch) produced a
-producer-bound case, `.local/m7/p2/producer-case-v2` (`m7-p2-producer-bound-v2`),
+producer-bound case, `.local/m7/p2/producer-case-v3` (`m7-p2-producer-bound-v3`),
 which verifies with `producer_identity=verified`. All reported statistics below
 are from that producer-bound case; the first divergence and pixel result are
 unchanged.
