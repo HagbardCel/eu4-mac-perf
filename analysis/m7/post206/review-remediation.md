@@ -66,7 +66,7 @@ review still required. No PR is merged.
   the first divergent checkpoint, last matching checkpoint, copy-source/
   predecessor events, the recommended next event, and first/last observations,
   deterministically, with `selected_because` reasons.
-- The authentic compact artifact is 6,274 bytes when regenerated at the final #208 head, has no absolute paths and
+- The authentic compact artifact is 6,181 bytes when regenerated at the final #208 head, has no absolute paths and
   retains the actionable event-142 recommendation.
 
 ### D4. Compact copy-source provenance

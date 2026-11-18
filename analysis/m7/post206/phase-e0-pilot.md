@@ -164,7 +164,7 @@ The exact final trace is refreshed in
   not differences. The authoritative summary is in
   [`evidence.json`](evidence.json); the earlier frame-2/3 `match` fields in
   those local files predate the lifecycle-coverage gate and are superseded.
-- `agent-diagnosis.json` — compact ~6.3 KB projection for frame 1.
+- `agent-diagnosis.json` — compact ~6.2 KB projection for frame 1.
 - Portable case under `.local/m7/phase-c-authentic-v2/phase-c-authentic-case-v2`
   (gitignored); manifest hashes in `evidence.json`.
 
