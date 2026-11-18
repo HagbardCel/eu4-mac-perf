@@ -339,11 +339,21 @@ def control_frame(frame_dir: Path | str) -> dict:
         if event.get("kind") != "resolve":
             continue
         index = _event_index(event, position)
-        source = event.get("source_image")
-        if not isinstance(source, dict) or not source.get("file"):
-            continue
         destination = str(event.get("destination") or "")
         if not destination:
+            continue
+        source = event.get("source_image")
+        if not isinstance(source, dict) or not source.get("file"):
+            # A captured transfer without a source image was never controlled.
+            # Skipping it would let the frame report a qualified match while
+            # some copies were never checked.
+            checks.append(_unavailable_check(index, event, destination, {
+                "reason_code": "missing_copy_source",
+                "reason": (
+                    "the copy has no captured source image; its capture/"
+                    "decoder path cannot be controlled"),
+                "event": None,
+            }))
             continue
         if lifecycle is None:
             checks.append(_unavailable_check(index, event, destination, {

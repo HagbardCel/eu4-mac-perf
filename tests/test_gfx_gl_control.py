@@ -378,6 +378,32 @@ class GlTransferControlTests(unittest.TestCase):
         self.assertEqual(report["checks"][0]["reason_code"],
                          "missing_source")
 
+    def test_copy_without_a_captured_source_image_is_unavailable(self):
+        events = [{
+            "index": 1, "kind": "resolve",
+            "operation": "glCopyTexSubImage2D", "source": "0",
+            "destination": "442",
+            "source_image": {"file": "copy-source.bgra",
+                             "sha256": _sha(self.source),
+                             "width": 2, "height": 2},
+        }, {
+            # A non-default source copy never gets a source capture; skipping
+            # it would let the frame report match while it was uncontrolled.
+            "index": 2, "kind": "resolve",
+            "operation": "glBlitFramebuffer", "source": "7",
+            "destination": "443",
+        }, _draw(3, textures=[_texture(
+            442, "destination.bin", _sha(self.destination))])]
+        frame = make_frame(self.root, source=self.source,
+                           destination=self.destination, events=events)
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "incomplete")
+        self.assertFalse(report["qualified"])
+        by_event = {check["event"]: check for check in report["checks"]}
+        self.assertEqual(by_event[1]["status"], "match")
+        self.assertEqual(by_event[2]["status"], "unavailable")
+        self.assertEqual(by_event[2]["reason_code"], "missing_copy_source")
+
     def test_missing_destination_sample_is_unavailable(self):
         frame = make_frame(self.root, source=self.source,
                            destination=self.destination,
