@@ -86,6 +86,24 @@ review still required. No PR is merged.
 - The compact projection now sanitizes every string in the bounded payload, not just artifact paths, so checkpoint-problem reasons and native execution errors cannot leak host paths. Regression: `test_compact_diagnosis_sanitizes_absolute_paths`.
 - Copy-source evidence and the "capture the copy source" limitation are emitted only when the producer is an actual transfer (`resolve`/`copy`). A draw-produced texture divergence no longer claims a missing copy source. Regression: `test_draw_producer_does_not_emit_copy_source_evidence`.
 
+### D6. Ordinary causal lower bounds
+
+- A matching checkpoint bounds an ordinary intermediate or final-only
+  divergence only when it observes the same relevant resource (`fb:0` for a
+  framebuffer divergence, the matching `tex:N` otherwise). An unrelated
+  matching texture no longer tightens the interval.
+- With no valid prior same-resource match, `unresolved_interval.start_event`
+  is `null`, `lower_bound` is `"unbounded"`, and `search_start_event=0` is
+  explicit operational search scope, not observed matching evidence.
+- Compact checkpoint selection applies the same rule: `last_matching` comes
+  from same-resource matches only, and `copy_source` is labelled only when
+  copy-source evidence exists.
+- Regressions: `CausalLowerBoundTests` covers unrelated texture before a
+  draw-produced framebuffer divergence, a genuine same-resource match,
+  final-only unrelated matches, final-only same-resource match, and compact
+  label hygiene. The authentic copy-source path and its event-142
+  recommendation are unchanged.
+
 ## PR #209 — evidence, integration and readiness
 
 ### E1. Efficiency audit
@@ -147,8 +165,8 @@ is 142.
 | PR | Focused result |
 | --- | --- |
 | #207 | 419 passed, 1 skipped, 0 failures |
-| #208 | 323 passed, 1 skipped, 0 failures |
-| #209 | 487 passed, 1 skipped, 0 failures |
+| #208 | 328 passed, 1 skipped, 0 failures |
+| #209 | 492 passed, 1 skipped, 0 failures |
 | plugin | 9 passed, 0 failed |
 
 The portable CI workflow must be re-run on each new head. The authentic case is
