@@ -43,23 +43,31 @@ file is not a merge authorization.
    policy and platform. Verify that an unverified current case is never
    reusable merely because a fingerprint matches, and that this remains a
    single receipt, not a cache.
-6. **Replay-host dependencies.** `automation.replay_host_dependencies` is the
+6. **Replay producer identity.** `gfx_independent_replay.write_producer_receipt`
+   and `gfx_replay_case.verify_producer_receipt`. Verify the receipt binds the
+   executable SHA-256, build fingerprint/stamp, capture identity and
+   `replay.json`/Metal-readback digests; portable cases package it; baseline
+   reuse rejects a changed producer and legacy cases without a receipt.
+7. **Build publication.** `m6_frame.build_replay_host`. Verify private temp
+   compilation, atomic publication, exclusive lock, binary digest in the stamp,
+   tamper detection, timeout/failure cleanup and overlapping builds.
+8. **Replay-host dependencies.** `automation.replay_host_dependencies` is the
    single closure for `m6_frame.build_replay_host` and
    `case_baseline`. Verify that a semantics-header edit rebuilds, an unchanged
    set does not, flags/compiler changes invalidate, and a failed build removes
    the binary and stamp.
-7. **Payload pass.** `case_baseline` calls `gfx_replay_case.verify()` once as
+9. **Payload pass.** `case_baseline` calls `gfx_replay_case.verify()` once as
    the authoritative payload hashing pass; it must not re-walk declared files.
    A reusable baseline requires `stage=complete`, `status=ok`, `readback=true`.
-8. **Causal narrowing.** The compact diagnosis retains the existing
+10. **Causal narrowing.** The compact diagnosis retains the existing
    `unresolved_interval` and `next_checkpoint`; a lower bound is `null` and
    `search_start_event` is not evidence. Verify that no cross-capture or
    unrelated-resource observation can bound the interval.
-9. **Efficiency evidence.** `analysis/m7/p2-efficiency.md` and
+11. **Efficiency evidence.** `analysis/m7/p2-efficiency.md` and
    `analysis/m7/p2-evidence.json`. Verify that the P1 autonomous session, the
    two-call P2 interface demonstration and the absent P2 autonomous session are
    distinguished, and that end-to-end efficiency is marked not measured.
-10. **Governance.** `analysis/m7/p2-governance.md`. The repository settings are
+12. **Governance.** `analysis/m7/p2-governance.md`. The repository settings are
    enforced; the independent approval is still outstanding.
 
 ## Verification to reproduce

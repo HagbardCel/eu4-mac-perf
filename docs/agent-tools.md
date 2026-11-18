@@ -264,8 +264,10 @@ python3 -m automation.agent_tools eu4_replay verify --case <case>
 
 `automation.case_baseline` records one identity for an existing case only after
 `gfx_replay_case.verify()` passes (its single payload pass re-hashes every
-declared file from disk) and the replay result/readback is complete with
-`stage=complete`. The identity covers the frame
+declared file from disk), the replay result/readback is complete with
+`stage=complete`, and `replay/producer-receipt.json` binds the executable/build
+that produced the readback. Legacy cases without a producer receipt remain
+historical evidence but are rejected for reuse. The identity covers the frame
 seal, diagnostic report, graph, replay result/readback, translated shader
 inputs, the renderer include closure (including `eu4_gfx_replay_semantics.h`),
 the replay binary/source, comparison policy and platform. It is not a result

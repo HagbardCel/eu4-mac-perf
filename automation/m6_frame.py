@@ -17,6 +17,7 @@ provenance belong in tracked evidence.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -24,7 +25,9 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
+import uuid
 from pathlib import Path
 
 from automation import replay_host_dependencies  # noqa: E402
@@ -996,58 +999,133 @@ REPLAY_HOST_CLI_SOURCE = BENCH / "eu4_gfx_frame_replay_cli.mm"
 REPLAY_HOST = BENCH / ".build" / "gfx_frame_replay"
 
 
-def build_replay_host(force: bool = False) -> Path:
-    """Build the replay host when its authoritative dependency set changes.
+_REPLAY_BUILD_THREAD_LOCK = threading.Lock()
 
-    The build decision and the baseline identity share
-    ``automation.replay_host_dependencies``: the two compilation units, their
-    local include closure, the compiler identity, build flags and relevant
-    environment variables.  A successful build writes a stamp; a failed build
-    leaves neither a stamp nor a stale binary that could be mistaken for a
-    current result.
+
+def _replay_host_stamp() -> Path:
+    return Path(str(REPLAY_HOST) + ".deps.json")
+
+
+def _replay_host_lock() -> Path:
+    return Path(str(REPLAY_HOST) + ".build.lock")
+
+
+def _replay_stamp_matches(stamp: Path, identity: dict, host: Path) -> bool:
+    if not host.is_file() or not stamp.is_file():
+        return False
+    try:
+        recorded = json.loads(stamp.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    if recorded.get("fingerprint") != identity["fingerprint"]:
+        return False
+    return recorded.get("binary_sha256") == _sha256(host)
+
+
+def replay_host_producer(host: Path | str | None = None) -> dict:
+    """Identity of the binary that produced a replay result."""
+    host = Path(host) if host is not None else REPLAY_HOST
+    stamp = Path(str(host) + ".deps.json")
+    identity = replay_host_dependencies.build_identity(
+        root=ROOT, sources=(REPLAY_HOST_SOURCE, REPLAY_HOST_CLI_SOURCE))
+    if not _replay_stamp_matches(stamp, identity, host):
+        raise FrameError(
+            "replay host build receipt does not match the current binary and "
+            "dependency closure")
+    return {
+        "schema": "gfx-replay-producer/v1",
+        "executable": str(host),
+        "executable_sha256": _sha256(host),
+        "build_fingerprint": identity["fingerprint"],
+        "build_stamp_sha256": _sha256(stamp),
+        "build_dependencies": identity["dependencies"],
+    }
+
+
+def build_replay_host(force: bool = False) -> Path:
+    """Build and publish the replay host under a narrow exclusive lock.
+
+    Publication is atomic: clang writes a private temporary file, the file is
+    validated, and only then is it renamed over the published path.  A stamp
+    containing the source/build fingerprint and compiled-binary digest is
+    written after publication; a failed, timed-out or interrupted build leaves
+    neither a stamp nor a binary that could be mistaken for current evidence.
     """
+    with _REPLAY_BUILD_THREAD_LOCK:
+        lock_path = _replay_host_lock()
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                return _build_replay_host_locked(force=force)
+            finally:
+                try:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+
+
+def _build_replay_host_locked(force: bool = False) -> Path:
     sources = (REPLAY_HOST_SOURCE, REPLAY_HOST_CLI_SOURCE)
     identity = replay_host_dependencies.build_identity(
         root=ROOT, sources=sources)
-    stamp = Path(str(REPLAY_HOST) + ".deps.json")
-    if not force and REPLAY_HOST.is_file() and stamp.is_file():
-        try:
-            recorded = json.loads(stamp.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            recorded = {}
-        if recorded.get("fingerprint") == identity["fingerprint"]:
-            return REPLAY_HOST
+    stamp = _replay_host_stamp()
+    if not force and _replay_stamp_matches(stamp, identity, REPLAY_HOST):
+        return REPLAY_HOST
     REPLAY_HOST.parent.mkdir(parents=True, exist_ok=True)
-    # Invalidate the previous receipt before compiling so a failed build can
-    # never leave a stamp that matches the new sources.
+    # Invalidate the previous receipt before compiling so no previous success
+    # can be mistaken for the result of this build.
     try:
         stamp.unlink()
     except FileNotFoundError:
         pass
-    built = subprocess.run(
-        replay_host_dependencies.build_command(REPLAY_HOST, sources),
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=180,
-    )
-    if built.returncode:
+    temporary = REPLAY_HOST.with_name(
+        f".{REPLAY_HOST.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
+    try:
+        built = subprocess.run(
+            replay_host_dependencies.build_command(temporary, sources),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=180,
+        )
+        if built.returncode:
+            raise FrameError(
+                built.stderr.strip() or "frame replay host build failed")
+        if not temporary.is_file() or temporary.stat().st_size == 0:
+            raise FrameError("frame replay host build produced no binary")
+        binary_sha = _sha256(temporary)
+        if not binary_sha:
+            raise FrameError("frame replay host build produced an unreadable binary")
+        os.replace(temporary, REPLAY_HOST)
+        payload = {
+            "schema": "gfx-replay-host-build/v1",
+            "fingerprint": identity["fingerprint"],
+            "binary_sha256": binary_sha,
+            "dependencies": identity["dependencies"],
+            "compiler": identity["compiler"],
+            "flags": identity["flags"],
+            "environment": identity["environment"],
+        }
+        stamp_tmp = stamp.with_name(stamp.name + f".tmp-{os.getpid()}-{uuid.uuid4().hex}")
+        stamp_tmp.write_text(json.dumps(payload, indent=2) + "\n",
+                             encoding="utf-8")
+        os.replace(stamp_tmp, stamp)
+        return REPLAY_HOST
+    except subprocess.TimeoutExpired as exc:
+        _discard_build_outputs(temporary, stamp, REPLAY_HOST)
+        raise FrameError("frame replay host build timed out") from exc
+    except BaseException:
+        _discard_build_outputs(temporary, stamp, REPLAY_HOST)
+        raise
+
+
+def _discard_build_outputs(temporary: Path, stamp: Path, host: Path) -> None:
+    for path in (temporary, stamp, host):
         try:
-            REPLAY_HOST.unlink()
+            path.unlink()
         except FileNotFoundError:
             pass
-        raise FrameError(built.stderr.strip() or "frame replay host build failed")
-    temporary = stamp.with_name(stamp.name + ".tmp")
-    temporary.write_text(json.dumps({
-        "schema": "gfx-replay-host-build/v1",
-        "fingerprint": identity["fingerprint"],
-        "dependencies": identity["dependencies"],
-        "compiler": identity["compiler"],
-        "flags": identity["flags"],
-        "environment": identity["environment"],
-    }, indent=2) + "\n", encoding="utf-8")
-    os.replace(temporary, stamp)
-    return REPLAY_HOST
 
 
 def _translator_identity() -> dict:

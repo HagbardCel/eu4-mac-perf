@@ -18,6 +18,15 @@ from automation import agent_tools, case_baseline, gfx_replay_case
 
 
 class P2WorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self._producer = mock.patch.object(
+            case_baseline, "_current_producer",
+            return_value={"executable": "/tmp/gfx_frame_replay",
+                          "executable_sha256": "c" * 64,
+                          "build_fingerprint": "b" * 64})
+        self._producer.start()
+        self.addCleanup(self._producer.stop)
+
     def _case(self, root: Path) -> Path:
         case = root / "case"
         (case / "capture").mkdir(parents=True)
@@ -44,6 +53,27 @@ class P2WorkflowTests(unittest.TestCase):
             "status": "ok", "stage": "complete", "readback": True,
             "events": 3, "encoded": 3}).encode())
         add("replay/metal-frame.bgra", b"\0" * 16)
+        replay_bytes = (case / "replay" / "replay.json").read_bytes()
+        metal_bytes = (case / "replay" / "metal-frame.bgra").read_bytes()
+        add("replay/producer-receipt.json", json.dumps({
+            "schema": "gfx-replay-producer-receipt/v1",
+            "producer": {
+                "executable": "/tmp/gfx_frame_replay",
+                "executable_sha256": "c" * 64,
+                "build_fingerprint": "b" * 64,
+                "build_stamp_sha256": "s" * 64,
+            },
+            "capture": {
+                "session_id": "session-a", "capture_frame_id": 1,
+                "event_stream_sha256": "a" * 64,
+            },
+            "result": {
+                "replay_json_sha256": hashlib.sha256(replay_bytes).hexdigest(),
+                "metal_frame_sha256": hashlib.sha256(metal_bytes).hexdigest(),
+                "status": "ok", "stage": "complete", "readback": True,
+                "events": 3, "encoded": 3,
+            },
+        }).encode())
         add("diagnostic-report.json", json.dumps({
             "schema": "gfx-frame-diagnosis/v1",
             "classification": "difference_with_partial_state_coverage",

@@ -3,10 +3,10 @@
   "base_commit": "246d7e08",
   "branch": "m7/p2-infra-hardening",
   "case": {
-    "case_id": "m7-live-frame-000001",
-    "case_json_sha256": "7c00ba56d66e11ed50099620085bc828456e2fa0d2839c0cfd05c885d9192283",
+    "case_id": "m7-p2-producer-bound",
+    "case_json_sha256": "9a362e067ed8bc7afe3723428ca3cd3cc0b509603b658b25c3bd2cd87e526d84",
     "seal_sha256": "794c482d49767b0b0aa356f5fc28919b9c2a57a33c88f7112152efd8c07d0ca6",
-    "baseline_fingerprint": "bfb78e0cf8a500815016438b0e5a81d0cbe9224f677ef90fe064ff682e84e442",
+    "baseline_fingerprint": "c01973833c3a4ccf6e9f42e0aaa9f1cb14c06e18266c98544a75a9d7265cd126",
     "capture": {
       "session_id": "a3111e0d-9b76-4b23-910d-38bd48c9aa93",
       "capture_frame_id": 1,
@@ -19,12 +19,16 @@
       "verified": true,
       "independently_reproducible": true,
       "payload_validation": "ok",
-      "payload_count": 1247,
+      "payload_count": 1246,
       "replay_stage": "complete",
+      "producer_identity": "verified",
       "renderer_semantics_included": true,
       "renderer_source_count": 5,
       "shader_inputs": 104,
-      "renderer_binary_sha256": "4f9804933989d4c064da13333b3c8d5361c6c81da20ca17bc692079f5d9fcd96",
+      "producer_executable_sha256": "ae7b609c24247f4e3d2b799c2435a055d2a343d733dbfca20145b2659434ef97",
+      "current_executable_sha256": "ae7b609c24247f4e3d2b799c2435a055d2a343d733dbfca20145b2659434ef97",
+      "build_fingerprint": "63cf3649220bea66deb3ebfae2f6243c6f3588f069e90a5ef58a064f965ad3ca",
+      "current_build_fingerprint": "63cf3649220bea66deb3ebfae2f6243c6f3588f069e90a5ef58a064f965ad3ca",
       "payload_pass": "gfx_replay_case.verify() (single authoritative pass)"
     }
   },
@@ -50,15 +54,16 @@
     "commands": [
       {
         "tool": "eu4_case_inspect",
-        "bytes": 8018,
-        "verification_included": true
+        "bytes": 7994,
+        "verification_included": true,
+        "producer_identity": "verified"
       },
       {
         "tool": "case_baseline check",
-        "bytes": 2355
+        "bytes": 1892
       }
     ],
-    "returned_chars": 10373,
+    "returned_chars": 9886,
     "native_calls": 2,
     "shell_calls": 0,
     "eu4_launches": 0,
@@ -69,9 +74,9 @@
     "reused_baseline": true,
     "interface_reduction_vs_p1_output": {
       "p1_returned_chars": 400666,
-      "p2_returned_chars": 10373,
-      "reduction_chars": 390293,
-      "reduction_fraction": 0.9741,
+      "p2_returned_chars": 9886,
+      "reduction_chars": 390780,
+      "reduction_fraction": 0.9753,
       "note": "compares interface output volume only; it does not replace the P1 agent's 80 tool calls or reasoning"
     }
   },
@@ -149,15 +154,15 @@
     "No EU4 launch and no replay were performed for this evidence; the existing verified baseline is reused."
   ],
   "offline_gate": {
-    "run_id": "20261118T173758Z-7d9c00f2",
+    "run_id": "20261118T192941Z-422feced",
     "profile": "offline",
     "min_tests": 3000,
-    "tests_ran": 3744,
-    "tests_executed": 3702,
+    "tests_ran": 3750,
+    "tests_executed": 3708,
     "skipped": 42,
     "failures": 0,
     "errors": 0,
-    "duration_seconds": 1301.731,
+    "duration_seconds": 1478.985,
     "exit_code": 0,
     "eu4_launches": 0,
     "notes": [
@@ -205,7 +210,8 @@
     "payload_single_pass": "case_baseline uses gfx_replay_case.verify() as the single payload/content hashing pass; no duplicate payload walker",
     "replay_stage": "a reusable baseline requires replay stage=complete, status=ok and readback=true",
     "mandatory_test_execution": "test_profiles verify executes each required test id and rejects dynamic skips",
-    "compact_essential_cap": "if essential identity/causal fields cannot fit, the envelope fails explicitly with output_cap_exceeded rather than silently dropping them"
+    "compact_essential_cap": "if essential identity/causal fields cannot fit, the envelope fails explicitly with output_cap_exceeded rather than silently dropping them",
+    "native_harness_stability": "live-capture harness startup waits and deadline were widened; this is test-only timing robustness under external machine load, not a behavioral change"
   },
   "replay_host_dependency_correction": {
     "shared_module": "automation/replay_host_dependencies.py",
@@ -221,11 +227,15 @@
     "unchanged_rebuild_test": "same test: second call performs no subprocess",
     "failed_build_test": "tests.test_replay_host_dependencies.IncrementalBuildTests.test_failed_build_removes_binary_and_stamp",
     "flags_identity_test": "tests.test_replay_host_dependencies.DependencyClosureTests.test_build_identity_accounts_for_flags_and_compiler",
-    "final_gate": "3744 ran / 3702 executed / 42 skipped / 0 failed"
+    "final_gate": "3744 ran / 3702 executed / 42 skipped / 0 failed",
+    "build_publication": "private temp output, atomic rename, exclusive file lock, binary sha256 in stamp; failed/timeout builds remove binary and stamp",
+    "binary_tamper_test": "tests.test_replay_host_dependencies.IncrementalBuildTests.test_stamp_records_binary_digest_and_tampering_rebuilds",
+    "timeout_test": "tests.test_replay_host_dependencies.IncrementalBuildTests.test_timeout_removes_outputs_and_receipt",
+    "overlap_test": "tests.test_replay_host_dependencies.IncrementalBuildTests.test_overlapping_builds_serialize_under_one_lock"
   },
   "focused_verification": {
-    "command": "python3.14 -m unittest tests.test_case_baseline tests.test_test_profiles tests.test_m7_evidence_identity tests.test_failure_taxonomy tests.test_p2_workflow tests.test_gfx_session tests.test_replay_host_dependencies",
-    "tests": 97,
+    "command": "python3.14 -m unittest tests.test_case_baseline tests.test_test_profiles tests.test_m7_evidence_identity tests.test_failure_taxonomy tests.test_p2_workflow tests.test_gfx_session tests.test_replay_host_dependencies tests.test_gfx_live_capture tests.test_gfx_replay_case",
+    "tests": 135,
     "skipped": 2,
     "failures": 0,
     "result": "OK"
@@ -242,5 +252,37 @@
     "notes": [
       "CI is necessary but not independent approval; the PR remains blocked on review."
     ]
+  },
+  "historical_case": {
+    "case_id": "m7-live-frame-000001",
+    "case_json_sha256": "7c00ba56d66e11ed50099620085bc828456e2fa0d2839c0cfd05c885d9192283",
+    "seal_sha256": "794c482d49767b0b0aa356f5fc28919b9c2a57a33c88f7112152efd8c07d0ca6",
+    "capture": {
+      "session_id": "a3111e0d-9b76-4b23-910d-38bd48c9aa93",
+      "capture_frame_id": 1,
+      "present_index": 617,
+      "scene_index": 617,
+      "event_stream_sha256": "62cfdae407ecf38cbed0c98a956c5115203de12a85d46fd9b92e3d1c2dd9778c",
+      "reference_sha256": "52322629c9d2e63e0f66c97a2ec2d79cf439377417f572fed688b3f6d7f5d1fb"
+    },
+    "producer_identity": "legacy_missing",
+    "baseline_reuse": "rejected: producer_identity_missing",
+    "note": "retained as historical evidence; no replay producer receipt, so it cannot silently qualify as a result from the current renderer"
+  },
+  "producer_identity": {
+    "receipt_schema": "gfx-replay-producer-receipt/v1",
+    "receipt": ".local/m7/p2/producer-case/replay/producer-receipt.json",
+    "verification": "verified",
+    "legacy_case_rejection": {
+      "ok": false,
+      "kind": "producer_identity_missing",
+      "detail": "the case has no replay producer receipt; it remains historical evidence but cannot be reused as a result from the current renderer"
+    },
+    "simulated_renderer_change": {
+      "ok": false,
+      "kind": "producer_mismatch",
+      "detail": "the replay result was produced by a different replay host (executable_sha256 differs); recompute it with the current renderer"
+    },
+    "note": "a newly recorded baseline cannot relabel the old replay as the new renderer; the receipt binds executable, build fingerprint, capture and output digests"
   }
 }

@@ -131,23 +131,43 @@ Final correction round:
 10. **Session identity normalizes the CPython launcher.** The Homebrew
    `bin/python3.14` launcher and the framework app binary are the same process
    image for ownership purposes; start-time comparison still guards PID reuse.
+11. **Replay results carry a producer receipt.** Every replay writes
+   `producer-receipt.json` binding the replay executable SHA-256, build
+   fingerprint/stamp, capture identity and `replay.json`/Metal-readback digests.
+   Portable cases package and verify the receipt. Baseline reuse requires the
+   receipt's executable and build fingerprint to match the current candidate
+   renderer. Legacy cases without a receipt remain historical evidence but are
+   rejected for reuse (`producer_identity_missing`).
+12. **Build publication is atomic and locked.** The replay host is compiled to a
+   private temporary path, validated, atomically renamed, and stamped with its
+   binary SHA-256. An exclusive process lock plus an in-process lock serialize
+   overlapping builds; failed/timeout/interrupted builds remove the binary and
+   stamp. Reuse checks both the source/build fingerprint and binary digest.
 
 ## Authentic demonstration (C1)
 
-Case: `.local/m7/p0-checkpoint-142/shadow/case` (`m7-live-frame-000001`,
-manifest `7c00ba56…`, seal `794c482d…`, session `a3111e0d…`, 1,247 files,
-graph complete, independently reproducible). No new EU4 launch and no replay
-were performed.
+The historical P0 case (`.local/m7/p0-checkpoint-142/shadow/case`,
+`m7-live-frame-000001`, seal `794c482d…`, session `a3111e0d…`) has **no producer
+receipt**. It remains historical evidence, but baseline reuse is rejected with
+`producer_identity_missing` rather than relabelling its replay as current-
+renderer output.
+
+One bounded offline replay of that same capture (no EU4 launch) produced a
+producer-bound case, `.local/m7/p2/producer-case` (`m7-p2-producer-bound`),
+which verifies with `producer_identity=verified`. All reported statistics below
+are from that producer-bound case; the first divergence and pixel result are
+unchanged.
 
 | Check | Result |
 |---|---|
-| Offline verification | `eu4_case_inspect` runs `gfx_replay_case.verify()` internally: ok, graph complete, independently reproducible |
+| Offline verification | `eu4_case_inspect` runs `gfx_replay_case.verify()` internally: ok, graph complete, independently reproducible, producer verified |
 | First divergence unchanged | event 142, `fb:0`, `_GfxDrawIndexed`, program 331; final 1,160,291 / 1,930,176, max 70 |
 | Causal interval unchanged | `start_event: null`, `lower_bound: unbounded`; `search_start_event: 0` is explicitly not matching evidence |
 | Next checkpoint | event 71, `fb:0`, `requires_capture: true` |
 | Baseline reuse | identity check `reusable=true`; no recomputation |
-| Compact inspect | 8,018 emitted bytes (was 479,719 bytes full) |
-| Reuse check | 2,355 bytes |
+| Compact inspect | 7,994 emitted bytes (was 479,719 bytes full) |
+| Reuse check | 1,892 bytes |
+| Producer receipt | executable SHA-256, build fingerprint, capture identity and replay/readback digests verified |
 | Separate verify (not routine) | 8,061 bytes when independent verification is explicitly needed |
 | Synthetic substitution | tampered payload fails `verify()` and invalidates the baseline (regression test) |
 | Failure/unavailable outcomes | explicit taxonomy tests; timeout cannot be `ok` |
@@ -169,7 +189,7 @@ Three different things are deliberately separated:
 | Metric | P1 autonomous session | P2 interface demonstration |
 |---|---|---|
 | Tool calls | 80 (2 native, 66 shell) | 2 native, 0 shell |
-| Returned output | 400,666 chars | 10,373 bytes |
+| Returned output | 400,666 chars | 9,886 bytes |
 | Oversized / truncated results | 6 / 2 | 0 / 0 |
 | EU4 launches | 0 | 0 |
 | Replays | 1 | 0 (baseline reused) |
@@ -183,14 +203,13 @@ still required before claiming end-to-end efficiency.
 
 ## Offline gate
 
-The final offline gate (`20261118T173758Z-7d9c00f2`) ran with
+The final offline gate (`20261118T192941Z-422feced`) ran with
 `EU4_TEST_PROFILE=offline` / `EU4_OFFLINE_ONLY=1` and `--min-tests 3000`:
-**3,744 tests ran, 3,702 executed, 42 skipped, 0 failures, 0 errors,
-1,301.7 s**. The floor counts executed tests, so classified skips cannot satisfy
+**3,750 tests ran, 3,708 executed, 42 skipped, 0 failures, 0 errors,
+1,479.0 s**. The floor counts executed tests, so classified skips cannot satisfy
 it. The skips are the live-only module, platform-only hosts and 11 optional-QBDI
 TR3 tests; QBDI remains non-mandatory. No EU4 process was started. The same gate
-is configured as the required `portable` check; GitHub Actions `portable`
-passed on head `04cc1939` in 4m29s (run 44365110079). CI is not independent
+is configured as the required `portable` check. CI is not independent
 approval.
 
 ## Evidence

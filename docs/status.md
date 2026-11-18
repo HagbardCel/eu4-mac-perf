@@ -49,28 +49,40 @@ qualification or error investigation. The cap is 8,192 exact emitted UTF-8
 bytes; truncation is explicit and identity, verification, first divergence,
 unresolved interval, recommended checkpoint and artifact references are
 preserved. If those essential fields themselves cannot fit, the tool fails with
-a bounded `output_cap_exceeded` error instead of dropping them. Full reports stay on disk. `automation.case_baseline` records an
-identity only after `gfx_replay_case.verify()` passes, every declared payload
-is re-hashed from disk, and the replay readback is complete. The identity
-includes the renderer include closure (`eu4_gfx_replay_semantics.h` and peers),
-replay binary/source, shaders, policy and platform; a matching fingerprint
-alone is not sufficient for reuse.
+a bounded `output_cap_exceeded` error instead of dropping them. Full reports
+stay on disk. `automation.case_baseline` records an identity only after
+`gfx_replay_case.verify()` passes (its single payload pass re-hashes every
+declared file), and the replay result has `stage=complete`, `status=ok`,
+`readback=true` and a verified `producer-receipt.json`. The producer receipt
+binds the replay executable SHA-256, build fingerprint/stamp, capture identity
+and replay/readback digests; portable cases preserve it. The identity also
+includes the shared renderer include closure (`eu4_gfx_replay_semantics.h` and
+peers), shaders, policy and platform; a matching fingerprint alone is not
+sufficient for reuse. Legacy cases without a producer receipt remain historical
+evidence and are rejected for reuse (`producer_identity_missing`). The replay
+host is compiled to a private temporary path, validated, atomically published
+and stamped with its binary digest under an exclusive lock; failed/timed-out
+builds leave no valid receipt.
 
-**Verified capabilities.** The authentic P0 case (`m7-live-frame-000001`,
-manifest `7c00ba56…`, seal `794c482d…`, session `a3111e0d…`) still verifies
-offline (1,247 files, graph complete, independently reproducible). Compact
-inspection returns the unchanged first divergence at event 142 `fb:0`
-(program 331, producer 141), final 1,160,291 / 1,930,176 differing pixels
-(max 70), an unbounded lower bound, and the recommended event-71 checkpoint.
-The routine interface path is two native reads (`eu4_case_inspect` 8,018 bytes
-plus baseline reuse 2,355 bytes) with zero shell calls, zero new replays and a
-verified baseline; this is an interface-level demonstration, not a replacement
-measurement for the P1 agent's 80 calls. End-to-end P2 efficiency is **not yet
-measured** because no provider credential is available. The final offline gate
-(`20261118T173758Z-7d9c00f2`) ran 3,744 tests, 3,702 executed, 42 classified
-skips, 0 failures. The replay-host build and baseline identity share
-`automation.replay_host_dependencies`; a semantic-header edit rebuilds and a
-failed build removes its binary and stamp. See [P2 efficiency](../analysis/m7/p2-efficiency.md)
+**Verified capabilities.** The historical P0 case (`m7-live-frame-000001`,
+seal `794c482d…`, session `a3111e0d…`) verifies offline but has no producer
+receipt; baseline reuse is correctly rejected as `producer_identity_missing`.
+One bounded offline replay of that capture produced `m7-p2-producer-bound`,
+which verifies with `producer_identity=verified`. Compact inspection returns the
+unchanged first divergence at event 142 `fb:0` (program 331, producer 141),
+final 1,160,291 / 1,930,176 differing pixels (max 70), an unbounded lower bound,
+and the recommended event-71 checkpoint. The routine interface path is two
+native reads (`eu4_case_inspect` 7,994 bytes plus baseline reuse 1,892 bytes)
+with zero shell calls, zero new replays and a verified producer; this is an
+interface-level demonstration, not a replacement measurement for the P1 agent's
+80 calls. End-to-end P2 efficiency is **not yet measured** because no provider
+credential is available. The final offline gate (`20261118T192941Z-422feced`)
+ran 3,750 tests, 3,708 executed, 42 classified skips, 0 failures. The replay-host
+build and baseline identity share `automation.replay_host_dependencies`; the
+build is atomically published under a lock with a binary digest, a
+semantic-header edit rebuilds, a failed build removes its binary and stamp, and
+replay results carry a producer receipt binding executable, build, capture and
+readback digests. See [P2 efficiency](../analysis/m7/p2-efficiency.md)
 and [evidence](../analysis/m7/p2-evidence.json).
 
 **Offline vs live.** The offline gate covers portable Python/native-harness

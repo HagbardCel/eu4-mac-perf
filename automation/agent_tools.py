@@ -1942,7 +1942,8 @@ COMPACT_INPUT_LIMIT = 6
 
 def _diagnosis_report(case_path: Path, manifest: dict) -> dict:
     """Load the existing diagnostic report; never synthesize one."""
-    relative = manifest.get("diagnostic_report")
+    relative = (manifest.get("diagnostic_report")
+                or manifest.get("report"))
     names = [relative] if isinstance(relative, str) and relative else [
         "diagnostic-report.json", "report.json"]
     for name in names:
@@ -1950,6 +1951,10 @@ def _diagnosis_report(case_path: Path, manifest: dict) -> dict:
         if path.is_file():
             value = _optional_json(path)
             if value:
+                inner = value.get("diagnosis")
+                if isinstance(inner, dict) and ("pixels" in inner
+                                                or "classification" in inner):
+                    return inner
                 return value
     return {}
 
@@ -2033,6 +2038,8 @@ def _compact_case_view(case_path: Path, schema: str, manifest: dict,
             "verifier_exception": bool(verification.get("verifier_exception")),
             "independently_reproducible": verification.get(
                 "independently_reproducible"),
+            "producer_identity": (verification.get("producer_identity") or {}).get(
+                "status"),
         },
         "capture": _case_capture_identity(case_path),
         "diagnosis": diagnosis,

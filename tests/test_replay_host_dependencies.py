@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -141,6 +144,62 @@ class IncrementalBuildTests(unittest.TestCase):
         self.assertIn("benchmark/eu4_gfx_replay_semantics.h",
                       stamp["dependencies"])
 
+    def test_stamp_records_binary_digest_and_tampering_rebuilds(self):
+        m6_frame.build_replay_host()
+        stamp = json.loads(self.stamp.read_text())
+        digest = hashlib.sha256(self.output.read_bytes()).hexdigest()
+        self.assertEqual(stamp["binary_sha256"], digest)
+        self.assertEqual(len(self.calls), 1)
+        self.output.write_bytes(b"tampered")
+        m6_frame.build_replay_host()
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(
+            json.loads(self.stamp.read_text())["binary_sha256"],
+            hashlib.sha256(self.output.read_bytes()).hexdigest())
+
+    def test_timeout_removes_outputs_and_receipt(self):
+        m6_frame.build_replay_host()
+        with mock.patch.object(
+                m6_frame.subprocess, "run",
+                side_effect=subprocess.TimeoutExpired(cmd="clang",
+                                                      timeout=180)):
+            with self.assertRaises(m6_frame.FrameError):
+                m6_frame.build_replay_host(force=True)
+        self.assertFalse(self.output.exists())
+        self.assertFalse(self.stamp.exists())
+        self.assertFalse(list(self.output.parent.glob(".*.tmp-*")))
+
+    def test_overlapping_builds_serialize_under_one_lock(self):
+        self.calls.clear()
+
+        def slow_run(command, **kwargs):
+            self.calls.append(list(command))
+            output = Path(command[command.index("-o") + 1])
+            time.sleep(0.1)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(b"binary")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        results = []
+        errors = []
+
+        def build():
+            try:
+                results.append(m6_frame.build_replay_host())
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        with mock.patch.object(m6_frame.subprocess, "run",
+                               side_effect=slow_run):
+            threads = [threading.Thread(target=build) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+        self.assertFalse(errors)
+        self.assertEqual(len(results), 2)
+        self.assertEqual(len(self.calls), 1)
+
     def test_build_flag_change_triggers_rebuild(self):
         m6_frame.build_replay_host()
         self.assertEqual(len(self.calls), 1)
@@ -162,7 +221,7 @@ class IncrementalBuildTests(unittest.TestCase):
         with mock.patch.object(m6_frame.subprocess, "run",
                                side_effect=failing_run):
             with self.assertRaises(m6_frame.FrameError):
-                m6_frame.build_replay_host()
+                m6_frame.build_replay_host(force=True)
         self.assertFalse(self.output.exists())
         self.assertFalse(self.stamp.exists())
 

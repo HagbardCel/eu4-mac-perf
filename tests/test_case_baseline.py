@@ -38,6 +38,27 @@ def _write_case(root: Path) -> Path:
         "status": "ok", "stage": "complete", "readback": True,
         "events": 3, "encoded": 3}).encode())
     add("replay/metal-frame.bgra", b"\0" * 16)
+    replay_bytes = (case / "replay" / "replay.json").read_bytes()
+    metal_bytes = (case / "replay" / "metal-frame.bgra").read_bytes()
+    add("replay/producer-receipt.json", json.dumps({
+        "schema": "gfx-replay-producer-receipt/v1",
+        "producer": {
+            "executable": "/tmp/gfx_frame_replay",
+            "executable_sha256": "c" * 64,
+            "build_fingerprint": "b" * 64,
+            "build_stamp_sha256": "s" * 64,
+        },
+        "capture": {
+            "session_id": "session-a", "capture_frame_id": 1,
+            "event_stream_sha256": "a" * 64,
+        },
+        "result": {
+            "replay_json_sha256": hashlib.sha256(replay_bytes).hexdigest(),
+            "metal_frame_sha256": hashlib.sha256(metal_bytes).hexdigest(),
+            "status": "ok", "stage": "complete", "readback": True,
+            "events": 3, "encoded": 3,
+        },
+    }).encode())
     add("diagnostic-report.json", json.dumps({
         "schema": "gfx-frame-diagnosis/v1",
         "classification": "difference_with_partial_state_coverage",
@@ -63,8 +84,15 @@ class BaselineIdentityTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.case = _write_case(self.root)
         self.baseline = self.root / "baseline.json"
+        self._producer = mock.patch.object(
+            case_baseline, "_current_producer",
+            return_value={"executable": "/tmp/gfx_frame_replay",
+                          "executable_sha256": "c" * 64,
+                          "build_fingerprint": "b" * 64})
+        self._producer.start()
 
     def tearDown(self):
+        self._producer.stop()
         self.temporary.cleanup()
 
     def test_record_and_check_reuses_the_same_identity(self):
@@ -122,7 +150,8 @@ class BaselineIdentityTests(unittest.TestCase):
         (self.case / "case.json").write_text(json.dumps(manifest))
         with self.assertRaises(case_baseline.BaselineError) as caught:
             case_baseline.load_check(self.case, self.baseline)
-        self.assertEqual(caught.exception.kind, "replay_incomplete")
+        self.assertIn(caught.exception.kind,
+                      ("replay_incomplete", "case_verification"))
 
     def test_changed_replay_status_invalidates_the_baseline(self):
         case_baseline.record(self.case, self.baseline)
@@ -139,7 +168,8 @@ class BaselineIdentityTests(unittest.TestCase):
         (self.case / "case.json").write_text(json.dumps(manifest))
         with self.assertRaises(case_baseline.BaselineError) as caught:
             case_baseline.load_check(self.case, self.baseline)
-        self.assertEqual(caught.exception.kind, "replay_incomplete")
+        self.assertIn(caught.exception.kind,
+                      ("replay_incomplete", "case_verification"))
 
     def test_modifying_renderer_semantics_invalidates_reuse(self):
         case_baseline.record(self.case, self.baseline)
@@ -175,6 +205,38 @@ class BaselineIdentityTests(unittest.TestCase):
                     ("benchmark/root.mm",))
         self.assertIn("benchmark/eu4_gfx_replay_semantics.h", first)
         self.assertNotEqual(first, second)
+
+    def test_producer_receipt_must_bind_the_replay_output(self):
+        receipt_path = self.case / "replay" / "producer-receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["result"]["replay_json_sha256"] = "0" * 64
+        receipt_path.write_text(json.dumps(receipt))
+        with self.assertRaises(case_baseline.BaselineError) as caught:
+            case_baseline.record(self.case, self.baseline)
+        self.assertIn(caught.exception.kind,
+                      ("case_verification", "producer_identity_invalid"))
+
+    def test_producer_binary_change_rejects_reuse(self):
+        case_baseline.record(self.case, self.baseline)
+        with mock.patch.object(
+                case_baseline, "_current_producer",
+                return_value={"executable": "/tmp/gfx_frame_replay",
+                              "executable_sha256": "d" * 64,
+                              "build_fingerprint": "b" * 64}):
+            with self.assertRaises(case_baseline.BaselineError) as caught:
+                case_baseline.load_check(self.case, self.baseline)
+        self.assertEqual(caught.exception.kind, "producer_mismatch")
+
+    def test_legacy_case_without_producer_receipt_cannot_be_reused(self):
+        receipt = self.case / "replay" / "producer-receipt.json"
+        receipt.unlink()
+        manifest = json.loads((self.case / "case.json").read_text())
+        manifest["files"] = [item for item in manifest["files"]
+                             if item["path"] != "replay/producer-receipt.json"]
+        (self.case / "case.json").write_text(json.dumps(manifest))
+        with self.assertRaises(case_baseline.BaselineError) as caught:
+            case_baseline.record(self.case, self.baseline)
+        self.assertEqual(caught.exception.kind, "producer_identity_missing")
 
     def test_changing_required_build_dependency_invalidates_reuse(self):
         case_baseline.record(self.case, self.baseline)

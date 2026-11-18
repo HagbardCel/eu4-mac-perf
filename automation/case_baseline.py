@@ -125,6 +125,31 @@ _PAYLOAD_PROBLEM_PREFIXES = (
 )
 
 
+def _current_producer() -> dict:
+    """Identity of the candidate replay host that should produce this result."""
+    from automation import m6_frame
+
+    identity = replay_host_dependencies.build_identity()
+    host = m6_frame.REPLAY_HOST
+    binary_sha = _sha256(host)
+    if not binary_sha:
+        raise BaselineError(
+            "producer_binary_missing",
+            f"the candidate replay host is not built: {host}")
+    stamp = _json(Path(str(host) + ".deps.json"))
+    if (stamp.get("fingerprint") != identity["fingerprint"]
+            or stamp.get("binary_sha256") != binary_sha):
+        raise BaselineError(
+            "producer_build_stale",
+            "the replay-host build receipt does not match the current source "
+            "closure and binary")
+    return {
+        "executable": str(host),
+        "executable_sha256": binary_sha,
+        "build_fingerprint": identity["fingerprint"],
+    }
+
+
 def _verify_case(case_dir: Path) -> dict:
     """Run the single authoritative verifier, including payload hashing.
 
@@ -150,6 +175,18 @@ def _verify_case(case_dir: Path) -> dict:
         raise BaselineError(
             "case_not_reproducible",
             "the case verifies but is not independently reproducible")
+    producer = value.get("producer_identity") if isinstance(
+        value.get("producer_identity"), dict) else {}
+    if producer.get("status") == "legacy_missing":
+        raise BaselineError(
+            "producer_identity_missing",
+            "the case has no replay producer receipt; it remains historical "
+            "evidence but cannot be reused as a result from the current renderer")
+    if producer.get("status") != "verified":
+        raise BaselineError(
+            "producer_identity_invalid",
+            "; ".join(str(item) for item in
+                      (producer.get("problems") or ["unknown producer problem"])[:8]))
     return value
 
 
@@ -189,6 +226,15 @@ def identity(case_dir: Path | str, *,
         raise BaselineError("missing_manifest", str(case_dir / "case.json"))
     payload_count = _payload_count(manifest)
     verification = _verify_case(case_dir)
+    receipt = (verification.get("producer_identity") or {}).get("receipt") or {}
+    recorded_producer = receipt.get("producer") or {}
+    current_producer = _current_producer()
+    for field in ("executable_sha256", "build_fingerprint"):
+        if recorded_producer.get(field) != current_producer.get(field):
+            raise BaselineError(
+                "producer_mismatch",
+                f"the replay result was produced by a different replay host "
+                f"({field} differs); recompute it with the current renderer")
     seal = _json(case_dir / "capture" / "frame-seal.json")
     if not all(seal.get(key) for key in (
             "session_id", "capture_frame_id", "event_stream_sha256")):
@@ -222,6 +268,13 @@ def identity(case_dir: Path | str, *,
             "replay_status": replay_result.get("status"),
             "replay_stage": replay_result.get("stage"),
             "replay_readback": replay_result.get("readback"),
+            "producer_identity": "verified",
+        },
+        "producer": {
+            "executable_sha256": recorded_producer.get("executable_sha256"),
+            "build_fingerprint": recorded_producer.get("build_fingerprint"),
+            "current_executable_sha256": current_producer.get("executable_sha256"),
+            "current_build_fingerprint": current_producer.get("build_fingerprint"),
         },
         "case_manifest_sha256": _sha256(case_dir / "case.json"),
         "seal_sha256": _sha256(case_dir / "capture" / "frame-seal.json"),
@@ -335,6 +388,10 @@ def evaluate(current: dict, baseline: dict) -> dict:
     elif current_validity.get("replay_status") != "ok":
         problems.append({"code": "current_replay_incomplete",
                          "detail": "the current replay baseline is incomplete"})
+    elif current_validity.get("producer_identity") != "verified":
+        problems.append({"code": "current_producer_missing",
+                         "detail": "the current result is not bound to a "
+                                   "matching replay producer"})
     stored_validity = stored.get("validity")
     if not isinstance(stored_validity, dict) or stored_validity.get(
             "verified") is not True:

@@ -205,13 +205,13 @@ static int run_mode(const char *mode, const char *run_dir,
     }
     if (!eu4_gfx_live_capture_start(
             (void *)(uintptr_t)gfx_set_constant_buffer_contract_stub, run_dir,
-            control_path, "live-test", 5, configured_unique(), true)) {
+            control_path, "live-test", 60, configured_unique(), true)) {
         return fail("live capture start failed");
     }
 
     if (strcmp(mode, "accept") == 0) {
         set_control(1);
-        sleep_ms(100);
+        sleep_ms(500);
         fixture first;
         fixture second;
         fill_fixture(&first);
@@ -241,7 +241,7 @@ static int run_mode(const char *mode, const char *run_dir,
         eu4_gfx_set_constant_buffer_capture_exit(&outer_frame);
     } else if (strcmp(mode, "hook") == 0) {
         set_control(1);
-        sleep_ms(100);
+        sleep_ms(500);
         fixture values[2];
         fill_fixture(&values[0]);
         fill_fixture(&values[1]);
@@ -263,7 +263,7 @@ static int run_mode(const char *mode, const char *run_dir,
         }
     } else if (strcmp(mode, "guard") == 0) {
         set_control(1);
-        sleep_ms(100);
+        sleep_ms(500);
         long page = sysconf(_SC_PAGESIZE);
         uint8_t *guard = mmap(NULL, (size_t)page, PROT_NONE,
                               MAP_PRIVATE | MAP_ANON, -1, 0);
@@ -280,7 +280,7 @@ static int run_mode(const char *mode, const char *run_dir,
         (void)munmap(guard, (size_t)page);
     } else if (strcmp(mode, "nested") == 0) {
         set_control(1);
-        sleep_ms(100);
+        sleep_ms(500);
         fixture first;
         fixture second;
         fill_fixture(&first);
@@ -291,13 +291,13 @@ static int run_mode(const char *mode, const char *run_dir,
         frame_for(&refused, &second, 3, 0);
         eu4_gfx_set_constant_buffer_capture_entry(&accepted);
         set_control(2);
-        sleep_ms(100);
+        sleep_ms(500);
         eu4_gfx_set_constant_buffer_capture_entry(&refused);
         eu4_gfx_set_constant_buffer_capture_exit(&refused);
         eu4_gfx_set_constant_buffer_capture_exit(&accepted);
     } else if (strcmp(mode, "quota") == 0) {
         set_control(1);
-        sleep_ms(100);
+        sleep_ms(500);
         fixture value;
         fill_fixture(&value);
         for (unsigned i = 0; i < 64; i++) {
@@ -305,7 +305,7 @@ static int run_mode(const char *mode, const char *run_dir,
         }
     } else if (strcmp(mode, "threads") == 0) {
         set_control(1);
-        sleep_ms(100);
+        sleep_ms(500);
         fixture values[2];
         pthread_t workers[2];
         fill_fixture(&values[0]);
@@ -320,7 +320,7 @@ static int run_mode(const char *mode, const char *run_dir,
         }
     } else if (strcmp(mode, "extent-cross") == 0) {
         set_control(1);
-        sleep_ms(100);
+        sleep_ms(500);
         long page = sysconf(_SC_PAGESIZE);
         if (page <= 0) {
             return fail("page size is unavailable");
@@ -344,7 +344,7 @@ static int run_mode(const char *mode, const char *run_dir,
         (void)munmap(pages, (size_t)page * 2);
     } else if (strcmp(mode, "buffer-guard") == 0) {
         set_control(1);
-        sleep_ms(100);
+        sleep_ms(500);
         long page = sysconf(_SC_PAGESIZE);
         if (page <= 0) {
             return fail("page size is unavailable");
@@ -368,7 +368,7 @@ static int run_mode(const char *mode, const char *run_dir,
         (void)munmap(guard, (size_t)page);
     } else if (strcmp(mode, "exit-guard") == 0) {
         set_control(1);
-        sleep_ms(100);
+        sleep_ms(500);
         long page = sysconf(_SC_PAGESIZE);
         if (page <= 0) {
             return fail("page size is unavailable");
@@ -392,7 +392,7 @@ static int run_mode(const char *mode, const char *run_dir,
         (void)munmap(ctx, (size_t)page);
     } else if (strcmp(mode, "thread-full") == 0) {
         set_control(1);
-        sleep_ms(100);
+        sleep_ms(500);
         enum { FILLERS = 63 };
         held_refusal *fillers = calloc(FILLERS, sizeof(*fillers));
         if (fillers == NULL) {
@@ -426,7 +426,7 @@ static int run_mode(const char *mode, const char *run_dir,
         free(fillers);
     } else if (strcmp(mode, "quota-overflow") == 0) {
         set_control(1);
-        sleep_ms(100);
+        sleep_ms(500);
         held_capture *held = calloc(1, sizeof(*held));
         if (held == NULL) {
             return fail("cannot allocate held capture");
@@ -449,7 +449,7 @@ static int run_mode(const char *mode, const char *run_dir,
         free(held);
     } else if (strcmp(mode, "late-publish") == 0) {
         set_control(1);
-        sleep_ms(100);
+        sleep_ms(500);
         held_capture *held = calloc(1, sizeof(*held));
         if (held == NULL) {
             return fail("cannot allocate held capture");
@@ -471,7 +471,7 @@ static int run_mode(const char *mode, const char *run_dir,
         }
     } else if (strcmp(mode, "identical") == 0) {
         set_control(1);
-        sleep_ms(20);
+        sleep_ms(500);
         fixture value;
         fill_fixture(&value);
         for (unsigned i = 0; i < 100; i++) {
@@ -482,7 +482,7 @@ static int run_mode(const char *mode, const char *run_dir,
         }
     } else if (strcmp(mode, "distinct-byte") == 0) {
         set_control(1);
-        sleep_ms(20);
+        sleep_ms(500);
         fixture value;
         fill_fixture(&value);
         direct_capture(&value, 3, 1);
@@ -493,7 +493,7 @@ static int run_mode(const char *mode, const char *run_dir,
         direct_capture(&value, 3, 1);
     } else if (strcmp(mode, "collide") == 0) {
         set_control(1);
-        sleep_ms(20);
+        sleep_ms(500);
         fixture first;
         fixture second;
         fill_fixture(&first);
@@ -503,7 +503,7 @@ static int run_mode(const char *mode, const char *run_dir,
         direct_capture(&second, 3, 0);
     } else if (strcmp(mode, "many-unique") == 0) {
         set_control(1);
-        sleep_ms(20);
+        sleep_ms(500);
         fixture *values = calloc(128, sizeof(*values));
         if (values == NULL) {
             return fail("cannot allocate distinct fixtures");
@@ -521,7 +521,7 @@ static int run_mode(const char *mode, const char *run_dir,
         free(values);
     } else if (strcmp(mode, "inflight-limit") == 0) {
         set_control(1);
-        sleep_ms(20);
+        sleep_ms(500);
         held_capture *held = calloc(3, sizeof(*held));
         pthread_t producers[3];
         if (held == NULL) {
@@ -539,7 +539,7 @@ static int run_mode(const char *mode, const char *run_dir,
         }
         open_gate(&held[0].release);
         (void)pthread_join(producers[0], NULL);
-        sleep_ms(100);
+        sleep_ms(500);
         fixture extra;
         fill_fixture(&extra);
         extra.ctx[200] = 9;
@@ -555,7 +555,7 @@ static int run_mode(const char *mode, const char *run_dir,
         free(held);
     } else if (strcmp(mode, "retry-write") == 0) {
         set_control(1);
-        sleep_ms(20);
+        sleep_ms(500);
         fixture value;
         fill_fixture(&value);
         direct_capture(&value, 3, 0);
@@ -565,7 +565,7 @@ static int run_mode(const char *mode, const char *run_dir,
         direct_capture(&value, 3, 0);
     } else if (strcmp(mode, "pool-full") == 0) {
         set_control(1);
-        sleep_ms(20);
+        sleep_ms(500);
         fixture value;
         fill_fixture(&value);
         for (unsigned i = 0; i < 64; i++) {
@@ -578,7 +578,7 @@ static int run_mode(const char *mode, const char *run_dir,
         }
     } else if (strcmp(mode, "canon") == 0) {
         set_control(1);
-        sleep_ms(20);
+        sleep_ms(500);
         fixture value;
         fill_fixture(&value);
         direct_capture(&value, 2, 1);

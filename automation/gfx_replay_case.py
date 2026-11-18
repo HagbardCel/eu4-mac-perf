@@ -154,7 +154,7 @@ def _case_bytes(root: Path) -> int:
 REPLAY_ARTIFACTS = (
     "replay.json", "replay-provenance.jsonl", "metal-frame.bgra",
     "checkpoint-request.json", "shadow-report.json", "replay-report.json",
-    "comparison.json", "state-coverage.json",
+    "comparison.json", "state-coverage.json", "producer-receipt.json",
 )
 # The pre-write estimate only decides the fast path.  The staged package is
 # measured before publication, so manifest/README formatting overhead is
@@ -439,8 +439,7 @@ def package(
     _relocate_capture_seal(case_dir)
     shutil.copytree(shader_source, case_dir / "shaders")
     (case_dir / "replay").mkdir(parents=True)
-    for name in ("replay.json", "replay-provenance.jsonl", "metal-frame.bgra",
-                 "checkpoint-request.json"):
+    for name in REPLAY_ARTIFACTS:
         source = replay_dir / name
         if source.is_file():
             shutil.copy2(source, case_dir / "replay" / name)
@@ -2473,6 +2472,96 @@ def _sequence_inventory(sequence: dict, case_dir: Path) -> list[str]:
     return required
 
 
+PRODUCER_RECEIPT_SCHEMA = "gfx-replay-producer-receipt/v1"
+
+
+def _case_capture_seal(case_dir: Path, manifest: dict) -> dict:
+    seal = _json(case_dir / "capture" / "frame-seal.json")
+    if seal:
+        return seal
+    if manifest.get("schema") != SEQUENCE_SCHEMA:
+        return {}
+    try:
+        sequence = _json(case_dir / "sequence.json")
+        frames = sequence.get("frames") or []
+        target = int(sequence.get("target_index") or len(frames))
+        entry = frames[target - 1] if 0 < target <= len(frames) else None
+        if isinstance(entry, dict) and isinstance(entry.get("dir"), str):
+            return _json(case_dir / entry["dir"] / "frame-seal.json")
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return {}
+    return {}
+
+
+def verify_producer_receipt(case_dir: Path, manifest: dict) -> dict:
+    """Validate a producer receipt and bind it to the packaged replay output.
+
+    A legacy case without a receipt remains historical evidence; it is not
+    claimed to be a result from any current renderer.  A present receipt is
+    verified structurally, against the packaged replay/readback digests and
+    against the captured frame identity.
+    """
+    path = case_dir / "replay" / "producer-receipt.json"
+    if not path.is_file():
+        return {"status": "legacy_missing", "problems": [], "receipt": None}
+    problems: list[str] = []
+    try:
+        receipt = _json(path)
+    except (OSError, UnicodeError, json.JSONDecodeError, CaseError) as exc:
+        return {"status": "invalid", "problems": [f"producer receipt unreadable: {exc}"],
+                "receipt": None}
+    if receipt.get("schema") != PRODUCER_RECEIPT_SCHEMA:
+        problems.append("producer receipt has an unexpected schema")
+    producer = receipt.get("producer") if isinstance(
+        receipt.get("producer"), dict) else {}
+    executable_sha = producer.get("executable_sha256")
+    fingerprint = producer.get("build_fingerprint")
+    if not _valid_sha256(executable_sha):
+        problems.append("producer receipt has no executable sha256")
+    if not _valid_sha256(fingerprint):
+        problems.append("producer receipt has no build fingerprint")
+    result = receipt.get("result") if isinstance(
+        receipt.get("result"), dict) else {}
+    replay_path = case_dir / "replay" / "replay.json"
+    metal_path = case_dir / "replay" / "metal-frame.bgra"
+    try:
+        replay = _json(replay_path)
+    except (OSError, UnicodeError, json.JSONDecodeError, CaseError):
+        replay = {}
+        problems.append("producer receipt has no readable replay.json")
+    if result.get("replay_json_sha256") != _sha(replay_path):
+        problems.append("producer receipt does not bind replay.json")
+    metal_sha = _sha(metal_path) if metal_path.is_file() else None
+    if result.get("metal_frame_sha256") != metal_sha:
+        problems.append("producer receipt does not bind the Metal readback")
+    for key in ("status", "stage", "readback"):
+        if result.get(key) != replay.get(key):
+            problems.append(f"producer receipt result.{key} disagrees with replay.json")
+    seal = _case_capture_seal(case_dir, manifest)
+    capture = receipt.get("capture") if isinstance(
+        receipt.get("capture"), dict) else {}
+    for key in ("session_id", "capture_frame_id", "event_stream_sha256"):
+        if not seal.get(key):
+            problems.append(f"case seal has no {key} for producer binding")
+        elif str(capture.get(key)) != str(seal.get(key)):
+            problems.append(f"producer receipt capture.{key} does not match the case seal")
+    status = "verified" if not problems else "invalid"
+    return {
+        "status": status,
+        "problems": problems,
+        "receipt": {
+            "schema": receipt.get("schema"),
+            "producer": {
+                "executable_sha256": executable_sha,
+                "build_fingerprint": fingerprint,
+                "build_stamp_sha256": producer.get("build_stamp_sha256"),
+            },
+            "capture": capture,
+            "result": result,
+        },
+    }
+
+
 def verify(case_dir: Path | str) -> dict:
     case_dir = Path(case_dir).expanduser().resolve()
     manifest_path = case_dir / "case.json"
@@ -2568,6 +2657,9 @@ def verify(case_dir: Path | str) -> dict:
         problems.append("graph.json is unreadable")
     if reproduction.get("independently_reproducible") is False:
         problems.append("reproduction is explicitly incomplete")
+    producer_identity = verify_producer_receipt(case_dir, manifest)
+    if producer_identity["status"] == "invalid":
+        problems.extend(producer_identity["problems"])
     verified = not problems
     if is_sequence:
         # A sequence is independently reproducible only when its own manifest
@@ -2595,6 +2687,7 @@ def verify(case_dir: Path | str) -> dict:
         "sequence": sequence_summary,
         "reproduction_status": reproduction.get("status"),
         "reproduction_reason": reproduction.get("reason"),
+        "producer_identity": producer_identity,
         "independently_reproducible": independently_reproducible,
     }
 
