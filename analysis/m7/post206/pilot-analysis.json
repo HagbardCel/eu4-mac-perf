@@ -108,8 +108,10 @@
   },
   "root_cause": "not_established",
   "unresolved_interval": {
-    "start_event": 13,
-    "end_event": 284
+    "start_event": null,
+    "end_event": 284,
+    "lower_bound": "unbounded",
+    "note": "event 13 matches tex:432, not the divergent fb:0 source, so it does not bound the source bisection"
   },
   "next_checkpoint": {
     "event": 142,
