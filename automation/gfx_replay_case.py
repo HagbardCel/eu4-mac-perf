@@ -871,6 +871,25 @@ def package_diagnosis(frame_dir: Path | str, metal_dir: Path | str,
     ``reproduction.status=incomplete`` is published instead of an oversized
     case.
     """
+    if report.get("faults") or report.get("fault_evidence") \
+            or report.get("fault_injection"):
+        return _incomplete_case(
+            Path(case_dir).expanduser().resolve(),
+            metal_dir=Path(metal_dir).expanduser().resolve(),
+            report=report,
+            missing=[{
+                "kind": "fault_experiment",
+                "reason": (
+                    "the selected fault is scoped to the source replay and "
+                    "cannot be replayed by the portable case"),
+            }],
+            schema=SCHEMA,
+            case_id=case_id,
+            title=title,
+            inputs=[],
+            reason="fault_experiment_not_portable",
+            max_bytes=max_bytes,
+        )
     frame_dir = Path(frame_dir).expanduser().resolve()
     metal_dir = Path(metal_dir).expanduser().resolve()
     destination = Path(case_dir).expanduser().resolve()

@@ -131,10 +131,6 @@ class CaseVerificationTests(unittest.TestCase):
         self.assertEqual(caught.exception.kind, "verification")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class FaultExperimentPackagingTests(unittest.TestCase):
     def test_fault_experiment_is_not_published_as_reproducible(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -162,3 +158,36 @@ class FaultExperimentPackagingTests(unittest.TestCase):
                              "fault_experiment_not_portable")
             self.assertFalse(reproduction["independently_reproducible"])
             self.assertEqual(manifest["replay_command"], [])
+
+    def test_single_frame_fault_experiment_is_not_published(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            metal = root / "metal"
+            metal.mkdir()
+            frames = root / "frame"
+            frames.mkdir()
+            report = {
+                "schema": "gfx-frame-diagnosis/v1",
+                "classification": "fault_experiment",
+                "faults": {"frame": 2, "event": 1,
+                           "sampler_shift": 1},
+                "fault_evidence": {"fired": True},
+                "qualification": {"qualified": False},
+                "first_divergence": {"kind": "semantic", "event": 1},
+                "graph": {"schema": "gfx-frame-graph/v1",
+                          "status": "complete", "reasons": [],
+                          "events": [], "resources": {}},
+            }
+            manifest = gfx_replay_case.package_diagnosis(
+                frames, metal, root / "case", report,
+                case_id="fault-single", max_bytes=1024 * 1024)
+            reproduction = manifest["reproduction"]
+            self.assertEqual(reproduction["status"], "incomplete")
+            self.assertEqual(reproduction["reason"],
+                             "fault_experiment_not_portable")
+            self.assertFalse(reproduction["independently_reproducible"])
+            self.assertEqual(manifest["replay_command"], [])
+
+
+if __name__ == "__main__":
+    unittest.main()
