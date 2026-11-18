@@ -1047,9 +1047,29 @@ def first_divergence(graph: dict, checkpoints: list[dict],
                         f"{source_previous} is the candidate and event "
                         f"{event} only observes the result"),
                 }
+            elif source_previous is None and int(event) == 0:
+                limitations.append(
+                    "the divergence is already present at event 0; no "
+                    "earlier captured operation exists to bisect")
+                recommended_action = {
+                    "action": "investigate_initial_state",
+                    "event": 0,
+                    "observation_event": 0,
+                    "target": first.get("target"),
+                    "resource": first.get("resource"),
+                    "reason": (
+                        "the source is already divergent at the first "
+                        "captured event; inspect the initial state rather "
+                        "than recapturing event 0"),
+                }
             else:
-                midpoint = max(int(start_event) + 1,
-                               (int(start_event) + int(event)) // 2)
+                if source_previous is None:
+                    # Event 0 is operational search scope, not observed
+                    # matching evidence.  It is a valid new checkpoint.
+                    midpoint = int(event) // 2
+                else:
+                    midpoint = max(int(start_event) + 1,
+                                   (int(start_event) + int(event)) // 2)
                 next_checkpoint = {
                     "event": midpoint,
                     "target": source_target,
@@ -2600,6 +2620,15 @@ def _compact_checkpoints(report: dict) -> tuple[list[dict], dict]:
                             or item["event"] <= int(div_event))]
             for item in related[-4:]:
                 add(item, "resource_predecessor")
+    else:
+        start_event = (divergence.get("unresolved_interval") or {}).get(
+            "start_event")
+        if isinstance(start_event, int):
+            add(next((item for item in items
+                      if item.get("event") == start_event
+                      and _checkpoint_matches_resource(item, "fb:0", "0")),
+                     None),
+                "last_matching")
     if recommended.get("event") is not None:
         add(next((item for item in items
                   if item.get("event") == recommended["event"]), None),
