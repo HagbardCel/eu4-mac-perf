@@ -1,5 +1,6 @@
 """Fail-closed regressions for the M7-P1 pilot conclusion contract."""
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -15,6 +16,10 @@ FRAME = {
     "event_stream_sha256": "62cfdae4" + "0" * 56,
 }
 OTHER_FRAME = dict(FRAME, session_id="another-launch")
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 def conclusion():
@@ -466,8 +471,7 @@ class PilotSummaryTests(unittest.TestCase):
             "schema": "gfx-strategy-b-case/v1",
             "case_id": "m7-live-frame-000001",
             "diagnostic_report": "diagnostic-report.json",
-            "files": [{"path": "payload.bin", "bytes": 1,
-                       "sha256": "a" * 64}],
+            "files": [],
         }
         self.seal = {
             "session_id": FRAME["session_id"],
@@ -532,12 +536,20 @@ class PilotSummaryTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def write_case(self):
+        payload = b"\x00"
+        (self.case / "payload.bin").write_bytes(payload)
+        seal_bytes = json.dumps(self.seal).encode("utf-8")
+        (self.case / "capture" / "frame-seal.json").write_bytes(seal_bytes)
+        report_bytes = json.dumps(self.report).encode("utf-8")
+        (self.case / "diagnostic-report.json").write_bytes(report_bytes)
+        self.manifest["files"] = [
+            {"path": "payload.bin", "bytes": len(payload),
+             "sha256": _sha(payload)},
+            {"path": "diagnostic-report.json", "bytes": len(report_bytes),
+             "sha256": _sha(report_bytes)},
+        ]
         (self.case / "case.json").write_text(
             json.dumps(self.manifest), encoding="utf-8")
-        (self.case / "capture" / "frame-seal.json").write_text(
-            json.dumps(self.seal), encoding="utf-8")
-        (self.case / "diagnostic-report.json").write_text(
-            json.dumps(self.report), encoding="utf-8")
 
     def refresh_binding(self):
         self.write_case()
@@ -591,7 +603,7 @@ class PilotSummaryTests(unittest.TestCase):
         self.write_run()
         result = self.summarize()
         self.assertTrue(result["ok"], result)
-        self.assertEqual(result["case_verification"]["files"], 1)
+        self.assertEqual(result["case_verification"]["files"], 2)
         self.assertTrue(result["case_verification"]["independently_reproducible"])
         self.assertEqual(result["authoritative_evidence"]["checkpoints"], 2)
         self.assertEqual(result["efficiency"]["eu4_launches"], 0)
@@ -681,6 +693,50 @@ class PilotSummaryTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("case_receipt_mismatch", problem_codes(result))
 
+    def test_modified_payload_after_receipt_is_rejected(self):
+        self.write_run()
+        first = self.summarize()
+        self.assertTrue(first["ok"], first)
+        # Edit an inventoried payload without touching the manifest or receipt.
+        report = json.loads((self.case / "diagnostic-report.json").read_text())
+        report["frame"]["events"] = 1
+        (self.case / "diagnostic-report.json").write_text(
+            json.dumps(report), encoding="utf-8")
+        result = self.summarize()
+        self.assertFalse(result["ok"])
+        self.assertIn("case_payload_mismatch", problem_codes(result))
+
+    def test_deleted_payload_after_receipt_is_rejected(self):
+        self.write_run()
+        self.assertTrue(self.summarize()["ok"])
+        (self.case / "payload.bin").unlink()
+        result = self.summarize()
+        self.assertFalse(result["ok"])
+        self.assertIn("case_payload_missing", problem_codes(result))
+
+    def test_fabricated_interval_via_edited_report_is_rejected(self):
+        # Reproduce the reported attack: edit the inventoried diagnostic
+        # report to add a matching event-71 checkpoint while leaving the
+        # manifest, seal and receipt unchanged.
+        self.write_run()
+        self.assertTrue(self.summarize()["ok"])
+        self.report["checkpoints"] = [
+            {"event": 71, "resource": "fb:0", "target": "0",
+             "status": "match", "authoritative": True},
+            {"event": 142, "resource": "fb:0", "target": "0",
+             "status": "divergent", "authoritative": True},
+        ]
+        (self.case / "diagnostic-report.json").write_text(
+            json.dumps(self.report), encoding="utf-8")
+        digests = dsh_pilot.case_receipt(self.case)
+        value = correction_conclusion(interval())
+        value["case"]["case_manifest_sha256"] = digests["case_manifest_sha256"]
+        value["case"]["seal_sha256"] = digests["seal_sha256"]
+        self.conclusion_path.write_text(json.dumps(value), encoding="utf-8")
+        result = self.summarize()
+        self.assertFalse(result["ok"])
+        self.assertIn("case_payload_mismatch", problem_codes(result))
+
     def test_case_receipt_mismatch_is_a_failure(self):
         self.manifest["case_id"] = "another-case"
         self.refresh_binding()
@@ -714,7 +770,7 @@ class PilotSummaryTests(unittest.TestCase):
         self.report["checkpoints"] = [
             {"event": 142, "resource": "fb:0", "target": "0",
              "status": "divergent", "authoritative": True}]
-        self.write_case()
+        self.refresh_binding()
         digests = dsh_pilot.case_receipt(self.case)
         value = correction_conclusion(interval())
         value["case"]["case_manifest_sha256"] = digests["case_manifest_sha256"]
@@ -729,7 +785,7 @@ class PilotSummaryTests(unittest.TestCase):
 
     def test_unverified_diagnostic_report_cannot_supply_intervals(self):
         self.report["identity"]["status"] = "unverified_session"
-        self.write_case()
+        self.refresh_binding()
         self.write_run()
         result = self.summarize()
         self.assertFalse(result["ok"])

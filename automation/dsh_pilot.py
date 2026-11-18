@@ -586,6 +586,56 @@ def _verification_complete(verification: dict) -> bool:
         and verification.get("graph_status") == "complete")
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _payload_integrity(case_dir: Path, manifest: dict) -> list[dict]:
+    """Hash every declared payload before a cached receipt is reused.
+
+    A receipt binds the manifest and seal, but not the bytes on disk.  A
+    deleted or modified inventoried file would otherwise leave the receipt
+    valid, so re-check sizes and hashes here (the diagnostic report is one of
+    the declared payloads).
+    """
+    problems: list[dict] = []
+    files = manifest.get("files")
+    if not isinstance(files, list):
+        return [{"code": "case_inventory_invalid",
+                 "detail": "case.json files is not a list"}]
+    for item in files:
+        if len(problems) >= 20:
+            break
+        if not isinstance(item, dict) or not _text(item.get("path")):
+            problems.append({"code": "case_inventory_invalid",
+                             "detail": "inventory entry has no path"})
+            continue
+        relative = str(item["path"])
+        path, problem = _case_relative_path(case_dir, relative)
+        if problem is not None:
+            problems.append({"code": "case_payload_invalid",
+                             "detail": problem})
+            continue
+        if not path.is_file():
+            problems.append({"code": "case_payload_missing",
+                             "detail": f"declared payload is absent: {relative}"})
+            continue
+        expected_bytes = item.get("bytes")
+        if isinstance(expected_bytes, int) and path.stat().st_size != expected_bytes:
+            problems.append({"code": "case_payload_mismatch",
+                             "detail": f"size differs: {relative}"})
+            continue
+        expected_sha = item.get("sha256")
+        if _text(expected_sha) and _sha256_file(path) != expected_sha:
+            problems.append({"code": "case_payload_mismatch",
+                             "detail": f"sha256 differs: {relative}"})
+    return problems
+
+
 def _verify_case(case_dir: Path) -> tuple[dict, list[dict]]:
     """Run the existing portable-case verifier; never trust a claim."""
     try:
@@ -654,6 +704,15 @@ def _authoritative_evidence(case_dir: Path, digests: dict,
             encoding="utf-8"))
         report_relative = str(manifest.get("diagnostic_report")
                               or "diagnostic-report.json")
+        declared = {str(item.get("path"))
+                    for item in manifest.get("files") or []
+                    if isinstance(item, dict)}
+        if report_relative not in declared:
+            problems.append({"code": "case_diagnostic_undeclared",
+                             "detail": "the diagnostic report used for "
+                                       "interval evidence is not in the "
+                                       "declared payload inventory"})
+            return None, problems
         report_path, problem = _case_relative_path(case_dir, report_relative)
         if problem is not None:
             problems.append({"code": "case_diagnostic_unavailable",
@@ -867,6 +926,12 @@ def summarize_run(run_dir: Path | str, conclusion_path: Path | str,
                                    f"verification flag is not evidence"})
     else:
         if case_receipt_path is not None:
+            try:
+                manifest = json.loads(
+                    (Path(case_dir) / "case.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                manifest = {}
+            problems.extend(_payload_integrity(Path(case_dir), manifest))
             verification, verification_problems = _verification_from_receipt(
                 Path(case_receipt_path), digests)
         else:
@@ -1036,6 +1101,14 @@ def main(argv: list[str] | None = None) -> int:
                                   f"{args.case}"})
                 else:
                     if args.case_receipt is not None:
+                        try:
+                            manifest = json.loads(
+                                (args.case / "case.json").read_text(
+                                    encoding="utf-8"))
+                        except (OSError, ValueError):
+                            manifest = {}
+                        case_problems.extend(
+                            _payload_integrity(args.case, manifest))
                         verification, found = _verification_from_receipt(
                             args.case_receipt, digests)
                     else:
