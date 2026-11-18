@@ -18,6 +18,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -951,6 +952,9 @@ def first_divergence(graph: dict, checkpoints: list[dict],
         next_checkpoint = None
         recommended_action = None
         producer_event = producer.get("event") if producer else None
+        copy_case = bool(
+            event_is_transfer
+            or (producer and str(producer.get("kind")) in ("resolve", "copy")))
         source_resource = "fb:0"
         if producer:
             source = str(producer.get("source") or "")
@@ -991,7 +995,14 @@ def first_divergence(graph: dict, checkpoints: list[dict],
                  or str(item.get("target")) == source_target)
         ]
         source_previous = max(source_matching) if source_matching else None
-        if source_status == "divergent":
+        if not copy_case:
+            # A draw/clear producer is not a transfer.  Its output checkpoint
+            # is not copy-source evidence; do not emit a copy-source block or
+            # a copy-source limitation for it.
+            source_evidence = None
+            source_status = None
+            source_previous = None
+        if copy_case and source_status == "divergent":
             limitations.append(
                 "the copy source was independently observed to differ; "
                 "the copy execution is not established as the cause")
@@ -1031,9 +1042,7 @@ def first_divergence(graph: dict, checkpoints: list[dict],
                                     if source_previous is not None
                                     else "unbounded"),
                 }
-        elif producer and (event_is_transfer
-                           or str(producer.get("kind")) in ("resolve",
-                                                            "copy")):
+        elif copy_case and producer:
             if source_status == "match":
                 limitations.append(
                     "the copy source was independently observed to match; "
@@ -1075,12 +1084,11 @@ def first_divergence(graph: dict, checkpoints: list[dict],
                         "transfer to establish whether the source or the "
                         "copy execution differs"),
                 }
-        copy_case = bool(
-            event_is_transfer
-            or (producer and str(producer.get("kind")) in ("resolve", "copy")))
         interval_start = source_previous if copy_case else previous
-        if source_evidence.get("status") == "unobserved" \
-                and not (event_is_transfer and str(first.get("target")) == "0"):
+        if (copy_case and source_evidence is not None
+                and source_evidence.get("status") == "unobserved"
+                and not (event_is_transfer
+                         and str(first.get("target")) == "0")):
             limitations.append(
                 "no independent copy-source evidence exists; the next "
                 "checkpoint must capture it")
@@ -1162,7 +1170,7 @@ def first_divergence(graph: dict, checkpoints: list[dict],
                     "resource when one exists, otherwise it is unbounded"),
             },
             "next_checkpoint": next_checkpoint,
-            "copy_source_evidence": source_evidence,
+            "copy_source_evidence": (source_evidence if copy_case else None),
             "recommended_action": recommended_action,
             "recommended_checkpoint": _normalise_checkpoint(
                 next_checkpoint, "next_checkpoint"),
@@ -2577,6 +2585,27 @@ def _compact_checkpoints(report: dict) -> tuple[list[dict], dict]:
     }
 
 
+def _sanitize_compact_paths(value):
+    """Recursively replace absolute path tokens with their basenames.
+
+    The compact diagnosis is handed to an agent and must not leak host paths.
+    Checkpoint problems and native execution errors can embed absolute paths,
+    so the whole projection is sanitized, not just the artifact map.
+    """
+    if isinstance(value, dict):
+        return {key: _sanitize_compact_paths(item)
+                for key, item in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_compact_paths(item) for item in value]
+    if isinstance(value, str):
+        return _ABSOLUTE_PATH_RE.sub(
+            lambda match: Path(match.group(0)).name or match.group(0), value)
+    return value
+
+
+_ABSOLUTE_PATH_RE = re.compile(r"(?<![/\w<:>])/(?:[^\s\",',;:]+)")
+
+
 def compact_diagnosis(report: dict) -> dict:
     """A bounded, machine-readable diagnosis for an autonomous coding agent.
 
@@ -2594,7 +2623,7 @@ def compact_diagnosis(report: dict) -> dict:
         (recommendation or {}).get("reason")
         or (action or {}).get("reason")
         or "no further checkpoint is recommended by this diagnosis")
-    return {
+    compact = {
         "schema": "gfx-agent-diagnosis/v1",
         "classification": report.get("classification"),
         "qualified": qualification.get("qualified"),
@@ -2646,6 +2675,7 @@ def compact_diagnosis(report: dict) -> dict:
         },
         "next_action": next_action,
     }
+    return _sanitize_compact_paths(compact)
 
 
 def write_compact_diagnosis(out_dir: Path | str, report: dict) -> Path:

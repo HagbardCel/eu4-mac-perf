@@ -1123,6 +1123,47 @@ class CompactAgentDiagnosisTests(unittest.TestCase):
         self.assertIn("last_matching", selected[149])
         self.assertIn("recommended_next", selected[190])
 
+    def test_compact_diagnosis_sanitizes_absolute_paths(self):
+        report = {
+            "classification": "invalid_provenance",
+            "qualification": {"qualified": False, "axes": {}},
+            "frame": {"capture_frame_id": 1},
+            "execution": {
+                "status": "failed",
+                "error": "open /Users/operator/evidence/replay.json failed",
+            },
+            "first_divergence": {
+                "kind": "intermediate",
+                "event": 4,
+                "target": "10",
+                "resource": "tex:10",
+                "reason": "checkpoint /private/tmp/metal/capture.bgra is invalid",
+                "limitations": ["read /var/folders/x/stage.bin failed"],
+            },
+            "checkpoints": [],
+            "pixels": {"status": "unavailable"},
+            "checkpoint_validation": {
+                "status": "invalid",
+                "problems": [{
+                    "kind": "invalid_result",
+                    "event": 4,
+                    "target": "10",
+                    "reason": (
+                        "checkpoint_size: /private/var/folders/x/metal/"
+                        "intermediate-event4-tex10.bgra is 7 bytes, expected "
+                        "256"),
+                }],
+            },
+            "artifacts": {"diagnostic_report": "/tmp/out/diagnostic-report.json"},
+        }
+        compact = gfx_independent_replay.compact_diagnosis(report)
+        text = json.dumps(compact)
+        for leaked in ("/private/", "/Users/", "/var/", "/tmp/"):
+            self.assertNotIn(leaked, text)
+        self.assertIn("intermediate-event4-tex10.bgra", text)
+        self.assertIn("replay.json", text)
+        self.assertIn("diagnostic-report.json", text)
+
     def test_compact_diagnosis_is_written_next_to_the_report(self):
         report = {
             "classification": "qualified_match",
@@ -1459,6 +1500,25 @@ class FirstDivergenceSourceEvidenceTests(unittest.TestCase):
         self.assertTrue(value["next_checkpoint"]["requires_capture"])
         self.assertEqual(value["recommended_checkpoint"]["source"],
                          "next_checkpoint")
+
+    def test_draw_producer_does_not_emit_copy_source_evidence(self):
+        graph = self.graph()
+        producer = graph["resources"]["tex:442"]["producers"][0]
+        producer["kind"] = "draw"
+        producer["entry"] = "_GfxDraw"
+        producer.pop("source", None)
+        producer.pop("source_framebuffer", None)
+        value = gfx_independent_replay.first_divergence(
+            graph, [self.divergent()],
+            {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        # A draw output is not a transfer source: no copy-source block and no
+        # false "capture the copy source" limitation may be emitted.
+        self.assertIsNone(value["copy_source_evidence"])
+        self.assertFalse(any("copy-source" in str(item)
+                             for item in value["limitations"]))
+        self.assertIsNone(value["next_checkpoint"])
+        self.assertIsNone(value["recommended_checkpoint"])
 
     def test_invalid_source_recommends_repair(self):
         checkpoints = [
