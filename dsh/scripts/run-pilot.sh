@@ -4,7 +4,7 @@
 #   OPENCODE_GO_API_KEY=... ./dsh/scripts/run-pilot.sh \
 #       --task-file <path> [--workspace <dir>] [--out <dir>] \
 #       [--session-id <id>] [--permission-mode workspace-write] \
-#       [--require-tool <name>]... [--allow-no-tools]
+#       [--require-tool <name>]...
 #
 # This is the evidence-producing counterpart to run-campaign.sh: it boots the
 # shipped headless profile plus one overlay (this checkout's tools plugin and
@@ -22,7 +22,6 @@ OUT=
 SESSION=
 MODE=workspace-write
 REQUIRE_TOOLS=
-ALLOW_NO_TOOLS=0
 
 usage() {
   sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
@@ -37,7 +36,6 @@ while [ $# -gt 0 ]; do
     --session-id) SESSION=${2:?--session-id needs an id}; shift 2 ;;
     --permission-mode) MODE=${2:?--permission-mode needs a value}; shift 2 ;;
     --require-tool) REQUIRE_TOOLS="$REQUIRE_TOOLS ${2:?--require-tool needs a name}"; shift 2 ;;
-    --allow-no-tools) ALLOW_NO_TOOLS=1; shift ;;
     -h|--help) usage 0 ;;
     *) echo "run-pilot: unknown option: $1" >&2; usage 2 ;;
   esac
@@ -209,40 +207,49 @@ if [ -n "$SESSION" ]; then
 fi
 
 if [ -n "$EXPORT" ] && [ -f "$EXPORT/session.v4.jsonl.zstd" ]; then
-  "$EU4_DSH_PYTHON" -m automation.dsh_efficiency analyze "$EXPORT" \
-    --out "$OUT/efficiency.json" > "$OUT/efficiency.stdout" 2> "$OUT/efficiency.err" \
-    && echo "run-pilot: export=$EXPORT" >&2 \
-    || echo "run-pilot: efficiency analysis failed (see $OUT/efficiency.err)" >&2
+  if ( cd "$INFRA" && "$EU4_DSH_PYTHON" -m automation.dsh_efficiency analyze \
+        "$EXPORT" --out "$OUT/efficiency.json" \
+        > "$OUT/efficiency.stdout" 2> "$OUT/efficiency.err" ); then
+    echo "run-pilot: export=$EXPORT" >&2
+  else
+    echo "run-pilot: efficiency analysis failed (see $OUT/efficiency.err)" >&2
+  fi
 else
   echo "run-pilot: no persisted session export found" >&2
 fi
 
-TOOLS=$("$EU4_DSH_PYTHON" - "$OUT/session.json" "$REQUIRE_TOOLS" "$ALLOW_NO_TOOLS" <<'PY'
+# The native-integration gate reads the actual invocation records.  Advertised
+# tool definitions, bash-only runs and goal-management-only runs do not count.
+set --
+for name in $REQUIRE_TOOLS; do
+  set -- "$@" --require-tool "$name"
+done
+if ( cd "$INFRA" && "$EU4_DSH_PYTHON" -m automation.dsh_pilot gate \
+      --events "$OUT/events.jsonl" "$@" --out "$OUT/native-gate.json" \
+      > "$OUT/native-gate.stdout" 2> "$OUT/native-gate.err" ); then
+  TOOLS_STATUS=0
+else
+  TOOLS_STATUS=$?
+fi
+
+NATIVE=$("$EU4_DSH_PYTHON" - "$OUT/native-gate.json" <<'PY'
 import json
 import sys
-
-path, required, allow_none = sys.argv[1:4]
-value = json.load(open(path))
-tools = [item for item in value.get("tool_calls") or [] if item]
-required = [item for item in required.split() if item]
-missing = [name for name in required if name not in tools]
-if not tools and allow_none != "1":
-    print("no native tool was invoked", file=sys.stderr)
-    raise SystemExit(2)
-if missing:
-    print("missing required native tool(s): " + ", ".join(missing),
-          file=sys.stderr)
-    raise SystemExit(2)
-print(",".join(tools))
+try:
+    value = json.load(open(sys.argv[1], encoding="utf-8"))
+except (OSError, ValueError):
+    print("")
+else:
+    print(",".join(value.get("native_executed") or []))
 PY
-) || TOOLS_STATUS=$?
-TOOLS_STATUS=${TOOLS_STATUS:-0}
+)
 
-echo "run-pilot: tool_calls=${TOOLS:-<none>}" >&2
+echo "run-pilot: native_tool_calls=${NATIVE:-<none>}" >&2
+if [ "${TOOLS_STATUS:-1}" -ne 0 ]; then
+  cat "$OUT/native-gate.err" >&2 2>/dev/null || true
+  exit 2
+fi
 if [ "$RC" -ne 0 ]; then
   exit "$RC"
-fi
-if [ "${TOOLS_STATUS:-0}" -ne 0 ]; then
-  exit 2
 fi
 exit 0

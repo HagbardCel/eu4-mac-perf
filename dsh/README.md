@@ -45,10 +45,11 @@ Two deliberate deviations from the shipped web profile:
 `run-pilot.sh` is the evidence-producing counterpart to `run-campaign.sh`: it
 mounts this checkout's tools plugin in the shipped headless profile, runs
 exactly one model turn, preserves the run events, the persistent session export
-and its `dsh_efficiency` analysis, and fails when no native EU4 tool was
-invoked. It requires `OPENCODE_GO_API_KEY` in the environment (the headless
-profile cannot read the stored credentials on 0.2.2-rc.1) and it does not
-schedule or continue goal rounds. A pilot conclusion is validated with
+and its `dsh_efficiency` analysis, and fails unless the actual invocation
+records show a completed call to one of the seven native EU4 tools. It requires
+`OPENCODE_GO_API_KEY` in the environment (the headless profile cannot read the
+stored credentials on 0.2.2-rc.1) and it does not schedule or continue goal
+rounds. A pilot conclusion is validated with
 `python3 -m automation.dsh_pilot validate --conclusion <path>`.
 
 The scripts set `DSH_HOME` themselves from `EU4_DSH_HOME` (default

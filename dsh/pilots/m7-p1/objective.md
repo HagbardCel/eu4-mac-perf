@@ -165,8 +165,13 @@ Write `.local/m7/p1/pilot-conclusion.json` with exactly this shape:
 
 Only include `correction` for `correction_proposed` and `evidence_request` for
 `requires_additional_evidence`. Any claimed `causal_interval` must carry
-`same_capture: true` and a `basis` whose checkpoints all name the sealed frame's
-capture identity.
+`same_capture: true`, a `basis`, and for a bounded interval exactly two
+endpoint observations: an `authoritative: true` `status: "match"` at
+`start_event` and an `authoritative: true` `status: "divergent"` at
+`end_event`, both naming the same `resource` and `target`, both from the same
+sealed capture, with matching `generation` where present. An unbounded interval
+uses `start_event: null`, `lower_bound: "unbounded"`, and only the divergent
+upper observation — do not invent a matching lower checkpoint.
 
 Validate before finishing (iterate until it passes):
 
