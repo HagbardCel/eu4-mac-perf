@@ -63,8 +63,23 @@ review still required. No PR is merged.
   the first divergent checkpoint, last matching checkpoint, copy-source/
   predecessor events, the recommended next event, and first/last observations,
   deterministically, with `selected_because` reasons.
-- The authentic compact artifact is 6,075 bytes, has no absolute paths and
+- The authentic compact artifact is 6,274 bytes, has no absolute paths and
   retains the actionable event-148 recommendation.
+
+### D4. Compact copy-source provenance
+
+- `_compact_source_evidence()` now publishes the authoritative
+  `reference_sha256` from `reconcile_checkpoints()` as the compact
+  `gl_sha256`; it previously projected a non-existent `gl_sha256` and
+  published `null`.
+- The Metal digest, source event/target/resource/status and authority stay
+  attached to the same source checkpoint. Missing source evidence remains
+  explicit (`checkpoint=null`, both digests `null`) rather than fabricated.
+- Regression: `CompactSourceEvidenceDigestTests` asserts both digests are
+  preserved and agree with the full report, that they name the source
+  checkpoint, and that missing evidence stays missing. The authentic frame-1
+  artifact confirms the projected GL digest `abd4ad6b…` equals the source
+  checkpoint's `reference_sha256`, and `c1c35604…` equals its Metal digest.
 
 ## PR #209 — evidence, integration and readiness
 
@@ -122,8 +137,8 @@ remains opt-in and is not a correction.
 | PR | Focused result |
 | --- | --- |
 | #207 | 416 passed, 1 skipped, 0 failures |
-| #208 | 292 passed, 1 skipped, 0 failures |
-| #209 | 480 passed, 1 skipped, 0 failures |
+| #208 | 321 passed, 1 skipped, 0 failures |
+| #209 | 482 passed, 1 skipped, 0 failures |
 | plugin | 9 passed, 0 failed |
 
 The portable CI workflow must be re-run on each new head. The authentic case is

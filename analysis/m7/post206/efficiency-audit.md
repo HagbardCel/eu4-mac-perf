@@ -63,8 +63,8 @@ was only an intermediate snapshot.
 
 1. **Capture budget:** the default is now 512 events. The previous 256 default
    caused a real `draw_cap` failure; the successful capture used 325 events.
-2. **Compact diagnosis:** the authentic `agent-diagnosis.json` is 6,075 bytes
-   versus 3,007,849 bytes for the full report (about 99.8% smaller), and it
+2. **Compact diagnosis:** the authentic `agent-diagnosis.json` is 6,274 bytes
+   versus 3,011,036 bytes for the full report (about 99.8% smaller), and it
    contains a causally selected checkpoint subset, not the first 32 rows.
 3. **Authentic case outside CI:** 1.348 GB is never part of routine CI; a
    512 MiB budget produces an explicit incomplete summary.
@@ -76,7 +76,7 @@ was only an intermediate snapshot.
 
 ## Claims not made
 
-- The 15 shell failures are not all defects; several are the negative tests
+- The 21 shell failures are not all defects; several are the negative tests
   that prove fail-closed behavior.
 - The parser cannot prove an EU4 process started from text alone; the two
   documented capture records are the process evidence.

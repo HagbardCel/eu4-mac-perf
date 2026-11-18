@@ -104,7 +104,7 @@ snapshot:
 | --- | --- |
 | Session | `session-67b86ef2…`, start 2026-11-17T18:43:58Z |
 | Tool calls | 710 total: 683 bash, 0 native tool-level failures |
-| Tool-level failures | 0 adapter errors; 15 shell commands with a nonzero exit marker (including deliberate negative tests) |
+| Tool-level failures | 0 adapter errors; 15 shell commands with a nonzero exit marker at this snapshot (the final export reports 21, including deliberate negative tests) |
 | Long jobs | 10; captures 250.4 s and 248.8 s, the stopped full run 153.2 s, focused suites 127.8/127.2/126.7/124.8/123.3/121.7 s, ~20–39 s replays |
 | Test invocations | 55 invocations / 25 distinct commands; 30 focused re-runs; the module-list full run is not counted as a completed full-suite pass |
 | Tool wait | not meaningful across the multi-hour unattended gap |
@@ -162,7 +162,7 @@ The exact final trace is refreshed in
 - `gl-control-frame1.json` … `gl-control-frame3.json` — zero-difference
   same-backend controls (in the gitignored capture root; summarized in
   [`evidence.json`](evidence.json)).
-- `agent-diagnosis.json` — compact 6,201-byte projection for frame 1.
+- `agent-diagnosis.json` — compact 6,274-byte projection for frame 1.
 - Portable case under `.local/m7/phase-c-authentic-v2/phase-c-authentic-case-v2`
   (gitignored); manifest hashes in `evidence.json`.
 

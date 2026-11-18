@@ -78,8 +78,8 @@ For the authentic frame 1 report:
 
 | Artifact | Size |
 | --- | --- |
-| `diagnostic-report.json` | 3,007,849 bytes |
-| `agent-diagnosis.json` | 6,201 bytes |
+| `diagnostic-report.json` | 3,011,036 bytes |
+| `agent-diagnosis.json` | 6,274 bytes |
 
 The projection keeps only the frame identity, execution status, first
 divergence, up to 16 inputs, up to 32 checkpoints, final statistics,

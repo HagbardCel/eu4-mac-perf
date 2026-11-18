@@ -53,7 +53,7 @@ was fetched and `f13602e4` is the merged #206 baseline.
 | No same-backend GL/GL control existed. | The authentic first divergence was a copy, but copy execution was not independently controlled. | Added `automation.gfx_gl_control` and `eu4_capture gl-control`: compare the captured GL default-framebuffer source with the captured GL destination texture under a declared channel normalization. | `GlTransferControlTests`; authentic frame 1 gives 0/1,930,176, while frames 2/3 are unavailable because the historical capture lacks copy-only lifecycle coverage. |
 | Divergence reports had frame-level statistics but no pixel location. | A frame-level mismatch cannot prioritize a region or a shader. | Added `first_differing_pixel` and `differing_bounds` to exact comparison statistics and to the first-divergence report. | `PixelLocationTests`; authentic report reports `(0,0)` and full-frame bounds. |
 | The recommended checkpoint was missing when the copy source itself differed. | The first divergent checkpoint became the copy source (event 284), and `next_checkpoint` was `null`. | Added a bisection recommendation for the unresolved interval (event 148, target 0, `requires_capture=true`) and explicit limitations. | Authentic diagnostic report and compact package. |
-| A coding agent had to parse a multi-megabyte diagnostic report. | `diagnostic-report.json` is ~3 MB for one authentic frame. | Added `gfx-agent-diagnosis/v1`, a bounded 6 KB projection written beside the full report. | `CompactAgentDiagnosisTests`; authentic frame produces 6,201 bytes. |
+| A coding agent had to parse a multi-megabyte diagnostic report. | `diagnostic-report.json` is ~3 MB for one authentic frame. | Added `gfx-agent-diagnosis/v1`, a bounded 6 KB projection written beside the full report. | `CompactAgentDiagnosisTests`; authentic frame produces 6,274 bytes. |
 
 ## Remaining gaps (not fixed here)
 
@@ -110,9 +110,9 @@ derived fixtures remain in `tests/`.
 - PR #207 focused set: **416 passed, 1 skipped, 0 failures** (supervisor,
   continuous replay, agent tools, GL control, diagnosis, case sequence, native
   bridge, frame capture).
-- PR #208 focused set: **292 passed, 1 skipped, 0 failures** (diagnosis, pixel
+- PR #208 focused set: **321 passed, 1 skipped, 0 failures** (diagnosis, pixel
   diagnostics, agent tools, supervisor, continuous replay, case sequence).
-- PR #209 final focused set: **480 passed, 1 skipped, 0 failures** across the
+- PR #209 final focused set: **482 passed, 1 skipped, 0 failures** across the
   capture, efficiency, agent, supervisor, replay, GL control, diagnosis, pixel,
   case and checkpoint modules.
 - DSH tools plugin: **9 passed, 0 failed**.
