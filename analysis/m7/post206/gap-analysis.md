@@ -110,9 +110,9 @@ derived fixtures remain in `tests/`.
 - PR #207 focused set: **419 passed, 1 skipped, 0 failures** (supervisor,
   continuous replay, agent tools, GL control, diagnosis, case sequence, native
   bridge, frame capture).
-- PR #208 focused set: **328 passed, 1 skipped, 0 failures** (diagnosis, pixel
+- PR #208 focused set: **330 passed, 1 skipped, 0 failures** (diagnosis, pixel
   diagnostics, agent tools, supervisor, continuous replay, case sequence).
-- PR #209 final focused set: **492 passed, 1 skipped, 0 failures** across the
+- PR #209 final focused set: **494 passed, 1 skipped, 0 failures** across the
   capture, efficiency, agent, supervisor, replay, GL control, diagnosis, pixel,
   case and checkpoint modules.
 - DSH tools plugin: **9 passed, 0 failed**.

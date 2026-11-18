@@ -95,14 +95,19 @@ review still required. No PR is merged.
 - With no valid prior same-resource match, `unresolved_interval.start_event`
   is `null`, `lower_bound` is `"unbounded"`, and `search_start_event=0` is
   explicit operational search scope, not observed matching evidence.
+- A copied-destination divergence is bounded by destination observations, not
+  by a source observation after the transfer. Source matches used for source
+  localisation are bounded before the transfer.
 - Compact checkpoint selection applies the same rule: `last_matching` comes
-  from same-resource matches only, and `copy_source` is labelled only when
-  copy-source evidence exists.
+  from same-resource matches only, and `copy_source` selects the actual
+  checkpoint identity recorded in `copy_source_evidence` (including a
+  non-default `tex:N` source), not a hardcoded framebuffer target.
 - Regressions: `CausalLowerBoundTests` covers unrelated texture before a
   draw-produced framebuffer divergence, a genuine same-resource match,
-  final-only unrelated matches, final-only same-resource match, and compact
-  label hygiene. The authentic copy-source path and its event-142
-  recommendation are unchanged.
+  final-only unrelated matches, final-only same-resource match, a
+  post-transfer source match before a destination divergence, compact label
+  hygiene and non-default source selection. The authentic copy-source path
+  and its event-142 recommendation are unchanged.
 
 ## PR #209 — evidence, integration and readiness
 
@@ -165,8 +170,8 @@ is 142.
 | PR | Focused result |
 | --- | --- |
 | #207 | 419 passed, 1 skipped, 0 failures |
-| #208 | 328 passed, 1 skipped, 0 failures |
-| #209 | 492 passed, 1 skipped, 0 failures |
+| #208 | 330 passed, 1 skipped, 0 failures |
+| #209 | 494 passed, 1 skipped, 0 failures |
 | plugin | 9 passed, 0 failed |
 
 The portable CI workflow must be re-run on each new head. The authentic case is
