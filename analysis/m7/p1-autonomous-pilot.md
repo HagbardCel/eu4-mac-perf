@@ -65,9 +65,9 @@ It never launched EU4.
 
 | Hypothesis | Verdict | Decisive evidence |
 | --- | --- | --- |
-| H1: unsupported dither/multisample caused it | **refuted** | 821,783 of 871,620 differing pixels (94.28%) are exactly 1 LSB; the signed error is asymmetric and unstructured in position (no 2/4/8 periodicity); only 162 pixels reach ≥8 LSB and those are edge-localized. Neither ordered dithering nor coverage-edge-confined MSAA has that signature. |
-| H2: the immediately preceding program-331 water draws produced it | **insufficient** | 2,739/2,739 replay bindings have no substitution and the program-331 translation preserves the audited semantics; reference-land regions differ on 95.2% of pixels, which 122 water draws cannot paint; no `fb:0` checkpoint exists between the event-7 full clear and event 142. |
-| H3: the dominant component is 1-LSB numeric pipeline variation, not a binding/shader-content defect | **supported (dominant component only)** | The same 1-LSB signature is already present in `tex:433` at event 270 (574,288 differing RGB pixels, 569,880 at 1 LSB, max 109), independent of program 331; captured textures upload as decompressed RGBA8, so block decode is not a source. The edge-localized residual is not explained. |
+| H1: positional/ordered dithering or coverage-edge-confined MSAA is the dominant cause | **refuted for those signatures** | 821,783 of 871,620 differing pixels (94.28%) are exactly 1 LSB; the signed error is asymmetric and unstructured in position (no 2/4/8 periodicity); only 162 pixels reach ≥8 LSB and those are edge-localized. This does **not** exclude a dithering implementation that is not position-ordered, or an MSAA resolve difference that is not edge-confined; no A/B toggle exists, so the broad "dithering or MSAA explains it" claim is not refuted and is not made. |
+| H2: the immediately preceding program-331 water draws produced it | **insufficient** | 2,739/2,739 replay bindings have no substitution and the program-331 translation preserves the audited semantics; reference-land regions differ on 95.2% of pixels, which 122 water draws cannot paint; no `fb:0` observation exists between the event-7 full clear and event 142. Event 7 is a search boundary, not a matching checkpoint. |
+| H3: the dominant 1-LSB component is consistent with numerical/quantization variation rather than a binding/shader-content defect | **supported (dominant component only; hypothesis, not mechanism)** | The same 1-LSB signature is already present in `tex:433` at event 270 (574,288 differing RGB pixels, 569,880 at 1 LSB, max 109), independent of program 331; captured textures upload as decompressed RGBA8, so block decode is not a source. It does not establish which pipeline stage varies, and the edge-localized residual is not explained. |
 
 Independent verification recomputed the histograms from the sealed GL blob and
 the Metal readback and reproduced the pilot's event-142 and final numbers
@@ -76,19 +76,23 @@ exactly (`event 142`: 821,783 at 1 LSB, 49,206 at 2, 631 at ≥3, 162 at ≥8, m
 event-7 clear of `fb:0` (`flags=7`), program 301 at events 14–19 and program 331
 at events 20–141; provenance confirms 2,739 bindings with zero substitutions.
 
-**Outcome:** `requires_additional_evidence`, with no patch and no causal
-interval claimed. The validator
+**Outcome:** `requires_additional_evidence`, with no patch, `root_cause` still
+`not_established`, and no causal interval claimed. The validator
 (`python3.14 -m automation.dsh_pilot validate`) reports `ok=true`, zero
-problems.
+problems. The run summary is bound to the verified case receipt
+(`case.json` and `frame-seal.json` digests) and its capture identity, and the
+native gate confirms that `eu4_case_inspect` and `eu4_replay` actually executed
+from the run-event records.
 
 The evidence request is precise and same-frame-aware: capture a **new** sealed
 frame of the identical selection with a pre-event `fb:0` checkpoint at
 **event 14** (first draw after the event-7 clear); if it matches, at **event
-20** (first program-331 draw); then **event 71** for midpoint bisection. The
-request states that a new capture has a new `session_id`,
-`capture_frame_id` and `event_stream_sha256`, that its checkpoints cannot be
-combined with event 142 of sealed frame 1, and that the new frame must reproduce
-the divergence in its own comparison.
+20** (first program-331 draw); then **event 71** for midpoint bisection. Event
+7 is an operational search boundary, not a matching checkpoint, so no lower
+bound is invented. The request states that a new capture has a new
+`session_id`, `capture_frame_id` and `event_stream_sha256`, that its
+checkpoints cannot be combined with event 142 of sealed frame 1, and that every
+requested checkpoint is compared only with its own new frame's GL reference.
 
 ## P1.5 — efficiency of the measured run
 
@@ -138,38 +142,58 @@ Interpretation:
    reconciliation `invalid` and records `capture.identity` in the report.
 2. **Pilot conclusion contract.** `automation/dsh_pilot.py` validates
    `gfx-pilot-conclusion/v1`: required diagnosis fields, the three-hypothesis
-   budget, no resolved interval from an unresolved pilot, no cross-capture
-   interval, correction evidence with before/after statistics and preserved
-   exact-match regressions, and an evidence request with a frame scope and a
-   cross-frame caveat for a new capture. `summarize` rejects a run with no
-   native tool or a non-zero EU4 launch count.
-3. **One-turn pilot launcher.** `dsh/scripts/run-pilot.sh` composes the shipped
+   budget, no resolved interval from an unresolved pilot, and a claimed
+   bounded interval that must carry one authoritative matching lower
+   observation and one authoritative divergent upper observation on the same
+   resource/target, in the same sealed capture, with no duplicate, incomplete
+   or contradictory entries (an unrelated texture match cannot bound `fb:0`;
+   resource generations must agree when present). Unbounded intervals are
+   reported with a null `start_event` and only the divergent upper
+   observation. The same module also requires a correction's before/after
+   statistics and preserved exact-match regressions, and an evidence request
+   with a frame scope and a cross-frame caveat for a new capture.
+3. **Actual-invocation native gate.** `automation.dsh_pilot gate` reads the
+   launcher's `events.jsonl` and pairs each `tool_call` with a completed
+   `tool_result`. Only the seven supported native EU4 tools (reused from
+   `automation.agent_tools.TOOLS`) count; a bash-only, image-read-only or
+   goal-management-only run fails. `summarize` uses the same gate, requires the
+   EU4 launch count to be a present integer exactly zero, and binds the
+   conclusion to the verified case receipt and capture identity.
+4. **One-turn pilot launcher.** `dsh/scripts/run-pilot.sh` composes the shipped
    headless profile with the eu4-tools overlay, requires the provider key in
-   the environment, preserves `events.jsonl`, `session.json` and
-   `efficiency.json`, and fails when no native tool was invoked. It does not
-   schedule or continue goal rounds.
-4. **Pilot objective.** `dsh/pilots/m7-p1/objective.md` is the bounded task the
+   the environment, preserves `events.jsonl`, `session.json`,
+   `native-gate.json` and the efficiency audit, and fails when the gate fails.
+   It does not schedule or continue goal rounds.
+5. **Pilot objective.** `dsh/pilots/m7-p1/objective.md` is the bounded task the
    session executed; the same file can seed a rerun.
-5. **Environment pin.** pnpm `12.21.0` reconciled in `dsh/runtime.json`.
+6. **Environment pin.** pnpm `12.21.0` reconciled in `dsh/runtime.json`.
 
 ## Verification
 
-- New focused regressions: 19 tests (`tests.test_m7_checkpoint_provenance`,
-  `tests.test_dsh_pilot`), including cross-capture interval rejection,
-  unknown-identity exclusion, capture stamping, unresolved-interval claims,
-  non-improving corrections and absolute-path rejection.
-- Dependent offline set: 292 tests, 1 skipped, passed in 150.5 s
-  (`test_agent_tools`, `test_gfx_case`, `test_gfx_replay_case_sequence`,
-  `test_gfx_replay_checkpoints`, `test_m7_diagnosis`, plus the new modules).
-- Full suite at the final gate: 3,610 tests, 28 skipped, 12 failures. Eleven
-  are the pre-existing QBDI-unavailable `test_trace_tr3` failures; a base run
-  in the untouched worktree reproduces exactly those eleven and
-  `automation.test_runner compare` reports `no_new_failures`. The twelfth is
-  the load-sensitive `test_gfx_session.test_only_owned_process_is_terminated`,
-  which passes focused in both the base and this branch. The first full run's
-  one introduced failure (the new launcher was undocumented) was fixed.
+- New focused regressions: 50 tests (`tests.test_dsh_pilot` 43,
+  `tests.test_m7_checkpoint_provenance` 7). They cover native-only,
+  bash-only, mixed, empty, failed-native and required-tool traces; launch
+  count missing/non-numeric/non-zero; case-receipt and capture-identity
+  binding; and bounded/unbounded causal intervals with mixed resources,
+  cross-capture observations, missing or wrong endpoints, non-authoritative
+  observations, duplicates and generation mismatches.
+- Requested focused/dependent set: 265 tests, 1 skipped, passed in 4.1 s
+  (`test_dsh_pilot`, `test_m7_checkpoint_provenance`, `test_m7_diagnosis`,
+  `test_gfx_replay_checkpoints`, `test_agent_tools`,
+  `test_dsh_native_bridge`).
+- Full suite at the final gate: 3,641 tests, 28 skipped, 11 failures. All
+  eleven are the pre-existing QBDI-unavailable `test_trace_tr3` failures; a
+  base run in the untouched worktree reproduces exactly those eleven and
+  `automation.test_runner compare` reports `no_new_failures`. An earlier run
+  also hit the load-sensitive
+  `test_gfx_session.test_only_owned_process_is_terminated`; it passes focused
+  in both the base and this branch and did not recur in the final run.
 - Portable checks: `compileall`, 34 goal-plugin tests, 9 tools-plugin tests,
   forbidden-tracked-paths, doc links and `git diff --check` pass.
+- The authentic pilot still passes the strengthened gates: its actual
+  `events.jsonl` shows `eu4_case_inspect` and `eu4_replay` executed, the
+  summary binds to `case.json` / `frame-seal.json` digests and the matching
+  capture identity, and the launch count is the integer `0`.
 - Authentic integration check: diagnosing the packaged P0 Metal result now
   reports `capture.identity` and stamps all 8 checkpoints with the same capture;
   the first divergence remains event 142 with no cross-capture exclusions.
