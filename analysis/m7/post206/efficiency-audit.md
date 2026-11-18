@@ -9,12 +9,12 @@ the export, not estimated.
 
 | Metric | Value | Interpretation |
 | --- | --- | --- |
-| Elapsed / model calls | 6,636.6 s / 460 | Two user turns; includes preparation and the Phase E0 pilot |
-| Tool calls | 493 total (469 bash, 6 write, 8 job_output, 2 create_goal, 2 get_goal, 2 update_goal, 2 todo_write, 1 job_kill, 1 job_list) | 0 native tool-level failures |
-| Shell commands / shell failures | 469 / 15 | `calls.failed` only counts tool-adapter errors; `shell_failures` counts bash results with a nonzero exit marker. The 15 include intentional diagnostic/test failures and negative tests, not 15 broken tools. |
-| Tool wait | 2,143.1 s (32.3% of elapsed) | Includes two authentic captures and every test/replay job |
-| Tokens | 177.8 M total, 99.5% cache-read | Effective input 177.0 M; output 0.8 M |
-| Output volume | 1,225,155 chars; 17 oversized, 3 truncated | Oversized rows are mostly historical document reads and full test logs |
+| Elapsed / model calls | 38,667 s / 673 | Wall-clock spans a multi-hour unattended gap between remediation turns; it is not active work |
+| Tool calls | 710 total (683 bash; 0 native tool-level failures) | The adapter reports no failed tool calls |
+| Shell commands / shell failures | 683 / 21 | `calls.failed` only counts tool-adapter errors; `shell_failures` counts bash results with a nonzero exit marker. The 21 include intentional diagnostic/test failures and negative tests. |
+| Tool wait | not meaningful across the gap | The raw call/result span sum is inflated by the unattended pause (about 1.5 Ms); do not use it as active wait |
+| Tokens | 332.3 M total, 99.0% cache-read | Cache-heavy long session |
+| Output volume | 1,048,347 chars; 0 oversized, 5 truncated | Bounded reads kept oversized output at zero |
 
 ## EU4 launches: reconciliation
 
@@ -42,15 +42,15 @@ used as evidence. The Phase E0 pilot launched EU4 **zero** times.
 
 ## Test invocations
 
-`tests.test_invocations=29`, `distinct_commands=16`,
-`duplicate_invocations=13`, `full_suite_invocations=0`.
+`tests.test_invocations=55`, `distinct_commands=25`,
+`duplicate_invocations=30`, `full_suite_invocations=0`.
 
-The 13 repeats are focused re-runs after edits and deliberate negative tests;
+The 30 repeats are focused re-runs after edits and deliberate negative tests;
 they are not duplicate full suites. The one broad module-list run was stopped
 at a live benchmark prompt and is not counted as a full-suite pass. The
 repetition is the main measurable cost in this session; batching the
 repeated `test_m7_diagnosis`/`test_dsh_efficiency` loops would have saved
-about 13 command invocations without losing coverage.
+about 30 command invocations without losing coverage.
 
 ## Goal status
 

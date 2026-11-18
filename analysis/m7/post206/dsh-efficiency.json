@@ -1,10 +1,10 @@
 {
   "calls": {
     "by_tool": {
-      "bash": 666,
+      "bash": 683,
       "create_goal": 3,
       "get_goal": 2,
-      "job_kill": 1,
+      "job_kill": 2,
       "job_list": 1,
       "job_output": 8,
       "todo_write": 3,
@@ -15,7 +15,7 @@
     "failed_by_tool": {},
     "failure_rate": 0.0,
     "note": "failed counts tool-level errors; shell_failures counts bash commands whose result text reports a nonzero exit code",
-    "shell_commands": 666,
+    "shell_commands": 683,
     "shell_failure_examples": [
       {
         "command_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_infra && timeout 25 git fetch origin 2>&1 | tail -20; echo \\\"exit=${PIPESTATUS[0]}\\\"; git log\u2026",
@@ -58,8 +58,8 @@
         "exit_code": 2
       }
     ],
-    "shell_failures": 20,
-    "total": 692
+    "shell_failures": 21,
+    "total": 710
   },
   "eu4_launches": {
     "bash_launches": 3,
@@ -109,8 +109,13 @@
     "user_messages": 3
   },
   "long_jobs": {
-    "count": 56,
+    "count": 60,
     "jobs": [
+      {
+        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && /opt/homebrew/bin/python3 -m automation.test_runner run --module tests.test_m6_frame --module tests.tes",
+        "seconds": 1983.525,
+        "status": "completed"
+      },
       {
         "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && gh pr checks 207 --watch --interval 10 2>&1 | tail -3",
         "seconds": 283.974,
@@ -155,96 +160,25 @@
         "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && pgrep -fl 'EuropaUniversalisIV/eu4' || true; /opt/homebrew/bin/python3 -m automation.m6_frame capture",
         "seconds": 248.751,
         "status": "completed"
-      },
-      {
-        "label": "cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && gh pr checks 207 --watch --interval 10 2>&1 | tail -3",
-        "seconds": 220.703,
-        "status": "completed"
       }
     ],
     "threshold_seconds": 20.0
   },
   "output": {
-    "max_chars": 49931,
-    "oversized": [
-      {
-        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && /opt/homebrew/bin/python3 - <<'PY'\\nfrom pathlib import Path\\np=Path('tests/test_m\u2026",
-        "chars": 49931,
-        "tool": "bash",
-        "truncated": true
-      },
-      {
-        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_infra && sed -n 520,900p docs/status.md\",\"description\":\"Read status doc tail\"}",
-        "chars": 45944,
-        "tool": "bash",
-        "truncated": false
-      },
-      {
-        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_infra && sed -n 160,700p analysis/m7/phase-ab-agent-bridge.md\",\"description\":\"Read phase AB r\u2026",
-        "chars": 25905,
-        "tool": "bash",
-        "truncated": false
-      },
-      {
-        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf && /opt/homebrew/bin/python3 - <<'PY'\\nimport json\\np='.local/m6/frames/menu-occ300\u2026",
-        "chars": 24485,
-        "tool": "bash",
-        "truncated": false
-      },
-      {
-        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_infra && sed -n 200,520p docs/status.md\",\"description\":\"Read status doc middle\"}",
-        "chars": 20432,
-        "tool": "bash",
-        "truncated": false
-      },
-      {
-        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && /opt/homebrew/bin/python3 -m automation.test_runner list --limit 5 2>&1 | tail -40\u2026",
-        "chars": 20281,
-        "tool": "bash",
-        "truncated": false
-      },
-      {
-        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && /opt/homebrew/bin/python3 -m automation.dsh_efficiency analyze <home>/.dsh/se\u2026",
-        "chars": 20185,
-        "tool": "bash",
-        "truncated": false
-      },
-      {
-        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_infra && sed -n 1,220p automation/README.md\",\"description\":\"Read automation README\"}",
-        "chars": 18670,
-        "tool": "bash",
-        "truncated": false
-      },
-      {
-        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && /opt/homebrew/bin/python3 -m automation.dsh_efficiency analyze <home>/.dsh/se\u2026",
-        "chars": 16692,
-        "tool": "bash",
-        "truncated": false
-      },
-      {
-        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_infra && sed -n 541,880p automation/m6_frame.py\",\"description\":\"Read capture implementation\"}",
-        "chars": 14292,
-        "tool": "bash",
-        "truncated": false
-      }
-    ],
-    "oversized_count": 17,
+    "max_chars": 8169,
+    "oversized": [],
+    "oversized_count": 0,
     "threshold_chars": 12000,
-    "total_chars": 1411713,
+    "total_chars": 1048347,
     "truncated": [
       {
         "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_m7_prep && /opt/homebrew/bin/python3 - <<'PY'\\nfrom pathlib import Path\\np=Path('tests/test_m\u2026",
-        "chars": 49931,
+        "chars": 5159,
         "tool": "bash"
       },
       {
         "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && sed -n 1,140p automation/dsh_efficiency.py && grep -n \\\"def analyze\\\\|eu4_launch\\\\|f\u2026",
         "chars": 5717,
-        "tool": "bash"
-      },
-      {
-        "argument_excerpt": "{\"command\":\"cd <home>/Projects/MiniProjects/eu4-mac-perf/wt_pr209 && sed -n 201,340p automation/dsh_efficiency.py && sed -n 400,510p automation/dsh_effic\u2026",
-        "chars": 10997,
         "tool": "bash"
       },
       {
@@ -263,7 +197,7 @@
         "tool": "bash"
       }
     ],
-    "truncated_count": 6
+    "truncated_count": 5
   },
   "repeated_calls": [
     {
@@ -324,7 +258,7 @@
     "id": "session-67b86ef2-53a9-4388-bd8d-fa63872f69a0"
   },
   "tests": {
-    "distinct_commands": 23,
+    "distinct_commands": 25,
     "duplicate_invocations": 30,
     "duplicates": [
       {
@@ -359,24 +293,24 @@
       }
     ],
     "full_suite_invocations": 0,
-    "test_invocations": 53
+    "test_invocations": 55
   },
   "tokens": {
-    "cache_read": 318082816,
-    "cache_read_share_of_total": 0.9939,
+    "cache_read": 328857088,
+    "cache_read_share_of_total": 0.9896,
     "cache_write": 0,
-    "effective_input": 319693967,
-    "input": 1611151,
-    "output": 356105,
-    "total": 320050072
+    "effective_input": 331939960,
+    "input": 3082872,
+    "output": 362008,
+    "total": 332301968
   },
   "turn": null,
   "wait": {
     "by_tool": {
-      "bash": 6789.987,
+      "bash": 1512757.604,
       "create_goal": 0.037,
       "get_goal": 0.018,
-      "job_kill": 0.005,
+      "job_kill": 0.019,
       "job_list": 0.012,
       "job_output": 0.053,
       "todo_write": 0.021,
@@ -384,23 +318,23 @@
       "write": 0.095
     },
     "calls_measured": {
-      "bash": 665,
+      "bash": 682,
       "create_goal": 3,
       "get_goal": 2,
-      "job_kill": 1,
+      "job_kill": 2,
       "job_list": 1,
       "job_output": 8,
       "todo_write": 3,
       "update_goal": 2,
       "write": 6
     },
-    "share_of_elapsed": 0.1875,
-    "tool_wait_seconds": 6790.249
+    "share_of_elapsed": 39.1224,
+    "tool_wait_seconds": 1512757.88
   },
   "window": {
-    "elapsed_seconds": 36211.873,
-    "end_utc": "2026-11-18T04:47:30.037000+00:00",
-    "model_calls": 656,
+    "elapsed_seconds": 38667.264,
+    "end_utc": "2026-11-18T05:28:25.428000+00:00",
+    "model_calls": 673,
     "start_utc": "2026-11-17T18:43:58.164000+00:00",
     "turns": 3
   }

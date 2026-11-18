@@ -121,9 +121,9 @@ remains opt-in and is not a correction.
 
 | PR | Focused result |
 | --- | --- |
-| #207 | 374 passed, 1 skipped, 0 failures |
-| #208 | 319 passed, 1 skipped, 0 failures |
-| #209 | 432 passed, 1 skipped, 0 failures |
+| #207 | 416 passed, 1 skipped, 0 failures |
+| #208 | 292 passed, 1 skipped, 0 failures |
+| #209 | 480 passed, 1 skipped, 0 failures |
 | plugin | 9 passed, 0 failed |
 
 The portable CI workflow must be re-run on each new head. The authentic case is
