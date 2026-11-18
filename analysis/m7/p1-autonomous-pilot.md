@@ -50,6 +50,10 @@ now requires that verification rather than the conclusion's own
 digest-bound receipt), requires valid/complete/independently reproducible
 evidence, and checks the case ID, sealed capture identity, and the
 `case.json` / `capture/frame-seal.json` digests against the conclusion.
+A reused receipt is bound to the manifest, seal and declared payload
+inventory, and the current declared payload bytes (including the diagnostic
+report) are re-hashed before reuse so an edited or deleted file cannot ride a
+stale receipt.
 Case manifest `7c00ba56…`, frame seal `794c482d…`.
 
 The standalone `eu4_replay case` baseline reproduces the P0 statistics — first
@@ -184,7 +188,7 @@ Interpretation:
 
 ## Verification
 
-- New focused regressions: 62 tests (`tests.test_dsh_pilot` 55,
+- New focused regressions: 65 tests (`tests.test_dsh_pilot` 58,
   `tests.test_m7_checkpoint_provenance` 7). They cover native-only,
   bash-only, mixed, empty, failed-native and required-tool traces; launch
   count missing/non-numeric/non-zero; missing/self-asserted/corrupt/
@@ -192,7 +196,7 @@ Interpretation:
   same-capture endpoints; and bounded/unbounded causal intervals with mixed
   resources, cross-capture observations, missing or wrong endpoints,
   non-authoritative observations, duplicates and generation mismatches.
-- Requested focused/dependent set: 277 tests, 1 skipped, passed in 4.5 s
+- Requested focused/dependent set: 280 tests, 1 skipped, passed in 4.4 s
   (`test_dsh_pilot`, `test_m7_checkpoint_provenance`, `test_m7_diagnosis`,
   `test_gfx_replay_checkpoints`, `test_agent_tools`,
   `test_dsh_native_bridge`).

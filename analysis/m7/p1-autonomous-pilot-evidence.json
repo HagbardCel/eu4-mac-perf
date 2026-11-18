@@ -257,7 +257,7 @@
         "tests.test_dsh_pilot",
         "tests.test_m7_checkpoint_provenance"
       ],
-      "tests": 62,
+      "tests": 65,
       "status": "passed"
     },
     "dependent_modules": {
@@ -269,9 +269,9 @@
         "tests.test_agent_tools",
         "tests.test_dsh_native_bridge"
       ],
-      "tests": 277,
+      "tests": 280,
       "skipped": 1,
-      "seconds": 4.5,
+      "seconds": 4.4,
       "status": "passed"
     },
     "full_suite": {
@@ -396,6 +396,15 @@
       "fix": "validate_conclusion looks claimed endpoints up in the case's verified diagnostic report; bounded intervals without authoritative same-resource match/divergent endpoints are interval_unverified",
       "tests": [
         "PilotConclusionTests"
+      ]
+    },
+    "receipt_payload_integrity": {
+      "finding": "a cached case receipt was not bound to current payload bytes; editing or deleting an inventoried file (including diagnostic-report.json) left the receipt valid",
+      "fix": "before reusing a receipt, hash every declared payload against its declared size/sha256; require the diagnostic report to be a declared payload; reject missing/modified files",
+      "tests": [
+        "PilotSummaryTests.test_modified_payload_after_receipt_is_rejected",
+        "test_deleted_payload_after_receipt_is_rejected",
+        "test_fabricated_interval_via_edited_report_is_rejected"
       ]
     }
   },

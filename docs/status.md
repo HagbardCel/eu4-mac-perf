@@ -38,7 +38,8 @@ excluded and mixed captures invalidate the diagnosis),
 `automation.dsh_pilot` validates the pilot conclusion and summary (actual
 invocation records from `events.jsonl` must show an executed native EU4 tool;
 case verification is mandatory and reuses the existing portable verifier
-rather than the conclusion's own flag; a claimed bounded interval needs
+rather than the conclusion's own flag, and a cached receipt is re-bound to
+the current payload hashes before reuse; a claimed bounded interval needs
 same-resource authoritative endpoints in one sealed capture, looked up in the
 case's verified diagnostic report; the launch count must be a present integer
 zero; the summary is bound to the case manifest/seal digests and capture
