@@ -43,15 +43,23 @@ file is not a merge authorization.
    policy and platform. Verify that an unverified current case is never
    reusable merely because a fingerprint matches, and that this remains a
    single receipt, not a cache.
-6. **Causal narrowing.** The compact diagnosis retains the existing
+6. **Replay-host dependencies.** `automation.replay_host_dependencies` is the
+   single closure for `m6_frame.build_replay_host` and
+   `case_baseline`. Verify that a semantics-header edit rebuilds, an unchanged
+   set does not, flags/compiler changes invalidate, and a failed build removes
+   the binary and stamp.
+7. **Payload pass.** `case_baseline` calls `gfx_replay_case.verify()` once as
+   the authoritative payload hashing pass; it must not re-walk declared files.
+   A reusable baseline requires `stage=complete`, `status=ok`, `readback=true`.
+8. **Causal narrowing.** The compact diagnosis retains the existing
    `unresolved_interval` and `next_checkpoint`; a lower bound is `null` and
    `search_start_event` is not evidence. Verify that no cross-capture or
    unrelated-resource observation can bound the interval.
-7. **Efficiency evidence.** `analysis/m7/p2-efficiency.md` and
+9. **Efficiency evidence.** `analysis/m7/p2-efficiency.md` and
    `analysis/m7/p2-evidence.json`. Verify that the P1 autonomous session, the
    two-call P2 interface demonstration and the absent P2 autonomous session are
    distinguished, and that end-to-end efficiency is marked not measured.
-8. **Governance.** `analysis/m7/p2-governance.md`. The repository settings are
+10. **Governance.** `analysis/m7/p2-governance.md`. The repository settings are
    enforced; the independent approval is still outstanding.
 
 ## Verification to reproduce
@@ -67,6 +75,7 @@ python3.14 -m automation.test_runner run --profile offline --label p2-focused \
   --module tests.test_agent_tools \
   --module tests.test_m7_diagnosis \
   --module tests.test_dsh_efficiency \
+  --module tests.test_replay_host_dependencies \
   --module tests.test_trace_tr3
 python3.14 -m automation.test_runner run --profile offline --label p2-full \
   --min-tests 3000

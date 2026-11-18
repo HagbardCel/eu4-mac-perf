@@ -80,6 +80,13 @@ class BaselineIdentityTests(unittest.TestCase):
         self.assertEqual(recorded["identity"]["validity"]["replay_status"],
                          "ok")
 
+    def test_identity_runs_one_authoritative_payload_pass(self):
+        original = case_baseline.gfx_replay_case.verify
+        with mock.patch.object(case_baseline.gfx_replay_case, "verify",
+                               wraps=original) as verify:
+            case_baseline.identity(self.case)
+        verify.assert_called_once()
+
     def test_edited_shader_payload_without_manifest_change_is_rejected(self):
         case_baseline.record(self.case, self.baseline)
         (self.case / "shaders" / "program.metal").write_bytes(b"changed")
@@ -99,6 +106,23 @@ class BaselineIdentityTests(unittest.TestCase):
         (self.case / "replay" / "metal-frame.bgra").write_bytes(b"\1" * 16)
         with self.assertRaises(case_baseline.BaselineError):
             case_baseline.load_check(self.case, self.baseline)
+
+    def test_missing_replay_stage_is_incomplete(self):
+        case_baseline.record(self.case, self.baseline)
+        result = json.loads((self.case / "replay" / "replay.json").read_text())
+        result.pop("stage", None)
+        (self.case / "replay" / "replay.json").write_bytes(
+            json.dumps(result).encode())
+        manifest = json.loads((self.case / "case.json").read_text())
+        for item in manifest["files"]:
+            if item["path"] == "replay/replay.json":
+                payload = (self.case / "replay" / "replay.json").read_bytes()
+                item["bytes"] = len(payload)
+                item["sha256"] = hashlib.sha256(payload).hexdigest()
+        (self.case / "case.json").write_text(json.dumps(manifest))
+        with self.assertRaises(case_baseline.BaselineError) as caught:
+            case_baseline.load_check(self.case, self.baseline)
+        self.assertEqual(caught.exception.kind, "replay_incomplete")
 
     def test_changed_replay_status_invalidates_the_baseline(self):
         case_baseline.record(self.case, self.baseline)
@@ -143,8 +167,7 @@ class BaselineIdentityTests(unittest.TestCase):
             semantics = bench / "eu4_gfx_replay_semantics.h"
             semantics.write_text("first semantics")
             (bench / "root.mm").write_text('#include "eu4_gfx_replay_semantics.h"\n')
-            with mock.patch.object(case_baseline, "ROOT", root), \
-                 mock.patch.object(case_baseline, "BENCH", bench):
+            with mock.patch.object(case_baseline, "ROOT", root):
                 first = case_baseline._renderer_closure(
                     ("benchmark/root.mm",))
                 semantics.write_text("changed semantics")

@@ -6,7 +6,7 @@
     "case_id": "m7-live-frame-000001",
     "case_json_sha256": "7c00ba56d66e11ed50099620085bc828456e2fa0d2839c0cfd05c885d9192283",
     "seal_sha256": "794c482d49767b0b0aa356f5fc28919b9c2a57a33c88f7112152efd8c07d0ca6",
-    "baseline_fingerprint": "3731567446977c5b672f7b3866f22bce11c905b22dc38695262163e4af63bb96",
+    "baseline_fingerprint": "bfb78e0cf8a500815016438b0e5a81d0cbe9224f677ef90fe064ff682e84e442",
     "capture": {
       "session_id": "a3111e0d-9b76-4b23-910d-38bd48c9aa93",
       "capture_frame_id": 1,
@@ -20,10 +20,12 @@
       "independently_reproducible": true,
       "payload_validation": "ok",
       "payload_count": 1247,
+      "replay_stage": "complete",
       "renderer_semantics_included": true,
-      "renderer_source_count": 7,
+      "renderer_source_count": 5,
       "shader_inputs": 104,
-      "renderer_binary_sha256": "4f9804933989d4c064da13333b3c8d5361c6c81da20ca17bc692079f5d9fcd96"
+      "renderer_binary_sha256": "4f9804933989d4c064da13333b3c8d5361c6c81da20ca17bc692079f5d9fcd96",
+      "payload_pass": "gfx_replay_case.verify() (single authoritative pass)"
     }
   },
   "p1_reference": {
@@ -138,7 +140,8 @@
       "first_divergence_confidence": "intermediate"
     },
     "unchanged_from_p1": true,
-    "p2_full_gate_passed": true
+    "p2_full_gate_passed": true,
+    "p2_full_gate_run": "20261118T173758Z-7d9c00f2"
   },
   "limitations": [
     "No new model-driven DSH session was run: OPENCODE_GO_API_KEY is absent in this environment, so the P2 measurement is the deterministic native-interface workflow plus the preserved P1 session export, not a new model turn.",
@@ -146,21 +149,21 @@
     "No EU4 launch and no replay were performed for this evidence; the existing verified baseline is reused."
   ],
   "offline_gate": {
-    "run_id": "20261118T162742Z-35ac5960",
+    "run_id": "20261118T173758Z-7d9c00f2",
     "profile": "offline",
     "min_tests": 3000,
-    "tests_ran": 3731,
-    "tests_executed": 3690,
-    "skipped": 41,
+    "tests_ran": 3744,
+    "tests_executed": 3702,
+    "skipped": 42,
     "failures": 0,
     "errors": 0,
-    "duration_seconds": 691.651,
+    "duration_seconds": 1301.731,
     "exit_code": 0,
     "eu4_launches": 0,
     "notes": [
       "Executed with EU4_TEST_PROFILE=offline and EU4_OFFLINE_ONLY=1.",
       "The floor is applied to executed tests (ran - skipped).",
-      "The 41 skips include the classified live-only module, platform-only hosts and optional-QBDI TR3 tests; QBDI is not mandatory."
+      "The 42 skips include the classified live-only module, platform-only hosts and optional-QBDI TR3 tests."
     ]
   },
   "pull_request": 212,
@@ -197,6 +200,34 @@
     "compact_output": "UTF-8 byte cap including the emitted newline; essential identity/causal fields preserved; exact output_bytes reported",
     "failure_classification": "explicit status precedence; shader/replay correctness failures are tool failures; dependency_unavailable is separate from graphics_unavailable",
     "test_floor": "counts executed tests (ran - skipped) and includes profile/min_tests in the dedup identity",
-    "live_gate": "live case must pass gfx_replay_case.verify() and be independently reproducible"
+    "live_gate": "live case must pass gfx_replay_case.verify() and be independently reproducible",
+    "replay_host_dependency": "one shared automation.replay_host_dependencies enumerator drives both build_replay_host and case_baseline; local header closure, compiler, flags and build env are all in the build identity",
+    "payload_single_pass": "case_baseline uses gfx_replay_case.verify() as the single payload/content hashing pass; no duplicate payload walker",
+    "replay_stage": "a reusable baseline requires replay stage=complete, status=ok and readback=true",
+    "mandatory_test_execution": "test_profiles verify executes each required test id and rejects dynamic skips",
+    "compact_essential_cap": "if essential identity/causal fields cannot fit, the envelope fails explicitly with output_cap_exceeded rather than silently dropping them"
+  },
+  "replay_host_dependency_correction": {
+    "shared_module": "automation/replay_host_dependencies.py",
+    "build_stamp": "benchmark/.build/gfx_frame_replay.deps.json",
+    "source_closure": [
+      "benchmark/eu4_gfx_draw_semantics.h",
+      "benchmark/eu4_gfx_frame_replay.mm",
+      "benchmark/eu4_gfx_frame_replay_cli.mm",
+      "benchmark/eu4_gfx_metal_replay.h",
+      "benchmark/eu4_gfx_replay_semantics.h"
+    ],
+    "header_change_test": "tests.test_replay_host_dependencies.IncrementalBuildTests.test_header_change_triggers_rebuild_and_unchanged_does_not",
+    "unchanged_rebuild_test": "same test: second call performs no subprocess",
+    "failed_build_test": "tests.test_replay_host_dependencies.IncrementalBuildTests.test_failed_build_removes_binary_and_stamp",
+    "flags_identity_test": "tests.test_replay_host_dependencies.DependencyClosureTests.test_build_identity_accounts_for_flags_and_compiler",
+    "final_gate": "3744 ran / 3702 executed / 42 skipped / 0 failed"
+  },
+  "focused_verification": {
+    "command": "python3.14 -m unittest tests.test_case_baseline tests.test_test_profiles tests.test_m7_evidence_identity tests.test_failure_taxonomy tests.test_p2_workflow tests.test_gfx_session tests.test_replay_host_dependencies",
+    "tests": 97,
+    "skipped": 2,
+    "failures": 0,
+    "result": "OK"
   }
 }

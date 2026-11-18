@@ -147,10 +147,19 @@ class SessionTests(unittest.TestCase):
         session.register("reference", owned)
         results = session.terminate_all(grace_seconds=3)
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0].outcome, "exited")
+        self.assertEqual(results[0].outcome, "exited", results[0].reason)
         self.assertIsNotNone(owned.poll())
         self.assertIsNone(unrelated.poll())
         session.close()
+
+    def test_python_launcher_and_framework_binary_are_one_identity(self):
+        launcher = Path(os.path.realpath(sys.executable))
+        app = (launcher.parent.parent / "Resources" / "Python.app" /
+               "Contents" / "MacOS" / "Python")
+        if not app.is_file():
+            self.skipTest("this interpreter has no framework app launcher")
+        self.assertEqual(gfx_session.normalize_executable(str(launcher)),
+                         str(app.resolve()))
 
     def test_identity_mismatch_is_never_signalled(self):
         child = self.spawn()

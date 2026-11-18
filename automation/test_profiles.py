@@ -16,8 +16,13 @@ from __future__ import annotations
 import functools
 import importlib
 import os
+import re
+import subprocess
+import sys
 import unittest
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
 
 PROFILE_ENV = "EU4_TEST_PROFILE"
 OFFLINE = "offline"
@@ -42,6 +47,8 @@ MANDATORY_OFFLINE_TEST_IDS = (
     "test_compact_case_stays_bounded_and_keeps_next_checkpoint",
     "tests.test_p2_workflow.P2WorkflowTests."
     "test_compact_case_read_is_under_the_cap_and_actionable",
+    "tests.test_replay_host_dependencies.IncrementalBuildTests."
+    "test_header_change_triggers_rebuild_and_unchanged_does_not",
     "tests.test_test_profiles.OfflineGateTests."
     "test_mandatory_manifest_modules_exist",
 )
@@ -59,6 +66,7 @@ MANDATORY_OFFLINE_MODULES = (
     "tests.test_m7_diagnosis",
     "tests.test_m7_evidence_identity",
     "tests.test_p2_workflow",
+    "tests.test_replay_host_dependencies",
     "tests.test_test_profiles",
 )
 
@@ -250,7 +258,53 @@ def _mandatory_test_problems() -> list[dict]:
     return problems
 
 
-def verify_offline_gate() -> dict:
+def _execute_required_tests() -> tuple[list[dict], list[dict]]:
+    """Run each required test id and prove it executed rather than skipped."""
+    results: list[dict] = []
+    problems: list[dict] = []
+    environment = dict(os.environ)
+    environment.update(profile_environment(OFFLINE))
+    for dotted in MANDATORY_OFFLINE_TEST_IDS:
+        try:
+            completed = subprocess.run(
+                [sys.executable, "-m", "unittest", dotted, "-v"],
+                cwd=str(ROOT), env=environment, capture_output=True,
+                text=True, check=False, timeout=120)
+        except (OSError, subprocess.SubprocessError) as exc:
+            results.append({"test": dotted, "executed": False,
+                            "status": "error", "detail": str(exc)})
+            problems.append({"code": "mandatory_test_not_executed",
+                             "detail": f"{dotted}: {type(exc).__name__}: {exc}"})
+            continue
+        output = (completed.stdout or "") + (completed.stderr or "")
+        skipped = re.search(r"skipped=(\d+)", output)
+        ran = re.search(r"^Ran (\d+) tests? in ", output, re.MULTILINE)
+        skipped_count = int(skipped.group(1)) if skipped else 0
+        ran_count = int(ran.group(1)) if ran else 0
+        if completed.returncode != 0:
+            detail = (output.strip().splitlines() or ["no output"])[-1]
+            results.append({"test": dotted, "executed": False,
+                            "status": "failed", "detail": detail})
+            problems.append({"code": "mandatory_test_failed",
+                             "detail": f"{dotted}: {detail}"})
+        elif skipped_count or ran_count != 1:
+            results.append({"test": dotted, "executed": False,
+                            "status": "skipped", "detail": detail_join(output)})
+            problems.append({"code": "mandatory_test_skipped",
+                             "detail": f"{dotted} did not execute "
+                                       f"(ran={ran_count}, "
+                                       f"skipped={skipped_count})"})
+        else:
+            results.append({"test": dotted, "executed": True,
+                            "status": "passed", "detail": ""})
+    return results, problems
+
+
+def detail_join(output: str) -> str:
+    return " | ".join(line.strip() for line in output.strip().splitlines()[-4:])
+
+
+def verify_offline_gate(*, execute: bool = False) -> dict:
     """Check the offline gate manifest without executing the suites.
 
     Import errors are reported per module.  This is the cheap preflight used by
@@ -284,6 +338,11 @@ def verify_offline_gate() -> dict:
                                    "module"})
     mandatory_tests = _mandatory_test_problems()
     problems.extend(mandatory_tests)
+    execution: list[dict] = []
+    if execute and not [item for item in problems
+                        if item.get("code", "").startswith("mandatory_")]:
+        execution, execution_problems = _execute_required_tests()
+        problems.extend(execution_problems)
     try:
         profile = active_profile()
     except ValueError as exc:
@@ -297,6 +356,7 @@ def verify_offline_gate() -> dict:
         "live_allowed": live_allowed(),
         "mandatory_modules": modules,
         "mandatory_tests": list(MANDATORY_OFFLINE_TEST_IDS),
+        "mandatory_test_execution": execution,
         "problems": problems,
         "problems_count": len(problems),
     }
@@ -311,6 +371,9 @@ def _parser():
     verify.add_argument("--profile", choices=PROFILES, default=None,
                         help="require this profile (default: inspect the "
                              "environment, which defaults to offline)")
+    verify.add_argument("--no-execute", action="store_true",
+                        help="check the manifest without running the required "
+                             "test ids")
     return parser
 
 
@@ -320,7 +383,7 @@ def main(argv: list[str] | None = None) -> int:
         os.environ[PROFILE_ENV] = args.profile
         if args.profile == OFFLINE:
             os.environ[OFFLINE_ONLY_ENV] = "1"
-    result = verify_offline_gate()
+    result = verify_offline_gate(execute=not args.no_execute)
     if args.profile is not None and result.get("profile") != args.profile:
         result["problems"].append({
             "code": "profile_mismatch",

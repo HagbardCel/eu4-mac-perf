@@ -32,8 +32,9 @@ software/hardware checks that the historical suite already relies on.
 - `automation.test_runner --min-tests N` makes a suite that executes fewer than
   `N` tests `incomplete`. Executed means `ran - skipped`; classified skips do
   not satisfy the floor. CI uses a floor of 3,000.
-- The mandatory manifest also names required test ids. A skipped, missing or
-  live-only mandatory test fails the manifest.
+- The mandatory manifest also names required test ids. `automation.test_profiles
+  verify` executes each required test id and rejects a missing, statically
+  skipped, dynamically skipped or live-only mandatory test.
 - Duplicate-run identity includes the profile and the test floor, so a weaker
   in-flight run cannot satisfy a stricter request.
 - Platform/hardware skips remain explicit `skipUnless(..., reason)`:

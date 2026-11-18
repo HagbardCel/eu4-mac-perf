@@ -27,6 +27,8 @@ import sys
 import time
 from pathlib import Path
 
+from automation import replay_host_dependencies  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "benchmark"
 if str(ROOT) not in sys.path:
@@ -995,38 +997,56 @@ REPLAY_HOST = BENCH / ".build" / "gfx_frame_replay"
 
 
 def build_replay_host(force: bool = False) -> Path:
-    dependencies = [REPLAY_HOST_SOURCE, REPLAY_HOST_CLI_SOURCE, Path(__file__)]
-    if not force and REPLAY_HOST.is_file():
-        newest = max(path.stat().st_mtime for path in dependencies if path.is_file())
-        if REPLAY_HOST.stat().st_mtime >= newest:
+    """Build the replay host when its authoritative dependency set changes.
+
+    The build decision and the baseline identity share
+    ``automation.replay_host_dependencies``: the two compilation units, their
+    local include closure, the compiler identity, build flags and relevant
+    environment variables.  A successful build writes a stamp; a failed build
+    leaves neither a stamp nor a stale binary that could be mistaken for a
+    current result.
+    """
+    sources = (REPLAY_HOST_SOURCE, REPLAY_HOST_CLI_SOURCE)
+    identity = replay_host_dependencies.build_identity(
+        root=ROOT, sources=sources)
+    stamp = Path(str(REPLAY_HOST) + ".deps.json")
+    if not force and REPLAY_HOST.is_file() and stamp.is_file():
+        try:
+            recorded = json.loads(stamp.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            recorded = {}
+        if recorded.get("fingerprint") == identity["fingerprint"]:
             return REPLAY_HOST
     REPLAY_HOST.parent.mkdir(parents=True, exist_ok=True)
+    # Invalidate the previous receipt before compiling so a failed build can
+    # never leave a stamp that matches the new sources.
+    try:
+        stamp.unlink()
+    except FileNotFoundError:
+        pass
     built = subprocess.run(
-        [
-            "clang",
-            "-arch",
-            "arm64",
-            "-O2",
-            "-Wall",
-            "-Wextra",
-            "-fobjc-arc",
-            "-lc++",
-            "-framework",
-            "Foundation",
-            "-framework",
-            "Metal",
-            "-o",
-            str(REPLAY_HOST),
-            str(REPLAY_HOST_SOURCE),
-            str(REPLAY_HOST_CLI_SOURCE),
-        ],
+        replay_host_dependencies.build_command(REPLAY_HOST, sources),
         capture_output=True,
         text=True,
         check=False,
         timeout=180,
     )
     if built.returncode:
+        try:
+            REPLAY_HOST.unlink()
+        except FileNotFoundError:
+            pass
         raise FrameError(built.stderr.strip() or "frame replay host build failed")
+    temporary = stamp.with_name(stamp.name + ".tmp")
+    temporary.write_text(json.dumps({
+        "schema": "gfx-replay-host-build/v1",
+        "fingerprint": identity["fingerprint"],
+        "dependencies": identity["dependencies"],
+        "compiler": identity["compiler"],
+        "flags": identity["flags"],
+        "environment": identity["environment"],
+    }, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, stamp)
     return REPLAY_HOST
 
 

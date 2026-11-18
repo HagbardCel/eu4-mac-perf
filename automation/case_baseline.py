@@ -20,25 +20,18 @@ import hashlib
 import json
 import os
 import platform
-import re
 import sys
 from pathlib import Path
 
-from automation import gfx_replay_case
+from automation import gfx_replay_case, replay_host_dependencies
 
 SCHEMA = "gfx-case-baseline/v1"
 IDENTITY_SCHEMA = "gfx-case-identity/v1"
 ROOT = Path(__file__).resolve().parents[1]
-BENCH = ROOT / "benchmark"
 
-# Renderer/build roots whose local include closure affects replay behavior.
-# Walking the includes is deliberate: adding a new semantics header must
-# invalidate a baseline even when nobody updates this list.
-RENDERER_ROOTS = (
-    "benchmark/eu4_gfx_frame_replay.mm",
-    "benchmark/eu4_gfx_frame_replay_cli.mm",
-    "benchmark/eu4_gfx_shader.mm",
-)
+# The renderer build closure is owned by replay_host_dependencies so the
+# incremental build and the baseline identity cannot drift apart.
+RENDERER_ROOTS = replay_host_dependencies.REPLAY_SOURCES
 # Non-header implementation that participates in the comparison or replay.
 IMPLEMENTATION_SOURCES = (
     "automation/m6_frame.py",
@@ -49,10 +42,6 @@ IMPLEMENTATION_SOURCES = (
     "automation/gfx_replay_case.py",
 )
 REPLAY_BINARY = "benchmark/.build/gfx_frame_replay"
-_LOCAL_INCLUDE = re.compile(
-    r'^\s*#\s*(?:include|import)\s+"([^"]+)"', re.MULTILINE)
-
-
 class BaselineError(RuntimeError):
     def __init__(self, kind: str, detail: str = ""):
         super().__init__(kind if not detail else f"{kind}: {detail}")
@@ -85,40 +74,10 @@ def _relative(path: Path) -> str | None:
         return None
 
 
-def _renderer_closure(roots=RENDERER_ROOTS) -> dict[str, str]:
-    """Hash the local include closure of the replay renderer build.
-
-    Only quoted includes that resolve inside the checkout are followed; system
-    frameworks are part of the platform identity, not this source identity.
-    """
-    seen: dict[Path, str] = {}
-    pending = [ROOT / name for name in roots]
-    while pending:
-        path = pending.pop()
-        try:
-            path = path.resolve()
-        except OSError:
-            continue
-        if path in seen or not path.is_file():
-            continue
-        relative = _relative(path)
-        if relative is None:
-            continue
-        seen[path] = relative
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        for match in _LOCAL_INCLUDE.finditer(text):
-            candidate = (path.parent / match.group(1)).resolve()
-            if candidate.is_file() and _relative(candidate) is not None:
-                pending.append(candidate)
-            else:
-                candidate = (BENCH / match.group(1)).resolve()
-                if candidate.is_file() and _relative(candidate) is not None:
-                    pending.append(candidate)
-    return {relative: _sha256(path) or "" for path, relative in sorted(
-        seen.items(), key=lambda item: item[1])}
+def _renderer_closure(roots=None) -> dict[str, str]:
+    """Hash the same renderer closure the replay-host build uses."""
+    sources = [ROOT / name for name in (roots or RENDERER_ROOTS)]
+    return replay_host_dependencies.relative_dependencies(ROOT, sources)
 
 
 def _implementation_sources() -> dict[str, str]:
@@ -147,53 +106,46 @@ def _shader_inputs(manifest: dict) -> dict[str, str]:
     return dict(sorted(rows.items()))
 
 
-def _validate_payloads(case_dir: Path, manifest: dict) -> int:
-    """Re-hash every declared payload from disk; a manifest claim is not proof."""
+def _payload_count(manifest: dict) -> int:
+    """Cheap inventory presence check; verify() owns the content hashing."""
     files = manifest.get("files")
     if not isinstance(files, list) or not files:
-        raise BaselineError("payload_inventory", "case.json has no payload inventory")
-    problems: list[str] = []
-    seen: set[str] = set()
-    for item in files:
-        if len(problems) >= 8:
-            break
-        if not isinstance(item, dict) or not isinstance(item.get("path"), str):
-            problems.append("invalid inventory entry")
-            continue
-        relative = item["path"]
-        if relative in seen:
-            problems.append(f"duplicate inventory path {relative}")
-            continue
-        seen.add(relative)
-        path, problem = gfx_replay_case._case_relative_path(case_dir, relative)
-        if problem is not None or path is None:
-            problems.append(problem or f"invalid path {relative}")
-            continue
-        if not path.is_file():
-            problems.append(f"declared payload is missing: {relative}")
-            continue
-        expected_bytes = item.get("bytes")
-        if type(expected_bytes) is not int or path.stat().st_size != expected_bytes:
-            problems.append(f"declared payload size differs: {relative}")
-            continue
-        expected_sha = item.get("sha256")
-        if not isinstance(expected_sha, str) or _sha256(path) != expected_sha:
-            problems.append(f"declared payload digest differs: {relative}")
-    if problems:
-        raise BaselineError("payload_validation", "; ".join(problems))
+        raise BaselineError("payload_inventory",
+                            "case.json has no payload inventory")
     return len(files)
 
 
+_PAYLOAD_PROBLEM_PREFIXES = (
+    "missing ",
+    "digest drift ",
+    "size drift ",
+    "duplicate manifest path",
+    "nonportable manifest path",
+    "manifest path escapes",
+)
+
+
 def _verify_case(case_dir: Path) -> dict:
+    """Run the single authoritative verifier, including payload hashing.
+
+    ``gfx_replay_case.verify()`` re-hashes every declared payload from disk.
+    The baseline must not repeat that pass; it only classifies a payload-only
+    failure so callers still get the precise error kind.
+    """
     try:
         value = gfx_replay_case.verify(case_dir)
     except Exception as exc:  # noqa: BLE001 - every verifier failure is closed
         raise BaselineError(
             "case_verification", f"{type(exc).__name__}: {exc}") from exc
     if value.get("ok") is not True:
-        problems = value.get("problems") or ["unknown verification failure"]
+        problems = [str(item) for item in
+                    (value.get("problems") or ["unknown verification failure"])]
+        payload_only = bool(problems) and all(
+            problem.startswith(_PAYLOAD_PROBLEM_PREFIXES)
+            for problem in problems)
         raise BaselineError(
-            "case_verification", "; ".join(str(item) for item in problems[:8]))
+            "payload_validation" if payload_only else "case_verification",
+            "; ".join(problems[:8]))
     if value.get("independently_reproducible") is not True:
         raise BaselineError(
             "case_not_reproducible",
@@ -210,7 +162,9 @@ def _replay_evidence(replay: Path) -> dict:
         raise BaselineError(
             "replay_incomplete",
             f"replay status is {result.get('status')!r}, not 'ok'")
-    if result.get("stage") not in (None, "complete"):
+    # A reusable baseline requires the completed replay stage.  Historical
+    # artifacts without it are not silently promoted; they must be replayed.
+    if result.get("stage") != "complete":
         raise BaselineError(
             "replay_incomplete",
             f"replay stage is {result.get('stage')!r}, not 'complete'")
@@ -233,7 +187,7 @@ def identity(case_dir: Path | str, *,
     manifest = _json(case_dir / "case.json")
     if not manifest:
         raise BaselineError("missing_manifest", str(case_dir / "case.json"))
-    payload_count = _validate_payloads(case_dir, manifest)
+    payload_count = _payload_count(manifest)
     verification = _verify_case(case_dir)
     seal = _json(case_dir / "capture" / "frame-seal.json")
     if not all(seal.get(key) for key in (

@@ -245,7 +245,10 @@ checkpoint statistics, the next recommended checkpoint, artifact names/sizes
 and the next action. The full manifest, dependency graph, command stream and
 diagnostic report stay on disk. The projection is capped at 8,192 emitted bytes
 and reports `truncated`, `output_cap_bytes`, `output_bytes_before_cap` and
-`truncated_fields` when the cap is reached. The cap is measured on the exact
+`truncated_fields` when the cap is reached. If the essential identity,
+verification, first-divergence, interval or checkpoint fields cannot fit, the
+tool returns an explicit bounded `output_cap_exceeded` error instead of
+dropping them. The cap is measured on the exact
 emitted UTF-8 bytes (including the trailing newline), not JSON character
 counts. Essential identity, verification, first-divergence, unresolved-interval,
 recommended-checkpoint and artifact references are never removed. Pass
@@ -260,8 +263,9 @@ python3 -m automation.agent_tools eu4_replay verify --case <case>
 ### Baseline reuse
 
 `automation.case_baseline` records one identity for an existing case only after
-`gfx_replay_case.verify()` passes, every declared payload is re-hashed from
-disk, and the replay result/readback is complete. The identity covers the frame
+`gfx_replay_case.verify()` passes (its single payload pass re-hashes every
+declared file from disk) and the replay result/readback is complete with
+`stage=complete`. The identity covers the frame
 seal, diagnostic report, graph, replay result/readback, translated shader
 inputs, the renderer include closure (including `eu4_gfx_replay_semantics.h`),
 the replay binary/source, comparison policy and platform. It is not a result

@@ -23,6 +23,11 @@ class _SkippedMandatoryTest(unittest.TestCase):
         pass
 
 
+class _DynamicSkipMandatoryTest(unittest.TestCase):
+    def test_dynamic_skip(self):
+        self.skipTest("dynamic negative fixture")
+
+
 class ProfileSelectionTests(unittest.TestCase):
     def test_absent_profile_defaults_to_offline(self):
         with mock.patch.dict(os.environ, {}, clear=True):
@@ -242,6 +247,18 @@ class MandatoryTestCoverageTests(unittest.TestCase):
         self.assertFalse(value["ok"])
         self.assertTrue(any(problem["code"] == "mandatory_test_skipped"
                             for problem in value["problems"]))
+
+    def test_dynamically_skipped_mandatory_test_fails_execution(self):
+        dotted = ("tests.test_test_profiles._DynamicSkipMandatoryTest."
+                  "test_dynamic_skip")
+        with mock.patch.object(test_profiles, "MANDATORY_OFFLINE_TEST_IDS",
+                               (dotted,)):
+            value = test_profiles.verify_offline_gate(execute=True)
+        self.assertFalse(value["ok"])
+        self.assertTrue(any(problem["code"] == "mandatory_test_skipped"
+                            for problem in value["problems"]), value)
+        self.assertEqual(value["mandatory_test_execution"][0]["executed"],
+                         False)
 
     def test_missing_mandatory_test_is_reported(self):
         with mock.patch.object(

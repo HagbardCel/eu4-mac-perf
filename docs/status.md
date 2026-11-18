@@ -17,9 +17,10 @@ entry points refuse a real launch. `automation.test_runner run --profile
 offline` is the routine gate; `--profile live` requires an explicit module and
 a real case and is never selected implicitly. A mandatory offline manifest
 (`automation.test_profiles verify --profile offline`) names required module and
-test ids. The floor counts executed tests (`ran - skipped`), and duplicate-run
-identity includes the profile and floor, so classified skips or a weaker
-in-flight run cannot satisfy a stricter request. CI runs the manifest and the complete
+test ids. The floor counts executed tests (`ran - skipped`), required test ids are
+executed (dynamic skips fail), and duplicate-run identity includes the profile
+and floor, so classified skips or a weaker in-flight run cannot satisfy a
+stricter request. CI runs the manifest and the complete
 offline discovery under the offline profile. `tests.test_live_qualification`
 is the classified live-only placeholder; it skips with a reason offline and,
 under the live profile, requires `EU4_LIVE_CASE` to pass `gfx_replay_case.verify()`
@@ -47,7 +48,8 @@ internally; a separate `eu4_replay verify` is for explicit independent
 qualification or error investigation. The cap is 8,192 exact emitted UTF-8
 bytes; truncation is explicit and identity, verification, first divergence,
 unresolved interval, recommended checkpoint and artifact references are
-preserved. Full reports stay on disk. `automation.case_baseline` records an
+preserved. If those essential fields themselves cannot fit, the tool fails with
+a bounded `output_cap_exceeded` error instead of dropping them. Full reports stay on disk. `automation.case_baseline` records an
 identity only after `gfx_replay_case.verify()` passes, every declared payload
 is re-hashed from disk, and the replay readback is complete. The identity
 includes the renderer include closure (`eu4_gfx_replay_semantics.h` and peers),
@@ -64,7 +66,11 @@ The routine interface path is two native reads (`eu4_case_inspect` 8,018 bytes
 plus baseline reuse 2,355 bytes) with zero shell calls, zero new replays and a
 verified baseline; this is an interface-level demonstration, not a replacement
 measurement for the P1 agent's 80 calls. End-to-end P2 efficiency is **not yet
-measured** because no provider credential is available. See [P2 efficiency](../analysis/m7/p2-efficiency.md)
+measured** because no provider credential is available. The final offline gate
+(`20261118T173758Z-7d9c00f2`) ran 3,744 tests, 3,702 executed, 42 classified
+skips, 0 failures. The replay-host build and baseline identity share
+`automation.replay_host_dependencies`; a semantic-header edit rebuilds and a
+failed build removes its binary and stamp. See [P2 efficiency](../analysis/m7/p2-efficiency.md)
 and [evidence](../analysis/m7/p2-evidence.json).
 
 **Offline vs live.** The offline gate covers portable Python/native-harness

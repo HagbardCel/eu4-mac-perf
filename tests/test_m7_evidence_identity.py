@@ -227,6 +227,42 @@ class CompactEvidenceTests(unittest.TestCase):
         self.assertIn("artifacts", bounded["result"])
         self.assertTrue(bounded["truncated_fields"])
 
+    def test_oversized_essential_fields_fail_bounded_not_silently(self):
+        result = {
+            "schema": "gfx-strategy-b-case/v1",
+            "case_id": "oversized-case",
+            "capture": {"session_id": "s" * 20000,
+                        "capture_frame_id": 1,
+                        "event_stream_sha256": "a" * 64},
+            "verification": {"ok": True, "case_id": "oversized-case",
+                             "independently_reproducible": True},
+            "diagnosis": {
+                "schema": "gfx-agent-diagnosis/v1",
+                "classification": "qualified_match",
+                "qualified": True,
+                "first_divergence": {
+                    "event": 142, "resource": "fb:0", "target": "0",
+                    "unresolved_interval": {"start_event": None,
+                                            "end_event": 142,
+                                            "lower_bound": "unbounded"},
+                    "next_checkpoint": {"event": 71, "resource": "fb:0",
+                                        "target": "0"},
+                },
+            },
+            "artifacts": {"report.json": {"bytes": 1, "path": "report.json"}},
+        }
+        envelope = agent_tools._envelope("eu4_case_inspect", "ok", result)
+        bounded = agent_tools._bounded_envelope(envelope)
+        emitted = agent_tools._emit_text(bounded)
+        self.assertLessEqual(len(emitted.encode("utf-8")),
+                             agent_tools.COMPACT_OUTPUT_CAP)
+        self.assertFalse(bounded["ok"])
+        self.assertEqual(bounded["failure"]["kind"], "output_cap_exceeded")
+        self.assertEqual(bounded["result"]["error"],
+                         "essential_fields_exceed_cap")
+        self.assertEqual(bounded["result"]["output_cap_bytes"],
+                         agent_tools.COMPACT_OUTPUT_CAP)
+
     def test_malformed_nested_evidence_cannot_look_qualified(self):
         envelope = agent_tools._envelope(
             "eu4_case_inspect", "ok",

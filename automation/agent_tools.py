@@ -2162,6 +2162,51 @@ def _essential_compact(result: dict, original: int, cap: int) -> dict:
     return value
 
 
+def _essential_cap_error(value: dict, cap: int, original: int) -> dict:
+    """A bounded error when essential evidence cannot fit the cap.
+
+    Silently dropping identity, provenance or the causal interval would make a
+    truncated result look complete.  Failing explicitly is the only safe
+    option.
+    """
+    result = {
+        "truncated": True,
+        "output_cap_bytes": cap,
+        "output_bytes_before_cap": original,
+        "error": "essential_fields_exceed_cap",
+        "required_fields": [
+            "capture_identity", "verification", "first_divergence",
+            "unresolved_interval", "next_checkpoint", "artifact_references",
+        ],
+        "detail": "the essential diagnostic fields exceed the output cap; "
+                  "read the on-disk diagnostic report",
+    }
+    envelope = _envelope(
+        str(value.get("tool") or "eu4_case_inspect"), "failed", result,
+        reason="essential diagnostic fields exceed the compact output cap",
+        diagnostic="failed", evidence="invalid", qualified=False)
+    failure = {"kind": "output_cap_exceeded", "class": "failure",
+               "detail": "essential evidence could not be represented within "
+                         "the output cap"}
+    envelope["failure"] = failure
+    envelope["outcome"]["failure_kind"] = failure["kind"]
+    envelope["outcome"]["failure_class"] = failure["class"]
+    envelope["truncated"] = True
+    envelope["output_cap_bytes"] = cap
+    envelope["output_bytes_before_cap"] = original
+    # The error envelope is small, but keep the hard guarantee if a caller
+    # deliberately sets a tiny cap.
+    if _utf8_len(envelope) > cap:
+        envelope.pop("runtime", None)
+    if _utf8_len(envelope) > cap:
+        envelope["reason"] = "output cap exceeded"
+    if _utf8_len(envelope) > cap:
+        result.pop("required_fields", None)
+        result.pop("detail", None)
+    envelope["result"]["output_bytes"] = _utf8_len(envelope)
+    return envelope
+
+
 def _bounded_envelope(value: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict:
     """Cap one compact envelope in emitted UTF-8 bytes, explicitly.
 
@@ -2237,17 +2282,19 @@ def _bounded_envelope(value: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict:
         if isinstance(next_checkpoint, dict) and isinstance(
                 next_checkpoint.get("reason"), str) and len(
                     next_checkpoint["reason"]) > 80:
-            next_checkpoint["reason"] = next_checkpoint["reason"][:80] + "…"
+            next_checkpoint["reason"] = next_checkpoint["reason"][:80]
             removed.append("next_checkpoint.reason")
             return
-        if minimal["result"]["verification"].get("problems"):
+        problems_value = minimal["result"]["verification"].get("problems")
+        if problems_value and any(len(str(item)) > 80
+                                  for item in problems_value):
             minimal["result"]["verification"]["problems"] = [
-                str(item)[:80] for item in
-                minimal["result"]["verification"]["problems"]]
+                str(item)[:80] for item in problems_value]
             removed.append("verification.problems")
             return
-        if isinstance(minimal["result"].get("artifacts"), dict):
-            paths = [name for name in minimal["result"]["artifacts"]][:4]
+        artifacts_value = minimal["result"].get("artifacts")
+        if isinstance(artifacts_value, dict) and "paths" not in artifacts_value:
+            paths = [name for name in artifacts_value][:4]
             minimal["result"]["artifacts"] = {"paths": paths}
             removed.append("artifact_sizes")
             return
@@ -2269,15 +2316,9 @@ def _bounded_envelope(value: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict:
         if _utf8_len(minimal) >= before:
             break
     if _utf8_len(minimal) > limit:
-        # Absolute floor: the causal and identity fields are already short.
-        # Keep their names and values but drop every remaining description.
-        minimal["result"]["diagnosis"]["next_action"] = None
-        minimal["result"]["diagnosis"]["first_divergence"].pop(
-            "limitations", None)
-        minimal["result"]["artifacts"] = {"paths": [
-            name for name in (minimal["result"].get("artifacts", {}))
-            if isinstance(name, str)][:2]}
-        removed.extend(["artifact_sizes", "diagnosis.next_action"])
+        # Essential identity/provenance does not fit.  Never return a partial
+        # success that silently dropped causal evidence.
+        return _essential_cap_error(value, cap, original)
     minimal["truncated"] = True
     minimal["output_cap_bytes"] = cap
     minimal["output_bytes_before_cap"] = original

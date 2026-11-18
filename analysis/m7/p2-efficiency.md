@@ -58,16 +58,20 @@ default: case/capture identity, verification, qualification axes, first
 divergence, selected checkpoint statistics, the next recommended checkpoint,
 artifact names/sizes and the next action. Full manifests, dependency graphs,
 command streams and screenshots stay on disk. `--full` restores the complete
-view. The compact envelope is capped at 8,192 emitted bytes and reports
-`truncated`, `output_cap_bytes` and `output_bytes_before_cap` when reduced.
+view. The compact envelope is capped at 8,192 exact emitted UTF-8 bytes and reports
+`truncated`, `output_cap_bytes`, `output_bytes_before_cap` and
+`truncated_fields` when reduced. If essential identity/provenance/causal fields
+cannot fit, it returns a bounded `output_cap_exceeded` error rather than a
+partial success.
 
 `automation.case_baseline` records one identity for an existing baseline only
-after the current case passes `gfx_replay_case.verify()` and every declared
-payload is re-hashed from disk. Reuse also requires a completed replay result
-and readback. The identity covers the seal, diagnostic report, graph, replay
-result/readback, translated shader inputs, the actual renderer include closure
-(including `eu4_gfx_replay_semantics.h`), the replay binary/source, the
-comparison policy and the platform. A matching stored fingerprint is necessary
+after the current case passes `gfx_replay_case.verify()`, whose single payload
+pass re-hashes every declared file from disk. Reuse also requires a completed replay result
+and readback. The identity covers the seal, diagnostic report, graph, a completed replay
+result/readback (`stage=complete`), translated shader inputs, the renderer
+include closure shared with the build (`eu4_gfx_replay_semantics.h`,
+`eu4_gfx_draw_semantics.h`, `eu4_gfx_metal_replay.h`), the replay binary/source,
+the comparison policy and the platform. A matching stored fingerprint is necessary
 but not sufficient: an invalid current identity is never reusable. It is a
 single identity receipt, not a persistent cache.
 `automation.dsh_efficiency` now emits a compact execution-summary block for the
@@ -101,6 +105,32 @@ The first reviewed head (`10087c33`) was corrected in five places:
    verifies internally; an immediate `eu4_replay verify` is redundant for a
    routine read and is reserved for independent qualification/error work. The
    efficiency evidence now separates interface-level and end-to-end claims.
+
+Final correction round:
+
+6. **One replay-host dependency enumerator.** `automation.replay_host_dependencies`
+   walks the two compilation units and their local include closure, and includes
+   compiler identity, build flags and relevant build environment variables. Both
+   `m6_frame.build_replay_host` and `case_baseline` use it. The build writes a
+   dependency stamp only after a successful compile; a failed build removes the
+   binary and stamp. Tests prove a semantics-header edit triggers a rebuild,
+   an unchanged dependency set does not, flag/compiler changes invalidate, and
+   failure leaves no valid-looking artifact.
+7. **One payload-validation pass.** `case_baseline` no longer re-hashes declared
+   payloads after calling the verifier. `gfx_replay_case.verify()` is the single
+   authoritative content-hashing pass; the baseline classifies its payload
+   problems without repeating the walk. A reusable replay requires
+   `stage=complete`, `status=ok` and `readback=true`.
+8. **Required tests execute, not merely exist.** `automation.test_profiles
+   verify` now runs each required test id and rejects a dynamic skip
+   (`self.skipTest`) as well as a static skip.
+9. **Oversized essential compact fields fail closed.** If identity, provenance
+   or causal fields cannot fit in 8,192 emitted UTF-8 bytes, the envelope returns
+   an explicit bounded `output_cap_exceeded` error instead of silently dropping
+   them.
+10. **Session identity normalizes the CPython launcher.** The Homebrew
+   `bin/python3.14` launcher and the framework app binary are the same process
+   image for ownership purposes; start-time comparison still guards PID reuse.
 
 ## Authentic demonstration (C1)
 
@@ -153,13 +183,13 @@ still required before claiming end-to-end efficiency.
 
 ## Offline gate
 
-The final offline gate (`20261118T162742Z-35ac5960`) ran with
+The final offline gate (`20261118T173758Z-7d9c00f2`) ran with
 `EU4_TEST_PROFILE=offline` / `EU4_OFFLINE_ONLY=1` and `--min-tests 3000`:
-**3,731 tests ran, 3,690 executed, 41 skipped, 0 failures, 0 errors, 691.7 s**.
-The floor counts executed tests, so classified skips cannot satisfy it. The
-skips are the live-only module, platform-only hosts and 11 optional-QBDI TR3
-tests; QBDI remains non-mandatory. No EU4 process was started. The same gate is
-configured as the required `portable` check.
+**3,744 tests ran, 3,702 executed, 42 skipped, 0 failures, 0 errors,
+1,301.7 s**. The floor counts executed tests, so classified skips cannot satisfy
+it. The skips are the live-only module, platform-only hosts and 11 optional-QBDI
+TR3 tests; QBDI remains non-mandatory. No EU4 process was started. The same gate
+is configured as the required `portable` check.
 
 ## Evidence
 
