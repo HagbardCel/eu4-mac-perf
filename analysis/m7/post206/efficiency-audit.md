@@ -64,8 +64,9 @@ was only an intermediate snapshot.
 1. **Capture budget:** the default is now 512 events. The previous 256 default
    caused a real `draw_cap` failure; the successful capture used 325 events.
 2. **Compact diagnosis:** the authentic `agent-diagnosis.json` is 6,274 bytes
-   versus 3,011,036 bytes for the full report (about 99.8% smaller), and it
-   contains a causally selected checkpoint subset, not the first 32 rows.
+   versus approximately 3.0 MB for the full report (3,011,036 bytes at the
+   recorded output path, about 99.8% smaller), and it contains a causally
+   selected checkpoint subset, not the first 32 rows.
 3. **Authentic case outside CI:** 1.348 GB is never part of routine CI; a
    512 MiB budget produces an explicit incomplete summary.
 4. **No duplicate full suites:** one broad run was stopped at a live prompt;

@@ -78,7 +78,7 @@ For the authentic frame 1 report:
 
 | Artifact | Size |
 | --- | --- |
-| `diagnostic-report.json` | 3,011,036 bytes |
+| `diagnostic-report.json` | ~3.0 MB (3,011,036 bytes at the recorded path; path-dependent) |
 | `agent-diagnosis.json` | 6,274 bytes |
 
 The projection keeps only the frame identity, execution status, first
