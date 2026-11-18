@@ -827,3 +827,23 @@ class FirstDivergenceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AttachmentNamespaceTests(unittest.TestCase):
+    def test_texture_and_renderbuffer_names_do_not_alias(self):
+        texture_target = {
+            "framebuffer": 9,
+            "color_attachment": {"type": "texture", "name": 7},
+        }
+        renderbuffer_target = {
+            "framebuffer": 9,
+            "color_attachment": {"type": "renderbuffer", "name": 7},
+        }
+        tex_key, tex_attachment = gfx_frame_graph._target_resource(
+            texture_target)
+        rb_key, rb_attachment = gfx_frame_graph._target_resource(
+            renderbuffer_target)
+        self.assertEqual(tex_key, "tex:7")
+        self.assertEqual(tex_attachment["name"], 7)
+        self.assertEqual(rb_key, "fb:9")
+        self.assertEqual(rb_attachment, {})

@@ -195,6 +195,21 @@ def _lifecycle_write(lifecycle: list[dict], start_event: int,
     return None
 
 
+def _attachment_texture_name(target: dict) -> str:
+    """Return the colour attachment name only when it is a texture.
+
+    GL textures and renderbuffers have independent numeric namespaces.  A
+    renderbuffer write with the same number must not invalidate a texture copy.
+    """
+    attachment = target.get("color_attachment")
+    if not isinstance(attachment, dict):
+        return ""
+    if str(attachment.get("type") or "") == "renderbuffer":
+        return ""
+    name = attachment.get("name")
+    return "" if name is None else str(name)
+
+
 def _destination_observation(events: list[dict], lifecycle: list[dict],
                              start_position: int, start_event: int,
                              name: str) -> dict:
@@ -208,8 +223,7 @@ def _destination_observation(events: list[dict], lifecycle: list[dict],
         index = _event_index(event, position)
         kind = event.get("kind")
         target = event.get("target") or {}
-        color = target.get("color_attachment") or {}
-        target_name = str(color.get("name")) if color else ""
+        target_name = _attachment_texture_name(target)
         if kind == "draw":
             if target_name == name:
                 return {

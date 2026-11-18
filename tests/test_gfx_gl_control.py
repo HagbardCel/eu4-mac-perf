@@ -413,3 +413,94 @@ class GlTransferControlTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AttachmentNamespaceControlTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.source = bytes((1, 2, 3, 255, 4, 5, 6, 255,
+                             7, 8, 9, 255, 10, 11, 12, 255))
+        self.destination = bytes((3, 2, 1, 255, 6, 5, 4, 255,
+                                  9, 8, 7, 255, 12, 11, 10, 255))
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def test_renderbuffer_write_does_not_invalidate_texture_copy(self):
+        events = [{
+            "index": 1, "kind": "resolve",
+            "operation": "glCopyTexSubImage2D", "source": "0",
+            "destination": "442", "internal_format": 32856,
+            "source_image": {"file": "copy-source.bgra",
+                             "sha256": _sha(self.source),
+                             "width": 2, "height": 2},
+        }, {
+            "index": 2, "kind": "draw",
+            "target": {"color_attachment": {"type": "renderbuffer",
+                                            "name": 442}},
+        }, _draw(3, textures=[_texture(
+            442, "destination.bin", _sha(self.destination))])]
+        frame = make_frame(self.root, source=self.source,
+                           destination=self.destination, events=events)
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "match")
+
+    def test_texture_write_with_same_id_invalidates(self):
+        events = [{
+            "index": 1, "kind": "resolve",
+            "operation": "glCopyTexSubImage2D", "source": "0",
+            "destination": "442", "internal_format": 32856,
+            "source_image": {"file": "copy-source.bgra",
+                             "sha256": _sha(self.source),
+                             "width": 2, "height": 2},
+        }, {
+            "index": 2, "kind": "draw",
+            "target": {"color_attachment": {"type": "texture",
+                                            "name": 442}},
+        }, _draw(3, textures=[_texture(
+            442, "destination.bin", _sha(self.destination))])]
+        frame = make_frame(self.root, source=self.source,
+                           destination=self.destination, events=events)
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "incomplete")
+        self.assertEqual(report["checks"][0]["reason_code"],
+                         "intervening_write")
+
+    def test_texture_clear_invalidates(self):
+        events = [{
+            "index": 1, "kind": "resolve",
+            "operation": "glCopyTexSubImage2D", "source": "0",
+            "destination": "442", "internal_format": 32856,
+            "source_image": {"file": "copy-source.bgra",
+                             "sha256": _sha(self.source),
+                             "width": 2, "height": 2},
+        }, {"index": 2, "kind": "clear",
+            "target": {"color_attachment": {"type": "texture",
+                                            "name": 442}}},
+           _draw(3, textures=[_texture(
+               442, "destination.bin", _sha(self.destination))])]
+        frame = make_frame(self.root, source=self.source,
+                           destination=self.destination, events=events)
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "incomplete")
+        self.assertEqual(report["checks"][0]["reason_code"],
+                         "intervening_clear")
+
+    def test_renderbuffer_clear_does_not_invalidate_texture(self):
+        events = [{
+            "index": 1, "kind": "resolve",
+            "operation": "glCopyTexSubImage2D", "source": "0",
+            "destination": "442", "internal_format": 32856,
+            "source_image": {"file": "copy-source.bgra",
+                             "sha256": _sha(self.source),
+                             "width": 2, "height": 2},
+        }, {"index": 2, "kind": "clear",
+            "target": {"color_attachment": {"type": "renderbuffer",
+                                            "name": 442}}},
+           _draw(3, textures=[_texture(
+               442, "destination.bin", _sha(self.destination))])]
+        frame = make_frame(self.root, source=self.source,
+                           destination=self.destination, events=events)
+        report = gfx_gl_control.control_frame(frame)
+        self.assertEqual(report["status"], "match")
