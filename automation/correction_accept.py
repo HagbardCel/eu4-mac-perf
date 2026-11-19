@@ -50,6 +50,10 @@ SCHEMA = "gfx-correction-acceptance/v1"
 RESULTS = ("accepted", "rejected", "invalid_evidence")
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_POLICY = ROOT / "analysis" / "m6" / "comparison-policy.json"
+DEFAULT_QUALIFICATION_CONTRACT = (
+    ROOT / "analysis" / "m6" / "correction-qualification.json")
+CONTRACT_SCHEMA = "gfx-correction-qualification/v1"
+CANONICAL_READBACK = "metal-frame.bgra"
 
 # Replay classifications that denote a completed comparison.  Anything else
 # (incomplete_*, invalid_provenance, gpu_execution_failure, fault_experiment)
@@ -154,6 +158,17 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
     if not replay:
         raise AcceptanceError("replay_unreadable",
                               str(replay_dir / "replay.json"))
+    frame_block = (replay.get("frame")
+                   if isinstance(replay.get("frame"), dict) else {})
+    raw_name = str(frame_block.get("raw_file") or "")
+    if raw_name != CANONICAL_READBACK:
+        # The shared comparator reads frame.raw_file; the producer receipt
+        # authenticates metal-frame.bgra.  Accepting an alternate path would
+        # compare a file the receipt never bound.
+        raise AcceptanceError(
+            "unbound_readback",
+            f"the replay declares readback {raw_name!r}; the producer receipt "
+            f"authenticates {CANONICAL_READBACK!r}")
     shadow_path = replay_dir / "shadow-report.json"
     shadow = _json(shadow_path) if shadow_path.is_file() else None
     identity = gfx_independent_replay.identity_axis(
@@ -342,12 +357,57 @@ def _baseline_problems(case_dir: Path, baseline: dict, before_dir: Path,
     }
 
 
+def _load_contract(value) -> tuple[dict, list[str]]:
+    """Load and validate the configured exact-match regression inventory."""
+    problems: list[str] = []
+    if value is None:
+        value = DEFAULT_QUALIFICATION_CONTRACT
+    if isinstance(value, dict):
+        contract = value
+    else:
+        path = Path(value).expanduser()
+        try:
+            contract = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            return {}, [f"qualification contract unreadable: {path}: {exc}"]
+        if not isinstance(contract, dict):
+            return {}, [f"qualification contract is not an object: {path}"]
+    if contract.get("schema") != CONTRACT_SCHEMA:
+        problems.append(
+            f"qualification contract schema must be {CONTRACT_SCHEMA}")
+    required = contract.get("required_regressions")
+    if not isinstance(required, list):
+        problems.append(
+            "qualification contract required_regressions must be a list")
+        required = []
+    cleaned: list[str] = []
+    for item in required:
+        if not isinstance(item, str) or not item.strip():
+            problems.append(
+                "qualification contract has an invalid regression id")
+            continue
+        if item in cleaned:
+            problems.append(
+                f"qualification contract repeats regression {item!r}")
+        cleaned.append(item)
+    allow_additional = contract.get("allow_additional", False)
+    if not isinstance(allow_additional, bool):
+        problems.append(
+            "qualification contract allow_additional must be a boolean")
+        allow_additional = False
+    return {"schema": contract.get("schema"),
+            "required_regressions": cleaned,
+            "allow_additional": allow_additional}, problems
+
+
 def evaluate(*, case_dir: Path | str, baseline_path: Path | str,
              candidate_revision: str, after_replay: Path | str,
              claimed_before, claimed_after,
              baseline_revision: str | None = None,
              regressions=(), policy: Path | str | None = None,
-             expected_revision: str | None = None) -> dict:
+             expected_revision: str | None = None,
+             qualification_contract=None,
+             claimed_regressions=()) -> dict:
     """Independently accept or reject one proposed correction."""
     case_dir = Path(case_dir).expanduser().resolve()
     baseline_path = Path(baseline_path).expanduser().resolve()
@@ -356,6 +416,10 @@ def evaluate(*, case_dir: Path | str, baseline_path: Path | str,
                    else DEFAULT_POLICY)
     problems: list[dict] = []
     limitations: list[str] = []
+    contract, contract_problems = _load_contract(qualification_contract)
+    for detail in contract_problems:
+        problems.append({"code": "qualification_contract",
+                         "detail": detail, "severity": "invalid"})
 
     def problem(code: str, detail: str, *, severity: str = "rejected") -> None:
         problems.append({"code": code, "detail": detail,
@@ -483,6 +547,19 @@ def evaluate(*, case_dir: Path | str, baseline_path: Path | str,
         limitations.append(
             "no baseline revision was supplied; a changed candidate revision "
             "cannot be proven from the artifacts alone")
+    if after is not None:
+        producer_revision = str(
+            after["producer"].get("source_revision") or "").strip()
+        if not producer_revision:
+            problem("candidate_revision_unbound",
+                    "the candidate producer receipt records no build revision; "
+                    "the revision string is not evidence of executable origin",
+                    severity="invalid")
+        elif revision and producer_revision != revision:
+            problem("candidate_revision_mismatch",
+                    f"the claimed candidate revision {revision!r} is not the "
+                    f"tested build revision {producer_revision!r}",
+                    severity="invalid")
 
     recomputed_before = _statistics(before["pixels"]) if before else None
     recomputed_after = _statistics(after["pixels"]) if after else None
@@ -513,49 +590,169 @@ def evaluate(*, case_dir: Path | str, baseline_path: Path | str,
                     "the recomputed candidate does not improve any pixel "
                     "statistic over the baseline")
 
-    # Every previously exact-matching regression must still be exact under the
-    # same candidate producer, recomputed from its own artifacts.
+    # The configured qualification contract defines the required exact-match
+    # inventory.  The supplied evidence must map one-to-one onto it: an omitted,
+    # substituted, duplicate or unrelated case is a rejection, and an empty
+    # submission cannot bypass a non-empty requirement.
+    required = list(contract.get("required_regressions") or [])
+    allow_additional = bool(contract.get("allow_additional"))
+    claimed_ids: list[str] = []
+    for entry in claimed_regressions or ():
+        value = entry
+        if isinstance(entry, dict):
+            value = entry.get("case_id") or entry.get("id") or entry.get("case")
+        text = str(value or "").strip()
+        if not text:
+            problem("regression_claim_invalid",
+                    "a claimed exact-match regression has no case identifier")
+            continue
+        if text in claimed_ids:
+            problem("regression_claim_duplicate",
+                    f"the conclusion claims regression {text!r} more than once")
+            continue
+        claimed_ids.append(text)
+    if required and claimed_ids:
+        if set(claimed_ids) != set(required):
+            problem("regression_claim_mismatch",
+                    "the conclusion's claimed regressions do not match the "
+                    "qualification contract: claimed "
+                    f"{sorted(claimed_ids)!r}, required {sorted(required)!r}",
+                    severity="invalid")
+    # The requirement is the contract when it names cases, otherwise the
+    # candidate's own claim.  An empty submission never bypasses either.
+    expected = required or claimed_ids
     regression_rows: list[dict] = []
+    submitted_ids: list[str] = []
     candidate_producer = (after or {}).get("producer") or {}
     for position, entry in enumerate(regressions or ()):
-        row = {"case": None, "ok": False, "statistics": None,
-               "producer_ok": False}
-        path = Path(entry).expanduser().resolve() if not isinstance(
-            entry, dict) else Path(str(entry.get("case") or "")).expanduser().resolve()
+        row = {"case": None, "case_id": None, "ok": False,
+               "statistics": None, "producer_ok": False}
+        if isinstance(entry, dict):
+            case_value = entry.get("case") or entry.get("path")
+            declared_id = entry.get("id") or entry.get("case_id")
+        else:
+            case_value, declared_id = entry, None
+        path = Path(str(case_value or "")).expanduser()
         row["case"] = str(path)
+        if not case_value:
+            problem("regression_invalid",
+                    f"regression entry {position} names no case",
+                    severity="invalid")
+            regression_rows.append(row)
+            continue
+        path = path.resolve()
         if not _within_root(path):
             problem("regression_outside_workspace",
                     f"regression {path} is outside the repository root",
                     severity="invalid")
+            regression_rows.append(row)
+            continue
+        manifest = _json(path / "case.json")
+        case_id = str(manifest.get("case_id") or declared_id or "").strip()
+        if not case_id:
+            problem("regression_invalid",
+                    f"regression {path} has no case_id", severity="invalid")
+            regression_rows.append(row)
+            continue
+        if case_id in submitted_ids:
+            problem("regression_duplicate",
+                    f"regression case {case_id!r} was submitted more than once",
+                    severity="invalid")
+            regression_rows.append(row)
+            continue
+        submitted_ids.append(case_id)
+        row["case_id"] = case_id
+        before_count = len(problems)
         try:
             verified = gfx_replay_case.verify(path)
             if verified.get("ok") is not True:
                 problem("regression_unverified",
-                        f"regression {path} no longer verifies")
+                        f"regression {case_id} no longer verifies",
+                        severity="invalid")
+            # Full-frame execution is established before any pixel result: a
+            # failed replay with stale zero-mismatch pixels is not a pass.
+            replay_document = _json(path / "replay" / "replay.json")
+            execution_problems = (
+                gfx_independent_replay.full_frame_completion_problems(
+                    replay_document))
+            if execution_problems:
+                problem("regression_incomplete",
+                        f"regression {case_id} is not a complete full-frame "
+                        "execution: " + "; ".join(execution_problems),
+                        severity="invalid")
+                row["ok"] = False
+                regression_rows.append(row)
+                continue
             replay_side = _replay_evidence(path / "capture",
                                            path / "replay", policy_path)
-            statistics = _statistics(replay_side["pixels"])
-            row["statistics"] = statistics
+            # Execution and provenance are established before pixels: a failed
+            # replay with stale zero-mismatch pixels is not a passing
+            # regression.
+            if replay_side["execution_problems"]:
+                problem("regression_incomplete",
+                        f"regression {case_id} is not a complete full-frame "
+                        "execution: "
+                        + "; ".join(replay_side["execution_problems"]),
+                        severity="invalid")
+            if _capture(replay_side["capture"] or {}) != _capture(seal):
+                problem("regression_foreign_capture",
+                        f"regression {case_id} does not name its own verified "
+                        "sealed capture", severity="invalid")
+            if replay_side["checkpoint_validation"].get("status") != "ok":
+                problem("regression_checkpoints",
+                        f"regression {case_id} checkpoint reconciliation is "
+                        f"{replay_side['checkpoint_validation'].get('status')!r}",
+                        severity="invalid")
+            if not replay_side["receipt_present"]:
+                problem("regression_receipt_missing",
+                        f"regression {case_id} has no producer receipt",
+                        severity="invalid")
             row["producer_ok"] = (
                 replay_side["producer"].get("executable_sha256")
                 == candidate_producer.get("executable_sha256")
                 and replay_side["producer"].get("build_fingerprint")
-                == candidate_producer.get("build_fingerprint"))
+                == candidate_producer.get("build_fingerprint")
+                and replay_side["producer"].get("source_revision")
+                == candidate_producer.get("source_revision"))
             if not row["producer_ok"]:
                 problem("regression_producer_mismatch",
-                        f"regression {path} was not produced by the candidate "
-                        "build")
+                        f"regression {case_id} was not produced by the "
+                        "candidate build", severity="invalid")
+            statistics = _statistics(replay_side["pixels"])
+            row["statistics"] = statistics
             if statistics is None or statistics["mismatched_pixels"] != 0:
                 problem("regression_failed",
-                        f"regression {path} is not an exact match "
-                        f"({None if statistics is None else statistics['mismatched_pixels']} "
-                        "mismatched pixels)")
-            else:
-                row["ok"] = True
+                        f"regression {case_id} is not an exact match "
+                        f"({None if statistics is None else statistics['mismatched_pixels']}"
+                        " mismatched pixels)")
         except Exception as exc:  # noqa: BLE001 - isolate each regression
             problem("regression_unverified",
-                    f"regression {path}: {type(exc).__name__}: {exc}")
+                    f"regression {case_id}: {type(exc).__name__}: {exc}",
+                    severity="invalid")
+        row["ok"] = len(problems) == before_count
         regression_rows.append(row)
+
+    missing = [case_id for case_id in expected
+               if case_id not in submitted_ids]
+    unexpected = [case_id for case_id in submitted_ids
+                  if case_id not in expected]
+    if expected and not submitted_ids:
+        problem("regression_missing",
+                "required exact-match regressions "
+                f"({', '.join(expected)}) were not supplied",
+                severity="invalid")
+    elif missing:
+        problem("regression_missing",
+                "required exact-match regressions are missing: "
+                + ", ".join(missing), severity="invalid")
+    if unexpected and not allow_additional:
+        problem("regression_unexpected",
+                "regressions not required by the contract or claimed by the "
+                "conclusion: " + ", ".join(unexpected), severity="invalid")
+    if not expected:
+        limitations.append(
+            "neither the qualification contract nor the conclusion requires "
+            "an exact-match regression")
 
     axes = {"before": _qualification_axes(before) if before else None,
             "after": _qualification_axes(after) if after else None}
@@ -583,8 +780,6 @@ def evaluate(*, case_dir: Path | str, baseline_path: Path | str,
         # Defensive: improvement is required for acceptance.
         result = "rejected"
 
-    if not regression_rows:
-        limitations.append("no exact-match regression cases were listed")
     if after is not None and before is not None and (
             after["producer"] == before["producer"]):
         limitations.append(
@@ -635,6 +830,17 @@ def evaluate(*, case_dir: Path | str, baseline_path: Path | str,
         }),
         "claimed": claimed,
         "regressions": regression_rows,
+        "regression_inventory": {
+            "contract_required": required,
+            "claimed": claimed_ids,
+            "required": expected,
+            "verified": [row["case_id"] for row in regression_rows
+                         if row["ok"]],
+            "submitted": submitted_ids,
+            "missing": missing,
+            "unexpected": unexpected,
+            "allow_additional": allow_additional,
+        },
         "qualification": axes,
         "complete_qualification": complete_qualification,
         "problems": problems,
@@ -656,6 +862,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--baseline-revision", default=None)
     parser.add_argument("--expected-revision", default=None)
     parser.add_argument("--regression", action="append", default=[], type=Path)
+    parser.add_argument("--claimed-regression", action="append", default=[])
+    parser.add_argument("--qualification-contract", type=Path, default=None)
     parser.add_argument("--policy", type=Path, default=None)
     parser.add_argument("--before-mismatched-pixels", type=int, required=True)
     parser.add_argument("--before-max-channel-error", type=int, required=True)
@@ -683,6 +891,8 @@ def main(argv: list[str] | None = None) -> int:
             },
             baseline_revision=args.baseline_revision,
             regressions=args.regression,
+            claimed_regressions=args.claimed_regression,
+            qualification_contract=args.qualification_contract,
             policy=args.policy,
             expected_revision=args.expected_revision,
         )

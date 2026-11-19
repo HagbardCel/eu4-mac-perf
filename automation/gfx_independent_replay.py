@@ -3266,6 +3266,7 @@ def write_producer_receipt(out_dir: Path, frame_dir: Path,
             "executable_sha256": producer.get("executable_sha256"),
             "build_fingerprint": producer.get("build_fingerprint"),
             "build_stamp_sha256": producer.get("build_stamp_sha256"),
+            "source_revision": producer.get("source_revision"),
         },
         "capture": capture,
         "result": {

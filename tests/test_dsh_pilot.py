@@ -146,6 +146,16 @@ def acceptance_report():
                                   "max_channel_error": 4}},
         "after": {"statistics": {"mismatched_pixels": 10,
                                  "max_channel_error": 2}},
+        "regression_inventory": {
+            "contract_required": ["canonical-title"],
+            "claimed": ["canonical-title"],
+            "required": ["canonical-title"],
+            "verified": ["canonical-title"],
+            "submitted": ["canonical-title"],
+            "missing": [],
+            "unexpected": [],
+            "allow_additional": False,
+        },
         "problems": [],
     }
 

@@ -460,6 +460,20 @@ def validate_conclusion(value, *, authoritative: dict | None = None,
                 "after": ((acceptance.get("after") or {}).get(
                     "statistics") or {}),
             }
+            inventory = (acceptance.get("regression_inventory")
+                         if isinstance(acceptance.get("regression_inventory"),
+                                       dict) else {})
+            claimed_cases = [
+                str(entry.get("case")) for entry in regressions
+                if isinstance(entry, dict) and entry.get("case")]
+            verified_cases = [str(item) for item in
+                              (inventory.get("verified") or [])]
+            if sorted(set(claimed_cases)) != sorted(set(verified_cases)):
+                problem("correction_regression_evidence_mismatch",
+                        "the conclusion's regression claims do not match the "
+                        "independently verified regression evidence: claimed "
+                        f"{sorted(set(claimed_cases))!r}, verified "
+                        f"{sorted(set(verified_cases))!r}")
             claims = {"before": before, "after": after}
             for side in ("before", "after"):
                 claim = claims[side]
@@ -1388,6 +1402,11 @@ def summarize_run(run_dir: Path | str, conclusion_path: Path | str,
                     claimed_after=validation_block.get("after"),
                     baseline_revision=correction_baseline_revision,
                     regressions=correction_regressions,
+                    claimed_regressions=[
+                        entry.get("case")
+                        for entry in (validation_block.get(
+                            "exact_match_regressions") or [])
+                        if isinstance(entry, dict)],
                     policy=correction_policy,
                     expected_revision=correction_expected_revision,
                 )

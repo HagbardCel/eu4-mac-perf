@@ -147,6 +147,7 @@ def _current_producer() -> dict:
         "executable": str(host),
         "executable_sha256": binary_sha,
         "build_fingerprint": identity["fingerprint"],
+        "source_revision": stamp.get("source_revision"),
     }
 
 

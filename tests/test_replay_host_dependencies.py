@@ -192,6 +192,11 @@ class IncrementalBuildTests(unittest.TestCase):
         self.assertIn("benchmark/eu4_gfx_replay_semantics.h",
                       stamp["dependencies"])
 
+    def test_producer_identity_exposes_the_source_revision_field(self):
+        m6_frame.build_replay_host()
+        producer = m6_frame.replay_host_producer()
+        self.assertIn("source_revision", producer)
+
     def test_stamp_records_binary_digest_and_tampering_rebuilds(self):
         m6_frame.build_replay_host()
         stamp = json.loads(self.stamp.read_text())

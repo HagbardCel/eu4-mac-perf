@@ -3,8 +3,10 @@
 The fixture packages a synthetic sealed frame and a Metal replay into the same
 portable case format the live pipeline uses.  The "renderer fault" is an
 explicit one-pixel difference in the baseline replay; the candidate replay
-removes it.  Nothing here executes EU4 or a GPU replay: acceptance is recomputed
-from the validated artifacts by the existing comparison and checkpoint engines.
+removes it.  Producer identity is mocked exactly as in ``test_case_baseline``,
+so the suite is portable: no native replay host, EU4 launch or GPU is needed.
+Acceptance is recomputed from the validated artifacts by the existing
+comparison and checkpoint engines.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -28,6 +31,26 @@ from automation import (  # noqa: E402
     gfx_replay_case,
 )
 from tests.test_m7_diagnosis import WIDTH, HEIGHT, DiagnosisFixture, sha  # noqa: E402
+
+REVISION = "d" * 40
+OTHER_REVISION = "e" * 40
+
+def producer_identity(*, revision: str = REVISION) -> dict:
+    return {
+        "executable": "/tmp/gfx_frame_replay",
+        "executable_sha256": "c" * 64,
+        "build_fingerprint": "b" * 64,
+        "build_stamp_sha256": "a" * 64,
+        "source_revision": revision,
+    }
+
+
+def contract(*ids: str, allow_additional: bool = False) -> dict:
+    return {
+        "schema": correction_accept.CONTRACT_SCHEMA,
+        "required_regressions": list(ids),
+        "allow_additional": allow_additional,
+    }
 
 
 def _report_for(fixture, replay_dir: Path, *, status: str) -> dict:
@@ -59,7 +82,6 @@ class CorrectionFixture:
         self.frame = self.fixture.frame
         self.reference = self.fixture.reference
         self.producer = case_baseline.current_producer()
-        self._sequence = 0
 
     def replay_dir(self, name: str, candidate: bytes,
                    *, status: str = "confirmed_rendering_difference") -> Path:
@@ -91,6 +113,12 @@ class CorrectionFixture:
         pixels[4] = (pixels[4] + 3) % 256
         return bytes(pixels)
 
+    def two_fault_pixels(self) -> bytes:
+        pixels = bytearray(self.reference)
+        pixels[0] = (pixels[0] + 7) % 256
+        pixels[4] = (pixels[4] + 7) % 256
+        return bytes(pixels)
+
     def package(self, replay: Path, name: str, *, case_id: str) -> Path:
         case_dir = self.root / name
         gfx_replay_case.package(self.frame, replay, case_dir,
@@ -111,6 +139,11 @@ class CorrectionFixture:
              "max_channel_error": after["max_channel_error"]},
         )
 
+    def exact_regression(self, name: str, case_id: str) -> tuple[Path, Path]:
+        replay = self.replay_dir(name, self.reference)
+        case_dir = self.package(replay, f"{name}-case", case_id=case_id)
+        return case_dir, replay
+
 
 class CorrectionAcceptanceTests(unittest.TestCase):
     def setUp(self):
@@ -118,23 +151,38 @@ class CorrectionAcceptanceTests(unittest.TestCase):
         base.mkdir(parents=True, exist_ok=True)
         self.temporary = tempfile.TemporaryDirectory(dir=base)
         self.root = Path(self.temporary.name)
+        for name, value in (
+                ("_current_producer", producer_identity()),
+                ("current_producer", producer_identity())):
+            patcher = mock.patch.object(case_baseline, name,
+                                        return_value=dict(value))
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.model = CorrectionFixture(self.root / "model")
 
     def tearDown(self):
         self.temporary.cleanup()
 
-    def acceptance(self, *, after: Path, claims, **kwargs):
-        before = self.model.replay_dir("before", self.model.faulty_pixels())
+    def build_model(self, *, before_pixels=None):
+        before_pixels = (self.model.faulty_pixels()
+                         if before_pixels is None else before_pixels)
+        before = self.model.replay_dir("before", before_pixels)
         case_dir = self.model.package(before, "case", case_id="controlled")
         baseline = self.model.baseline(case_dir, "baseline.json")
+        return case_dir, baseline
+
+    def acceptance(self, *, after: Path, claims, **kwargs):
+        case_dir, baseline = self.build_model()
         return correction_accept.evaluate(
             case_dir=case_dir,
             baseline_path=baseline,
-            candidate_revision=kwargs.pop("candidate_revision", "candidate-1"),
+            candidate_revision=kwargs.pop("candidate_revision", REVISION),
             after_replay=after,
             claimed_before=claims[0],
             claimed_after=claims[1],
             baseline_revision=kwargs.pop("baseline_revision", "baseline-1"),
+            qualification_contract=kwargs.pop(
+                "qualification_contract", contract()),
             **kwargs)
 
     def test_one_pixel_fault_is_corrected_and_accepted(self):
@@ -149,6 +197,7 @@ class CorrectionAcceptanceTests(unittest.TestCase):
         self.assertTrue(report["pixel_perfect"], report)
         self.assertEqual(
             report["after"]["statistics"]["mismatched_pixels"], 0)
+        self.assertEqual(report["candidate"]["revision"], REVISION)
 
     def test_worse_candidate_is_rejected(self):
         after = self.model.replay_dir("after-worse", self.model.partial_pixels())
@@ -161,23 +210,19 @@ class CorrectionAcceptanceTests(unittest.TestCase):
         self.assertIn("not_improved",
                       {item["code"] for item in report["problems"]})
 
-    def test_valid_partial_improvement_with_fewer_pixels_is_accepted(self):
-        # Baseline has two differing pixels; the candidate fixes one.
-        baseline = bytearray(self.model.reference)
-        baseline[0] = (baseline[0] + 7) % 256
-        baseline[4] = (baseline[4] + 7) % 256
-        before = self.model.replay_dir("before2", bytes(baseline))
-        case_dir = self.model.package(before, "case2", case_id="partial")
-        baseline_record = self.model.baseline(case_dir, "baseline2.json")
+    def test_valid_partial_improvement_is_accepted_not_equivalent(self):
+        case_dir, baseline = self.build_model(
+            before_pixels=self.model.two_fault_pixels())
         after = self.model.replay_dir("after2", self.model.partial_pixels())
         report = correction_accept.evaluate(
             case_dir=case_dir,
-            baseline_path=baseline_record,
-            candidate_revision="candidate-2",
+            baseline_path=baseline,
+            candidate_revision=REVISION,
             after_replay=after,
             claimed_before={"mismatched_pixels": 2, "max_channel_error": 7},
             claimed_after={"mismatched_pixels": 2, "max_channel_error": 3},
-            baseline_revision="baseline-1")
+            baseline_revision="baseline-1",
+            qualification_contract=contract())
         self.assertEqual(report["result"], "accepted", report)
         self.assertTrue(report["improved"])
         self.assertFalse(report["pixel_perfect"])
@@ -195,8 +240,6 @@ class CorrectionAcceptanceTests(unittest.TestCase):
                       {item["code"] for item in report["problems"]})
 
     def test_substituted_candidate_artifact_is_rejected(self):
-        # The candidate path points at the unmodified baseline replay while the
-        # conclusion claims a corrected result.
         substituted = self.model.replay_dir(
             "substituted", self.model.faulty_pixels())
         report = self.acceptance(
@@ -229,17 +272,16 @@ class CorrectionAcceptanceTests(unittest.TestCase):
         case_dir = self.model.package(before, "case-change",
                                       case_id="changed")
         baseline_path = self.model.baseline(case_dir, "baseline-change.json")
-        # Rewrite the packaged baseline Metal readback: its recorded digest no
-        # longer describes the artifact that would be reused.
         (case_dir / "replay" / "metal-frame.bgra").write_bytes(self.model.reference)
         report = correction_accept.evaluate(
             case_dir=case_dir,
             baseline_path=baseline_path,
-            candidate_revision="candidate-3",
+            candidate_revision=REVISION,
             after_replay=after,
             claimed_before={"mismatched_pixels": 1, "max_channel_error": 7},
             claimed_after={"mismatched_pixels": 0, "max_channel_error": 0},
-            baseline_revision="baseline-1")
+            baseline_revision="baseline-1",
+            qualification_contract=contract())
         self.assertEqual(report["result"], "invalid_evidence", report)
         self.assertIn("baseline_replay_changed",
                       {item["code"] for item in report["problems"]})
@@ -270,12 +312,52 @@ class CorrectionAcceptanceTests(unittest.TestCase):
                 {"mismatched_pixels": 0, "max_channel_error": 0}))
         self.assertEqual(report["result"], "invalid_evidence", report)
 
+    def test_unbound_alternate_readback_is_rejected(self):
+        after = self.model.replay_dir("after-alt", self.model.reference)
+        shutil.copy2(after / "metal-frame.bgra", after / "alternate.bgra")
+        replay = json.loads((after / "replay.json").read_text())
+        replay["frame"]["raw_file"] = "alternate.bgra"
+        (after / "replay.json").write_text(json.dumps(replay))
+        report = self.acceptance(
+            after=after,
+            claims=self.model.claims(
+                {"mismatched_pixels": 1, "max_channel_error": 7},
+                {"mismatched_pixels": 0, "max_channel_error": 0}))
+        self.assertEqual(report["result"], "invalid_evidence", report)
+        details = " ".join(item.get("detail", "")
+                           for item in report["problems"])
+        self.assertIn("unbound_readback", details)
+
+    def test_revision_not_bound_to_the_tested_build_is_rejected(self):
+        after = self.model.replay_dir("after-rev", self.model.reference)
+        report = self.acceptance(
+            after=after,
+            claims=self.model.claims(
+                {"mismatched_pixels": 1, "max_channel_error": 7},
+                {"mismatched_pixels": 0, "max_channel_error": 0}),
+            candidate_revision=OTHER_REVISION)
+        self.assertEqual(report["result"], "invalid_evidence", report)
+        self.assertIn("candidate_revision_mismatch",
+                      {item["code"] for item in report["problems"]})
+
+    def test_receipt_without_a_build_revision_is_rejected(self):
+        after = self.model.replay_dir("after-norev", self.model.reference)
+        receipt_path = after / "producer-receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["producer"].pop("source_revision", None)
+        receipt_path.write_text(json.dumps(receipt))
+        report = self.acceptance(
+            after=after,
+            claims=self.model.claims(
+                {"mismatched_pixels": 1, "max_channel_error": 7},
+                {"mismatched_pixels": 0, "max_channel_error": 0}))
+        self.assertEqual(report["result"], "invalid_evidence", report)
+        self.assertIn("candidate_revision_unbound",
+                      {item["code"] for item in report["problems"]})
+
     def test_regression_failure_hidden_behind_improvement_is_rejected(self):
         after = self.model.replay_dir("after-reg", self.model.reference)
-        before = self.model.replay_dir("before-reg",
-                                       self.model.faulty_pixels())
-        case_dir = self.model.package(before, "case-reg", case_id="regression-main")
-        baseline_path = self.model.baseline(case_dir, "baseline-reg.json")
+        case_dir, baseline_path = self.build_model()
         broken = bytearray(self.model.reference)
         broken[8] = (broken[8] + 1) % 256
         regression = self.model.replay_dir("regression", bytes(broken))
@@ -284,15 +366,133 @@ class CorrectionAcceptanceTests(unittest.TestCase):
         report = correction_accept.evaluate(
             case_dir=case_dir,
             baseline_path=baseline_path,
-            candidate_revision="candidate-4",
+            candidate_revision=REVISION,
             after_replay=after,
             claimed_before={"mismatched_pixels": 1, "max_channel_error": 7},
             claimed_after={"mismatched_pixels": 0, "max_channel_error": 0},
             baseline_revision="baseline-1",
-            regressions=[regression_case])
+            regressions=[regression_case],
+            claimed_regressions=["regression-broken"],
+            qualification_contract=contract("regression-broken"))
         self.assertEqual(report["result"], "rejected", report)
+        self.assertIn("regression_failed",
+                      {item["code"] for item in report["problems"]})
+
+    def test_valid_exact_match_regression_is_accepted(self):
+        after = self.model.replay_dir("after-reg-ok", self.model.reference)
+        case_dir, baseline_path = self.build_model()
+        regression_case, _ = self.model.exact_regression(
+            "regression-ok", "regression-ok")
+        report = correction_accept.evaluate(
+            case_dir=case_dir,
+            baseline_path=baseline_path,
+            candidate_revision=REVISION,
+            after_replay=after,
+            claimed_before={"mismatched_pixels": 1, "max_channel_error": 7},
+            claimed_after={"mismatched_pixels": 0, "max_channel_error": 0},
+            baseline_revision="baseline-1",
+            regressions=[regression_case],
+            claimed_regressions=["regression-ok"],
+            qualification_contract=contract("regression-ok"))
+        self.assertEqual(report["result"], "accepted", report)
+        self.assertEqual(report["regression_inventory"]["verified"],
+                         ["regression-ok"])
+
+    def test_missing_required_regression_is_rejected(self):
+        after = self.model.replay_dir("after-missing", self.model.reference)
+        report = self.acceptance(
+            after=after,
+            claims=self.model.claims(
+                {"mismatched_pixels": 1, "max_channel_error": 7},
+                {"mismatched_pixels": 0, "max_channel_error": 0}),
+            qualification_contract=contract("regression-ok"))
+        self.assertEqual(report["result"], "invalid_evidence", report)
+        self.assertIn("regression_missing",
+                      {item["code"] for item in report["problems"]})
+
+    def test_claimed_regression_without_evidence_is_rejected(self):
+        after = self.model.replay_dir("after-claimed", self.model.reference)
+        report = self.acceptance(
+            after=after,
+            claims=self.model.claims(
+                {"mismatched_pixels": 1, "max_channel_error": 7},
+                {"mismatched_pixels": 0, "max_channel_error": 0}),
+            claimed_regressions=["regression-ok"])
+        self.assertEqual(report["result"], "invalid_evidence", report)
+        self.assertIn("regression_missing",
+                      {item["code"] for item in report["problems"]})
+
+    def test_duplicate_regression_is_rejected(self):
+        after = self.model.replay_dir("after-dup", self.model.reference)
+        case_dir, baseline_path = self.build_model()
+        regression_case, _ = self.model.exact_regression(
+            "regression-dup", "regression-dup")
+        report = correction_accept.evaluate(
+            case_dir=case_dir,
+            baseline_path=baseline_path,
+            candidate_revision=REVISION,
+            after_replay=after,
+            claimed_before={"mismatched_pixels": 1, "max_channel_error": 7},
+            claimed_after={"mismatched_pixels": 0, "max_channel_error": 0},
+            baseline_revision="baseline-1",
+            regressions=[regression_case, regression_case],
+            claimed_regressions=["regression-dup"],
+            qualification_contract=contract("regression-dup"))
+        self.assertEqual(report["result"], "invalid_evidence", report)
+        self.assertIn("regression_duplicate",
+                      {item["code"] for item in report["problems"]})
+
+    def test_unrelated_regression_is_rejected(self):
+        after = self.model.replay_dir("after-unrelated", self.model.reference)
+        case_dir, baseline_path = self.build_model()
+        unrelated, _ = self.model.exact_regression(
+            "regression-other", "regression-other")
+        report = correction_accept.evaluate(
+            case_dir=case_dir,
+            baseline_path=baseline_path,
+            candidate_revision=REVISION,
+            after_replay=after,
+            claimed_before={"mismatched_pixels": 1, "max_channel_error": 7},
+            claimed_after={"mismatched_pixels": 0, "max_channel_error": 0},
+            baseline_revision="baseline-1",
+            regressions=[unrelated],
+            claimed_regressions=["regression-ok"],
+            qualification_contract=contract("regression-ok"))
+        self.assertEqual(report["result"], "invalid_evidence", report)
         codes = {item["code"] for item in report["problems"]}
-        self.assertIn("regression_failed", codes)
+        self.assertIn("regression_missing", codes)
+        self.assertIn("regression_unexpected", codes)
+
+    def test_failed_regression_execution_is_rejected_despite_zero_pixels(self):
+        after = self.model.replay_dir("after-reg-fail", self.model.reference)
+        case_dir, baseline_path = self.build_model()
+        replay = self.model.replay_dir("regression-failed", self.model.reference)
+        # Rebind a failed execution to the exact (zero-mismatch) pixels.
+        document = json.loads((replay / "replay.json").read_text())
+        document["command_status"] = 5
+        (replay / "replay.json").write_text(json.dumps(document))
+        gfx_independent_replay.write_producer_receipt(
+            replay, self.model.frame, self.model.producer,
+            replay / "replay.json")
+        (replay / "replay-report.json").write_text(
+            json.dumps(_report_for(self.model.fixture, replay,
+                                   status="failed")))
+        regression_case = self.model.package(
+            replay, "case-regression-failed", case_id="regression-failed")
+        report = correction_accept.evaluate(
+            case_dir=case_dir,
+            baseline_path=baseline_path,
+            candidate_revision=REVISION,
+            after_replay=after,
+            claimed_before={"mismatched_pixels": 1, "max_channel_error": 7},
+            claimed_after={"mismatched_pixels": 0, "max_channel_error": 0},
+            baseline_revision="baseline-1",
+            regressions=[regression_case],
+            claimed_regressions=["regression-failed"],
+            qualification_contract=contract("regression-failed"))
+        self.assertEqual(report["result"], "invalid_evidence", report)
+        self.assertIn("regression_incomplete",
+                      {item["code"] for item in report["problems"]})
 
     def test_unsupported_state_is_not_claimed_as_qualification(self):
         model = CorrectionFixture(self.root / "dither", dither=True)
@@ -303,11 +503,12 @@ class CorrectionAcceptanceTests(unittest.TestCase):
         report = correction_accept.evaluate(
             case_dir=case_dir,
             baseline_path=baseline_path,
-            candidate_revision="candidate-5",
+            candidate_revision=REVISION,
             after_replay=after,
             claimed_before={"mismatched_pixels": 1, "max_channel_error": 7},
             claimed_after={"mismatched_pixels": 0, "max_channel_error": 0},
-            baseline_revision="baseline-1")
+            baseline_revision="baseline-1",
+            qualification_contract=contract())
         self.assertEqual(report["result"], "accepted", report)
         self.assertFalse(report["complete_qualification"])
         self.assertFalse(report["pixel_perfect"])
@@ -319,7 +520,7 @@ class CorrectionAcceptanceTests(unittest.TestCase):
             claims=self.model.claims(
                 {"mismatched_pixels": 1, "max_channel_error": 7},
                 {"mismatched_pixels": 0, "max_channel_error": 0}),
-            candidate_revision="same-rev", baseline_revision="same-rev")
+            candidate_revision=REVISION, baseline_revision=REVISION)
         self.assertEqual(report["result"], "invalid_evidence", report)
         self.assertIn("candidate_unchanged",
                       {item["code"] for item in report["problems"]})
@@ -349,6 +550,7 @@ class CorrectionAcceptanceTests(unittest.TestCase):
         self.assertIn("after", report)
         self.assertIn("problems", report)
         self.assertIn("pixel_perfect", report)
+        self.assertIn("regression_inventory", report)
         json.dumps(report)
 
 
