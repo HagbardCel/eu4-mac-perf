@@ -2056,15 +2056,17 @@ def _checkpoint_binding_problems(metal_dir: Path, request: dict,
     return problems, bindings
 
 
-def _checkpoint_request_state(graph: dict, metal_dir: Path,
-                              shadow: dict | None = None,
-                              seal: dict | None = None
-                              ) -> tuple[dict, str, list[dict], dict]:
+def checkpoint_request_evidence(graph: dict, metal_dir: Path,
+                                shadow: dict | None = None,
+                                seal: dict | None = None
+                                ) -> tuple[dict, str, list[dict], dict]:
     """Load and validate the checkpoint request bound to one Metal result.
 
     An unbound or disagreeing request is reported with an explicit severity;
     it is never silently replaced by a derived plan, and a later valid pixel
-    match cannot repair it.
+    match cannot repair it.  ``correction_accept`` and the in-process diagnosis
+    share this one definition so an acceptance caller cannot bypass the graph
+    agreement and binding checks.
     """
     metal_dir = Path(metal_dir)
     published = _optional_json(metal_dir / "checkpoint-request.json")
@@ -2389,7 +2391,7 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
     request_binding: dict = {"status": "in_process", "bindings": []}
     if request is None:
         request, request_source, request_problems, request_binding = (
-            _checkpoint_request_state(graph, metal_dir, shadow, seal))
+            checkpoint_request_evidence(graph, metal_dir, shadow, seal))
     else:
         request_source = request_source or "provided"
         request_problems = []
