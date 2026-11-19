@@ -468,6 +468,30 @@ class DefaultCheckpointGraphTests(unittest.TestCase):
         self.assertEqual(item["reference_width"], WIDTH)
         self.assertEqual(item["reference_height"], HEIGHT)
 
+    def test_legacy_request_serialization_is_unchanged_without_identity(self):
+        self.attach(4)
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        request = gfx_frame_graph.checkpoint_request(graph)
+        item = next(item for item in request["checkpoints"]
+                    if item["event"] == 4 and item["target"] == "0")
+        # Byte-identical legacy key order and no identity keys.
+        self.assertEqual(list(item), [
+            "event", "target", "resource", "file", "reference_file",
+            "reference_sha256", "reference_width", "reference_height",
+            "producer_events"])
+        self.assertNotIn("session_id", item)
+        self.assertNotIn("capture_frame_id", item)
+
+    def test_request_serialization_adds_capture_identity_when_present(self):
+        self.attach(4, session_id="session-a", capture_frame_id=1)
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        request = gfx_frame_graph.checkpoint_request(graph)
+        item = next(item for item in request["checkpoints"]
+                    if item["event"] == 4 and item["target"] == "0")
+        self.assertEqual(item["session_id"], "session-a")
+        self.assertEqual(item["capture_frame_id"], 1)
+        self.assertEqual(list(item)[-2:], ["session_id", "capture_frame_id"])
+
     def test_checkpoint_request_is_stable_and_ordered(self):
         self.attach(4)
         graph = gfx_frame_graph.build(self.fixture.frame)

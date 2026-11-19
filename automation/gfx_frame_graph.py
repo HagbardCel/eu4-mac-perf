@@ -1178,7 +1178,7 @@ def checkpoint_request(graph: dict) -> dict:
     plan = checkpoint_plan(graph)
     checkpoints = []
     for item in plan:
-        checkpoints.append({
+        entry = {
             "event": item["event"],
             "target": item["target"],
             "resource": item["resource"],
@@ -1188,9 +1188,15 @@ def checkpoint_request(graph: dict) -> dict:
             "reference_width": item["reference_width"],
             "reference_height": item["reference_height"],
             "producer_events": item["producer_events"],
-            "session_id": item.get("session_id"),
-            "capture_frame_id": item.get("capture_frame_id"),
-        })
+        }
+        # Capture identity is additive: a legacy capture without it must
+        # serialize exactly as it did before the multi-checkpoint work, so the
+        # checkpoint request digest is unchanged for portable old cases.
+        if item.get("session_id") is not None:
+            entry["session_id"] = item["session_id"]
+        if item.get("capture_frame_id") is not None:
+            entry["capture_frame_id"] = item["capture_frame_id"]
+        checkpoints.append(entry)
     return {
         "schema": "gfx-frame-checkpoint-request/v1",
         "checkpoints": checkpoints,

@@ -716,6 +716,8 @@ def capture(args: argparse.Namespace) -> int:
             str(event) for event in checkpoint_events)
         env_extra["EU4_GFX_FRAME_TRACE_MAX_CHECKPOINTS"] = str(
             int(getattr(args, "max_checkpoints", 4)))
+    if checkpoint_event is not None or checkpoint_events is not None:
+        # The aggregate readback budget applies to the single-event form too.
         env_extra["EU4_GFX_FRAME_TRACE_CHECKPOINT_MAX_BYTES"] = str(
             checkpoint_budget)
     shadow_enabled = bool(getattr(args, "shadow", False))

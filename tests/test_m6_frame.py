@@ -18,6 +18,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+from unittest import mock
 import unittest
 from pathlib import Path
 
@@ -1522,6 +1523,35 @@ class CaptureBudgetTests(unittest.TestCase):
         self.assertIn("empty",
                       m6_frame.checkpoint_events_selection_error(
                           [], 512, 4))
+
+    def test_checkpoint_byte_budget_is_forwarded_for_both_selection_forms(self):
+        import eu4_gfx_startup_trace as startup
+
+        with tempfile.TemporaryDirectory() as temporary:
+            for index, extra in enumerate((
+                    ["--default-checkpoint-event", "14"],
+                    ["--default-checkpoint-events", "14,20"])):
+                with self.subTest(selection=extra[0]):
+                    output = str(Path(temporary) / f"budget-{index}")
+                    args = m6_frame._parser().parse_args(
+                        ["capture", "--output", output,
+                         "--checkpoint-max-bytes", "12345", *extra])
+                    seen = {}
+
+                    def fake_run_ops(**kwargs):
+                        seen.update(kwargs)
+                        raise RuntimeError("stop after environment capture")
+
+                    with mock.patch.object(startup, "preflight_ops",
+                                           return_value={}), \
+                         mock.patch.object(startup, "run_ops",
+                                           side_effect=fake_run_ops):
+                        status = m6_frame.capture(args)
+                    self.assertEqual(status, 4)
+                    self.assertEqual(
+                        seen["env_extra"].get(
+                            "EU4_GFX_FRAME_TRACE_CHECKPOINT_MAX_BYTES"),
+                        "12345")
 
     def test_checkpoint_options_refuse_both_selection_forms(self):
         args = m6_frame._parser().parse_args(
