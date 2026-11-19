@@ -72,6 +72,20 @@ def _flip_rows(data: bytes, width: int, height: int) -> bytes:
     return bytes(out)
 
 
+def _grid_span(index: int, size: int, count: int) -> tuple[int, int]:
+    """Half-open pixel span of a floor-indexed grid bin.
+
+    A pixel at coordinate ``value`` is assigned to bin
+    ``value * count // size``.  The inverse span is therefore
+    ``[ceil(index*size/count), ceil((index+1)*size/count))``; using floor for
+    the end point would report a rectangle that does not contain the pixel for
+    sizes that are not multiples of the grid.
+    """
+    start = (index * size + count - 1) // count
+    end = ((index + 1) * size + count - 1) // count
+    return start, end - start
+
+
 def compare_images(
     reference: bytes, candidate: bytes, width: int, height: int
 ) -> dict:
@@ -90,9 +104,6 @@ def compare_images(
         [0] * grid_x for _ in range(grid_y)
     ]
     region_counts = [[0] * grid_x for _ in range(grid_y)]
-    region_pixels = [
-        [0] * grid_x for _ in range(grid_y)
-    ]
     for pixel in range(total):
         offset = pixel * 4
         b0, g0, r0, a0 = reference[offset:offset + 4]
@@ -126,7 +137,6 @@ def compare_images(
         region = (y * grid_y // height, x * grid_x // width)
         region_sum[region[0]][region[1]] += pixel_max
         region_counts[region[0]][region[1]] += 1
-        region_pixels[region[0]][region[1]] += 1
     regions = []
     for gy in range(grid_y):
         for gx in range(grid_x):
@@ -134,14 +144,16 @@ def compare_images(
             if count == 0:
                 continue
             mean = region_sum[gy][gx] / count
+            start_x, span_x = _grid_span(gx, width, grid_x)
+            start_y, span_y = _grid_span(gy, height, grid_y)
             regions.append(
                 {
                     "row": gy,
                     "column": gx,
-                    "x": gx * width // grid_x,
-                    "y": gy * height // grid_y,
-                    "width": width // grid_x,
-                    "height": height // grid_y,
+                    "x": start_x,
+                    "y": start_y,
+                    "width": span_x,
+                    "height": span_y,
                     "mean_max_channel_error": round(mean, 6),
                 }
             )
