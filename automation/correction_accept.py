@@ -694,7 +694,18 @@ def evaluate(*, case_dir: Path | str, baseline_path: Path | str,
                         "execution: "
                         + "; ".join(replay_side["execution_problems"]),
                         severity="invalid")
-            if _capture(replay_side["capture"] or {}) != _capture(seal):
+            if replay_side["identity"].get("status") not in (
+                    "verified", "unverified_session"):
+                problem("regression_identity",
+                        f"regression {case_id} identity is "
+                        f"{replay_side['identity'].get('status')!r}",
+                        severity="invalid")
+            # A regression is independently sealed: compare its replay against
+            # its own capture identity, never the primary correction case's.
+            regression_seal = _json(path / "capture" / "frame-seal.json")
+            if (not _valid_capture(_capture(regression_seal))
+                    or _capture(replay_side["capture"] or {})
+                    != _capture(regression_seal)):
                 problem("regression_foreign_capture",
                         f"regression {case_id} does not name its own verified "
                         "sealed capture", severity="invalid")

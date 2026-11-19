@@ -73,10 +73,14 @@ def _report_for(fixture, replay_dir: Path, *, status: str) -> dict:
 class CorrectionFixture:
     """One sealed capture, one baseline replay and one candidate replay."""
 
-    def __init__(self, root: Path, *, dither: bool = False):
+    def __init__(self, root: Path, *, dither: bool = False,
+                 session_id: str = "session-1",
+                 capture_frame_id: int = 7):
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
-        self.fixture = DiagnosisFixture(root / "fixture")
+        self.fixture = DiagnosisFixture(
+            root / "fixture", session_id=session_id,
+            capture_frame_id=capture_frame_id)
         if dither:
             self.fixture.write_frame(dither=True)
         self.frame = self.fixture.frame
@@ -353,6 +357,96 @@ class CorrectionAcceptanceTests(unittest.TestCase):
                 {"mismatched_pixels": 0, "max_channel_error": 0}))
         self.assertEqual(report["result"], "invalid_evidence", report)
         self.assertIn("candidate_revision_unbound",
+                      {item["code"] for item in report["problems"]})
+
+    def test_regression_with_its_own_sealed_capture_is_accepted(self):
+        after = self.model.replay_dir("after-own-cap", self.model.reference)
+        case_dir, baseline_path = self.build_model()
+        other = CorrectionFixture(self.root / "other", session_id="session-2",
+                                  capture_frame_id=9)
+        replay = other.replay_dir("regression-other", other.reference)
+        regression_case = other.package(
+            replay, "case-regression-other", case_id="regression-other-capture")
+        primary_seal = json.loads(
+            (case_dir / "capture" / "frame-seal.json").read_text())
+        regression_seal = json.loads(
+            (regression_case / "capture" / "frame-seal.json").read_text())
+        self.assertNotEqual(primary_seal["session_id"],
+                            regression_seal["session_id"])
+        report = correction_accept.evaluate(
+            case_dir=case_dir,
+            baseline_path=baseline_path,
+            candidate_revision=REVISION,
+            after_replay=after,
+            claimed_before={"mismatched_pixels": 1, "max_channel_error": 7},
+            claimed_after={"mismatched_pixels": 0, "max_channel_error": 0},
+            baseline_revision="baseline-1",
+            regressions=[regression_case],
+            claimed_regressions=["regression-other-capture"],
+            qualification_contract=contract("regression-other-capture"))
+        self.assertEqual(report["result"], "accepted", report)
+        self.assertEqual(report["regression_inventory"]["verified"],
+                         ["regression-other-capture"])
+
+    def test_regression_replay_identity_must_match_its_own_seal(self):
+        after = self.model.replay_dir("after-bad-reg-id", self.model.reference)
+        case_dir, baseline_path = self.build_model()
+        other = CorrectionFixture(self.root / "other-bad", session_id="session-3",
+                                  capture_frame_id=11)
+        replay = other.replay_dir("regression-bad-id", other.reference)
+        document = json.loads((replay / "replay.json").read_text())
+        document["manifest_reference_sha256"] = sha(b"another-frame")
+        (replay / "replay.json").write_text(json.dumps(document))
+        gfx_independent_replay.write_producer_receipt(
+            replay, other.frame, other.producer, replay / "replay.json")
+        (replay / "replay-report.json").write_text(
+            json.dumps(_report_for(other.fixture, replay,
+                                   status="confirmed_rendering_difference")))
+        regression_case = other.package(
+            replay, "case-regression-bad-id", case_id="regression-bad-id")
+        report = correction_accept.evaluate(
+            case_dir=case_dir,
+            baseline_path=baseline_path,
+            candidate_revision=REVISION,
+            after_replay=after,
+            claimed_before={"mismatched_pixels": 1, "max_channel_error": 7},
+            claimed_after={"mismatched_pixels": 0, "max_channel_error": 0},
+            baseline_revision="baseline-1",
+            regressions=[regression_case],
+            claimed_regressions=["regression-bad-id"],
+            qualification_contract=contract("regression-bad-id"))
+        self.assertEqual(report["result"], "invalid_evidence", report)
+        self.assertIn("regression_identity",
+                      {item["code"] for item in report["problems"]})
+
+    def test_regression_receipt_from_another_capture_is_rejected(self):
+        after = self.model.replay_dir("after-bad-receipt",
+                                      self.model.reference)
+        case_dir, baseline_path = self.build_model()
+        other = CorrectionFixture(self.root / "other-receipt",
+                                  session_id="session-4",
+                                  capture_frame_id=13)
+        replay = other.replay_dir("regression-bad-receipt", other.reference)
+        receipt_path = replay / "producer-receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["capture"]["session_id"] = "session-1"
+        receipt_path.write_text(json.dumps(receipt))
+        regression_case = other.package(
+            replay, "case-regression-bad-receipt",
+            case_id="regression-bad-receipt")
+        report = correction_accept.evaluate(
+            case_dir=case_dir,
+            baseline_path=baseline_path,
+            candidate_revision=REVISION,
+            after_replay=after,
+            claimed_before={"mismatched_pixels": 1, "max_channel_error": 7},
+            claimed_after={"mismatched_pixels": 0, "max_channel_error": 0},
+            baseline_revision="baseline-1",
+            regressions=[regression_case],
+            claimed_regressions=["regression-bad-receipt"],
+            qualification_contract=contract("regression-bad-receipt"))
+        self.assertEqual(report["result"], "invalid_evidence", report)
+        self.assertIn("regression_unverified",
                       {item["code"] for item in report["problems"]})
 
     def test_regression_failure_hidden_behind_improvement_is_rejected(self):
