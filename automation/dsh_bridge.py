@@ -332,6 +332,74 @@ def _trusted_modules_digest(checker: Path, strict: bool = True) -> tuple[str, li
     return receipts.digest_text(receipts.canonical_json(rows)), rows
 
 
+def _workspace_write_problem(workspace: Path) -> str | None:
+    """Probe the candidate workspace without leaving a file behind.
+
+    A campaign that cannot write its permitted outputs would fail after a
+    launch or validation, so prepare refuses before the anchor is created.
+    """
+    workspace = Path(workspace)
+    if not workspace.is_dir():
+        return f"candidate workspace is not a directory: {workspace}"
+    probe = workspace / f".dsh-prepare-probe-{os.getpid()}"
+    try:
+        probe.write_text("probe\n", encoding="utf-8")
+    except OSError as exc:
+        return f"candidate workspace is not writable: {workspace}: {exc}"
+    finally:
+        try:
+            probe.unlink()
+        except OSError:
+            pass
+    return None
+
+
+def _head_or_none(path: Path) -> str | None:
+    try:
+        return _git(path, "rev-parse", "HEAD")
+    except Refusal:
+        return None
+
+
+def _startup_block(sidecar: Sidecar, roots: dict) -> dict:
+    """Compact facts an agent needs before spending a launch or validation."""
+    workspace = Path(sidecar.workspace)
+    head = _head_or_none(workspace) if sidecar.mode == "worktree" else None
+    first_command = (
+        ["git", "-C", str(workspace), "status", "--short"]
+        if head else ["ls", str(workspace)]
+    )
+    return {
+        "campaign_id": sidecar.campaign_id,
+        "sidecar": str(sidecar.sidecar_path),
+        "source_campaign": str(sidecar.source_campaign),
+        "objective_digest": sidecar.objective_digest,
+        "workspace": str(workspace),
+        "workspace_mode": sidecar.mode,
+        "workspace_head": head,
+        "workspace_writable": True,
+        "run_root": str(sidecar.run_root),
+        "checker": str(sidecar.checker),
+        "execution_roots": roots,
+        "allowed_paths": list(sidecar.allowed_paths),
+        "forbidden_paths": list(sidecar.forbidden_paths),
+        "live_capture": {
+            "enabled": sidecar.live_capture_enabled,
+            "policy": (
+                "EU4 launch exclusivity is enforced by the host-wide process "
+                "lease; a sidecar cannot enable live capture"),
+        },
+        "closing": {
+            "require_checker_pass": sidecar.require_checker_pass,
+            "require_independent_review": sidecar.require_independent_review,
+            "max_rounds": sidecar.max_rounds,
+            "max_validations": sidecar.max_validations,
+            "wall_clock_seconds": sidecar.wall_clock_seconds,
+        },
+        "first_command": first_command,
+    }
+
+
 def _identity(sidecar: Sidecar, infra_commit: str) -> dict:
     modules_digest, modules_rows = _trusted_modules_digest(sidecar.checker)
     manifest_digest = None
@@ -470,6 +538,10 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit) -> int:
             sidecar.candidate_baseline_commit or "",
         )
 
+    write_problem = _workspace_write_problem(sidecar.workspace)
+    if write_problem:
+        raise Refusal("workspace_not_writable", write_problem)
+
     identities = _identity(sidecar, infra_commit)
     existing = receipts.read_json(stored.identity)
     if existing is None and not getattr(args, "create_anchor", False):
@@ -509,6 +581,7 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit) -> int:
         "identities": identities,
         "identity_digest": receipts.identity_digest(identities),
         "anchored_now": existing is None,
+        "startup": _startup_block(sidecar, roots),
     })
     return EXIT_OK
 

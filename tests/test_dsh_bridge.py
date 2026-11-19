@@ -95,6 +95,41 @@ class PrepareTests(BridgeTestCase):
         )
         self.assertEqual(len(out["identity_digest"]), 64)
 
+    def test_prepare_emits_a_compact_startup_block(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        code, out = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK)
+        startup = out["startup"]
+        self.assertEqual(startup["campaign_id"], out["campaign_id"])
+        self.assertEqual(startup["workspace"], str(self.workspace.resolve()))
+        self.assertEqual(startup["workspace_mode"], "seed")
+        self.assertTrue(startup["workspace_writable"])
+        self.assertIsNone(startup["workspace_head"])
+        self.assertEqual(startup["checker"], out["execution_roots"]["checker"])
+        self.assertEqual(startup["run_root"], str(self.run_root.resolve()))
+        self.assertEqual(startup["objective_digest"],
+                         out["identities"]["objective_digest"])
+        self.assertEqual(startup["live_capture"]["enabled"], False)
+        self.assertEqual(startup["closing"]["max_rounds"], 4)
+        self.assertEqual(startup["closing"]["max_validations"], 6)
+        self.assertEqual(startup["closing"]["wall_clock_seconds"], 600)
+        self.assertIn(startup["first_command"][0], ("git", "ls"))
+        # The writability probe must not leave candidate residue.
+        self.assertEqual(
+            list(self.workspace.glob(".dsh-prepare-probe-*")), [])
+
+    def test_prepare_refuses_an_unwritable_workspace_before_anchoring(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        self.workspace.mkdir(parents=True)
+        self.workspace.chmod(0o500)
+        self.addCleanup(self.workspace.chmod, 0o700)
+        code, out = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["kind"], "workspace_not_writable")
+        self.assertIn(str(self.workspace), out["detail"])
+        self.assertFalse((self.run_root / "identity.json").is_file())
+
 
 class ValidationBudgetTests(BridgeTestCase):
     """External sidecar limits are enforced from the bridge's attempt log."""
