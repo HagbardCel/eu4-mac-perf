@@ -3,27 +3,38 @@
 Authoritative summary of what is established, qualified, and in flight.
 Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
 
-## M7 final remediation and bounded acceptance (2026-11-19)
+## M7 — READY: implementation, autonomous campaign and bounded authentic pilot (2026-11-19)
 
-- **#214/#215/#216/#217** final heads `ea554cae`, `01b3b60b`, `82c09bfb`,
-  `e7abe15a`; portable CI passes for all four and for this report's head.
-  Legacy checkpoint-request hashes are byte-identical for two recorded cases;
-  the native repeated-blob verifier accepts the authentic capture.
-- The capture/launch boundary now validates the explicit reservation created by
-  `capture()` (the redundant post-reservation check and the `env_extra` token
-  were removed). Regression identity is bound to each regression's own seal.
-- One controlled two-round native DSH campaign (in the running Web session)
-  localized a seeded texture-format regression, corrected it, rebuilt, replayed
-  and was **accepted** by `correction_accept` (1,925,408/255 → 1,161,075/75).
-- Final full offline gate: passed (699 s, 0 failures).
-- **Review blocker:** the repository has only the owner collaborator, no
-  invitations, and branch protection requires 0 approvals. No independent
-  reviewer is available; no PR was merged and no waiver was recorded. The
-  documented `eu4-web` + `run.sh --campaign` launcher was exercised through
-  preparation and objective printing, but creating the session/goal requires
-  operator interaction; the authorized live capture was not run. The
-  `corrections` allowance is now enforced at the correction-acceptance
-  boundary. Verdict remains **NOT_READY**.
+The implementation stack is merged on `main` at `8943bcdd`: #214 `0068127`,
+#215 `a3bca8a`, #216 `df16667`, #217 `8943bcd`. Portable CI passed on every
+merged head, the integrated offline gate passed (721 s, 0 failures), and the
+native repeated-blob host accepts the preserved authentic capture.
+
+The autonomous workflow is qualified: a two-round native DSH campaign diagnosed
+a seeded renderer fault, applied a genuine source fix (`eb6a9b24`), replayed and
+was **accepted** by `correction_accept` (1,925,408/255 → 1,161,075/75). The
+documented `run.sh --campaign` launcher prepares the isolated workspace, external
+state and objective; creating the goal in a fresh `eu4-web` session remains an
+operator step. Correction attempts are now reserved atomically at the acceptance
+boundary, and rejected/invalid verdicts are audited as failed attempts.
+
+One authentic bounded pilot then produced a **new sealed frame** (session
+`2564021f…`, frame 1, present/scene 615, 325 operations) with the repaired
+in-process Metal shadow path: identity and provenance verified, operations
+complete, state coverage partial. Same-frame `fb:0` checkpoints: event 14 match
+(0), event 17 divergent (391,120 px / max 79), event 19 (666,261/79), event 20
+(875,960/79), event 284 (1,235,098/99); final 1,160,428/67. The interval
+narrows to **[14, 17]**, producer event 16, next checkpoint 15. This is a new
+frame and is not combined with the historical [14, 20] frame.
+
+The pilot legitimately ends with **requires_additional_evidence**: no specific
+renderer cause is established, no speculative correction was attempted, and the
+next step is a fresh frame with checkpoints 15 and 16. EU4 was terminated, the
+GOG settings restored, the background display unchanged, and no orphan process
+or reservation remains. Pixel-perfect equivalence is not claimed. Verdict:
+**READY for M7 infrastructure and autonomous-campaign operation**; the renderer
+difference remains a follow-up migration objective. Report:
+[../analysis/m7/m7-readiness.md](../analysis/m7/m7-readiness.md).
 
 ## M7 authentic pilot — bounded multi-checkpoint capture (2026-11-19)
 
