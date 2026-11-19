@@ -3296,6 +3296,59 @@ def replay(
     policy: Path | str | None = None,
     timeout: float = 1800.0,
 ) -> dict:
+    """Execute one replay under the externally configured campaign budget.
+
+    The budget check happens before the host is built or any output is
+    prepared, so an exhausted campaign cannot spend another GPU execution.
+    """
+    from automation import campaign_guard
+
+    guard = campaign_guard.from_env()
+    reservation = None
+    if guard is not None:
+        try:
+            # Reserve before the host is built or any output is prepared.
+            reservation = guard.reserve(
+                {"replays": 1},
+                evidence={"frame_dir": str(frame_dir),
+                          "out_dir": str(out_dir)})
+        except campaign_guard.CampaignRefusal as exc:
+            raise ReplayError("campaign_refused",
+                              f"{exc.kind}: {exc.detail}") from exc
+    try:
+        report = _replay_locked(
+            frame_dir, out_dir, shaders=shaders, faults=faults, policy=policy,
+            timeout=timeout)
+    except BaseException as exc:  # noqa: BLE001 - record then propagate
+        if guard is not None and reservation is not None:
+            guard.complete(reservation, outcome="failed",
+                           detail=f"{type(exc).__name__}: {exc}",
+                           evidence={"frame_dir": str(frame_dir),
+                                     "out_dir": str(out_dir)})
+        raise
+    if guard is not None and reservation is not None:
+        failed = (report.get("status") == "invalid"
+                  or (report.get("execution") or {}).get("status")
+                  == "failed")
+        guard.complete(
+            reservation, outcome="failed" if failed else "ok",
+            detail=" ".join(str(item) for item in (
+                (report.get("execution") or {}).get("error"),
+                (report.get("execution") or {}).get("failure")) if item),
+            evidence={"frame_dir": str(frame_dir), "out_dir": str(out_dir),
+                      "status": report.get("status")})
+    return report
+
+
+def _replay_locked(
+    frame_dir: Path | str,
+    out_dir: Path | str,
+    *,
+    shaders: Path | str | None = None,
+    faults: dict | None = None,
+    policy: Path | str | None = None,
+    timeout: float = 1800.0,
+) -> dict:
     """Execute one captured workload through the production Metal replay host."""
     frame_dir = Path(frame_dir).expanduser().resolve()
     out_dir = Path(out_dir).expanduser().resolve()

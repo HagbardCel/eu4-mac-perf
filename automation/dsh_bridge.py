@@ -512,11 +512,89 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit) -> int:
     return EXIT_OK
 
 
+VALIDATIONS_LOG = "validations.jsonl"
+
+
+def _validation_history(run_root: Path) -> list[dict]:
+    """Actual validation attempts recorded by the bridge, not the model."""
+    path = Path(run_root) / VALIDATIONS_LOG
+    rows: list[dict] = []
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                rows.append(value)
+    return rows
+
+
+def _append_validation(run_root: Path, row: dict) -> None:
+    path = Path(run_root) / VALIDATIONS_LOG
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def _prepared_epoch(run_root: Path) -> float | None:
+    anchor = receipts.read_json(receipts.paths(run_root).identity) or {}
+    stamped = str(anchor.get("prepared_at") or "")
+    if not stamped:
+        return None
+    try:
+        return datetime.fromisoformat(
+            stamped.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _campaign_budget_stop(sidecar: Sidecar, history: list[dict],
+                          now: float) -> dict | None:
+    """Refuse another validation when an external sidecar limit is exhausted."""
+    if sidecar.max_validations and len(history) >= sidecar.max_validations:
+        return {
+            "kind": "budget_exhausted",
+            "detail": f"{len(history)} validation attempt(s) reached "
+                      f"max_validations={sidecar.max_validations}",
+        }
+    if sidecar.wall_clock_seconds:
+        started = _prepared_epoch(sidecar.run_root)
+        if started is None and history:
+            started = min(float(row.get("at") or now) for row in history)
+        if started is not None and now - started > sidecar.wall_clock_seconds:
+            return {
+                "kind": "deadline",
+                "detail": f"the campaign exceeded its "
+                          f"{sidecar.wall_clock_seconds}s wall-clock budget",
+            }
+    failures = [row for row in history
+                if row.get("checker_verdict") != "pass"]
+    if failures and sidecar.max_identical_retries:
+        last = failures[-1]
+        key = (last.get("classification"), last.get("digest"))
+        same = [row for row in failures
+                if (row.get("classification"), row.get("digest")) == key]
+        if len(same) > sidecar.max_identical_retries:
+            return {
+                "kind": "repeated_failure",
+                "detail": f"the identical failure {key[0]!r}/{key[1]!r} "
+                          f"occurred {len(same)} times; change the diagnostic "
+                          "strategy before validating again",
+            }
+    return None
+
+
 def op_validate(args) -> int:
     """Run the trusted checker once and record the qualification.
 
-    No attempt history, retry scheduler or budget: a caller that wants another
-    check asks again, and DSH's own round cap bounds the campaign.
+    DSH's round cap bounds how many times the model may ask.  The sidecar's
+    ``max_validations``, ``wall_clock_seconds`` and ``max_identical_retries``
+    are enforced here from the bridge's own attempt log, so an exhausted or
+    repeating campaign is refused before another checker run.
     """
     sidecar = load_sidecar(Path(args.sidecar))
     _roots(sidecar)
@@ -534,6 +612,25 @@ def op_validate(args) -> int:
         before = _identity(sidecar, infra_commit)
         _check_anchor(_prepared_identities(sidecar), before)
         digest = before["candidate"]["digest"]
+
+        # External limits: the bridge refuses before spending another checker
+        # run, independently of what the model intends.
+        history = _validation_history(sidecar.run_root)
+        stop = _campaign_budget_stop(sidecar, history, time.time())
+        if stop is not None:
+            emit({
+                "ok": True,
+                "operation": "validate",
+                "campaign_id": sidecar.campaign_id,
+                "classification": "policy_stop",
+                "kind": stop["kind"],
+                "goal_policy": GOAL_POLICY["unavailable"],
+                "detail": stop["detail"],
+                "validations": len(history),
+                "max_validations": sidecar.max_validations,
+                "candidate_digest": digest,
+            })
+            return EXIT_OK
 
         started = time.monotonic()
         outcome = run_accept(_AcceptShim(sidecar), sidecar.workspace)
@@ -556,6 +653,16 @@ def op_validate(args) -> int:
                     "allow_incomplete_inputs on the campaign to accept that",
                 )
         diagnostics = str(outcome.get("diagnostics") or "")
+        diagnostics_digest = receipts.digest_text(diagnostics)
+        _append_validation(sidecar.run_root, {
+            "at": time.time(),
+            "classification": classification,
+            "kind": kind,
+            "checker_verdict": verdict,
+            "digest": diagnostics_digest,
+            "exit_code": outcome.get("exit_code"),
+            "duration_ms": duration_ms,
+        })
         receipt = {
             "schema": receipts.SCHEMA,
             "identities": before,

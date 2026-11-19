@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url'
 
 import {
   completionDenialReason,
+  mergeDenialReason,
   digestObjective,
   goalBindingProblems,
   qualificationRefusal,
@@ -324,7 +325,9 @@ export function apply(ctx, config = {}) {
   // On the plain context, so it applies globally and is evaluated before any
   // agent-scoped guard layer, and with no I/O so it cannot stall the loop.
   ctx.effect(() => {
-    const dispose = ctx.tools.guard((exec) => completionDenialReason(exec))
+    const dispose = ctx.tools.guard(
+      (exec) => completionDenialReason(exec) || mergeDenialReason(exec)
+    )
     registeredGuards += 1
     return dispose
   })

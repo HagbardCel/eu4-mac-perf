@@ -31,7 +31,7 @@ import time
 import uuid
 from pathlib import Path
 
-from automation import replay_host_dependencies  # noqa: E402
+from automation import campaign_guard, replay_host_dependencies  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "benchmark"
@@ -622,6 +622,22 @@ def checkpoint_options_error(args) -> str | None:
     return None
 
 
+def _reap_coordinator(coordinator) -> None:
+    """Terminate and reap an owned shadow coordinator, never leaving a child."""
+    if coordinator is None:
+        return
+    if coordinator.poll() is None:
+        coordinator.terminate()
+    try:
+        coordinator.communicate(timeout=10)
+    except subprocess.TimeoutExpired:
+        coordinator.kill()
+        try:
+            coordinator.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+
+
 def capture(args: argparse.Namespace) -> int:
     import eu4_gfx_startup_trace as startup
     from automation import live_gfx
@@ -801,6 +817,27 @@ def capture(args: argparse.Namespace) -> int:
             env_extra["EU4_GFX_FRAME_TRACE_TIMEOUT_MS"] = str(timeout_ms)
         if getattr(args, "seal_log", False):
             env_extra["EU4_GFX_FRAME_SEAL_LOG"] = "1"
+    capture_guard = None
+    reservation = None
+    if campaign_guard.from_env() is not None:
+        try:
+            capture_guard = campaign_guard.from_env()
+            frames = int(args.max_frames) if continuous else 1
+            wanted = {"eu4_launches": 1}
+            if seal_enabled:
+                wanted["sealed_frames"] = frames
+            if shadow_enabled:
+                wanted["shadow_executions"] = frames
+            reservation = capture_guard.reserve(
+                wanted, evidence={"output": str(output),
+                                  "continuous": continuous,
+                                  "max_frames": frames})
+            # The child launch choke point accepts only this reservation.
+            env_extra["EU4_CAMPAIGN_RESERVATION"] = reservation
+        except campaign_guard.CampaignRefusal as exc:
+            print(f"capture refused: {exc.kind}: {exc.detail}",
+                  file=sys.stderr)
+            return 3
     coordinator = None
     if shadow_enabled:
         coordinator = subprocess.Popen(
@@ -847,6 +884,13 @@ def capture(args: argparse.Namespace) -> int:
             text=True,
         )
     try:
+        capture_guard = campaign_guard.from_env()
+        if capture_guard is not None:
+            capture_guard.require("eu4_launches")
+    except campaign_guard.CampaignRefusal as exc:
+        print(f"capture refused: {exc.kind}: {exc.detail}", file=sys.stderr)
+        return 3
+    try:
         report = startup.run_ops(
             targets=TARGETS,
             max_events=max_events,
@@ -861,18 +905,18 @@ def capture(args: argparse.Namespace) -> int:
             game_args=list(getattr(args, "game_arg", []) or []) or None,
         )
     except (startup.StartupError, OSError, RuntimeError) as exc:
-        if coordinator is not None:
-            coordinator.terminate()
-            try:
-                coordinator.communicate(timeout=10)
-            except subprocess.TimeoutExpired:
-                coordinator.kill()
-                coordinator.communicate()
+        _reap_coordinator(coordinator)
         if token is not None:
             live_gfx._finish_launch(
                 Path(args.campaign_run_root), token, pid=None,
                 status=f"failed: {exc}",
             )
+        if capture_guard is not None and reservation is not None:
+            capture_guard.complete(
+                reservation, outcome="failed",
+                detail=f"{type(exc).__name__}: {exc}",
+                failure_action="eu4_launches",
+                evidence={"output": str(output)})
         print(f"capture failed: {exc}", file=sys.stderr)
         return 4
     result: dict = {
@@ -952,8 +996,7 @@ def capture(args: argparse.Namespace) -> int:
                 try:
                     coordinator.communicate(timeout=30)
                 except subprocess.TimeoutExpired:
-                    coordinator.terminate()
-                    coordinator.communicate(timeout=10)
+                    _reap_coordinator(coordinator)
             coordinator_path = shadow_dir / "coordinator.json"
             if not coordinator_path.is_file():
                 raise FrameError("in-process shadow coordinator produced no report")
@@ -1057,6 +1100,33 @@ def capture(args: argparse.Namespace) -> int:
                 for item in campaign_frames
             ],
         }
+    if capture_guard is not None and reservation is not None:
+        seal_value = result.get("seal") or {}
+        sealed_frames = (seal_value.get("frames")
+                         if isinstance(seal_value, dict) else None) or []
+        consumed = {"eu4_launches": 1}
+        if seal_enabled:
+            consumed["sealed_frames"] = (
+                len(sealed_frames) if continuous else
+                (1 if "seal" in result and "seal_error" not in result
+                 else 0))
+        if shadow_enabled:
+            consumed["shadow_executions"] = (
+                len(sealed_frames) if continuous else
+                (1 if status == 0 or result.get("shadow") else 0))
+        failure_action = ("shadow_executions"
+                          if shadow_enabled and status != 0
+                          else "eu4_launches")
+        capture_guard.complete(
+            reservation,
+            outcome="ok" if status == 0 else "failed",
+            detail=str(result.get("error") or result.get("seal_error")
+                       or result.get("shadow_error") or ""),
+            consumed=consumed if status == 0 else None,
+            failure_action=failure_action,
+            evidence={"output": str(output), "status": status,
+                      "pid": report.get("pid"),
+                      "frames": len(sealed_frames)})
     (output / "capture-report.json").write_text(json.dumps(result, indent=2) + "\n")
     if token is not None:
         live_gfx._finish_launch(
