@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from automation import dsh_pilot
 
@@ -99,6 +100,7 @@ def interval(*, start=71, end=142, resource="fb:0", lower_bound=None,
 def authoritative_evidence(*, capture=FRAME, checkpoints=None):
     return {
         "schema": "gfx-pilot-authoritative-checkpoints/v1",
+        "source": "in_process",
         "capture": dict(capture),
         "report_sha256": "e" * 64,
         "checkpoints": checkpoints if checkpoints is not None else [
@@ -790,6 +792,110 @@ class PilotSummaryTests(unittest.TestCase):
         result = self.summarize()
         self.assertFalse(result["ok"])
         self.assertIn("case_diagnostic_unverified", problem_codes(result))
+
+    def switch_to_producer_bound(self):
+        """Replace the in-process report with a producer-bound standalone one."""
+        self.manifest.pop("diagnostic_report", None)
+        self.manifest["report"] = "report.json"
+        manifest_sha = "9" * 64
+        reference_sha = "8" * 64
+        self.report = {
+            "schema": "gfx-independent-replay/v1",
+            "status": "confirmed_rendering_difference",
+            "diagnosis": {
+                "capture": {
+                    "validity": "valid",
+                    "identity": {
+                        "session_id": FRAME["session_id"],
+                        "capture_frame_id": 1,
+                        "event_stream_sha256": FRAME["event_stream_sha256"],
+                        "present_index": 617,
+                        "scene_index": 617,
+                        "manifest_sha256": manifest_sha,
+                        "reference_sha256": reference_sha,
+                    },
+                },
+                "identity": {"status": "unverified_session"},
+                "checkpoints": [
+                    {"event": 11, "resource": "tex:431", "target": "431",
+                     "status": "match", "authoritative": True},
+                    {"event": 142, "resource": "fb:0", "target": "0",
+                     "status": "divergent", "authoritative": True},
+                ],
+            },
+        }
+        payload = b"\x00"
+        report_bytes = json.dumps(self.report).encode("utf-8")
+        (self.case / "report.json").write_bytes(report_bytes)
+        (self.case / "diagnostic-report.json").unlink()
+        self.manifest["files"] = [
+            {"path": "payload.bin", "bytes": len(payload),
+             "sha256": _sha(payload)},
+            {"path": "report.json", "bytes": len(report_bytes),
+             "sha256": _sha(report_bytes)},
+        ]
+        (self.case / "case.json").write_text(
+            json.dumps(self.manifest), encoding="utf-8")
+        digests = dsh_pilot.case_receipt(self.case)
+        value = conclusion()
+        value["case"]["case_manifest_sha256"] = digests["case_manifest_sha256"]
+        value["case"]["seal_sha256"] = digests["seal_sha256"]
+        self.conclusion_path.write_text(json.dumps(value), encoding="utf-8")
+        self.write_receipt(digests)
+        return digests
+
+    def test_producer_bound_case_without_in_process_report_is_accepted(self):
+        self.switch_to_producer_bound()
+        self.write_run()
+        with mock.patch(
+                "automation.gfx_replay_case.verify_producer_receipt",
+                return_value={"status": "verified"}):
+            result = self.summarize()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["authoritative_evidence"]["checkpoints"], 2)
+
+    def test_bounded_interval_from_producer_bound_report_is_rejected(self):
+        digests = self.switch_to_producer_bound()
+        value = conclusion()
+        value["causal_interval"] = interval()
+        value["case"]["case_manifest_sha256"] = digests["case_manifest_sha256"]
+        value["case"]["seal_sha256"] = digests["seal_sha256"]
+        self.conclusion_path.write_text(json.dumps(value), encoding="utf-8")
+        self.write_run()
+        with mock.patch(
+                "automation.gfx_replay_case.verify_producer_receipt",
+                return_value={"status": "verified"}):
+            result = self.summarize()
+        self.assertFalse(result["ok"])
+        self.assertIn("interval_unverified",
+                      {item["code"] for item in
+                       result["conclusion"]["validation"]["problems"]})
+
+    def test_producer_bound_report_capture_mismatch_is_rejected(self):
+        self.switch_to_producer_bound()
+        self.report["diagnosis"]["capture"]["identity"]["session_id"] = (
+            OTHER_FRAME["session_id"])
+        report_bytes = json.dumps(self.report).encode("utf-8")
+        (self.case / "report.json").write_bytes(report_bytes)
+        for item in self.manifest["files"]:
+            if item["path"] == "report.json":
+                item["sha256"] = _sha(report_bytes)
+        (self.case / "case.json").write_text(
+            json.dumps(self.manifest), encoding="utf-8")
+        digests = dsh_pilot.case_receipt(self.case)
+        value = conclusion()
+        value["case"]["case_manifest_sha256"] = digests["case_manifest_sha256"]
+        value["case"]["seal_sha256"] = digests["seal_sha256"]
+        self.conclusion_path.write_text(json.dumps(value), encoding="utf-8")
+        self.write_receipt(digests)
+        self.write_run()
+        with mock.patch(
+                "automation.gfx_replay_case.verify_producer_receipt",
+                return_value={"status": "verified"}):
+            result = self.summarize()
+        self.assertFalse(result["ok"])
+        self.assertIn("case_diagnostic_identity_mismatch",
+                      problem_codes(result))
 
     @unittest.skipUnless(
         (Path(__file__).resolve().parents[1]

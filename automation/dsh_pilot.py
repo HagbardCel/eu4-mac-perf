@@ -687,37 +687,32 @@ def _verification_from_receipt(receipt_path: Path, digests: dict,
     return verification, problems
 
 
-def _authoritative_evidence(case_dir: Path, digests: dict,
-                            ) -> tuple[dict | None, list[dict]]:
-    """Load the case's diagnostic report, bound to its sealed capture.
+def _sealed_capture(seal: dict) -> dict:
+    return {
+        "session_id": seal.get("session_id"),
+        "capture_frame_id": seal.get("capture_frame_id"),
+        "event_stream_sha256": seal.get("event_stream_sha256"),
+    }
 
-    The report and its checkpoints are existing evidence: this function does
-    not re-run a comparator or build a dependency graph.  It only refuses a
-    report whose identity is not verified or whose frame does not match the
-    seal.
-    """
-    problems: list[dict] = []
-    case_dir = Path(case_dir)
+
+def _in_process_evidence(case_dir: Path, manifest: dict, seal: dict,
+                         declared: set[str], problems: list[dict],
+                         ) -> tuple[dict | None, list[dict]]:
+    """The P1 evidence path: a verified in-process diagnostic report."""
+    report_relative = str(manifest.get("diagnostic_report")
+                          or "diagnostic-report.json")
+    if report_relative not in declared:
+        problems.append({"code": "case_diagnostic_undeclared",
+                         "detail": "the diagnostic report used for "
+                                   "interval evidence is not in the "
+                                   "declared payload inventory"})
+        return None, problems
+    report_path, problem = _case_relative_path(case_dir, report_relative)
+    if problem is not None:
+        problems.append({"code": "case_diagnostic_unavailable",
+                         "detail": problem})
+        return None, problems
     try:
-        manifest = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
-        seal = json.loads((case_dir / "capture" / "frame-seal.json").read_text(
-            encoding="utf-8"))
-        report_relative = str(manifest.get("diagnostic_report")
-                              or "diagnostic-report.json")
-        declared = {str(item.get("path"))
-                    for item in manifest.get("files") or []
-                    if isinstance(item, dict)}
-        if report_relative not in declared:
-            problems.append({"code": "case_diagnostic_undeclared",
-                             "detail": "the diagnostic report used for "
-                                       "interval evidence is not in the "
-                                       "declared payload inventory"})
-            return None, problems
-        report_path, problem = _case_relative_path(case_dir, report_relative)
-        if problem is not None:
-            problems.append({"code": "case_diagnostic_unavailable",
-                             "detail": problem})
-            return None, problems
         report_bytes = report_path.read_bytes()
         report = json.loads(report_bytes)
     except (OSError, ValueError) as exc:
@@ -781,14 +776,143 @@ def _authoritative_evidence(case_dir: Path, digests: dict,
         })
     return {
         "schema": "gfx-pilot-authoritative-checkpoints/v1",
-        "capture": {
-            "session_id": seal.get("session_id"),
-            "capture_frame_id": seal.get("capture_frame_id"),
-            "event_stream_sha256": seal.get("event_stream_sha256"),
-        },
+        "source": "in_process",
+        "capture": _sealed_capture(seal),
         "report_sha256": hashlib.sha256(report_bytes).hexdigest(),
         "checkpoints": checkpoints,
     }, problems
+
+
+def _producer_bound_evidence(case_dir: Path, manifest: dict, seal: dict,
+                             declared: set[str], problems: list[dict],
+                             ) -> tuple[dict | None, list[dict]]:
+    """Evidence from a producer-bound standalone replay.
+
+    A P2 case carries a verified producer receipt and an independent replay
+    report instead of the in-process diagnostic report.  That report is not a
+    qualified diagnosis (its frame identity is ``unverified_session`` by
+    design), but its checkpoints are observations of the same sealed capture,
+    bound by the producer receipt and the case's declared payload inventory.
+    This path is therefore evidence for an unbounded upper observation only; a
+    bounded interval still requires the in-process report.
+    """
+    report_relative = str(manifest.get("report") or "report.json")
+    if report_relative not in declared:
+        problems.append({"code": "case_diagnostic_undeclared",
+                         "detail": "the producer-bound replay report is not in "
+                                   "the declared payload inventory"})
+        return None, problems
+    report_path, problem = _case_relative_path(case_dir, report_relative)
+    if problem is not None:
+        problems.append({"code": "case_diagnostic_unavailable",
+                         "detail": problem})
+        return None, problems
+    try:
+        report_bytes = report_path.read_bytes()
+        report = json.loads(report_bytes)
+        from automation import gfx_replay_case
+        receipt = gfx_replay_case.verify_producer_receipt(case_dir, manifest)
+    except Exception as exc:  # noqa: BLE001 - invalid evidence fails closed
+        problems.append({"code": "case_diagnostic_unavailable",
+                         "detail": f"{type(exc).__name__}: {exc}"})
+        return None, problems
+    if receipt.get("status") != "verified":
+        problems.append({"code": "case_producer_unverified",
+                         "detail": "the case producer receipt is not verified; "
+                                   "a standalone replay report cannot supply "
+                                   "causal evidence"})
+        return None, problems
+    if report.get("schema") != "gfx-independent-replay/v1":
+        problems.append({"code": "case_diagnostic_schema",
+                         "detail": "producer-bound replay report has an "
+                                   "unexpected schema"})
+        return None, problems
+    diagnosis = report.get("diagnosis") if isinstance(report.get("diagnosis"),
+                                                     dict) else {}
+    capture = diagnosis.get("capture") if isinstance(diagnosis.get("capture"),
+                                                     dict) else {}
+    if capture.get("validity") != "valid":
+        problems.append({"code": "case_diagnostic_unverified",
+                         "detail": "the producer-bound replay capture is not "
+                                   "valid"})
+        return None, problems
+    identity = capture.get("identity") if isinstance(capture.get("identity"),
+                                                     dict) else {}
+    comparisons = {
+        "session_id": (identity.get("session_id"), seal.get("session_id")),
+        "capture_frame_id": (identity.get("capture_frame_id"),
+                             seal.get("capture_frame_id")),
+        "event_stream_sha256": (identity.get("event_stream_sha256"),
+                                seal.get("event_stream_sha256")),
+        "present_index": (identity.get("present_index"),
+                          seal.get("present_index")),
+        "scene_index": (identity.get("scene_index"), seal.get("scene_index")),
+        "manifest_sha256": (identity.get("manifest_sha256"),
+                            seal.get("manifest_sha256")),
+        "reference_sha256": (identity.get("reference_sha256"),
+                             seal.get("reference_sha256")),
+    }
+    mismatched = [name for name, (actual, expected) in comparisons.items()
+                  if actual != expected]
+    if mismatched:
+        problems.append({"code": "case_diagnostic_identity_mismatch",
+                         "detail": "producer-bound replay report does not match "
+                                   "the frame seal: "
+                                   + ", ".join(sorted(mismatched))})
+        return None, problems
+    checkpoints = []
+    for item in (diagnosis.get("checkpoints") or report.get("checkpoints")
+                 or []):
+        if not isinstance(item, dict):
+            continue
+        checkpoints.append({
+            key: item.get(key) for key in
+            ("event", "resource", "target", "status", "authoritative",
+             "generation")
+        })
+    if not checkpoints:
+        problems.append({"code": "case_diagnostic_unavailable",
+                         "detail": "the producer-bound replay report has no "
+                                   "checkpoints"})
+        return None, problems
+    return {
+        "schema": "gfx-pilot-authoritative-checkpoints/v1",
+        "source": "producer_bound_standalone",
+        "producer_identity": "verified",
+        "capture": _sealed_capture(seal),
+        "report_sha256": hashlib.sha256(report_bytes).hexdigest(),
+        "checkpoints": checkpoints,
+    }, problems
+
+
+def _authoritative_evidence(case_dir: Path, digests: dict,
+                            ) -> tuple[dict | None, list[dict]]:
+    """Load the case's existing checkpoint evidence, bound to its seal.
+
+    An in-process diagnostic report is the strong P1 path.  A producer-bound
+    standalone case has no such report; its verified producer receipt and
+    replay report are accepted as an unbounded-observation source instead.  The
+    bounded-interval check in ``_verify_interval_evidence`` still demands the
+    in-process report.
+    """
+    problems: list[dict] = []
+    case_dir = Path(case_dir)
+    try:
+        manifest = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
+        seal = json.loads((case_dir / "capture" / "frame-seal.json").read_text(
+            encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        problems.append({"code": "case_diagnostic_unavailable",
+                         "detail": f"{type(exc).__name__}: {exc}"})
+        return None, problems
+    declared = {str(item.get("path"))
+                for item in manifest.get("files") or []
+                if isinstance(item, dict)}
+    if manifest.get("diagnostic_report"):
+        return _in_process_evidence(case_dir, manifest, seal, declared,
+                                    problems)
+    return _producer_bound_evidence(case_dir, manifest, seal, declared,
+                                    problems)
 
 
 def _case_relative_path(case_dir: Path, relative: str) -> tuple[Path, str | None]:
@@ -857,6 +981,14 @@ def _verify_interval_evidence(interval: dict, evidence: dict | None,
                           f"{expected_status} checkpoint"})
 
     if bounded:
+        if evidence.get("source") != "in_process":
+            problems.append({
+                "code": "interval_unverified",
+                "detail": "a bounded interval requires the in-process verified "
+                          "diagnostic report; a producer-bound standalone "
+                          "replay can only support an unbounded upper "
+                          "observation"})
+            return
         check(claim(interval.get("start_event")), "lower", "match")
     check(claim(interval.get("end_event")), "upper", "divergent")
 

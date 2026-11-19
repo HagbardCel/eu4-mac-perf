@@ -1,0 +1,46 @@
+{
+  "schema": "m7-p2-governance-postmerge/v1",
+  "checked_utc": "2026-11-19T09:03:30Z",
+  "repository": "HagbardCel/eu4-mac-perf",
+  "branch": "main",
+  "merge_commit": "6e3b7913ec4f7dacf69e6520674bb43716aba6f9",
+  "merged_at": "2026-11-19T08:58:54Z",
+  "merged_by": "HagbardCel",
+  "pull_request": 212,
+  "head": "668b40ed568ca2be40889da8f36597d3362d862c",
+  "review_history": {
+    "states": ["COMMENTED"],
+    "approved_count": 0,
+    "approved_on_final_head": false,
+    "review_decision_after_merge": "REVIEW_REQUIRED",
+    "note": "The only review states are automated Codex and owner comments; GitHub still requires an approval for the merged PR."
+  },
+  "protection": {
+    "required_status_checks": {
+      "strict": true,
+      "contexts": ["portable"]
+    },
+    "required_approving_review_count": 1,
+    "dismiss_stale_reviews": true,
+    "require_last_push_approval": true,
+    "enforce_admins": true,
+    "required_conversation_resolution": true,
+    "allow_force_pushes": false,
+    "allow_deletions": false
+  },
+  "required_check": {
+    "context": "portable",
+    "conclusion": "success",
+    "completed_at": "2026-11-19T09:03:09Z"
+  },
+  "finding": "PR #212 merged despite an unsatisfied one-approval gate. The API does not expose whether an administrative bypass or a transient protection change was used; either way the documented independent-review gate was not effective. Protections remain enabled and were not weakened.",
+  "same_pattern": {
+    "pull_requests": [210, 211],
+    "note": "Both merged with only COMMENTED reviews."
+  },
+  "remediation": [
+    "The closure PR requires a fresh APPROVED review on its exact final head by someone other than the author.",
+    "An administrative override must be declared before the merge with its reason and compensating review plan; a post-hoc note is not approval.",
+    "If no independent reviewer is available, the PR remains unmerged and is reported as awaiting review."
+  ]
+}
