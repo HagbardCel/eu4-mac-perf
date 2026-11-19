@@ -181,6 +181,20 @@ def default_checkpoint_problems(value, index: int,
     if not _is_sha256(value.get("sha256")):
         problems.append(
             f"default checkpoint at event {index} has an invalid sha256")
+    # Capture identity is carried on the record when the tracer knows it.  An
+    # absent pair is tolerated for older captures; a malformed or foreign pair
+    # is not.
+    session = value.get("session_id")
+    if session is not None and (not isinstance(session, str) or not session):
+        problems.append(
+            f"default checkpoint at event {index} has an invalid session_id")
+    capture_frame = value.get("capture_frame_id")
+    if capture_frame is not None and (
+            not isinstance(capture_frame, int) or isinstance(capture_frame, bool)
+            or capture_frame <= 0):
+        problems.append(
+            f"default checkpoint at event {index} has an invalid "
+            "capture_frame_id")
     return problems
 
 
@@ -583,7 +597,10 @@ def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
     default_checkpoints: list[dict] = []
 
     # Additive selected-event metadata.  It stays part of the event record, so
-    # the operation count and replay stream are unchanged.
+    # the operation count and replay stream are unchanged.  Several bounded
+    # checkpoints may be attached to one frame; each must name its own
+    # pre-execution event and the declared selection must match what was
+    # actually attached.
     for index, event in enumerate(events):
         value = event.get("default_checkpoint")
         if value is None:
@@ -600,10 +617,51 @@ def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
             "reference_sha256": value["sha256"],
             "reference_width": value["width"],
             "reference_height": value["height"],
+            "session_id": value.get("session_id"),
+            "capture_frame_id": value.get("capture_frame_id"),
         })
-    if len(default_checkpoints) > 1:
+    attached_events = [item["event"] for item in default_checkpoints]
+    if attached_events != sorted(attached_events) or len(
+            set(attached_events)) != len(attached_events):
+        # Each event carries at most one checkpoint, so this is only reachable
+        # with a malformed stream; never derive an interval from it.
         contract_problems.append(
-            "frame declares more than one selected default checkpoint")
+            "default checkpoints are not strictly increasing per event")
+    declared_events = manifest.get("default_checkpoint_events")
+    if declared_events is not None:
+        if (not isinstance(declared_events, list)
+                or any(not isinstance(item, int) or isinstance(item, bool)
+                       for item in declared_events)):
+            contract_problems.append(
+                "frame declares a malformed default checkpoint event list")
+        elif declared_events != attached_events:
+            contract_problems.append(
+                "frame declares default checkpoints "
+                f"{declared_events!r} but attached {attached_events!r}")
+        declared_count = manifest.get("default_checkpoint_count")
+        if (isinstance(declared_count, int)
+                and not isinstance(declared_count, bool)
+                and isinstance(declared_events, list)
+                and declared_count != len(declared_events)):
+            contract_problems.append(
+                "frame declares "
+                f"{declared_count} default checkpoints but lists "
+                f"{len(declared_events)}")
+    # Every checkpoint in one frame must belong to the same execution.  The
+    # authoritative seal binding is re-checked during reconciliation; here the
+    # records only have to be internally consistent.
+    checkpoint_sessions = {
+        item["session_id"] for item in default_checkpoints
+        if item.get("session_id") is not None}
+    if len(checkpoint_sessions) > 1:
+        contract_problems.append(
+            "default checkpoints name more than one capture session")
+    checkpoint_frames = {
+        item["capture_frame_id"] for item in default_checkpoints
+        if item.get("capture_frame_id") is not None}
+    if len(checkpoint_frames) > 1:
+        contract_problems.append(
+            "default checkpoints name more than one capture frame")
 
     # First pass: every logical texture name that is ever written.
     for event in events:
@@ -1103,6 +1161,8 @@ def checkpoint_plan(graph: dict) -> list[dict]:
             "reference_width": item["reference_width"],
             "reference_height": item["reference_height"],
             "producer_events": [],
+            "session_id": item.get("session_id"),
+            "capture_frame_id": item.get("capture_frame_id"),
         })
     plan.sort(key=lambda item: (item["event"], item["target"]))
     return plan
@@ -1118,7 +1178,7 @@ def checkpoint_request(graph: dict) -> dict:
     plan = checkpoint_plan(graph)
     checkpoints = []
     for item in plan:
-        checkpoints.append({
+        entry = {
             "event": item["event"],
             "target": item["target"],
             "resource": item["resource"],
@@ -1128,7 +1188,15 @@ def checkpoint_request(graph: dict) -> dict:
             "reference_width": item["reference_width"],
             "reference_height": item["reference_height"],
             "producer_events": item["producer_events"],
-        })
+        }
+        # Capture identity is additive: a legacy capture without it must
+        # serialize exactly as it did before the multi-checkpoint work, so the
+        # checkpoint request digest is unchanged for portable old cases.
+        if item.get("session_id") is not None:
+            entry["session_id"] = item["session_id"]
+        if item.get("capture_frame_id") is not None:
+            entry["capture_frame_id"] = item["capture_frame_id"]
+        checkpoints.append(entry)
     return {
         "schema": "gfx-frame-checkpoint-request/v1",
         "checkpoints": checkpoints,

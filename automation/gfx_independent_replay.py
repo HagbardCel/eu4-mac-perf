@@ -396,6 +396,22 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
             results.append(_invalid_checkpoint(merged, graph, reason,
                                                requested=True))
 
+        if capture is not None:
+            requested_session = wanted.get("session_id")
+            if (requested_session is not None
+                    and capture.get("session_id") is not None
+                    and str(requested_session)
+                    != str(capture["session_id"])):
+                fail("checkpoint names a foreign capture session")
+                continue
+            requested_frame = wanted.get("capture_frame_id")
+            if (requested_frame is not None
+                    and capture.get("capture_frame_id") is not None
+                    and int(requested_frame)
+                    != int(capture["capture_frame_id"])):
+                fail("checkpoint names a foreign capture frame")
+                continue
+
         if item.get("ok") is not True:
             fail(str(item.get("error") or "checkpoint readback reported failure"))
             continue

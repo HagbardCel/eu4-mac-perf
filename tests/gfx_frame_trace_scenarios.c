@@ -123,6 +123,9 @@ static void reset_env(void) {
     unsetenv("EU4_GFX_FRAME_TRACE_MAX_PENDING");
     unsetenv("EU4_GFX_FRAME_TRACE_MAX_BYTES");
     unsetenv("EU4_GFX_FRAME_TRACE_DEFAULT_CHECKPOINT_EVENT");
+    unsetenv("EU4_GFX_FRAME_TRACE_DEFAULT_CHECKPOINT_EVENTS");
+    unsetenv("EU4_GFX_FRAME_TRACE_MAX_CHECKPOINTS");
+    unsetenv("EU4_GFX_FRAME_TRACE_CHECKPOINT_MAX_BYTES");
 }
 
 static int configure(const char *directory) {
@@ -526,6 +529,124 @@ static int scenario_checkpoint_out_of_range(const char *directory) {
     setenv("EU4_GFX_FRAME_TRACE_TEST_ONLY", "1", 1);
     setenv("EU4_GFX_FRAME_TRACE_MAX_DRAWS", "4", 1);
     setenv("EU4_GFX_FRAME_TRACE_DEFAULT_CHECKPOINT_EVENT", "4", 1);
+    int configured = eu4_gfx_frame_trace_configure_from_env();
+    printf("configure_rejected=%d\n", configured);
+    return configured < 0 ? 0 : 4;
+}
+
+static int configure_checkpoint_multi(const char *directory,
+                                      const char *events,
+                                      const char *max_count,
+                                      const char *max_bytes) {
+    reset_env();
+    setenv("EU4_GFX_FRAME_TRACE_DIR", directory, 1);
+    setenv("EU4_GFX_FRAME_TRACE_TEST_ONLY", "1", 1);
+    setenv("EU4_GFX_FRAME_SEAL", "1", 1);
+    setenv("EU4_GFX_FRAME_TRACE_DEFAULT_CHECKPOINT_EVENTS", events, 1);
+    if (max_count != NULL) {
+        setenv("EU4_GFX_FRAME_TRACE_MAX_CHECKPOINTS", max_count, 1);
+    }
+    if (max_bytes != NULL) {
+        setenv("EU4_GFX_FRAME_TRACE_CHECKPOINT_MAX_BYTES", max_bytes, 1);
+    }
+    return eu4_gfx_frame_trace_configure_from_env();
+}
+
+/* Three selected checkpoints in one frame across the three supported
+   pre-operation boundaries: draw, clear and copy. */
+static int scenario_checkpoint_multi(const char *directory) {
+    if (configure_checkpoint_multi(directory, "0,1,2", NULL, NULL) <= 0) {
+        return 2;
+    }
+    arm_via_present();
+    draw(true, 0x1000);
+    if (!eu4_gfx_frame_trace_test_checkpoint_captured_at(0)) {
+        return 4;
+    }
+    draw(false, 0x1000); /* event 0: draw */
+    clear_one();         /* event 1: clear */
+    if (!eu4_gfx_frame_trace_test_checkpoint_captured_at(1)) {
+        return 5;
+    }
+    valid_copy(442);     /* event 2: copy */
+    if (eu4_gfx_frame_trace_test_checkpoint_count() != 3 ||
+        !eu4_gfx_frame_trace_test_checkpoint_captured_at(2)) {
+        return 6;
+    }
+    finish_via_present();
+    return 0;
+}
+
+/* A requested event beyond the observed frame may not be silently dropped. */
+static int scenario_checkpoint_multi_missed(const char *directory) {
+    if (configure_checkpoint_multi(directory, "0,3", NULL, NULL) <= 0) {
+        return 2;
+    }
+    arm_via_present();
+    draw(true, 0x1000);
+    draw(false, 0x1000);
+    clear_one();
+    valid_copy(442);
+    finish_via_present();
+    return 0;
+}
+
+/* The aggregate readback budget is enforced before the second readback. */
+static int scenario_checkpoint_multi_budget(const char *directory) {
+    if (configure_checkpoint_multi(directory, "0,1", NULL, "100") <= 0) {
+        return 2;
+    }
+    arm_via_present();
+    draw(true, 0x1000);
+    draw(false, 0x1000);
+    clear_one();
+    finish_via_present();
+    return 0;
+}
+
+/* A captured checkpoint whose record is never emitted cannot be attached. */
+static int scenario_checkpoint_multi_pending(const char *directory) {
+    if (configure_checkpoint_multi(directory, "0", NULL, NULL) <= 0) {
+        return 2;
+    }
+    arm_via_present();
+    if (eu4_gfx_frame_trace_test_checkpoint_hook() != 1) {
+        return 4;
+    }
+    finish_via_present();
+    return 0;
+}
+
+static int reject_selection(const char *directory, const char *events,
+                            const char *max_count) {
+    int configured = configure_checkpoint_multi(directory, events, max_count,
+                                                NULL);
+    printf("configure_rejected=%d\n", configured);
+    return configured < 0 ? 0 : 4;
+}
+
+static int scenario_checkpoint_multi_unordered(const char *directory) {
+    return reject_selection(directory, "2,1", NULL);
+}
+
+static int scenario_checkpoint_multi_duplicate(const char *directory) {
+    return reject_selection(directory, "1,1", NULL);
+}
+
+static int scenario_checkpoint_multi_empty(const char *directory) {
+    return reject_selection(directory, "0,,1", NULL);
+}
+
+static int scenario_checkpoint_multi_over_count(const char *directory) {
+    return reject_selection(directory, "0,1,2", "2");
+}
+
+static int scenario_checkpoint_multi_both_forms(const char *directory) {
+    reset_env();
+    setenv("EU4_GFX_FRAME_TRACE_DIR", directory, 1);
+    setenv("EU4_GFX_FRAME_TRACE_TEST_ONLY", "1", 1);
+    setenv("EU4_GFX_FRAME_TRACE_DEFAULT_CHECKPOINT_EVENT", "0", 1);
+    setenv("EU4_GFX_FRAME_TRACE_DEFAULT_CHECKPOINT_EVENTS", "0,1", 1);
     int configured = eu4_gfx_frame_trace_configure_from_env();
     printf("configure_rejected=%d\n", configured);
     return configured < 0 ? 0 : 4;
@@ -1010,6 +1131,33 @@ int main(int argc, char **argv) {
     }
     if (strcmp(scenario, "checkpoint-out-of-range") == 0) {
         return scenario_checkpoint_out_of_range(directory);
+    }
+    if (strcmp(scenario, "checkpoint-multi") == 0) {
+        return scenario_checkpoint_multi(directory);
+    }
+    if (strcmp(scenario, "checkpoint-multi-missed") == 0) {
+        return scenario_checkpoint_multi_missed(directory);
+    }
+    if (strcmp(scenario, "checkpoint-multi-budget") == 0) {
+        return scenario_checkpoint_multi_budget(directory);
+    }
+    if (strcmp(scenario, "checkpoint-multi-pending") == 0) {
+        return scenario_checkpoint_multi_pending(directory);
+    }
+    if (strcmp(scenario, "checkpoint-multi-unordered") == 0) {
+        return scenario_checkpoint_multi_unordered(directory);
+    }
+    if (strcmp(scenario, "checkpoint-multi-duplicate") == 0) {
+        return scenario_checkpoint_multi_duplicate(directory);
+    }
+    if (strcmp(scenario, "checkpoint-multi-empty") == 0) {
+        return scenario_checkpoint_multi_empty(directory);
+    }
+    if (strcmp(scenario, "checkpoint-multi-over-count") == 0) {
+        return scenario_checkpoint_multi_over_count(directory);
+    }
+    if (strcmp(scenario, "checkpoint-multi-both-forms") == 0) {
+        return scenario_checkpoint_multi_both_forms(directory);
     }
     if (strcmp(scenario, "flush-fail") == 0) {
         return scenario_flush_fail(directory);

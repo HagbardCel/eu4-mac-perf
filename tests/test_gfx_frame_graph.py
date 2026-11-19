@@ -425,6 +425,25 @@ class DefaultCheckpointGraphTests(unittest.TestCase):
         self.fixture.write()
         return value
 
+    def attach_many(self, events=(1, 3, 4)):
+        """Attach several checkpoints and declare the matching selection."""
+        for event_index in events:
+            self.attach(event_index)
+        manifest = json.loads(
+            (self.fixture.frame / "frame-trace.json").read_text())
+        manifest["default_checkpoint_events"] = list(events)
+        manifest["default_checkpoint_count"] = len(events)
+        (self.fixture.frame / "frame-trace.json").write_text(
+            json.dumps(manifest))
+
+    def redeclare(self, events):
+        manifest = json.loads(
+            (self.fixture.frame / "frame-trace.json").read_text())
+        manifest["default_checkpoint_events"] = list(events)
+        manifest["default_checkpoint_count"] = len(events)
+        (self.fixture.frame / "frame-trace.json").write_text(
+            json.dumps(manifest))
+
     def test_captured_checkpoint_joins_the_deterministic_request(self):
         self.attach(4)
         graph = gfx_frame_graph.build(self.fixture.frame)
@@ -448,6 +467,30 @@ class DefaultCheckpointGraphTests(unittest.TestCase):
         self.assertEqual(item["reference_sha256"], sha(self.payload))
         self.assertEqual(item["reference_width"], WIDTH)
         self.assertEqual(item["reference_height"], HEIGHT)
+
+    def test_legacy_request_serialization_is_unchanged_without_identity(self):
+        self.attach(4)
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        request = gfx_frame_graph.checkpoint_request(graph)
+        item = next(item for item in request["checkpoints"]
+                    if item["event"] == 4 and item["target"] == "0")
+        # Byte-identical legacy key order and no identity keys.
+        self.assertEqual(list(item), [
+            "event", "target", "resource", "file", "reference_file",
+            "reference_sha256", "reference_width", "reference_height",
+            "producer_events"])
+        self.assertNotIn("session_id", item)
+        self.assertNotIn("capture_frame_id", item)
+
+    def test_request_serialization_adds_capture_identity_when_present(self):
+        self.attach(4, session_id="session-a", capture_frame_id=1)
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        request = gfx_frame_graph.checkpoint_request(graph)
+        item = next(item for item in request["checkpoints"]
+                    if item["event"] == 4 and item["target"] == "0")
+        self.assertEqual(item["session_id"], "session-a")
+        self.assertEqual(item["capture_frame_id"], 1)
+        self.assertEqual(list(item)[-2:], ["session_id", "capture_frame_id"])
 
     def test_checkpoint_request_is_stable_and_ordered(self):
         self.attach(4)
@@ -473,14 +516,66 @@ class DefaultCheckpointGraphTests(unittest.TestCase):
         self.assertTrue(any("default framebuffer" in reason
                             for reason in graph["reasons"]), graph["reasons"])
 
-    def test_multiple_selected_checkpoints_are_invalid(self):
-        self.attach(4)
-        self.fixture.events[1]["default_checkpoint"] = dict(
-            self.fixture.events[4]["default_checkpoint"], event=1)
-        self.fixture.write()
+    def test_multiple_selected_checkpoints_are_accepted_in_order(self):
+        self.attach_many((1, 3, 4))
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        self.assertEqual(graph["status"], "complete", graph["reasons"])
+        self.assertEqual(
+            [item["event"] for item in graph["default_checkpoints"]],
+            [1, 3, 4])
+        plan = gfx_frame_graph.checkpoint_plan(graph)
+        selected = [(item["event"], item["target"]) for item in plan
+                    if item["resource"] == "fb:0"]
+        self.assertEqual(selected, [(1, "0"), (3, "0"), (4, "0")])
+        request = gfx_frame_graph.checkpoint_request(graph)
+        self.assertEqual(
+            [item["event"] for item in request["checkpoints"]
+             if item["resource"] == "fb:0"],
+            [1, 3, 4])
+
+    def test_declared_selection_must_match_attached_checkpoints(self):
+        self.attach_many((1, 3, 4))
+        self.redeclare((1, 3))
         graph = gfx_frame_graph.build(self.fixture.frame)
         self.assertEqual(graph["status"], "invalid")
-        self.assertTrue(any("more than one" in reason
+        self.assertTrue(any("declares default checkpoints" in reason
+                            for reason in graph["reasons"]), graph["reasons"])
+
+    def test_declared_count_must_match_the_declared_selection(self):
+        self.attach_many((1, 3, 4))
+        manifest = json.loads(
+            (self.fixture.frame / "frame-trace.json").read_text())
+        manifest["default_checkpoint_count"] = 2
+        (self.fixture.frame / "frame-trace.json").write_text(
+            json.dumps(manifest))
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        self.assertEqual(graph["status"], "invalid")
+        self.assertTrue(any("but lists" in reason
+                            for reason in graph["reasons"]), graph["reasons"])
+
+    def test_checkpoints_from_two_sessions_are_invalid(self):
+        self.attach(1, session_id="session-a", capture_frame_id=1)
+        self.attach(3, session_id="session-b", capture_frame_id=1)
+        self.redeclare((1, 3))
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        self.assertEqual(graph["status"], "invalid")
+        self.assertTrue(any("more than one capture session" in reason
+                            for reason in graph["reasons"]), graph["reasons"])
+
+    def test_checkpoints_from_two_capture_frames_are_invalid(self):
+        self.attach(1, session_id="session-a", capture_frame_id=1)
+        self.attach(3, session_id="session-a", capture_frame_id=2)
+        self.redeclare((1, 3))
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        self.assertEqual(graph["status"], "invalid")
+        self.assertTrue(any("more than one capture frame" in reason
+                            for reason in graph["reasons"]), graph["reasons"])
+
+    def test_malformed_capture_identity_is_invalid(self):
+        self.attach(1, session_id="")
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        self.assertEqual(graph["status"], "invalid")
+        self.assertTrue(any("session_id" in reason
                             for reason in graph["reasons"]), graph["reasons"])
 
     def test_missing_checkpoint_blob_is_invalid(self):

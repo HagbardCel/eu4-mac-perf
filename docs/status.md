@@ -3,6 +3,35 @@
 Authoritative summary of what is established, qualified, and in flight.
 Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
 
+## M7 PR 1 — multi-checkpoint same-frame capture (2026-11-19)
+
+The selected-event `fb:0` checkpoint mechanism now accepts a bounded ordered
+collection per captured frame. `--default-checkpoint-events 14,20,71,142`
+(`EU4_GFX_FRAME_TRACE_DEFAULT_CHECKPOINT_EVENTS`) is opt-in; the existing
+single-event option and the single-checkpoint case format are unchanged. The
+native tracer rejects unordered, duplicate, empty or out-of-range selections,
+enforces a configurable maximum count (default 4, hard bound 8) and an
+aggregate readback-byte budget (default 64 MiB) before each readback, and
+records `session_id`/`capture_frame_id` on every checkpoint so a record cannot
+silently join another execution. Each checkpoint still attaches only to the
+event it was selected for; a missed, duplicated, unattached or over-budget
+checkpoint fails the capture closed (`default_checkpoint_missed`,
+`default_checkpoint_duplicate`, `default_checkpoint_unattached`,
+`default_checkpoint_budget`). `gfx_frame_graph.build()` accepts several
+checkpoints and requires the declared selection to match what was attached;
+`first_divergence()` therefore yields a bounded same-capture interval when a
+matching lower checkpoint and a divergent upper checkpoint exist, and excludes
+same-resource matches from another capture.
+
+Offline verification: native trace scenarios cover draw/clear/copy ordering,
+identity, budget, missed/duplicate/unattached and selection rejection;
+graph tests cover the declared-selection match, foreign session/frame and
+identity validation; diagnosis tests cover a same-frame bounded interval and
+cross-capture exclusion. The disabled path performs no extra readback.
+**Not yet established:** a live multi-checkpoint capture, the event-142
+producing operation, and independent final-head review. The event-142 causal
+interval remains unresolved against authentic evidence until the live pilot.
+
 ## M7-P2 — reliability, compact diagnostics and efficiency (2026-11-19)
 
 P0 (PR #210), P1 (PR #211) and P2 (PR #212) are merged on `main`; the closure
