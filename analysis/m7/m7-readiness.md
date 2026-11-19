@@ -201,8 +201,11 @@ for those numbers. This is a reporting gap, not an enforcement gap.
   diagnosis, m6_frame, DSH pilot/bridge, correction acceptance, blob verifier).
 - The full offline gate passed on the PR3 integration state (1140 s,
   `20261119T133445Z-ca3de126`).
-- **Final-state gate after the Phase A corrections: passed** (699 s,
-  `20261119T170815Z-6afa4ac1`, label `final-integrated-20261119`, 0 failures).
+- **Final-state gate after the final code change (correction allowance):**
+  passed (721 s, `20261119T182911Z-a2cfafcc`, label `final-gate-20261119b`,
+  0 failures).
+- Earlier integrated gate after the Phase A corrections: passed (699 s,
+  `20261119T170815Z-6afa4ac1`, label `final-integrated-20261119`).
 - Earlier final-state gate: passed (877 s, 3848 tests,
   `20261119T145206Z-17c1021e`, label `full-pr4-final`, 42 skipped, 0 failures).
   Two earlier attempts failed on different, unrelated load-sensitive tests:
@@ -290,6 +293,26 @@ goal: the operator must open the Web/TUI session and send the printed objective
 there. That operator dependency is the reason a fresh two-round run through
 this exact launcher is not recorded; the two-round evidence below comes from
 the running Web session's native goal driver.
+
+## Previous review findings and resolution (not independently confirmed)
+
+The findings that drove the remediation rounds were addressed as follows; no
+independent reviewer is available to confirm them, so they remain
+self-assessed.
+
+| Finding | Resolution | Evidence |
+| --- | --- | --- |
+| #214 byte budget only forwarded for the plural form; identity keys changed legacy requests | Forwarded for both forms; absent identity omitted; legacy request bytes/hashes preserved | `ea554cae`, graph tests, byte-identical recorded requests |
+| #215 portable suite needed a native host; claims not independently recomputed; regressions optional; unbound readback; revision string unproven | Producer mocking; mandatory inventory; execution/provenance before pixels; canonical readback; build-revision binding; per-regression seal identity | `01b3b60b`, 26 acceptance tests incl. different-capture regression |
+| #216 check-then-record, coordinator leaks, strategy reset, no merge boundary, launch reservation rejected the just-reserved allowance | Atomic reservations; pre-child multi-resource capture; coordinator reaping; operator-token recovery; merge denial; explicit reservation at the choke point; corrections allowance at acceptance | `82c09bfb`, `de2786bd`, boundary + budget tests |
+| #217 scope creep into campaign budgets | Verifier fix only; budget changes moved to #216 | `7e4d3a96`, native verifier tests |
+| #218 evidence conflated the controlled correction with authentic evidence | Five evidence categories separated; launcher validation and review blocker recorded | This report |
+
+Previous governance failures remain documented: PR #212 and #213 merged
+without an `APPROVED` review or an explicit waiver; GitHub reports
+`reviewDecision: REVIEW_REQUIRED` for the earlier stack. `main` branch
+protection currently requires **0** approving reviews, and the repository has
+one collaborator.
 
 ## Final gate
 

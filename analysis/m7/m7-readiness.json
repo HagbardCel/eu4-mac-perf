@@ -196,6 +196,11 @@
     "program": 301,
     "resource": "fb:0"
   },
+  "independent_review": {
+    "available": false,
+    "merged": 0,
+    "reason": "single collaborator, no invitations, branch protection requires 0 approvals"
+  },
   "launcher_validation": {
     "campaign_state_used": {
       "eu4_launches": 0,
@@ -220,10 +225,10 @@
     "target": "0"
   },
   "offline_gate": {
-    "duration_seconds": 699.334,
+    "duration_seconds": 721.584,
     "failures": 0,
-    "label": "final-integrated-20261119",
-    "record": "20261119T170815Z-6afa4ac1",
+    "label": "final-gate-20261119b",
+    "record": "20261119T182911Z-a2cfafcc",
     "status": "passed"
   },
   "pull_requests": {
@@ -250,6 +255,7 @@
     "pr217": "verifier fix only; campaign-budget changes moved to #216",
     "pr218": "cross-capture wording corrected; NOT_READY retained"
   },
+  "review_findings_resolved_self_assessed": true,
   "schema": "m7-readiness/v1",
   "unresolved": [
     "independent reviewer or recorded operator waiver for the exact heads",
