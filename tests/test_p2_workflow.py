@@ -51,7 +51,8 @@ class P2WorkflowTests(unittest.TestCase):
         add("shaders/shaders.json", b"{}")
         add("replay/replay.json", json.dumps({
             "status": "ok", "stage": "complete", "readback": True,
-            "events": 3, "encoded": 3}).encode())
+            "partial": False, "timed_out": False, "failed": 0,
+            "command_status": 4, "events": 3, "encoded": 3}).encode())
         add("replay/metal-frame.bgra", b"\0" * 16)
         replay_bytes = (case / "replay" / "replay.json").read_bytes()
         metal_bytes = (case / "replay" / "metal-frame.bgra").read_bytes()
@@ -71,7 +72,8 @@ class P2WorkflowTests(unittest.TestCase):
                 "replay_json_sha256": hashlib.sha256(replay_bytes).hexdigest(),
                 "metal_frame_sha256": hashlib.sha256(metal_bytes).hexdigest(),
                 "status": "ok", "stage": "complete", "readback": True,
-                "events": 3, "encoded": 3,
+                "partial": False, "timed_out": False, "failed": 0,
+                "command_status": 4, "events": 3, "encoded": 3,
             },
         }).encode())
         add("diagnostic-report.json", json.dumps({

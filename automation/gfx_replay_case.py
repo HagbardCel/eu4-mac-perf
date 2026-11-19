@@ -2539,9 +2539,11 @@ def verify_producer_receipt(case_dir: Path, manifest: dict) -> dict:
     metal_sha = _sha(metal_path) if metal_path.is_file() else None
     if result.get("metal_frame_sha256") != metal_sha:
         problems.append("producer receipt does not bind the Metal readback")
-    for key in ("status", "stage", "readback"):
+    for key in ("status", "stage", "readback", "events", "encoded",
+                "failed", "command_status"):
         if result.get(key) != replay.get(key):
-            problems.append(f"producer receipt result.{key} disagrees with replay.json")
+            problems.append(
+                f"producer receipt result.{key} disagrees with replay.json")
     seal = _case_capture_seal(case_dir, manifest)
     capture = receipt.get("capture") if isinstance(
         receipt.get("capture"), dict) else {}

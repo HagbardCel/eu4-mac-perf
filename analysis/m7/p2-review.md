@@ -43,35 +43,40 @@ file is not a merge authorization.
    policy and platform. Verify that an unverified current case is never
    reusable merely because a fingerprint matches, and that this remains a
    single receipt, not a cache.
-6. **Replay producer identity and execution snapshot.** Verify
+6. **Full-frame reuse contract.** Verify `case_baseline._replay_evidence`
+   requires complete status/stage/readback/partial/timeout/failed/encoded/events
+   and Metal command status, and that producer-receipt execution fields agree.
+   Negative tests cover partial, short encode, nonzero failed, timeout and
+   unsuccessful command buffer.
+7. **Replay producer identity and execution snapshot.** Verify
    `snapshot_replay_host` executes an immutable copy and the receipt names the
    bytes actually launched; verify external `--replay-dir` overrides are
    rejected and missing receipt-bound artifacts are structured invalid evidence.
-7. **Replay producer identity.** `gfx_independent_replay.write_producer_receipt`
+8. **Replay producer identity.** `gfx_independent_replay.write_producer_receipt`
    and `gfx_replay_case.verify_producer_receipt`. Verify the receipt binds the
    executable SHA-256, build fingerprint/stamp, capture identity and
    `replay.json`/Metal-readback digests; portable cases package it; baseline
    reuse rejects a changed producer and legacy cases without a receipt.
-8. **Build publication.** `m6_frame.build_replay_host`. Verify private temp
+9. **Build publication.** `m6_frame.build_replay_host`. Verify private temp
    compilation, atomic publication, exclusive lock, binary digest in the stamp,
    tamper detection, timeout/failure cleanup and overlapping builds.
-9. **Replay-host dependencies.** `automation.replay_host_dependencies` is the
+10. **Replay-host dependencies.** `automation.replay_host_dependencies` is the
    single closure for `m6_frame.build_replay_host` and
    `case_baseline`. Verify that a semantics-header edit rebuilds, an unchanged
    set does not, flags/compiler changes invalidate, and a failed build removes
    the binary and stamp.
-10. **Payload pass.** `case_baseline` calls `gfx_replay_case.verify()` once as
+11. **Payload pass.** `case_baseline` calls `gfx_replay_case.verify()` once as
    the authoritative payload hashing pass; it must not re-walk declared files.
    A reusable baseline requires `stage=complete`, `status=ok`, `readback=true`.
-11. **Causal narrowing.** The compact diagnosis retains the existing
+12. **Causal narrowing.** The compact diagnosis retains the existing
    `unresolved_interval` and `next_checkpoint`; a lower bound is `null` and
    `search_start_event` is not evidence. Verify that no cross-capture or
    unrelated-resource observation can bound the interval.
-12. **Efficiency evidence.** `analysis/m7/p2-efficiency.md` and
+13. **Efficiency evidence.** `analysis/m7/p2-efficiency.md` and
    `analysis/m7/p2-evidence.json`. Verify that the P1 autonomous session, the
    two-call P2 interface demonstration and the absent P2 autonomous session are
    distinguished, and that end-to-end efficiency is marked not measured.
-13. **Governance.** `analysis/m7/p2-governance.md`. The repository settings are
+14. **Governance.** `analysis/m7/p2-governance.md`. The repository settings are
    enforced; the independent approval is still outstanding.
 
 ## Verification to reproduce

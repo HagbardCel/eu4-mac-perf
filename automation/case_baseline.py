@@ -195,20 +195,14 @@ def _replay_evidence(replay: Path) -> dict:
     if not result:
         raise BaselineError("replay_missing",
                             f"no readable {replay / 'replay.json'}")
-    if result.get("status") != "ok":
+    from automation import gfx_independent_replay
+
+    completion = gfx_independent_replay.full_frame_completion_problems(result)
+    if completion:
         raise BaselineError(
             "replay_incomplete",
-            f"replay status is {result.get('status')!r}, not 'ok'")
-    # A reusable baseline requires the completed replay stage.  Historical
-    # artifacts without it are not silently promoted; they must be replayed.
-    if result.get("stage") != "complete":
-        raise BaselineError(
-            "replay_incomplete",
-            f"replay stage is {result.get('stage')!r}, not 'complete'")
-    if result.get("readback") is not True:
-        raise BaselineError(
-            "replay_incomplete",
-            "the replay result does not record a successful readback")
+            "the replay is not a complete full-frame execution: "
+            + "; ".join(completion))
     metal = replay / "metal-frame.bgra"
     if not metal.is_file() or metal.stat().st_size == 0:
         raise BaselineError("replay_missing", f"no Metal readback at {metal}")

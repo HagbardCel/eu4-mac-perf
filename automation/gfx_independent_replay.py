@@ -2974,6 +2974,37 @@ def diagnose_frame(frame_dir: Path | str, metal_result_dir: Path | str,
     return report
 
 
+def full_frame_completion_problems(replay: dict) -> list[str]:
+    """Return why a replay result is not a complete full-frame execution.
+
+    This is the full-frame baseline contract: every captured event encoded,
+    no failures, a completed Metal command buffer, a real readback and no
+    partial/timeout mode.  Missing metadata is a problem, not an implicit pass.
+    """
+    problems: list[str] = []
+    if replay.get("status") != "ok":
+        problems.append(f"status is {replay.get('status')!r}")
+    if replay.get("stage") != "complete":
+        problems.append(f"stage is {replay.get('stage')!r}")
+    if replay.get("readback") is not True:
+        problems.append("readback is not true")
+    if replay.get("partial") is not False:
+        problems.append("partial is not false")
+    if replay.get("timed_out") is not False:
+        problems.append("timed_out is not false")
+    if replay.get("failed") != 0:
+        problems.append(f"failed is {replay.get('failed')!r}")
+    events = replay.get("events")
+    encoded = replay.get("encoded")
+    if type(events) is not int or type(encoded) is not int:
+        problems.append("encoded/events are not integers")
+    elif encoded != events:
+        problems.append(f"encoded {encoded} != events {events}")
+    if replay.get("command_status") != 4:
+        problems.append(f"command_status is {replay.get('command_status')!r}")
+    return problems
+
+
 def classify_replay(*, execution_ok: bool, coverage: str, semantic: str,
                     pixels: str, checkpoints: list[dict],
                     checkpoint_validation: dict, faults: dict | None,

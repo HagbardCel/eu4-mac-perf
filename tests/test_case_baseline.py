@@ -36,7 +36,8 @@ def _write_case(root: Path) -> Path:
     add("shaders/program.metal", b"kernel")
     add("replay/replay.json", json.dumps({
         "status": "ok", "stage": "complete", "readback": True,
-        "events": 3, "encoded": 3}).encode())
+        "partial": False, "timed_out": False, "failed": 0,
+        "command_status": 4, "events": 3, "encoded": 3}).encode())
     add("replay/metal-frame.bgra", b"\0" * 16)
     replay_bytes = (case / "replay" / "replay.json").read_bytes()
     metal_bytes = (case / "replay" / "metal-frame.bgra").read_bytes()
@@ -56,7 +57,8 @@ def _write_case(root: Path) -> Path:
             "replay_json_sha256": hashlib.sha256(replay_bytes).hexdigest(),
             "metal_frame_sha256": hashlib.sha256(metal_bytes).hexdigest(),
             "status": "ok", "stage": "complete", "readback": True,
-            "events": 3, "encoded": 3,
+            "partial": False, "timed_out": False, "failed": 0,
+            "command_status": 4, "events": 3, "encoded": 3,
         },
     }).encode())
     add("diagnostic-report.json", json.dumps({
@@ -94,6 +96,84 @@ class BaselineIdentityTests(unittest.TestCase):
     def tearDown(self):
         self._producer.stop()
         self.temporary.cleanup()
+
+    def _rewrite_replay(self, **changes):
+        import hashlib
+        import json as _json
+        replay_path = self.case / "replay" / "replay.json"
+        replay = _json.loads(replay_path.read_bytes())
+        replay.update(changes)
+        replay_path.write_bytes(_json.dumps(replay).encode())
+        receipt_path = self.case / "replay" / "producer-receipt.json"
+        receipt = _json.loads(receipt_path.read_bytes())
+        for key in ("status", "stage", "readback", "events", "encoded",
+                    "failed", "command_status"):
+            receipt["result"][key] = replay.get(key)
+        receipt["result"]["replay_json_sha256"] = hashlib.sha256(
+            replay_path.read_bytes()).hexdigest()
+        receipt_path.write_bytes(_json.dumps(receipt).encode())
+        manifest_path = self.case / "case.json"
+        manifest = _json.loads(manifest_path.read_bytes())
+        for item in manifest["files"]:
+            target = self.case / item["path"]
+            if item["path"] in ("replay/replay.json",
+                                "replay/producer-receipt.json"):
+                item["bytes"] = target.stat().st_size
+                item["sha256"] = hashlib.sha256(target.read_bytes()).hexdigest()
+        manifest_path.write_bytes(_json.dumps(manifest).encode())
+
+    def test_receipt_execution_fields_must_match_replay(self):
+        import hashlib
+        import json as _json
+        from automation import gfx_replay_case
+
+        receipt_path = self.case / "replay" / "producer-receipt.json"
+        receipt = _json.loads(receipt_path.read_bytes())
+        receipt["result"]["encoded"] = 0
+        receipt_path.write_bytes(_json.dumps(receipt).encode())
+        manifest_path = self.case / "case.json"
+        manifest = _json.loads(manifest_path.read_bytes())
+        for item in manifest["files"]:
+            if item["path"] == "replay/producer-receipt.json":
+                payload = receipt_path.read_bytes()
+                item["bytes"] = len(payload)
+                item["sha256"] = hashlib.sha256(payload).hexdigest()
+        manifest_path.write_bytes(_json.dumps(manifest).encode())
+        verification = gfx_replay_case.verify(self.case)
+        self.assertEqual(verification["producer_identity"]["status"], "invalid")
+        with self.assertRaises(case_baseline.BaselineError):
+            case_baseline.record(self.case, self.baseline)
+
+    def test_partial_full_frame_is_not_reusable(self):
+        self._rewrite_replay(partial=True)
+        with self.assertRaises(case_baseline.BaselineError) as caught:
+            case_baseline.record(self.case, self.baseline)
+        self.assertEqual(caught.exception.kind, "replay_incomplete")
+
+    def test_short_encoded_count_is_not_reusable(self):
+        replay = json.loads((self.case / "replay" / "replay.json").read_text())
+        self._rewrite_replay(encoded=replay["events"] - 1)
+        with self.assertRaises(case_baseline.BaselineError) as caught:
+            case_baseline.record(self.case, self.baseline)
+        self.assertEqual(caught.exception.kind, "replay_incomplete")
+
+    def test_nonzero_failed_count_is_not_reusable(self):
+        self._rewrite_replay(failed=1)
+        with self.assertRaises(case_baseline.BaselineError) as caught:
+            case_baseline.record(self.case, self.baseline)
+        self.assertEqual(caught.exception.kind, "replay_incomplete")
+
+    def test_timeout_is_not_reusable(self):
+        self._rewrite_replay(timed_out=True)
+        with self.assertRaises(case_baseline.BaselineError) as caught:
+            case_baseline.record(self.case, self.baseline)
+        self.assertEqual(caught.exception.kind, "replay_incomplete")
+
+    def test_unsuccessful_command_buffer_is_not_reusable(self):
+        self._rewrite_replay(command_status=5)
+        with self.assertRaises(case_baseline.BaselineError) as caught:
+            case_baseline.record(self.case, self.baseline)
+        self.assertEqual(caught.exception.kind, "replay_incomplete")
 
     def test_record_and_check_reuses_the_same_identity(self):
         recorded = case_baseline.record(self.case, self.baseline)

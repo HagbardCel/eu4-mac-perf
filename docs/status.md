@@ -52,8 +52,10 @@ preserved. If those essential fields themselves cannot fit, the tool fails with
 a bounded `output_cap_exceeded` error instead of dropping them. Full reports
 stay on disk. `automation.case_baseline` records an identity only after
 `gfx_replay_case.verify()` passes (its single payload pass re-hashes every
-declared file), and the replay result has `stage=complete`, `status=ok`,
-`readback=true` and a verified `producer-receipt.json`. The producer receipt
+declared file), and the replay result is a complete full-frame execution: `stage=complete`,
+`status=ok`, `readback=true`, `partial=false`, `timed_out=false`, `failed=0`,
+`encoded==events` and Metal `command_status=4`, with a verified
+`producer-receipt.json` whose execution fields agree. The producer receipt
 binds the replay executable SHA-256, build fingerprint/stamp, capture identity
 and replay/readback digests; portable cases preserve it. The replay executes an
 immutable per-run snapshot of the validated host, so the receipt identifies the
@@ -71,7 +73,7 @@ builds leave no valid receipt.
 **Verified capabilities.** The historical P0 case (`m7-live-frame-000001`,
 seal `794c482d…`, session `a3111e0d…`) verifies offline but has no producer
 receipt; baseline reuse is correctly rejected as `producer_identity_missing`.
-One bounded offline replay of that capture produced `m7-p2-producer-bound-v4`,
+One bounded offline replay of that capture produced `m7-p2-producer-bound-v5`,
 which verifies with `producer_identity=verified`. Compact inspection returns the
 unchanged first divergence at event 142 `fb:0` (program 331, producer 141),
 final 1,160,291 / 1,930,176 differing pixels (max 70), an unbounded lower bound,
@@ -80,8 +82,8 @@ native reads (`eu4_case_inspect` 8,003 bytes plus baseline reuse 1,760 bytes)
 with zero shell calls, zero new replays and a verified producer; this is an
 interface-level demonstration, not a replacement measurement for the P1 agent's
 80 calls. End-to-end P2 efficiency is **not yet measured** because no provider
-credential is available. The final offline gate (`20261118T210920Z-db418469`)
-ran 3,754 tests, 3,712 executed, 42 classified skips, 0 failures. The replay-host
+credential is available. The final offline gate (`20261119T072637Z-551b7e55`)
+ran 3,760 tests, 3,718 executed, 42 classified skips, 0 failures. The replay-host
 build and baseline identity share `automation.replay_host_dependencies`; the
 build is atomically published under a lock with a binary digest, a
 semantic-header edit rebuilds, a failed build removes its binary and stamp, and

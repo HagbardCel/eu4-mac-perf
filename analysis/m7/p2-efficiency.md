@@ -150,7 +150,14 @@ Final correction round:
 14. **Missing receipt-bound artifacts fail closed.** A producer receipt without
     `replay.json`/Metal readback returns structured invalid evidence instead of
     an unhandled filesystem exception.
-15. **Build publication is atomic and locked.** The replay host is compiled to a
+15. **Baseline reuse requires full-frame completion.** The shared
+    `gfx_independent_replay.full_frame_completion_problems()` predicate requires
+    `status=ok`, `stage=complete`, `readback=true`, `partial=false`,
+    `timed_out=false`, `failed=0`, integer `events/encoded` with equality, and
+    Metal `command_status=4`. Missing or inconsistent metadata fails as
+    `replay_incomplete`; the producer receipt must agree with `replay.json` for
+    those execution fields.
+16. **Build publication is atomic and locked.** The replay host is compiled to a
    private temporary path, validated, atomically renamed, and stamped with its
    binary SHA-256. An exclusive process lock plus an in-process lock serialize
    overlapping builds; failed/timeout/interrupted builds remove the binary and
@@ -165,7 +172,7 @@ receipt**. It remains historical evidence, but baseline reuse is rejected with
 renderer output.
 
 One bounded offline replay of that same capture (no EU4 launch) produced a
-producer-bound case, `.local/m7/p2/producer-case-v4` (`m7-p2-producer-bound-v4`),
+producer-bound case, `.local/m7/p2/producer-case-v5` (`m7-p2-producer-bound-v5`),
 which verifies with `producer_identity=verified`. All reported statistics below
 are from that producer-bound case; the first divergence and pixel result are
 unchanged.
@@ -215,10 +222,10 @@ still required before claiming end-to-end efficiency.
 
 ## Offline gate
 
-The final offline gate (`20261118T210920Z-db418469`) ran with
+The final offline gate (`20261119T072637Z-551b7e55`) ran with
 `EU4_TEST_PROFILE=offline` / `EU4_OFFLINE_ONLY=1` and `--min-tests 3000`:
-**3,754 tests ran, 3,712 executed, 42 skipped, 0 failures, 0 errors,
-936.2 s**. The floor counts executed tests, so classified skips cannot satisfy
+**3,760 tests ran, 3,718 executed, 42 skipped, 0 failures, 0 errors,
+1,318.3 s**. The floor counts executed tests, so classified skips cannot satisfy
 it. The skips are the live-only module, platform-only hosts and 11 optional-QBDI
 TR3 tests; QBDI remains non-mandatory. No EU4 process was started. The same gate
 is configured as the required `portable` check; GitHub Actions `portable` passed
