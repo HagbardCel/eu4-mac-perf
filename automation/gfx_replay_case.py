@@ -2707,8 +2707,17 @@ def replay_case(case_dir: Path | str, out_dir: Path | str,
         raise CaseError("verification", "; ".join(verification["problems"]))
     manifest = json.loads((case_dir / "case.json").read_text())
     if manifest.get("schema") == SEQUENCE_SCHEMA:
-        return _replay_sequence_case(case_dir, Path(out_dir).expanduser().resolve(),
-                                     faults=faults)
+        from automation import campaign_guard
+
+        try:
+            with campaign_guard.attempt(
+                    "replays", evidence={"case": str(case_dir)}):
+                return _replay_sequence_case(
+                    case_dir, Path(out_dir).expanduser().resolve(),
+                    faults=faults)
+        except campaign_guard.CampaignRefusal as exc:
+            raise CaseError("campaign_refused",
+                            f"{exc.kind}: {exc.detail}") from exc
     return gfx_independent_replay.replay(
         case_dir / "capture", out_dir, shaders=case_dir / "shaders",
         faults=faults,

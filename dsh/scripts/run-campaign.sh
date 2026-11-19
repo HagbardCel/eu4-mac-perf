@@ -14,6 +14,7 @@ set -eu
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 INFRA=$(CDPATH= cd -- "$HERE/../.." && pwd)
+CAMPAIGN_STATE=${EU4_CAMPAIGN_STATE:-}
 SIDECAR=${1:?usage: run-campaign.sh <sidecar.json>}
 shift 2>/dev/null || true
 
@@ -53,6 +54,28 @@ EU4_DSH_PYTHON=$(
   exit 1
 }
 export EU4_DSH_PYTHON
+
+# Optional EU4 resource budget enforced by the action sites, not the model.
+if [ -n "${CAMPAIGN_STATE:-}" ]; then
+  EU4_CAMPAIGN_STATE=$(CDPATH= cd -- "$(dirname -- "$CAMPAIGN_STATE")" 2>/dev/null && pwd)/$(basename -- "$CAMPAIGN_STATE") || EU4_CAMPAIGN_STATE=$CAMPAIGN_STATE
+  export EU4_CAMPAIGN_STATE
+  if [ ! -f "$EU4_CAMPAIGN_STATE" ]; then
+    ( cd "$INFRA" && "$EU4_DSH_PYTHON" -m automation.campaign_guard init \
+        --state "$EU4_CAMPAIGN_STATE" ) >&2 || {
+      echo "$(basename "$0"): could not initialise the campaign state" >&2
+      exit 1
+    }
+  fi
+  echo "$(basename "$0"): campaign state=$EU4_CAMPAIGN_STATE" >&2
+  # The operator token initializes administrative recovery and must never be
+  # inherited by the agent session.
+  if [ -n "${EU4_CAMPAIGN_ADMIN_TOKEN:-}" ]; then
+    echo "$(basename "$0"): administrative recovery is enabled for this campaign" >&2
+  else
+    echo "$(basename "$0"): no EU4_CAMPAIGN_ADMIN_TOKEN; administrative recovery is disabled" >&2
+  fi
+  unset EU4_CAMPAIGN_ADMIN_TOKEN
+fi
 echo "run-campaign: python=$EU4_DSH_PYTHON" >&2
 PLUGIN=$INFRA/dsh/eu4-goal-plugin/lib/index.js
 TOOLS_PLUGIN=$INFRA/dsh/eu4-tools-plugin/lib/index.js

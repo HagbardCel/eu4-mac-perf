@@ -7,6 +7,7 @@ import {
   goalBindingProblems,
   qualificationRefusal,
   workspaceRefusal,
+  mergeDenialReason,
 } from '../lib/decisions.js'
 
 test('every model-initiated completion is denied, bound or not', () => {
@@ -20,6 +21,23 @@ test('other goal actions and other tools are left alone', () => {
   assert.equal(completionDenialReason({ name: 'get_goal', arguments: {} }), undefined)
   assert.equal(completionDenialReason({ name: 'eu4_finalize_candidate', arguments: {} }), undefined)
   assert.equal(completionDenialReason({ name: 'update_goal' }), undefined)
+})
+
+test('merges and direct main pushes are denied for command tools', () => {
+  const denied = [
+    { name: 'bash', arguments: { command: 'gh pr merge 214 --squash' } },
+    { name: 'bash', arguments: { command: 'git merge m7/pr1' } },
+    { name: 'bash', arguments: { command: 'git push origin main' } },
+    { name: 'shell', arguments: { command: 'gh api -X PUT repos/x/y/pulls/1/merge' } },
+  ]
+  for (const exec of denied) assert.ok(mergeDenialReason(exec), exec.name)
+  const allowed = [
+    { name: 'bash', arguments: { command: 'git merge-base --is-ancestor a b' } },
+    { name: 'bash', arguments: { command: 'git push origin feature/x' } },
+    { name: 'bash', arguments: { command: 'gh pr view 214' } },
+    { name: 'read', arguments: { path: 'README.md' } },
+  ]
+  for (const exec of allowed) assert.equal(mergeDenialReason(exec), undefined)
 })
 
 test('a replaced goal invalidates the binding', () => {

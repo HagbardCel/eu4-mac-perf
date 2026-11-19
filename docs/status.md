@@ -67,6 +67,32 @@ cross-capture exclusion. The disabled path performs no extra readback.
 producing operation, and independent final-head review. The event-142 causal
 interval remains unresolved against authentic evidence until the live pilot.
 
+## M7 PR 3 — bounded autonomous campaign (2026-11-19)
+
+DSH remains the orchestrator: Web/TUI sessions continue native goal rounds and
+the goal plugin denies self-certified completion, while the headless profile
+answers exactly one turn. The headless limitation is documented rather than
+disguised as round orchestration
+([campaign contract](m7-autonomous-campaign.md)).
+
+EU4-specific resources are bounded outside the model by
+`automation/campaign_guard.py`: `EU4_CAMPAIGN_STATE` activates an exclusive,
+persisted budget for EU4 launches, sealed frames, shadow executions, replays,
+corrections and wall-clock time. The gate runs before `m6_frame capture` launches
+EU4 and before a Metal replay host is built, records the actual outcome (not the
+model's report), classifies failures, refuses an identical failure repeated
+twice until the strategy changes, and writes a structured stop. The launchers
+accept `--campaign-state` and export it into the DSH session. The DSH bridge now
+enforces the sidecar's `max_validations`, `wall_clock_seconds` and
+`max_identical_retries` from its own `validations.jsonl` attempt log.
+
+Offline verification: `tests.test_campaign_guard` (budgets, deadline, failure
+classes, changed-strategy gate, concurrent accounting, launch/replay action
+gates), `tests.test_dsh_bridge.ValidationBudgetTests`, and the existing pilot /
+multiround smoke contract. **Not yet established:** an authentic multi-round
+live campaign (no provider credential was available to the one-shot profile in
+this environment) and live budget exhaustion against a real EU4 launch.
+
 ## M7-P2 — reliability, compact diagnostics and efficiency (2026-11-19)
 
 P0 (PR #210), P1 (PR #211) and P2 (PR #212) are merged on `main`; the closure

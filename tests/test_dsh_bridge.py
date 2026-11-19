@@ -13,6 +13,7 @@ import uuid
 from pathlib import Path
 
 from automation import dsh_bridge
+from automation import dsh_campaign
 from automation import dsh_receipts as receipts
 
 REPO = Path(__file__).resolve().parents[1]
@@ -92,6 +93,59 @@ class PrepareTests(BridgeTestCase):
             out["execution_roots"]["candidate_root"], str(self.workspace.resolve())
         )
         self.assertEqual(len(out["identity_digest"]), 64)
+
+
+class ValidationBudgetTests(BridgeTestCase):
+    """External sidecar limits are enforced from the bridge's attempt log."""
+
+    def loaded(self, *, retry=None, limits=None):
+        path = self.sidecar(self.campaign("smoke-campaign"))
+        data = json.loads(path.read_text())
+        if retry is not None:
+            data["checker_retry"].update(retry)
+        if limits is not None:
+            data["limits"].update(limits)
+        path.write_text(json.dumps(data), encoding="utf-8")
+        return dsh_campaign.load_sidecar(path)
+
+    def test_max_validations_refuses_another_run(self):
+        sidecar = self.loaded(limits={"max_validations": 1})
+        history = [{"at": 1.0, "classification": "verdict",
+                    "checker_verdict": "fail", "digest": "a"}]
+        stop = dsh_bridge._campaign_budget_stop(sidecar, history, 2.0)
+        self.assertEqual(stop["kind"], "budget_exhausted")
+        self.assertIn("max_validations", stop["detail"])
+
+    def test_identical_failure_streak_requires_changed_strategy(self):
+        sidecar = self.loaded(retry={"max_identical_retries": 1})
+        row = {"at": 1.0, "classification": "verdict",
+               "checker_verdict": "fail", "digest": "same"}
+        stop = dsh_bridge._campaign_budget_stop(
+            sidecar, [row, dict(row)], 2.0)
+        self.assertEqual(stop["kind"], "repeated_failure")
+        self.assertIn("change the diagnostic strategy", stop["detail"])
+
+    def test_different_failures_do_not_trip_the_strategy_gate(self):
+        sidecar = self.loaded(retry={"max_identical_retries": 1})
+        rows = [
+            {"at": 1.0, "classification": "verdict",
+             "checker_verdict": "fail", "digest": "a"},
+            {"at": 2.0, "classification": "verdict",
+             "checker_verdict": "fail", "digest": "b"},
+        ]
+        self.assertIsNone(dsh_bridge._campaign_budget_stop(sidecar, rows, 3.0))
+
+    def test_wall_clock_deadline_is_refused(self):
+        sidecar = self.loaded(limits={"wall_clock_seconds": 1})
+        rows = [{"at": 100.0, "classification": "verdict",
+                 "checker_verdict": "fail", "digest": "a"}]
+        stop = dsh_bridge._campaign_budget_stop(sidecar, rows, 200.0)
+        self.assertEqual(stop["kind"], "deadline")
+
+    def test_a_fresh_campaign_is_not_stopped(self):
+        sidecar = self.loaded()
+        self.assertIsNone(dsh_bridge._campaign_budget_stop(
+            sidecar, [], 2.0))
 
 
 class ClassificationTests(BridgeTestCase):

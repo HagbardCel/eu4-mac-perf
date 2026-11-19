@@ -41,6 +41,7 @@ export DSH_HOME
 
 CAMPAIGN=''
 WORKSPACE=''
+CAMPAIGN_STATE=''
 while [ $# -gt 0 ]; do
   case "$1" in
     --campaign)
@@ -67,6 +68,18 @@ while [ $# -gt 0 ]; do
       WORKSPACE=${1#--workspace=}
       shift
       ;;
+    --campaign-state)
+      CAMPAIGN_STATE=${2:?--campaign-state needs a path}
+      shift 2
+      ;;
+    --campaign-state=)
+      echo "run: --campaign-state needs a path" >&2
+      exit 2
+      ;;
+    --campaign-state=*)
+      CAMPAIGN_STATE=${1#--campaign-state=}
+      shift
+      ;;
     *)
       break
       ;;
@@ -77,6 +90,7 @@ if [ -n "$CAMPAIGN" ] && [ -n "$WORKSPACE" ]; then
   echo "run: use --campaign or --workspace, not both" >&2
   exit 2
 fi
+
 
 if [ -n "$WORKSPACE" ]; then
   [ -d "$WORKSPACE" ] || {
@@ -133,6 +147,30 @@ EU4_DSH_PYTHON=$(
   exit 1
 }
 export EU4_DSH_PYTHON
+
+# Optional EU4 resource budget enforced by the action sites (m6_frame capture,
+# Metal replay) independently of the model. DSH still owns goal rounds; this
+# file bounds launches, sealed frames, shadow executions and replays.
+if [ -n "$CAMPAIGN_STATE" ]; then
+  EU4_CAMPAIGN_STATE=$(CDPATH= cd -- "$(dirname -- "$CAMPAIGN_STATE")" 2>/dev/null && pwd)/$(basename -- "$CAMPAIGN_STATE") || EU4_CAMPAIGN_STATE=$CAMPAIGN_STATE
+  export EU4_CAMPAIGN_STATE
+  if [ ! -f "$EU4_CAMPAIGN_STATE" ]; then
+    ( cd "$INFRA" && "$EU4_DSH_PYTHON" -m automation.campaign_guard init \
+        --state "$EU4_CAMPAIGN_STATE" ) >&2 || {
+      echo "run: could not initialise the campaign state" >&2
+      exit 1
+    }
+  fi
+  echo "run: campaign state=$EU4_CAMPAIGN_STATE" >&2
+  # The operator token initializes administrative recovery and must never be
+  # inherited by the agent session.
+  if [ -n "${EU4_CAMPAIGN_ADMIN_TOKEN:-}" ]; then
+    echo "run: administrative recovery is enabled for this campaign" >&2
+  else
+    echo "run: no EU4_CAMPAIGN_ADMIN_TOKEN; administrative recovery is disabled" >&2
+  fi
+  unset EU4_CAMPAIGN_ADMIN_TOKEN
+fi
 echo "run: Python interpreter: $EU4_DSH_PYTHON" >&2
 
 if [ -n "$WORKSPACE" ]; then

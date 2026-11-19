@@ -129,3 +129,37 @@ export function qualificationRefusal(result) {
   }
   return undefined
 }
+
+/**
+ * Deny model-initiated merges and direct main-branch updates.
+ *
+ * Branch protection and the operator's token remain the authority; this guard
+ * makes the no-merge rule an effective boundary inside the agent rather than a
+ * sentence in the objective. It inspects the shell-style argument text of any
+ * execution-capable tool and refuses commands that would merge or push to main.
+ *
+ * @param {{name?: string, arguments?: unknown}} exec
+ * @returns {string|undefined} denial reason, or undefined to leave the call
+ */
+export function mergeDenialReason(exec) {
+  if (!exec) return undefined
+  const name = String(exec.name || '').toLowerCase()
+  if (!name) return undefined
+  // Only command-executing tools can merge; read/edit tools stay untouched.
+  if (!/(bash|shell|exec|command|terminal|run)/.test(name)) return undefined
+  const text = JSON.stringify(exec.arguments ?? {})
+  const patterns = [
+    /\bgh\s+pr\s+merge\b/,
+    /\bgh\s+api\b[^"'\\]*\/merge\b/,
+    /\bgit\s+merge(?:\s|$)/,
+    /\bgit\s+push\b[^"'\\]*\b(main|master)\b/,
+  ]
+  if (patterns.some((pattern) => pattern.test(text))) {
+    return (
+      'Merging is not permitted from an autonomous campaign. Every PR needs ' +
+      'independent review of its exact head or a recorded operator waiver; ' +
+      'merge is an operator action, not an agent action.'
+    )
+  }
+  return undefined
+}

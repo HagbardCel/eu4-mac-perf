@@ -209,6 +209,7 @@ def run(
     env_extra: dict | None = None,
     game_args: list[str] | None = None,
     background_plan: object | None = None,
+    campaign_reservation: str | None = None,
 ) -> dict:
     """Launch one startup-trace session.
 
@@ -483,6 +484,7 @@ def run_ops(
     retention: str | None = None,
     game_args: list[str] | None = None,
     background_plan: object | None = None,
+    campaign_reservation: str | None = None,
 ) -> dict:
     """Launch one bounded original-process observation session.
 
@@ -499,9 +501,16 @@ def run_ops(
     # This is the single process-spawn choke point for the trace/capture paths.
     # Tests that replace ``run_ops`` with a fake never reach it; an explicit
     # offline profile cannot launch EU4 through this path.
-    from automation import test_profiles
+    from automation import campaign_guard, test_profiles
 
     test_profiles.ensure_live_launch("eu4_gfx_startup_trace.run_ops")
+    # Every capture path funnels through this spawn site.  When a campaign
+    # budget is active, only an open launch reservation may proceed, so an
+    # alternative unguarded launcher cannot bypass the guard.
+    try:
+        campaign_guard.require_launch_reservation(campaign_reservation)
+    except campaign_guard.CampaignRefusal as exc:
+        raise StartupError(str(exc)) from exc
     evidence = evidence or preflight_ops(
         targets,
         max_events=max_events,

@@ -22,6 +22,7 @@ OUT=
 SESSION=
 MODE=workspace-write
 REQUIRE_TOOLS=
+CAMPAIGN_STATE=
 
 usage() {
   sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
@@ -36,6 +37,7 @@ while [ $# -gt 0 ]; do
     --session-id) SESSION=${2:?--session-id needs an id}; shift 2 ;;
     --permission-mode) MODE=${2:?--permission-mode needs a value}; shift 2 ;;
     --require-tool) REQUIRE_TOOLS="$REQUIRE_TOOLS ${2:?--require-tool needs a name}"; shift 2 ;;
+    --campaign-state) CAMPAIGN_STATE=${2:?--campaign-state needs a path}; shift 2 ;;
     -h|--help) usage 0 ;;
     *) echo "run-pilot: unknown option: $1" >&2; usage 2 ;;
   esac
@@ -90,6 +92,28 @@ EU4_DSH_PYTHON=$(
   exit 2
 }
 export EU4_DSH_PYTHON
+
+# Optional EU4 resource budget enforced by the action sites, not the model.
+if [ -n "${CAMPAIGN_STATE:-}" ]; then
+  EU4_CAMPAIGN_STATE=$(CDPATH= cd -- "$(dirname -- "$CAMPAIGN_STATE")" 2>/dev/null && pwd)/$(basename -- "$CAMPAIGN_STATE") || EU4_CAMPAIGN_STATE=$CAMPAIGN_STATE
+  export EU4_CAMPAIGN_STATE
+  if [ ! -f "$EU4_CAMPAIGN_STATE" ]; then
+    ( cd "$INFRA" && "$EU4_DSH_PYTHON" -m automation.campaign_guard init \
+        --state "$EU4_CAMPAIGN_STATE" ) >&2 || {
+      echo "$(basename "$0"): could not initialise the campaign state" >&2
+      exit 1
+    }
+  fi
+  echo "$(basename "$0"): campaign state=$EU4_CAMPAIGN_STATE" >&2
+  # The operator token initializes administrative recovery and must never be
+  # inherited by the agent session.
+  if [ -n "${EU4_CAMPAIGN_ADMIN_TOKEN:-}" ]; then
+    echo "$(basename "$0"): administrative recovery is enabled for this campaign" >&2
+  else
+    echo "$(basename "$0"): no EU4_CAMPAIGN_ADMIN_TOKEN; administrative recovery is disabled" >&2
+  fi
+  unset EU4_CAMPAIGN_ADMIN_TOKEN
+fi
 
 WORKSPACE=$(CDPATH= cd -- "$WORKSPACE" && pwd)
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
