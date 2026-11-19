@@ -218,6 +218,7 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
         receipt.get("producer"), dict) else {}
     receipt_capture = receipt.get("capture") if isinstance(
         receipt.get("capture"), dict) else {}
+    checkpoint_binding = "absent"
     if receipt:
         for key in ("session_id", "capture_frame_id", "event_stream_sha256"):
             if str(receipt_capture.get(key)) != str(seal.get(key)):
@@ -236,6 +237,47 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
             raise AcceptanceError("replay_receipt_mismatch",
                                   "producer receipt does not bind the Metal "
                                   "readback")
+        bound = result.get("checkpoint_files")
+        if bound is None:
+            # Receipts written before intermediate binding remain inspectable;
+            # they cannot establish checkpoint exactness independently.
+            checkpoint_binding = "absent"
+        else:
+            if not isinstance(bound, list):
+                raise AcceptanceError(
+                    "replay_receipt_mismatch",
+                    "producer receipt checkpoint binding is not a list")
+            bound_map: dict[str, str] = {}
+            for row in bound:
+                if not isinstance(row, dict):
+                    raise AcceptanceError(
+                        "replay_receipt_mismatch",
+                        "producer receipt has a malformed checkpoint entry")
+                name = str(row.get("file") or "")
+                if (not name or Path(name).name != name
+                        or name in bound_map):
+                    raise AcceptanceError(
+                        "replay_receipt_mismatch",
+                        f"producer receipt has an invalid checkpoint file "
+                        f"name {name!r}")
+                bound_map[name] = str(row.get("sha256") or "")
+            replay_names = {
+                Path(str(item.get("file"))).name
+                for item in replay.get("checkpoints") or []
+                if isinstance(item, dict) and item.get("file")}
+            if set(bound_map) != replay_names:
+                missing = sorted(replay_names - set(bound_map))
+                extra = sorted(set(bound_map) - replay_names)
+                raise AcceptanceError(
+                    "replay_receipt_mismatch",
+                    "producer receipt does not bind exactly the returned "
+                    f"checkpoints (missing={missing!r}, extra={extra!r})")
+            for name, expected in bound_map.items():
+                if _sha256(replay_dir / name) != expected:
+                    raise AcceptanceError(
+                        "replay_receipt_mismatch",
+                        f"producer receipt does not bind checkpoint {name}")
+            checkpoint_binding = "bound"
     return {
         "capture_dir": str(capture_dir),
         "replay_dir": str(replay_dir),
@@ -257,6 +299,7 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
         "state_coverage": states,
         "producer": producer,
         "receipt_present": bool(receipt),
+        "checkpoint_binding": checkpoint_binding,
     }
 
 
@@ -669,6 +712,12 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
                     "the candidate replay has no producer receipt",
                     severity="invalid")
         else:
+            if after.get("checkpoint_binding") == "absent":
+                limitations.append(
+                    "the candidate producer receipt does not bind its "
+                    "intermediate checkpoint files; checkpoint exactness is "
+                    "recomputed from the sealed reference but not bound to the "
+                    "producer")
             try:
                 current = case_baseline.current_producer()
             except case_baseline.BaselineError as exc:

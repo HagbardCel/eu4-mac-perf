@@ -139,6 +139,11 @@ class CorrectionFixture:
         case_baseline.record(case_dir, path)
         return path
 
+    def rewrite_receipt(self, directory: Path) -> None:
+        """Simulate a producer that emitted these bytes with a valid receipt."""
+        gfx_independent_replay.write_producer_receipt(
+            directory, self.frame, self.producer, directory / "replay.json")
+
     def claims(self, before: dict, after: dict) -> tuple[dict, dict]:
         return (
             {"mismatched_pixels": before["mismatched_pixels"],
@@ -230,6 +235,9 @@ class CorrectionAcceptanceTests(unittest.TestCase):
         pixels = bytearray(intermediates[0].read_bytes())
         pixels[0] ^= 1
         intermediates[0].write_bytes(bytes(pixels))
+        # A genuine producer would sign the bytes it emitted; rebind them so
+        # this exercises the checkpoint predicate, not receipt tamper checks.
+        self.model.rewrite_receipt(after)
         report = self.acceptance(
             after=after,
             claims=self.model.claims(
@@ -243,6 +251,38 @@ class CorrectionAcceptanceTests(unittest.TestCase):
         self.assertEqual(
             report["after"]["checkpoint_authority"]["divergent"], 1)
 
+    def test_intermediate_changed_after_receipt_is_invalid(self):
+        after = self.model.replay_dir("after-tamper", self.model.reference)
+        intermediate = sorted(after.glob("intermediate-*.bgra"))[0]
+        pixels = bytearray(intermediate.read_bytes())
+        pixels[0] ^= 1
+        intermediate.write_bytes(bytes(pixels))
+        report = self.acceptance(
+            after=after,
+            claims=self.model.claims(
+                {"mismatched_pixels": 1, "max_channel_error": 7},
+                {"mismatched_pixels": 0, "max_channel_error": 0}))
+        self.assertEqual(report["result"], "invalid_evidence", report)
+        self.assertIn("replay_receipt_mismatch",
+                      json.dumps(report["problems"]))
+
+    def test_receipt_without_intermediate_binding_stays_inspectable(self):
+        after = self.model.replay_dir("after-legacy-receipt",
+                                      self.model.reference)
+        receipt_path = after / "producer-receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["result"].pop("checkpoint_files", None)
+        receipt_path.write_text(json.dumps(receipt))
+        report = self.acceptance(
+            after=after,
+            claims=self.model.claims(
+                {"mismatched_pixels": 1, "max_channel_error": 7},
+                {"mismatched_pixels": 0, "max_channel_error": 0}))
+        self.assertEqual(report["result"], "accepted", report)
+        self.assertTrue(report["pixel_perfect"], report)
+        self.assertTrue(any("does not bind its intermediate" in item
+                            for item in report["limitations"]))
+
     def test_persistent_intermediate_difference_is_not_exact(self):
         # A checkpoint that was divergent in the baseline and remains divergent
         # is reported separately: partial progress is allowed, but the
@@ -253,6 +293,7 @@ class CorrectionAcceptanceTests(unittest.TestCase):
             pixels = bytearray(path.read_bytes())
             pixels[0] ^= 1
             path.write_bytes(bytes(pixels))
+        self.model.rewrite_receipt(before)
         case_dir = self.model.package(before, "case-corrupt",
                                       case_id="corrupt-baseline")
         baseline = self.model.baseline(case_dir, "baseline-corrupt.json")
@@ -262,6 +303,7 @@ class CorrectionAcceptanceTests(unittest.TestCase):
             pixels = bytearray(path.read_bytes())
             pixels[0] ^= 1
             path.write_bytes(bytes(pixels))
+        self.model.rewrite_receipt(after)
         report = correction_accept.evaluate(
             case_dir=case_dir,
             baseline_path=baseline,

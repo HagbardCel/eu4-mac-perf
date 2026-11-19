@@ -3261,6 +3261,20 @@ def write_producer_receipt(out_dir: Path, frame_dir: Path,
     capture = capture_identity(seal, trace) or {}
     replay = _optional_json(result_path) or {}
     metal = out_dir / "metal-frame.bgra"
+    checkpoint_files = []
+    for item in replay.get("checkpoints") or []:
+        if not isinstance(item, dict):
+            continue
+        name = _safe_member_name(str(item.get("file") or ""))
+        if not name:
+            continue
+        path = out_dir / name
+        if path.is_file():
+            checkpoint_files.append({
+                "file": name,
+                "sha256": _sha256_file(path),
+            })
+    checkpoint_files.sort(key=lambda row: row["file"])
     value = {
         "schema": PRODUCER_RECEIPT_SCHEMA,
         "producer": {
@@ -3275,6 +3289,7 @@ def write_producer_receipt(out_dir: Path, frame_dir: Path,
             "replay_json_sha256": _sha256_file(result_path),
             "metal_frame_sha256": (_sha256_file(metal)
                                    if metal.is_file() else None),
+            "checkpoint_files": checkpoint_files,
             "status": replay.get("status"),
             "stage": replay.get("stage"),
             "readback": replay.get("readback"),
