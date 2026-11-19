@@ -3,6 +3,91 @@
 Authoritative summary of what is established, qualified, and in flight.
 Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
 
+## M7 final remediation and bounded acceptance (2026-11-19)
+
+- **#214/#215/#216/#217** final heads `ea554cae`, `01b3b60b`, `82c09bfb`,
+  `e7abe15a`; portable CI passes for all four and for this report's head.
+  Legacy checkpoint-request hashes are byte-identical for two recorded cases;
+  the native repeated-blob verifier accepts the authentic capture.
+- The capture/launch boundary now validates the explicit reservation created by
+  `capture()` (the redundant post-reservation check and the `env_extra` token
+  were removed). Regression identity is bound to each regression's own seal.
+- One controlled two-round native DSH campaign (in the running Web session)
+  localized a seeded texture-format regression, corrected it, rebuilt, replayed
+  and was **accepted** by `correction_accept` (1,925,408/255 → 1,161,075/75).
+- Final full offline gate: passed (699 s, 0 failures).
+- **Review blocker:** the repository has only the owner collaborator, no
+  invitations, and branch protection requires 0 approvals. No independent
+  reviewer is available; no PR was merged and no waiver was recorded. The
+  documented `eu4-web` + `run.sh --campaign` launcher was exercised through
+  preparation and objective printing, but creating the session/goal requires
+  operator interaction; the authorized live capture was not run. The
+  `corrections` allowance is now enforced at the correction-acceptance
+  boundary. Verdict remains **NOT_READY**.
+
+## M7 authentic pilot — bounded multi-checkpoint capture (2026-11-19)
+
+One EU4 launch produced one sealed scene frame (session
+`5a4eb79e-1de2-401a-ba0b-d3524e45c68d`, capture frame 1, present/scene 612,
+325 operations, 1728×1117) with four `fb:0` checkpoints at events 14, 20, 71
+and 142. The background capture used BetterDisplay `EU4 Test` (id 12, not
+main), restored the GOG `settings.txt` to its pre-capture SHA-256, and
+terminated the owned process (`terminated=true`, `killed=false`).
+
+The in-process Metal shadow failed closed *before GPU work* on a repeated-blob
+verification defect: the event-14 checkpoint pixels are identical to the frame
+seed, so content-addressed storage returned the seed blob name, whose reference
+omits `bytes`, and the verifier treated the omitted size as zero. PR #217 fixes
+the verifier (omitted size is unknown; conflicting sizes/digests still fail)
+and adds a native host test. The authentic frame now verifies
+(`blob_references=0`).
+
+The offline replay of that sealed frame localized the first confirmed
+same-frame divergence to event 20 (`fb:0`, 876,044/1,930,176 pixels, max
+channel 134) with a matching checkpoint at event 14, yielding the bounded causal
+interval **[14, 20]** and a recommended next checkpoint at event 17. The
+candidate operation is the event-19 indexed draw (program 301). This is the
+first authentic multi-checkpoint interval and the first bounded localization of
+the M7 divergence; it is **not** a root cause and no renderer correction was
+attempted. Classification is `incomplete_diagnostics` because the offline
+standalone identity is `unverified_session` by design; state coverage is
+partial.
+
+Final-state full offline gate: passed (877 s, 3848 tests, 0 failures). The
+review remediation (2026-11-19) then repaired #214-#217: portable correction
+fixtures, mandatory regression inventory and bound provenance, atomic
+reservation-first campaign accounting with operator-only recovery, and the
+launch reservation enforced at both launch choke points. Final verdict:
+**NOT_READY** — no independent final-head review or operator waiver, no
+separate multi-round DSH campaign, and the event-19 producing operation is
+unestablished. Report: [M7 readiness](../analysis/m7/m7-readiness.md).
+
+## M7 PR 3 — bounded autonomous campaign (2026-11-19)
+
+DSH remains the orchestrator: Web/TUI sessions continue native goal rounds and
+the goal plugin denies self-certified completion, while the headless profile
+answers exactly one turn. The headless limitation is documented rather than
+disguised as round orchestration
+([campaign contract](m7-autonomous-campaign.md)).
+
+EU4-specific resources are bounded outside the model by
+`automation/campaign_guard.py`: `EU4_CAMPAIGN_STATE` activates an exclusive,
+persisted budget for EU4 launches, sealed frames, shadow executions, replays,
+corrections and wall-clock time. The gate runs before `m6_frame capture` launches
+EU4 and before a Metal replay host is built, records the actual outcome (not the
+model's report), classifies failures, refuses an identical failure repeated
+twice until the strategy changes, and writes a structured stop. The launchers
+accept `--campaign-state` and export it into the DSH session. The DSH bridge now
+enforces the sidecar's `max_validations`, `wall_clock_seconds` and
+`max_identical_retries` from its own `validations.jsonl` attempt log.
+
+Offline verification: `tests.test_campaign_guard` (budgets, deadline, failure
+classes, changed-strategy gate, concurrent accounting, launch/replay action
+gates), `tests.test_dsh_bridge.ValidationBudgetTests`, and the existing pilot /
+multiround smoke contract. **Not yet established:** an authentic multi-round
+live campaign (no provider credential was available to the one-shot profile in
+this environment) and live budget exhaustion against a real EU4 launch.
+
 ## M7 PR 2 — independent correction acceptance (2026-11-19)
 
 `automation/correction_accept.py` turns a `correction_proposed` conclusion into
@@ -66,32 +151,6 @@ cross-capture exclusion. The disabled path performs no extra readback.
 **Not yet established:** a live multi-checkpoint capture, the event-142
 producing operation, and independent final-head review. The event-142 causal
 interval remains unresolved against authentic evidence until the live pilot.
-
-## M7 PR 3 — bounded autonomous campaign (2026-11-19)
-
-DSH remains the orchestrator: Web/TUI sessions continue native goal rounds and
-the goal plugin denies self-certified completion, while the headless profile
-answers exactly one turn. The headless limitation is documented rather than
-disguised as round orchestration
-([campaign contract](m7-autonomous-campaign.md)).
-
-EU4-specific resources are bounded outside the model by
-`automation/campaign_guard.py`: `EU4_CAMPAIGN_STATE` activates an exclusive,
-persisted budget for EU4 launches, sealed frames, shadow executions, replays,
-corrections and wall-clock time. The gate runs before `m6_frame capture` launches
-EU4 and before a Metal replay host is built, records the actual outcome (not the
-model's report), classifies failures, refuses an identical failure repeated
-twice until the strategy changes, and writes a structured stop. The launchers
-accept `--campaign-state` and export it into the DSH session. The DSH bridge now
-enforces the sidecar's `max_validations`, `wall_clock_seconds` and
-`max_identical_retries` from its own `validations.jsonl` attempt log.
-
-Offline verification: `tests.test_campaign_guard` (budgets, deadline, failure
-classes, changed-strategy gate, concurrent accounting, launch/replay action
-gates), `tests.test_dsh_bridge.ValidationBudgetTests`, and the existing pilot /
-multiround smoke contract. **Not yet established:** an authentic multi-round
-live campaign (no provider credential was available to the one-shot profile in
-this environment) and live budget exhaustion against a real EU4 launch.
 
 ## M7-P2 — reliability, compact diagnostics and efficiency (2026-11-19)
 

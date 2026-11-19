@@ -1,0 +1,262 @@
+{
+  "axes": {
+    "capture_validity": "valid",
+    "first_divergence_confidence": "intermediate",
+    "frame_shader_identity": "unverified_session",
+    "gpu_execution": "ok",
+    "operation_coverage": "complete",
+    "pixel_comparison": "divergent",
+    "rendering_state_coverage": "partial",
+    "resource_provenance": "verified"
+  },
+  "baseline_main": "2c00ea13061b0c950146e4e6e2eb93746d34d2fd",
+  "campaign": {
+    "budgets": {
+      "corrections": 1,
+      "eu4_launches": 1,
+      "replays": 2,
+      "sealed_frames": 1,
+      "shadow_executions": 1,
+      "wall_clock_seconds": 1800
+    },
+    "counts": {
+      "corrections": 0,
+      "eu4_launches": 1,
+      "replays": 1,
+      "sealed_frames": 1,
+      "shadow_executions": 1,
+      "wall_clock_seconds": 0
+    },
+    "exhausted": [
+      "eu4_launches",
+      "sealed_frames",
+      "shadow_executions"
+    ]
+  },
+  "capture": {
+    "capture_frame_id": 1,
+    "declared_checkpoints": [
+      14,
+      20,
+      71,
+      142
+    ],
+    "display": {
+      "display_id": 12,
+      "main": false,
+      "mode": "background",
+      "name": "EU4 Test"
+    },
+    "event_stream_sha256": "2c754402b7f001c95f7135facabe05a4dee48c61560756ab0511fdf6ee7720af",
+    "height": 1117,
+    "killed": false,
+    "manifest_sha256": "c6bcc714886bd6c23613d5f1ce28269e95df06ee3a4a61d2a5f2433e68c6787c",
+    "operations": 325,
+    "present_index": 612,
+    "reference_sha256": "99e476d724f30e6970116c88358c3da82397f8eb873cb840bdc4ad8a83e80cbe",
+    "scene_index": 612,
+    "session_id": "5a4eb79e-1de2-401a-ba0b-d3524e45c68d",
+    "settings_restored_sha256": "62b4902a3a999ad3e623dd92800c3406359b44e60497491393e6b191836dd496",
+    "terminated": true,
+    "width": 1728
+  },
+  "causal_interval": {
+    "end_event": 20,
+    "lower_bound": "same_resource_match",
+    "note": "the first confirmed divergent checkpoint; the lower bound is the last matching checkpoint for the same resource when one exists, otherwise it is unbounded. Event 0 is only an operational search start, not observed matching evidence",
+    "search_start_event": 14,
+    "start_event": 14
+  },
+  "checkpoint_summary": {
+    "diagnostic": 1,
+    "divergent": 7,
+    "invalid": 0,
+    "matched": 3,
+    "requested": 11,
+    "returned": 11
+  },
+  "checkpoints": [
+    {
+      "event": 14,
+      "max_channel_error": 0,
+      "mismatched_pixels": 0,
+      "resource": "fb:0",
+      "status": "match"
+    },
+    {
+      "event": 20,
+      "max_channel_error": 134,
+      "mismatched_pixels": 876044,
+      "resource": "fb:0",
+      "status": "divergent"
+    },
+    {
+      "event": 71,
+      "max_channel_error": 134,
+      "mismatched_pixels": 874649,
+      "resource": "fb:0",
+      "status": "divergent"
+    },
+    {
+      "event": 142,
+      "max_channel_error": 134,
+      "mismatched_pixels": 872186,
+      "resource": "fb:0",
+      "status": "divergent"
+    },
+    {
+      "event": 284,
+      "max_channel_error": 99,
+      "mismatched_pixels": 1236121,
+      "resource": "fb:0",
+      "status": "divergent"
+    }
+  ],
+  "classification": "incomplete_diagnostics",
+  "controlled_campaign": {
+    "after": {
+      "max_channel_error": 75,
+      "mismatched_pixels": 1161075
+    },
+    "before": {
+      "max_channel_error": 255,
+      "mismatched_pixels": 1925408
+    },
+    "checker_result": "accepted",
+    "corrections_used": 1,
+    "eu4_launches": 0,
+    "fault_commit": "71dbd4bb",
+    "fix_commit": "eb6a9b24",
+    "goal_rounds": 2,
+    "pixel_perfect": false,
+    "regression_evidence": "none available; empty inventory recorded as a limitation",
+    "replays_used": 1,
+    "workflow_caveat": "running web-profile native goal driver, not a fresh eu4-web run.sh campaign session",
+    "worktree": "wt_m7_campaign"
+  },
+  "correction_acceptance": "controlled offline fixture only (PR #215); no renderer correction attempted",
+  "corrections_budget": {
+    "before_evidence": true,
+    "boundary": "automation.correction_accept.evaluate",
+    "enforced": true,
+    "tested": [
+      "first permitted",
+      "second refused",
+      "CLI path refused",
+      "failed evaluation charged",
+      "zero allowance refused"
+    ]
+  },
+  "date": "2026-11-19",
+  "evidence_categories": {
+    "authentic_live_capture_offline_replay": "established (prior sealed frame, interval [14,20])",
+    "controlled_two_round_seeded_correction": "established (checker-accepted; not a renderer correction)",
+    "genuine_preserved_exact_match_regression_cases": "not established (none available)",
+    "synthetic_exact_match_regression_tests": "unit coverage only",
+    "uncorrected_authentic_event20_difference": "open (event 20 876,044 px / max 134)"
+  },
+  "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "final_remediation": {
+    "ci": "portable CI passes for #214-#218 on the final heads",
+    "date": "2026-11-19",
+    "pr214": "byte budget forwarded for both forms; legacy checkpoint-request bytes/hashes preserved (cc7d69b9, 73af04fc)",
+    "pr215": "portable fixtures; per-regression seal identity; mandatory inventory; readback/revision binding",
+    "pr216": "explicit launch reservation validated at the choke point; redundant post-reservation check and env token removed; boundary tests",
+    "pr217": "verifier only; authentic repeated-blob capture verifies (blob_references=0)"
+  },
+  "final_statistics": {
+    "alpha_different_pixels": 0,
+    "differing_bounds": {
+      "height": 1117,
+      "width": 1728,
+      "x": 0,
+      "y": 0
+    },
+    "first_differing_pixel": {
+      "offset": 0,
+      "x": 0,
+      "y": 0
+    },
+    "max_channel_error": 75,
+    "mean_abs_error": [
+      0.396664346,
+      0.516222355,
+      0.652758609,
+      0.0
+    ],
+    "mean_max_channel_error": 0.864315482,
+    "mismatched_fraction": 0.6015384089326569,
+    "mismatched_pixels": 1161075,
+    "pixels": 1930176
+  },
+  "first_divergence": {
+    "event": 20,
+    "operation": "draw",
+    "producer_event": 19,
+    "program": 301,
+    "resource": "fb:0"
+  },
+  "launcher_validation": {
+    "campaign_state_used": {
+      "eu4_launches": 0,
+      "replays": 0,
+      "sealed_frames": 0,
+      "shadow_executions": 0
+    },
+    "command": "run.sh --campaign dsh/campaigns/m7-launcher-smoke.json --campaign-state .local/m7/launcher/state.json --help",
+    "operator_dependency": "the goal must be created in the Web/TUI session",
+    "result": "prepare+anchor+objective printed; web --help exited; no session/goal created"
+  },
+  "next_checkpoint": {
+    "event": 17,
+    "interval": [
+      14,
+      20
+    ],
+    "lower_bound": "same_resource_match",
+    "reason": "the default framebuffer differs at the first divergent checkpoint; capture an fb:0 checkpoint near the midpoint of the unresolved interval to bisect the origin",
+    "requires_capture": true,
+    "resource": "fb:0",
+    "target": "0"
+  },
+  "offline_gate": {
+    "duration_seconds": 699.334,
+    "failures": 0,
+    "label": "final-integrated-20261119",
+    "record": "20261119T170815Z-6afa4ac1",
+    "status": "passed"
+  },
+  "pull_requests": {
+    "heads": {
+      "214": "ea554cae",
+      "215": "01b3b60b",
+      "216": "de2786bd",
+      "217": "7e4d3a96"
+    },
+    "independent_review": false,
+    "merged": 0,
+    "operator_waiver": null,
+    "pr1": 214,
+    "pr2": 215,
+    "pr3": 216,
+    "pr4": 217,
+    "pr5": 218
+  },
+  "remediation": {
+    "date": "2026-11-19",
+    "pr214": "byte-budget forwarded for singular selection; legacy request bytes preserved",
+    "pr215": "portable fixtures; mandatory regression inventory; execution/provenance before pixels; readback and revision binding",
+    "pr216": "atomic reservations; multi-resource capture reservation; coordinator reaping; operator-only recovery; launch choke-point enforcement; merge denial",
+    "pr217": "verifier fix only; campaign-budget changes moved to #216",
+    "pr218": "cross-capture wording corrected; NOT_READY retained"
+  },
+  "schema": "m7-readiness/v1",
+  "unresolved": [
+    "independent reviewer or recorded operator waiver for the exact heads",
+    "documented eu4-web + run.sh --campaign multi-round session",
+    "one explicitly authorized live capture with checkpoints 14,17,19,20 in a new frame",
+    "the controlled correction is a seeded format regression, not the authentic event-20 defect",
+    "the Metal renderer is not equivalent: 60.15% differing pixels"
+  ],
+  "verdict": "NOT_READY"
+}
