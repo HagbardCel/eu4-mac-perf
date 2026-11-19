@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -538,6 +539,84 @@ def _append_validation(run_root: Path, row: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row, sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _validation_attempts(history: list[dict]) -> list[dict]:
+    """One logical attempt per distinct ``attempt_id``.
+
+    New records have a ``start`` row written before the checker runs and a
+    ``result`` row after it.  A start without a result is an interrupted
+    attempt: it still counts against ``max_validations`` after a restart.  Older
+    logs have one self-contained row per attempt and remain readable; each such
+    row is treated as its own attempt.
+    """
+    attempts: dict[str, dict] = {}
+    order: list[str] = []
+    for index, row in enumerate(history):
+        raw = row.get("attempt_id")
+        key = str(raw) if raw else f"legacy-{index}"
+        attempt = attempts.get(key)
+        if attempt is None:
+            attempt = {"attempt_id": key, "terminal": bool(not raw)}
+            attempts[key] = attempt
+            order.append(key)
+        # Keep the first timestamp: a completed attempt started when its start
+        # row was written, which is the strict wall-clock reference.
+        if "at" in row and "at" not in attempt:
+            attempt["at"] = row["at"]
+        for field in ("operation", "candidate_digest", "classification",
+                      "kind", "checker_verdict", "digest", "exit_code",
+                      "duration_ms", "qualified"):
+            if field in row:
+                attempt[field] = row[field]
+        if raw:
+            if row.get("phase") == "start":
+                attempt["terminal"] = False
+            else:
+                attempt["terminal"] = True
+        else:
+            attempt["terminal"] = True
+            if "qualified" not in row:
+                attempt["qualified"] = row.get("checker_verdict") == "pass"
+    return [attempts[key] for key in order]
+
+
+def _start_attempt(run_root: Path, *, operation: str,
+                   candidate_digest: str | None) -> str:
+    """Persist an attempt before the expensive checker can start."""
+    attempt_id = (f"val-{time.time_ns()}-{os.getpid()}-"
+                  f"{uuid.uuid4().hex[:8]}")
+    _append_validation(run_root, {
+        "attempt_id": attempt_id,
+        "phase": "start",
+        "at": time.time(),
+        "operation": operation,
+        "candidate_digest": candidate_digest,
+    })
+    return attempt_id
+
+
+def _finish_attempt(run_root: Path, attempt_id: str, *, operation: str,
+                    classification: str, kind: str | None,
+                    verdict: str | None, diagnostics: str,
+                    exit_code, duration_ms: int,
+                    qualified: bool) -> None:
+    """Persist the terminal result of an attempt started earlier."""
+    _append_validation(run_root, {
+        "attempt_id": attempt_id,
+        "phase": "result",
+        "at": time.time(),
+        "operation": operation,
+        "classification": classification,
+        "kind": kind,
+        "checker_verdict": verdict,
+        "digest": receipts.digest_text(diagnostics),
+        "exit_code": exit_code,
+        "duration_ms": duration_ms,
+        "qualified": bool(qualified),
+    })
 
 
 def _prepared_epoch(run_root: Path) -> float | None:
@@ -554,25 +633,36 @@ def _prepared_epoch(run_root: Path) -> float | None:
 
 def _campaign_budget_stop(sidecar: Sidecar, history: list[dict],
                           now: float) -> dict | None:
-    """Refuse another validation when an external sidecar limit is exhausted."""
-    if sidecar.max_validations and len(history) >= sidecar.max_validations:
+    """Refuse another validation when an external sidecar limit is exhausted.
+
+    The allowance counts *attempts*, not log rows: the pre-checker ``start`` and
+    post-checker ``result`` rows of one attempt share an identifier and count
+    once.  A start with no result (the bridge was interrupted mid-checker)
+    remains counted.  The identical-failure gate only considers classified
+    terminal failures, so an interrupted attempt consumes budget without
+    inventing a failure class.
+    """
+    attempts = _validation_attempts(history)
+    if sidecar.max_validations and len(attempts) >= sidecar.max_validations:
         return {
             "kind": "budget_exhausted",
-            "detail": f"{len(history)} validation attempt(s) reached "
+            "detail": f"{len(attempts)} validation attempt(s) reached "
                       f"max_validations={sidecar.max_validations}",
         }
     if sidecar.wall_clock_seconds:
         started = _prepared_epoch(sidecar.run_root)
-        if started is None and history:
-            started = min(float(row.get("at") or now) for row in history)
+        if started is None and attempts:
+            started = min(float(row.get("at") or now) for row in attempts)
         if started is not None and now - started > sidecar.wall_clock_seconds:
             return {
                 "kind": "deadline",
                 "detail": f"the campaign exceeded its "
                           f"{sidecar.wall_clock_seconds}s wall-clock budget",
             }
-    failures = [row for row in history
-                if row.get("checker_verdict") != "pass"]
+    failures = [row for row in attempts
+                if row.get("terminal")
+                and not row.get("qualified", False)
+                and row.get("classification")]
     if failures and sidecar.max_identical_retries:
         last = failures[-1]
         key = (last.get("classification"), last.get("digest"))
@@ -616,6 +706,7 @@ def op_validate(args) -> int:
         # External limits: the bridge refuses before spending another checker
         # run, independently of what the model intends.
         history = _validation_history(sidecar.run_root)
+        attempts = _validation_attempts(history)
         stop = _campaign_budget_stop(sidecar, history, time.time())
         if stop is not None:
             emit({
@@ -626,43 +717,68 @@ def op_validate(args) -> int:
                 "kind": stop["kind"],
                 "goal_policy": GOAL_POLICY["unavailable"],
                 "detail": stop["detail"],
-                "validations": len(history),
+                "validations": len(attempts),
                 "max_validations": sidecar.max_validations,
                 "candidate_digest": digest,
             })
             return EXIT_OK
 
+        # The attempt is durable before the checker runs: if this process is
+        # interrupted, the start row still consumes one validation allowance.
+        attempt_id = _start_attempt(sidecar.run_root, operation="validate",
+                                    candidate_digest=digest)
         started = time.monotonic()
-        outcome = run_accept(_AcceptShim(sidecar), sidecar.workspace)
+        checker_exception = None
+        try:
+            outcome = run_accept(_AcceptShim(sidecar), sidecar.workspace)
+        except Exception as exc:  # noqa: BLE001 - the attempt must be recorded
+            checker_exception = exc
+            outcome = {
+                "ok": False,
+                "verdict": None,
+                "exit_code": None,
+                "diagnostics": f"{type(exc).__name__}: {exc}",
+            }
         duration_ms = int((time.monotonic() - started) * 1000)
 
         after = _identity(sidecar, infra_commit)
-        if after != before:
+        classification, kind, verdict = classify(outcome)
+        if checker_exception is not None:
+            classification, kind = "infrastructure_error", "checker_exception"
+
+        drift = after != before
+        incomplete = False
+        if not drift and classification == "verdict" and verdict == "pass" \
+                and not sidecar.allow_incomplete_inputs:
+            inventory = snapshot.ignored_inputs(sidecar.workspace)
+            incomplete = bool(inventory["truncated"])
+
+        diagnostics = str(outcome.get("diagnostics") or "")
+        qualified = (not drift and not incomplete
+                     and classification == "verdict" and verdict == "pass")
+        _finish_attempt(
+            sidecar.run_root, attempt_id, operation="validate",
+            classification=("identity_drift" if drift else
+                            "inputs_incomplete" if incomplete else
+                            classification),
+            kind=("identity_drift" if drift else
+                  "inputs_incomplete" if incomplete else kind),
+            verdict=verdict, diagnostics=diagnostics,
+            exit_code=outcome.get("exit_code"), duration_ms=duration_ms,
+            qualified=qualified)
+
+        if drift:
             changed = [key for key in before if before[key] != after.get(key)]
             raise Refusal("identity_drift",
                           "identity changed during the checker run: " + ", ".join(changed))
-
-        classification, kind, verdict = classify(outcome)
-        if verdict == "pass" and not sidecar.allow_incomplete_inputs:
-            inventory = snapshot.ignored_inputs(sidecar.workspace)
-            if inventory["truncated"]:
-                raise Refusal(
-                    "inputs_incomplete",
-                    "the ignored-input inventory was truncated, so the evidence "
-                    "cannot be shown to cover everything the checker read; declare "
-                    "allow_incomplete_inputs on the campaign to accept that",
-                )
-        diagnostics = str(outcome.get("diagnostics") or "")
+        if incomplete:
+            raise Refusal(
+                "inputs_incomplete",
+                "the ignored-input inventory was truncated, so the evidence "
+                "cannot be shown to cover everything the checker read; declare "
+                "allow_incomplete_inputs on the campaign to accept that",
+            )
         diagnostics_digest = receipts.digest_text(diagnostics)
-        _append_validation(sidecar.run_root, {
-            "at": time.time(),
-            "classification": classification,
-            "kind": kind,
-            "checker_verdict": verdict,
-            "digest": diagnostics_digest,
-            "exit_code": outcome.get("exit_code"),
-            "duration_ms": duration_ms,
-        })
         receipt = {
             "schema": receipts.SCHEMA,
             "identities": before,
@@ -832,11 +948,40 @@ def _replay_frozen(sidecar: Sidecar, frozen: dict) -> dict:
                 "frozen_mismatch",
                 f"the replay worktree is at {head[:12]}, not the pinned baseline",
             )
-        outcome = run_accept(_AcceptShim(sidecar), replay_root)
+        # Reproduction is another physical checker execution: it is charged
+        # against the same campaign limits before it starts.
+        stop = _campaign_budget_stop(
+            sidecar, _validation_history(sidecar.run_root), time.time())
+        if stop is not None:
+            raise Refusal(stop["kind"], stop["detail"])
+        attempt_id = _start_attempt(
+            sidecar.run_root, operation="finalize-replay",
+            candidate_digest=commit)
+        started = time.monotonic()
+        checker_exception = None
+        try:
+            outcome = run_accept(_AcceptShim(sidecar), replay_root)
+        except Exception as exc:  # noqa: BLE001 - the attempt must be recorded
+            checker_exception = exc
+            outcome = {
+                "ok": False,
+                "verdict": None,
+                "exit_code": None,
+                "diagnostics": f"{type(exc).__name__}: {exc}",
+            }
+        duration_ms = int((time.monotonic() - started) * 1000)
+        classification, kind, verdict = classify(outcome)
+        if checker_exception is not None:
+            classification, kind = "infrastructure_error", "checker_exception"
+        _finish_attempt(
+            sidecar.run_root, attempt_id, operation="finalize-replay",
+            classification=classification, kind=kind, verdict=verdict,
+            diagnostics=str(outcome.get("diagnostics") or ""),
+            exit_code=outcome.get("exit_code"), duration_ms=duration_ms,
+            qualified=(classification == "verdict" and verdict == "pass"))
     finally:
         _drop_worktree(replay_root)
 
-    classification, kind, verdict = classify(outcome)
     if classification != "verdict" or verdict != "pass":
         raise Refusal(
             "frozen_mismatch",
@@ -1102,6 +1247,9 @@ def op_checker_compat(args) -> int:
         outcome = None
         if workspace is not None:
             try:
+                # Administrative diagnostic on the pristine baseline: it never
+                # qualifies a candidate and is deliberately not charged against
+                # the campaign's max_validations allowance.
                 outcome = run_accept(_AcceptShim(sidecar), workspace)
             finally:
                 # A temporary worktree is still a registered git worktree.
@@ -1441,13 +1589,58 @@ def op_finalize(args) -> int:
                 )
 
 
+        # A fresh qualification run is a checker execution: it is charged
+        # against the same limits as validate and refuses before starting.
+        history = _validation_history(sidecar.run_root)
+        attempts = _validation_attempts(history)
+        stop = _campaign_budget_stop(sidecar, history, time.time())
+        if stop is not None:
+            emit({
+                "ok": True,
+                "operation": "finalize",
+                "campaign_id": sidecar.campaign_id,
+                "classification": "policy_stop",
+                "kind": stop["kind"],
+                "goal_policy": GOAL_POLICY["unavailable"],
+                "detail": stop["detail"],
+                "validations": len(attempts),
+                "max_validations": sidecar.max_validations,
+                "candidate_digest": (current.get("candidate") or {}).get("digest"),
+            })
+            return EXIT_OK
+
+        attempt_id = _start_attempt(
+            sidecar.run_root, operation="finalize",
+            candidate_digest=(current.get("candidate") or {}).get("digest"))
         started = time.monotonic()
-        outcome = run_accept(_AcceptShim(sidecar), sidecar.workspace)
+        checker_exception = None
+        try:
+            outcome = run_accept(_AcceptShim(sidecar), sidecar.workspace)
+        except Exception as exc:  # noqa: BLE001 - the attempt must be recorded
+            checker_exception = exc
+            outcome = {
+                "ok": False,
+                "verdict": None,
+                "exit_code": None,
+                "diagnostics": f"{type(exc).__name__}: {exc}",
+            }
         duration_ms = int((time.monotonic() - started) * 1000)
         classification, kind, verdict = classify(outcome)
+        if checker_exception is not None:
+            classification, kind = "infrastructure_error", "checker_exception"
 
         after = _identity(sidecar, _git(infra_root(), "rev-parse", "HEAD"))
-        if after != current:
+        drift = after != current
+        _finish_attempt(
+            sidecar.run_root, attempt_id, operation="finalize",
+            classification="identity_drift" if drift else classification,
+            kind="identity_drift" if drift else kind,
+            verdict=verdict,
+            diagnostics=str(outcome.get("diagnostics") or ""),
+            exit_code=outcome.get("exit_code"), duration_ms=duration_ms,
+            qualified=(not drift and classification == "verdict"
+                       and verdict == "pass"))
+        if drift:
             raise Refusal("identity_drift", "identity changed during the finalization run")
 
         if classification != "verdict" or verdict != "pass":

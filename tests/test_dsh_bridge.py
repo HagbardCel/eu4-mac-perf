@@ -11,6 +11,7 @@ import tempfile
 import unittest
 import uuid
 from pathlib import Path
+from unittest import mock
 
 from automation import dsh_bridge
 from automation import dsh_campaign
@@ -842,3 +843,206 @@ class ExitPolicyTests(BridgeTestCase):
         self.assertEqual(out["kind"], "not_qualified")
         self.assertEqual(out["goal_policy"], dsh_bridge.GOAL_POLICY["fail"])
         self.assertNotEqual(out["goal_policy"], "pause")
+
+
+class CheckerAttemptAccountingTests(BridgeTestCase):
+    """Every checker execution is a durable attempt with a terminal result."""
+
+    def logged(self) -> tuple[list[dict], list[dict]]:
+        rows = dsh_bridge._validation_history(self.run_root)
+        return rows, dsh_bridge._validation_attempts(rows)
+
+    def sidecar_with_limit(self, fixture: str, max_validations: int) -> Path:
+        sidecar = self.sidecar(self.campaign(fixture))
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        data["limits"]["max_validations"] = max_validations
+        sidecar.write_text(json.dumps(data), encoding="utf-8")
+        return sidecar
+
+    def test_a_normal_pass_records_one_distinct_attempt(self) -> None:
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        self.run_bridge("prepare", sidecar)
+        code, out = self.run_bridge("validate", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        rows, attempts = self.logged()
+        self.assertEqual([row.get("phase") for row in rows],
+                         ["start", "result"])
+        self.assertEqual(len({row["attempt_id"] for row in rows}), 1)
+        self.assertEqual(len(attempts), 1)
+        self.assertTrue(attempts[0]["terminal"])
+        self.assertTrue(attempts[0]["qualified"])
+        self.assertEqual(attempts[0]["checker_verdict"], "pass")
+
+    def test_a_checker_failure_is_a_classified_terminal_attempt(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        self.run_bridge("prepare", sidecar)
+        code, out = self.run_bridge("validate", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertEqual(out["checker_verdict"], "fail")
+        _, attempts = self.logged()
+        self.assertEqual(len(attempts), 1)
+        self.assertTrue(attempts[0]["terminal"])
+        self.assertFalse(attempts[0]["qualified"])
+        self.assertEqual(attempts[0]["classification"], "verdict")
+        self.assertEqual(attempts[0]["checker_verdict"], "fail")
+
+    def test_a_checker_exception_is_recorded_and_counted(self) -> None:
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        self.run_bridge("prepare", sidecar)
+        with mock.patch.object(dsh_bridge, "run_accept",
+                               side_effect=RuntimeError("checker exploded")):
+            code, out = self.run_bridge("validate", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertEqual(out["classification"], "infrastructure_error")
+        self.assertEqual(out["kind"], "checker_exception")
+        _, attempts = self.logged()
+        self.assertEqual(len(attempts), 1)
+        self.assertTrue(attempts[0]["terminal"])
+        self.assertFalse(attempts[0]["qualified"])
+        self.assertEqual(attempts[0]["kind"], "checker_exception")
+
+    def test_identity_drift_after_the_checker_is_recorded(self) -> None:
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        self.run_bridge("prepare", sidecar)
+        original = dsh_bridge._identity
+        calls: list[dict] = []
+
+        def drifting(sidecar_arg, infra_commit):
+            value = original(sidecar_arg, infra_commit)
+            calls.append(value)
+            if len(calls) == 2:
+                value = json.loads(json.dumps(value))
+                value["candidate"]["digest"] = "0" * 64
+            return value
+
+        with mock.patch.object(dsh_bridge, "_identity", side_effect=drifting):
+            code, out = self.run_bridge("validate", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+        self.assertEqual(out["kind"], "identity_drift")
+        _, attempts = self.logged()
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(attempts[0]["classification"], "identity_drift")
+        self.assertFalse(attempts[0]["qualified"])
+
+    def test_incomplete_inputs_after_a_pass_are_recorded(self) -> None:
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        self.run_bridge("prepare", sidecar)
+        original = dsh_bridge.snapshot.ignored_inputs
+        dsh_bridge.snapshot.ignored_inputs = lambda ws: {
+            "entries": [], "truncated": True}
+        self.addCleanup(setattr, dsh_bridge.snapshot, "ignored_inputs", original)
+        code, out = self.run_bridge("validate", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+        self.assertEqual(out["kind"], "inputs_incomplete")
+        _, attempts = self.logged()
+        self.assertEqual(len(attempts), 1)
+        self.assertEqual(attempts[0]["classification"], "inputs_incomplete")
+        self.assertFalse(attempts[0]["qualified"])
+
+    def test_an_interrupted_attempt_counts_against_max_validations(self) -> None:
+        sidecar = self.sidecar_with_limit("pass-campaign", 1)
+        self.run_bridge("prepare", sidecar)
+        # A crash between the start row and the checker result leaves exactly
+        # this durable record behind; a restarted bridge must still count it.
+        dsh_bridge._append_validation(self.run_root, {
+            "attempt_id": "interrupted-attempt",
+            "phase": "start",
+            "at": 1.0,
+            "operation": "validate",
+        })
+        with mock.patch.object(dsh_bridge, "run_accept",
+                               side_effect=AssertionError(
+                                   "the checker must not start")):
+            code, out = self.run_bridge("validate", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertEqual(out["classification"], "policy_stop")
+        self.assertEqual(out["kind"], "budget_exhausted")
+        self.assertEqual(out["validations"], 1)
+        _, attempts = self.logged()
+        self.assertEqual(len(attempts), 1)
+        self.assertFalse(attempts[0]["terminal"])
+
+    def test_distinct_attempts_not_log_rows_are_counted(self) -> None:
+        sidecar = dsh_campaign.load_sidecar(
+            self.sidecar_with_limit("pass-campaign", 2))
+        rows = [
+            {"attempt_id": "one", "phase": "start", "at": 1.0},
+            {"attempt_id": "one", "phase": "result", "at": 1.1,
+             "classification": "verdict", "checker_verdict": "pass",
+             "qualified": True},
+        ]
+        self.assertIsNone(dsh_bridge._campaign_budget_stop(sidecar, rows, 2.0))
+        rows.extend([
+            {"attempt_id": "two", "phase": "start", "at": 3.0},
+            {"attempt_id": "two", "phase": "result", "at": 3.1,
+             "classification": "verdict", "checker_verdict": "pass",
+             "qualified": True},
+        ])
+        stop = dsh_bridge._campaign_budget_stop(sidecar, rows, 4.0)
+        self.assertEqual(stop["kind"], "budget_exhausted")
+
+    def test_an_exhausted_budget_refuses_before_the_checker_starts(self) -> None:
+        sidecar = self.sidecar_with_limit("pass-campaign", 1)
+        self.run_bridge("prepare", sidecar)
+        self.assertEqual(self.run_bridge("validate", sidecar)[0],
+                         dsh_bridge.EXIT_OK)
+        rows_before = dsh_bridge._validation_history(self.run_root)
+        with mock.patch.object(dsh_bridge, "run_accept",
+                               side_effect=AssertionError(
+                                   "the checker must not start")):
+            code, out = self.run_bridge("validate", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertEqual(out["kind"], "budget_exhausted")
+        self.assertEqual(dsh_bridge._validation_history(self.run_root),
+                         rows_before)
+
+    def test_finalization_fresh_checker_execution_is_accounted(self) -> None:
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        self.run_bridge("prepare", sidecar)
+        self.assertEqual(self.run_bridge("validate", sidecar)[0],
+                         dsh_bridge.EXIT_OK)
+        code, out = self.run_bridge("finalize", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertTrue((self.run_root / "finalization.json").is_file())
+        _, attempts = self.logged()
+        self.assertEqual([row["operation"] for row in attempts],
+                         ["validate", "finalize"])
+        self.assertTrue(all(row["qualified"] for row in attempts))
+        self.assertEqual(len({row["attempt_id"] for row in attempts}), 2)
+
+    def test_finalization_refuses_before_a_fresh_checker_when_exhausted(self) -> None:
+        sidecar = self.sidecar_with_limit("pass-campaign", 1)
+        self.run_bridge("prepare", sidecar)
+        self.assertEqual(self.run_bridge("validate", sidecar)[0],
+                         dsh_bridge.EXIT_OK)
+        rows_before = dsh_bridge._validation_history(self.run_root)
+        with mock.patch.object(dsh_bridge, "run_accept",
+                               side_effect=AssertionError(
+                                   "the finalization checker must not start")):
+            code, out = self.run_bridge("finalize", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertEqual(out["classification"], "policy_stop")
+        self.assertEqual(out["kind"], "budget_exhausted")
+        self.assertFalse((self.run_root / "finalization.json").exists())
+        self.assertEqual(dsh_bridge._validation_history(self.run_root),
+                         rows_before)
+
+    def test_legacy_rows_remain_readable_and_count_as_attempts(self) -> None:
+        sidecar = dsh_campaign.load_sidecar(
+            self.sidecar_with_limit("pass-campaign", 3))
+        rows = [
+            {"at": 1.0, "classification": "verdict",
+             "checker_verdict": "fail", "digest": "a"},
+            {"at": 2.0, "classification": "verdict",
+             "checker_verdict": "pass", "digest": "b"},
+        ]
+        attempts = dsh_bridge._validation_attempts(rows)
+        self.assertEqual(len(attempts), 2)
+        self.assertTrue(all(row["terminal"] for row in attempts))
+        self.assertFalse(attempts[0]["qualified"])
+        self.assertTrue(attempts[1]["qualified"])
+        self.assertIsNone(dsh_bridge._campaign_budget_stop(sidecar, rows, 3.0))
+        self.assertEqual(
+            dsh_bridge._campaign_budget_stop(sidecar, rows + [rows[-1]],
+                                            4.0)["kind"],
+            "budget_exhausted")

@@ -14,6 +14,14 @@ unused part of the reservation.  An interrupted or abandoned reservation keeps
 its full charge (conservative), so a crash cannot silently restore a spent
 execution allowance.
 
+An EU4 launch reservation additionally carries a one-use claim.  Checking that
+a reservation is open is read-only; immediately before the process is created,
+the launch path atomically marks the reservation's ``eu4_launches`` entitlement
+as claimed.  A second claim against the same reservation is refused, including
+concurrent claims, so one reservation can authorize at most one EU4 process.  A
+claimed reservation stays open for the subsequent completion and outcome
+accounting, and a failed spawn conservatively keeps the consumed allowance.
+
 An identical failure repeated ``MAX_IDENTICAL_RETRIES`` times blocks that action
 for the campaign.  There is no model-accessible reset: only an administrative
 recovery authorized by the operator's token can clear a stop or a block, and it
@@ -219,14 +227,23 @@ class Guard:
         return state
 
     # -- decisions ------------------------------------------------------
-    def _refusal(self, state: dict, needed: dict[str, int],
-                 now: float) -> None:
+    def _lifecycle_refusal(self, state: dict, now: float) -> None:
+        """Refuse when the campaign itself may no longer act.
+
+        This is deliberately separate from the budget check: a reservation has
+        already charged its resource, so the resource's remaining balance is
+        zero and must not make the reserved action look unaffordable.
+        """
         if state.get("stop"):
             raise CampaignRefusal("stopped",
                                   str(state["stop"].get("reason")))
         if now > float(state.get("deadline_epoch") or 0):
             raise CampaignRefusal("deadline",
                                   "the campaign wall-clock deadline has passed")
+
+    def _refusal(self, state: dict, needed: dict[str, int],
+                 now: float) -> None:
+        self._lifecycle_refusal(state, now)
         budgets = state.get("budgets") or {}
         counts = state.get("counts") or {}
         for action, amount in needed.items():
@@ -283,6 +300,7 @@ class Guard:
                 "actions": needed,
                 "state": "reserved",
                 "created_at": now,
+                "campaign_id": state.get("campaign_id"),
                 "evidence": evidence,
             }
             state["exhausted"] = sorted(
@@ -301,6 +319,69 @@ class Guard:
             del state["history"][:-MAX_HISTORY]
             self._write(state)
         return identifier
+
+    def claim_launch(self, reservation_id: str, *, evidence=None,
+                     now: float | None = None) -> dict:
+        """Atomically consume one reservation's EU4 launch entitlement.
+
+        This is the one-use claim at the process-creation boundary.  It refuses
+        unless the reservation is open, belongs to this campaign, still carries
+        a positive ``eu4_launches`` allowance, and has not been claimed before.
+        The claim is persisted under the state lock *before* the caller may call
+        ``subprocess.Popen``, so two contenders cannot both be authorized.
+
+        The budget is not re-checked: the reservation already charged its
+        resources, and a remaining balance of zero is therefore expected.  Only
+        the campaign lifecycle (stop and deadline) is re-verified here.  The
+        reservation is not closed by the claim; completion still records the
+        verified outcome (and a failed spawn keeps the full charge).
+        """
+        now = time.time() if now is None else now
+        with self._locked():
+            state = self.state()
+            self._lifecycle_refusal(state, now)
+            if not reservation_id:
+                raise CampaignRefusal(
+                    "launch_reservation",
+                    "the campaign requires an open EU4 launch reservation")
+            reservation = (state.get("reservations") or {}).get(
+                str(reservation_id))
+            if not isinstance(reservation, dict):
+                raise CampaignRefusal("reservation_missing", str(reservation_id))
+            owner = reservation.get("campaign_id")
+            if owner is not None and owner != state.get("campaign_id"):
+                raise CampaignRefusal(
+                    "reservation_campaign",
+                    f"{reservation_id} belongs to campaign {owner!r}, not "
+                    f"{state.get('campaign_id')!r}")
+            if reservation.get("state") != "reserved":
+                raise CampaignRefusal(
+                    "reservation_closed",
+                    f"{reservation_id} is {reservation.get('state')!r}")
+            if int((reservation.get("actions") or {}).get(
+                    "eu4_launches", 0)) <= 0:
+                raise CampaignRefusal(
+                    "launch_reservation",
+                    f"{reservation_id} has no eu4_launches allowance")
+            if reservation.get("launch_claim"):
+                claimed = reservation["launch_claim"]
+                raise CampaignRefusal(
+                    "launch_already_claimed",
+                    f"{reservation_id} already authorized a launch at "
+                    f"{claimed.get('at')}")
+            claim = {"action": "eu4_launches", "at": now}
+            reservation["launch_claim"] = claim
+            state["history"].append({
+                "action": "claim_launch",
+                "outcome": "claimed",
+                "at": now,
+                "reservation": str(reservation_id),
+                "detail": "one-use eu4_launches entitlement consumed",
+                "evidence": evidence,
+            })
+            del state["history"][:-MAX_HISTORY]
+            self._write(state)
+        return dict(claim)
 
     def complete(self, reservation_id: str, *, outcome: str = "ok",
                  detail: str = "", evidence=None,
@@ -377,7 +458,11 @@ class Guard:
         return state
 
     def validate_reservation(self, reservation_id: str, action: str) -> bool:
-        """True when the identifier holds an open reservation for the action."""
+        """True when the identifier holds an open reservation for the action.
+
+        Read-only preflight only.  A launch must additionally call
+        :meth:`claim_launch`; this check never consumes the entitlement.
+        """
         if not reservation_id:
             return False
         try:
@@ -480,7 +565,8 @@ class Guard:
         open_reservations = [
             {"reservation": identifier,
              "actions": reservation.get("actions"),
-             "created_at": reservation.get("created_at")}
+             "created_at": reservation.get("created_at"),
+             "launch_claimed": bool(reservation.get("launch_claim"))}
             for identifier, reservation in
             (state.get("reservations") or {}).items()
             if reservation.get("state") == "reserved"]
@@ -523,6 +609,11 @@ def require_from_env(action: str) -> Guard | None:
     return guard
 
 
+def _launch_token(reservation: str | None) -> str:
+    return (reservation if reservation is not None
+            else os.environ.get("EU4_CAMPAIGN_RESERVATION", "")).strip()
+
+
 def require_launch_reservation(reservation: str | None = None,
                                guard: "Guard | None" = None) -> None:
     """Refuse an EU4 spawn that does not hold an open launch reservation.
@@ -532,19 +623,35 @@ def require_launch_reservation(reservation: str | None = None,
     inherited process environment cannot authorize a launch.  When no explicit
     identity is supplied, the ambient token is used only as a compatibility
     fallback for direct CLI invocations, which a campaign still validates.
-    Both launch choke points call this, so an alternative tool cannot spend an
-    unguarded launch while a campaign budget is active.
+    Both launch choke points call this read-only preflight, so an alternative
+    tool cannot spend an unguarded launch while a campaign budget is active.
+    The one-use entitlement is consumed separately by
+    :func:`claim_launch_reservation` immediately before process creation.
     """
     guard = guard if guard is not None else from_env()
     if guard is None:
         return
-    token = (reservation if reservation is not None
-             else os.environ.get("EU4_CAMPAIGN_RESERVATION", "")).strip()
-    if not guard.validate_reservation(token, "eu4_launches"):
+    if not guard.validate_reservation(_launch_token(reservation),
+                                      "eu4_launches"):
         raise CampaignRefusal(
             "launch_reservation",
             "the campaign requires an open EU4 launch reservation; start the "
             "capture through automation.m6_frame capture")
+
+
+def claim_launch_reservation(reservation: str | None = None,
+                             guard: "Guard | None" = None,
+                             evidence=None) -> dict | None:
+    """Atomically claim the one-use EU4 launch entitlement, just before spawn.
+
+    Returns ``None`` when campaigns are disabled.  Otherwise the claim is
+    persisted before the caller is allowed to create the process; refusal means
+    no process may be created.
+    """
+    guard = guard if guard is not None else from_env()
+    if guard is None:
+        return None
+    return guard.claim_launch(_launch_token(reservation), evidence=evidence)
 
 
 @contextlib.contextmanager

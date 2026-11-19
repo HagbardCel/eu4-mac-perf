@@ -215,6 +215,7 @@ class GuardTests(unittest.TestCase):
             self.assertIsNone(campaign_guard.from_env())
             self.assertIsNone(campaign_guard.require_from_env("replays"))
             campaign_guard.require_launch_reservation()
+            self.assertIsNone(campaign_guard.claim_launch_reservation())
             self.assertFalse(self.path.exists())
 
     def test_state_is_machine_readable(self):
@@ -228,6 +229,132 @@ class GuardTests(unittest.TestCase):
         status = self.guard.status()
         self.assertEqual(status["open_reservations"][0]["reservation"],
                          reservation)
+
+
+class LaunchClaimTests(unittest.TestCase):
+    """One open launch reservation authorizes exactly one process creation."""
+
+    def setUp(self):
+        base = ROOT / ".local" / "test-runs"
+        base.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(dir=base)
+        self.path = Path(self.temporary.name) / "claim-state.json"
+        self.guard = campaign_guard.Guard(self.path)
+        self.guard.init(campaign_id="claim", budgets={"eu4_launches": 1})
+        self.reservation = self.guard.reserve({"eu4_launches": 1})
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def test_one_reservation_authorizes_one_claim(self):
+        self.guard.claim_launch(self.reservation)
+        state = self.guard.state()
+        reservation = state["reservations"][self.reservation]
+        self.assertTrue(reservation["launch_claim"])
+        self.assertEqual(reservation["state"], "reserved")
+        # The reservation is still open for completion/outcome accounting.
+        self.assertTrue(self.guard.validate_reservation(
+            self.reservation, "eu4_launches"))
+        self.assertTrue(self.guard.status()["open_reservations"][0]
+                        ["launch_claimed"])
+        self.assertEqual(state["history"][-1]["action"], "claim_launch")
+
+    def test_the_same_reservation_cannot_authorize_a_second_claim(self):
+        self.guard.claim_launch(self.reservation)
+        with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
+            self.guard.claim_launch(self.reservation)
+        self.assertEqual(raised.exception.kind, "launch_already_claimed")
+        self.assertEqual(self.guard.state()["history"][-1]["action"],
+                         "claim_launch")
+
+    def test_concurrent_claims_produce_exactly_one_success(self):
+        outcomes: list[str] = []
+
+        def compete():
+            guard = campaign_guard.Guard(self.path)
+            try:
+                guard.claim_launch(self.reservation)
+                outcomes.append("claimed")
+            except campaign_guard.CampaignRefusal as exc:
+                outcomes.append(exc.kind)
+
+        threads = [threading.Thread(target=compete) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(outcomes.count("claimed"), 1)
+        self.assertEqual(outcomes.count("launch_already_claimed"), 7)
+
+    def test_a_stopped_campaign_cannot_claim(self):
+        self.guard.stop("blocked", "environment unsafe")
+        with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
+            self.guard.claim_launch(self.reservation)
+        self.assertEqual(raised.exception.kind, "stopped")
+        self.assertNotIn("launch_claim",
+                         self.guard.state()["reservations"][self.reservation])
+
+    def test_an_expired_campaign_cannot_claim(self):
+        path = Path(self.temporary.name) / "expired.json"
+        guard = campaign_guard.Guard(path)
+        guard.init(campaign_id="expired", deadline_seconds=0.2,
+                   budgets={"eu4_launches": 1})
+        reservation = guard.reserve({"eu4_launches": 1})
+        time.sleep(0.3)
+        with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
+            guard.claim_launch(reservation)
+        self.assertEqual(raised.exception.kind, "deadline")
+
+    def test_invalid_and_missing_reservations_are_rejected(self):
+        with self.assertRaises(campaign_guard.CampaignRefusal) as missing:
+            self.guard.claim_launch("does-not-exist")
+        self.assertEqual(missing.exception.kind, "reservation_missing")
+        with self.assertRaises(campaign_guard.CampaignRefusal) as empty:
+            self.guard.claim_launch("")
+        self.assertEqual(empty.exception.kind, "launch_reservation")
+
+    def test_a_completed_reservation_cannot_claim(self):
+        self.guard.complete(self.reservation, outcome="ok")
+        with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
+            self.guard.claim_launch(self.reservation)
+        self.assertEqual(raised.exception.kind, "reservation_closed")
+
+    def test_a_reservation_without_a_launch_allowance_cannot_claim(self):
+        path = Path(self.temporary.name) / "replays-only.json"
+        guard = campaign_guard.Guard(path)
+        guard.init(campaign_id="replays-only", budgets={"replays": 1})
+        reservation = guard.reserve({"replays": 1})
+        with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
+            guard.claim_launch(reservation)
+        self.assertEqual(raised.exception.kind, "launch_reservation")
+
+    def test_a_claimed_reservation_still_completes_and_keeps_its_charge(self):
+        self.guard.claim_launch(self.reservation)
+        state = self.guard.complete(self.reservation, outcome="failed",
+                                    detail="spawn raised",
+                                    failure_action="eu4_launches")
+        reservation = state["reservations"][self.reservation]
+        self.assertEqual(reservation["state"], "failed")
+        self.assertTrue(reservation["launch_claim"])
+        self.assertEqual(state["counts"]["eu4_launches"], 1)
+        # A claimed reservation can never be redirected to another process.
+        with self.assertRaises(campaign_guard.CampaignRefusal):
+            self.guard.claim_launch(self.reservation)
+
+    def test_a_claimed_launch_does_not_break_multi_resource_completion(self):
+        path = Path(self.temporary.name) / "multi.json"
+        guard = campaign_guard.Guard(path)
+        guard.init(campaign_id="multi",
+                   budgets={"eu4_launches": 1, "sealed_frames": 2})
+        reservation = guard.reserve({"eu4_launches": 1, "sealed_frames": 2})
+        guard.claim_launch(reservation)
+        state = guard.complete(reservation, outcome="ok",
+                               consumed={"eu4_launches": 1,
+                                         "sealed_frames": 1})
+        self.assertEqual(state["counts"]["eu4_launches"], 1)
+        self.assertEqual(state["counts"]["sealed_frames"], 1)
+        self.assertEqual(state["reservations"][reservation]["state"],
+                         "completed")
 
 
 class LaunchReservationTests(unittest.TestCase):
@@ -363,6 +490,195 @@ class ActionSiteGateTests(unittest.TestCase):
         state = guard.state()
         self.assertEqual(state["counts"]["sealed_frames"], 1)
         self.assertEqual(state["counts"]["shadow_executions"], 1)
+
+
+class _FakeLease:
+    def child_fds(self):
+        return []
+
+    def release(self):
+        return None
+
+
+class _FakeSession:
+    display = None
+
+    def display_env(self):
+        return {}
+
+    def register(self, role, process, token=None):
+        return types.SimpleNamespace(
+            as_dict=lambda: {"pid": process.pid, "role": role})
+
+
+class OneUseLaunchBoundaryTests(unittest.TestCase):
+    """Both physical launch paths spend one reservation for one process."""
+
+    def setUp(self):
+        base = ROOT / ".local" / "test-runs"
+        base.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(dir=base)
+        self.root = Path(self.temporary.name)
+        self.state_path = self.root / "state.json"
+        self.guard = campaign_guard.Guard(self.state_path)
+        self.guard.init(campaign_id="one-use",
+                        budgets={"eu4_launches": 1})
+        self.reservation = self.guard.reserve({"eu4_launches": 1})
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def run_ops(self, name: str, popen, *, state_path=None,
+                reservation=None):
+        import eu4_gfx_startup_trace as startup
+        from automation import test_profiles
+
+        launcher = self.root / "launcher.json"
+        launcher.write_text(json.dumps({"exeArgs": []}), encoding="utf-8")
+        evidence = {
+            "executable_sha256": "a" * 64,
+            "library_sha256": "b" * 64,
+            "ops": ["_GfxDraw"],
+        }
+        with mock.patch.dict(os.environ,
+                             {"EU4_CAMPAIGN_STATE": str(
+                                 state_path or self.state_path),
+                              "EU4_CAMPAIGN_RESERVATION":
+                                  reservation or self.reservation}), \
+                mock.patch.object(test_profiles, "ensure_live_launch",
+                                  return_value=None), \
+                mock.patch.object(startup.base, "GOG_LAUNCHER", launcher), \
+                mock.patch.object(startup.launch_lease, "acquire",
+                                  return_value=_FakeLease()), \
+                mock.patch.object(startup.subprocess, "Popen", popen):
+            return startup.run_ops(
+                targets=["_GfxDraw"], max_events=8, duration_s=1.0,
+                timeout_s=5, output=self.root / name, authorize_live=True,
+                evidence=evidence)
+
+    def spawn(self, name: str, popen, *, reservation=None, enabled=True):
+        from automation import gfx_launch, test_profiles
+
+        def prepare(role, config, run_dir, libraries=None, backend=None):
+            Path(run_dir).mkdir(parents=True, exist_ok=False)
+            return {}, Path(run_dir), Path(run_dir) / "observe"
+
+        run_dir = self.root / name
+        environment = ({"EU4_CAMPAIGN_STATE": str(self.state_path)}
+                       if enabled else {})
+        with mock.patch.dict(os.environ, environment), \
+                mock.patch.object(test_profiles, "ensure_live_launch",
+                                  return_value=None), \
+                mock.patch.object(gfx_launch, "prepare", prepare), \
+                mock.patch.object(gfx_launch.subprocess, "Popen", popen):
+            if not enabled:
+                os.environ.pop("EU4_CAMPAIGN_STATE", None)
+                os.environ.pop("EU4_CAMPAIGN_RESERVATION", None)
+            config = types.SimpleNamespace(
+                args=[], executable=Path("/tmp/eu4"))
+            return gfx_launch.spawn(
+                "reference", config, run_dir,
+                lease=_FakeLease(), session=_FakeSession(),
+                campaign_reservation=(self.reservation
+                                      if reservation is None
+                                      else reservation))
+
+    def test_run_ops_claims_once_and_a_failed_spawn_keeps_the_charge(self):
+        calls = []
+
+        def popen(*args, **kwargs):
+            calls.append(args)
+            raise RuntimeError("controlled spawn failure")
+
+        with self.assertRaises(RuntimeError):
+            self.run_ops("first", popen)
+        state = self.guard.state()
+        self.assertTrue(state["reservations"][self.reservation]["launch_claim"])
+        self.assertEqual(state["counts"]["eu4_launches"], 1)
+
+        with self.assertRaises(RuntimeError) as raised:
+            self.run_ops("second", popen)
+        self.assertIn("already", str(raised.exception))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.guard.state()["counts"]["eu4_launches"], 1)
+
+    def test_a_stopped_campaign_is_refused_immediately_before_popen(self):
+        self.guard.stop("blocked", "environment unsafe")
+        calls = []
+
+        def popen(*args, **kwargs):
+            calls.append(args)
+            return types.SimpleNamespace(pid=4242)
+
+        with self.assertRaises(RuntimeError) as raised:
+            self.run_ops("stopped", popen)
+        self.assertIn("stopped", str(raised.exception))
+        self.assertEqual(calls, [])
+
+    def test_an_expired_campaign_is_refused_immediately_before_popen(self):
+        path = self.root / "expired-state.json"
+        guard = campaign_guard.Guard(path)
+        guard.init(campaign_id="expired-launch", deadline_seconds=0.2,
+                   budgets={"eu4_launches": 1})
+        reservation = guard.reserve({"eu4_launches": 1})
+        time.sleep(0.3)
+        calls = []
+
+        def popen(*args, **kwargs):
+            calls.append(args)
+            return types.SimpleNamespace(pid=4242)
+
+        with self.assertRaises(RuntimeError) as raised:
+            self.run_ops("expired", popen, state_path=path,
+                         reservation=reservation)
+        self.assertIn("deadline", str(raised.exception))
+        self.assertEqual(calls, [])
+
+    def test_gfx_launch_spawn_claims_once(self):
+        calls = []
+
+        def popen(*args, **kwargs):
+            calls.append(args)
+            return types.SimpleNamespace(pid=4242)
+
+        launched = self.spawn("spawn-first", popen)
+        self.assertEqual(launched.process.pid, 4242)
+        self.assertTrue(self.guard.state()["reservations"][self.reservation]
+                        ["launch_claim"])
+        with self.assertRaises(RuntimeError) as raised:
+            self.spawn("spawn-second", popen)
+        self.assertIn("already", str(raised.exception))
+        self.assertEqual(len(calls), 1)
+
+    def test_both_launch_paths_share_the_same_entitlement(self):
+        calls = []
+
+        def popen(*args, **kwargs):
+            calls.append(args)
+            raise RuntimeError("controlled spawn failure")
+
+        with self.assertRaises(RuntimeError):
+            self.run_ops("shared-first", popen)
+        with self.assertRaises(RuntimeError) as raised:
+            self.spawn("shared-second", popen)
+        self.assertIn("already", str(raised.exception))
+        self.assertEqual(len(calls), 1)
+
+    def test_guard_disabled_spawn_keeps_its_existing_behavior(self):
+        calls = []
+
+        def popen(*args, **kwargs):
+            calls.append(args)
+            return types.SimpleNamespace(pid=4242)
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("EU4_CAMPAIGN_STATE", None)
+            os.environ.pop("EU4_CAMPAIGN_RESERVATION", None)
+            self.assertIsNone(campaign_guard.claim_launch_reservation())
+            launched = self.spawn("unguarded", popen, reservation="",
+                                  enabled=False)
+        self.assertEqual(launched.process.pid, 4242)
+        self.assertEqual(len(calls), 1)
 
 
 class _FakeStartup(types.ModuleType):

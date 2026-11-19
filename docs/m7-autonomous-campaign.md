@@ -1,8 +1,10 @@
 # M7 autonomous campaign contract
 
-Status: implementation and offline qualification are complete; an authentic
-live multi-round campaign has not been run (see the readiness report under
-`analysis/m7/`).
+Status: implementation, offline qualification and a genuine two-round DSH
+correction workflow are complete; the workflow used a controlled seeded fault
+and an authentic renderer correction has not been demonstrated (see the
+readiness report under `analysis/m7/`). M7 is READY for infrastructure and
+controlled autonomous execution, not for a claim of OpenGL/Metal equivalence.
 
 ## Orchestration stays native to DSH
 
@@ -27,7 +29,7 @@ by `automation/campaign_guard.py`, which is enforced at the action sites:
 
 | budget | enforced before |
 | --- | --- |
-| `eu4_launches` | `automation.m6_frame capture` calls `startup.run_ops` |
+| `eu4_launches` | the one-use launch claim immediately before each process spawn (`run`, `run_ops`, `gfx_launch.spawn`) |
 | `sealed_frames` | a single-frame capture records whether a seal was produced |
 | `shadow_executions` | a single-frame capture with `--shadow` records the in-process bridge run |
 | `replays` | `automation.gfx_independent_replay.replay` (single frame) and `gfx_replay_case.replay_case` (sequence) before the host is built |
@@ -56,10 +58,24 @@ frame count; a failed or interrupted action keeps its full charge, and an
 abandoned reservation is marked conservatively without restoring the allowance.
 A replay reserves its budget before the host is built.
 
-Both EU4 launch choke points (`eu4_gfx_startup_trace.run_ops` and
-`gfx_launch.spawn`) require an open launch reservation while a campaign state is
-active, so an alternative tool or a direct CLI invocation cannot bypass the
-guard.
+A launch reservation is also **one-use**. Passing the read-only preflight is not
+enough to start a process: immediately before `subprocess.Popen`, the launch
+path atomically records a claim on the reservation. The claim is refused if the
+reservation is missing, closed, owned by another campaign, lacks a positive
+`eu4_launches` allowance, was already claimed, or if the campaign is stopped or
+past its deadline. The claim does not close the reservation, so completion and
+outcome accounting still run; a failed spawn after the claim keeps the consumed
+allowance. Two concurrent launch attempts against one reservation produce
+exactly one success. The claim is per reservation, not per unit of allowance: a
+reservation that declares more than one launch still authorizes exactly one
+process, so a campaign that needs several launches creates a reservation for
+each one.
+
+Every EU4 process-spawn site (`eu4_gfx_startup_trace.run`,
+`eu4_gfx_startup_trace.run_ops` and `gfx_launch.spawn`) keeps the read-only
+preflight and then consumes the one-use claim, so an alternative tool or a
+direct CLI invocation cannot bypass the guard and a reservation cannot authorize
+a second process.
 
 State is a JSON document with budgets, counts, open reservations, remaining,
 failure classes, blocked actions and a bounded history.
@@ -87,8 +103,15 @@ permitted resource. `requires_additional_evidence` and `blocked` are valid
 outcomes and are preferable to a fabricated root cause.
 
 The bridge enforces the sidecar's `max_validations`, `wall_clock_seconds` and
-`max_identical_retries` from its own `validations.jsonl` attempt log, so a
-campaign cannot keep validating after those limits are exhausted.
+`max_identical_retries` from its own `validations.jsonl` attempt lifecycle. Each
+checker execution has a distinct attempt ID: a start record is persisted before
+the checker is invoked and a terminal result after it. An interrupted attempt
+(a start with no result) still counts after a restart. The allowance counts
+attempts, not log rows, and the identical-failure gate only considers classified
+terminal failures. Finalization's fresh checker run and frozen-candidate replay
+are charged through the same limits and refuse before starting when the budget is
+exhausted; the administrative `checker-compat` baseline probe is explicitly not
+charged because it never qualifies a candidate.
 
 ## Isolation and merge discipline
 
@@ -118,18 +141,26 @@ campaign cannot keep validating after those limits are exhausted.
 ## Offline demonstration
 
 `tests.test_campaign_guard` proves atomic all-or-nothing reservations,
-concurrent competition for one allowance, completion/failure reconciliation,
-abandoned reservations, the failure block and operator-only recovery, per-resource
-independence, and the launch/replay action gates. `tests.test_dsh_bridge.ValidationBudgetTests` proves
-the bridge-side limits, and `tests.test_dsh_pilot` proves that a correction is
-only accepted through the independent checker. The existing `dsh/campaigns/
-multiround` smoke campaign exercises two native rounds and a checker pass when
-started from the Web/TUI profile.
+concurrent competition for one allowance, one-use launch claims (including
+concurrent claims, stopped/expired campaigns and spawn failure after a claim),
+completion/failure reconciliation, abandoned reservations, the failure block and
+operator-only recovery, per-resource independence, and the launch/replay action
+gates. `tests.test_dsh_bridge.CheckerAttemptAccountingTests` proves the attempt
+lifecycle for passing, failing, exceptional, identity-drifted and
+incomplete-input executions, interrupted attempts, finalization accounting and
+refusal before an exhausted checker run. `tests.test_dsh_pilot` proves that a
+correction is only accepted through the independent checker. The existing
+`dsh/campaigns/multiround` smoke campaign exercises two native rounds and a
+checker pass when started from the Web/TUI profile.
 
 ## Unresolved limits
 
 - The headless profile cannot continue a goal; only the Web/TUI profile can.
-- An authentic live multi-round campaign and an authentic renderer correction
-  have not been demonstrated. The event-142 producing operation is unknown.
+- The genuine two-round correction used a controlled seeded fault; an authentic
+  renderer correction is still not demonstrated. The authentic difference is
+  localized to `[14, 17]` in the bounded pilot, rendering-state coverage remains
+  partial, and the renderer root cause is not established.
+- A fresh `eu4-web` launcher-to-goal session has not been demonstrated end to
+  end; creating that goal remains an operator step.
 - A multi-round campaign needs a provider credential. The headless profile
   cannot read the credential service on `0.2.2-rc.1`; the Web profile can.

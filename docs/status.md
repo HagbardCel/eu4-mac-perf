@@ -5,10 +5,18 @@ Operational commands live in [profiler and benchmark operations](reference/profi
 
 ## M7 — READY: implementation, autonomous campaign and bounded authentic pilot (2026-11-19)
 
-The implementation stack is merged on `main` at `8943bcdd`: #214 `0068127`,
-#215 `a3bca8a`, #216 `df16667`, #217 `8943bcd`. Portable CI passed on every
-merged head, the integrated offline gate passed (721 s, 0 failures), and the
-native repeated-blob host accepts the preserved authentic capture.
+The implementation stack is merged on `main` through #218 (`cecc727c`): #214
+`0068127`, #215 `a3bca8a`, #216 `df16667`, #217 `8943bcd`. Portable CI passed on
+every merged head, the integrated offline gate passed (721 s, 0 failures), and
+the native repeated-blob host accepts the preserved authentic capture.
+
+Post-completion hardening then closed two residual correctness gaps without
+changing the renderer implementation: an EU4 launch reservation now carries a
+one-use atomic claim immediately before each process spawn, and the DSH bridge
+records every checker attempt before the checker starts (including
+finalization's fresh and frozen-replay runs). M7 remains **READY** for
+infrastructure and controlled autonomous execution; the authentic renderer root
+cause remains open.
 
 The autonomous workflow is qualified: a two-round native DSH campaign diagnosed
 a seeded renderer fault, applied a genuine source fix (`eb6a9b24`), replayed and
@@ -68,10 +76,15 @@ Final-state full offline gate: passed (877 s, 3848 tests, 0 failures). The
 review remediation (2026-11-19) then repaired #214-#217: portable correction
 fixtures, mandatory regression inventory and bound provenance, atomic
 reservation-first campaign accounting with operator-only recovery, and the
-launch reservation enforced at both launch choke points. Final verdict:
-**NOT_READY** — no independent final-head review or operator waiver, no
-separate multi-round DSH campaign, and the event-19 producing operation is
-unestablished. Report: [M7 readiness](../analysis/m7/m7-readiness.md).
+launch reservation enforced at every process-spawn site.
+
+> **Historical note — superseded.** At that point the verdict was recorded as
+> **NOT_READY** because no independent final-head review or operator waiver had
+> been recorded, no separate multi-round DSH campaign had been demonstrated, and
+> the event-19 producing operation was unestablished. The later two-round
+> campaign and bounded authentic pilot recorded above superseded that verdict;
+> M7 is now READY for infrastructure and controlled autonomous execution. The
+> authentic renderer root cause is still unestablished.
 
 ## M7 PR 3 — bounded autonomous campaign (2026-11-19)
 
@@ -87,17 +100,26 @@ persisted budget for EU4 launches, sealed frames, shadow executions, replays,
 corrections and wall-clock time. The gate runs before `m6_frame capture` launches
 EU4 and before a Metal replay host is built, records the actual outcome (not the
 model's report), classifies failures, refuses an identical failure repeated
-twice until the strategy changes, and writes a structured stop. The launchers
-accept `--campaign-state` and export it into the DSH session. The DSH bridge now
+twice until the strategy changes, and writes a structured stop. Every EU4
+process-spawn site consumes a one-use launch claim under the state lock
+immediately before `subprocess.Popen`; a reservation therefore authorizes at
+most one process and cannot be reused concurrently. The launchers accept
+`--campaign-state` and export it into the DSH session. The DSH bridge now
 enforces the sidecar's `max_validations`, `wall_clock_seconds` and
-`max_identical_retries` from its own `validations.jsonl` attempt log.
+`max_identical_retries` from a durable `validations.jsonl` attempt lifecycle:
+a start record precedes each checker execution, a result record follows it, and
+a start without a result still counts after a restart. Finalization's fresh run
+and frozen-candidate replay are charged through the same limits, while the
+administrative checker-compatibility probe is not.
 
 Offline verification: `tests.test_campaign_guard` (budgets, deadline, failure
-classes, changed-strategy gate, concurrent accounting, launch/replay action
-gates), `tests.test_dsh_bridge.ValidationBudgetTests`, and the existing pilot /
-multiround smoke contract. **Not yet established:** an authentic multi-round
-live campaign (no provider credential was available to the one-shot profile in
-this environment) and live budget exhaustion against a real EU4 launch.
+classes, changed-strategy gate, concurrent accounting, one-use launch claims at
+both spawn boundaries, launch/replay action gates),
+`tests.test_dsh_bridge.CheckerAttemptAccountingTests`, and the existing pilot /
+multiround smoke contract. The earlier PR-3 limitation — no authentic
+multi-round campaign — was resolved by the recorded two-round workflow and the
+bounded authentic pilot above. The authentic renderer root cause and a fresh
+`eu4-web` launcher-to-goal run remain open.
 
 ## M7 PR 2 — independent correction acceptance (2026-11-19)
 

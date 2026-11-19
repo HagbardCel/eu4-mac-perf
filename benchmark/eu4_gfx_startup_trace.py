@@ -219,6 +219,14 @@ def run(
     """
     if not authorize_live:
         raise StartupError("Live launch requires the explicit --authorize-live flag")
+    from automation import campaign_guard
+
+    guard = campaign_guard.from_env()
+    try:
+        campaign_guard.require_launch_reservation(campaign_reservation,
+                                                  guard=guard)
+    except campaign_guard.CampaignRefusal as exc:
+        raise StartupError(str(exc)) from exc
     evidence = preflight()
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     run_dir = (ROOT / "results" / f"{stamp}-gfx-startup").resolve()
@@ -267,6 +275,12 @@ def run(
             if existing:
                 insertion.append(existing)
             env["DYLD_INSERT_LIBRARIES"] = ":".join(insertion)
+        try:
+            campaign_guard.claim_launch_reservation(
+                campaign_reservation, guard=guard,
+                evidence={"output": str(run_dir)})
+        except campaign_guard.CampaignRefusal as exc:
+            raise StartupError(str(exc)) from exc
         game = subprocess.Popen(
             ["./eu4", *launcher["exeArgs"], *(game_args or [])],
             cwd=base.GOG_EXE.parent,
@@ -507,8 +521,10 @@ def run_ops(
     # Every capture path funnels through this spawn site.  When a campaign
     # budget is active, only an open launch reservation may proceed, so an
     # alternative unguarded launcher cannot bypass the guard.
+    guard = campaign_guard.from_env()
     try:
-        campaign_guard.require_launch_reservation(campaign_reservation)
+        campaign_guard.require_launch_reservation(campaign_reservation,
+                                                  guard=guard)
     except campaign_guard.CampaignRefusal as exc:
         raise StartupError(str(exc)) from exc
     evidence = evidence or preflight_ops(
@@ -603,6 +619,14 @@ def run_ops(
             if existing:
                 insertion.append(existing)
             env["DYLD_INSERT_LIBRARIES"] = ":".join(insertion)
+        # The one-use entitlement is consumed after all read-only preflight and
+        # environment preparation, immediately before the process exists.
+        try:
+            campaign_guard.claim_launch_reservation(
+                campaign_reservation, guard=guard,
+                evidence={"output": str(run_dir)})
+        except campaign_guard.CampaignRefusal as exc:
+            raise StartupError(str(exc)) from exc
         game = subprocess.Popen(
             ["./eu4", *launcher["exeArgs"], *(game_args or [])],
             cwd=base.GOG_EXE.parent,
