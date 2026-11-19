@@ -1727,6 +1727,19 @@ def _capture_error_class(message: str) -> str:
     return "invalid" if any(token in lowered for token in integrity) else "incomplete"
 
 
+def identity_axis(seal: dict | None, trace: dict, replay: dict,
+                  shadow: dict | None = None, *,
+                  require_seal: bool = True) -> dict:
+    """Public projection of the shared replay-identity axis.
+
+    Correction acceptance must apply the same identity contract the diagnosis
+    path uses; it may not invent a weaker one.  ``verified`` is the only status
+    that can support complete qualification.
+    """
+    return _identity_check(seal, trace, replay, shadow,
+                           require_seal=require_seal)
+
+
 def _identity_check(seal: dict | None, trace: dict, replay: dict,
                     shadow: dict | None, *, require_seal: bool) -> dict:
     checks: list[dict] = []
@@ -3253,6 +3266,7 @@ def write_producer_receipt(out_dir: Path, frame_dir: Path,
             "executable_sha256": producer.get("executable_sha256"),
             "build_fingerprint": producer.get("build_fingerprint"),
             "build_stamp_sha256": producer.get("build_stamp_sha256"),
+            "source_revision": producer.get("source_revision"),
         },
         "capture": capture,
         "result": {

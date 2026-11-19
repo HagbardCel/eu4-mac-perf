@@ -1,0 +1,6 @@
+{
+  "schema": "gfx-correction-qualification/v1",
+  "description": "Exact-match regression inventory for a renderer correction. A campaign may supply a stricter contract with a non-empty required_regressions list; the candidate conclusion's own claimed regressions are always enforced even when this list is empty.",
+  "required_regressions": [],
+  "allow_additional": false
+}

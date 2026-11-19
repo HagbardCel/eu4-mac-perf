@@ -33,6 +33,17 @@ HYPOTHESIS_STATUS = ("supported", "refuted", "insufficient")
 FRAME_SCOPES = ("same_sealed_frame", "new_capture")
 INTERVAL_STATUS = ("match", "divergent")
 MAX_HYPOTHESES = 3
+# Strict allowlist of standalone diagnostic report statuses that denote a
+# completed comparison.  A missing or unknown status is never accepted.
+STANDALONE_REPORT_STATUSES = frozenset({
+    "qualified_match",
+    "qualified_difference",
+    "difference_with_partial_state_coverage",
+    "unsupported_state",
+    # Legacy completed-difference wording present in historical P2 reports.
+    "confirmed_rendering_difference",
+    "partial_rendering_difference",
+})
 
 
 def _native_tool_names() -> frozenset[str]:
@@ -223,7 +234,8 @@ def _valid_basis(interval: dict, problems: list[dict], *,
 
 
 def validate_conclusion(value, *, authoritative: dict | None = None,
-                        case_digests: dict | None = None) -> dict:
+                        case_digests: dict | None = None,
+                        correction_acceptance: dict | None = None) -> dict:
     problems: list[dict] = []
 
     def problem(code: str, detail: str) -> None:
@@ -417,6 +429,63 @@ def validate_conclusion(value, *, authoritative: dict | None = None,
                     problem("correction_regressions",
                             "every exact-match regression must report zero "
                             "mismatched pixels")
+        # A claim is not an accepted correction.  The independent checker must
+        # have recomputed the same artifacts and reported acceptance.
+        acceptance = (correction_acceptance
+                      if isinstance(correction_acceptance, dict) else None)
+        if acceptance is None:
+            problem("correction_unverified",
+                    "a correction_proposed conclusion requires an independent "
+                    "correction-acceptance report")
+        else:
+            if acceptance.get("schema") != "gfx-correction-acceptance/v1":
+                problem("correction_acceptance_schema",
+                        "the acceptance report has an unexpected schema")
+            if acceptance.get("result") != "accepted":
+                problem("correction_not_accepted",
+                        "independent acceptance did not accept the correction: "
+                        + "; ".join(
+                            f"{item.get('code')}: {item.get('detail')}"
+                            for item in (acceptance.get("problems") or [])[:6]))
+            acceptance_capture = _capture_key(
+                (acceptance.get("case") or {}).get("capture"))
+            if (acceptance_capture is not None and case_frame_key is not None
+                    and acceptance_capture != case_frame_key):
+                problem("correction_capture_mismatch",
+                        "the acceptance report belongs to a different sealed "
+                        "capture")
+            recomputed = {
+                "before": ((acceptance.get("before") or {}).get(
+                    "statistics") or {}),
+                "after": ((acceptance.get("after") or {}).get(
+                    "statistics") or {}),
+            }
+            inventory = (acceptance.get("regression_inventory")
+                         if isinstance(acceptance.get("regression_inventory"),
+                                       dict) else {})
+            claimed_cases = [
+                str(entry.get("case")) for entry in regressions
+                if isinstance(entry, dict) and entry.get("case")]
+            verified_cases = [str(item) for item in
+                              (inventory.get("verified") or [])]
+            if sorted(set(claimed_cases)) != sorted(set(verified_cases)):
+                problem("correction_regression_evidence_mismatch",
+                        "the conclusion's regression claims do not match the "
+                        "independently verified regression evidence: claimed "
+                        f"{sorted(set(claimed_cases))!r}, verified "
+                        f"{sorted(set(verified_cases))!r}")
+            claims = {"before": before, "after": after}
+            for side in ("before", "after"):
+                claim = claims[side]
+                actual = recomputed[side]
+                if _statistics(claim) and actual:
+                    for key in ("mismatched_pixels", "max_channel_error"):
+                        if claim.get(key) != actual.get(key):
+                            problem(
+                                "correction_claim_mismatch",
+                                f"the conclusion reports {side} {key}="
+                                f"{claim.get(key)!r} but independent "
+                                f"recomputation is {actual.get(key)!r}")
     elif "correction" in value:
         problem("correction_without_outcome",
                 "correction is only allowed with outcome=correction_proposed")
@@ -458,6 +527,17 @@ def validate_conclusion(value, *, authoritative: dict | None = None,
                     "a new capture must state that it cannot bound the "
                     "existing frame without proven equivalent starting state")
 
+    acceptance_summary = None
+    if isinstance(correction_acceptance, dict):
+        acceptance_summary = {
+            "schema": correction_acceptance.get("schema"),
+            "result": correction_acceptance.get("result"),
+            "pixel_perfect": correction_acceptance.get("pixel_perfect"),
+            "improved": correction_acceptance.get("improved"),
+            "complete_qualification": correction_acceptance.get(
+                "complete_qualification"),
+            "problems": len(correction_acceptance.get("problems") or []),
+        }
     return {
         "schema": VALIDATION_SCHEMA,
         "ok": not problems,
@@ -470,6 +550,7 @@ def validate_conclusion(value, *, authoritative: dict | None = None,
             "hypotheses": len(hypotheses),
             "has_interval": interval is not None,
             "correction": "correction" in value,
+            "correction_acceptance": acceptance_summary,
             "evidence_request": "evidence_request" in value,
         },
     }
@@ -872,15 +953,20 @@ def _producer_execution_problems(case_dir: Path, declared: set[str], report: dic
                          "detail": "replay.json carries failure records"})
 
     status = report.get("status")
-    if status in ("invalid", "error", "failed", "gpu_execution_failure"):
+    if status not in STANDALONE_REPORT_STATUSES:
+        # A strict allowlist: an unknown, missing or incomplete status is not a
+        # completed diagnostic, whatever the rest of the report claims.
         problems.append({"code": "case_report_execution_invalid",
-                         "detail": f"report status is {status!r}"})
+                         "detail": f"report status {status!r} is not a "
+                                   "completed diagnostic status"})
     outcome = report.get("outcome") if isinstance(report.get("outcome"),
                                                    dict) else {}
-    if outcome.get("execution") not in (None, "ok"):
+    # Successful execution must be stated explicitly; a missing field is not
+    # evidence that the replay completed.
+    if outcome.get("execution") != "ok":
         problems.append({"code": "case_report_execution_invalid",
                          "detail": "report outcome.execution is "
-                                   f"{outcome.get('execution')!r}"})
+                                   f"{outcome.get('execution')!r}, not 'ok'"})
     if outcome.get("fault_injection") is True:
         problems.append({"code": "case_fault_contaminated",
                          "detail": "report outcome.fault_injection is true"})
@@ -1185,7 +1271,14 @@ def _verify_interval_evidence(interval: dict, evidence: dict | None,
 
 def summarize_run(run_dir: Path | str, conclusion_path: Path | str,
                   case_dir: Path | str, *,
-                  case_receipt_path: Path | str | None = None) -> dict:
+                  case_receipt_path: Path | str | None = None,
+                  correction_baseline: Path | str | None = None,
+                  correction_after_replay: Path | str | None = None,
+                  correction_candidate_revision: str | None = None,
+                  correction_baseline_revision: str | None = None,
+                  correction_expected_revision: str | None = None,
+                  correction_regressions=(),
+                  correction_policy: Path | str | None = None) -> dict:
     """Combine one pilot run's session, efficiency and conclusion evidence.
 
     Acceptance is fail-closed: the case is verified with the existing portable
@@ -1279,9 +1372,60 @@ def summarize_run(run_dir: Path | str, conclusion_path: Path | str,
             Path(case_dir), digests)
         problems.extend(evidence_problems)
 
+    # An accepted correction is decided from the artifacts, never from the
+    # conclusion's own statistics.  This runs for every correction_proposed
+    # conclusion; missing inputs make the conclusion unverified.
+    correction_acceptance: dict | None = None
+    if conclusion and conclusion.get("outcome") == "correction_proposed":
+        correction = (conclusion.get("correction")
+                      if isinstance(conclusion.get("correction"), dict) else {})
+        validation_block = (correction.get("validation")
+                            if isinstance(correction.get("validation"),
+                                          dict) else {})
+        if correction_after_replay is None or correction_baseline is None:
+            problems.append({
+                "code": "correction_unverified",
+                "detail": "no independent correction acceptance was supplied; "
+                          "a claimed correction cannot be accepted from the "
+                          "conclusion alone"})
+        else:
+            try:
+                from automation import correction_accept
+
+                correction_acceptance = correction_accept.evaluate(
+                    case_dir=case_dir,
+                    baseline_path=correction_baseline,
+                    candidate_revision=str(
+                        correction_candidate_revision or ""),
+                    after_replay=correction_after_replay,
+                    claimed_before=validation_block.get("before"),
+                    claimed_after=validation_block.get("after"),
+                    baseline_revision=correction_baseline_revision,
+                    regressions=correction_regressions,
+                    claimed_regressions=[
+                        entry.get("case")
+                        for entry in (validation_block.get(
+                            "exact_match_regressions") or [])
+                        if isinstance(entry, dict)],
+                    policy=correction_policy,
+                    expected_revision=correction_expected_revision,
+                )
+            except Exception as exc:  # noqa: BLE001 - acceptance fails closed
+                correction_acceptance = {
+                    "schema": "gfx-correction-acceptance/v1",
+                    "ok": False,
+                    "result": "invalid_evidence",
+                    "problems": [{
+                        "code": "acceptance_error",
+                        "detail": f"{type(exc).__name__}: {exc}",
+                        "severity": "invalid"}],
+                }
+            problems.extend(correction_acceptance.get("problems") or [])
+
     if conclusion:
         validation = validate_conclusion(
-            conclusion, authoritative=evidence, case_digests=digests)
+            conclusion, authoritative=evidence, case_digests=digests,
+            correction_acceptance=correction_acceptance)
         problems.extend(validation.get("problems") or [])
     else:
         validation = {"schema": VALIDATION_SCHEMA, "ok": False,
@@ -1302,6 +1446,7 @@ def summarize_run(run_dir: Path | str, conclusion_path: Path | str,
         "native_gate": gate,
         "case_verification": verification,
         "case_receipt": digests,
+        "correction_acceptance": correction_acceptance,
         "authoritative_evidence": (None if evidence is None else {
             "schema": evidence.get("schema"),
             "report_sha256": evidence.get("report_sha256"),
@@ -1379,6 +1524,19 @@ def _parser() -> argparse.ArgumentParser:
     summary.add_argument("--case-receipt", type=Path, default=None,
                          help="digest-bound verification receipt, reused "
                               "instead of re-running the verifier")
+    summary.add_argument("--correction-baseline", type=Path, default=None,
+                         help="recorded case baseline for a proposed "
+                              "correction")
+    summary.add_argument("--correction-after-replay", type=Path, default=None,
+                         help="candidate replay directory produced by the "
+                              "candidate build")
+    summary.add_argument("--correction-candidate-revision", default=None)
+    summary.add_argument("--correction-baseline-revision", default=None)
+    summary.add_argument("--correction-expected-revision", default=None)
+    summary.add_argument("--correction-regression", action="append",
+                         type=Path, default=[],
+                         help="previously exact-matching case to recheck")
+    summary.add_argument("--correction-policy", type=Path, default=None)
     summary.add_argument("--out", type=Path, default=None)
     return parser
 
@@ -1387,8 +1545,16 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     status = 0
     if args.operation == "summarize":
-        result = summarize_run(args.run, args.conclusion, args.case,
-                               case_receipt_path=args.case_receipt)
+        result = summarize_run(
+            args.run, args.conclusion, args.case,
+            case_receipt_path=args.case_receipt,
+            correction_baseline=args.correction_baseline,
+            correction_after_replay=args.correction_after_replay,
+            correction_candidate_revision=args.correction_candidate_revision,
+            correction_baseline_revision=args.correction_baseline_revision,
+            correction_expected_revision=args.correction_expected_revision,
+            correction_regressions=args.correction_regression,
+            correction_policy=args.correction_policy)
         status = 0 if result.get("ok") else 1
     elif args.operation == "gate":
         try:

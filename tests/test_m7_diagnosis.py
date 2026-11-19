@@ -105,8 +105,11 @@ def _clear(target, flags=7):
 
 
 class DiagnosisFixture:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, session_id: str = "session-1",
+                 capture_frame_id: int = 7):
         self.root = root
+        self.session_id = session_id
+        self.capture_frame_id = capture_frame_id
         self.frame = root / "frame"
         self.metal = root / "metal"
         self.shaders = root / "translated"
@@ -165,7 +168,8 @@ class DiagnosisFixture:
         (self.frame / "frame-seal.json").write_text(json.dumps({
             "schema": "gfx-frame-seal/v1", "sealed": True, "complete": True,
             "struct_size": 2256, "abi_version": 2,
-            "capture_frame_id": 7, "session_id": "session-1", "pid": 4242,
+            "capture_frame_id": self.capture_frame_id,
+            "session_id": self.session_id, "pid": 4242,
             "process_start_ns": 100, "boundary": "scene",
             "present_index": 2, "scene_index": 2,
             "operation_count": len(self.events),

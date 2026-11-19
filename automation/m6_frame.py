@@ -1085,6 +1085,59 @@ def _replay_host_stamp() -> Path:
     return Path(str(REPLAY_HOST) + ".deps.json")
 
 
+def _git_head_revision() -> str | None:
+    """Revision of the checkout the replay host was built from.
+
+    Read from the Git metadata files rather than by spawning git: the build
+    path is exercised by tests that replace ``subprocess.run`` with the
+    compiler fake, and a build must not depend on an external process just to
+    label its own output.  Worktrees (``.git`` is a file) are resolved.
+    """
+    git_dir = ROOT / ".git"
+    try:
+        if git_dir.is_file():
+            text = git_dir.read_text(encoding="utf-8").strip()
+            if not text.startswith("gitdir:"):
+                return None
+            target = Path(text.split(":", 1)[1].strip())
+            git_dir = target if target.is_absolute() else (ROOT / target)
+        common = git_dir
+        common_file = git_dir / "commondir"
+        if common_file.is_file():
+            target = Path(common_file.read_text(encoding="utf-8").strip())
+            common = target if target.is_absolute() else (git_dir / target)
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+        if head.startswith("ref:"):
+            reference = head.split(":", 1)[1].strip()
+            reference_path = git_dir / reference
+            if not reference_path.is_file():
+                reference_path = common / reference
+            if reference_path.is_file():
+                head = reference_path.read_text(encoding="utf-8").strip()
+            else:
+                packed = common / "packed-refs"
+                if not packed.is_file():
+                    return None
+                resolved = None
+                for line in packed.read_text(encoding="utf-8").splitlines():
+                    if line.startswith("#") or " " not in line:
+                        continue
+                    candidate, _, name = line.partition(" ")
+                    if name.strip() == reference:
+                        resolved = candidate.strip()
+                        break
+                if resolved is None:
+                    return None
+                head = resolved
+    except (OSError, UnicodeError):
+        return None
+    if len(head) not in (40, 64):
+        return None
+    if any(character not in "0123456789abcdef" for character in head):
+        return None
+    return head
+
+
 def _replay_host_lock() -> Path:
     return Path(str(REPLAY_HOST) + ".build.lock")
 
@@ -1111,12 +1164,17 @@ def replay_host_producer(host: Path | str | None = None) -> dict:
         raise FrameError(
             "replay host build receipt does not match the current binary and "
             "dependency closure")
+    try:
+        recorded = json.loads(stamp.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise FrameError(f"unreadable replay host build receipt: {exc}") from exc
     return {
         "schema": "gfx-replay-producer/v1",
         "executable": str(host),
         "executable_sha256": _sha256(host),
         "build_fingerprint": identity["fingerprint"],
         "build_stamp_sha256": _sha256(stamp),
+        "source_revision": recorded.get("source_revision"),
         "build_dependencies": identity["dependencies"],
     }
 
@@ -1218,6 +1276,7 @@ def _build_replay_host_locked(force: bool = False) -> Path:
             "schema": "gfx-replay-host-build/v1",
             "fingerprint": identity["fingerprint"],
             "binary_sha256": binary_sha,
+            "source_revision": _git_head_revision(),
             "dependencies": identity["dependencies"],
             "compiler": identity["compiler"],
             "flags": identity["flags"],
