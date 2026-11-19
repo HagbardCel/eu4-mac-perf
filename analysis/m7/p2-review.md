@@ -6,10 +6,11 @@ Status: **merged implementation without a recorded independent approval.** PR
 history has no `APPROVED` state and GitHub still reports `REVIEW_REQUIRED`.
 See [P2 governance](p2-governance.md) for the enforcement gap.
 
-This file is now the checklist for the **closure PR** (the bounded pilot,
-corrected objective and evidence report). A fresh independent review of the
-closure PR's exact final head is the merge gate. CI success, this file, or the
-author's own review is not approval.
+This file is now the checklist for the **closure PR**
+[#213](https://github.com/HagbardCel/eu4-mac-perf/pull/213) (the bounded pilot,
+corrected objective, acceptance-integrity repair and evidence report). A fresh
+independent review of the closure PR's exact final head is the merge gate. CI
+success, this file, or the author's own review is not approval.
 
 ## Merged base and closure branch
 
@@ -42,12 +43,25 @@ author's own review is not approval.
 6. **Conclusion honesty.** No correction is claimed without measured before/
    after statistics on the identical sealed case; unsupported dithering/MSAA
    attribution is refused; `requires_additional_evidence` is a valid ending.
-7. **Acceptance tooling.** Any change to `automation.dsh_pilot` must be the
-   minimum needed to accept a producer-bound case's evidence without treating
-   an unverified standalone replay as a qualified in-process diagnosis. It
-   must not weaken the bounded-interval lookup or the launch count.
-8. **Governance.** The closure report must state the #212 approval gap and the
-   outstanding operational acceptance; it must not declare M7 complete.
+7. **Acceptance tooling and integrity.** Any change to
+   `automation.dsh_pilot` must be the minimum needed to accept a
+   producer-bound case's evidence without treating an unverified standalone
+   replay as a qualified in-process diagnosis. Verify that the standalone path
+   applies `full_frame_completion_problems()` to `replay/replay.json` and
+   rejects failed, partial, timed-out, partially encoded and unsuccessful
+   Metal execution, invalid report execution, invalid checkpoint validation and
+   fault-contaminated evidence. A verified producer receipt must not substitute
+   for execution success. It must not weaken the bounded-interval lookup or the
+   launch count, and a genuinely divergent completed replay must still pass.
+8. **First-divergence claim.** The conclusion's
+   `starting_diagnosis.first_divergence` must match the authoritative report's
+   event and resource in the same sealed capture. A fabricated event or a
+   foreign capture must be rejected.
+9. **Governance.** The closure report must state the #212 approval gap and the
+   outstanding operational acceptance; it must not declare M7 complete. The
+   repository currently has one collaborator (the owner), so the one-approval
+   gate is unsatisfiable without an external reviewer or an explicit
+   pre-declared override.
 
 ## Closure result (2026-11-19)
 
@@ -59,18 +73,24 @@ For the reviewer, the closure evidence is already recorded:
 - native gate: `eu4_case_inspect` and `eu4_re_query` actually executed;
 - conclusion: `requires_additional_evidence`, no correction, no root cause,
   unresolved `[0,142]` interval, event-71 `fb:0` new-capture request;
-- `dsh_pilot validate` and `summarize` both pass on
-  `.local/m7/p2/producer-case-v5`; independent NumPy reproduction matches the
-  event-142 and final-frame statistics exactly;
-- the only code change is the minimal producer-bound evidence path in
-  `automation/dsh_pilot.py`: an unbounded upper observation may come from a
-  producer-receipt-backed standalone report, but a bounded interval still
-  requires the in-process verified report;
-- no live capture was run.
+- `dsh_pilot validate` and `summarize` both pass on the preserved
+  `.local/m7/p2/producer-case-v5` after the integrity repair; independent NumPy
+  reproduction matches the event-142 and final-frame statistics exactly;
+- the acceptance-integrity repair in `automation/dsh_pilot.py` now applies the
+  shared full-frame execution contract to the packaged `replay/replay.json`,
+  rejects invalid report execution/checkpoint validation/fault contamination,
+  and verifies the claimed first divergence against the authoritative report;
+- `tests.test_dsh_pilot` has 73 tests; the new negative cases use internally
+  consistent receipt hashes and sealed identities so they fail on the intended
+  gate, not an unrelated payload error;
+- an unbounded upper observation may come from a producer-receipt-backed
+  standalone report; a bounded interval still requires the in-process verified
+  report;
+- no new DSH session and no live capture were run.
 
 This is evidence for independent review, not an approval. The reviewer must
-confirm the producer-bound acceptance change does not weaken the bounded
-interval or launch-count guarantees.
+confirm the producer-bound acceptance change does not weaken the full-frame
+execution, bounded-interval, first-divergence or launch-count guarantees.
 
 ## Verification to reproduce
 
@@ -95,7 +115,13 @@ python3.14 -m automation.dsh_pilot summarize \
   --run .local/m7/p2/closure/run \
   --conclusion .local/m7/p2/closure/pilot-conclusion.json \
   --case .local/m7/p2/producer-case-v5
+python3.14 -m automation.test_runner run --profile offline \
+  --label p2-closure-integrity-final-full --min-tests 3000
 ```
+
+Last recorded: focused 286 ran / 283 executed / 3 skips / 0 failures
+(`20261119T100551Z-36314b0e`); full 3,775 ran / 3,733 executed / 42 classified
+skips / 0 failures in 1,045.0 s (`20261119T100602Z-ddebfe8e`).
 
 ## Known limits to carry into review
 

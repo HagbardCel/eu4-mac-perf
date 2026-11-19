@@ -22,7 +22,8 @@ the final head is the gate.
 | Offline manifest | `automation.test_profiles verify --profile offline` → `ok=true`, 0 problems |
 | Focused P2 selection (pre-fix) | run `20261119T091239Z-c287d4c4`: 382 ran, 369 executed, 13 classified skips, 0 failures |
 | Focused P2 selection (post-fix) | run `20261119T092932Z-e557e673`: passed, 0 failures |
-| Full offline gate | `20261119T092938Z-23b4e94b`: 3,763 ran, 3,721 executed, 42 classified skips, 0 failures, 675.7 s |
+| Focused integrity selection (final) | run `20261119T100551Z-36314b0e`: 286 ran, 283 executed, 3 skips, 0 failures |
+| Full offline gate | `20261119T100602Z-ddebfe8e`: 3,775 ran, 3,733 executed, 42 classified skips, 0 failures, 1,045.0 s |
 
 ### Governance gap (recorded, not repaired)
 
@@ -35,6 +36,23 @@ whether the merge used an administrative bypass or a transient protection
 change; either way the documented gate was not effective. The closure PR must
 receive a fresh independent approval of its exact final head. A green CI run is
 not approval. Full record: [P2 governance](p2-governance.md).
+
+**Effective merge permissions and bypass rules (investigated 2026-11-19).**
+The repository is user-owned; the only collaborator is the owner with `admin`
+permissions. There are no repository rulesets. Auto-merge is disabled; merge,
+squash and rebase merges are enabled. With `required_approving_review_count=1`
+and `enforce_admins=true`, the configured gate is **unsatisfiable by any
+legitimate actor in the current setup**: GitHub rejects self-approval and there
+is no second human reviewer. A merge therefore requires an administrative
+bypass or a transient protection change. The API exposes neither. #212 is an
+**unresolved governance incident**, not an approval that can be reconstructed
+retroactively.
+
+To prevent recurrence without weakening protections: add a genuinely
+independent reviewer/collaborator, or move the repository to an organisation
+ruleset with required reviewers and an empty bypass list; at minimum, record an
+explicit pre-merge override decision and keep the PR unmerged until an external
+review is recorded. Do not add fake approvals or disable the gate.
 
 ## 2. Case-selection correction
 
@@ -156,21 +174,82 @@ The native gate records `native_executed=[eu4_case_inspect, eu4_re_query]`,
 to the producer case and reports `eu4_launches=0`, `native_tool_count=2`,
 `tool_count=20`.
 
-### Acceptance-tool correction (minimal)
+### Acceptance-integrity repair
 
-Before this closure, `dsh_pilot` required an in-process
-`diagnostic-report.json` for **every** acceptance. The producer-bound case has
-no such report, so both commands failed with `case_diagnostic_undeclared` even
-though the case verifies and its baseline is reusable.
+Two acceptance defects were found and corrected; neither changes the pilot's
+conclusion.
 
-The fix adds a producer-bound evidence path: when a case declares no in-process
-report, a `gfx-independent-replay/v1` report is accepted only if the case's
-producer receipt verifies and the report's embedded capture identity matches
-the frame seal. That evidence can supply the **upper** observation of an
-**unbounded** interval. A **bounded** interval still requires the in-process
-verified report, so the strongest causal guarantee is not weakened. The launch
-count and case verification gates are unchanged. Regressions:
-`tests.test_dsh_pilot` (61 tests, including three new producer-bound cases).
+**A. Missing producer-bound evidence path.** Before this closure, `dsh_pilot`
+required an in-process `diagnostic-report.json` for **every** acceptance. The
+producer-bound case has no such report, so both commands failed with
+`case_diagnostic_undeclared` even though the case verifies and its baseline is
+reusable. The fix accepts a `gfx-independent-replay/v1` report only when the
+case's producer receipt verifies and the report's embedded capture identity
+matches the frame seal. It can supply the **upper** observation of an
+**unbounded** interval; a **bounded** interval still requires the in-process
+verified report.
+
+**B. Failed execution could pass as standalone evidence.** A verified producer
+receipt proves *who* produced the packaged replay, not that the replay
+completed. The original producer-bound path checked the receipt, payload
+integrity and capture identity but did not apply the full-frame contract to the
+packaged `replay/replay.json`. A failed, timed-out, partially encoded or
+fault-injected replay with a divergent checkpoint could therefore have been
+admitted.
+
+The correction applies the existing shared
+`gfx_independent_replay.full_frame_completion_problems()` contract before any
+checkpoint is exposed. It additionally rejects:
+
+- invalid report execution (`status` invalid/error/failed, non-`ok`
+  `outcome.execution`, or a `diagnosis.execution` that is not `status=ok`,
+  `stage=complete`, `failed=0`, `timed_out=false`, `partial=false`,
+  `command_status=4`, `readback_ok=true`, with no error/failure);
+- invalid checkpoint validation (`status != ok`, `invalid != 0`, or non-empty
+  `problems`);
+- fault-contaminated evidence (`faults` or `fault_evidence` present).
+
+Producer-receipt verification, payload integrity and sealed-capture matching
+are retained. A completed replay with genuine pixel divergence — including
+`incomplete_diagnostics` with unsupported state coverage — remains admissible;
+no pixel equality is required.
+
+**C. First-divergence claim verification.** The authoritative evidence now
+exposes the report's `first_divergence` bound to the verified capture.
+`validate_conclusion()` compares the conclusion's
+`starting_diagnosis.first_divergence` against it, requiring the same event and
+resource and the same sealed capture. A fabricated event, a different resource
+or evidence from another capture is rejected (`first_divergence_mismatch`,
+`first_divergence_capture_mismatch`, `evidence_capture_mismatch`). This uses the
+existing conclusion validator and the existing report; there is no new
+diagnostic schema or second comparison engine. The historical in-process path
+remains unchanged apart from the added claim check, and it still requires the
+in-process verified report for a bounded interval.
+
+**Regressions.** `tests.test_dsh_pilot` now has **73 tests**. New cases prove:
+failed replay with a divergent checkpoint rejected; rejected draw, failed
+count and failure-record rejected; incomplete encoding, timeout, missing
+readback, `partial` and non-successful command buffer rejected; a verified
+producer receipt does not
+convert failed execution into valid evidence; invalid report execution,
+invalid checkpoint validation and fault contamination rejected; fabricated
+first-divergence event rejected; complete divergent replay with unsupported
+state accepted; bounded standalone intervals rejected; in-process acceptance
+and first-divergence matching preserved. Negative fixtures are internally
+consistent: receipt hashes, payload inventory and sealed identities are
+recomputed, so failure comes from the intended gate, not an unrelated payload
+error.
+
+**D. Revalidation of the preserved pilot.** No new model session was started.
+The preserved artifacts (`producer-case-v5`, the closed session export and the
+run directory) were revalidated with the corrected code:
+`validate` and `summarize` both return `ok=true`, 0 problems, producer evidence
+with 8 checkpoints and capture
+`a3111e0d…/1/62cfdae4…`. The session still records 20 tool calls (2 native:
+`eu4_case_inspect`, `eu4_re_query`), 13 model calls, 314.55 s, 0 EU4 launches,
+0 replays, `requires_additional_evidence`, no correction and no claimed causal
+interval. Event 142, the unbounded lower endpoint and the event-71 new-capture
+request are unchanged.
 
 ## 5. Efficiency comparison with P1
 
@@ -190,6 +269,17 @@ demonstration is **not** used as the efficiency measurement.
 | Replays during pilot | 0 | **0** | — |
 | EU4 launches | 0 | **0** | — |
 | Tests | 0 | 0 | — |
+
+**Actual versus reported measurements.** The table uses the audited raw event
+stream and the session export, not the model's self-report. The export reports
+85,622 returned characters; the raw `tool_result` payloads are 68,616 UTF-8
+bytes (the difference is event serialization). The raw stream confirms the
+20 calls exactly: 2 native, 9 shell, 6 read, 2 glob, 1 write; 1 oversized read
+(20,405 chars), 0 truncated results, 1 file read twice with different limits
+(`automation/dsh_pilot.py`), and 2 shell commands that exited nonzero during
+exploratory NumPy work (0 failed tool calls). The 524,175 tokens and 314.55 s
+wall time are from the efficiency export; the session truly made 13 model
+calls. No replay or EU4 launch appears in either source.
 
 Correctness comparison: both sessions ended with
 `requires_additional_evidence`, no correction and no root-cause claim. P1
@@ -218,11 +308,11 @@ request is preserved for a separately authorized bounded capture:
 
 ## 7. Offline gate and repository state
 
-The closure full offline gate (`20261119T092938Z-23b4e94b`,
-`--profile offline --min-tests 3000`, label `p2-closure-full`) passed:
-**3,763 ran, 3,721 executed, 42 classified skips, 0 failures, 0 errors,
-675.7 s**. The three added tests are the producer-bound acceptance
-regressions. The earlier post-merge full gate (`20261119T072637Z-551b7e55`)
+The closure full offline gate (`20261119T100602Z-ddebfe8e`,
+`--profile offline --min-tests 3000`, label `p2-closure-integrity-final-full`) passed:
+**3,775 ran, 3,733 executed, 42 classified skips, 0 failures, 0 errors,
+1,045.0 s**. The additional tests are the producer-bound acceptance and
+integrity regressions. The earlier post-merge full gate (`20261119T072637Z-551b7e55`)
 was 3,760 ran / 3,718 executed / 42 skipped / 0 failures in 1,318.3 s.
 
 Large evidence (case payloads, raw event stream, session export, efficiency

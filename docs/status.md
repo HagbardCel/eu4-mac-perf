@@ -102,9 +102,24 @@ case exactly (871,620 / max 103 / 94.2823% 1-LSB / 162 ≥8 at event 142; final
 `summarize` pass on the exact producer case. The minimal acceptance correction
 accepts producer-receipt-backed evidence for an **unbounded** observation while
 keeping the in-process verified report mandatory for a **bounded** interval.
-The closure offline gate (`20261119T092938Z-23b4e94b`) ran 3,763 tests, 3,721
-executed, 42 classified skips, 0 failures, 0 errors in 675.7 s.
-See [P2 closure pilot](../analysis/m7/p2-closure-pilot.md),
+The closure offline gate (`20261119T100602Z-ddebfe8e`) ran 3,775 tests, 3,733
+executed, 42 classified skips, 0 failures, 0 errors in 1,045.0 s.
+
+**Acceptance-integrity repair.** A verified producer receipt proved who
+produced the packaged replay, not that it completed. The standalone path now
+applies the shared
+`gfx_independent_replay.full_frame_completion_problems()` contract to
+`replay/replay.json` and rejects failed, partial, timed-out, partially encoded
+or unsuccessful Metal execution, invalid report execution, invalid checkpoint
+validation and fault-contaminated evidence. It also verifies the conclusion's
+first divergence against the authoritative report (same event, resource and
+sealed capture). A completed replay with genuine pixel divergence remains
+admissible; a bounded interval still requires in-process verified evidence. The
+preserved pilot was revalidated without a new session: `validate` and
+`summarize` both pass, the native calls are unchanged, and the conclusion
+remains `requires_additional_evidence` with event 142, the unbounded lower
+endpoint and the event-71 new-capture request. `tests.test_dsh_pilot` now has
+73 tests. See [P2 closure pilot](../analysis/m7/p2-closure-pilot.md),
 [P2 efficiency](../analysis/m7/p2-efficiency.md) and
 [evidence](../analysis/m7/p2-evidence.json).
 

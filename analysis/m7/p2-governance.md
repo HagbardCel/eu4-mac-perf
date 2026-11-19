@@ -63,6 +63,18 @@ repository documents was not effective for #212. The same pattern applies to
 #210 and #211: both merged with only `COMMENTED` reviews. The gap is therefore
 systemic in the M7 series, not a single accidental click.
 
+**Effective permissions (2026-11-19).** The repository is user-owned and has
+exactly one collaborator, the owner with `admin` permissions; there are no
+repository rulesets; auto-merge is disabled and merge/squash/rebase merges are
+enabled. With one required approval, `enforce_admins=true`, GitHub's rejection
+of self-approval, and no second human, the configured gate is **unsatisfiable
+by any legitimate actor**. A merge therefore requires an administrative bypass
+or a transient protection change, neither of which the API exposes. #212
+remains an unresolved governance incident. To prevent recurrence, add an
+independent reviewer/collaborator or move to an organisation ruleset with
+required reviewers and an empty bypass list; at minimum, record an explicit
+pre-merge override decision. Do not weaken protections or fabricate approvals.
+
 Do **not** disable or weaken protections to make future merges easier. The
 correct remediation is procedural and reviewable:
 

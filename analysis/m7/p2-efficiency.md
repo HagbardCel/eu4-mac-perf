@@ -230,6 +230,11 @@ is the end-to-end efficiency measurement that P2 previously lacked. The
 interface path remains a separate reduction in routine diagnostic bytes and
 shell work; it is not a substitute for the model-driven measurement.
 
+The C2 numbers above were revalidated after the acceptance-integrity repair
+(the packaged replay is now checked against the full-frame execution contract
+before standalone evidence is admitted); the session was not rerun and the
+reported counts are unchanged.
+
 C2's conclusion and independent reproduction are in
 [P2 closure pilot](p2-closure-pilot.md). Acceptance required a minimal
 `automation.dsh_pilot` correction because the producer-bound case has a
@@ -248,10 +253,10 @@ TR3 tests; QBDI remains non-mandatory. No EU4 process was started. The same gate
 is configured as the required `portable` check; GitHub Actions `portable` passed
 on head `5ec4fdc2` in 4m34s (run 44483074062). CI is not independent approval.
 
-The closure gate (`20261119T092938Z-23b4e94b`, same profile and floor) ran
-**3,763 tests, 3,721 executed, 42 skipped, 0 failures, 0 errors in 675.7 s**.
-The three additional tests are the producer-bound acceptance regressions in
-`tests.test_dsh_pilot`.
+The closure gate (`20261119T100602Z-ddebfe8e`, same profile and floor) ran
+**3,775 tests, 3,733 executed, 42 skipped, 0 failures, 0 errors in 1,045.0 s**.
+The additional tests are the producer-bound acceptance and integrity
+regressions in `tests.test_dsh_pilot`.
 
 ## Evidence
 
