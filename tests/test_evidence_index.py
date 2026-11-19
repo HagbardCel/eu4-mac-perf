@@ -120,6 +120,37 @@ class DiscoveryTests(unittest.TestCase):
         self.assertIn("direct", {row["session_id"] for row in value["sessions"]})
         self.assertTrue(str(direct).startswith(str(self.root)))
 
+    def test_published_case_locators_are_discoverable(self):
+        from automation import case_locator
+        from tests.test_case_locator import make_case
+
+        case = make_case(self.root / "published" / "case",
+                         session_id="session-locator", capture_frame_id=4)
+        published = case_locator.publish(case, self.root,
+                                         originating_run="run-7")
+        value = evidence_index.discover(configured_roots=str(self.root))
+        # Existing campaign rows and counts are unchanged.
+        self.assertEqual(value["counts"]["total"], 2)
+        self.assertEqual(value["locator_counts"]["total"], 1)
+        self.assertEqual(value["locator_counts"]["available"], 1)
+        row = value["case_locators"][0]
+        self.assertEqual(row["session_id"], "session-locator")
+        self.assertEqual(row["capture_frame_id"], 4)
+        self.assertEqual(row["seal_sha256"],
+                         published["identity"]["seal_sha256"])
+        self.assertEqual(row["originating_run"], "run-7")
+        self.assertEqual(row["state"], "available")
+        self.assertTrue(row["read_only"])
+        # A text query matches locator metadata too.
+        filtered = evidence_index.discover(
+            configured_roots=str(self.root), query="session-locator")
+        self.assertEqual(len(filtered["case_locators"]), 1)
+        # A classification filter is a campaign question, not a locator one.
+        filtered = evidence_index.discover(
+            configured_roots=str(self.root),
+            classification="rendering_difference")
+        self.assertEqual(filtered["case_locators"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
