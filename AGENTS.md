@@ -13,13 +13,16 @@ returns an already-running identical suite instead of launching a duplicate.
 
 1. **After a code change**, run the focused modules that exercise it:
    ```sh
-   python3 -m automation.test_runner run \
+   python3.14 -m automation.test_runner run --profile offline \
      --module tests.test_agent_tools --module tests.test_gfx_case
    ```
 2. **Once focused tests pass**, run the dependent modules they touch (the
    neighbouring suites named in the change or its plan).
-3. **Run the full suite once at the end**:
-   `python3 -m automation.test_runner run --label full`.
+3. **Run the full offline gate once at the end**:
+   `python3.14 -m automation.test_runner run --profile offline --label full`.
+   The offline profile is the default and cannot launch EU4. Live tests are
+   explicit: `--profile live --module <module>`, with a real case and bounded
+   timeout, and are never part of the default gate.
 4. **Compare failures against base** before claiming a regression:
    run the same focused modules in a base worktree (`--cwd`) and use
    `python3 -m automation.test_runner compare --base <id|record> --candidate <id|record>`.
@@ -27,8 +30,10 @@ returns an already-running identical suite instead of launching a duplicate.
 5. Inspect a running or finished invocation with
    `python3 -m automation.test_runner status --id <id>`; do not poll a log file.
 
-`python3 -m automation.python_runtime resolve` is the checked interpreter for
-the diagnostic core. If a native tool reports an interpreter or NumPy mismatch,
+`python3.14 -m automation.python_runtime resolve` is the checked interpreter
+for the diagnostic core. The profile split is enforced by
+`automation.test_profiles` and by the capture/launch entry points: an explicit
+`EU4_TEST_PROFILE=offline` (or `EU4_OFFLINE_ONLY=1`) refuses a real EU4 launch. If a native tool reports an interpreter or NumPy mismatch,
 fix `EU4_DSH_PYTHON` rather than running the tool again with another Python.
 
 ## Evidence discovery

@@ -166,6 +166,29 @@ def process_alive(pid: int) -> bool:
     return True
 
 
+def normalize_executable(path: str) -> str:
+    """Stable executable identity across a launcher-to-framework re-exec.
+
+    Homebrew/CPython launchers such as ``.../bin/python3.14`` exec the framework
+    binary at ``.../Resources/Python.app/Contents/MacOS/Python``.  The process
+    start time is unchanged, and both paths denote the same interpreter for
+    ownership purposes.
+    """
+    if not path:
+        return ""
+    try:
+        resolved = os.path.realpath(path)
+    except OSError:
+        return path
+    candidate = Path(resolved)
+    if candidate.name.startswith("python") and candidate.parent.name == "bin":
+        app = (candidate.parent.parent / "Resources" / "Python.app" /
+               "Contents" / "MacOS" / "Python")
+        if app.is_file():
+            return str(app.resolve())
+    return resolved
+
+
 @dataclass(frozen=True)
 class ProcessIdentity:
     pid: int
@@ -198,10 +221,17 @@ class ProcessIdentity:
         current = self.current()
         if current is None:
             return False
+        # proc_pidpath can transiently fail under heavy process load while the
+        # libproc start time remains available.  An unreadable executable path
+        # is not evidence of PID reuse; the stable start time still guards it.
+        executable_ok = (
+            not current.get("executable")
+            or normalize_executable(current["executable"])
+            == normalize_executable(self.executable))
         return (
             current["start_seconds"] == self.start_seconds
             and current["start_microseconds"] == self.start_microseconds
-            and current["executable"] == self.executable
+            and executable_ok
         )
 
     def as_dict(self) -> dict:
@@ -260,9 +290,28 @@ def terminate_owned(
     (``pgid == pid``).  Otherwise only the exact PID is signalled, so a caller
     can never take down an unrelated process that shares a group.
     """
-    if not identity.matches():
-        return Termination(identity.role, identity.pid, "identity_mismatch",
-                           reason="PID was reused or the executable changed; not signalled")
+    # A libproc / /proc read can fail transiently under load.  Retry briefly,
+    # but never signal when a readable identity definitively differs; a
+    # readable process that already exited needs no signal either.
+    matched = False
+    last_current = None
+    for _attempt in range(5):
+        if identity.matches():
+            matched = True
+            break
+        if process is not None and process.poll() is not None:
+            return Termination(identity.role, identity.pid, "already_exited",
+                               returncode=process.returncode)
+        last_current = identity.current()
+        if last_current is not None:
+            break
+        time.sleep(0.02)
+    if not matched:
+        return Termination(
+            identity.role, identity.pid, "identity_mismatch",
+            reason=(f"expected pid={identity.pid} start="
+                    f"{identity.start_seconds}.{identity.start_microseconds} "
+                    f"exe={identity.executable!r}; current={last_current!r}"))
     if process is not None and process.poll() is not None:
         return Termination(identity.role, identity.pid, "already_exited",
                            returncode=process.returncode)

@@ -2974,6 +2974,37 @@ def diagnose_frame(frame_dir: Path | str, metal_result_dir: Path | str,
     return report
 
 
+def full_frame_completion_problems(replay: dict) -> list[str]:
+    """Return why a replay result is not a complete full-frame execution.
+
+    This is the full-frame baseline contract: every captured event encoded,
+    no failures, a completed Metal command buffer, a real readback and no
+    partial/timeout mode.  Missing metadata is a problem, not an implicit pass.
+    """
+    problems: list[str] = []
+    if replay.get("status") != "ok":
+        problems.append(f"status is {replay.get('status')!r}")
+    if replay.get("stage") != "complete":
+        problems.append(f"stage is {replay.get('stage')!r}")
+    if replay.get("readback") is not True:
+        problems.append("readback is not true")
+    if replay.get("partial") is not False:
+        problems.append("partial is not false")
+    if replay.get("timed_out") is not False:
+        problems.append("timed_out is not false")
+    if replay.get("failed") != 0:
+        problems.append(f"failed is {replay.get('failed')!r}")
+    events = replay.get("events")
+    encoded = replay.get("encoded")
+    if type(events) is not int or type(encoded) is not int:
+        problems.append("encoded/events are not integers")
+    elif encoded != events:
+        problems.append(f"encoded {encoded} != events {events}")
+    if replay.get("command_status") != 4:
+        problems.append(f"command_status is {replay.get('command_status')!r}")
+    return problems
+
+
 def classify_replay(*, execution_ok: bool, coverage: str, semantic: str,
                     pixels: str, checkpoints: list[dict],
                     checkpoint_validation: dict, faults: dict | None,
@@ -3178,6 +3209,54 @@ def main(argv: list[str] | None = None) -> int:
     return qualification_exit_code(report)
 
 
+PRODUCER_RECEIPT_SCHEMA = "gfx-replay-producer-receipt/v1"
+def _sha256_file(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+
+
+def write_producer_receipt(out_dir: Path, frame_dir: Path,
+                           producer: dict, result_path: Path) -> dict:
+    """Bind a replay result to the exact executable and build that produced it."""
+    seal = _optional_json(frame_dir / "frame-seal.json") or {}
+    trace = _optional_json(frame_dir / "frame-trace.json") or {}
+    capture = capture_identity(seal, trace) or {}
+    replay = _optional_json(result_path) or {}
+    metal = out_dir / "metal-frame.bgra"
+    value = {
+        "schema": PRODUCER_RECEIPT_SCHEMA,
+        "producer": {
+            "executable": producer.get("executable"),
+            "executable_sha256": producer.get("executable_sha256"),
+            "build_fingerprint": producer.get("build_fingerprint"),
+            "build_stamp_sha256": producer.get("build_stamp_sha256"),
+        },
+        "capture": capture,
+        "result": {
+            "replay_json_sha256": _sha256_file(result_path),
+            "metal_frame_sha256": (_sha256_file(metal)
+                                   if metal.is_file() else None),
+            "status": replay.get("status"),
+            "stage": replay.get("stage"),
+            "readback": replay.get("readback"),
+            "events": replay.get("events"),
+            "encoded": replay.get("encoded"),
+            "failed": replay.get("failed"),
+            "command_status": replay.get("command_status"),
+        },
+    }
+    path = out_dir / "producer-receipt.json"
+    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    return value
+
+
 def replay(
     frame_dir: Path | str,
     out_dir: Path | str,
@@ -3196,8 +3275,12 @@ def replay(
     request = gfx_frame_graph.write_checkpoint_request(
         graph, out_dir / "checkpoint-request.json")
     host = m6_frame.build_replay_host()
+    try:
+        snapshot, producer = m6_frame.snapshot_replay_host(host)
+    except m6_frame.FrameError as exc:
+        raise ReplayError("producer_identity", str(exc)) from exc
     command = [
-        str(host), "--frame", str(frame_dir), "--shaders", str(shader_dir),
+        str(snapshot), "--frame", str(frame_dir), "--shaders", str(shader_dir),
         "--out", str(out_dir), "--checkpoints",
         str(out_dir / "checkpoint-request.json"),
     ]
@@ -3212,11 +3295,24 @@ def replay(
         if faults.get("sampler_shift_min") is not None:
             env["EU4_FRAME_REPLAY_SAMPLER_SHIFT_MIN"] = str(
                 faults["sampler_shift_min"])
-    ran = subprocess.run(
-        command, capture_output=True, text=True, check=False, env=env,
-        timeout=timeout,
-    )
+    try:
+        ran = subprocess.run(
+            command, capture_output=True, text=True, check=False, env=env,
+            timeout=timeout,
+        )
+    except BaseException:
+        try:
+            snapshot.unlink()
+        except FileNotFoundError:
+            pass
+        raise
     result_path = out_dir / "replay.json"
+    if result_path.is_file():
+        write_producer_receipt(out_dir, frame_dir, producer, result_path)
+    try:
+        snapshot.unlink()
+    except FileNotFoundError:
+        pass
     if ran.returncode != 0 or not result_path.is_file():
         diagnosis = analyse_frame(
             frame_dir, out_dir, policy, graph=graph, request=request,
@@ -3290,6 +3386,7 @@ def replay(
             "final_readback": str(out_dir / "metal-frame.bgra"),
             "checkpoint_request": str(out_dir / "checkpoint-request.json"),
             "diagnostic_report": str(out_dir / "replay-report.json"),
+            "producer_receipt": str(out_dir / "producer-receipt.json"),
         },
     }
     (out_dir / "replay-report.json").write_text(

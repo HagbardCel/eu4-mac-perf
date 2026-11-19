@@ -3,6 +3,110 @@
 Authoritative summary of what is established, qualified, and in flight.
 Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
 
+## M7-P2 — reliability, compact diagnostics and efficiency (2026-11-18)
+
+P0 (PR #210) and P1 (PR #211) are merged and are the accepted P2 base. P2 is
+[PR #212](https://github.com/HagbardCel/eu4-mac-perf/pull/212) on
+`m7/p2-infra-hardening` from merge `246d7e08`; its final head has not yet
+received the independent approval required before merge.
+
+**Test profiles.** `offline` is the default and cannot launch EU4: an explicit
+`EU4_TEST_PROFILE=offline` (or durable `EU4_OFFLINE_ONLY=1`) makes the
+`gfx_launch.spawn`, `eu4_gfx_startup_trace.run_ops` and `live_gfx probe`
+entry points refuse a real launch. `automation.test_runner run --profile
+offline` is the routine gate; `--profile live` requires an explicit module and
+a real case and is never selected implicitly. A mandatory offline manifest
+(`automation.test_profiles verify --profile offline`) names required module and
+test ids. The floor counts executed tests (`ran - skipped`), required test ids are
+executed (dynamic skips fail), and duplicate-run identity includes the profile
+and floor, so classified skips or a weaker in-flight run cannot satisfy a
+stricter request. CI runs the manifest and the complete
+offline discovery under the offline profile. `tests.test_live_qualification`
+is the classified live-only placeholder; it skips with a reason offline and,
+under the live profile, requires `EU4_LIVE_CASE` to pass `gfx_replay_case.verify()`
+and be independently reproducible. The TR3 tests that need the optional
+QBDI x86-64 release are classified skips with the missing-dependency reason,
+not environment failures; QBDI remains non-mandatory. The exact offline/live
+split is in [M7 test profiles](m7-test-profiles.md).
+
+**Failure handling.** Every `eu4-agent-tool/v2` result separates a completed
+comparison from operational failure: `execution_timeout`,
+`missing_credential`, `graphics_unavailable`, `dependency_unavailable`,
+`evidence_invalid`, `evidence_missing`, `policy_refusal`, `tool_failure`, or
+`null` for a usable comparison. Invalid evidence takes precedence over generic
+dependency wording; a shader/replay correctness failure is a tool failure, not
+a GPU-capability failure; and a nested invalid verification/diagnosis cannot
+appear qualified. Timeouts and exceptions cannot report `ok`. The test runner preserves
+its log and record after failure and reports `failure_kind`.
+
+**Compact diagnostics.** `eu4_case_inspect` and `eu4_replay verify` return a
+bounded `gfx-agent-case/v1` projection by default (case/capture identity,
+verification, axes, first divergence, checkpoint statistics, next checkpoint,
+artifact names/sizes, next action); `--full` restores the complete view.
+`eu4_case_inspect` is the preferred single routine read because it verifies
+internally; a separate `eu4_replay verify` is for explicit independent
+qualification or error investigation. The cap is 8,192 exact emitted UTF-8
+bytes; truncation is explicit and identity, verification, first divergence,
+unresolved interval, recommended checkpoint and artifact references are
+preserved. If those essential fields themselves cannot fit, the tool fails with
+a bounded `output_cap_exceeded` error instead of dropping them. Full reports
+stay on disk. `automation.case_baseline` records an identity only after
+`gfx_replay_case.verify()` passes (its single payload pass re-hashes every
+declared file), and the replay result is a complete full-frame execution: `stage=complete`,
+`status=ok`, `readback=true`, `partial=false`, `timed_out=false`, `failed=0`,
+`encoded==events` and Metal `command_status=4`, with a verified
+`producer-receipt.json` whose execution fields agree. The producer receipt
+binds the replay executable SHA-256, build fingerprint/stamp, capture identity
+and replay/readback digests; portable cases preserve it. The replay executes an
+immutable per-run snapshot of the validated host, so the receipt identifies the
+bytes actually launched even if a concurrent build replaces the shared output.
+A receipt without `replay.json` fails closed, and an external `--replay-dir`
+override is rejected. The identity also
+includes the shared renderer include closure (`eu4_gfx_replay_semantics.h` and
+peers), shaders, policy and platform; a matching fingerprint alone is not
+sufficient for reuse. Legacy cases without a producer receipt remain historical
+evidence and are rejected for reuse (`producer_identity_missing`). The replay
+host is compiled to a private temporary path, validated, atomically published
+and stamped with its binary digest under an exclusive lock; failed/timed-out
+builds leave no valid receipt.
+
+**Verified capabilities.** The historical P0 case (`m7-live-frame-000001`,
+seal `794c482d…`, session `a3111e0d…`) verifies offline but has no producer
+receipt; baseline reuse is correctly rejected as `producer_identity_missing`.
+One bounded offline replay of that capture produced `m7-p2-producer-bound-v5`,
+which verifies with `producer_identity=verified`. Compact inspection returns the
+unchanged first divergence at event 142 `fb:0` (program 331, producer 141),
+final 1,160,291 / 1,930,176 differing pixels (max 70), an unbounded lower bound,
+and the recommended event-71 checkpoint. The routine interface path is two
+native reads (`eu4_case_inspect` 8,003 bytes plus baseline reuse 1,760 bytes)
+with zero shell calls, zero new replays and a verified producer; this is an
+interface-level demonstration, not a replacement measurement for the P1 agent's
+80 calls. End-to-end P2 efficiency is **not yet measured** because no provider
+credential is available. The final offline gate (`20261119T072637Z-551b7e55`)
+ran 3,760 tests, 3,718 executed, 42 classified skips, 0 failures. The replay-host
+build and baseline identity share `automation.replay_host_dependencies`; the
+build is atomically published under a lock with a binary digest, a
+semantic-header edit rebuilds, a failed build removes its binary and stamp, and
+replay results carry a producer receipt binding executable, build, capture and
+readback digests. See [P2 efficiency](../analysis/m7/p2-efficiency.md)
+and [evidence](../analysis/m7/p2-evidence.json).
+
+**Offline vs live.** The offline gate covers portable Python/native-harness
+tests, case verification, graph/diagnosis and compact interfaces. It does not
+launch EU4, move the desktop, use BetterDisplay/Rosetta or require a live GPU
+capture. Live qualification is explicit, bounded and separate; it requires an
+already-captured case or an operator-authorized launch and retains diagnostics.
+
+**Remaining limits.** No new model-driven P2 session was run because no
+provider credential is available in this environment; only interface-level
+efficiency is measured. End-to-end efficiency remains unmeasured.
+`gl_dither` and `multisample` remain unsupported, the pre-event-142 causal
+interval is unresolved, and a multi-checkpoint same-frame capture remains the
+justified next instrumentation step. Branch protection and the independent
+final-head approval are tracked in the
+[P2 governance report](../analysis/m7/p2-governance.md); merge is blocked until
+both are satisfied.
+
 ## M7-P1 — autonomous differential-debugging pilot (2026-11-18)
 
 One real model-driven DSH session investigated the authentic M7-P0 event-142

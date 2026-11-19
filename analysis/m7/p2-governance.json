@@ -1,0 +1,28 @@
+{
+  "schema": "m7-p2-governance/v1",
+  "checked_utc": "2026-11-18T13:32:01.002045+00:00",
+  "repository": "HagbardCel/eu4-mac-perf",
+  "branch": "main",
+  "enforced": true,
+  "configuration": {
+    "required_status_checks": {
+      "strict": true,
+      "contexts": [
+        "portable"
+      ]
+    },
+    "enforce_admins": true,
+    "required_approving_review_count": 1,
+    "dismiss_stale_reviews": true,
+    "require_last_push_approval": true,
+    "required_conversation_resolution": true,
+    "allow_force_pushes": false,
+    "allow_deletions": false
+  },
+  "notes": [
+    "A fresh approval is required after a review-invalidating push because dismiss_stale_reviews and require_last_push_approval are enabled.",
+    "GitHub does not allow a pull request author to approve their own PR; the independent-review requirement therefore cannot be satisfied by self-approval.",
+    "The mandatory check is the existing 'portable' job from the 'Portable profiler correctness' workflow.",
+    "Unattended interactive EU4 execution remains outside CI: live qualification is a separate explicit test profile."
+  ]
+}

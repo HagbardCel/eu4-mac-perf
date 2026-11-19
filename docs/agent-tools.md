@@ -20,8 +20,11 @@ or offline case) is recorded in [current project status](status.md#artifact-owne
     "diagnostic_complete": true,
     "verdict": "different",
     "evidence": "valid",
-    "qualified": false
+    "qualified": false,
+    "failure_kind": null,
+    "failure_class": "comparison"
   },
+  "failure": {"kind": null, "class": "comparison", "detail": ""},
   "runtime": {
     "executable": "/absolute/python3.14",
     "configured": "/absolute/python3.14",
@@ -46,6 +49,15 @@ result, not a traceback.
 | `outcome.verdict` | `different`, `equal`, `unverified`, a GPU verdict, `null` | the comparison/rendering conclusion, if any |
 | `outcome.evidence` | `valid`, `invalid`, `unverified`, `null` | is the evidence the operation used trustworthy? |
 | `outcome.qualified` | `true`, `false`, `null` | the separate qualification outcome |
+| `outcome.failure_kind` | `null`, `execution_timeout`, `missing_credential`, `graphics_unavailable`, `dependency_unavailable`, `evidence_invalid`, `evidence_missing`, `policy_refusal`, `tool_failure` | the operational failure class, separate from a comparison difference |
+
+A completed comparison that finds different pixels has no `failure_kind`; a
+timeout, missing credential, unavailable graphics capability, missing
+dependency, invalid evidence and genuine mismatch are distinct outcomes. A
+shader or replay correctness failure is a tool failure, not a GPU-capability
+failure, and invalid evidence wins over generic dependency wording. A nested
+invalid verification/diagnosis downgrades the envelope. No failure class can be
+promoted to a successful qualification.
 
 `ok` is true only when execution succeeded and the diagnostic is complete or
 explicitly bounded (`partial`). Consequences:
@@ -223,6 +235,55 @@ identities and outcomes and never auto-selects one. The compact result contains:
 
 `--temporal` adds the reusable consecutive/cross-process frame diagnostics
 described below. `--full` restores the raw recorded comparison and first pair.
+
+### Compact case inspection and verification
+
+`eu4_case_inspect` and `eu4_replay verify` return a bounded
+`gfx-agent-case/v1` projection by default. It carries the case and capture
+identity, verification status, qualification axes, first divergence, selected
+checkpoint statistics, the next recommended checkpoint, artifact names/sizes
+and the next action. The full manifest, dependency graph, command stream and
+diagnostic report stay on disk. The projection is capped at 8,192 emitted bytes
+and reports `truncated`, `output_cap_bytes`, `output_bytes_before_cap` and
+`truncated_fields` when the cap is reached. If the essential identity,
+verification, first-divergence, interval or checkpoint fields cannot fit, the
+tool returns an explicit bounded `output_cap_exceeded` error instead of
+dropping them. The cap is measured on the exact
+emitted UTF-8 bytes (including the trailing newline), not JSON character
+counts. Essential identity, verification, first-divergence, unresolved-interval,
+recommended-checkpoint and artifact references are never removed. Pass
+`--full` only when a specific missing field requires the complete report view.
+
+```sh
+python3 -m automation.agent_tools eu4_case_inspect --case <case>
+python3 -m automation.agent_tools eu4_case_inspect --case <case> --full
+python3 -m automation.agent_tools eu4_replay verify --case <case>
+```
+
+### Baseline reuse
+
+`automation.case_baseline` records one identity for an existing case only after
+`gfx_replay_case.verify()` passes (its single payload pass re-hashes every
+declared file from disk), the replay result/readback is complete with
+`stage=complete`, and `replay/producer-receipt.json` binds the executable/build
+that produced the readback. Reuse is bound to the verified packaged `replay/`
+directory; an external `--replay-dir` is rejected. Legacy cases without a
+producer receipt remain historical evidence but are rejected for reuse. The identity covers the frame
+seal, diagnostic report, graph, replay result/readback, translated shader
+inputs, the renderer include closure (including `eu4_gfx_replay_semantics.h`),
+the replay binary/source, comparison policy and platform. It is not a result
+cache: a mismatch or an unverified current case forces a recomputation.
+
+```sh
+python3 -m automation.case_baseline record --case <case> --baseline <out>.json
+python3 -m automation.case_baseline check --case <case> --baseline <out>.json
+```
+
+### Test profiles
+
+Routine tools run under the offline profile; see
+[M7 offline and live test profiles](m7-test-profiles.md) for the gate, the
+launch guards and the explicit live opt-in.
 
 ### `eu4_replay`
 

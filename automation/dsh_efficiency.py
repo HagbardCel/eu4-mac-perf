@@ -470,7 +470,7 @@ def analyze(
     total_tokens = tokens["totalTokens"] or (input_tokens + cache_read + tokens["outputTokens"])
     goal_operations = [row["operation"] for row in goal_events]
     last_goal = goal_events[-1] if goal_events else None
-    return {
+    value = {
         "schema": SCHEMA,
         "session": session,
         "window": {
@@ -576,6 +576,96 @@ def analyze(
                 else turn_end_reasons[-1] if turn_end_reasons
                 else last_goal["phase"] if last_goal else "unknown"),
         },
+    }
+    value["summary"] = execution_summary(value)
+    return value
+
+
+def execution_summary(value: dict) -> dict:
+    """Compact P2 execution table derived from the existing measurement.
+
+    Values that the session export cannot support (for example GL-versus-Metal
+    replay counts or GPU checkpoint overhead) are explicit ``None`` with the
+    reason, never a measured-looking zero.  Token telemetry is deliberately
+    excluded from the summary until its measurement method is validated.
+    """
+    calls = value.get("calls") or {}
+    by_tool = calls.get("by_tool") or {}
+    try:
+        from automation.agent_tools import TOOLS as _native
+
+        native_names = set(_native)
+    except Exception:  # noqa: BLE001 - the metric is still usable
+        native_names = {
+            "eu4_re_query", "eu4_session", "eu4_capture", "eu4_diff_run",
+            "eu4_diff_inspect", "eu4_replay", "eu4_case_inspect",
+        }
+    native_calls = sum(count for name, count in by_tool.items()
+                       if name in native_names)
+    shell_calls = by_tool.get("bash", 0)
+    tests = value.get("tests") or {}
+    launches = value.get("eu4_launches") or {}
+    output = value.get("output") or {}
+    goal = value.get("goal") or {}
+    failures = calls.get("failed") or 0
+    launch_count = launches.get("count")
+    if launch_count is None:
+        outcome = "unknown"
+    elif launch_count:
+        outcome = "launch_attempt"
+    elif failures:
+        outcome = "blocked" if goal.get("terminal") else "failed_tool_calls"
+    elif goal.get("outcome") == "complete":
+        outcome = "diagnosis_or_correction"
+    elif goal.get("outcome") == "blocked":
+        outcome = "blocked"
+    elif goal.get("outcome") == "active":
+        outcome = "in_progress"
+    else:
+        outcome = str(goal.get("outcome") or "unknown")
+    return {
+        "schema": "dsh-execution-summary/v1",
+        "tool_calls": {
+            "total": calls.get("total"),
+            "native": native_calls,
+            "shell": shell_calls,
+            "by_tool": dict(sorted(by_tool.items())),
+        },
+        "execution": {
+            "wall_seconds": (value.get("window") or {}).get("elapsed_seconds"),
+            "turns": (value.get("window") or {}).get("turns"),
+            "model_calls": (value.get("window") or {}).get("model_calls"),
+        },
+        "eu4_launches": launch_count,
+        "replays": {
+            "total_tool_invocations": by_tool.get("eu4_replay", 0),
+            "gl": None,
+            "metal": None,
+            "note": "per-backend replay counts need a run-event field; the "
+                    "tool invocation count is reported instead",
+        },
+        "tests": {
+            "executions": tests.get("test_invocations"),
+            "repetitions": tests.get("duplicate_invocations"),
+            "skips": tests.get("skipped", None),
+            "failures": tests.get("failures", None),
+            "note": "skips/failures are not carried in the session export; "
+                    "read the preserved test-run record for those counts",
+        },
+        "diagnostics": {
+            "returned_chars": output.get("total_chars"),
+            "oversized_results": output.get("oversized_count"),
+            "truncated_results": output.get("truncated_count"),
+            "artifact_bytes": None,
+            "note": "artifact sizes are recorded on disk, not in the export",
+        },
+        "gpu_work": {
+            "checkpoint_readbacks": None,
+            "measured_overhead_seconds": None,
+            "note": "checkpoint and readback cost is in the replay report",
+        },
+        "outcome": outcome,
+        "token_telemetry": "excluded until the measurement method is validated",
     }
 
 

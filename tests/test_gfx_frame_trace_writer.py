@@ -467,6 +467,40 @@ class FrameTraceWriterTests(unittest.TestCase):
             self.assertIn("443", lifecycle_seen)
             self.assertFalse((directory / "frame-000004").exists())
 
+    def test_capture_ids_are_monotonic_and_disambiguated_across_sessions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = root / "campaign-a"
+            second = root / "campaign-b"
+            self._run("continuous", first, 3, 64 * 1024 * 1024)
+            self._run("continuous", second, 1, 64 * 1024 * 1024)
+            seals = []
+            for directory in (first, second):
+                rows = []
+                for path in sorted(directory.glob("frame-*")):
+                    seal = json.loads((path / "frame-seal.json").read_text())
+                    rows.append(seal)
+                seals.append(rows)
+            self.assertEqual([row["capture_frame_id"] for row in seals[0]],
+                             [1, 2, 3])
+            self.assertEqual([row["capture_frame_id"] for row in seals[1]],
+                             [1])
+            # A new process is a new session even when its first capture id is
+            # again 1.  Identity is the tuple, never the frame id alone.
+            self.assertNotEqual(seals[0][0]["session_id"],
+                                seals[1][0]["session_id"])
+            # The synthetic workload is deterministic, so the event-stream
+            # digest may legitimately repeat.  The session id is what
+            # disambiguates two captures with the same frame id.
+            self.assertEqual(seals[0][0]["event_stream_sha256"],
+                             seals[1][0]["event_stream_sha256"])
+            self.assertGreater(seals[0][1]["capture_frame_id"],
+                               seals[0][0]["capture_frame_id"])
+            self.assertEqual(
+                json.loads((first / "frame-000002" /
+                            "frame-sequence.json").read_text())["previous"]
+                ["capture_frame_id"], 1)
+
     def _sequence(self, directory: Path, index: int) -> dict:
         return json.loads(
             (directory / f"frame-{index:06d}" / "frame-sequence.json").read_text())

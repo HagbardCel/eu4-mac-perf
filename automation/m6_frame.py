@@ -17,6 +17,7 @@ provenance belong in tracked evidence.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -24,8 +25,13 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
+import threading
 import time
+import uuid
 from pathlib import Path
+
+from automation import replay_host_dependencies  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "benchmark"
@@ -994,40 +1000,170 @@ REPLAY_HOST_CLI_SOURCE = BENCH / "eu4_gfx_frame_replay_cli.mm"
 REPLAY_HOST = BENCH / ".build" / "gfx_frame_replay"
 
 
+_REPLAY_BUILD_THREAD_LOCK = threading.Lock()
+
+
+def _replay_host_stamp() -> Path:
+    return Path(str(REPLAY_HOST) + ".deps.json")
+
+
+def _replay_host_lock() -> Path:
+    return Path(str(REPLAY_HOST) + ".build.lock")
+
+
+def _replay_stamp_matches(stamp: Path, identity: dict, host: Path) -> bool:
+    if not host.is_file() or not stamp.is_file():
+        return False
+    try:
+        recorded = json.loads(stamp.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    if recorded.get("fingerprint") != identity["fingerprint"]:
+        return False
+    return recorded.get("binary_sha256") == _sha256(host)
+
+
+def replay_host_producer(host: Path | str | None = None) -> dict:
+    """Identity of the binary that produced a replay result."""
+    host = Path(host) if host is not None else REPLAY_HOST
+    stamp = Path(str(host) + ".deps.json")
+    identity = replay_host_dependencies.build_identity(
+        root=ROOT, sources=(REPLAY_HOST_SOURCE, REPLAY_HOST_CLI_SOURCE))
+    if not _replay_stamp_matches(stamp, identity, host):
+        raise FrameError(
+            "replay host build receipt does not match the current binary and "
+            "dependency closure")
+    return {
+        "schema": "gfx-replay-producer/v1",
+        "executable": str(host),
+        "executable_sha256": _sha256(host),
+        "build_fingerprint": identity["fingerprint"],
+        "build_stamp_sha256": _sha256(stamp),
+        "build_dependencies": identity["dependencies"],
+    }
+
+
+def snapshot_replay_host(host: Path | str | None = None,
+                        *, attempts: int = 3) -> tuple[Path, dict]:
+    """Create an immutable per-run executable snapshot of the replay host.
+
+    The producer identity is read first, the bytes are copied, and the copy is
+    hashed.  If a concurrent build replaced the shared host between those
+    steps, the snapshot digest will not match the identity and the operation
+    retries.  The returned receipt describes the snapshot that will actually be
+    executed, not merely the shared path.
+    """
+    host = Path(host) if host is not None else REPLAY_HOST
+    for _attempt in range(max(1, attempts)):
+        producer = replay_host_producer(host)
+        descriptor, name = tempfile.mkstemp(prefix="gfx-frame-replay-host.")
+        os.close(descriptor)
+        snapshot = Path(name)
+        try:
+            shutil.copyfile(host, snapshot)
+            os.chmod(snapshot, host.stat().st_mode & 0o777)
+            digest = _sha256(snapshot)
+            if digest != producer.get("executable_sha256"):
+                snapshot.unlink()
+                continue
+            value = dict(producer)
+            value["executable"] = str(snapshot)
+            value["executable_sha256"] = digest
+            return snapshot, value
+        except BaseException:
+            try:
+                snapshot.unlink()
+            except FileNotFoundError:
+                pass
+            raise
+    raise FrameError(
+        "replay host changed repeatedly while creating the per-run snapshot")
+
+
 def build_replay_host(force: bool = False) -> Path:
-    dependencies = [REPLAY_HOST_SOURCE, REPLAY_HOST_CLI_SOURCE, Path(__file__)]
-    if not force and REPLAY_HOST.is_file():
-        newest = max(path.stat().st_mtime for path in dependencies if path.is_file())
-        if REPLAY_HOST.stat().st_mtime >= newest:
-            return REPLAY_HOST
+    """Build and publish the replay host under a narrow exclusive lock.
+
+    Publication is atomic: clang writes a private temporary file, the file is
+    validated, and only then is it renamed over the published path.  A stamp
+    containing the source/build fingerprint and compiled-binary digest is
+    written after publication; a failed, timed-out or interrupted build leaves
+    neither a stamp nor a binary that could be mistaken for current evidence.
+    """
+    with _REPLAY_BUILD_THREAD_LOCK:
+        lock_path = _replay_host_lock()
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                return _build_replay_host_locked(force=force)
+            finally:
+                try:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+
+
+def _build_replay_host_locked(force: bool = False) -> Path:
+    sources = (REPLAY_HOST_SOURCE, REPLAY_HOST_CLI_SOURCE)
+    identity = replay_host_dependencies.build_identity(
+        root=ROOT, sources=sources)
+    stamp = _replay_host_stamp()
+    if not force and _replay_stamp_matches(stamp, identity, REPLAY_HOST):
+        return REPLAY_HOST
     REPLAY_HOST.parent.mkdir(parents=True, exist_ok=True)
-    built = subprocess.run(
-        [
-            "clang",
-            "-arch",
-            "arm64",
-            "-O2",
-            "-Wall",
-            "-Wextra",
-            "-fobjc-arc",
-            "-lc++",
-            "-framework",
-            "Foundation",
-            "-framework",
-            "Metal",
-            "-o",
-            str(REPLAY_HOST),
-            str(REPLAY_HOST_SOURCE),
-            str(REPLAY_HOST_CLI_SOURCE),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=180,
-    )
-    if built.returncode:
-        raise FrameError(built.stderr.strip() or "frame replay host build failed")
-    return REPLAY_HOST
+    # Invalidate the previous receipt before compiling so no previous success
+    # can be mistaken for the result of this build.
+    try:
+        stamp.unlink()
+    except FileNotFoundError:
+        pass
+    temporary = REPLAY_HOST.with_name(
+        f".{REPLAY_HOST.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
+    try:
+        built = subprocess.run(
+            replay_host_dependencies.build_command(temporary, sources),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=180,
+        )
+        if built.returncode:
+            raise FrameError(
+                built.stderr.strip() or "frame replay host build failed")
+        if not temporary.is_file() or temporary.stat().st_size == 0:
+            raise FrameError("frame replay host build produced no binary")
+        binary_sha = _sha256(temporary)
+        if not binary_sha:
+            raise FrameError("frame replay host build produced an unreadable binary")
+        os.replace(temporary, REPLAY_HOST)
+        payload = {
+            "schema": "gfx-replay-host-build/v1",
+            "fingerprint": identity["fingerprint"],
+            "binary_sha256": binary_sha,
+            "dependencies": identity["dependencies"],
+            "compiler": identity["compiler"],
+            "flags": identity["flags"],
+            "environment": identity["environment"],
+        }
+        stamp_tmp = stamp.with_name(stamp.name + f".tmp-{os.getpid()}-{uuid.uuid4().hex}")
+        stamp_tmp.write_text(json.dumps(payload, indent=2) + "\n",
+                             encoding="utf-8")
+        os.replace(stamp_tmp, stamp)
+        return REPLAY_HOST
+    except subprocess.TimeoutExpired as exc:
+        _discard_build_outputs(temporary, stamp, REPLAY_HOST)
+        raise FrameError("frame replay host build timed out") from exc
+    except BaseException:
+        _discard_build_outputs(temporary, stamp, REPLAY_HOST)
+        raise
+
+
+def _discard_build_outputs(temporary: Path, stamp: Path, host: Path) -> None:
+    for path in (temporary, stamp, host):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _translator_identity() -> dict:
