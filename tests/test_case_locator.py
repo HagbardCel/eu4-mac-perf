@@ -15,49 +15,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from automation import case_locator, gfx_replay_case  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from case_locator_fixtures import make_case  # noqa: E402
 
 
 def _sha(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
-
-
-def make_case(root: Path, *, case_id: str = "synthetic",
-              session_id: str = "session-1",
-              capture_frame_id: int = 7,
-              report_status: str = "partial") -> Path:
-    root.mkdir(parents=True)
-    (root / "capture").mkdir()
-    (root / "shaders").mkdir()
-    (root / "capture" / "frame-trace.json").write_text(
-        json.dumps({"schema": "gfx-frame-trace/v1", "complete": True}))
-    (root / "capture" / "frame-events.jsonl").write_text("")
-    (root / "capture" / "frame-seal.json").write_text(json.dumps({
-        "schema": "gfx-frame-seal/v1", "sealed": True, "complete": True,
-        "session_id": session_id,
-        "capture_frame_id": capture_frame_id,
-        "event_stream_sha256": _sha(b"events"),
-        "reference_sha256": _sha(b"reference"),
-    }))
-    (root / "shaders" / "shaders.json").write_text("{}")
-    (root / "report.json").write_text(json.dumps({"status": report_status}))
-    (root / "graph.json").write_text(json.dumps({"status": "partial"}))
-    files = []
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
-            continue
-        payload = path.read_bytes()
-        files.append({
-            "path": path.relative_to(root).as_posix(),
-            "bytes": len(payload),
-            "sha256": _sha(payload),
-        })
-    (root / "case.json").write_text(json.dumps({
-        "schema": gfx_replay_case.SCHEMA,
-        "case_id": case_id,
-        "files": files,
-        "replay_status": "partial",
-    }))
-    return root
 
 
 class CaseLocatorTests(unittest.TestCase):

@@ -122,7 +122,9 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_published_case_locators_are_discoverable(self):
         from automation import case_locator
-        from tests.test_case_locator import make_case
+
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from case_locator_fixtures import make_case
 
         case = make_case(self.root / "published" / "case",
                          session_id="session-locator", capture_frame_id=4)
