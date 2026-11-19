@@ -228,3 +228,28 @@ class WorkspaceBaseTests(unittest.TestCase):
             with self.assertRaises(SidecarError) as caught:
                 load_sidecar(path)
         self.assertIn("workspace_base", str(caught.exception))
+
+
+class LauncherSmokeCompatibilityTests(unittest.TestCase):
+    """Both public smoke profiles select one canonical source campaign."""
+
+    def test_both_sidecars_resolve_the_same_source_and_objective(self) -> None:
+        from automation.dsh_campaign import load_sidecar
+
+        sidecars = {
+            name: load_sidecar(REPO / "dsh" / "campaigns" / f"{name}.json")
+            for name in ("m7-launcher-smoke", "multiround-smoke")
+        }
+        first, second = sidecars.values()
+        canonical = REPO / "dsh" / "campaigns" / "multiround" / "campaign.json"
+        self.assertEqual(first.source_campaign, canonical)
+        self.assertEqual(second.source_campaign, canonical)
+        self.assertEqual(first.objective_digest, second.objective_digest)
+        self.assertEqual(first.source_campaign_sha256,
+                         second.source_campaign_sha256)
+        self.assertEqual(first.checker, second.checker)
+        self.assertFalse(first.live_capture_enabled)
+        self.assertFalse(second.live_capture_enabled)
+        # The sidecar identities and run roots stay distinct.
+        self.assertNotEqual(first.campaign_id, second.campaign_id)
+        self.assertNotEqual(first.run_root, second.run_root)
