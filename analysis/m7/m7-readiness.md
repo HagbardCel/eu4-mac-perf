@@ -15,11 +15,31 @@ remains open and the next evidence request is recorded below.
 | --- | --- | --- |
 | #214 Multi-checkpoint capture | `0068127` | Bounded `fb:0` checkpoints per frame, budgets, causal localization |
 | #215 Independent correction acceptance | `a3bca8a` | Artifact-recomputed acceptance, mandatory regression inventory, readback/revision binding |
-| #216 Campaign resource guard | `df16667` | Atomic reservations, launch-boundary validation, fail-closed recovery, correction accounting |
+| #216 Campaign resource guard | `df16667` | Atomic reservations, one-use launch claims, fail-closed recovery, correction accounting |
 | #217 Native blob verifier | `8943bcd` | Size-unknown repeated blob references in the sealed event stream |
 | #218 This report | this head | Final evidence and closure |
 
-`main` after the merges: `8943bcdd`.
+`main` after the merges: `8943bcdd`; after the #218 documentation merge:
+`cecc727c`.
+
+## Post-completion hardening (2026-11-19)
+
+Two residual correctness issues were closed on a focused branch without
+reopening the renderer or repeating the pilot:
+
+- **One-use launch reservations.** An open reservation is a read-only preflight;
+  each physical spawn site (`run`, `run_ops`, `gfx_launch.spawn`) atomically
+  claims the reservation's `eu4_launches` entitlement immediately before
+  `subprocess.Popen`. A second or concurrent claim is refused, stopped/expired
+  campaigns are rechecked, and a failed spawn keeps the consumed allowance.
+- **Fail-closed checker accounting.** `validations.jsonl` now carries a durable
+  attempt lifecycle (start before the checker, terminal result after it, distinct
+  attempt IDs). Interrupted and exceptional attempts count against
+  `max_validations`; finalization's fresh run and frozen-candidate replay are
+  charged too; the administrative `checker-compat` probe is not.
+
+This hardening is verified offline. It does not alter the pilot evidence, the
+controlled two-round correction, or the `[14, 17]` localization.
 
 Portable CI passed on every merged head (`ea554cae`, `01b3b60b`, `3800f883`,
 `c1ea34ab` and their branch-update heads). Focused macOS suites passed; the
@@ -132,3 +152,6 @@ its own interval.
   demonstrated in the running Web session.
 - The controlled correction is evidence for the autonomous loop, not a repair of
   the authentic defect.
+- The one-use claim and checker-attempt lifecycle are qualified by focused and
+  offline tests; no additional live EU4 launch was performed to re-demonstrate
+  them, and the recorded pilot remains the authoritative live evidence.

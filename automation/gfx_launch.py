@@ -221,8 +221,10 @@ def spawn(role: str, config: LaunchConfig, run_dir: Path, *, lease: launch_lease
         test_profiles.ensure_live_launch("gfx_launch.spawn")
     except test_profiles.LiveProfileError as exc:
         raise LaunchError("test_profile", str(exc)) from exc
+    guard = campaign_guard.from_env()
     try:
-        campaign_guard.require_launch_reservation(campaign_reservation)
+        campaign_guard.require_launch_reservation(campaign_reservation,
+                                                  guard=guard)
     except campaign_guard.CampaignRefusal as exc:
         raise LaunchError("campaign_refused", str(exc)) from exc
     if backend is None:
@@ -253,6 +255,14 @@ def spawn(role: str, config: LaunchConfig, run_dir: Path, *, lease: launch_lease
     stderr = (run_dir / "game.stderr").open("wb")
     argv = ["./eu4", *config.args]
     try:
+        # Consume the one-use entitlement after preparation and immediately
+        # before the process exists.  A failed claim means no process at all.
+        try:
+            campaign_guard.claim_launch_reservation(
+                campaign_reservation, guard=guard,
+                evidence={"run_dir": str(run_dir), "role": role})
+        except campaign_guard.CampaignRefusal as exc:
+            raise LaunchError("campaign_refused", str(exc)) from exc
         process = subprocess.Popen(
             argv,
             cwd=config.executable.parent,
