@@ -150,6 +150,15 @@ def _current_producer() -> dict:
     }
 
 
+def current_producer() -> dict:
+    """Identity of the candidate replay host that should produce a result.
+
+    Public entry point for consumers (correction acceptance) that must bind a
+    candidate artifact to the build it claims to come from.
+    """
+    return _current_producer()
+
+
 def _verify_case(case_dir: Path) -> dict:
     """Run the single authoritative verifier, including payload hashing.
 

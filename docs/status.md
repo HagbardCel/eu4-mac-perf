@@ -3,6 +3,41 @@
 Authoritative summary of what is established, qualified, and in flight.
 Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
 
+## M7 PR 2 — independent correction acceptance (2026-11-19)
+
+`automation/correction_accept.py` turns a `correction_proposed` conclusion into
+an evidence decision. It requires the verified sealed case, the recorded
+baseline, a candidate revision and the candidate replay output; it then
+recomputes before/after pixels with the existing `m6_compare` engine and
+reconciles checkpoints with the existing request/response machinery. It never
+reuses the baseline's recorded statistics once the renderer build or dependency
+closure changed, and it rejects:
+
+- claimed statistics that disagree with the recomputed values;
+- a candidate replay that is not a complete full-frame execution, even when its
+  checkpoint files look valid;
+- a candidate whose producer receipt does not match the current replay build,
+  or that has no receipt at all;
+- a candidate capture/reference that is not the case's sealed capture;
+- an unchanged candidate revision, or a substituted candidate artifact;
+- a previously exact-matching regression that no longer recomputes to zero.
+
+`pixel_perfect` is reported only for zero mismatched pixels and zero maximum
+channel error under complete qualification (verified replay identity, complete
+execution, clean checkpoint reconciliation and complete state coverage). An
+accepted partial improvement is explicitly not equivalence.
+
+`dsh_pilot.summarize` now runs the checker when a correction is proposed and
+requires an accepted report; a valid `correction_proposed` conclusion alone is
+no longer accepted. The standalone-report path uses a strict status allowlist
+and requires `outcome.execution == "ok"` explicitly.
+
+Offline verification is `tests.test_correction_accept` (controlled one-pixel
+fault corrected and accepted; adversarial fabricated/substituted/stale/failed/
+foreign/regression cases) plus the pilot and case-baseline suites. **Not yet
+established:** an authentic renderer correction through this path, and
+independent final-head review. The event-142 producer remains unknown.
+
 ## M7 PR 1 — multi-checkpoint same-frame capture (2026-11-19)
 
 The selected-event `fb:0` checkpoint mechanism now accepts a bounded ordered

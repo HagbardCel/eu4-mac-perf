@@ -7,8 +7,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from automation import dsh_pilot
+from automation import correction_accept, dsh_pilot
 
 FRAME = {
     "session_id": "a3111e0d-9b76-4b23-910d-38bd48c9aa93",
@@ -132,6 +133,23 @@ def correction_conclusion(interval_value):
     return value
 
 
+def acceptance_report():
+    """Minimal independent acceptance for a corrected conclusion fixture."""
+    return {
+        "schema": "gfx-correction-acceptance/v1",
+        "result": "accepted",
+        "pixel_perfect": False,
+        "improved": True,
+        "complete_qualification": False,
+        "case": {"capture": dict(FRAME)},
+        "before": {"statistics": {"mismatched_pixels": 100,
+                                  "max_channel_error": 4}},
+        "after": {"statistics": {"mismatched_pixels": 10,
+                                 "max_channel_error": 2}},
+        "problems": [],
+    }
+
+
 def problem_codes(result):
     return {item["code"] for item in result["problems"]}
 
@@ -246,10 +264,51 @@ class PilotConclusionTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("correction_files", problem_codes(result))
 
-    def test_valid_bounded_interval_supports_a_correction(self):
+    def test_correction_without_independent_acceptance_is_rejected(self):
         result = dsh_pilot.validate_conclusion(
             correction_conclusion(interval()),
             authoritative=authoritative_evidence())
+        self.assertFalse(result["ok"])
+        self.assertIn("correction_unverified", problem_codes(result))
+
+    def test_non_accepted_acceptance_is_rejected(self):
+        acceptance = acceptance_report()
+        acceptance["result"] = "rejected"
+        acceptance["problems"] = [{"code": "claim_disagrees",
+                                   "detail": "recomputed differs"}]
+        result = dsh_pilot.validate_conclusion(
+            correction_conclusion(interval()),
+            authoritative=authoritative_evidence(),
+            correction_acceptance=acceptance)
+        self.assertFalse(result["ok"])
+        self.assertIn("correction_not_accepted", problem_codes(result))
+
+    def test_acceptance_claim_mismatch_is_rejected(self):
+        acceptance = acceptance_report()
+        acceptance["after"] = {"statistics": {
+            "mismatched_pixels": 5, "max_channel_error": 2}}
+        result = dsh_pilot.validate_conclusion(
+            correction_conclusion(interval()),
+            authoritative=authoritative_evidence(),
+            correction_acceptance=acceptance)
+        self.assertFalse(result["ok"])
+        self.assertIn("correction_claim_mismatch", problem_codes(result))
+
+    def test_acceptance_from_another_capture_is_rejected(self):
+        acceptance = acceptance_report()
+        acceptance["case"] = {"capture": dict(OTHER_FRAME)}
+        result = dsh_pilot.validate_conclusion(
+            correction_conclusion(interval()),
+            authoritative=authoritative_evidence(),
+            correction_acceptance=acceptance)
+        self.assertFalse(result["ok"])
+        self.assertIn("correction_capture_mismatch", problem_codes(result))
+
+    def test_valid_bounded_interval_supports_a_correction(self):
+        result = dsh_pilot.validate_conclusion(
+            correction_conclusion(interval()),
+            authoritative=authoritative_evidence(),
+            correction_acceptance=acceptance_report())
         self.assertTrue(result["ok"], result)
 
     def test_texture_match_cannot_bound_a_framebuffer_divergence(self):
@@ -625,6 +684,46 @@ class PilotSummaryTests(unittest.TestCase):
             self.run, self.conclusion_path,
             case if case is not None else self.case,
             case_receipt_path=self.receipt_path if receipt else None)
+
+    def test_correction_acceptance_is_attached_from_artifact_inputs(self):
+        self.write_case()
+        digests = self.refresh_binding()
+        value = correction_conclusion(interval())
+        value["case"]["case_manifest_sha256"] = digests["case_manifest_sha256"]
+        value["case"]["seal_sha256"] = digests["seal_sha256"]
+        self.conclusion_path.write_text(json.dumps(value), encoding="utf-8")
+        self.write_run()
+        with mock.patch.object(correction_accept, "evaluate",
+                               return_value=acceptance_report()) as evaluate:
+            result = dsh_pilot.summarize_run(
+                self.run, self.conclusion_path, self.case,
+                case_receipt_path=self.receipt_path,
+                correction_baseline=self.root / "baseline.json",
+                correction_after_replay=self.root / "after",
+                correction_candidate_revision="candidate-rev",
+                correction_baseline_revision="baseline-rev",
+                correction_regressions=[self.root / "regression"])
+        self.assertEqual(result["correction_acceptance"]["result"],
+                         "accepted")
+        kwargs = evaluate.call_args.kwargs
+        self.assertEqual(Path(kwargs["case_dir"]), self.case)
+        self.assertEqual(kwargs["candidate_revision"], "candidate-rev")
+        self.assertEqual(kwargs["baseline_revision"], "baseline-rev")
+        self.assertEqual(len(kwargs["regressions"]), 1)
+
+    def test_correction_without_acceptance_inputs_is_unverified(self):
+        self.write_case()
+        digests = self.refresh_binding()
+        value = correction_conclusion(interval())
+        value["case"]["case_manifest_sha256"] = digests["case_manifest_sha256"]
+        value["case"]["seal_sha256"] = digests["seal_sha256"]
+        self.conclusion_path.write_text(json.dumps(value), encoding="utf-8")
+        self.write_run()
+        result = dsh_pilot.summarize_run(
+            self.run, self.conclusion_path, self.case,
+            case_receipt_path=self.receipt_path)
+        self.assertFalse(result["ok"])
+        self.assertIn("correction_unverified", problem_codes(result))
 
     def test_complete_run_summarizes_with_verified_case_receipt(self):
         self.write_run()
@@ -1016,6 +1115,26 @@ class PilotSummaryTests(unittest.TestCase):
     def test_invalid_report_execution_is_rejected(self):
         def mutate(report):
             report["diagnosis"]["execution"]["status"] = "failed"
+        result = self.producer_bound_summary(report_mutator=mutate)
+        self.assertFalse(result["ok"])
+        self.assertIn("case_report_execution_invalid", problem_codes(result))
+
+    def test_unknown_or_missing_report_status_is_rejected(self):
+        for value in ("something_else", None):
+            with self.subTest(status=value):
+                def mutate(report, value=value):
+                    if value is None:
+                        report.pop("status", None)
+                    else:
+                        report["status"] = value
+                result = self.producer_bound_summary(report_mutator=mutate)
+                self.assertFalse(result["ok"])
+                self.assertIn("case_report_execution_invalid",
+                              problem_codes(result))
+
+    def test_missing_execution_status_is_rejected(self):
+        def mutate(report):
+            report["outcome"].pop("execution", None)
         result = self.producer_bound_summary(report_mutator=mutate)
         self.assertFalse(result["ok"])
         self.assertIn("case_report_execution_invalid", problem_codes(result))
