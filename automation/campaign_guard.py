@@ -522,17 +522,23 @@ def require_from_env(action: str) -> Guard | None:
     return guard
 
 
-def require_launch_reservation(guard: "Guard | None" = None) -> None:
+def require_launch_reservation(reservation: str | None = None,
+                               guard: "Guard | None" = None) -> None:
     """Refuse an EU4 spawn that does not hold an open launch reservation.
 
-    Both launch choke points call this, so a permitted alternative tool or a
-    direct CLI invocation cannot spend an unguarded launch while a campaign
-    budget is active.
+    ``reservation`` is the identity the trusted caller created with
+    :meth:`Guard.reserve`; the capture path passes it explicitly so a stale or
+    inherited process environment cannot authorize a launch.  When no explicit
+    identity is supplied, the ambient token is used only as a compatibility
+    fallback for direct CLI invocations, which a campaign still validates.
+    Both launch choke points call this, so an alternative tool cannot spend an
+    unguarded launch while a campaign budget is active.
     """
     guard = guard if guard is not None else from_env()
     if guard is None:
         return
-    token = os.environ.get("EU4_CAMPAIGN_RESERVATION", "").strip()
+    token = (reservation if reservation is not None
+             else os.environ.get("EU4_CAMPAIGN_RESERVATION", "")).strip()
     if not guard.validate_reservation(token, "eu4_launches"):
         raise CampaignRefusal(
             "launch_reservation",

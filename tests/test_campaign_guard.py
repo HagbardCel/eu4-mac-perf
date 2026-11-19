@@ -365,5 +365,183 @@ class ActionSiteGateTests(unittest.TestCase):
         self.assertEqual(state["counts"]["shadow_executions"], 1)
 
 
+class _FakeStartup(types.ModuleType):
+    """Controlled stand-in for the native startup module.
+
+    It records the trusted launch call, verifies the explicit reservation under
+    the state lock, then raises so capture's failure path (coordinator reap and
+    conservative reservation retention) is exercised without a real launch.
+    """
+
+    StartupError = RuntimeError
+
+    def __init__(self, state_path: Path):
+        super().__init__("eu4_gfx_startup_trace")
+        self.state_path = state_path
+        self.calls: list[dict] = []
+        self.reservation_valid_at_call: bool | None = None
+
+    def preflight_ops(self, *args, **kwargs):
+        return {}
+
+    def run_ops(self, **kwargs):
+        self.calls.append(kwargs)
+        token = kwargs.get("campaign_reservation")
+        guard = campaign_guard.Guard(self.state_path)
+        self.reservation_valid_at_call = guard.validate_reservation(
+            token or "", "eu4_launches")
+        raise RuntimeError("controlled fake launch boundary")
+
+
+class _FakePopen:
+    def __init__(self, *args, **kwargs):
+        self.pid = 4242
+        self.returncode = None
+        self.terminated = False
+        self.killed = False
+
+    def poll(self):
+        return None
+
+    def terminate(self):
+        self.terminated = True
+
+    def kill(self):
+        self.killed = True
+
+    def communicate(self, timeout=None):
+        self.returncode = 0
+        return "", ""
+
+
+class CaptureLaunchBoundaryTests(unittest.TestCase):
+    """The actual capture-to-launch boundary under an external campaign budget."""
+
+    def setUp(self):
+        base = ROOT / ".local" / "test-runs"
+        base.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(dir=base)
+        self.root = Path(self.temporary.name)
+        self.state_path = self.root / "state.json"
+        self.guard = campaign_guard.Guard(self.state_path)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def init(self, **budgets):
+        values = {"eu4_launches": 1, "sealed_frames": 1,
+                  "shadow_executions": 1}
+        values.update(budgets)
+        self.guard.init(campaign_id="boundary", budgets=values)
+
+    def capture(self, name: str, *extra: str, startup, popen):
+        args = m6_frame._parser().parse_args(
+            ["capture", "--output", str(self.root / name), *extra])
+        with mock.patch.dict(os.environ,
+                             {"EU4_CAMPAIGN_STATE": str(self.state_path)}), \
+             mock.patch.dict(sys.modules,
+                             {"eu4_gfx_startup_trace": startup}), \
+             mock.patch.object(m6_frame.subprocess, "Popen", popen):
+            return m6_frame.capture(args)
+
+    def test_one_launch_under_a_budget_of_one_is_permitted(self):
+        self.init(eu4_launches=1)
+        startup = _FakeStartup(self.state_path)
+        status = self.capture("one", "--seal", startup=startup,
+                              popen=AssertionError)
+        self.assertEqual(status, 4)
+        self.assertEqual(len(startup.calls), 1)
+        self.assertTrue(startup.reservation_valid_at_call)
+        state = self.guard.state()
+        self.assertEqual(state["counts"]["eu4_launches"], 1)
+        self.assertEqual(
+            [row["state"] for row in state["reservations"].values()],
+            ["failed"])
+
+    def test_second_launch_is_refused_before_starting_any_process(self):
+        self.init(eu4_launches=1)
+        first = _FakeStartup(self.state_path)
+        self.assertEqual(self.capture("first", "--seal", startup=first,
+                                      popen=AssertionError), 4)
+        second = _FakeStartup(self.state_path)
+        status = self.capture("second", "--seal", startup=second,
+                              popen=AssertionError)
+        self.assertEqual(status, 3)
+        self.assertEqual(second.calls, [])
+
+    def test_zero_frame_allowance_refuses_before_the_coordinator(self):
+        self.init(sealed_frames=0)
+        startup = _FakeStartup(self.state_path)
+        status = self.capture("noframe", "--seal", startup=startup,
+                              popen=AssertionError)
+        self.assertEqual(status, 3)
+        self.assertEqual(startup.calls, [])
+        state = self.guard.state()
+        self.assertEqual(state["counts"]["eu4_launches"], 0)
+        self.assertEqual(state["reservations"], {})
+
+    def test_continuous_capture_reserves_the_frame_and_shadow_upper_bound(self):
+        self.init(sealed_frames=3, shadow_executions=3)
+        startup = _FakeStartup(self.state_path)
+        captured = {}
+
+        def popen(command, *args, **kwargs):
+            fake = _FakePopen()
+            captured["command"] = command
+            captured["proc"] = fake
+            return fake
+
+        status = self.capture(
+            "continuous", "--shadow", "--continuous", "--max-frames", "3",
+            "--max-pending", "2", startup=startup, popen=popen)
+        self.assertEqual(status, 4)
+        self.assertEqual(len(startup.calls), 1)
+        state = self.guard.state()
+        reservation = next(iter(state["reservations"].values()))
+        self.assertEqual(reservation["actions"],
+                         {"eu4_launches": 1, "sealed_frames": 3,
+                          "shadow_executions": 3})
+        self.assertIn("--max-frames", captured["command"])
+
+    def test_refusal_leaves_no_coordinator_or_open_reservation(self):
+        self.init(shadow_executions=0)
+        startup = _FakeStartup(self.state_path)
+        spawned = []
+
+        def popen(command, *args, **kwargs):
+            spawned.append(command)
+            return _FakePopen()
+
+        status = self.capture("noshadow", "--shadow", startup=startup,
+                              popen=popen)
+        self.assertEqual(status, 3)
+        self.assertEqual(spawned, [])
+        self.assertEqual(startup.calls, [])
+        state = self.guard.state()
+        self.assertEqual(state["reservations"], {})
+        self.assertEqual(state["counts"]["eu4_launches"], 0)
+        self.assertEqual(state["counts"]["shadow_executions"], 0)
+
+    def test_direct_unreserved_launch_is_prohibited(self):
+        self.init()
+        import eu4_gfx_startup_trace as startup
+        from automation import test_profiles
+
+        with mock.patch.dict(os.environ,
+                             {"EU4_CAMPAIGN_STATE": str(self.state_path)}), \
+             mock.patch.object(test_profiles, "ensure_live_launch",
+                               return_value=None), \
+             mock.patch.object(startup, "preflight_ops", return_value={}), \
+             mock.patch.object(
+                 startup.subprocess, "Popen",
+                 side_effect=AssertionError("the game must not spawn")):
+            with self.assertRaises(startup.StartupError) as raised:
+                startup.run_ops(
+                    targets=["_GfxDraw"], max_events=16, duration_s=1.0,
+                    authorize_live=True, timeout_s=10,
+                    output=self.root / "direct")
+        self.assertIn("launch reservation", str(raised.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

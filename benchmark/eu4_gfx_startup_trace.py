@@ -209,6 +209,7 @@ def run(
     env_extra: dict | None = None,
     game_args: list[str] | None = None,
     background_plan: object | None = None,
+    campaign_reservation: str | None = None,
 ) -> dict:
     """Launch one startup-trace session.
 
@@ -483,6 +484,7 @@ def run_ops(
     retention: str | None = None,
     game_args: list[str] | None = None,
     background_plan: object | None = None,
+    campaign_reservation: str | None = None,
 ) -> dict:
     """Launch one bounded original-process observation session.
 
@@ -506,7 +508,7 @@ def run_ops(
     # budget is active, only an open launch reservation may proceed, so an
     # alternative unguarded launcher cannot bypass the guard.
     try:
-        campaign_guard.require_launch_reservation()
+        campaign_guard.require_launch_reservation(campaign_reservation)
     except campaign_guard.CampaignRefusal as exc:
         raise StartupError(str(exc)) from exc
     evidence = evidence or preflight_ops(

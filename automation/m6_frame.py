@@ -832,8 +832,6 @@ def capture(args: argparse.Namespace) -> int:
                 wanted, evidence={"output": str(output),
                                   "continuous": continuous,
                                   "max_frames": frames})
-            # The child launch choke point accepts only this reservation.
-            env_extra["EU4_CAMPAIGN_RESERVATION"] = reservation
         except campaign_guard.CampaignRefusal as exc:
             print(f"capture refused: {exc.kind}: {exc.detail}",
                   file=sys.stderr)
@@ -884,13 +882,6 @@ def capture(args: argparse.Namespace) -> int:
             text=True,
         )
     try:
-        capture_guard = campaign_guard.from_env()
-        if capture_guard is not None:
-            capture_guard.require("eu4_launches")
-    except campaign_guard.CampaignRefusal as exc:
-        print(f"capture refused: {exc.kind}: {exc.detail}", file=sys.stderr)
-        return 3
-    try:
         report = startup.run_ops(
             targets=TARGETS,
             max_events=max_events,
@@ -903,6 +894,7 @@ def capture(args: argparse.Namespace) -> int:
             retention="state",
             background_plan=background_plan,
             game_args=list(getattr(args, "game_arg", []) or []) or None,
+            campaign_reservation=reservation,
         )
     except (startup.StartupError, OSError, RuntimeError) as exc:
         _reap_coordinator(coordinator)
