@@ -229,7 +229,7 @@ The final offline gate (`20261119T072637Z-551b7e55`) ran with
 it. The skips are the live-only module, platform-only hosts and 11 optional-QBDI
 TR3 tests; QBDI remains non-mandatory. No EU4 process was started. The same gate
 is configured as the required `portable` check; GitHub Actions `portable` passed
-on head `233ba261` in 4m16s (run 44402214704). CI is not independent approval.
+on head `5ec4fdc2` in 4m34s (run 44483074062). CI is not independent approval.
 
 ## Evidence
 
