@@ -3581,11 +3581,11 @@ static BOOL verify_reference_object(id object, NSString *frame_dir,
             }
             expected_size = (uint64_t)[bytes_value unsignedLongLongValue];
         }
+        NSString *path = [[frame_dir stringByAppendingPathComponent:@"blobs"]
+            stringByAppendingPathComponent:name];
         NSDictionary *prior = seen[name];
         if (prior != nil) {
-            if (![prior[@"sha256"] isEqualToString:sha] ||
-                (bytes_value != nil &&
-                 [prior[@"bytes"] unsignedLongLongValue] != expected_size)) {
+            if (![prior[@"sha256"] isEqualToString:sha]) {
                 if (error != NULL) {
                     *error = [NSError errorWithDomain:kErrorDomain code:115
                                              userInfo:@{NSLocalizedDescriptionKey:
@@ -3594,13 +3594,40 @@ static BOOL verify_reference_object(id object, NSString *frame_dir,
                 }
                 return NO;
             }
+            /* A reference that omits "bytes" states no size.  It is unknown,
+               not zero: two identical content-addressed references may describe
+               the same payload with different metadata completeness.  A
+               declared size that disagrees with another declared size is still
+               a conflict, and a size declared after an omitted one is verified
+               against the file. */
+            id prior_bytes = prior[@"bytes"];
+            if (bytes_value != nil && prior_bytes != nil &&
+                [prior_bytes unsignedLongLongValue] != expected_size) {
+                if (error != NULL) {
+                    *error = [NSError errorWithDomain:kErrorDomain code:115
+                                             userInfo:@{NSLocalizedDescriptionKey:
+                                                            [NSString stringWithFormat:
+                                                                 @"conflicting repeated blob reference %@", name]}];
+                }
+                return NO;
+            }
+            if (bytes_value != nil && prior_bytes == nil) {
+                if (!verify_file_sha(path, expected_size, sha.UTF8String,
+                                     error)) {
+                    return NO;
+                }
+                seen[name] = @{@"sha256": sha, @"bytes": @(expected_size)};
+            }
         } else {
-            NSString *path = [[frame_dir stringByAppendingPathComponent:@"blobs"]
-                stringByAppendingPathComponent:name];
             if (!verify_file_sha(path, expected_size, sha.UTF8String, error)) {
                 return NO;
             }
-            seen[name] = @{@"sha256": sha, @"bytes": @(expected_size)};
+            NSMutableDictionary *entry =
+                [NSMutableDictionary dictionaryWithObject:sha forKey:@"sha256"];
+            if (bytes_value != nil) {
+                entry[@"bytes"] = @(expected_size);
+            }
+            seen[name] = entry;
         }
     }
     for (id value in dictionary.allValues) {
@@ -5183,4 +5210,22 @@ extern "C" void eu4_metal_replay_destroy(eu4_metal_replay_session *session) {
 extern "C" const char *eu4_metal_replay_last_error(
     eu4_metal_replay_session *session) {
     return session != NULL ? session->error : "";
+}
+
+/* Host-test only: run the production repeated-blob reference verifier over a
+   frame's event stream without creating a Metal device or a replay session.
+   Returns 0 when every reference agrees, -1 with the error on stderr. */
+extern "C" int eu4_gfx_frame_replay_test_blob_references(const char *frame_dir) {
+    if (frame_dir == NULL || frame_dir[0] == 0) {
+        return -1;
+    }
+    NSString *directory = @(frame_dir);
+    NSError *error = nil;
+    if (!verify_blob_references(directory, &error)) {
+        fprintf(stderr, "%s\n",
+                safe_utf8(failure_text(error, @"blob verification failed"),
+                          "blob verification failed"));
+        return -1;
+    }
+    return 0;
 }

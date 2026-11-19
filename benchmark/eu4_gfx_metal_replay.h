@@ -96,6 +96,11 @@ void eu4_metal_replay_destroy(eu4_metal_replay_session *session);
 
 const char *eu4_metal_replay_last_error(eu4_metal_replay_session *session);
 
+/* Host-test only: verify the repeated blob references in one frame's event
+ * stream with the production verifier, without creating a Metal device.
+ * Returns 0 when every reference agrees and -1 otherwise. */
+int eu4_gfx_frame_replay_test_blob_references(const char *frame_dir);
+
 #ifdef __cplusplus
 }
 #endif
