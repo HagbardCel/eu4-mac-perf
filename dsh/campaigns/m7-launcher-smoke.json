@@ -1,0 +1,26 @@
+{
+  "schema": "eu4-dsh-campaign/v1",
+  "campaign_id": "m7-launcher-smoke-20261119",
+  "source_campaign": "dsh/campaigns/multiround/campaign.json",
+  "candidate": {
+    "mode": "seed",
+    "workspace_base": "infra",
+    "workspace": ".local/dsh/m7-launcher-smoke-20261119/workspace",
+    "policy": {
+      "allowed_paths": ["marker.txt", "progress.md"]
+    }
+  },
+  "run_root": ".local/dsh/m7-launcher-smoke-20261119/run",
+  "goal": {
+    "max_rounds": 6,
+    "require_checker_pass": true,
+    "require_independent_review": false
+  },
+  "limits": {
+    "validation_timeout_seconds": 60,
+    "wall_clock_seconds": 900
+  },
+  "live_capture": {
+    "enabled": false
+  }
+}

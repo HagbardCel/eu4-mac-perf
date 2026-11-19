@@ -1,0 +1,140 @@
+{
+  "authentic_pilot": {
+    "axes": {
+      "capture_validity": "valid",
+      "frame_shader_identity": "verified",
+      "gpu_execution": "ok",
+      "operation_coverage": "complete",
+      "pixel_comparison": "divergent",
+      "rendering_state_coverage": "partial",
+      "resource_provenance": "verified"
+    },
+    "budget": {
+      "automatic_merges": 0,
+      "corrections": 0,
+      "launches": 1,
+      "replays": 0,
+      "sealed_frames": 1,
+      "shadow_executions": 1
+    },
+    "capture_frame_id": 1,
+    "checkpoints": [
+      {
+        "event": 14,
+        "max_channel_error": 0,
+        "mismatched_pixels": 0,
+        "status": "match"
+      },
+      {
+        "event": 17,
+        "max_channel_error": 79,
+        "mismatched_pixels": 391120,
+        "status": "divergent"
+      },
+      {
+        "event": 19,
+        "max_channel_error": 79,
+        "mismatched_pixels": 666261,
+        "status": "divergent"
+      },
+      {
+        "event": 20,
+        "max_channel_error": 79,
+        "mismatched_pixels": 875960,
+        "status": "divergent"
+      },
+      {
+        "event": 284,
+        "max_channel_error": 99,
+        "mismatched_pixels": 1235098,
+        "status": "divergent"
+      }
+    ],
+    "cleanup": {
+      "display": "EU4 Test (main=false)",
+      "killed": false,
+      "settings_restored": true,
+      "terminated": true
+    },
+    "conclusion": "requires_additional_evidence",
+    "event_stream_sha256": "33b9044a1ea33ab425a2f7173e4ae898d5d6395d1c35b3576fa49f99052c19ad",
+    "final": {
+      "max_channel_error": 67,
+      "mismatched_pixels": 1160428
+    },
+    "first_divergence": {
+      "event": 17,
+      "operation": "draw",
+      "producer_event": 16,
+      "program": 301,
+      "resource": "fb:0"
+    },
+    "height": 1117,
+    "interval": [
+      14,
+      17
+    ],
+    "manifest_sha256": "89776f8c13d5bbb7b7ac962e04fac1e8ce6cd93d792f0b82dc35aa11e0931552",
+    "next_checkpoint": 15,
+    "operations": 325,
+    "pid": 54668,
+    "present_index": 615,
+    "reference_sha256": "9283ae21e3d8fd43559d2978b7f33d290a124aef2f32dcd5163c12dd607bea92",
+    "scene_index": 615,
+    "session_id": "2564021f-4e00-4a58-a448-043697249a91",
+    "width": 1728
+  },
+  "campaign": {
+    "controlled": {
+      "after": {
+        "max_channel_error": 75,
+        "mismatched_pixels": 1161075
+      },
+      "before": {
+        "max_channel_error": 255,
+        "mismatched_pixels": 1925408
+      },
+      "checker": "accepted",
+      "corrections": 1,
+      "fault_commit": "71dbd4bb",
+      "fix_commit": "eb6a9b24",
+      "launches": 0,
+      "replays": 1,
+      "rounds": 2
+    },
+    "corrections_budget": "enforced at correction_accept.evaluate; outcome/verdict/problem codes audited",
+    "launcher": "run.sh --campaign prepared workspace/state/objective; goal creation is an operator step"
+  },
+  "ci": {
+    "focused": "pass",
+    "full_offline_gate": {
+      "duration_seconds": 721.584,
+      "failures": 0,
+      "record": "20261119T182911Z-a2cfafcc",
+      "status": "passed"
+    },
+    "portable": "pass on every merged head"
+  },
+  "date": "2026-11-19",
+  "limitations": [
+    "authentic event-17 difference localized to [14,17], not root-caused",
+    "rendering state coverage partial; no equivalence claim",
+    "eu4-web session creation and its eu4_* tool surface remain an operator step",
+    "controlled correction is evidence for the autonomous loop, not a repair of the authentic defect"
+  ],
+  "main": "8943bcdd",
+  "merged": {
+    "214": "0068127",
+    "215": "a3bca8a",
+    "216": "df16667",
+    "217": "8943bcd"
+  },
+  "native_verifier": {
+    "authentic_capture": "blob_references=0",
+    "tests": 5
+  },
+  "report_pr": 218,
+  "schema": "m7-readiness/v2",
+  "scope": "M7 operational infrastructure and autonomous-campaign workflow; not renderer equivalence",
+  "verdict": "READY"
+}
