@@ -470,6 +470,29 @@ def analyze(
     total_tokens = tokens["totalTokens"] or (input_tokens + cache_read + tokens["outputTokens"])
     goal_operations = [row["operation"] for row in goal_events]
     last_goal = goal_events[-1] if goal_events else None
+    first_goal = goal_events[0] if goal_events else None
+    goal_start = first_goal["time"] if first_goal else None
+    goal_end = last_goal["time"] if last_goal else None
+    goal_elapsed = (goal_end - goal_start
+                    if goal_start is not None and goal_end is not None
+                    else None)
+    last_phase = last_goal["phase"] if last_goal else None
+    terminal_phases = {
+        "complete": "completed",
+        "completed": "completed",
+        "blocked": "blocked",
+        "cancelled": "cancelled",
+    }
+    if last_goal is None:
+        # No goal record exists: turn completion is reported separately and is
+        # never promoted to a goal outcome.
+        goal_outcome = "no_goal"
+    elif last_phase in terminal_phases:
+        goal_outcome = terminal_phases[last_phase]
+    elif last_phase == "active":
+        goal_outcome = "active"
+    else:
+        goal_outcome = str(last_phase or "unknown")
     value = {
         "schema": SCHEMA,
         "session": session,
@@ -564,17 +587,20 @@ def analyze(
         "goal": {
             "operations": goal_operations,
             "last_operation": last_goal["operation"] if last_goal else None,
-            "last_phase": last_goal["phase"] if last_goal else None,
-            "active": bool(last_goal and last_goal["phase"] == "active"),
-            "terminal": bool(last_goal and last_goal["phase"] in (
+            "last_phase": last_phase,
+            "active": bool(last_goal and last_phase == "active"),
+            "terminal": bool(last_goal and last_phase in (
                 "complete", "completed", "blocked", "cancelled")),
+            "started_utc": _iso(goal_start),
+            "ended_utc": _iso(goal_end),
+            "duration_seconds": (round(goal_elapsed, 3)
+                                 if goal_elapsed is not None else None),
             "turn_end_reasons": turn_end_reasons,
             "last_turn_reason": (turn_end_reasons[-1]
                                  if turn_end_reasons else None),
-            "outcome": (
-                "active" if last_goal and last_goal["phase"] == "active"
-                else turn_end_reasons[-1] if turn_end_reasons
-                else last_goal["phase"] if last_goal else "unknown"),
+            # The final goal/change record owns the goal outcome.  A completed
+            # turn after a blocked goal must not read as a completed migration.
+            "outcome": goal_outcome,
         },
     }
     value["summary"] = execution_summary(value)
@@ -609,20 +635,21 @@ def execution_summary(value: dict) -> dict:
     goal = value.get("goal") or {}
     failures = calls.get("failed") or 0
     launch_count = launches.get("count")
-    if launch_count is None:
+    goal_outcome = str(goal.get("outcome") or "unknown")
+    if goal.get("terminal"):
+        # A bounded diagnosis that ends blocked stays blocked even when the
+        # turn itself completed normally.
+        outcome = goal_outcome
+    elif launch_count is None:
         outcome = "unknown"
     elif launch_count:
         outcome = "launch_attempt"
     elif failures:
-        outcome = "blocked" if goal.get("terminal") else "failed_tool_calls"
-    elif goal.get("outcome") == "complete":
-        outcome = "diagnosis_or_correction"
-    elif goal.get("outcome") == "blocked":
-        outcome = "blocked"
-    elif goal.get("outcome") == "active":
+        outcome = "failed_tool_calls"
+    elif goal_outcome == "active":
         outcome = "in_progress"
     else:
-        outcome = str(goal.get("outcome") or "unknown")
+        outcome = goal_outcome
     return {
         "schema": "dsh-execution-summary/v1",
         "tool_calls": {
@@ -635,6 +662,7 @@ def execution_summary(value: dict) -> dict:
             "wall_seconds": (value.get("window") or {}).get("elapsed_seconds"),
             "turns": (value.get("window") or {}).get("turns"),
             "model_calls": (value.get("window") or {}).get("model_calls"),
+            "goal_seconds": goal.get("duration_seconds"),
         },
         "eu4_launches": launch_count,
         "replays": {
@@ -665,6 +693,11 @@ def execution_summary(value: dict) -> dict:
             "note": "checkpoint and readback cost is in the replay report",
         },
         "outcome": outcome,
+        "goal_outcome": goal_outcome,
+        "turn_outcome": goal.get("last_turn_reason"),
+        "action_attempted": (
+            "launch" if launch_count else
+            "none" if launch_count == 0 else "unknown"),
         "token_telemetry": "excluded until the measurement method is validated",
     }
 

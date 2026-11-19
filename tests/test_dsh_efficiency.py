@@ -206,6 +206,52 @@ class EfficiencyTests(unittest.TestCase):
         self.assertEqual(value["calls"]["total"], 5)
 
 
+class GoalPhaseTests(unittest.TestCase):
+    def test_blocked_goal_is_not_reported_as_completed(self):
+        events = [
+            {"type": "session", "version": 4, "id": "s", "time": 1000,
+             "createdAt": 1000},
+            {"type": "turn/start", "time": 2000, "data": {"turn": 1}},
+            {"type": "goal/change", "time": 2000, "data": {
+                "operation": "create",
+                "goal": {"id": "g", "phase": "active", "revision": 1}}},
+            {"type": "goal/change", "time": 2679000, "data": {
+                "operation": "block",
+                "goal": {"id": "g", "phase": "blocked", "revision": 2}}},
+            {"type": "turn/end", "time": 3132000, "data": {
+                "turn": 1, "reason": {"kind": "completed"}}},
+        ]
+        value = dsh_efficiency.analyze(events)
+        goal = value["goal"]
+        self.assertEqual(goal["outcome"], "blocked")
+        self.assertEqual(goal["last_phase"], "blocked")
+        self.assertEqual(goal["last_turn_reason"], "completed")
+        self.assertAlmostEqual(goal["duration_seconds"], 2677.0, places=3)
+        summary = value["summary"]
+        self.assertEqual(summary["outcome"], "blocked")
+        self.assertEqual(summary["goal_outcome"], "blocked")
+        self.assertEqual(summary["turn_outcome"], "completed")
+        self.assertAlmostEqual(summary["execution"]["goal_seconds"], 2677.0,
+                               places=3)
+        self.assertAlmostEqual(summary["execution"]["wall_seconds"], 3131.0,
+                               places=3)
+
+    def test_absent_goal_does_not_synthesize_completion(self):
+        events = [
+            {"type": "turn/start", "time": 1000, "data": {"turn": 1}},
+            {"type": "turn/end", "time": 2000, "data": {
+                "turn": 1, "reason": {"kind": "completed"}}},
+        ]
+        value = dsh_efficiency.analyze(events)
+        self.assertEqual(value["goal"]["outcome"], "no_goal")
+        self.assertIsNone(value["goal"]["duration_seconds"])
+        self.assertEqual(value["goal"]["last_turn_reason"], "completed")
+        summary = value["summary"]
+        self.assertEqual(summary["goal_outcome"], "no_goal")
+        self.assertNotIn(summary["outcome"],
+                         ("completed", "diagnosis_or_correction"))
+
+
 if __name__ == "__main__":
     unittest.main()
 
