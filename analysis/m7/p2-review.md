@@ -49,8 +49,10 @@ success, this file, or the author's own review is not approval.
    replay as a qualified in-process diagnosis. Verify that the standalone path
    applies `full_frame_completion_problems()` to `replay/replay.json` and
    rejects failed, partial, timed-out, partially encoded and unsuccessful
-   Metal execution, invalid report execution, invalid checkpoint validation and
-   fault-contaminated evidence. A verified producer receipt must not substitute
+   Metal execution, invalid report execution (including non-empty execution
+   failures), invalid checkpoint validation, fault contamination (including
+   `outcome.fault_injection=true`), report/replay execution-field mismatch and
+   malformed/non-object reports. A verified producer receipt must not substitute
    for execution success. It must not weaken the bounded-interval lookup or the
    launch count, and a genuinely divergent completed replay must still pass.
 8. **First-divergence claim.** The conclusion's
@@ -80,7 +82,7 @@ For the reviewer, the closure evidence is already recorded:
   shared full-frame execution contract to the packaged `replay/replay.json`,
   rejects invalid report execution/checkpoint validation/fault contamination,
   and verifies the claimed first divergence against the authoritative report;
-- `tests.test_dsh_pilot` has 73 tests; the new negative cases use internally
+- `tests.test_dsh_pilot` has 78 tests; the new negative cases use internally
   consistent receipt hashes and sealed identities so they fail on the intended
   gate, not an unrelated payload error;
 - an unbounded upper observation may come from a producer-receipt-backed
@@ -119,9 +121,9 @@ python3.14 -m automation.test_runner run --profile offline \
   --label p2-closure-integrity-final-full --min-tests 3000
 ```
 
-Last recorded: focused 286 ran / 283 executed / 3 skips / 0 failures
-(`20261119T100551Z-36314b0e`); full 3,775 ran / 3,733 executed / 42 classified
-skips / 0 failures in 1,045.0 s (`20261119T100602Z-ddebfe8e`).
+Last recorded: focused 291 ran / 288 executed / 3 skips / 0 failures
+(`20261119T104917Z-270996f5`); full 3,780 ran / 3,738 executed / 42 classified
+skips / 0 failures in 1,070.0 s (`20261119T104932Z-3de77549`).
 
 ## Known limits to carry into review
 

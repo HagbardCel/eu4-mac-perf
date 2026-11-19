@@ -881,6 +881,9 @@ def _producer_execution_problems(case_dir: Path, declared: set[str], report: dic
         problems.append({"code": "case_report_execution_invalid",
                          "detail": "report outcome.execution is "
                                    f"{outcome.get('execution')!r}"})
+    if outcome.get("fault_injection") is True:
+        problems.append({"code": "case_fault_contaminated",
+                         "detail": "report outcome.fault_injection is true"})
 
     execution = (diagnosis.get("execution")
                  if isinstance(diagnosis.get("execution"), dict) else {})
@@ -903,9 +906,37 @@ def _producer_execution_problems(case_dir: Path, declared: set[str], report: dic
         for key in ("error", "failure"):
             if execution.get(key):
                 wrong.append(f"{key} is set")
+        if execution.get("failures"):
+            wrong.append("failures is not empty")
         if wrong:
             problems.append({"code": "case_report_execution_invalid",
                              "detail": "; ".join(wrong)})
+
+        # The report's execution summary and the packaged replay.json must
+        # describe the same execution; a mismatch is not a usable observation.
+        corresponding = (
+            ("status", "status"), ("stage", "stage"),
+            ("events", "events"), ("encoded", "encoded"),
+            ("failed", "failed"), ("command_status", "command_status"),
+            ("readback", "readback_ok"), ("partial", "partial"),
+            ("timed_out", "timed_out"),
+        )
+        mismatch = []
+        for replay_key, execution_key in corresponding:
+            if replay.get(replay_key) != execution.get(execution_key):
+                mismatch.append(
+                    f"{replay_key}={replay.get(replay_key)!r} != "
+                    f"execution.{execution_key}="
+                    f"{execution.get(execution_key)!r}")
+        if (bool(replay.get("failure"))
+                != bool(execution.get("failure"))):
+            mismatch.append("failure presence differs")
+        if (bool(replay.get("failures"))
+                != bool(execution.get("failures"))):
+            mismatch.append("failures presence differs")
+        if mismatch:
+            problems.append({"code": "case_report_replay_mismatch",
+                             "detail": "; ".join(mismatch)})
 
     validation = (diagnosis.get("checkpoint_validation")
                   if isinstance(diagnosis.get("checkpoint_validation"), dict)
@@ -962,6 +993,11 @@ def _producer_bound_evidence(case_dir: Path, manifest: dict, seal: dict,
     except Exception as exc:  # noqa: BLE001 - invalid evidence fails closed
         problems.append({"code": "case_diagnostic_unavailable",
                          "detail": f"{type(exc).__name__}: {exc}"})
+        return None, problems
+    if not isinstance(report, dict):
+        problems.append({"code": "case_diagnostic_schema",
+                         "detail": "producer-bound replay report is not a "
+                                   "JSON object"})
         return None, problems
     if receipt.get("status") != "verified":
         problems.append({"code": "case_producer_unverified",

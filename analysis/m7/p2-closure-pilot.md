@@ -22,8 +22,8 @@ the final head is the gate.
 | Offline manifest | `automation.test_profiles verify --profile offline` → `ok=true`, 0 problems |
 | Focused P2 selection (pre-fix) | run `20261119T091239Z-c287d4c4`: 382 ran, 369 executed, 13 classified skips, 0 failures |
 | Focused P2 selection (post-fix) | run `20261119T092932Z-e557e673`: passed, 0 failures |
-| Focused integrity selection (final) | run `20261119T100551Z-36314b0e`: 286 ran, 283 executed, 3 skips, 0 failures |
-| Full offline gate | `20261119T100602Z-ddebfe8e`: 3,775 ran, 3,733 executed, 42 classified skips, 0 failures, 1,045.0 s |
+| Focused integrity selection (final) | run `20261119T104917Z-270996f5`: 291 ran, 288 executed, 3 skips, 0 failures |
+| Full offline gate | `20261119T104932Z-3de77549`: 3,780 ran, 3,738 executed, 42 classified skips, 0 failures, 1,070.0 s |
 
 ### Governance gap (recorded, not repaired)
 
@@ -204,10 +204,19 @@ checkpoint is exposed. It additionally rejects:
 - invalid report execution (`status` invalid/error/failed, non-`ok`
   `outcome.execution`, or a `diagnosis.execution` that is not `status=ok`,
   `stage=complete`, `failed=0`, `timed_out=false`, `partial=false`,
-  `command_status=4`, `readback_ok=true`, with no error/failure);
+  `command_status=4`, `readback_ok=true`, with no error/failure and no
+  `failures` records);
+- inconsistent execution summaries: the report's `diagnosis.execution` must
+  agree with the packaged `replay/replay.json` on status, stage, events,
+  encoded, failed, command status, readback, partial, timeout and failure
+  presence;
 - invalid checkpoint validation (`status != ok`, `invalid != 0`, or non-empty
   `problems`);
-- fault-contaminated evidence (`faults` or `fault_evidence` present).
+- fault-contaminated evidence (`faults` or `fault_evidence` present, or
+  `outcome.fault_injection=true` even with empty fault fields);
+- malformed or non-object standalone reports, returned as a structured
+  `case_diagnostic_unavailable`/`case_diagnostic_schema` failure rather than an
+  unhandled exception.
 
 Producer-receipt verification, payload integrity and sealed-capture matching
 are retained. A completed replay with genuine pixel divergence — including
@@ -226,19 +235,20 @@ diagnostic schema or second comparison engine. The historical in-process path
 remains unchanged apart from the added claim check, and it still requires the
 in-process verified report for a bounded interval.
 
-**Regressions.** `tests.test_dsh_pilot` now has **73 tests**. New cases prove:
+**Regressions.** `tests.test_dsh_pilot` now has **78 tests**. New cases prove:
 failed replay with a divergent checkpoint rejected; rejected draw, failed
 count and failure-record rejected; incomplete encoding, timeout, missing
 readback, `partial` and non-successful command buffer rejected; a verified
-producer receipt does not
-convert failed execution into valid evidence; invalid report execution,
-invalid checkpoint validation and fault contamination rejected; fabricated
-first-divergence event rejected; complete divergent replay with unsupported
-state accepted; bounded standalone intervals rejected; in-process acceptance
-and first-divergence matching preserved. Negative fixtures are internally
-consistent: receipt hashes, payload inventory and sealed identities are
-recomputed, so failure comes from the intended gate, not an unrelated payload
-error.
+producer receipt does not convert failed execution into valid evidence;
+invalid report execution, non-empty execution failures, invalid checkpoint
+validation, fault contamination and `outcome.fault_injection=true` rejected;
+report/replay execution-field mismatch rejected; malformed and non-object
+reports rejected with structured problems; fabricated first-divergence event
+rejected; complete divergent replay with unsupported state accepted; bounded
+standalone intervals rejected; in-process acceptance and first-divergence
+matching preserved. Negative fixtures are internally consistent: receipt
+hashes, payload inventory and sealed identities are recomputed, so failure
+comes from the intended gate, not an unrelated payload error.
 
 **D. Revalidation of the preserved pilot.** No new model session was started.
 The preserved artifacts (`producer-case-v5`, the closed session export and the
@@ -250,6 +260,17 @@ with 8 checkpoints and capture
 0 replays, `requires_additional_evidence`, no correction and no claimed causal
 interval. Event 142, the unbounded lower endpoint and the event-71 new-capture
 request are unchanged.
+
+**Codex P1 review thread.** The automated Codex review of `dcd5d45a` flagged
+that a failed replay execution could still be accepted through its divergent
+checkpoint because `verify_producer_receipt()` binds digests and agreement with
+`replay.json`, not execution success. The correction applies the full-frame
+contract and the report/replay consistency checks above; five additional
+failure-path tests cover `outcome.fault_injection`, non-empty
+`diagnosis.execution.failures`, report/replay field mismatch, and malformed /
+non-object reports. The thread is answered with the implementation and test
+evidence but remains unresolved pending independent review; it must not be
+resolved by the author on the strength of self-verification.
 
 ## 5. Efficiency comparison with P1
 
@@ -308,10 +329,10 @@ request is preserved for a separately authorized bounded capture:
 
 ## 7. Offline gate and repository state
 
-The closure full offline gate (`20261119T100602Z-ddebfe8e`,
+The closure full offline gate (`20261119T104932Z-3de77549`,
 `--profile offline --min-tests 3000`, label `p2-closure-integrity-final-full`) passed:
-**3,775 ran, 3,733 executed, 42 classified skips, 0 failures, 0 errors,
-1,045.0 s**. The additional tests are the producer-bound acceptance and
+**3,780 ran, 3,738 executed, 42 classified skips, 0 failures, 0 errors,
+1,070.0 s**. The additional tests are the producer-bound acceptance and
 integrity regressions. The earlier post-merge full gate (`20261119T072637Z-551b7e55`)
 was 3,760 ran / 3,718 executed / 42 skipped / 0 failures in 1,318.3 s.
 

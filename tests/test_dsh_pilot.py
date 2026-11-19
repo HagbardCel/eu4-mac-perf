@@ -819,7 +819,8 @@ class PilotSummaryTests(unittest.TestCase):
         self.assertIn("case_diagnostic_unverified", problem_codes(result))
 
     def producer_bound_case(self, *, replay_overrides=None,
-                            report_mutator=None, conclusion_mutator=None):
+                            report_mutator=None, conclusion_mutator=None,
+                            report_override=None, report_raw=None):
         """Build an internally consistent producer-bound standalone case."""
         self.manifest.pop("diagnostic_report", None)
         self.manifest["report"] = "report.json"
@@ -846,7 +847,8 @@ class PilotSummaryTests(unittest.TestCase):
                     "status": "ok", "stage": "complete", "failed": 0,
                     "timed_out": False, "partial": False,
                     "command_status": 4, "readback_ok": True,
-                    "error": None, "failure": None,
+                    "events": 2, "encoded": 2,
+                    "error": None, "failure": None, "failures": [],
                 },
                 "checkpoint_validation": {
                     "status": "ok", "invalid": 0, "problems": [],
@@ -882,7 +884,13 @@ class PilotSummaryTests(unittest.TestCase):
         metal = b"\x00" * 16
         payload = b"\x00"
         (self.case / "replay").mkdir(exist_ok=True)
-        report_bytes = json.dumps(self.report).encode("utf-8")
+        if report_override is not None:
+            report_bytes = json.dumps(report_override).encode("utf-8")
+        elif report_raw is not None:
+            report_bytes = (report_raw if isinstance(report_raw, bytes)
+                            else report_raw.encode("utf-8"))
+        else:
+            report_bytes = json.dumps(self.report).encode("utf-8")
         replay_bytes = json.dumps(replay).encode("utf-8")
         (self.case / "report.json").write_bytes(report_bytes)
         (self.case / "replay" / "replay.json").write_bytes(replay_bytes)
@@ -1036,6 +1044,40 @@ class PilotSummaryTests(unittest.TestCase):
         self.assertIn("first_divergence_mismatch",
                       {item["code"] for item in
                        result["conclusion"]["validation"]["problems"]})
+
+    def test_outcome_fault_injection_without_fault_evidence_is_rejected(self):
+        def mutate(report):
+            report["outcome"]["fault_injection"] = True
+        result = self.producer_bound_summary(report_mutator=mutate)
+        self.assertFalse(result["ok"])
+        self.assertIn("case_fault_contaminated", problem_codes(result))
+
+    def test_nonempty_execution_failures_is_rejected(self):
+        def mutate(report):
+            report["diagnosis"]["execution"]["failures"] = [
+                {"event": 142, "error": "rejected draw"}]
+        result = self.producer_bound_summary(report_mutator=mutate)
+        self.assertFalse(result["ok"])
+        self.assertIn("case_report_execution_invalid",
+                      problem_codes(result))
+
+    def test_report_replay_execution_mismatch_is_rejected(self):
+        def mutate(report):
+            report["diagnosis"]["execution"]["events"] = 99
+        result = self.producer_bound_summary(report_mutator=mutate)
+        self.assertFalse(result["ok"])
+        self.assertIn("case_report_replay_mismatch", problem_codes(result))
+
+    def test_non_object_report_is_rejected(self):
+        result = self.producer_bound_summary(
+            report_override=["not", "an", "object"])
+        self.assertFalse(result["ok"])
+        self.assertIn("case_diagnostic_schema", problem_codes(result))
+
+    def test_malformed_report_json_is_rejected(self):
+        result = self.producer_bound_summary(report_raw=b"{not json")
+        self.assertFalse(result["ok"])
+        self.assertIn("case_diagnostic_unavailable", problem_codes(result))
 
     def test_bounded_interval_from_producer_bound_report_is_rejected(self):
         def mutate(value):

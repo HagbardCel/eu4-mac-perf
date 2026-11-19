@@ -182,16 +182,16 @@
       "The 42 skips include the classified live-only module, platform-only hosts and optional-QBDI TR3 tests."
     ],
     "closure_gate": {
-      "run_id": "20261119T100602Z-ddebfe8e",
-      "label": "p2-closure-integrity-final-full",
+      "run_id": "20261119T104932Z-3de77549",
+      "label": "p2-closure-final-full",
       "profile": "offline",
       "min_tests": 3000,
-      "tests_ran": 3775,
-      "tests_executed": 3733,
+      "tests_ran": 3780,
+      "tests_executed": 3738,
       "skipped": 42,
       "failures": 0,
       "errors": 0,
-      "duration_seconds": 1044.962,
+      "duration_seconds": 1070.013,
       "exit_code": 0,
       "eu4_launches": 0,
       "notes": [
@@ -266,16 +266,16 @@
     "overlap_test": "tests.test_replay_host_dependencies.IncrementalBuildTests.test_overlapping_builds_serialize_under_one_lock"
   },
   "focused_verification": {
-    "command": "python3.14 -m automation.test_runner run --profile offline --label p2-closure-integrity-focused --module tests.test_dsh_pilot --module tests.test_p2_workflow --module tests.test_m7_evidence_identity --module tests.test_case_baseline --module tests.test_failure_taxonomy --module tests.test_agent_tools --module tests.test_dsh_efficiency --module tests.test_replay_host_dependencies --module tests.test_test_profiles",
-    "run_id": "20261119T100551Z-36314b0e",
+    "command": "python3.14 -m automation.test_runner run --profile offline --label p2-closure-final-integrity-focused --module tests.test_dsh_pilot --module tests.test_p2_workflow --module tests.test_m7_evidence_identity --module tests.test_case_baseline --module tests.test_failure_taxonomy --module tests.test_agent_tools --module tests.test_dsh_efficiency --module tests.test_replay_host_dependencies --module tests.test_test_profiles",
+    "run_id": "20261119T104917Z-270996f5",
     "result": "passed",
-    "tests_ran": 286,
-    "tests_executed": 283,
+    "tests_ran": 291,
+    "tests_executed": 288,
     "skipped": 3,
     "failures": 0,
     "errors": 0,
-    "duration_seconds": 1.867,
-    "note": "Final focused integrity selection after the last code change; includes tests.test_dsh_pilot (73 tests)."
+    "duration_seconds": 5.758,
+    "note": "Final focused integrity selection after the last code change; includes tests.test_dsh_pilot (78 tests)."
   },
   "ci": {
     "merged_base_check": {
@@ -411,7 +411,7 @@
     "launch_count_verified": 0,
     "native_gate_ok": true,
     "problems": [],
-    "regressions": "tests.test_dsh_pilot (73 tests; failed-execution, invalid report/checkpoint/fault, first-divergence and bounded-interval cases)",
+    "regressions": "tests.test_dsh_pilot (78 tests; failed-execution, invalid report/checkpoint/fault, first-divergence and bounded-interval cases)",
     "schema": "m7-p2-pilot-acceptance/v1",
     "summarize_ok": true,
     "validate_ok": true,
@@ -453,7 +453,7 @@
     "bounded_interval_still_requires_in_process": true,
     "tests": {
       "module": "tests.test_dsh_pilot",
-      "tests": 73,
+      "tests": 78,
       "negative_cases": [
         "failed replay with divergent checkpoint",
         "rejected draw failure record",
@@ -468,7 +468,12 @@
         "invalid checkpoint validation",
         "fault-contaminated evidence",
         "fabricated first-divergence event",
-        "bounded interval from standalone replay"
+        "bounded interval from standalone replay",
+        "outcome.fault_injection=true with empty fault fields",
+        "non-empty diagnosis.execution.failures",
+        "report/replay execution-field mismatch",
+        "malformed standalone report",
+        "non-object standalone report"
       ],
       "positive_cases": [
         "complete divergent replay with unsupported state",
@@ -488,6 +493,12 @@
       "claims_interval": false,
       "eu4_launches": 0,
       "replays": 0
+    },
+    "codex_review": {
+      "review_commit": "dcd5d45aef7636feca0854f99ba22f71dc676a93",
+      "finding": "failed replay execution could be accepted through its divergent checkpoint",
+      "correction_commit": "final head in PR #213",
+      "thread_status": "answered; unresolved pending independent review"
     }
   }
 }

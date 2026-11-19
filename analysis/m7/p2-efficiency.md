@@ -253,8 +253,8 @@ TR3 tests; QBDI remains non-mandatory. No EU4 process was started. The same gate
 is configured as the required `portable` check; GitHub Actions `portable` passed
 on head `5ec4fdc2` in 4m34s (run 44483074062). CI is not independent approval.
 
-The closure gate (`20261119T100602Z-ddebfe8e`, same profile and floor) ran
-**3,775 tests, 3,733 executed, 42 skipped, 0 failures, 0 errors in 1,045.0 s**.
+The closure gate (`20261119T104932Z-3de77549`, same profile and floor) ran
+**3,780 tests, 3,738 executed, 42 skipped, 0 failures, 0 errors in 1,070.0 s**.
 The additional tests are the producer-bound acceptance and integrity
 regressions in `tests.test_dsh_pilot`.
 
