@@ -86,6 +86,16 @@ correct remediation is procedural and reviewable:
 3. if no independent reviewer is available, the PR stays unmerged and the work
    is reported as awaiting review. A green CI run is never a substitute.
 
+## Operator waiver for PR #213 (2026-11-19)
+
+After the closure PR was prepared and the fresh-review request was posted, the
+operator explicitly waived the independent final-head review requirement for
+PR #213. The PR was merged with the P1 correction and regression evidence
+recorded, `portable` CI green, and the P1 conversation resolved after that
+waiver. **No `APPROVED` review was manufactured**, and the waiver is a recorded
+governance decision, not independent review. The #212 incident remains
+unresolved and is not retroactively approved.
+
 ## Not enforced automatically
 
 - **Independent review.** Branch protection requires one approval, but cannot
@@ -99,7 +109,9 @@ correct remediation is procedural and reviewable:
 
 ## Merge decision
 
-M7-P2 is merged as implementation. M7 operational acceptance is **not**
-complete: the independent final-head review of #212 is missing, and the pilot
-acceptance evidence is being closed in a separate PR. The closure PR must not
-be merged by the author, by admin bypass, or on the strength of CI alone.
+M7-P2 implementation and the closure pilot are merged. M7 preparation is
+**complete under the operator's explicit waiver** of the independent final-head
+review requirement for PR #213. No approval was manufactured; the #212
+final-head review remains an unresolved governance incident. Autonomous
+renderer migration is not qualified and pixel-perfect OpenGL/Metal
+equivalence is not achieved.

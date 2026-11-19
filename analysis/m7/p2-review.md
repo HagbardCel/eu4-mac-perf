@@ -1,16 +1,17 @@
 # M7-P2 — review request and final-head checklist
 
-Status: **merged implementation without a recorded independent approval.** PR
-[#212](https://github.com/HagbardCel/eu4-mac-perf/pull/212) merged as
-`6e3b7913` on 2026-11-19T08:58:54Z; its final head was `668b40ed`. The review
-history has no `APPROVED` state and GitHub still reports `REVIEW_REQUIRED`.
-See [P2 governance](p2-governance.md) for the enforcement gap.
+Status: **PR #212 merged without a recorded independent approval; PR #213
+merged under an explicit operator waiver of the independent final-head review
+requirement (2026-11-19).** No `APPROVED` review was manufactured. The #212
+incident remains unresolved. See [P2 governance](p2-governance.md).
 
-This file is now the checklist for the **closure PR**
+This file is the historical checklist for the **closure PR**
 [#213](https://github.com/HagbardCel/eu4-mac-perf/pull/213) (the bounded pilot,
-corrected objective, acceptance-integrity repair and evidence report). A fresh
-independent review of the closure PR's exact final head is the merge gate. CI
-success, this file, or the author's own review is not approval.
+corrected objective, acceptance-integrity repair and evidence report). The
+operator waived the independent review requirement after the fresh-review
+request; the checklist and verification evidence remain for audit, but no
+approval is claimed. CI success, this file, or the author's own review is not
+approval.
 
 ## Merged base and closure branch
 
@@ -90,9 +91,10 @@ For the reviewer, the closure evidence is already recorded:
   report;
 - no new DSH session and no live capture were run.
 
-This is evidence for independent review, not an approval. The reviewer must
-confirm the producer-bound acceptance change does not weaken the full-frame
-execution, bounded-interval, first-divergence or launch-count guarantees.
+This was evidence for independent review, not an approval. The operator
+subsequently waived the independent review requirement for PR #213; the
+full-frame execution, bounded-interval, first-divergence and launch-count
+guarantees remain the reviewed implementation contract.
 
 ## Verification to reproduce
 

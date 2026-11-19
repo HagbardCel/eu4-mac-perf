@@ -500,5 +500,20 @@
       "correction_commit": "final head in PR #213",
       "thread_status": "answered; unresolved pending independent review"
     }
+  },
+  "governance_waiver": {
+    "date": "2026-11-19",
+    "scope": "PR #213 independent final-head review requirement",
+    "operator": "HagbardCel",
+    "approval_manufactured": false,
+    "p1_thread": "resolved after explicit operator waiver",
+    "incident_212": "retained as unresolved; not retroactively approved",
+    "statuses": {
+      "m7_p0_p1_p2_implementation": "complete",
+      "authentic_bounded_offline_pilot": "complete and accepted",
+      "m7_preparation": "complete under recorded waiver",
+      "autonomous_renderer_migration": "not qualified",
+      "pixel_perfect_equivalence": "not achieved"
+    }
   }
 }

@@ -129,10 +129,10 @@ launch EU4, move the desktop, use BetterDisplay/Rosetta or require a live GPU
 capture. Live qualification is explicit, bounded and separate; it requires an
 already-captured case or an operator-authorized launch and retains diagnostics.
 
-**Remaining limits.** M7-P2 is merged as implementation but operational
-acceptance is **not** complete: #212 merged without a recorded approving review
-(GitHub still reports `REVIEW_REQUIRED`), and no approval can be manufactured
-retroactively. The producer case's standalone replay is
+**Remaining limits.** M7-P2 implementation and the closure pilot are complete.
+The operator explicitly waived the independent final-head review requirement
+for PR #213 on 2026-11-19; no `APPROVED` review was manufactured, and the #212
+incident remains unresolved. The producer case's standalone replay is
 `incomplete_diagnostics` (`frame_shader_identity=unverified_session`) by
 design; it is not a qualified match. `gl_dither` and `multisample` remain
 unsupported, the pre-event-142 causal interval is unresolved, no live event-71
@@ -142,8 +142,9 @@ characterized, not explained. Readiness is **READY WITH LIMITATIONS for another
 bounded offline model-driven diagnostic task**; **not ready** for unattended
 renderer migration or a live diagnosis campaign. Governance:
 [P2 governance](../analysis/m7/p2-governance.md) and
-[closure review checklist](../analysis/m7/p2-review.md). The closure PR is
-unmerged pending independent final-head review.
+[closure review checklist](../analysis/m7/p2-review.md). M7 preparation is
+complete under the recorded waiver; autonomous renderer migration is not
+qualified, and pixel-perfect OpenGL/Metal equivalence is not achieved.
 
 ## M7-P1 — autonomous differential-debugging pilot (2026-11-18)
 

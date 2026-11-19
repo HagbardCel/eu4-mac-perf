@@ -3,11 +3,12 @@
 Date: 2026-11-19. Starting revision: `6e3b7913ec4f7dacf69e6520674bb43716aba6f9`
 (PR #212 merge; PRs #210, #211 and #212 are all ancestors of `origin/main`).
 
-Status: **one authentic model-driven pilot ran and was independently accepted
-offline.** M7 operational acceptance is **not** complete: #212 merged without a
-recorded approving review, no live event-71 capture was run, and the renderer
-correction/root cause is still unknown. No PR is merged; independent review of
-the final head is the gate.
+Status: **one authentic model-driven pilot ran and was accepted by the
+repository's validation; PR #213 is merged under the operator's explicit
+waiver of the independent final-head review requirement (2026-11-19).** No
+`APPROVED` review was manufactured. #212 remains an unresolved governance
+incident. No live event-71 capture was run, and the renderer correction/root
+cause is still unknown.
 
 ## 1. Merged state and gates
 
@@ -346,8 +347,9 @@ regressions.
 
 Limitations carried forward:
 
-- M7-P2 implementation is merged; its **independent final-head approval is
-  missing**, and M7 operational acceptance is not complete.
+- M7-P2 implementation and the closure pilot are complete. The operator waived
+  the independent final-head review requirement for PR #213; the #212
+  final-head approval remains missing and is not retroactively approved.
 - The producer case is `incomplete_diagnostics` by design; it is not a
   qualified match. The historical in-process diagnosis supplies the
   authoritative divergence but not producer identity.
@@ -359,8 +361,10 @@ Limitations carried forward:
   state) is unknown.
 - No live capture was run in this closure.
 
-Readiness: **READY WITH LIMITATIONS for another bounded, offline,
-model-driven diagnostic task** against an existing verified producer-bound
-case. **Not ready** for unattended renderer migration, a live diagnosis
-campaign, or a claim of M7 operational acceptance. The next task should be the
-single new-capture event-71 experiment, not a speculative Metal fix.
+Readiness: M7 preparation is **complete under the recorded waiver**. Offline
+autonomous diagnostics are **ready with documented limitations** for another
+bounded, offline, model-driven diagnostic task against an existing verified
+producer-bound case. Live differential investigation requires separately
+bounded experiments. **Not ready** for unattended renderer migration; pixel-
+perfect OpenGL/Metal equivalence is not achieved. The next task should be the
+bounded multi-checkpoint same-frame capture, not a speculative Metal fix.
