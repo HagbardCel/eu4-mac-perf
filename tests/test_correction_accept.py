@@ -715,6 +715,95 @@ class CorrectionBudgetTests(unittest.TestCase):
         self.assertEqual(raised.exception.kind, "campaign_refused")
         self.assertIn("budget_exhausted", raised.exception.detail)
 
+    def reservation(self):
+        state = self.guard.state()
+        reservations = list(state["reservations"].values())
+        self.assertEqual(len(reservations), 1)
+        return reservations[0]
+
+    def test_accepted_attempt_is_recorded_with_its_verdict(self):
+        self.guard.init(campaign_id="budget", budgets={"corrections": 1,
+                                                       "replays": 2})
+        arguments = self.arguments()
+        with mock.patch.dict(
+                os.environ, {"EU4_CAMPAIGN_STATE": str(self.state_path)}):
+            report = correction_accept.evaluate(**arguments)
+        self.assertEqual(report["result"], "accepted")
+        reservation = self.reservation()
+        self.assertEqual(reservation["state"], "completed")
+        self.assertTrue(reservation["completion_evidence"]["accepted"])
+        self.assertEqual(reservation["completion_evidence"]["result"], "accepted")
+        self.assertEqual(reservation["completion_evidence"]["problem_codes"], [])
+
+    def test_rejected_attempt_is_failed_with_its_problem_codes(self):
+        self.guard.init(campaign_id="budget", budgets={"corrections": 1,
+                                                       "replays": 2})
+        after = self.model.replay_dir("after-rejected",
+                                      self.model.partial_pixels())
+        before = self.model.replay_dir("before-rejected",
+                                       self.model.faulty_pixels())
+        case_dir = self.model.package(before, "case-rejected",
+                                      case_id="rejected-case")
+        baseline = self.model.baseline(case_dir, "baseline-rejected.json")
+        arguments = {
+            "case_dir": case_dir, "baseline_path": baseline,
+            "candidate_revision": REVISION, "after_replay": after,
+            "claimed_before": {"mismatched_pixels": 1, "max_channel_error": 7},
+            "claimed_after": {"mismatched_pixels": 2, "max_channel_error": 3},
+            "baseline_revision": "baseline-1",
+            "qualification_contract": contract(),
+        }
+        with mock.patch.dict(
+                os.environ, {"EU4_CAMPAIGN_STATE": str(self.state_path)}):
+            report = correction_accept.evaluate(**arguments)
+        self.assertEqual(report["result"], "rejected", report)
+        reservation = self.reservation()
+        self.assertEqual(reservation["state"], "failed")
+        self.assertFalse(reservation["completion_evidence"]["accepted"])
+        self.assertEqual(reservation["completion_evidence"]["result"], "rejected")
+        self.assertIn("not_improved", reservation["completion_evidence"]["problem_codes"])
+
+    def test_invalid_evidence_attempt_is_failed_with_its_problem_codes(self):
+        self.guard.init(campaign_id="budget", budgets={"corrections": 1,
+                                                       "replays": 2})
+        after = self.model.replay_dir("after-invalid",
+                                      self.model.partial_pixels())
+        before = self.model.replay_dir("before-invalid",
+                                       self.model.faulty_pixels())
+        case_dir = self.model.package(before, "case-invalid",
+                                      case_id="invalid-case")
+        baseline = self.model.baseline(case_dir, "baseline-invalid.json")
+        arguments = {
+            "case_dir": case_dir, "baseline_path": baseline,
+            "candidate_revision": REVISION, "after_replay": after,
+            "claimed_before": {"mismatched_pixels": 1, "max_channel_error": 7},
+            "claimed_after": {"mismatched_pixels": 0, "max_channel_error": 0},
+            "baseline_revision": "baseline-1",
+            "qualification_contract": contract(),
+        }
+        with mock.patch.dict(
+                os.environ, {"EU4_CAMPAIGN_STATE": str(self.state_path)}):
+            report = correction_accept.evaluate(**arguments)
+        self.assertEqual(report["result"], "invalid_evidence", report)
+        reservation = self.reservation()
+        self.assertEqual(reservation["state"], "failed")
+        self.assertFalse(reservation["completion_evidence"]["accepted"])
+        self.assertIn("claim_disagrees",
+                      reservation["completion_evidence"]["problem_codes"])
+
+    def test_exceptional_attempt_is_failed_and_keeps_its_charge(self):
+        self.guard.init(campaign_id="budget", budgets={"corrections": 1,
+                                                       "replays": 2})
+        arguments = self.arguments()
+        arguments["case_dir"] = self.root / "missing-case"
+        with mock.patch.dict(
+                os.environ, {"EU4_CAMPAIGN_STATE": str(self.state_path)}):
+            with self.assertRaises(correction_accept.AcceptanceError):
+                correction_accept.evaluate(**arguments)
+        reservation = self.reservation()
+        self.assertEqual(reservation["state"], "failed")
+        self.assertEqual(self.guard.state()["counts"]["corrections"], 1)
+
     def test_refusal_cannot_be_bypassed_through_the_cli(self):
         self.guard.init(campaign_id="budget", budgets={"corrections": 1,
                                                        "replays": 2})

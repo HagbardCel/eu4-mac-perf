@@ -359,6 +359,7 @@ class Guard:
                                     else "failed")
             reservation["completed_at"] = now
             reservation["detail"] = (detail or "")[:500]
+            reservation["completion_evidence"] = evidence
             state["exhausted"] = sorted(
                 key for key, budget in (state.get("budgets") or {}).items()
                 if key != "wall_clock_seconds" and budget is not None

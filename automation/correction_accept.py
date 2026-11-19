@@ -447,11 +447,23 @@ def evaluate(*, case_dir: Path | str, baseline_path: Path | str,
                 evidence={"candidate_revision": str(candidate_revision)})
         raise
     if guard is not None and reservation is not None:
+        verdict = str(result.get("result") or "unknown")
+        problems = [str(item.get("code"))
+                    for item in (result.get("problems") or [])
+                    if isinstance(item, dict)]
+        accepted = verdict == "accepted"
+        # Only an independently accepted correction is a successful attempt;
+        # a rejection or invalid evidence is a failed attempt that keeps its
+        # charge.  The audit record names the verdict and problem codes.
         guard.complete(
-            reservation, outcome="ok",
-            detail=str(result.get("result")),
+            reservation,
+            outcome="ok" if accepted else "failed",
+            detail=verdict,
             evidence={"candidate_revision": str(candidate_revision),
-                      "result": result.get("result")})
+                      "result": verdict,
+                      "accepted": accepted,
+                      "problem_codes": problems,
+                      "problem_count": len(problems)})
     return result
 
 
