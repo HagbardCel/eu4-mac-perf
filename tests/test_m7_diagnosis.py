@@ -1646,6 +1646,73 @@ class CheckpointBisectionTests(unittest.TestCase):
         self.assertEqual(action["observation_event"], 142)
         self.assertIn("observes the result", action["reason"])
 
+    def checkpoint_with_capture(self, event, status, capture, *,
+                                mismatched=0):
+        value = self.checkpoint(event, status, mismatched=mismatched)
+        if capture is not None:
+            value["capture"] = dict(capture)
+        return value
+
+    def capture(self, *, session="session-1", frame=7, stream="e" * 64):
+        return {
+            "session_id": session,
+            "capture_frame_id": frame,
+            "event_stream_sha256": stream,
+        }
+
+    def test_three_same_frame_checkpoints_bound_a_tight_interval(self):
+        capture = self.capture()
+        value = gfx_independent_replay.first_divergence(
+            self.graph(),
+            [self.checkpoint_with_capture(14, "match", capture),
+             self.checkpoint_with_capture(71, "match", capture),
+             self.checkpoint_with_capture(142, "divergent", capture,
+                                          mismatched=4)],
+            {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        self.assertEqual(value["kind"], "intermediate")
+        self.assertEqual(value["event"], 142)
+        interval = value["unresolved_interval"]
+        self.assertEqual(interval["start_event"], 71)
+        self.assertEqual(interval["end_event"], 142)
+        self.assertEqual(interval["lower_bound"], "same_resource_match")
+        self.assertEqual(value["next_checkpoint"]["event"], 106)
+        self.assertEqual(value["next_checkpoint"]["interval"], [71, 142])
+        self.assertNotIn(14, [index for index in
+                              value["cross_capture_excluded"][
+                                  "capture_matches"]])
+
+    def test_matching_checkpoint_from_another_capture_does_not_bound(self):
+        capture = self.capture()
+        foreign = self.capture(session="session-0", frame=3)
+        value = gfx_independent_replay.first_divergence(
+            self.graph(),
+            [self.checkpoint_with_capture(71, "match", foreign),
+             self.checkpoint_with_capture(142, "divergent", capture,
+                                          mismatched=4)],
+            {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        interval = value["unresolved_interval"]
+        self.assertIsNone(interval["start_event"])
+        self.assertEqual(interval["lower_bound"], "unbounded")
+        self.assertEqual(
+            value["cross_capture_excluded"]["capture_matches"], [71])
+        self.assertEqual(value["next_checkpoint"]["event"], 71)
+
+    def test_identity_without_an_event_stream_does_not_match(self):
+        capture = self.capture()
+        partial = {"session_id": "session-1", "capture_frame_id": 7}
+        value = gfx_independent_replay.first_divergence(
+            self.graph(),
+            [self.checkpoint_with_capture(71, "match", partial),
+             self.checkpoint_with_capture(142, "divergent", capture,
+                                          mismatched=4)],
+            {"status": "divergent", "statistics": {}},
+            checkpoint_validation={"status": "ok"})
+        interval = value["unresolved_interval"]
+        self.assertIsNone(interval["start_event"])
+        self.assertEqual(interval["lower_bound"], "unbounded")
+
     def test_unavailable_checkpoint_does_not_narrow(self):
         for status in ("incomplete", "invalid"):
             value = gfx_independent_replay.first_divergence(

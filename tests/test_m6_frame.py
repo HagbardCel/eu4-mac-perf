@@ -9,7 +9,9 @@ declared policy.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import os
 import struct
@@ -1482,3 +1484,61 @@ class CaptureBudgetTests(unittest.TestCase):
                       m6_frame.checkpoint_selection_error(512, 512))
         self.assertIn("below",
                       m6_frame.checkpoint_selection_error(513, 512))
+
+    def test_multiple_default_checkpoint_option_parses_an_ordered_set(self):
+        args = m6_frame._parser().parse_args(
+            ["capture", "--output", "/tmp/frame-capture",
+             "--default-checkpoint-events", "14,20,71,142"])
+        self.assertEqual(args.default_checkpoint_events, [14, 20, 71, 142])
+        self.assertIsNone(args.default_checkpoint_event)
+        self.assertEqual(args.max_checkpoints, 4)
+        self.assertEqual(args.checkpoint_max_bytes, 64 * 1024 * 1024)
+        self.assertIsNone(m6_frame.checkpoint_options_error(args))
+
+    def test_multiple_default_checkpoint_malformed_list_is_rejected(self):
+        for value in ("", "14,,20", "14,a", ","):
+            with self.subTest(value=value):
+                with self.assertRaises(SystemExit):
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        m6_frame._parser().parse_args(
+                            ["capture", "--output", "/tmp/frame-capture",
+                             "--default-checkpoint-events", value])
+
+    def test_multiple_default_checkpoint_selection_is_validated(self):
+        self.assertIsNone(m6_frame.checkpoint_events_selection_error(
+            [14, 20, 71, 142], 512, 4))
+        self.assertIn("strictly increasing",
+                      m6_frame.checkpoint_events_selection_error(
+                          [20, 14], 512, 4))
+        self.assertIn("strictly increasing",
+                      m6_frame.checkpoint_events_selection_error(
+                          [14, 14], 512, 4))
+        self.assertIn("below",
+                      m6_frame.checkpoint_events_selection_error(
+                          [512], 512, 4))
+        self.assertIn("exceed",
+                      m6_frame.checkpoint_events_selection_error(
+                          [1, 2, 3, 4, 5], 512, 4))
+        self.assertIn("empty",
+                      m6_frame.checkpoint_events_selection_error(
+                          [], 512, 4))
+
+    def test_checkpoint_options_refuse_both_selection_forms(self):
+        args = m6_frame._parser().parse_args(
+            ["capture", "--output", "/tmp/frame-capture",
+             "--default-checkpoint-event", "14",
+             "--default-checkpoint-events", "14,20"])
+        self.assertIn("mutually exclusive",
+                      m6_frame.checkpoint_options_error(args))
+
+    def test_checkpoint_options_require_a_positive_byte_budget(self):
+        args = m6_frame._parser().parse_args(
+            ["capture", "--output", "/tmp/frame-capture",
+             "--default-checkpoint-events", "14,20",
+             "--checkpoint-max-bytes", "0"])
+        self.assertIn("positive", m6_frame.checkpoint_options_error(args))
+        # An unbounded selection has no checkpoint budget to enforce.
+        args = m6_frame._parser().parse_args(
+            ["capture", "--output", "/tmp/frame-capture",
+             "--checkpoint-max-bytes", "0"])
+        self.assertIsNone(m6_frame.checkpoint_options_error(args))

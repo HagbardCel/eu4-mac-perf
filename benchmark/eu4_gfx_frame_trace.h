@@ -34,6 +34,16 @@
  *                                  clear and the recorded copy expose this
  *                                  pre-execution boundary; an event that never
  *                                  reaches one fails the capture closed.
+ *   EU4_GFX_FRAME_TRACE_DEFAULT_CHECKPOINT_EVENTS
+ *                                  ordered, comma-separated form of the above
+ *                                  for a bounded set of checkpoints in one
+ *                                  frame.  Selecting both forms is refused.
+ *   EU4_GFX_FRAME_TRACE_MAX_CHECKPOINTS
+ *                                  maximum accepted checkpoint count
+ *                                  (default 4, hard bound 8)
+ *   EU4_GFX_FRAME_TRACE_CHECKPOINT_MAX_BYTES
+ *                                  aggregate readback-byte budget for the
+ *                                  whole checkpoint set (default 64 MiB)
  *   EU4_GFX_FRAME_TRACE_TIMEOUT_MS bounded time from arming to finish; an
  *                                  expired frame is published as an explicit
  *                                  incomplete result
@@ -88,7 +98,12 @@ int eu4_gfx_frame_trace_test_checkpoint(const char *directory, int event,
                                         char *out_file, size_t out_size);
 /* Host-test only: invoke the selected-event hook directly (duplicate guard). */
 int eu4_gfx_frame_trace_test_checkpoint_hook(void);
+/* Host-test only: 1 when at least one requested slot has been captured. */
 int eu4_gfx_frame_trace_test_checkpoint_captured(void);
+/* Host-test only: number of requested checkpoint slots in the current
+   configuration and whether one specific slot has been captured. */
+int eu4_gfx_frame_trace_test_checkpoint_count(void);
+int eu4_gfx_frame_trace_test_checkpoint_captured_at(int slot);
 
 /* Effective state of one glCopyTexSubImage2D/glBlitFramebuffer call.  The
    source attachment and the default framebuffer's read buffer are part of the

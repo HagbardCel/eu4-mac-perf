@@ -82,9 +82,14 @@ static void load_sampler_queries(void) {
 #define FTRACE_MAX_LIFECYCLE 64
 #define FTRACE_MAX_TEX_BYTES (256u * 1024u * 1024u)
 #define FTRACE_MAX_BLOB_BYTES (512u * 1024u * 1024u)
-/* One selected pre-operation framebuffer checkpoint is bounded by the same
-   maximum drawable extent the readback itself enforces (8192x8192 BGRA8). */
+/* A bounded collection of selected pre-operation framebuffer checkpoints.
+   Each individual image is limited to the maximum drawable extent the
+   readback itself enforces (8192x8192 BGRA8); the whole set additionally
+   shares one aggregate readback-byte budget and one deadline per capture. */
+#define FTRACE_MAX_CHECKPOINTS 8
+#define FTRACE_DEFAULT_MAX_CHECKPOINTS 4
 #define FTRACE_MAX_CHECKPOINT_BYTES (256u * 1024u * 1024u)
+#define FTRACE_DEFAULT_CHECKPOINT_TOTAL_BYTES (64ull * 1024ull * 1024ull)
 #define FTRACE_CHECKPOINT_MAX_NS (10ull * 1000ull * 1000ull * 1000ull)
 #define FTRACE_NAME 96
 
@@ -180,14 +185,22 @@ static struct {
     uint32_t reference_width;
     uint32_t reference_height;
 
-    /* Exactly one opt-in default-framebuffer checkpoint, captured immediately
-       before the selected event executes.  -1 means the feature is disabled
-       and no additional GPU readback is performed. */
-    int checkpoint_event;
-    int checkpoint_captured;
-    uint64_t checkpoint_ns;
-    char checkpoint_file[FTRACE_NAME];
-    char checkpoint_json[768];
+    /* Bounded opt-in default-framebuffer checkpoints.  Each requested event is
+       captured immediately before that operation executes.  An empty set
+       disables the feature entirely and performs no additional GPU readback. */
+    int checkpoint_events[FTRACE_MAX_CHECKPOINTS];
+    int checkpoint_count;
+    int checkpoint_max_count;
+    uint64_t checkpoint_max_bytes;
+    int checkpoint_captured[FTRACE_MAX_CHECKPOINTS];
+    uint64_t checkpoint_ns[FTRACE_MAX_CHECKPOINTS];
+    size_t checkpoint_bytes[FTRACE_MAX_CHECKPOINTS];
+    uint64_t checkpoint_total_bytes;
+    char checkpoint_file[FTRACE_MAX_CHECKPOINTS][FTRACE_NAME];
+    char checkpoint_json[FTRACE_MAX_CHECKPOINTS][1024];
+    /* Slot captured at the current event and not yet attached to its record.
+       -1 means nothing is pending. */
+    int checkpoint_pending;
 
     char gl_vendor[256];
     char gl_renderer[256];
@@ -629,15 +642,41 @@ static int capture_timed_out_locked(void);
 static void continuous_write_campaign(const char *status,
                                       const char *reason);
 static int maybe_capture_default_checkpoint_locked(void);
-static int capture_default_checkpoint_pixels_locked(const uint8_t *pixels,
+static int capture_default_checkpoint_pixels_locked(int slot,
+                                                    const uint8_t *pixels,
                                                     uint32_t width,
                                                     uint32_t height);
+static int checkpoint_pending_slot_locked(void);
+static void checkpoint_clear_pending_locked(void);
 
 static void fail_capture_locked(const char *reason) {
     g.capture_failed = 1;
     if (g_capture_failure_reason == NULL) {
         g_capture_failure_reason = reason;
     }
+}
+
+/* The pending checkpoint may only attach to the event it was selected for.
+   A record emitted for any other index means the pre-execution observation
+   was attached to the wrong operation, so the capture is failed rather than
+   silently re-bound. */
+static int checkpoint_pending_slot_locked(void) {
+    if (g.checkpoint_pending < 0) {
+        return -1;
+    }
+    if (g.checkpoint_pending >= g.checkpoint_count) {
+        fail_capture_locked("default_checkpoint_unattached");
+        return -1;
+    }
+    if (g.checkpoint_events[g.checkpoint_pending] != g.event_count) {
+        fail_capture_locked("default_checkpoint_unattached");
+        return -1;
+    }
+    return g.checkpoint_pending;
+}
+
+static void checkpoint_clear_pending_locked(void) {
+    g.checkpoint_pending = -1;
 }
 
 /* Ordered copy/resolve event from the GL interposer.  Every copy is logged to
@@ -728,10 +767,12 @@ int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event) {
         internal_format = queried_format;
     }
     char source_image[512] = "";
-    char checkpoint_image[800] = "";
-    if (g.checkpoint_json[0] != 0) {
+    char checkpoint_image[1100] = "";
+    int checkpoint_slot = checkpoint_pending_slot_locked();
+    if (checkpoint_slot >= 0) {
         snprintf(checkpoint_image, sizeof(checkpoint_image),
-                 ",\"default_checkpoint\":%s", g.checkpoint_json);
+                 ",\"default_checkpoint\":%s",
+                 g.checkpoint_json[checkpoint_slot]);
     }
     if (g.armed && event->source_framebuffer == 0) {
         const char *capture_source = getenv(
@@ -810,7 +851,7 @@ int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event) {
         g.event_count++;
         g.copy_events++;
         accepted = 1;
-        g.checkpoint_json[0] = 0;
+        checkpoint_clear_pending_locked();
     }
     pthread_mutex_unlock(&g_lock);
     return accepted;
@@ -1185,7 +1226,9 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
     memcpy(g.session_id, preserved_session_id, sizeof(g.session_id));
     g.at_frame = UINT64_MAX;
     g.boundary_fb = -1;
-    g.checkpoint_event = -1;
+    g.checkpoint_pending = -1;
+    g.checkpoint_max_count = FTRACE_DEFAULT_MAX_CHECKPOINTS;
+    g.checkpoint_max_bytes = FTRACE_DEFAULT_CHECKPOINT_TOTAL_BYTES;
     const char *dir = getenv("EU4_GFX_FRAME_TRACE_DIR");
     const char *boundary_fb = getenv("EU4_GFX_FRAME_TRACE_BOUNDARY_FB");
     const char *boundary = getenv("EU4_GFX_FRAME_TRACE_BOUNDARY");
@@ -1200,6 +1243,8 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
     const char *max_frame_draws = getenv("EU4_GFX_FRAME_TRACE_MAX_FRAME_DRAWS");
     const char *default_checkpoint_event =
         getenv("EU4_GFX_FRAME_TRACE_DEFAULT_CHECKPOINT_EVENT");
+    const char *default_checkpoint_events =
+        getenv("EU4_GFX_FRAME_TRACE_DEFAULT_CHECKPOINT_EVENTS");
     const char *timeline = getenv("EU4_GFX_FRAME_TRACE_TIMELINE");
     const char *timeout_ms = getenv("EU4_GFX_FRAME_TRACE_TIMEOUT_MS");
     const char *seal = getenv("EU4_GFX_FRAME_SEAL");
@@ -1338,19 +1383,80 @@ int eu4_gfx_frame_trace_configure_from_env(void) {
         }
         g.max_frame_draws = (uint32_t)value; /* 0 means unlimited */
     }
-    if (default_checkpoint_event != NULL &&
-        default_checkpoint_event[0] != 0) {
+    const char *max_checkpoints =
+        getenv("EU4_GFX_FRAME_TRACE_MAX_CHECKPOINTS");
+    if (max_checkpoints != NULL && max_checkpoints[0] != 0) {
         uint64_t value = 0;
-        if (parse_u64(default_checkpoint_event, &value) != 0 ||
-            value > (uint64_t)INT_MAX) {
+        if (parse_u64(max_checkpoints, &value) != 0 || value == 0 ||
+            value > (uint64_t)FTRACE_MAX_CHECKPOINTS) {
             return -1;
         }
-        if (value >= (uint64_t)g.max_draws) {
-            /* A selected event at or beyond the event budget can never be
-               recorded and can never be observed pre-execution. */
+        g.checkpoint_max_count = (int)value;
+    }
+    const char *checkpoint_max_bytes =
+        getenv("EU4_GFX_FRAME_TRACE_CHECKPOINT_MAX_BYTES");
+    if (checkpoint_max_bytes != NULL && checkpoint_max_bytes[0] != 0) {
+        uint64_t value = 0;
+        if (parse_u64(checkpoint_max_bytes, &value) != 0 || value == 0) {
             return -1;
         }
-        g.checkpoint_event = (int)value;
+        g.checkpoint_max_bytes = value;
+    }
+    /* One selection source only.  The ordered list is the multi-checkpoint
+       form; the single-event variable is retained for existing callers. */
+    const char *checkpoint_selection = NULL;
+    if (default_checkpoint_events != NULL &&
+        default_checkpoint_events[0] != 0) {
+        if (default_checkpoint_event != NULL &&
+            default_checkpoint_event[0] != 0) {
+            return -1;
+        }
+        checkpoint_selection = default_checkpoint_events;
+    } else if (default_checkpoint_event != NULL &&
+               default_checkpoint_event[0] != 0) {
+        checkpoint_selection = default_checkpoint_event;
+    }
+    if (checkpoint_selection != NULL) {
+        size_t selection_length = strlen(checkpoint_selection);
+        /* Reject empty elements explicitly: strtok_r would silently collapse
+           them and a requested checkpoint would disappear. */
+        if (selection_length >= 512 || checkpoint_selection[0] == ',' ||
+            checkpoint_selection[selection_length - 1] == ',' ||
+            strstr(checkpoint_selection, ",,") != NULL) {
+            return -1;
+        }
+        char selection_copy[512];
+        snprintf(selection_copy, sizeof(selection_copy), "%s",
+                 checkpoint_selection);
+        char *save = NULL;
+        for (char *token = strtok_r(selection_copy, ",", &save); token != NULL;
+             token = strtok_r(NULL, ",", &save)) {
+            uint64_t value = 0;
+            if (parse_u64(token, &value) != 0 ||
+                value > (uint64_t)INT_MAX) {
+                return -1;
+            }
+            if (value >= (uint64_t)g.max_draws) {
+                /* A selected event at or beyond the event budget can never be
+                   recorded and can never be observed pre-execution. */
+                return -1;
+            }
+            if (g.checkpoint_count >= g.checkpoint_max_count ||
+                g.checkpoint_count >= FTRACE_MAX_CHECKPOINTS) {
+                return -1;
+            }
+            if (g.checkpoint_count > 0 &&
+                value <= (uint64_t)
+                    g.checkpoint_events[g.checkpoint_count - 1]) {
+                /* Strictly increasing: duplicates and reordering are
+                   rejected rather than normalised. */
+                return -1;
+            }
+            g.checkpoint_events[g.checkpoint_count++] = (int)value;
+        }
+        if (g.checkpoint_count == 0) {
+            return -1;
+        }
     }
     if (timeout_ms != NULL) {
         uint64_t value = 0;
@@ -2937,11 +3043,19 @@ static int write_frame_manifest(int complete, const char *reason) {
     fprintf(file, "\"scene_index\":%d,",
             g.boundary_scene ? g.capturing_frame : g.scene_index);
     fprintf(file, "\"events\":%d,", g.event_count);
-    if (g.checkpoint_event < 0) {
-        fputs("\"default_checkpoint_event\":null,", file);
-    } else {
+    fputs("\"default_checkpoint_events\":[", file);
+    for (int index = 0; index < g.checkpoint_count; index++) {
+        fprintf(file, "%s%d", index == 0 ? "" : ",",
+                g.checkpoint_events[index]);
+    }
+    fputs("],", file);
+    fprintf(file, "\"default_checkpoint_count\":%d,", g.checkpoint_count);
+    if (g.checkpoint_count == 1) {
         fprintf(file, "\"default_checkpoint_event\":%d,",
-                g.checkpoint_event);
+                g.checkpoint_events[0]);
+    } else {
+        /* The legacy singular field is only meaningful for one selection. */
+        fputs("\"default_checkpoint_event\":null,", file);
     }
     fprintf(file, "\"capacity_exceeded\":%s,", bool_text(g.capacity_exceeded));
     fprintf(file, "\"capacity_limit\":\"%s\",", g.capacity_limit);
@@ -3549,15 +3663,19 @@ static void finish_capture_ex(const char *reason, int allow_reference) {
            does not claim a reference image. */
         capture_dimensions_only(&g.reference_width, &g.reference_height);
     }
-    /* A requested checkpoint that never reached a supported pre-operation
-       boundary is a capture failure, not a frame that can be qualified. */
-    if (g.checkpoint_event >= 0 && !g.checkpoint_captured) {
-        fail_capture_locked("default_checkpoint_missed");
+    /* Every requested checkpoint must have reached a supported
+       pre-operation boundary exactly once; a missed one is a capture
+       failure, not a frame that can be qualified. */
+    for (int index = 0; index < g.checkpoint_count; index++) {
+        if (!g.checkpoint_captured[index]) {
+            fail_capture_locked("default_checkpoint_missed");
+            break;
+        }
     }
     /* A checkpoint captured at a boundary that finalizes before the selected
        event record is emitted has no event to attach to.  Never publish an
        unreferenced blob as if it belonged to the selected event. */
-    if (g.checkpoint_event >= 0 && g.checkpoint_json[0] != 0) {
+    if (g.checkpoint_pending >= 0) {
         fail_capture_locked("default_checkpoint_unattached");
     }
     /* The manifest is published only after the event stream has been closed
@@ -3815,10 +3933,15 @@ static void start_capture_at_frame(int next_frame) {
     g.draw_events = 0;
     g.clear_events = 0;
     g.copy_events = 0;
-    g.checkpoint_captured = 0;
-    g.checkpoint_ns = 0;
-    g.checkpoint_file[0] = 0;
-    g.checkpoint_json[0] = 0;
+    for (int index = 0; index < FTRACE_MAX_CHECKPOINTS; index++) {
+        g.checkpoint_captured[index] = 0;
+        g.checkpoint_ns[index] = 0;
+        g.checkpoint_bytes[index] = 0;
+        g.checkpoint_file[index][0] = 0;
+        g.checkpoint_json[index][0] = 0;
+    }
+    g.checkpoint_total_bytes = 0;
+    g.checkpoint_pending = -1;
     g.truncated = 0;
     g.capture_failed = 0;
     g.stream_validated = 0;
@@ -4038,12 +4161,17 @@ int eu4_gfx_frame_trace_test_reference(const char *directory) {
 }
 
 /* Publish one already-read BGRA8 image as the additive default-framebuffer
-   checkpoint of the selected event.  The blob is content-addressed and joins
-   the ordinary blob registry, so normal trace verification and the portable
-   case inventory see it exactly like every other captured payload. */
-static int capture_default_checkpoint_pixels_locked(const uint8_t *pixels,
+   checkpoint of the selected event in ``slot``.  The blob is content-addressed
+   and joins the ordinary blob registry, so normal trace verification and the
+   portable case inventory see it exactly like every other captured payload. */
+static int capture_default_checkpoint_pixels_locked(int slot,
+                                                    const uint8_t *pixels,
                                                     uint32_t width,
                                                     uint32_t height) {
+    if (slot < 0 || slot >= g.checkpoint_count) {
+        fail_capture_locked("default_checkpoint_unattached");
+        return -1;
+    }
     if (pixels == NULL || width == 0 || height == 0 || width > 8192 ||
         height > 8192) {
         fail_capture_locked("default_checkpoint_dimensions");
@@ -4059,57 +4187,105 @@ static int capture_default_checkpoint_pixels_locked(const uint8_t *pixels,
         fail_capture_locked("default_checkpoint_size");
         return -1;
     }
+    if (g.checkpoint_total_bytes > g.checkpoint_max_bytes ||
+        (uint64_t)bytes > g.checkpoint_max_bytes - g.checkpoint_total_bytes) {
+        fail_capture_locked("default_checkpoint_budget");
+        return -1;
+    }
     char file[FTRACE_NAME];
     char sha[65];
     if (put_blob(pixels, bytes, "default-checkpoint", file, sha) != 0) {
         return -1;
     }
-    snprintf(g.checkpoint_file, sizeof(g.checkpoint_file), "%s", file);
+    /* A standalone host call has no configured session; the identity fields
+       are then omitted rather than published empty. */
+    char identity[192] = "";
+    if (g.session_id[0] != 0 && g.capture_id != 0) {
+        snprintf(identity, sizeof(identity),
+                 ",\"session_id\":\"%s\",\"capture_frame_id\":%llu",
+                 g.session_id, (unsigned long long)g.capture_id);
+    }
+    snprintf(g.checkpoint_file[slot], sizeof(g.checkpoint_file[slot]), "%s",
+             file);
     snprintf(
-        g.checkpoint_json, sizeof(g.checkpoint_json),
+        g.checkpoint_json[slot], sizeof(g.checkpoint_json[slot]),
         "{\"schema\":\"gfx-default-framebuffer-checkpoint/v1\","
         "\"event\":%d,\"target\":\"0\",\"resource\":\"fb:0\","
         "\"width\":%u,\"height\":%u,\"bytes\":%zu,"
         "\"file\":\"%s\",\"sha256\":\"%s\","
         "\"pixel_format\":\"BGRA8\",\"origin\":\"lower_left\","
-        "\"timing\":\"pre_event\",\"status\":\"captured\","
+        "\"timing\":\"pre_event\",\"status\":\"captured\"%s,"
         "\"readback_ns\":%llu}",
-        g.checkpoint_event, width, height, bytes, file, sha,
-        (unsigned long long)g.checkpoint_ns);
-    g.checkpoint_captured = 1;
+        g.checkpoint_events[slot], width, height, bytes, file, sha, identity,
+        (unsigned long long)g.checkpoint_ns[slot]);
+    g.checkpoint_bytes[slot] = bytes;
+    g.checkpoint_total_bytes += (uint64_t)bytes;
+    g.checkpoint_captured[slot] = 1;
     return 0;
 }
 
 /* Observe the default framebuffer immediately before the selected event.  This
    runs from the draw/clear entry hooks and from the pre-execution copy event,
    never from an exit hook, so the captured image matches Metal's pre-event
-   checkpoint semantics.  Returns 1 after a capture, 0 when this is not the
-   selected event, and -1 when the requested checkpoint could not be produced. */
+   checkpoint semantics.  Returns 1 after a capture, 0 when this is not a
+   selected event, and -1 when the requested checkpoint could not be
+   produced. */
 static int maybe_capture_default_checkpoint_locked(void) {
-    if (g.checkpoint_event < 0 || !g.armed || g.events == NULL) {
+    if (g.checkpoint_count == 0 || !g.armed || g.events == NULL) {
         return 0;
     }
-    if (g.event_count != g.checkpoint_event) {
+    int slot = -1;
+    for (int index = 0; index < g.checkpoint_count; index++) {
+        if (g.checkpoint_events[index] == g.event_count) {
+            slot = index;
+            break;
+        }
+    }
+    if (slot < 0) {
         return 0;
     }
     if (g.event_count >= (int)g.max_draws) {
         fail_capture_locked("default_checkpoint_event_not_recorded");
         return -1;
     }
-    if (g.checkpoint_captured) {
+    if (g.checkpoint_captured[slot]) {
         fail_capture_locked("default_checkpoint_duplicate");
         return -1;
     }
-    uint64_t started = now_ns();
+    if (g.checkpoint_pending >= 0) {
+        /* An earlier selected checkpoint was captured but its record was never
+           emitted; the pre-execution observation cannot be attached. */
+        fail_capture_locked("default_checkpoint_unattached");
+        return -1;
+    }
     uint32_t width = 0;
     uint32_t height = 0;
-    uint8_t *pixels = NULL;
     if (g.test_only) {
-        /* The offline writer host has no GL context.  It still exercises the
-           production blob/metadata/finalize path with a bounded synthetic
-           image; the real readback below is shared with the final reference. */
+        /* The offline writer host has no GL context.  Its synthetic image is
+           bounded exactly like the production readback below. */
         width = 4;
         height = 4;
+    } else {
+        capture_dimensions_only(&width, &height);
+    }
+    if (width == 0 || height == 0) {
+        fail_capture_locked("default_checkpoint_dimensions");
+        return -1;
+    }
+    /* Reject an over-budget readback before touching the driver. */
+    uint64_t projected = (uint64_t)width * (uint64_t)height * 4ull;
+    if (projected == 0 ||
+        g.checkpoint_total_bytes > g.checkpoint_max_bytes ||
+        projected > g.checkpoint_max_bytes - g.checkpoint_total_bytes) {
+        fail_capture_locked("default_checkpoint_budget");
+        return -1;
+    }
+    uint64_t started = now_ns();
+    uint8_t *pixels = NULL;
+    if (g.test_only) {
+        /* It still exercises the production blob/metadata/finalize path with a
+           bounded synthetic image; the real readback below is shared with the
+           final reference. */
         pixels = malloc((size_t)width * height * 4u);
         if (pixels != NULL) {
             for (size_t i = 0; i < (size_t)width * height * 4u; i++) {
@@ -4125,15 +4301,19 @@ static int maybe_capture_default_checkpoint_locked(void) {
         fail_capture_locked("default_checkpoint_read");
         return -1;
     }
-    g.checkpoint_ns = now_ns() - started;
+    g.checkpoint_ns[slot] = now_ns() - started;
     int result =
-        capture_default_checkpoint_pixels_locked(pixels, width, height);
+        capture_default_checkpoint_pixels_locked(slot, pixels, width, height);
     free(pixels);
-    if (result == 0 && g.checkpoint_ns > FTRACE_CHECKPOINT_MAX_NS) {
+    if (result != 0) {
+        return -1;
+    }
+    if (g.checkpoint_ns[slot] > FTRACE_CHECKPOINT_MAX_NS) {
         fail_capture_locked("default_checkpoint_time");
         return -1;
     }
-    return result == 0 ? 1 : -1;
+    g.checkpoint_pending = slot;
+    return 1;
 }
 
 /* Host-test only: run the production readback/writer for one selected event,
@@ -4153,10 +4333,20 @@ int eu4_gfx_frame_trace_test_checkpoint(const char *directory, int event,
     if (mkdir_p(blobs) != 0) {
         return -1;
     }
-    g.checkpoint_event = event;
-    g.checkpoint_captured = 0;
-    g.checkpoint_file[0] = 0;
-    g.checkpoint_json[0] = 0;
+    g.checkpoint_events[0] = event;
+    g.checkpoint_count = 1;
+    if (g.checkpoint_max_count == 0) {
+        g.checkpoint_max_count = FTRACE_DEFAULT_MAX_CHECKPOINTS;
+    }
+    if (g.checkpoint_max_bytes == 0) {
+        g.checkpoint_max_bytes = FTRACE_DEFAULT_CHECKPOINT_TOTAL_BYTES;
+    }
+    g.checkpoint_pending = -1;
+    g.checkpoint_captured[0] = 0;
+    g.checkpoint_bytes[0] = 0;
+    g.checkpoint_total_bytes = 0;
+    g.checkpoint_file[0][0] = 0;
+    g.checkpoint_json[0][0] = 0;
     uint64_t started = now_ns();
     uint32_t width = 0;
     uint32_t height = 0;
@@ -4165,15 +4355,15 @@ int eu4_gfx_frame_trace_test_checkpoint(const char *directory, int event,
         free(pixels);
         return -1;
     }
-    g.checkpoint_ns = now_ns() - started;
-    int result =
-        capture_default_checkpoint_pixels_locked(pixels, width, height);
+    g.checkpoint_ns[0] = now_ns() - started;
+    int result = capture_default_checkpoint_pixels_locked(0, pixels, width,
+                                                          height);
     free(pixels);
     if (result != 0) {
         return -1;
     }
     if (out_file != NULL && out_size > 0) {
-        snprintf(out_file, out_size, "%s", g.checkpoint_file);
+        snprintf(out_file, out_size, "%s", g.checkpoint_file[0]);
     }
     return 0;
 }
@@ -4185,7 +4375,23 @@ int eu4_gfx_frame_trace_test_checkpoint_hook(void) {
 }
 
 int eu4_gfx_frame_trace_test_checkpoint_captured(void) {
-    return g.checkpoint_captured;
+    for (int index = 0; index < g.checkpoint_count; index++) {
+        if (g.checkpoint_captured[index]) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int eu4_gfx_frame_trace_test_checkpoint_count(void) {
+    return g.checkpoint_count;
+}
+
+int eu4_gfx_frame_trace_test_checkpoint_captured_at(int slot) {
+    if (slot < 0 || slot >= g.checkpoint_count) {
+        return 0;
+    }
+    return g.checkpoint_captured[slot];
 }
 
 void eu4_gfx_frame_trace_boundary_entry(eu4_gfx_capture_frame *frame,
@@ -4544,18 +4750,20 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
         g.event_count < (int)g.max_draws) {
         /* The offline writer host has no GL context; keep the ordered stream
            shape without querying the driver. */
-        char body[1024];
+        int checkpoint_slot = checkpoint_pending_slot_locked();
+        char body[2048];
         int length = snprintf(
             body, sizeof body,
             "{\"kind\":\"clear\",\"before_first_draw\":%s,\"flags\":%d,"
             "\"test\":true%s%s}",
             bool_text(g.event_count == 0), (int)frame->rsi,
-            g.checkpoint_json[0] != 0 ? ",\"default_checkpoint\":" : "",
-            g.checkpoint_json);
+            checkpoint_slot >= 0 ? ",\"default_checkpoint\":" : "",
+            checkpoint_slot >= 0
+                ? g.checkpoint_json[checkpoint_slot] : "");
         if (length > 0 && (size_t)length < sizeof body && emit_event(body)) {
             g.event_count++;
             g.clear_events++;
-            g.checkpoint_json[0] = 0;
+            checkpoint_clear_pending_locked();
         }
         pthread_mutex_unlock(&g_lock);
         eu4_gfx_frame_sealed_dispatch();
@@ -4574,6 +4782,7 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
         }
         char *buffer = NULL;
         size_t size = 0;
+        int checkpoint_slot = checkpoint_pending_slot_locked();
         FILE *memory = open_memstream(&buffer, &size);
         if (memory != NULL) {
             json_out out = {memory, 0};
@@ -4585,9 +4794,9 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
                     (double)color[0], (double)color[1], (double)color[2],
                     (double)color[3], (double)depth, stencil);
             capture_target(&out, NULL, NULL);
-            if (g.checkpoint_json[0] != 0) {
+            if (checkpoint_slot >= 0) {
                 jprintf(&out, ",\"default_checkpoint\":%s",
-                        g.checkpoint_json);
+                        g.checkpoint_json[checkpoint_slot]);
             }
             jprintf(&out, "}");
             fclose(memory);
@@ -4595,7 +4804,7 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
                 emit_event(buffer);
                 g.event_count++;
                 g.clear_events++;
-                g.checkpoint_json[0] = 0;
+                checkpoint_clear_pending_locked();
             } else {
                 g.capture_failed = 1;
             }
@@ -4764,20 +4973,21 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
             if (g.event_count >= (int)g.max_draws) {
                 g.truncated = 1;
             } else {
-                char body[1024];
+                int checkpoint_slot = checkpoint_pending_slot_locked();
+                char body[2048];
                 int length = snprintf(
                     body, sizeof body,
                     "{\"kind\":\"draw\",\"index\":%d,\"test\":true,"
                     "\"draw\":{\"entry\":\"_GfxDraw\",\"caller_rva\":\"0x%llx\"}%s%s}",
                     g.event_count, (unsigned long long)call->caller_rva,
-                    g.checkpoint_json[0] != 0 ? ",\"default_checkpoint\":"
-                                              : "",
-                    g.checkpoint_json);
+                    checkpoint_slot >= 0 ? ",\"default_checkpoint\":" : "",
+                    checkpoint_slot >= 0
+                        ? g.checkpoint_json[checkpoint_slot] : "");
                 if (length > 0 && (size_t)length < sizeof body &&
                     emit_event(body)) {
                     g.event_count++;
                     g.draw_events++;
-                    g.checkpoint_json[0] = 0;
+                    checkpoint_clear_pending_locked();
                 }
             }
         }
@@ -4791,13 +5001,14 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
     if (g.armed && g.events != NULL && g.event_count < (int)g.max_draws) {
         char *buffer = NULL;
         size_t size = 0;
+        int checkpoint_slot = checkpoint_pending_slot_locked();
         FILE *memory = open_memstream(&buffer, &size);
         if (memory != NULL) {
             json_out out = {memory, 0};
             jprintf(&out, "{\"kind\":\"draw\",\"index\":%d", g.event_count);
-            if (g.checkpoint_json[0] != 0) {
+            if (checkpoint_slot >= 0) {
                 jprintf(&out, ",\"default_checkpoint\":%s",
-                        g.checkpoint_json);
+                        g.checkpoint_json[checkpoint_slot]);
             }
             if (!g.seed_emitted && g.seed_json[0] != 0) {
                 const char *seed = g.seed_json;
@@ -4834,7 +5045,7 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
                 emit_event(buffer);
                 g.event_count++;
                 g.draw_events++;
-                g.checkpoint_json[0] = 0;
+                checkpoint_clear_pending_locked();
             } else {
                 fail_capture_locked(g_capture_failure_reason != NULL
                                         ? g_capture_failure_reason

@@ -252,6 +252,95 @@ class FrameTraceWriterTests(unittest.TestCase):
             result = self._run("checkpoint-out-of-range", directory)
             self.assertIn("configure_rejected=-1", result.stdout)
 
+    def test_multiple_checkpoints_cover_draw_clear_and_copy(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            self._run("checkpoint-multi", directory)
+            manifest = self._manifest(directory)
+            events = self._events(directory)
+            self.assertTrue(manifest["complete"], manifest)
+            self.assertEqual(manifest["default_checkpoint_events"], [0, 1, 2])
+            self.assertEqual(manifest["default_checkpoint_count"], 3)
+            # The legacy singular field only describes a single selection.
+            self.assertIsNone(manifest["default_checkpoint_event"])
+            self.assertEqual([event["kind"] for event in events],
+                             ["draw", "clear", "resolve"])
+            for index, event in enumerate(events):
+                checkpoint = event["default_checkpoint"]
+                self.assertEqual(checkpoint["event"], index)
+                self.assertEqual(checkpoint["resource"], "fb:0")
+                self.assertEqual(checkpoint["timing"], "pre_event")
+                self.assertEqual(checkpoint["status"], "captured")
+                blob = directory / "blobs" / checkpoint["file"]
+                self.assertTrue(blob.is_file())
+                self.assertEqual(
+                    hashlib.sha256(blob.read_bytes()).hexdigest(),
+                    checkpoint["sha256"])
+            seal = json.loads(
+                (directory / "frame-seal.json").read_text())
+            self.assertTrue(seal["sealed"], seal)
+            self.assertEqual(seal["operation_count"], 3)
+
+    def test_every_checkpoint_preserves_the_capture_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            self._run("checkpoint-multi", directory)
+            events = self._events(directory)
+            seal = json.loads((directory / "frame-seal.json").read_text())
+            identities = {(event["default_checkpoint"]["session_id"],
+                           event["default_checkpoint"]["capture_frame_id"])
+                          for event in events}
+            self.assertEqual(len(identities), 1)
+            session_id, capture_frame_id = identities.pop()
+            self.assertEqual(session_id, seal["session_id"])
+            self.assertEqual(capture_frame_id, seal["capture_frame_id"])
+
+    def test_multiple_checkpoints_fail_closed_when_one_is_missed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            self._run("checkpoint-multi-missed", directory)
+            manifest = self._manifest(directory)
+            self.assertFalse(manifest["complete"], manifest)
+            self.assertEqual(manifest["reason"], "default_checkpoint_missed")
+            attached = [event["default_checkpoint"]["event"]
+                        for event in self._events(directory)
+                        if "default_checkpoint" in event]
+            self.assertEqual(attached, [0])
+
+    def test_multiple_checkpoints_enforce_the_aggregate_byte_budget(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            self._run("checkpoint-multi-budget", directory)
+            manifest = self._manifest(directory)
+            self.assertFalse(manifest["complete"], manifest)
+            self.assertEqual(manifest["reason"], "default_checkpoint_budget")
+            attached = [event["default_checkpoint"]["event"]
+                        for event in self._events(directory)
+                        if "default_checkpoint" in event]
+            self.assertEqual(attached, [0])
+
+    def test_captured_checkpoint_without_a_record_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            self._run("checkpoint-multi-pending", directory)
+            manifest = self._manifest(directory)
+            self.assertFalse(manifest["complete"], manifest)
+            self.assertEqual(manifest["reason"],
+                             "default_checkpoint_unattached")
+
+    def test_invalid_checkpoint_selections_are_rejected(self):
+        for scenario in (
+                "checkpoint-multi-unordered",
+                "checkpoint-multi-duplicate",
+                "checkpoint-multi-empty",
+                "checkpoint-multi-over-count",
+                "checkpoint-multi-both-forms"):
+            with self.subTest(scenario=scenario):
+                with tempfile.TemporaryDirectory() as temporary:
+                    directory = Path(temporary) / "capture"
+                    result = self._run(scenario, directory)
+                    self.assertIn("configure_rejected=-1", result.stdout)
+
     def test_disabled_checkpoint_adds_no_metadata_or_readback(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary) / "capture"

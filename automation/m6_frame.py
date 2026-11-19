@@ -560,6 +560,68 @@ def checkpoint_selection_error(event, max_draws) -> str | None:
     return None
 
 
+def checkpoint_events_selection_error(events, max_draws,
+                                      max_count: int = 4) -> str | None:
+    """Reject an invalid bounded set of default-framebuffer checkpoints.
+
+    The set must be non-empty, strictly increasing (so duplicates and
+    reordering are refused rather than normalised), in range, and within the
+    externally enforced count budget.  The native tracer applies the same
+    checks again, so a caller cannot bypass them.
+    """
+    if events is None:
+        return None
+    if not events:
+        return "default checkpoint events must not be empty"
+    if max_count <= 0:
+        return "maximum checkpoint count must be positive"
+    if len(events) > max_count:
+        return (f"{len(events)} default checkpoints exceed the maximum of "
+                f"{max_count}")
+    previous = None
+    for event in events:
+        if not isinstance(event, int) or isinstance(event, bool):
+            return "default checkpoint events must be integers"
+        if event < 0:
+            return "default checkpoint events must be non-negative"
+        if max_draws <= 0 or event >= max_draws:
+            return "default checkpoint events must be below --max-draws"
+        if previous is not None and event <= previous:
+            return ("default checkpoint events must be strictly increasing "
+                    "and distinct")
+        previous = event
+    return None
+
+
+def checkpoint_options_error(args) -> str | None:
+    """Validate the checkpoint capture options before a live launch.
+
+    Returns a human-readable refusal reason, or ``None`` when the selection is
+    acceptable.  The native tracer repeats every check, so this is a usability
+    guard rather than the only enforcement point.
+    """
+    checkpoint_event = getattr(args, "default_checkpoint_event", None)
+    checkpoint_events = getattr(args, "default_checkpoint_events", None)
+    problem = checkpoint_selection_error(checkpoint_event, args.max_draws)
+    if problem is not None:
+        return problem
+    if checkpoint_events is not None:
+        if checkpoint_event is not None:
+            return ("--default-checkpoint-event and "
+                    "--default-checkpoint-events are mutually exclusive")
+        problem = checkpoint_events_selection_error(
+            checkpoint_events, args.max_draws,
+            int(getattr(args, "max_checkpoints", 4)))
+        if problem is not None:
+            return problem
+    checkpoint_budget = int(getattr(args, "checkpoint_max_bytes",
+                                    64 * 1024 * 1024))
+    if (checkpoint_event is not None or checkpoint_events is not None) and \
+            checkpoint_budget <= 0:
+        return "--checkpoint-max-bytes must be positive"
+    return None
+
+
 def capture(args: argparse.Namespace) -> int:
     import eu4_gfx_startup_trace as startup
     from automation import live_gfx
@@ -610,11 +672,13 @@ def capture(args: argparse.Namespace) -> int:
         print(f"capture refused: unknown boundary {args.boundary!r}", file=sys.stderr)
         return 2
     checkpoint_event = getattr(args, "default_checkpoint_event", None)
-    checkpoint_problem = checkpoint_selection_error(
-        checkpoint_event, args.max_draws)
+    checkpoint_events = getattr(args, "default_checkpoint_events", None)
+    checkpoint_problem = checkpoint_options_error(args)
     if checkpoint_problem is not None:
         print(f"capture refused: {checkpoint_problem}", file=sys.stderr)
         return 2
+    checkpoint_budget = int(getattr(args, "checkpoint_max_bytes",
+                                    64 * 1024 * 1024))
     env_extra = {
         "EU4_GFX_FRAME_TRACE_DIR": str(frame_dir),
         "EU4_GFX_FRAME_TRACE_CALLERS": args.callers or "",
@@ -647,6 +711,13 @@ def capture(args: argparse.Namespace) -> int:
     if checkpoint_event is not None:
         env_extra["EU4_GFX_FRAME_TRACE_DEFAULT_CHECKPOINT_EVENT"] = str(
             checkpoint_event)
+    if checkpoint_events is not None:
+        env_extra["EU4_GFX_FRAME_TRACE_DEFAULT_CHECKPOINT_EVENTS"] = ",".join(
+            str(event) for event in checkpoint_events)
+        env_extra["EU4_GFX_FRAME_TRACE_MAX_CHECKPOINTS"] = str(
+            int(getattr(args, "max_checkpoints", 4)))
+        env_extra["EU4_GFX_FRAME_TRACE_CHECKPOINT_MAX_BYTES"] = str(
+            checkpoint_budget)
     shadow_enabled = bool(getattr(args, "shadow", False))
     continuous = bool(getattr(args, "continuous", False))
     asynchronous = bool(getattr(args, "async", False))
@@ -821,6 +892,11 @@ def capture(args: argparse.Namespace) -> int:
             "pre_post_callers": args.pre_post_callers,
             "default_checkpoint_event": getattr(
                 args, "default_checkpoint_event", None),
+            "default_checkpoint_events": getattr(
+                args, "default_checkpoint_events", None),
+            "max_checkpoints": getattr(args, "max_checkpoints", None),
+            "checkpoint_max_bytes": getattr(
+                args, "checkpoint_max_bytes", None),
         },
     }
     status = 0
@@ -2673,6 +2749,27 @@ def inspect(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _checkpoint_event_list(value: str) -> list[int]:
+    """Parse ``14,20,71,142`` into an ordered event list.
+
+    Ordering, range and count budgets are validated later against the capture
+    options so the error names the conflicting option.
+    """
+    if not value:
+        raise argparse.ArgumentTypeError("empty checkpoint event list")
+    events: list[int] = []
+    for token in value.split(","):
+        if not token:
+            raise argparse.ArgumentTypeError(
+                "checkpoint events must be a comma-separated list of integers")
+        try:
+            events.append(int(token))
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(
+                f"invalid checkpoint event {token!r}") from exc
+    return events
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -2702,6 +2799,18 @@ def _parser() -> argparse.ArgumentParser:
              "before this captured event index executes (opt-in; draw, clear "
              "and the recorded copy have pre-execution hooks, any other event "
              "fails closed)")
+    cap.add_argument(
+        "--default-checkpoint-events", type=_checkpoint_event_list,
+        default=None, metavar="EVENTS",
+        help="capture a bounded ordered set of default-framebuffer "
+             "checkpoints, e.g. 14,20,71,142, immediately before each event "
+             "executes; mutually exclusive with --default-checkpoint-event")
+    cap.add_argument(
+        "--max-checkpoints", type=int, default=4,
+        help="maximum accepted default checkpoint count (native hard bound 8)")
+    cap.add_argument(
+        "--checkpoint-max-bytes", type=int, default=64 * 1024 * 1024,
+        help="aggregate readback-byte budget for the whole checkpoint set")
     cap.add_argument("--seal", action="store_true",
                      help="publish the authoritative frame-seal/v1 handoff")
     cap.add_argument("--shadow", action="store_true",
