@@ -99,8 +99,11 @@ def interval(*, start=71, end=142, resource="fb:0", lower_bound=None,
 def authoritative_evidence(*, capture=FRAME, checkpoints=None):
     return {
         "schema": "gfx-pilot-authoritative-checkpoints/v1",
+        "source": "in_process",
         "capture": dict(capture),
         "report_sha256": "e" * 64,
+        "first_divergence": {"event": 142, "resource": "fb:0",
+                             "target": "0", "capture": dict(capture)},
         "checkpoints": checkpoints if checkpoints is not None else [
             endpoint(71, "fb:0", "match"),
             endpoint(142, "fb:0", "divergent"),
@@ -139,6 +142,28 @@ class PilotConclusionTests(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["checks"]["outcome"],
                          "requires_additional_evidence")
+
+    def test_authoritative_first_divergence_matches_in_process_path(self):
+        result = dsh_pilot.validate_conclusion(
+            conclusion(), authoritative=authoritative_evidence())
+        self.assertTrue(result["ok"], result)
+
+    def test_fabricated_in_process_first_divergence_is_rejected(self):
+        evidence = authoritative_evidence()
+        evidence["first_divergence"]["event"] = 71
+        result = dsh_pilot.validate_conclusion(
+            conclusion(), authoritative=evidence)
+        self.assertFalse(result["ok"])
+        self.assertIn("first_divergence_mismatch",
+                      {item["code"] for item in result["problems"]})
+
+    def test_authoritative_evidence_from_another_capture_is_rejected(self):
+        result = dsh_pilot.validate_conclusion(
+            conclusion(), authoritative=authoritative_evidence(
+                capture=OTHER_FRAME))
+        self.assertFalse(result["ok"])
+        self.assertIn("evidence_capture_mismatch",
+                      {item["code"] for item in result["problems"]})
 
     def test_cross_capture_interval_is_rejected(self):
         value = conclusion()
@@ -507,6 +532,8 @@ class PilotSummaryTests(unittest.TestCase):
                 {"event": 142, "resource": "fb:0", "target": "0",
                  "status": "divergent", "authoritative": True},
             ],
+            "first_divergence": {"event": 142, "resource": "fb:0",
+                                 "target": "0"},
         }
         self.write_case()
         self.conclusion_path = self.root / "conclusion.json"
@@ -790,6 +817,285 @@ class PilotSummaryTests(unittest.TestCase):
         result = self.summarize()
         self.assertFalse(result["ok"])
         self.assertIn("case_diagnostic_unverified", problem_codes(result))
+
+    def producer_bound_case(self, *, replay_overrides=None,
+                            report_mutator=None, conclusion_mutator=None,
+                            report_override=None, report_raw=None):
+        """Build an internally consistent producer-bound standalone case."""
+        self.manifest.pop("diagnostic_report", None)
+        self.manifest["report"] = "report.json"
+        identity = {
+            "session_id": FRAME["session_id"],
+            "capture_frame_id": 1,
+            "event_stream_sha256": FRAME["event_stream_sha256"],
+            "present_index": 617,
+            "scene_index": 617,
+            "manifest_sha256": self.seal["manifest_sha256"],
+            "reference_sha256": self.seal["reference_sha256"],
+        }
+        first = {"event": 142, "resource": "fb:0", "target": "0"}
+        self.report = {
+            "schema": "gfx-independent-replay/v1",
+            "status": "confirmed_rendering_difference",
+            "outcome": {"execution": "ok", "pixels": "divergent",
+                        "state_coverage": "partial"},
+            "first_divergence": dict(first),
+            "diagnosis": {
+                "capture": {"validity": "valid", "identity": identity},
+                "identity": {"status": "unverified_session"},
+                "execution": {
+                    "status": "ok", "stage": "complete", "failed": 0,
+                    "timed_out": False, "partial": False,
+                    "command_status": 4, "readback_ok": True,
+                    "events": 2, "encoded": 2,
+                    "error": None, "failure": None, "failures": [],
+                },
+                "checkpoint_validation": {
+                    "status": "ok", "invalid": 0, "problems": [],
+                    "requested": 2, "returned": 2,
+                },
+                "faults": {},
+                "fault_evidence": None,
+                "first_divergence": dict(first),
+                "checkpoints": [
+                    {"event": 11, "resource": "tex:431", "target": "431",
+                     "status": "match", "authoritative": True},
+                    {"event": 142, "resource": "fb:0", "target": "0",
+                     "status": "divergent", "authoritative": True},
+                ],
+            },
+        }
+        if report_mutator is not None:
+            report_mutator(self.report)
+        replay = {
+            "schema": "gfx-metal-replay/v1",
+            "status": "ok",
+            "stage": "complete",
+            "readback": True,
+            "partial": False,
+            "timed_out": False,
+            "failed": 0,
+            "events": 2,
+            "encoded": 2,
+            "command_status": 4,
+        }
+        if replay_overrides:
+            replay.update(replay_overrides)
+        metal = b"\x00" * 16
+        payload = b"\x00"
+        (self.case / "replay").mkdir(exist_ok=True)
+        if report_override is not None:
+            report_bytes = json.dumps(report_override).encode("utf-8")
+        elif report_raw is not None:
+            report_bytes = (report_raw if isinstance(report_raw, bytes)
+                            else report_raw.encode("utf-8"))
+        else:
+            report_bytes = json.dumps(self.report).encode("utf-8")
+        replay_bytes = json.dumps(replay).encode("utf-8")
+        (self.case / "report.json").write_bytes(report_bytes)
+        (self.case / "replay" / "replay.json").write_bytes(replay_bytes)
+        (self.case / "replay" / "metal-frame.bgra").write_bytes(metal)
+        receipt = {
+            "schema": "gfx-replay-producer-receipt/v1",
+            "producer": {
+                "executable_sha256": "a" * 64,
+                "build_fingerprint": "b" * 64,
+                "build_stamp_sha256": "c" * 64,
+            },
+            "capture": {
+                "session_id": FRAME["session_id"],
+                "capture_frame_id": 1,
+                "event_stream_sha256": FRAME["event_stream_sha256"],
+            },
+            "result": {
+                "status": replay["status"],
+                "stage": replay["stage"],
+                "readback": replay["readback"],
+                "events": replay["events"],
+                "encoded": replay["encoded"],
+                "failed": replay["failed"],
+                "command_status": replay["command_status"],
+                "replay_json_sha256": _sha(replay_bytes),
+                "metal_frame_sha256": _sha(metal),
+            },
+        }
+        receipt_bytes = json.dumps(receipt).encode("utf-8")
+        (self.case / "replay" / "producer-receipt.json").write_bytes(
+            receipt_bytes)
+        diagnostic = self.case / "diagnostic-report.json"
+        if diagnostic.exists():
+            diagnostic.unlink()
+        self.manifest["files"] = [
+            {"path": "payload.bin", "bytes": len(payload),
+             "sha256": _sha(payload)},
+            {"path": "report.json", "bytes": len(report_bytes),
+             "sha256": _sha(report_bytes)},
+            {"path": "replay/replay.json", "bytes": len(replay_bytes),
+             "sha256": _sha(replay_bytes)},
+            {"path": "replay/metal-frame.bgra", "bytes": len(metal),
+             "sha256": _sha(metal)},
+            {"path": "replay/producer-receipt.json",
+             "bytes": len(receipt_bytes), "sha256": _sha(receipt_bytes)},
+        ]
+        (self.case / "case.json").write_text(
+            json.dumps(self.manifest), encoding="utf-8")
+        digests = dsh_pilot.case_receipt(self.case)
+        value = conclusion()
+        value["case"]["case_manifest_sha256"] = digests["case_manifest_sha256"]
+        value["case"]["seal_sha256"] = digests["seal_sha256"]
+        if conclusion_mutator is not None:
+            conclusion_mutator(value)
+        self.conclusion_path.write_text(json.dumps(value), encoding="utf-8")
+        self.write_receipt(digests)
+        return digests
+
+    def producer_bound_summary(self, **kwargs):
+        self.producer_bound_case(**kwargs)
+        self.write_run()
+        return self.summarize()
+
+    def test_producer_bound_case_without_in_process_report_is_accepted(self):
+        result = self.producer_bound_summary()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["authoritative_evidence"]["checkpoints"], 2)
+
+    def test_complete_divergent_replay_with_unsupported_state_passes(self):
+        # The report is divergent with partial state coverage; no pixel
+        # equality is required for standalone checkpoint evidence.
+        result = self.producer_bound_summary()
+        self.assertTrue(result["ok"], result)
+        self.assertFalse(result["conclusion"]["has_correction"])
+
+    def test_failed_replay_with_divergent_checkpoint_is_rejected(self):
+        result = self.producer_bound_summary(replay_overrides={
+            "status": "failed", "stage": "event_encode"})
+        self.assertFalse(result["ok"])
+        self.assertIn("case_replay_incomplete", problem_codes(result))
+
+    def test_rejected_draw_or_failed_operation_count_is_rejected(self):
+        result = self.producer_bound_summary(replay_overrides={"failed": 1})
+        self.assertFalse(result["ok"])
+        self.assertIn("case_replay_incomplete", problem_codes(result))
+
+    def test_rejected_draw_failure_record_is_rejected(self):
+        result = self.producer_bound_summary(replay_overrides={
+            "failures": [{"event": 42, "stage": "event_encode",
+                          "error": "draw rejected"}],
+        })
+        self.assertFalse(result["ok"])
+        self.assertIn("case_replay_incomplete", problem_codes(result))
+
+    def test_incomplete_encoding_timeout_readback_and_command_are_rejected(self):
+        cases = {
+            "encoded": {"encoded": 1},
+            "timed_out": {"timed_out": True},
+            "readback": {"readback": False},
+            "command_status": {"command_status": 5},
+            "partial": {"partial": True},
+        }
+        for label, overrides in cases.items():
+            with self.subTest(label=label):
+                result = self.producer_bound_summary(
+                    replay_overrides=overrides)
+                self.assertFalse(result["ok"])
+                self.assertIn("case_replay_incomplete",
+                              problem_codes(result))
+
+    def test_valid_receipt_does_not_convert_failed_execution(self):
+        self.producer_bound_case(replay_overrides={
+            "status": "failed", "stage": "event_encode", "failed": 1})
+        from automation import gfx_replay_case
+        receipt = gfx_replay_case.verify_producer_receipt(
+            self.case, self.manifest)
+        self.assertEqual(receipt["status"], "verified", receipt)
+        self.write_run()
+        result = self.summarize()
+        self.assertFalse(result["ok"])
+        self.assertIn("case_replay_incomplete", problem_codes(result))
+
+    def test_invalid_report_execution_is_rejected(self):
+        def mutate(report):
+            report["diagnosis"]["execution"]["status"] = "failed"
+        result = self.producer_bound_summary(report_mutator=mutate)
+        self.assertFalse(result["ok"])
+        self.assertIn("case_report_execution_invalid", problem_codes(result))
+
+    def test_invalid_checkpoint_validation_is_rejected(self):
+        def mutate(report):
+            report["diagnosis"]["checkpoint_validation"]["status"] = "invalid"
+            report["diagnosis"]["checkpoint_validation"]["invalid"] = 1
+        result = self.producer_bound_summary(report_mutator=mutate)
+        self.assertFalse(result["ok"])
+        self.assertIn("case_checkpoint_validation_invalid",
+                      problem_codes(result))
+
+    def test_fault_contaminated_evidence_is_rejected(self):
+        def mutate(report):
+            report["diagnosis"]["faults"] = {"injected": "controlled"}
+        result = self.producer_bound_summary(report_mutator=mutate)
+        self.assertFalse(result["ok"])
+        self.assertIn("case_fault_contaminated", problem_codes(result))
+
+    def test_fabricated_first_divergence_is_rejected(self):
+        def mutate(value):
+            value["starting_diagnosis"]["first_divergence"]["event"] = 71
+        result = self.producer_bound_summary(conclusion_mutator=mutate)
+        self.assertFalse(result["ok"])
+        self.assertIn("first_divergence_mismatch",
+                      {item["code"] for item in
+                       result["conclusion"]["validation"]["problems"]})
+
+    def test_outcome_fault_injection_without_fault_evidence_is_rejected(self):
+        def mutate(report):
+            report["outcome"]["fault_injection"] = True
+        result = self.producer_bound_summary(report_mutator=mutate)
+        self.assertFalse(result["ok"])
+        self.assertIn("case_fault_contaminated", problem_codes(result))
+
+    def test_nonempty_execution_failures_is_rejected(self):
+        def mutate(report):
+            report["diagnosis"]["execution"]["failures"] = [
+                {"event": 142, "error": "rejected draw"}]
+        result = self.producer_bound_summary(report_mutator=mutate)
+        self.assertFalse(result["ok"])
+        self.assertIn("case_report_execution_invalid",
+                      problem_codes(result))
+
+    def test_report_replay_execution_mismatch_is_rejected(self):
+        def mutate(report):
+            report["diagnosis"]["execution"]["events"] = 99
+        result = self.producer_bound_summary(report_mutator=mutate)
+        self.assertFalse(result["ok"])
+        self.assertIn("case_report_replay_mismatch", problem_codes(result))
+
+    def test_non_object_report_is_rejected(self):
+        result = self.producer_bound_summary(
+            report_override=["not", "an", "object"])
+        self.assertFalse(result["ok"])
+        self.assertIn("case_diagnostic_schema", problem_codes(result))
+
+    def test_malformed_report_json_is_rejected(self):
+        result = self.producer_bound_summary(report_raw=b"{not json")
+        self.assertFalse(result["ok"])
+        self.assertIn("case_diagnostic_unavailable", problem_codes(result))
+
+    def test_bounded_interval_from_producer_bound_report_is_rejected(self):
+        def mutate(value):
+            value["causal_interval"] = interval()
+        result = self.producer_bound_summary(conclusion_mutator=mutate)
+        self.assertFalse(result["ok"])
+        self.assertIn("interval_unverified",
+                      {item["code"] for item in
+                       result["conclusion"]["validation"]["problems"]})
+
+    def test_producer_bound_report_capture_mismatch_is_rejected(self):
+        def mutate(report):
+            report["diagnosis"]["capture"]["identity"]["session_id"] = (
+                OTHER_FRAME["session_id"])
+        result = self.producer_bound_summary(report_mutator=mutate)
+        self.assertFalse(result["ok"])
+        self.assertIn("case_diagnostic_identity_mismatch",
+                      problem_codes(result))
 
     @unittest.skipUnless(
         (Path(__file__).resolve().parents[1]

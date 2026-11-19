@@ -3,12 +3,15 @@
 Authoritative summary of what is established, qualified, and in flight.
 Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
 
-## M7-P2 — reliability, compact diagnostics and efficiency (2026-11-18)
+## M7-P2 — reliability, compact diagnostics and efficiency (2026-11-19)
 
-P0 (PR #210) and P1 (PR #211) are merged and are the accepted P2 base. P2 is
-[PR #212](https://github.com/HagbardCel/eu4-mac-perf/pull/212) on
-`m7/p2-infra-hardening` from merge `246d7e08`; its final head has not yet
-received the independent approval required before merge.
+P0 (PR #210), P1 (PR #211) and P2 (PR #212) are merged on `main`; the closure
+starting point is `6e3b7913` (merge of #212, 2026-11-19T08:58:54Z). #212's final
+head was `668b40ed`; it merged with no `APPROVED` review, and GitHub still
+reports `reviewDecision: REVIEW_REQUIRED`. The required `portable` check passed
+on `6e3b7913` at 09:03:09Z. Merged implementation is **not** operational
+acceptance; the approval gap is documented in the
+[P2 governance report](../analysis/m7/p2-governance.md).
 
 **Test profiles.** `offline` is the default and cannot launch EU4: an explicit
 `EU4_TEST_PROFILE=offline` (or durable `EU4_OFFLINE_ONLY=1`) makes the
@@ -79,17 +82,46 @@ unchanged first divergence at event 142 `fb:0` (program 331, producer 141),
 final 1,160,291 / 1,930,176 differing pixels (max 70), an unbounded lower bound,
 and the recommended event-71 checkpoint. The routine interface path is two
 native reads (`eu4_case_inspect` 8,003 bytes plus baseline reuse 1,760 bytes)
-with zero shell calls, zero new replays and a verified producer; this is an
-interface-level demonstration, not a replacement measurement for the P1 agent's
-80 calls. End-to-end P2 efficiency is **not yet measured** because no provider
-credential is available. The final offline gate (`20261119T072637Z-551b7e55`)
-ran 3,760 tests, 3,718 executed, 42 classified skips, 0 failures. The replay-host
-build and baseline identity share `automation.replay_host_dependencies`; the
-build is atomically published under a lock with a binary digest, a
-semantic-header edit rebuilds, a failed build removes its binary and stamp, and
-replay results carry a producer receipt binding executable, build, capture and
-readback digests. See [P2 efficiency](../analysis/m7/p2-efficiency.md)
-and [evidence](../analysis/m7/p2-evidence.json).
+with zero shell calls and zero new replays; this remains an interface-level
+demonstration, not the end-to-end measurement.
+
+**One bounded model-driven session (C2).** On 2026-11-19 one real headless DSH
+session (`session-fbd20740…`, provider `opencode-go`, model
+`deepseek-v4.1-flash`) investigated the producer-bound case offline through the
+unchanged `dsh/scripts/run-pilot.sh`, under an external 20-minute deadline. It
+used 20 tool calls (2 native, 9 shell, 6 read, 2 glob, 1 write), 13 model calls,
+314.6 s, 524,175 tokens, 85,622 returned characters, **0 replays and 0 EU4
+launches**. The native gate records `eu4_case_inspect` and `eu4_re_query` as
+actually executed. The recorded producer baseline was reused
+(`reusable=true`, fingerprint `dcf83b9e…`). The conclusion is
+`requires_additional_evidence`: no correction, no root cause, no causal
+interval; the unresolved `[0,142]` interval stays unbounded, and event 71
+`fb:0` is a new-capture request. Independent NumPy reproduction matched the
+case exactly (871,620 / max 103 / 94.2823% 1-LSB / 162 ≥8 at event 142; final
+1,160,291 / max 70 / 77.29% 1-LSB). Both `automation.dsh_pilot validate` and
+`summarize` pass on the exact producer case. The minimal acceptance correction
+accepts producer-receipt-backed evidence for an **unbounded** observation while
+keeping the in-process verified report mandatory for a **bounded** interval.
+The closure offline gate (`20261119T104932Z-3de77549`) ran 3,780 tests, 3,738
+executed, 42 classified skips, 0 failures, 0 errors in 1,070.0 s.
+
+**Acceptance-integrity repair.** A verified producer receipt proved who
+produced the packaged replay, not that it completed. The standalone path now
+applies the shared
+`gfx_independent_replay.full_frame_completion_problems()` contract to
+`replay/replay.json` and rejects failed, partial, timed-out, partially encoded
+or unsuccessful Metal execution, invalid report execution, invalid checkpoint
+validation and fault-contaminated evidence. It also verifies the conclusion's
+first divergence against the authoritative report (same event, resource and
+sealed capture). A completed replay with genuine pixel divergence remains
+admissible; a bounded interval still requires in-process verified evidence. The
+preserved pilot was revalidated without a new session: `validate` and
+`summarize` both pass, the native calls are unchanged, and the conclusion
+remains `requires_additional_evidence` with event 142, the unbounded lower
+endpoint and the event-71 new-capture request. `tests.test_dsh_pilot` now has
+78 tests. See [P2 closure pilot](../analysis/m7/p2-closure-pilot.md),
+[P2 efficiency](../analysis/m7/p2-efficiency.md) and
+[evidence](../analysis/m7/p2-evidence.json).
 
 **Offline vs live.** The offline gate covers portable Python/native-harness
 tests, case verification, graph/diagnosis and compact interfaces. It does not
@@ -97,15 +129,22 @@ launch EU4, move the desktop, use BetterDisplay/Rosetta or require a live GPU
 capture. Live qualification is explicit, bounded and separate; it requires an
 already-captured case or an operator-authorized launch and retains diagnostics.
 
-**Remaining limits.** No new model-driven P2 session was run because no
-provider credential is available in this environment; only interface-level
-efficiency is measured. End-to-end efficiency remains unmeasured.
-`gl_dither` and `multisample` remain unsupported, the pre-event-142 causal
-interval is unresolved, and a multi-checkpoint same-frame capture remains the
-justified next instrumentation step. Branch protection and the independent
-final-head approval are tracked in the
-[P2 governance report](../analysis/m7/p2-governance.md); merge is blocked until
-both are satisfied.
+**Remaining limits.** M7-P2 implementation and the closure pilot are complete.
+The operator explicitly waived the independent final-head review requirement
+for PR #213 on 2026-11-19; no `APPROVED` review was manufactured, and the #212
+incident remains unresolved. The producer case's standalone replay is
+`incomplete_diagnostics` (`frame_shader_identity=unverified_session`) by
+design; it is not a qualified match. `gl_dither` and `multisample` remain
+unsupported, the pre-event-142 causal interval is unresolved, no live event-71
+capture was run, and a multi-checkpoint same-frame capture remains the
+justified next instrumentation step. The systematic −1 LSB offset is
+characterized, not explained. Readiness is **READY WITH LIMITATIONS for another
+bounded offline model-driven diagnostic task**; **not ready** for unattended
+renderer migration or a live diagnosis campaign. Governance:
+[P2 governance](../analysis/m7/p2-governance.md) and
+[closure review checklist](../analysis/m7/p2-review.md). M7 preparation is
+complete under the recorded waiver; autonomous renderer migration is not
+qualified, and pixel-perfect OpenGL/Metal equivalence is not achieved.
 
 ## M7-P1 — autonomous differential-debugging pilot (2026-11-18)
 

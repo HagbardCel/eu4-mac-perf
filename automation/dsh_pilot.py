@@ -278,6 +278,32 @@ def validate_conclusion(value, *, authoritative: dict | None = None,
         problem("starting_diagnosis",
                 "starting_diagnosis.root_cause is required (use "
                 "'not_established' when unknown)")
+    if authoritative is not None:
+        evidence_capture = _capture_key(authoritative.get("capture"))
+        if (evidence_capture is not None and case_frame_key is not None
+                and evidence_capture != case_frame_key):
+            problem("evidence_capture_mismatch",
+                    "authoritative checkpoint evidence belongs to a different "
+                    "sealed capture")
+        authoritative_first = authoritative.get("first_divergence")
+        if isinstance(authoritative_first, dict) and _integer(first.get("event")):
+            if (authoritative_first.get("event") != first.get("event")
+                    or str(authoritative_first.get("resource"))
+                    != str(first.get("resource"))):
+                problem(
+                    "first_divergence_mismatch",
+                    "the conclusion first_divergence "
+                    f"({first.get('event')}, {first.get('resource')}) does not "
+                    "match the authoritative report "
+                    f"({authoritative_first.get('event')}, "
+                    f"{authoritative_first.get('resource')})")
+            first_capture = _capture_key(authoritative_first.get("capture"))
+            if (first_capture is not None and case_frame_key is not None
+                    and first_capture != case_frame_key):
+                problem(
+                    "first_divergence_capture_mismatch",
+                    "the authoritative first divergence belongs to a "
+                    "different sealed capture")
 
     hypotheses = value.get("hypotheses")
     if not isinstance(hypotheses, list) or not hypotheses:
@@ -687,37 +713,32 @@ def _verification_from_receipt(receipt_path: Path, digests: dict,
     return verification, problems
 
 
-def _authoritative_evidence(case_dir: Path, digests: dict,
-                            ) -> tuple[dict | None, list[dict]]:
-    """Load the case's diagnostic report, bound to its sealed capture.
+def _sealed_capture(seal: dict) -> dict:
+    return {
+        "session_id": seal.get("session_id"),
+        "capture_frame_id": seal.get("capture_frame_id"),
+        "event_stream_sha256": seal.get("event_stream_sha256"),
+    }
 
-    The report and its checkpoints are existing evidence: this function does
-    not re-run a comparator or build a dependency graph.  It only refuses a
-    report whose identity is not verified or whose frame does not match the
-    seal.
-    """
-    problems: list[dict] = []
-    case_dir = Path(case_dir)
+
+def _in_process_evidence(case_dir: Path, manifest: dict, seal: dict,
+                         declared: set[str], problems: list[dict],
+                         ) -> tuple[dict | None, list[dict]]:
+    """The P1 evidence path: a verified in-process diagnostic report."""
+    report_relative = str(manifest.get("diagnostic_report")
+                          or "diagnostic-report.json")
+    if report_relative not in declared:
+        problems.append({"code": "case_diagnostic_undeclared",
+                         "detail": "the diagnostic report used for "
+                                   "interval evidence is not in the "
+                                   "declared payload inventory"})
+        return None, problems
+    report_path, problem = _case_relative_path(case_dir, report_relative)
+    if problem is not None:
+        problems.append({"code": "case_diagnostic_unavailable",
+                         "detail": problem})
+        return None, problems
     try:
-        manifest = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
-        seal = json.loads((case_dir / "capture" / "frame-seal.json").read_text(
-            encoding="utf-8"))
-        report_relative = str(manifest.get("diagnostic_report")
-                              or "diagnostic-report.json")
-        declared = {str(item.get("path"))
-                    for item in manifest.get("files") or []
-                    if isinstance(item, dict)}
-        if report_relative not in declared:
-            problems.append({"code": "case_diagnostic_undeclared",
-                             "detail": "the diagnostic report used for "
-                                       "interval evidence is not in the "
-                                       "declared payload inventory"})
-            return None, problems
-        report_path, problem = _case_relative_path(case_dir, report_relative)
-        if problem is not None:
-            problems.append({"code": "case_diagnostic_unavailable",
-                             "detail": problem})
-            return None, problems
         report_bytes = report_path.read_bytes()
         report = json.loads(report_bytes)
     except (OSError, ValueError) as exc:
@@ -781,14 +802,307 @@ def _authoritative_evidence(case_dir: Path, digests: dict,
         })
     return {
         "schema": "gfx-pilot-authoritative-checkpoints/v1",
-        "capture": {
-            "session_id": seal.get("session_id"),
-            "capture_frame_id": seal.get("capture_frame_id"),
-            "event_stream_sha256": seal.get("event_stream_sha256"),
-        },
+        "source": "in_process",
+        "capture": _sealed_capture(seal),
         "report_sha256": hashlib.sha256(report_bytes).hexdigest(),
+        "first_divergence": _first_divergence_evidence(
+            report, report, _sealed_capture(seal)),
         "checkpoints": checkpoints,
     }, problems
+
+
+def _first_divergence_evidence(report: dict, diagnosis: dict,
+                                capture: dict) -> dict | None:
+    """Copy the report's authoritative first divergence, bound to the capture."""
+    source = report.get("first_divergence")
+    if not isinstance(source, dict):
+        source = diagnosis.get("first_divergence")
+    if not isinstance(source, dict):
+        return None
+    return {
+        "event": source.get("event"),
+        "resource": source.get("resource"),
+        "target": source.get("target"),
+        "capture": dict(capture),
+    }
+
+
+def _producer_execution_problems(case_dir: Path, declared: set[str], report: dict,
+                                 diagnosis: dict) -> list[dict]:
+    """Reject standalone reports whose execution is not a complete replay.
+
+    A verified producer receipt proves *who* produced the packaged replay; it
+    does not prove that the replay completed.  A divergent checkpoint from a
+    failed, partial, timed-out or fault-injected run is not usable causal
+    evidence, so this path applies the shared full-frame contract before the
+    checkpoints are exposed.
+    """
+    problems: list[dict] = []
+    replay_relative = "replay/replay.json"
+    if replay_relative not in declared:
+        problems.append({"code": "case_replay_undeclared",
+                         "detail": "replay/replay.json is not in the declared "
+                                   "payload inventory"})
+        return problems
+    try:
+        replay = json.loads((case_dir / replay_relative).read_text(
+            encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        problems.append({"code": "case_replay_unreadable",
+                         "detail": f"{type(exc).__name__}: {exc}"})
+        return problems
+    if not isinstance(replay, dict):
+        problems.append({"code": "case_replay_unreadable",
+                         "detail": "replay/replay.json is not an object"})
+        return problems
+    try:
+        from automation.gfx_independent_replay import (
+            full_frame_completion_problems,
+        )
+        replay_problems = full_frame_completion_problems(replay)
+    except Exception as exc:  # noqa: BLE001 - fail closed on import/contract
+        problems.append({"code": "case_replay_unverified",
+                         "detail": f"{type(exc).__name__}: {exc}"})
+        return problems
+    if replay_problems:
+        problems.append({"code": "case_replay_incomplete",
+                         "detail": "; ".join(replay_problems)})
+    if replay.get("failure") or replay.get("failures"):
+        problems.append({"code": "case_replay_incomplete",
+                         "detail": "replay.json carries failure records"})
+
+    status = report.get("status")
+    if status in ("invalid", "error", "failed", "gpu_execution_failure"):
+        problems.append({"code": "case_report_execution_invalid",
+                         "detail": f"report status is {status!r}"})
+    outcome = report.get("outcome") if isinstance(report.get("outcome"),
+                                                   dict) else {}
+    if outcome.get("execution") not in (None, "ok"):
+        problems.append({"code": "case_report_execution_invalid",
+                         "detail": "report outcome.execution is "
+                                   f"{outcome.get('execution')!r}"})
+    if outcome.get("fault_injection") is True:
+        problems.append({"code": "case_fault_contaminated",
+                         "detail": "report outcome.fault_injection is true"})
+
+    execution = (diagnosis.get("execution")
+                 if isinstance(diagnosis.get("execution"), dict) else {})
+    if not execution:
+        problems.append({"code": "case_report_execution_invalid",
+                         "detail": "diagnosis.execution is missing"})
+    else:
+        expected = {
+            "status": "ok",
+            "stage": "complete",
+            "failed": 0,
+            "timed_out": False,
+            "partial": False,
+            "command_status": 4,
+            "readback_ok": True,
+        }
+        wrong = [f"{key}={execution.get(key)!r} (expected {value!r})"
+                 for key, value in expected.items()
+                 if execution.get(key) != value]
+        for key in ("error", "failure"):
+            if execution.get(key):
+                wrong.append(f"{key} is set")
+        if execution.get("failures"):
+            wrong.append("failures is not empty")
+        if wrong:
+            problems.append({"code": "case_report_execution_invalid",
+                             "detail": "; ".join(wrong)})
+
+        # The report's execution summary and the packaged replay.json must
+        # describe the same execution; a mismatch is not a usable observation.
+        corresponding = (
+            ("status", "status"), ("stage", "stage"),
+            ("events", "events"), ("encoded", "encoded"),
+            ("failed", "failed"), ("command_status", "command_status"),
+            ("readback", "readback_ok"), ("partial", "partial"),
+            ("timed_out", "timed_out"),
+        )
+        mismatch = []
+        for replay_key, execution_key in corresponding:
+            if replay.get(replay_key) != execution.get(execution_key):
+                mismatch.append(
+                    f"{replay_key}={replay.get(replay_key)!r} != "
+                    f"execution.{execution_key}="
+                    f"{execution.get(execution_key)!r}")
+        if (bool(replay.get("failure"))
+                != bool(execution.get("failure"))):
+            mismatch.append("failure presence differs")
+        if (bool(replay.get("failures"))
+                != bool(execution.get("failures"))):
+            mismatch.append("failures presence differs")
+        if mismatch:
+            problems.append({"code": "case_report_replay_mismatch",
+                             "detail": "; ".join(mismatch)})
+
+    validation = (diagnosis.get("checkpoint_validation")
+                  if isinstance(diagnosis.get("checkpoint_validation"), dict)
+                  else report.get("checkpoint_validation"))
+    validation = validation if isinstance(validation, dict) else {}
+    if (validation.get("status") != "ok"
+            or validation.get("invalid") != 0
+            or validation.get("problems")):
+        problems.append({"code": "case_checkpoint_validation_invalid",
+                         "detail": "checkpoint validation is not clean: "
+                                   f"status={validation.get('status')!r}, "
+                                   f"invalid={validation.get('invalid')!r}, "
+                                   f"problems={validation.get('problems')!r}"})
+
+    faults = diagnosis.get("faults") or report.get("faults")
+    fault_evidence = (diagnosis.get("fault_evidence")
+                      or report.get("fault_evidence"))
+    if faults or fault_evidence:
+        problems.append({"code": "case_fault_contaminated",
+                         "detail": "the standalone replay report carries "
+                                   "fault-injection evidence"})
+    return problems
+
+
+def _producer_bound_evidence(case_dir: Path, manifest: dict, seal: dict,
+                             declared: set[str], problems: list[dict],
+                             ) -> tuple[dict | None, list[dict]]:
+    """Evidence from a producer-bound standalone replay.
+
+    A P2 case carries a verified producer receipt and an independent replay
+    report instead of the in-process diagnostic report.  That report is not a
+    qualified diagnosis (its frame identity is ``unverified_session`` by
+    design), but its checkpoints are observations of the same sealed capture,
+    bound by the producer receipt and the case's declared payload inventory.
+    This path is therefore evidence for an unbounded upper observation only; a
+    bounded interval still requires the in-process report.
+    """
+    report_relative = str(manifest.get("report") or "report.json")
+    if report_relative not in declared:
+        problems.append({"code": "case_diagnostic_undeclared",
+                         "detail": "the producer-bound replay report is not in "
+                                   "the declared payload inventory"})
+        return None, problems
+    report_path, problem = _case_relative_path(case_dir, report_relative)
+    if problem is not None:
+        problems.append({"code": "case_diagnostic_unavailable",
+                         "detail": problem})
+        return None, problems
+    try:
+        report_bytes = report_path.read_bytes()
+        report = json.loads(report_bytes)
+        from automation import gfx_replay_case
+        receipt = gfx_replay_case.verify_producer_receipt(case_dir, manifest)
+    except Exception as exc:  # noqa: BLE001 - invalid evidence fails closed
+        problems.append({"code": "case_diagnostic_unavailable",
+                         "detail": f"{type(exc).__name__}: {exc}"})
+        return None, problems
+    if not isinstance(report, dict):
+        problems.append({"code": "case_diagnostic_schema",
+                         "detail": "producer-bound replay report is not a "
+                                   "JSON object"})
+        return None, problems
+    if receipt.get("status") != "verified":
+        problems.append({"code": "case_producer_unverified",
+                         "detail": "the case producer receipt is not verified; "
+                                   "a standalone replay report cannot supply "
+                                   "causal evidence"})
+        return None, problems
+    if report.get("schema") != "gfx-independent-replay/v1":
+        problems.append({"code": "case_diagnostic_schema",
+                         "detail": "producer-bound replay report has an "
+                                   "unexpected schema"})
+        return None, problems
+    diagnosis = report.get("diagnosis") if isinstance(report.get("diagnosis"),
+                                                     dict) else {}
+    execution_problems = _producer_execution_problems(
+        case_dir, declared, report, diagnosis)
+    if execution_problems:
+        problems.extend(execution_problems)
+        return None, problems
+    capture = diagnosis.get("capture") if isinstance(diagnosis.get("capture"),
+                                                     dict) else {}
+    if capture.get("validity") != "valid":
+        problems.append({"code": "case_diagnostic_unverified",
+                         "detail": "the producer-bound replay capture is not "
+                                   "valid"})
+        return None, problems
+    identity = capture.get("identity") if isinstance(capture.get("identity"),
+                                                     dict) else {}
+    comparisons = {
+        "session_id": (identity.get("session_id"), seal.get("session_id")),
+        "capture_frame_id": (identity.get("capture_frame_id"),
+                             seal.get("capture_frame_id")),
+        "event_stream_sha256": (identity.get("event_stream_sha256"),
+                                seal.get("event_stream_sha256")),
+        "present_index": (identity.get("present_index"),
+                          seal.get("present_index")),
+        "scene_index": (identity.get("scene_index"), seal.get("scene_index")),
+        "manifest_sha256": (identity.get("manifest_sha256"),
+                            seal.get("manifest_sha256")),
+        "reference_sha256": (identity.get("reference_sha256"),
+                             seal.get("reference_sha256")),
+    }
+    mismatched = [name for name, (actual, expected) in comparisons.items()
+                  if actual != expected]
+    if mismatched:
+        problems.append({"code": "case_diagnostic_identity_mismatch",
+                         "detail": "producer-bound replay report does not match "
+                                   "the frame seal: "
+                                   + ", ".join(sorted(mismatched))})
+        return None, problems
+    checkpoints = []
+    for item in (diagnosis.get("checkpoints") or report.get("checkpoints")
+                 or []):
+        if not isinstance(item, dict):
+            continue
+        checkpoints.append({
+            key: item.get(key) for key in
+            ("event", "resource", "target", "status", "authoritative",
+             "generation")
+        })
+    if not checkpoints:
+        problems.append({"code": "case_diagnostic_unavailable",
+                         "detail": "the producer-bound replay report has no "
+                                   "checkpoints"})
+        return None, problems
+    return {
+        "schema": "gfx-pilot-authoritative-checkpoints/v1",
+        "source": "producer_bound_standalone",
+        "producer_identity": "verified",
+        "capture": _sealed_capture(seal),
+        "report_sha256": hashlib.sha256(report_bytes).hexdigest(),
+        "first_divergence": _first_divergence_evidence(
+            report, diagnosis, _sealed_capture(seal)),
+        "checkpoints": checkpoints,
+    }, problems
+
+
+def _authoritative_evidence(case_dir: Path, digests: dict,
+                            ) -> tuple[dict | None, list[dict]]:
+    """Load the case's existing checkpoint evidence, bound to its seal.
+
+    An in-process diagnostic report is the strong P1 path.  A producer-bound
+    standalone case has no such report; its verified producer receipt and
+    replay report are accepted as an unbounded-observation source instead.  The
+    bounded-interval check in ``_verify_interval_evidence`` still demands the
+    in-process report.
+    """
+    problems: list[dict] = []
+    case_dir = Path(case_dir)
+    try:
+        manifest = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
+        seal = json.loads((case_dir / "capture" / "frame-seal.json").read_text(
+            encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        problems.append({"code": "case_diagnostic_unavailable",
+                         "detail": f"{type(exc).__name__}: {exc}"})
+        return None, problems
+    declared = {str(item.get("path"))
+                for item in manifest.get("files") or []
+                if isinstance(item, dict)}
+    if manifest.get("diagnostic_report"):
+        return _in_process_evidence(case_dir, manifest, seal, declared,
+                                    problems)
+    return _producer_bound_evidence(case_dir, manifest, seal, declared,
+                                    problems)
 
 
 def _case_relative_path(case_dir: Path, relative: str) -> tuple[Path, str | None]:
@@ -857,6 +1171,14 @@ def _verify_interval_evidence(interval: dict, evidence: dict | None,
                           f"{expected_status} checkpoint"})
 
     if bounded:
+        if evidence.get("source") != "in_process":
+            problems.append({
+                "code": "interval_unverified",
+                "detail": "a bounded interval requires the in-process verified "
+                          "diagnostic report; a producer-bound standalone "
+                          "replay can only support an unbounded upper "
+                          "observation"})
+            return
         check(claim(interval.get("start_event")), "lower", "match")
     check(claim(interval.get("end_event")), "upper", "divergent")
 

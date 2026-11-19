@@ -194,31 +194,53 @@ unchanged.
 
 ### Efficiency evidence scope
 
-Three different things are deliberately separated:
+Four different things are deliberately separated:
 
 1. **P1 autonomous session** (`session-fd42d127-…`): one model turn, 72 model
    calls, 80 tool calls (2 native, 66 shell), 400,666 returned characters,
-   1,220 s. It reached `requires_additional_evidence`.
+   1,220 s. It reused the existing baseline (0 replays during the turn) and
+   reached `requires_additional_evidence`.
 2. **P2 deterministic interface demonstration**: the two routine native reads
    below, with no model turn. It proves the interface contract and output size,
    not the end-to-end cost of an investigation.
-3. **P2 autonomous session**: not run. `OPENCODE_GO_API_KEY` is absent in this
-   environment, so end-to-end efficiency is **not yet measured**.
+3. **P2 autonomous session (C2)** (`session-fbd20740-…`, 2026-11-19): one model
+   turn against `.local/m7/p2/producer-case-v5`, 13 model calls, 20 tool calls
+   (2 native, 9 shell, 6 read, 2 glob, 1 write), 85,622 returned characters,
+   314.6 s, 0 replays and 0 EU4 launches. It reused the recorded producer
+   baseline and reached `requires_additional_evidence`.
+4. **P2 live event-71 capture**: not run. The offline pilot succeeded and did
+   not expose a native-capture-path defect.
 
-| Metric | P1 autonomous session | P2 interface demonstration |
-|---|---|---|
-| Tool calls | 80 (2 native, 66 shell) | 2 native, 0 shell |
-| Returned output | 400,666 chars | 9,763 bytes |
-| Oversized / truncated results | 6 / 2 | 0 / 0 |
-| EU4 launches | 0 | 0 |
-| Replays | 1 | 0 (baseline reused) |
-| Model calls / elapsed | 72 / 1,220 s | 0 / not applicable |
-| End-to-end comparable? | — | **No; interface-level only** |
+| Metric | P1 autonomous | P2 autonomous (C2) | P2 interface demo |
+|---|---|---|---|
+| Tool calls | 80 (2 native, 66 shell) | **20** (2 native, 9 shell) | 2 native, 0 shell |
+| Model calls | 72 | **13** | 0 |
+| Elapsed | 1,220 s | **314.6 s** | not applicable |
+| Tokens total | 10,084,703 | **524,175** | not applicable |
+| Returned output | 400,666 chars | **85,622 chars** (68,616 raw tool-result bytes) | 9,763 bytes |
+| Oversized / truncated | 6 / 2 | **1 / 0** | 0 / 0 |
+| Tool wait | 34.131 s (2.8%) | **4.057 s** (1.29%) | 0 |
+| EU4 launches | 0 | **0** | 0 |
+| Replays during turn | 0 | **0** (baseline reused) | 0 (baseline reused) |
+| End-to-end comparable? | — | **yes; model-driven** | **no; interface-level only** |
 
-The interface path is a genuine reduction in routine diagnostic bytes and
-shell work, but it is **not** a replacement measurement for the P1 agent's
-reasoning. A bounded P2 autonomous session against the same verified case is
-still required before claiming end-to-end efficiency.
+The C2 session is 75.0% fewer tool calls, 81.9% fewer model calls, 74.2% less
+wall time, 94.8% fewer tokens and 78.6% fewer returned characters than P1. It
+is the end-to-end efficiency measurement that P2 previously lacked. The
+interface path remains a separate reduction in routine diagnostic bytes and
+shell work; it is not a substitute for the model-driven measurement.
+
+The C2 numbers above were revalidated after the acceptance-integrity repair
+(the packaged replay is now checked against the full-frame execution contract
+before standalone evidence is admitted); the session was not rerun and the
+reported counts are unchanged.
+
+C2's conclusion and independent reproduction are in
+[P2 closure pilot](p2-closure-pilot.md). Acceptance required a minimal
+`automation.dsh_pilot` correction because the producer-bound case has a
+standalone replay report, not an in-process `diagnostic-report.json`. The fix
+accepts producer-receipt-backed evidence for an **unbounded** observation while
+keeping the in-process report mandatory for a **bounded** interval.
 
 ## Offline gate
 
@@ -230,6 +252,11 @@ it. The skips are the live-only module, platform-only hosts and 11 optional-QBDI
 TR3 tests; QBDI remains non-mandatory. No EU4 process was started. The same gate
 is configured as the required `portable` check; GitHub Actions `portable` passed
 on head `5ec4fdc2` in 4m34s (run 44483074062). CI is not independent approval.
+
+The closure gate (`20261119T104932Z-3de77549`, same profile and floor) ran
+**3,780 tests, 3,738 executed, 42 skipped, 0 failures, 0 errors in 1,070.0 s**.
+The additional tests are the producer-bound acceptance and integrity
+regressions in `tests.test_dsh_pilot`.
 
 ## Evidence
 

@@ -1,7 +1,7 @@
 {
   "schema": "m7-p2-efficiency-evidence/v1",
-  "base_commit": "246d7e08",
-  "branch": "m7/p2-infra-hardening",
+  "base_commit": "6e3b7913ec4f7dacf69e6520674bb43716aba6f9",
+  "branch": "m7/p2-closure-pilot",
   "case": {
     "case_id": "m7-p2-producer-bound-v5",
     "case_json_sha256": "9af1c29deed44d81ed95abb8d6258776615ba269df2b5b65ab4d706d307c2a66",
@@ -45,7 +45,7 @@
     "oversized_results": 6,
     "truncated_results": 2,
     "eu4_launches": 0,
-    "replays": 1,
+    "replays": 0,
     "tests": 0
   },
   "p2_deterministic_workflow": {
@@ -81,7 +81,7 @@
     }
   },
   "correctness": {
-    "classification": "difference_with_partial_state_coverage",
+    "classification": "incomplete_diagnostics",
     "qualified": false,
     "first_divergence": {
       "event": 142,
@@ -146,12 +146,23 @@
     },
     "unchanged_from_p1": true,
     "p2_full_gate_passed": true,
-    "p2_full_gate_run": "20261118T173758Z-7d9c00f2"
+    "p2_full_gate_run": "20261118T173758Z-7d9c00f2",
+    "classification_scope": "producer-bound standalone replay",
+    "historical_in_process_classification": "difference_with_partial_state_coverage",
+    "root_cause": "not_established",
+    "first_divergence_agrees_with": [
+      "historical in-process gfx-frame-diagnosis/v1 (identity verified)",
+      "producer-case-v5 standalone gfx-independent-replay/v1"
+    ]
   },
   "limitations": [
-    "No new model-driven DSH session was run: OPENCODE_GO_API_KEY is absent in this environment, so the P2 measurement is the deterministic native-interface workflow plus the preserved P1 session export, not a new model turn.",
+    "The standalone producer case is incomplete_diagnostics (frame_shader_identity=unverified_session) by design; it is not a qualified match.",
     "GL-versus-Metal replay counts and checkpoint GPU overhead are not carried in the session export; they remain explicit nulls in dsh_efficiency.",
-    "No EU4 launch and no replay were performed for this evidence; the existing verified baseline is reused."
+    "No replay or capture was performed during the pilot; the existing verified producer baseline was reused.",
+    "PR #212 merged without a recorded approving review; operational acceptance remains outstanding.",
+    "No live event-71 capture was run; the pre-event-142 interval remains unbounded.",
+    "The systematic -1 LSB offset is characterized, not explained.",
+    "A multi-checkpoint same-frame capture is not implemented."
   ],
   "offline_gate": {
     "run_id": "20261119T072637Z-551b7e55",
@@ -169,7 +180,24 @@
       "Executed with EU4_TEST_PROFILE=offline and EU4_OFFLINE_ONLY=1.",
       "The floor is applied to executed tests (ran - skipped).",
       "The 42 skips include the classified live-only module, platform-only hosts and optional-QBDI TR3 tests."
-    ]
+    ],
+    "closure_gate": {
+      "run_id": "20261119T104932Z-3de77549",
+      "label": "p2-closure-final-full",
+      "profile": "offline",
+      "min_tests": 3000,
+      "tests_ran": 3780,
+      "tests_executed": 3738,
+      "skipped": 42,
+      "failures": 0,
+      "errors": 0,
+      "duration_seconds": 1070.013,
+      "exit_code": 0,
+      "eu4_launches": 0,
+      "notes": [
+        "Includes the producer-bound acceptance and integrity regressions; no EU4 launch."
+      ]
+    }
   },
   "pull_request": 212,
   "initial_head": "f7e3e0b5655882fea9edfbb1afcc8e537e75784d",
@@ -238,24 +266,44 @@
     "overlap_test": "tests.test_replay_host_dependencies.IncrementalBuildTests.test_overlapping_builds_serialize_under_one_lock"
   },
   "focused_verification": {
-    "command": "python3.14 -m unittest tests.test_case_baseline tests.test_gfx_replay_case tests.test_replay_host_dependencies tests.test_p2_workflow",
-    "tests": 54,
-    "skipped": 0,
+    "command": "python3.14 -m automation.test_runner run --profile offline --label p2-closure-final-integrity-focused --module tests.test_dsh_pilot --module tests.test_p2_workflow --module tests.test_m7_evidence_identity --module tests.test_case_baseline --module tests.test_failure_taxonomy --module tests.test_agent_tools --module tests.test_dsh_efficiency --module tests.test_replay_host_dependencies --module tests.test_test_profiles",
+    "run_id": "20261119T104917Z-270996f5",
+    "result": "passed",
+    "tests_ran": 291,
+    "tests_executed": 288,
+    "skipped": 3,
     "failures": 0,
-    "result": "OK"
+    "errors": 0,
+    "duration_seconds": 5.758,
+    "note": "Final focused integrity selection after the last code change; includes tests.test_dsh_pilot (78 tests)."
   },
   "ci": {
-    "workflow": "Portable profiler correctness",
-    "job": "portable",
-    "conclusion": "success",
-    "duration_seconds": 274,
-    "run_id": 44483074062,
-    "job_id": 135419769233,
-    "url": "https://github.com/HagbardCel/eu4-mac-perf/actions/runs/44483074062/job/135419769233",
-    "head": "5ec4fdc29abc5e060377d113c00ef35e8ed05934",
+    "merged_base_check": {
+      "completed_at": "2026-11-19T09:03:09Z",
+      "conclusion": "success",
+      "head": "6e3b7913ec4f7dacf69e6520674bb43716aba6f9",
+      "job": "portable",
+      "notes": [
+        "Post-merge required check on the starting SHA; CI is not independent approval."
+      ]
+    },
     "notes": [
-      "CI is necessary but not independent approval; the PR remains blocked on review."
-    ]
+      "CI is necessary but not approval; #212 still merged without a recorded approving review."
+    ],
+    "p2_head_check": {
+      "conclusion": "success",
+      "duration_seconds": 274,
+      "head": "5ec4fdc29abc5e060377d113c00ef35e8ed05934",
+      "job": "portable",
+      "job_id": 135419769233,
+      "notes": [
+        "CI is necessary but not independent approval; the PR remains blocked on review."
+      ],
+      "run_id": 44483074062,
+      "url": "https://github.com/HagbardCel/eu4-mac-perf/actions/runs/44483074062/job/135419769233",
+      "workflow": "Portable profiler correctness"
+    },
+    "schema": "m7-p2-ci/v1"
   },
   "historical_case": {
     "case_id": "m7-live-frame-000001",
@@ -288,5 +336,184 @@
       "detail": "the replay result was produced by a different replay host (executable_sha256 differs); recompute it with the current renderer"
     },
     "note": "a newly recorded baseline cannot relabel the old replay as the new renderer; the receipt binds executable, build fingerprint, capture and output digests"
+  },
+  "p2_autonomous_session": {
+    "baseline": ".local/m7/p2/producer-baseline-v5.json",
+    "baseline_fingerprint": "dcf83b9ec3e23e54f43da360e989bb88c21b970513062f0b6bbe6242d25bca48",
+    "baseline_reusable": true,
+    "case": ".local/m7/p2/producer-case-v5",
+    "case_id": "m7-p2-producer-bound-v5",
+    "duplicated_file_reads": [
+      "automation/dsh_pilot.py"
+    ],
+    "elapsed_seconds": 314.55,
+    "eu4_launches": 0,
+    "evidence_request": {
+      "checkpoint": {
+        "event": 71,
+        "resource": "fb:0"
+      },
+      "frame_scope": "new_capture"
+    },
+    "failed_tool_calls": 0,
+    "glob_calls": 2,
+    "hypotheses": [
+      {
+        "id": "H1",
+        "scope": "signature only",
+        "status": "supported"
+      },
+      {
+        "id": "H2",
+        "status": "insufficient"
+      },
+      {
+        "id": "H3",
+        "status": "insufficient"
+      }
+    ],
+    "model": "deepseek-v4.1-flash",
+    "model_calls": 13,
+    "native_calls": 2,
+    "native_executed": [
+      "eu4_case_inspect",
+      "eu4_re_query"
+    ],
+    "objective": ".local/m7/p2/closure/objective.md",
+    "outcome": "requires_additional_evidence",
+    "oversized_results": 1,
+    "provider": "opencode-go",
+    "raw_tool_result_bytes": 68616,
+    "read_calls": 6,
+    "repeated_exact_calls": 0,
+    "replays": 0,
+    "returned_chars": 85622,
+    "schema": "m7-p2-autonomous-session/v1",
+    "session_id": "session-fbd20740-656f-462c-9f28-7a33991a4051",
+    "shell_calls": 9,
+    "shell_nonzero": 2,
+    "tests": 0,
+    "tokens": {
+      "cache_read": 432256,
+      "input": 65349,
+      "output": 26570,
+      "total": 524175
+    },
+    "tool_calls_total": 20,
+    "tool_wait_seconds": 4.057,
+    "truncated_results": 0,
+    "turns": 1,
+    "write_calls": 1
+  },
+  "acceptance": {
+    "authoritative_checkpoints": 8,
+    "evidence_source": "producer_bound_standalone",
+    "launch_count_verified": 0,
+    "native_gate_ok": true,
+    "problems": [],
+    "regressions": "tests.test_dsh_pilot (78 tests; failed-execution, invalid report/checkpoint/fault, first-divergence and bounded-interval cases)",
+    "schema": "m7-p2-pilot-acceptance/v1",
+    "summarize_ok": true,
+    "validate_ok": true,
+    "validator_change": "producer-bound standalone evidence accepted for an unbounded upper observation only after the packaged replay passes full_frame_completion_problems(); invalid report execution, invalid checkpoint validation and fault contamination are rejected; bounded intervals still require the in-process verified report",
+    "full_frame_execution_gate": true,
+    "first_divergence_verified": true,
+    "failed_execution_rejected": true
+  },
+  "closure": {
+    "case_manifest_sha256": "9af1c29deed44d81ed95abb8d6258776615ba269df2b5b65ab4d706d307c2a66",
+    "conclusion_sha256": "f538584662918af5954584774513e08a9e62966dbb463882fc0d256cf9594679",
+    "efficiency_sha256": "7576aee4e2a6acd2cfb63d3e3c90b6fff854edaa5579fbb845dae723b1d61169",
+    "events_sha256": "40da862f3c1f1083bf4c3602fd95669ece2c114faa92beb76e6fb0a80e2ae815",
+    "live_capture": "not run",
+    "native_gate_sha256": "1f448a49c878d8544cce7f6e5309a725ef027af49770ba61352bf754fbc091a3",
+    "portable_check": "success 2026-11-19T09:03:09Z on 6e3b7913",
+    "producer_build_fingerprint": "63cf3649220bea66deb3ebfae2f6243c6f3588f069e90a5ef58a064f965ad3ca",
+    "producer_executable_sha256": "3ef85b04863e9abbb29746a3f540a50926f70b4e3e2f80976000ccdd7bf03ca6",
+    "schema": "m7-p2-closure-evidence/v1",
+    "seal_sha256": "794c482d49767b0b0aa356f5fc28919b9c2a57a33c88f7112152efd8c07d0ca6",
+    "session_export_sha256": "df140ef2720bfa3135baa9fc819ef900e10ba07750cf9fe450f342579e81c644",
+    "starting_sha": "6e3b7913ec4f7dacf69e6520674bb43716aba6f9",
+    "summary_sha256": "e4f9e3ef4baf3dd287205bc81672130c689b3bd0c53a4e607c027192908a32b1",
+    "validate_sha256": "179f942db88df04d32ed02418e2acb3c8dada2222ee8924e0781d8f559ba5b3b"
+  },
+  "acceptance_integrity": {
+    "schema": "m7-p2-acceptance-integrity/v1",
+    "defect": "A verified producer receipt was treated as proof that the standalone replay completed. The producer-bound path did not apply the full-frame execution contract to replay/replay.json and did not reject invalid report execution, invalid checkpoint validation or fault-contaminated evidence.",
+    "correction": [
+      "apply gfx_independent_replay.full_frame_completion_problems() to replay/replay.json",
+      "require report status not invalid/error/failed and outcome.execution=ok",
+      "require diagnosis.execution status=ok, stage=complete, failed=0, timed_out=false, partial=false, command_status=4, readback_ok=true, no error/failure",
+      "reject checkpoint_validation status!=ok, invalid!=0 or non-empty problems",
+      "reject faults or fault_evidence",
+      "compare starting_diagnosis.first_divergence with the authoritative report event/resource in the sealed capture"
+    ],
+    "pixel_equality_required": false,
+    "complete_divergent_replay_passes": true,
+    "bounded_interval_still_requires_in_process": true,
+    "tests": {
+      "module": "tests.test_dsh_pilot",
+      "tests": 78,
+      "negative_cases": [
+        "failed replay with divergent checkpoint",
+        "rejected draw failure record",
+        "nonzero failed operation count",
+        "incomplete encoding",
+        "timed-out replay",
+        "missing readback",
+        "unsuccessful Metal command buffer",
+        "partial replay",
+        "verified receipt on failed execution",
+        "invalid report execution",
+        "invalid checkpoint validation",
+        "fault-contaminated evidence",
+        "fabricated first-divergence event",
+        "bounded interval from standalone replay",
+        "outcome.fault_injection=true with empty fault fields",
+        "non-empty diagnosis.execution.failures",
+        "report/replay execution-field mismatch",
+        "malformed standalone report",
+        "non-object standalone report"
+      ],
+      "positive_cases": [
+        "complete divergent replay with unsupported state",
+        "in-process authoritative first divergence",
+        "in-process acceptance unchanged"
+      ],
+      "fixtures": "internally consistent receipt hashes, payload inventory and sealed identities"
+    },
+    "revalidation": {
+      "session_id": "session-fbd20740-656f-462c-9f28-7a33991a4051",
+      "new_session": false,
+      "validate_ok": true,
+      "summarize_ok": true,
+      "evidence_source": "producer_bound_standalone",
+      "authoritative_checkpoints": 8,
+      "outcome": "requires_additional_evidence",
+      "claims_interval": false,
+      "eu4_launches": 0,
+      "replays": 0
+    },
+    "codex_review": {
+      "review_commit": "dcd5d45aef7636feca0854f99ba22f71dc676a93",
+      "finding": "failed replay execution could be accepted through its divergent checkpoint",
+      "correction_commit": "final head in PR #213",
+      "thread_status": "answered; unresolved pending independent review"
+    }
+  },
+  "governance_waiver": {
+    "date": "2026-11-19",
+    "scope": "PR #213 independent final-head review requirement",
+    "operator": "HagbardCel",
+    "approval_manufactured": false,
+    "p1_thread": "resolved after explicit operator waiver",
+    "incident_212": "retained as unresolved; not retroactively approved",
+    "statuses": {
+      "m7_p0_p1_p2_implementation": "complete",
+      "authentic_bounded_offline_pilot": "complete and accepted",
+      "m7_preparation": "complete under recorded waiver",
+      "autonomous_renderer_migration": "not qualified",
+      "pixel_perfect_equivalence": "not achieved"
+    }
   }
 }

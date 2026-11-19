@@ -1,13 +1,17 @@
 # M7-P2 — qualification and review gates
 
-Status: branch protection is enabled on `main`. P2 is
-[PR #212](https://github.com/HagbardCel/eu4-mac-perf/pull/212); it still requires
-a fresh independent approval of its final head before merge.
+Status: **merged implementation, outstanding independent review.** Branch
+protection is enabled on `main`. [PR #212](https://github.com/HagbardCel/eu4-mac-perf/pull/212)
+merged as `6e3b7913` on 2026-11-19T08:58:54Z **without a recorded approving
+review**. The merge is a documented enforcement gap, not evidence that the
+review requirement was satisfied. The closure work is a separate PR and must
+receive a fresh independent review of its final head before merge.
 
 ## Enforced on `main`
 
 Verified through the GitHub API on 2026-11-18 (receipt:
-[p2-governance.json](p2-governance.json)):
+[p2-governance.json](p2-governance.json)) and re-checked on 2026-11-19 after
+the merge:
 
 | Protection | Value |
 |---|---|
@@ -34,16 +38,80 @@ unittest discovery under `EU4_TEST_PROFILE=offline` / `EU4_OFFLINE_ONLY=1`.
 Live EU4 qualification is deliberately not a required check: it needs a real
 game process and is selected explicitly with `--profile live`.
 
+## Observed enforcement gap on PR #212
+
+Facts from the GitHub API, recorded 2026-11-19 (receipt:
+[p2-governance-postmerge.json](p2-governance-postmerge.json)):
+
+- The PR was merged by the repository owner at 08:58:54Z as merge commit
+  `6e3b7913ec4f7dacf69e6520674bb43716aba6f9`; its head was `668b40ed`.
+- The review history on #212 contains only `COMMENTED` reviews: one automated
+  Codex review and four owner comments. There is **no `APPROVED` review** and no
+  approval on the final head.
+- After the merge, GitHub still reports `reviewDecision: REVIEW_REQUIRED` for
+  the PR. This is direct evidence that the configured one-approval gate was
+  never satisfied.
+- The `portable` check on the merge commit completed successfully at
+  09:03:09Z. CI was green; CI is not review.
+- Branch protection remains enabled with the table above (`enforce_admins:
+  true`, `required_approving_review_count: 1`, `require_last_push_approval:
+  true`).
+
+The repository API does not expose whether the merge used an administrative
+bypass path or a transient protection change. Either way, the gate that the
+repository documents was not effective for #212. The same pattern applies to
+#210 and #211: both merged with only `COMMENTED` reviews. The gap is therefore
+systemic in the M7 series, not a single accidental click.
+
+**Effective permissions (2026-11-19).** The repository is user-owned and has
+exactly one collaborator, the owner with `admin` permissions; there are no
+repository rulesets; auto-merge is disabled and merge/squash/rebase merges are
+enabled. With one required approval, `enforce_admins=true`, GitHub's rejection
+of self-approval, and no second human, the configured gate is **unsatisfiable
+by any legitimate actor**. A merge therefore requires an administrative bypass
+or a transient protection change, neither of which the API exposes. #212
+remains an unresolved governance incident. To prevent recurrence, add an
+independent reviewer/collaborator or move to an organisation ruleset with
+required reviewers and an empty bypass list; at minimum, record an explicit
+pre-merge override decision. Do not weaken protections or fabricate approvals.
+
+Do **not** disable or weaken protections to make future merges easier. The
+correct remediation is procedural and reviewable:
+
+1. every future PR (including this closure) requires an explicit `APPROVED`
+   review on its final head from someone other than the author;
+2. a merge performed under an administrative override must be recorded in the
+   PR and in the governance report **before** the merge, with the exact reason
+   and the compensating review plan; a post-hoc note is not approval;
+3. if no independent reviewer is available, the PR stays unmerged and the work
+   is reported as awaiting review. A green CI run is never a substitute.
+
+## Operator waiver for PR #213 (2026-11-19)
+
+After the closure PR was prepared and the fresh-review request was posted, the
+operator explicitly waived the independent final-head review requirement for
+PR #213. The PR was merged with the P1 correction and regression evidence
+recorded, `portable` CI green, and the P1 conversation resolved after that
+waiver. **No `APPROVED` review was manufactured**, and the waiver is a recorded
+governance decision, not independent review. The #212 incident remains
+unresolved and is not retroactively approved.
+
 ## Not enforced automatically
 
 - **Independent review.** Branch protection requires one approval, but cannot
-  judge whether a reviewer is genuinely independent. The P2 PR must be reviewed
-  by someone other than its author and the approval must name the final head.
+  judge whether a reviewer is genuinely independent or whether an approval
+  names the final head. A repository with one human writer cannot satisfy
+  GitHub's self-approval rule; an external reviewer or an explicit,
+  pre-declared override decision is required.
 - **No unattended interactive EU4 execution.** CI has no game install and the
   offline launch guard refuses a real launch. A live run remains an explicit
   operator action; it is not scheduled and is not part of CI.
 
 ## Merge decision
 
-P2 is not complete until the final head has a fresh independent approval and
-the required `portable` check is green. CI success alone is not approval.
+M7-P2 implementation and the closure pilot are merged. M7 preparation is
+**complete under the operator's explicit waiver** of the independent final-head
+review requirement for PR #213. No approval was manufactured; the #212
+final-head review remains an unresolved governance incident. Autonomous
+renderer migration is not qualified and pixel-perfect OpenGL/Metal
+equivalence is not achieved.
