@@ -169,7 +169,8 @@ def _returned_checkpoint_names(replay: dict) -> set[str]:
 
 
 def _replay_evidence(capture_dir: Path, replay_dir: Path,
-                     policy: Path) -> dict:
+                     policy: Path, *,
+                     approved_recipes: set[str] | None = None) -> dict:
     """Recompute one side's execution, identity, pixels and checkpoints.
 
     Everything here is either validated from the artifacts or recomputed with
@@ -256,6 +257,8 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
     receipt_capture = receipt.get("capture") if isinstance(
         receipt.get("capture"), dict) else {}
     checkpoint_binding = "absent"
+    recipe = None
+    recipe_approved = False
     if receipt:
         for key in ("session_id", "capture_frame_id", "event_stream_sha256"):
             if str(receipt_capture.get(key)) != str(seal.get(key)):
@@ -263,6 +266,62 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
                     "replay_capture_mismatch",
                     f"producer receipt capture.{key} does not match the "
                     "sealed case capture")
+        raw_recipe = receipt.get("recipe")
+        if raw_recipe is not None and not isinstance(raw_recipe, dict):
+            raise AcceptanceError(
+                "invalid_recipe",
+                "producer receipt recipe is present but is not an object")
+        recipe = raw_recipe if isinstance(raw_recipe, dict) else None
+        recipe_approved = False
+        if recipe is not None:
+            if not isinstance(recipe.get("consumed_env"), dict):
+                raise AcceptanceError(
+                    "invalid_recipe",
+                    "producer receipt consumed_env is not an object")
+            if not isinstance(recipe.get("effective_env"), dict):
+                raise AcceptanceError(
+                    "invalid_recipe",
+                    "producer receipt effective_env is not an object")
+            if recipe.get("faults") is not None and not isinstance(
+                    recipe.get("faults"), dict):
+                raise AcceptanceError(
+                    "invalid_recipe",
+                    "producer receipt faults are not an object")
+            if recipe.get("schema") != gfx_independent_replay.RECIPE_SCHEMA:
+                raise AcceptanceError(
+                    "invalid_recipe",
+                    "producer receipt recipe schema is not the current "
+                    "replay recipe")
+            expected_effective = (
+                gfx_independent_replay.effective_replay_environment(
+                    recipe.get("consumed_env")))
+            if recipe.get("effective_env") != expected_effective:
+                raise AcceptanceError(
+                    "invalid_recipe",
+                    "producer receipt effective environment disagrees with "
+                    "the consumed environment it records")
+            if recipe.get("sha256") != gfx_independent_replay.recipe_digest(
+                    recipe):
+                raise AcceptanceError(
+                    "invalid_recipe",
+                    "producer receipt recipe digest does not match its "
+                    "recorded inputs")
+            expected_diagnostic = bool(
+                recipe.get("faults")) or bool(recipe.get("effective_env"))
+            if bool(recipe.get("diagnostic")) is not expected_diagnostic:
+                raise AcceptanceError(
+                    "invalid_recipe",
+                    "producer receipt diagnostic flag disagrees with its "
+                    "recorded effective inputs")
+            if recipe.get("diagnostic") is True:
+                digest = str(recipe.get("sha256") or "")
+                if not digest or digest not in (approved_recipes or set()):
+                    raise AcceptanceError(
+                        "diagnostic_recipe",
+                        "producer receipt records a diagnostic replay recipe; "
+                        "a diagnostic variant is never correction evidence "
+                        "unless its exact recipe is explicitly approved")
+                recipe_approved = True
         result = receipt.get("result") if isinstance(
             receipt.get("result"), dict) else {}
         if result.get("replay_json_sha256") != _sha256(
@@ -334,6 +393,8 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
         "graph_status": graph.get("status"),
         "state_coverage": states,
         "producer": producer,
+        "recipe": recipe,
+        "recipe_approved": recipe_approved,
         "receipt_present": bool(receipt),
         "checkpoint_binding": checkpoint_binding,
     }
@@ -578,7 +639,7 @@ def _baseline_problems(case_dir: Path, baseline: dict, before_dir: Path,
 
 
 def _load_contract(value) -> tuple[dict, list[str]]:
-    """Load and validate the configured exact-match regression inventory."""
+    """Load and validate the configured qualification contract."""
     problems: list[str] = []
     if value is None:
         value = DEFAULT_QUALIFICATION_CONTRACT
@@ -628,11 +689,32 @@ def _load_contract(value) -> tuple[dict, list[str]]:
         problems.append(
             "qualification contract allow_no_exact_control must be a boolean")
         allow_no_exact_control = False
+    # A diagnostic replay recipe (a fault, an inherited override or any other
+    # effective non-default input) is never correction evidence on its own.
+    # An operator may explicitly approve one exact recipe digest; approval is
+    # by content, not by a receipt declaring itself canonical.
+    approved = contract.get("approved_canonical_recipes", [])
+    if not isinstance(approved, list):
+        problems.append(
+            "qualification contract approved_canonical_recipes must be a list")
+        approved = []
+    approved_recipes: list[str] = []
+    for item in approved:
+        if (not isinstance(item, str) or len(item) != 64
+                or any(char not in "0123456789abcdef" for char in item)):
+            problems.append(
+                "qualification contract has an invalid approved recipe digest")
+            continue
+        if item in approved_recipes:
+            problems.append(
+                f"qualification contract repeats approved recipe {item!r}")
+        approved_recipes.append(item)
     return {"schema": contract.get("schema"),
             "required_regressions": cleaned,
             "allow_additional": allow_additional,
             "allow_final_only": allow_final_only,
-            "allow_no_exact_control": allow_no_exact_control}, problems
+            "allow_no_exact_control": allow_no_exact_control,
+            "approved_canonical_recipes": approved_recipes}, problems
 
 
 def evaluate(*, case_dir: Path | str, baseline_path: Path | str,
@@ -722,6 +804,7 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
     for detail in contract_problems:
         problems.append({"code": "qualification_contract",
                          "detail": detail, "severity": "invalid"})
+    approved_recipes = set(contract.get("approved_canonical_recipes") or [])
 
     def problem(code: str, detail: str, *, severity: str = "rejected") -> None:
         problems.append({"code": code, "detail": detail,
@@ -759,8 +842,9 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
 
     # The baseline's recorded result is never reused as the before statistic.
     try:
-        before = _replay_evidence(case_dir / "capture", before_dir,
-                                  policy_path)
+        before = _replay_evidence(
+            case_dir / "capture", before_dir, policy_path,
+            approved_recipes=approved_recipes)
     except AcceptanceError as exc:
         problem("before_unverified", str(exc), severity="invalid")
         before = None
@@ -787,9 +871,16 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
                 "the baseline checkpoint reconciliation is "
                 f"{before_checkpoints!r}; the before checkpoint statistics are "
                 "reported as incomplete evidence")
+        if before["receipt_present"] and before["recipe"] is None:
+            limitations.append(
+                "the baseline producer receipt has no replay recipe; ambient "
+                "diagnostic overrides cannot be excluded from the before "
+                "statistic")
 
     try:
-        after = _replay_evidence(case_dir / "capture", after_dir, policy_path)
+        after = _replay_evidence(
+            case_dir / "capture", after_dir, policy_path,
+            approved_recipes=approved_recipes)
     except AcceptanceError as exc:
         problem("after_unverified", str(exc), severity="invalid")
         after = None
@@ -817,6 +908,16 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
                     "the candidate replay has no producer receipt",
                     severity="invalid")
         else:
+            if after["recipe"] is None:
+                limitations.append(
+                    "the candidate producer receipt has no replay recipe; "
+                    "ambient diagnostic overrides cannot be excluded from the "
+                    "candidate evidence")
+            if after.get("recipe_approved"):
+                limitations.append(
+                    "the candidate replay uses an explicitly approved "
+                    "non-canonical recipe; the approval is recorded, not "
+                    "inferred")
             if after.get("checkpoint_binding") == "absent":
                 limitations.append(
                     "the candidate producer receipt does not bind its "
@@ -1008,8 +1109,9 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
                 row["ok"] = False
                 regression_rows.append(row)
                 continue
-            replay_side = _replay_evidence(path / "capture",
-                                           path / "replay", policy_path)
+            replay_side = _replay_evidence(
+                path / "capture", path / "replay", policy_path,
+                approved_recipes=approved_recipes)
             # Execution and provenance are established before pixels: a failed
             # replay with stale zero-mismatch pixels is not a passing
             # regression.

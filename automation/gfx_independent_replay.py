@@ -3553,8 +3553,243 @@ def _sha256_file(path: Path) -> str | None:
 
 
 
+_CONSUMED_REPLAY_ENV = (
+    "EU4_FRAME_REPLAY_COPY_FAULT",
+    "EU4_FRAME_REPLAY_DEBUG_ATTR_VERTEX",
+    "EU4_FRAME_REPLAY_DEBUG_DESCRIPTOR",
+    "EU4_FRAME_REPLAY_DEBUG_FRAGMENT",
+    "EU4_FRAME_REPLAY_DEBUG_VERTEX",
+    "EU4_FRAME_REPLAY_DISABLE_RT_FLIP",
+    "EU4_FRAME_REPLAY_FAULT_EVENT",
+    "EU4_FRAME_REPLAY_FAULT_FRAME",
+    "EU4_FRAME_REPLAY_FLIP_WINDING",
+    "EU4_FRAME_REPLAY_LINEAR_ALL",
+    "EU4_FRAME_REPLAY_LINEAR_MIN",
+    "EU4_FRAME_REPLAY_NEAREST_ALL",
+    "EU4_FRAME_REPLAY_NO_CULL",
+    "EU4_FRAME_REPLAY_PRECISE_MATH",
+    "EU4_FRAME_REPLAY_SAMPLER_SHIFT",
+    "EU4_FRAME_REPLAY_SAMPLER_SHIFT_MIN",
+)
+
+# These switches are always removed before a replay so a stray ambient
+# experiment cannot be inherited by an ordinary run.  The receipt records the
+# scrub so the difference between the caller's environment and the child's is
+# explicit rather than implied.
+_SCRUBBED_REPLAY_ENV = (
+    "EU4_FRAME_REPLAY_DISABLE_RT_FLIP",
+    "EU4_FRAME_REPLAY_SAMPLER_SHIFT",
+)
+
+_BOOLEAN_REPLAY_ENV = (
+    "EU4_FRAME_REPLAY_DEBUG_ATTR_VERTEX",
+    "EU4_FRAME_REPLAY_DEBUG_VERTEX",
+    "EU4_FRAME_REPLAY_DISABLE_RT_FLIP",
+    "EU4_FRAME_REPLAY_FLIP_WINDING",
+    "EU4_FRAME_REPLAY_LINEAR_ALL",
+    "EU4_FRAME_REPLAY_LINEAR_MIN",
+    "EU4_FRAME_REPLAY_NEAREST_ALL",
+    "EU4_FRAME_REPLAY_NO_CULL",
+)
+
+RECIPE_SCHEMA = "gfx-replay-recipe/v2"
+
+
+def _replay_int(value, default: int = 0) -> int:
+    try:
+        return int(str(value).strip(), 10)
+    except (TypeError, ValueError):
+        return default
+
+
+def _replay_enabled(value) -> bool:
+    return isinstance(value, str) and value[:1] == "1"
+
+
+def _fault_environment(faults: dict | None) -> dict:
+    """The environment variables an explicit replay fault injects."""
+    faults = dict(faults or {})
+    injected: dict[str, str] = {}
+    if faults.get("disable_render_target_vflip"):
+        injected["EU4_FRAME_REPLAY_DISABLE_RT_FLIP"] = "1"
+    if faults.get("sampler_shift") is not None:
+        injected["EU4_FRAME_REPLAY_SAMPLER_SHIFT"] = str(
+            faults["sampler_shift"])
+        if faults.get("sampler_shift_min") is not None:
+            injected["EU4_FRAME_REPLAY_SAMPLER_SHIFT_MIN"] = str(
+                faults["sampler_shift_min"])
+    return injected
+
+
+def resolve_replay_environment(*, ambient: dict | None = None,
+                               faults: dict | None = None) -> dict:
+    """The exact environment passed to the replay child.
+
+    The caller's ambient environment is inherited, a fixed set of fault
+    switches is scrubbed, and requested faults are injected for this replay
+    only.  The resolved mapping is what both the child and the receipt see.
+    """
+    base = dict(os.environ if ambient is None else ambient)
+    env = dict(base)
+    for key in _SCRUBBED_REPLAY_ENV:
+        env.pop(key, None)
+    env.update(_fault_environment(faults))
+    return env
+
+
+def _effective_replay_env(consumed: dict) -> dict:
+    """The consumed variables whose values actually change native execution.
+
+    An explicit default (for example ``EU4_FRAME_REPLAY_PRECISE_MATH=0``)
+    resolves to the same behaviour as an absent variable.  Only effective
+    values belong in the recipe identity; the raw values stay inspectable.
+    """
+    effective: dict[str, str] = {}
+    for key, value in consumed.items():
+        if key == "EU4_FRAME_REPLAY_PRECISE_MATH":
+            active = value == "1"
+        elif key in _BOOLEAN_REPLAY_ENV:
+            active = _replay_enabled(value)
+        elif key == "EU4_FRAME_REPLAY_DEBUG_FRAGMENT":
+            active = _replay_enabled(value) or value in ("texture", "uv")
+        elif key == "EU4_FRAME_REPLAY_DEBUG_DESCRIPTOR":
+            # Presence alone selects the descriptor diagnostics.
+            active = True
+        elif key == "EU4_FRAME_REPLAY_COPY_FAULT":
+            active = value == "command"
+        else:
+            # Sampler-shift selectors are resolved contextually below.
+            active = False
+        if active:
+            effective[key] = value
+    shift = _replay_int(consumed.get("EU4_FRAME_REPLAY_SAMPLER_SHIFT"), 0)
+    if shift:
+        effective["EU4_FRAME_REPLAY_SAMPLER_SHIFT"] = consumed[
+            "EU4_FRAME_REPLAY_SAMPLER_SHIFT"]
+        shift_min = _replay_int(
+            consumed.get("EU4_FRAME_REPLAY_SAMPLER_SHIFT_MIN"), 7)
+        if (shift_min != 7
+                and "EU4_FRAME_REPLAY_SAMPLER_SHIFT_MIN" in consumed):
+            effective["EU4_FRAME_REPLAY_SAMPLER_SHIFT_MIN"] = consumed[
+                "EU4_FRAME_REPLAY_SAMPLER_SHIFT_MIN"]
+        if ("EU4_FRAME_REPLAY_FAULT_FRAME" in consumed
+                and _replay_int(
+                    consumed.get("EU4_FRAME_REPLAY_FAULT_FRAME"), 0) > 0):
+            effective["EU4_FRAME_REPLAY_FAULT_FRAME"] = consumed[
+                "EU4_FRAME_REPLAY_FAULT_FRAME"]
+        if ("EU4_FRAME_REPLAY_FAULT_EVENT" in consumed
+                and _replay_int(
+                    consumed.get("EU4_FRAME_REPLAY_FAULT_EVENT"), -1) >= 0):
+            effective["EU4_FRAME_REPLAY_FAULT_EVENT"] = consumed[
+                "EU4_FRAME_REPLAY_FAULT_EVENT"]
+    return effective
+
+
+def effective_replay_environment(consumed: dict | None) -> dict:
+    """Canonical effective projection of a receipt's consumed environment."""
+    return _effective_replay_env(dict(consumed or {}))
+
+
+def recipe_digest(recipe: dict) -> str:
+    """Digest of the execution-relevant fields of a recipe.
+
+    Approval and acceptance compare this digest, never a receipt's own
+    ``sha256`` field, so editing the recorded inputs invalidates an approved
+    recipe.
+    """
+    payload = {
+        "schema": RECIPE_SCHEMA,
+        "effective_env": dict(sorted((recipe.get("effective_env") or {}).items())),
+        "faults": recipe.get("faults") or {},
+        "shader_identity": recipe.get("shader_identity") or {},
+        "policy_sha256": recipe.get("policy_sha256"),
+    }
+    return hashlib.sha256(json.dumps(
+        payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def replay_recipe(*, env: dict | None = None,
+                  ambient: dict | None = None,
+                  shaders: Path | str | None = None,
+                  policy: Path | str | None = None,
+                  faults: dict | None = None) -> dict:
+    """The effective, consumed inputs of one replay invocation.
+
+    A byte hash of the output proves which bytes were saved; it cannot explain
+    which ambient override produced them.  ``env`` is the exact mapping passed
+    to the replay child (after scrubbing and fault injection), not the
+    caller's ambient environment.  The recipe is deliberately limited to
+    consumed options: unrelated variables, secrets and host paths are not
+    public evidence.
+    """
+    inherited_ambient = ambient is None and env is None
+    resolved = dict(os.environ if env is None else env)
+    previous = dict(os.environ) if inherited_ambient else (
+        None if ambient is None else dict(ambient))
+    consumed = {
+        key: resolved[key] for key in _CONSUMED_REPLAY_ENV
+        if key in resolved
+    }
+    effective = _effective_replay_env(consumed)
+    faults = dict(faults or {})
+    fault_env = _fault_environment(faults)
+    injected = sorted(
+        key for key in effective
+        if key in fault_env and resolved.get(key) == fault_env[key])
+    inherited = sorted(
+        key for key in effective
+        if previous is not None
+        and key not in injected
+        and previous.get(key) == resolved.get(key))
+    # resolve_replay_environment always removes these from the ambient
+    # environment before it applies any explicit fault.  Record what was
+    # scrubbed even when a fault re-injects the same name with a new value.
+    scrubbed = sorted(
+        key for key in _SCRUBBED_REPLAY_ENV
+        if previous is not None and key in previous)
+    shader_identity = {"shaders_json_sha256": "", "artifacts_sha256": "",
+                       "artifact_count": 0}
+    if shaders is not None:
+        try:
+            shader_identity = m6_frame.shader_receipt_identity(
+                Path(shaders), required=False)
+        except (OSError, m6_frame.FrameError):
+            shader_identity = {"shaders_json_sha256": "", "artifacts_sha256": "",
+                               "artifact_count": 0}
+    policy_sha = None
+    if policy is not None:
+        try:
+            policy_sha = _sha256_file(Path(policy))
+        except OSError:
+            policy_sha = None
+    recipe = {
+        "schema": RECIPE_SCHEMA,
+        "diagnostic": bool(faults) or bool(effective),
+        "faults": faults,
+        "consumed_env": dict(sorted(consumed.items())),
+        "effective_env": dict(sorted(effective.items())),
+        "inherited_env": inherited,
+        "injected_env": injected,
+        "scrubbed_env": scrubbed,
+        "shader_identity": shader_identity,
+        "policy_sha256": policy_sha,
+        "precise_math": consumed.get("EU4_FRAME_REPLAY_PRECISE_MATH"),
+        "environment_sha256": hashlib.sha256(json.dumps({
+            "effective_env": dict(sorted(effective.items())),
+            "faults": faults,
+        }, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+    }
+    recipe["sha256"] = recipe_digest(recipe)
+    return recipe
+
+
 def write_producer_receipt(out_dir: Path, frame_dir: Path,
-                           producer: dict, result_path: Path) -> dict:
+                           producer: dict, result_path: Path, *,
+                           shaders: Path | str | None = None,
+                           policy: Path | str | None = None,
+                           faults: dict | None = None,
+                           env: dict | None = None,
+                           ambient: dict | None = None) -> dict:
     """Bind a replay result to the exact executable and build that produced it."""
     seal = _optional_json(frame_dir / "frame-seal.json") or {}
     trace = _optional_json(frame_dir / "frame-trace.json") or {}
@@ -3607,6 +3842,9 @@ def write_producer_receipt(out_dir: Path, frame_dir: Path,
             "source_revision": producer.get("source_revision"),
         },
         "capture": capture,
+        "recipe": replay_recipe(
+            env=env, ambient=ambient, shaders=shaders, policy=policy,
+            faults=faults),
         "result": {
             "replay_json_sha256": _sha256_file(result_path),
             "metal_frame_sha256": (_sha256_file(metal)
@@ -3706,17 +3944,12 @@ def _replay_locked(
         "--out", str(out_dir), "--checkpoints",
         str(out_dir / "checkpoint-request.json"),
     ]
-    env = dict(os.environ)
-    env.pop("EU4_FRAME_REPLAY_DISABLE_RT_FLIP", None)
-    env.pop("EU4_FRAME_REPLAY_SAMPLER_SHIFT", None)
+    ambient = dict(os.environ)
     faults = dict(faults or {})
-    if faults.get("disable_render_target_vflip"):
-        env["EU4_FRAME_REPLAY_DISABLE_RT_FLIP"] = "1"
-    if faults.get("sampler_shift") is not None:
-        env["EU4_FRAME_REPLAY_SAMPLER_SHIFT"] = str(faults["sampler_shift"])
-        if faults.get("sampler_shift_min") is not None:
-            env["EU4_FRAME_REPLAY_SAMPLER_SHIFT_MIN"] = str(
-                faults["sampler_shift_min"])
+    # Resolve once and pass the same mapping to the child and to the receipt.
+    # The receipt must describe the environment that actually ran, not the
+    # caller's pre-scrub environment or a sample of known switches.
+    env = resolve_replay_environment(ambient=ambient, faults=faults)
     try:
         ran = subprocess.run(
             command, capture_output=True, text=True, check=False, env=env,
@@ -3734,7 +3967,9 @@ def _replay_locked(
         if result_path.is_file():
             try:
                 write_producer_receipt(
-                    out_dir, frame_dir, producer, result_path)
+                    out_dir, frame_dir, producer, result_path,
+                    shaders=shader_dir, policy=policy, faults=faults,
+                    env=env, ambient=ambient)
             except ReplayError as exc:
                 # A malformed/failed checkpoint declaration is a diagnostic
                 # result, not a reason to lose the report or leak the host

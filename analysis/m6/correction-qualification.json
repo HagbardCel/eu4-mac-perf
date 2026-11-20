@@ -1,6 +1,7 @@
 {
   "schema": "gfx-correction-qualification/v1",
-  "description": "Exact-match regression inventory for a renderer correction. A campaign may supply a stricter contract with a non-empty required_regressions list; the candidate conclusion's own claimed regressions are always enforced even when this list is empty.",
+  "description": "Exact-match regression inventory for a renderer correction. A campaign may supply a stricter contract with a non-empty required_regressions list; the candidate conclusion's own claimed regressions are always enforced even when this list is empty. approved_canonical_recipes lists exact replay-recipe digests that an operator explicitly approves despite recording a diagnostic input; approval is by content, never by declaration.",
   "required_regressions": [],
-  "allow_additional": false
+  "allow_additional": false,
+  "approved_canonical_recipes": []
 }
