@@ -11,6 +11,9 @@ existing campaign runner. There is no separate authorization database.
 
 from __future__ import annotations
 
+_MISSING_CLEANUP = object()
+
+
 import argparse
 import datetime as dt
 import fcntl
@@ -280,8 +283,17 @@ def _finish_launch(
 
 
 def _capture_status(report: dict, *, until_target_draw: bool = False) -> tuple[str, str]:
-    if report.get("cleanup_ok") is not True:
-        detail = "; ".join(report.get("cleanup_errors") or [])
+    raw_cleanup_ok = report.get("cleanup_ok", _MISSING_CLEANUP)
+    cleanup_record = report.get("cleanup")
+    cleanup_errors = list(report.get("cleanup_errors") or [])
+    if raw_cleanup_ok is _MISSING_CLEANUP:
+        cleanup_ok = not (isinstance(cleanup_record, dict)
+                          and cleanup_record.get("ok") is False) \
+            and not cleanup_errors
+    else:
+        cleanup_ok = raw_cleanup_ok is True and not cleanup_errors
+    if not cleanup_ok:
+        detail = "; ".join(cleanup_errors)
         return "unavailable", "cleanup_failed" + (f": {detail}" if detail else "")
     status = report.get("status")
     if not isinstance(status, dict) or status.get("state") != "installed":

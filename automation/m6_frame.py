@@ -16,6 +16,9 @@ provenance belong in tracked evidence.
 
 from __future__ import annotations
 
+_MISSING_CLEANUP = object()
+
+
 import argparse
 import fcntl
 import hashlib
@@ -1209,8 +1212,18 @@ def capture(args: argparse.Namespace) -> int:
                 for item in campaign_frames
             ],
         }
-    cleanup_ok = report.get("cleanup_ok") is True
+    raw_cleanup_ok = report.get("cleanup_ok", _MISSING_CLEANUP)
+    cleanup_record = report.get("cleanup")
     cleanup_errors = list(report.get("cleanup_errors") or [])
+    if raw_cleanup_ok is _MISSING_CLEANUP:
+        # Legacy reports predate the explicit field.  A missing record with no
+        # error evidence is not a failure; an explicit cleanup block that says
+        # it failed is.
+        cleanup_ok = not (isinstance(cleanup_record, dict)
+                          and cleanup_record.get("ok") is False) \
+            and not cleanup_errors
+    else:
+        cleanup_ok = raw_cleanup_ok is True and not cleanup_errors
     display_record = report.get("display")
     result["cleanup"] = {
         "ok": cleanup_ok,
