@@ -429,6 +429,8 @@ class ShaderReceiptIdentityTests(unittest.TestCase):
             identity = m6_frame.shader_receipt_identity(shader_dir)
         self.assertEqual(identity["artifacts_sha256"], self.EXPECTED_DIGEST)
         self.assertEqual(identity["artifact_count"], 3)
+        self.assertEqual(list(identity), [
+            "shaders_json_sha256", "artifacts_sha256", "artifact_count"])
         self.assertEqual(
             identity["shaders_json_sha256"],
             hashlib.sha256(self.FILES["shaders.json"]).hexdigest())

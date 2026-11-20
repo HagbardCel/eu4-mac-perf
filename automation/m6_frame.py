@@ -2206,13 +2206,6 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
         "source": str(request_path),
         "graph_status": graph.get("status"),
     }
-    shaders_json = shader_dir / "shaders.json"
-    if not shaders_json.is_file():
-        result["status"] = "failed"
-        result["error"] = f"translated shader report is missing: {shaders_json}"
-        (shadow / "coordinator.json").write_text(
-            json.dumps(result, indent=2) + "\n")
-        return 1
     try:
         identity = shader_receipt_identity(shader_dir, required=True)
     except FrameError as exc:
@@ -2467,10 +2460,6 @@ def artifact_digest(directory: Path) -> tuple[str, int]:
         digest.update(b"\n")
         count += 1
     return digest.hexdigest(), count
-
-
-# Backwards-compatible private alias for callers in this module.
-_artifact_digest = artifact_digest
 
 
 def shader_receipt_identity(directory: Path | str | None, *,
