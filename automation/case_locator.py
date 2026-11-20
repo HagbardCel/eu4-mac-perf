@@ -114,6 +114,43 @@ def _symlink_problem(root: Path) -> str | None:
     return None
 
 
+def _tree_inventory(root: Path) -> dict[str, tuple[int, str]]:
+    """Regular files under ``root`` with relative path, size and digest.
+
+    Symlinks are rejected rather than followed.  The inventory is taken before
+    copying and re-computed on the staged copy; a path that was swapped for a
+    symlink or changed bytes during the copy window therefore cannot be
+    published as a regular file.
+    """
+    root = Path(root)
+    inventory: dict[str, tuple[int, str]] = {}
+
+    def walk(directory: Path, prefix: str) -> None:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                relative = f"{prefix}{entry.name}"
+                if entry.is_symlink():
+                    raise CaseLocatorError(
+                        "symlink_source",
+                        f"case contains a symlink at {relative}; publish a "
+                        "self-contained copy instead")
+                if entry.is_dir(follow_symlinks=False):
+                    walk(Path(entry.path), relative + "/")
+                elif entry.is_file(follow_symlinks=False):
+                    try:
+                        size = entry.stat(follow_symlinks=False).st_size
+                        digest = _sha(Path(entry.path))
+                    except OSError as exc:
+                        raise CaseLocatorError(
+                            "copy_unreadable",
+                            f"cannot inventory {relative}: {exc}") from exc
+                    inventory[relative] = (size, digest or "")
+
+    if root.is_dir():
+        walk(root, "")
+    return inventory
+
+
 def _existing_ancestor(path: Path) -> Path:
     current = Path(path)
     while not current.exists() and current != current.parent:
@@ -297,6 +334,9 @@ def _preflight_space(root: Path, source_bytes: int, *,
 
 def _adopt_existing(target: Path, identity: dict, key: str) -> dict:
     """Verify and identity-check an already published copy."""
+    symlink = _symlink_problem(target)
+    if symlink is not None:
+        raise CaseLocatorError("symlink_source", symlink)
     existing = _verify(target)
     if existing.get("ok") is not True:
         raise CaseLocatorError(
@@ -428,7 +468,9 @@ def publish(case_dir: Path | str, evidence_root: Path | str, *,
         symlink = _symlink_problem(case_dir)
         if symlink is not None:
             raise CaseLocatorError("symlink_source", symlink)
-        source_bytes, source_files = _tree_stats(case_dir)
+        inventory = _tree_inventory(case_dir)
+        source_bytes = sum(size for size, _digest in inventory.values())
+        source_files = len(inventory)
         _preflight_space(root, source_bytes,
                          size_budget=size_budget, min_free=min_free_bytes)
         cases.mkdir(parents=True, exist_ok=True)
@@ -446,6 +488,21 @@ def publish(case_dir: Path | str, evidence_root: Path | str, *,
             staged_symlink = _symlink_problem(staging)
             if staged_symlink is not None:
                 raise CaseLocatorError("symlink_source", staged_symlink)
+            # Reject any staged path that differs from the pre-copy inventory.
+            # This is the copy-window guard: a file or directory swapped for a
+            # symlink after the scan is either rejected above or fails this
+            # size/digest/path comparison.
+            staged_inventory = _tree_inventory(staging)
+            if staged_inventory != inventory:
+                changed = sorted(
+                    set(inventory) ^ set(staged_inventory)
+                    | {name for name in inventory.keys()
+                       & staged_inventory.keys()
+                       if inventory[name] != staged_inventory[name]})
+                raise CaseLocatorError(
+                    "copy_changed",
+                    f"staged case changed during copy at "
+                    f"{', '.join(changed[:8])}; refusing to publish")
             copied = _verify(staging)
             if copied.get("ok") is not True:
                 raise CaseLocatorError(
@@ -802,6 +859,22 @@ def locate(evidence_root: Path | str, *, session_id: str | None = None,
     elif scan_truncated:
         state = "unknown_truncated"
     truncated = scan_truncated or matched_total > len(matches)
+    # Metadata for every matched locator was computed even when only ``limit``
+    # were fully verified.  A damaged unreturned match must not leave the
+    # lookup looking like a success.
+    metadata_worst = "available"
+    for candidate in ("invalid_path", "missing_payload"):
+        if matched_metadata_states.get(candidate):
+            metadata_worst = candidate
+            break
+    verified_all = not truncated
+    if verify and truncated and matched_total > len(matches):
+        # An unreturned match could be corrupt; a page-1-only result is not a
+        # reusable success.  The distinct state is non-zero at the CLI.
+        state = "truncated_unverified"
+        metadata_worst = "unknown"
+    elif state == "available" and metadata_worst != "available":
+        state = metadata_worst
     return {
         "schema": SCHEMA,
         "root": str(root),
@@ -813,10 +886,13 @@ def locate(evidence_root: Path | str, *, session_id: str | None = None,
         "limit": limit,
         "scan_truncated": scan_truncated,
         "truncated": truncated,
+        "verified_all": verified_all,
+        "safe_to_reuse": state == "available" and verified_all,
         "invalid_locators": invalid_locators[:20],
         "invalid_locator_count": len(invalid_locators),
         "matched_metadata_states": matched_metadata_states,
-        "state_scope": "returned_matches",
+        "state_scope": ("all_matched" if verified_all
+                        else "returned_matches_only"),
         "read_only": True,
     }
 
@@ -830,22 +906,31 @@ def summaries(evidence_root: Path | str) -> list[dict]:
     return [_locator_metadata(root, locator) for locator in locators]
 
 
-def inventory(evidence_root: Path | str, *, verify: bool = False) -> dict:
+def inventory(evidence_root: Path | str, *, verify: bool = False,
+              offset: int = 0, limit: int | None = None) -> dict:
     """Bounded summary of published locators under one root.
 
     Metadata-only by default.  ``verify=True`` hashes and re-verifies each
     selected package and is intended for an explicit operator check, not a
-    discovery loop.
+    discovery loop.  ``offset``/``limit`` page the stable locator order; the
+    counts describe the full selected set and the returned page separately.
     """
+    if offset < 0:
+        raise CaseLocatorError("offset", "offset must be >= 0")
+    if limit is not None and limit < 1:
+        raise CaseLocatorError("limit", "limit must be >= 1")
     root = Path(evidence_root).expanduser().resolve()
     if not root.is_dir():
         return {"schema": SCHEMA, "root": str(root),
                 "state": "root_unavailable", "locators": [],
                 "counts": {}, "truncated": False, "read_only": True}
     locators, truncated, invalid_locators = _locator_scan(root)
+    selected = locators[offset:]
+    if limit is not None:
+        selected = selected[:limit]
     rows = [(_resolve_match(root, locator) if verify
              else _locator_metadata(root, locator))
-            for locator in locators]
+            for locator in selected]
     counts: dict[str, int] = {}
     for row in rows:
         counts[row["state"]] = counts.get(row["state"], 0) + 1
@@ -858,16 +943,23 @@ def inventory(evidence_root: Path | str, *, verify: bool = False) -> dict:
         state = "available"
     else:
         state = "degraded"
+    page_truncated = offset + len(rows) < len(locators)
     return {
         "schema": SCHEMA,
         "root": str(root),
         "state": state,
         "counts": counts,
         "locators": rows,
+        "total": len(locators),
+        "offset": offset,
+        "limit": limit,
+        "returned": len(rows),
+        "next_offset": (offset + len(rows)) if page_truncated else None,
         "invalid_locators": invalid_locators[:20],
         "invalid_locator_count": invalid_count,
         "verified": verify,
-        "truncated": truncated,
+        "truncated": truncated or page_truncated,
+        "scan_truncated": truncated,
         "scan_limit": MAX_LOCATORS,
         "read_only": True,
     }
@@ -896,6 +988,8 @@ def _parser() -> argparse.ArgumentParser:
     inventory_parser.add_argument("--root", required=True, type=Path)
     inventory_parser.add_argument("--verify", action="store_true",
                                   help="hash and fully verify every locator")
+    inventory_parser.add_argument("--offset", type=int, default=0)
+    inventory_parser.add_argument("--limit", type=int, default=None)
     return parser
 
 
@@ -916,7 +1010,8 @@ def main(argv: list[str] | None = None) -> int:
                 verify=not args.no_verify)
             status = 0 if value["state"] == "available" else 2
         else:
-            value = inventory(args.root, verify=args.verify)
+            value = inventory(args.root, verify=args.verify,
+                             offset=args.offset, limit=args.limit)
             status = 0
     except CaseLocatorError as exc:
         print(json.dumps({"schema": SCHEMA, "ok": False,

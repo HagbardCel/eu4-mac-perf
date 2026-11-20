@@ -700,7 +700,8 @@ def eu4_re_query(args: argparse.Namespace) -> dict:
 
 
 def discover_evidence(*, roots, query=None, classification=None, since=None,
-                      limit=20, offset=0) -> dict:
+                      limit=20, offset=0, locator_limit=None,
+                      locator_offset=0) -> dict:
     return evidence_index.discover(
         configured_roots=roots,
         query=query,
@@ -708,6 +709,8 @@ def discover_evidence(*, roots, query=None, classification=None, since=None,
         since=since,
         limit=limit,
         offset=offset,
+        locator_limit=locator_limit,
+        locator_offset=locator_offset,
     )
 
 
@@ -743,6 +746,9 @@ def eu4_session(args: argparse.Namespace) -> dict:
             since=args.since,
             limit=int(getattr(args, "limit", 20) or 20),
             offset=int(getattr(args, "offset", 0) or 0),
+            locator_limit=getattr(args, "locator_limit", None),
+            locator_offset=int(
+                getattr(args, "locator_offset", 0) or 0),
         )
         return _envelope("eu4_session", "ok", discovery)
     run = Path(args.run).expanduser().resolve()
@@ -3230,6 +3236,10 @@ def _parser() -> argparse.ArgumentParser:
         "active", "closed", "stale", "all"), default=None)
     session.add_argument("--limit", type=int, default=20)
     session.add_argument("--offset", type=int, default=0)
+    session.add_argument("--locator-limit", type=int, default=None,
+                         help="locator page size (defaults to --limit)")
+    session.add_argument("--locator-offset", type=int, default=0,
+                         help="locator page offset")
     session.add_argument("--evidence-root", default=None,
                          help="pathsep-separated evidence roots (default EU4_EVIDENCE_ROOT)")
     session.add_argument("--query", default=None)

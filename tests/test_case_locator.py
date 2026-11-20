@@ -342,6 +342,87 @@ class CaseLocatorTests(unittest.TestCase):
         self.assertTrue(inventory["truncated"])
         self.assertEqual(inventory["scan_limit"], 1)
 
+
+    def test_verified_lookup_with_an_unreturned_match_is_not_reusable(self):
+        first = make_case(self.root / "one" / "case", capture_frame_id=1)
+        second = make_case(self.root / "two" / "case", capture_frame_id=2)
+        case_locator.publish(first, self.evidence)
+        published = case_locator.publish(second, self.evidence)
+        target = (Path(published["locator_path"]).parents[1]
+                  / published["relative_path"])
+        (target / "report.json").write_bytes(b"corrupt")
+        located = case_locator.locate(
+            self.evidence, session_id="session-1", limit=1, verify=True)
+        self.assertEqual(located["state"], "truncated_unverified", located)
+        self.assertFalse(located["safe_to_reuse"])
+        self.assertFalse(located["verified_all"])
+        self.assertEqual(located["state_scope"], "returned_matches_only")
+
+    def test_inventory_pages_with_offset_and_limit(self):
+        for index in range(3):
+            case = make_case(self.root / f"case-{index}" / "case",
+                             capture_frame_id=index + 1)
+            case_locator.publish(case, self.evidence)
+        page = case_locator.inventory(self.evidence, offset=1, limit=1)
+        self.assertEqual(page["total"], 3)
+        self.assertEqual(page["returned"], 1)
+        self.assertEqual(page["offset"], 1)
+        self.assertTrue(page["truncated"])
+        self.assertIsNotNone(page["next_offset"])
+
+    def test_copy_window_byte_change_is_refused(self):
+        case = make_case(self.root / "producer" / "case")
+        real = shutil.copytree
+
+        def copy_then_mutate(source, destination, *args, **kwargs):
+            result = real(source, destination, *args, **kwargs)
+            if Path(destination).parent.name.startswith(".publish-"):
+                victim = Path(destination) / "report.json"
+                victim.write_bytes(victim.read_bytes() + b"foreign")
+            return result
+
+        with mock.patch("automation.case_locator.shutil.copytree",
+                        side_effect=copy_then_mutate):
+            with self.assertRaises(case_locator.CaseLocatorError) as raised:
+                case_locator.publish(case, self.evidence)
+        self.assertEqual(raised.exception.kind, "copy_changed")
+        self.assertFalse(any((self.evidence / "cases").glob("*/case")))
+        self.assertFalse(list((self.evidence / "locators").glob("*.json")))
+
+    def test_copy_window_directory_symlink_is_refused(self):
+        case = make_case(self.root / "producer" / "case")
+        foreign = self.root / "foreign"
+        foreign.mkdir()
+        (foreign / "payload.bin").write_bytes(b"foreign")
+        real = shutil.copytree
+
+        def copy_then_swap(source, destination, *args, **kwargs):
+            result = real(source, destination, *args, **kwargs)
+            if Path(destination).parent.name.startswith(".publish-"):
+                shaders = Path(destination) / "shaders"
+                shutil.rmtree(shaders)
+                os.symlink(foreign, shaders)
+            return result
+
+        with mock.patch("automation.case_locator.shutil.copytree",
+                        side_effect=copy_then_swap):
+            with self.assertRaises(case_locator.CaseLocatorError) as raised:
+                case_locator.publish(case, self.evidence)
+        self.assertEqual(raised.exception.kind, "symlink_source")
+        self.assertFalse(any((self.evidence / "cases").glob("*/case")))
+
+    def test_republish_rejects_a_symlinked_published_payload(self):
+        case = make_case(self.root / "producer" / "case")
+        published = case_locator.publish(case, self.evidence)
+        target = (Path(published["locator_path"]).parents[1]
+                  / published["relative_path"])
+        victim = target / "report.json"
+        victim.unlink()
+        os.symlink(case / "report.json", victim)
+        with self.assertRaises(case_locator.CaseLocatorError) as raised:
+            case_locator.publish(case, self.evidence)
+        self.assertEqual(raised.exception.kind, "symlink_source")
+
     def test_size_budget_and_free_space_are_preflighted(self) -> None:
         case = make_case(self.root / "producer" / "case")
         with self.assertRaises(case_locator.CaseLocatorError) as raised:

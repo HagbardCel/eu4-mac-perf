@@ -153,6 +153,34 @@ class DiscoveryTests(unittest.TestCase):
             classification="rendering_difference")
         self.assertEqual(filtered["case_locators"], [])
 
+    def test_locator_counts_are_scoped_and_page_independently(self):
+        from automation import case_locator
+
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from case_locator_fixtures import make_case
+
+        for index in range(3):
+            case = make_case(self.root / f"published-{index}" / "case",
+                             session_id=f"session-{index}",
+                             capture_frame_id=index + 1)
+            case_locator.publish(case, self.root)
+        first = evidence_index.discover(
+            configured_roots=str(self.root), limit=20,
+            locator_limit=2, locator_offset=0)
+        self.assertEqual(first["locator_counts"]["scanned"], 3)
+        self.assertEqual(first["locator_counts"]["filtered"], 3)
+        self.assertEqual(first["locator_counts"]["returned"], 2)
+        self.assertEqual(len(first["case_locators"]), 2)
+        self.assertTrue(first["locator_counts"]["filter_truncated"])
+        second = evidence_index.discover(
+            configured_roots=str(self.root), limit=20,
+            locator_limit=2, locator_offset=2)
+        self.assertEqual(second["locator_counts"]["returned"], 1)
+        self.assertFalse(second["locator_counts"]["filter_truncated"])
+        self.assertNotEqual(
+            {row["key"] for row in first["case_locators"]},
+            {row["key"] for row in second["case_locators"]})
+
 
 if __name__ == "__main__":
     unittest.main()
