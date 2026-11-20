@@ -286,12 +286,15 @@ def _capture_status(report: dict, *, until_target_draw: bool = False) -> tuple[s
     raw_cleanup_ok = report.get("cleanup_ok", _MISSING_CLEANUP)
     cleanup_record = report.get("cleanup")
     cleanup_errors = list(report.get("cleanup_errors") or [])
+    nested_failed = (isinstance(cleanup_record, dict)
+                     and (cleanup_record.get("ok") is False
+                          or bool(cleanup_record.get("errors"))))
     if raw_cleanup_ok is _MISSING_CLEANUP:
-        cleanup_ok = not (isinstance(cleanup_record, dict)
-                          and cleanup_record.get("ok") is False) \
-            and not cleanup_errors
+        # Legacy report with no cleanup fields at all: not a failure.
+        cleanup_ok = not nested_failed and not cleanup_errors
     else:
-        cleanup_ok = raw_cleanup_ok is True and not cleanup_errors
+        cleanup_ok = (raw_cleanup_ok is True and not nested_failed
+                      and not cleanup_errors)
     if not cleanup_ok:
         detail = "; ".join(cleanup_errors)
         return "unavailable", "cleanup_failed" + (f": {detail}" if detail else "")

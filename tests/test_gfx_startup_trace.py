@@ -814,6 +814,25 @@ class CaptureCleanupOutcomeTests(unittest.TestCase):
         self.assertIn("cleanup_failed", status[1])
         self.assertIn("close failed", status[1])
 
+    def test_nested_cleanup_failure_overrides_top_level_true(self):
+        for cleanup in ({"ok": False},
+                        {"ok": True, "errors": ["lease: close failed"]}):
+            with tempfile.TemporaryDirectory() as temporary:
+                output = Path(temporary) / "run"
+                status = self.capture(
+                    output, self.report(cleanup_ok=True, cleanup=cleanup))
+                written = json.loads(
+                    (output / "capture-report.json").read_text())
+            self.assertEqual(status, 8, cleanup)
+            self.assertEqual(written["outcome"], "failed")
+            self.assertFalse(written["cleanup"]["ok"])
+        status = live_gfx._capture_status({
+            "cleanup_ok": True,
+            "cleanup": {"ok": False, "errors": ["lease: close failed"]},
+            "status": {"state": "installed"},
+        })
+        self.assertEqual(status[0], "unavailable")
+
     def test_cleanup_failure_makes_the_capture_fail(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "run"
