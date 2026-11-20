@@ -1271,6 +1271,45 @@ static MTLPixelFormat pixel_format_for(NSString *name) {
 
 /* Creates and uploads one captured texture dictionary. All captured rows are
  * GL lower-left origin, so rows are flipped for Metal's top-left origin. */
+static MTLPixelFormat compressed_pixel_format(NSString *format) {
+    if ([format isEqualToString:@"DXT1"]) {
+        return MTLPixelFormatBC1_RGBA;
+    }
+    if ([format isEqualToString:@"DXT3"]) {
+        return MTLPixelFormatBC2_RGBA;
+    }
+    if ([format isEqualToString:@"DXT5"]) {
+        return MTLPixelFormatBC3_RGBA;
+    }
+    return MTLPixelFormatInvalid;
+}
+
+/* Returns YES only when every level carries the original compressed blocks in
+ * the same S3TC format.  A partially compressed texture is rejected: mixing a
+ * compressed and a decoded upload would silently change the decode path. */
+static BOOL compressed_levels(NSArray *levels, NSString **format_out) {
+    NSString *format = nil;
+    for (NSDictionary *level in levels) {
+        NSDictionary *compressed = level[@"compressed"];
+        if (![compressed isKindOfClass:[NSDictionary class]]) {
+            return NO;
+        }
+        NSString *value = string_value(compressed[@"format"]);
+        if (value.length == 0) {
+            return NO;
+        }
+        if (format == nil) {
+            format = value;
+        } else if (![format isEqualToString:value]) {
+            return NO;
+        }
+    }
+    if (format_out != NULL) {
+        *format_out = format;
+    }
+    return YES;
+}
+
 static id<MTLTexture> build_texture(NSDictionary *texture, NSString *frameDir,
                                     NSError **error) {
     NSArray *levels = texture[@"levels"];
@@ -1288,6 +1327,22 @@ static id<MTLTexture> build_texture(NSDictionary *texture, NSString *frameDir,
     NSString *format = string_value(first[@"pixel_format"]);
     MTLPixelFormat pixel_format = pixel_format_for(format);
     BOOL cube = [string_value(texture[@"target"]) isEqualToString:@"cube"];
+    NSString *compressed_format = nil;
+    BOOL compressed = !cube && compressed_levels(levels, &compressed_format);
+    MTLPixelFormat compressed_pixel = compressed
+        ? compressed_pixel_format(compressed_format) : MTLPixelFormatInvalid;
+    if (compressed && compressed_pixel == MTLPixelFormatInvalid) {
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:25
+                                     userInfo:@{NSLocalizedDescriptionKey:
+                                                    [@"unsupported compressed texture format "
+                                                     stringByAppendingString:compressed_format ?: @"<missing>"]}];
+        }
+        return nil;
+    }
+    if (compressed) {
+        pixel_format = compressed_pixel;
+    }
     if (pixel_format == MTLPixelFormatInvalid || width == 0 || height == 0) {
         if (error != NULL) {
             *error = [NSError errorWithDomain:kErrorDomain code:21
@@ -1322,6 +1377,29 @@ static id<MTLTexture> build_texture(NSDictionary *texture, NSString *frameDir,
         NSUInteger level_width = number(level[@"width"], width);
         NSUInteger level_height = number(level[@"height"], height);
         NSUInteger level_bytes = number(level[@"bytes"], 0);
+        if (compressed) {
+            NSDictionary *block = level[@"compressed"];
+            NSData *blob = read_blob(frameDir, string_value(block[@"file"]));
+            NSUInteger expected = number(block[@"bytes"], 0);
+            NSUInteger row_bytes = number(block[@"row_stride"], 0);
+            if (blob == nil || expected == 0 || blob.length != expected ||
+                row_bytes == 0 || cube) {
+                if (error != NULL) {
+                    *error = [NSError errorWithDomain:kErrorDomain code:26
+                                             userInfo:@{NSLocalizedDescriptionKey:
+                                                            [NSString stringWithFormat:
+                                                                 @"compressed texture level %lu is incomplete",
+                                                                 (unsigned long)level_index]}];
+                }
+                return nil;
+            }
+            MTLRegion region = MTLRegionMake2D(0, 0, level_width, level_height);
+            [texture_handle replaceRegion:region
+                             mipmapLevel:level_index
+                               withBytes:blob.bytes
+                             bytesPerRow:row_bytes];
+            continue;
+        }
         NSMutableArray *face_files = [NSMutableArray array];
         if ([level[@"faces"] isKindOfClass:[NSArray class]]) {
             for (NSDictionary *face in level[@"faces"]) {
@@ -1387,6 +1465,10 @@ static NSString *texture_cache_key(NSDictionary *texture) {
                        (unsigned long)number(texture[@"width"], 0)];
     for (NSDictionary *level in texture[@"levels"] ?: @[]) {
         [key appendFormat:@"-%@", string_value(level[@"sha256"]) ?: @""];
+        NSDictionary *compressed = level[@"compressed"];
+        if ([compressed isKindOfClass:[NSDictionary class]]) {
+            [key appendFormat:@".c%@", string_value(compressed[@"sha256"]) ?: @""];
+        }
         for (NSDictionary *face in level[@"faces"] ?: @[]) {
             [key appendFormat:@".%@", string_value(face[@"sha256"]) ?: @""];
         }

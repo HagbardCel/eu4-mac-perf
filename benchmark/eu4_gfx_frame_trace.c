@@ -98,6 +98,7 @@ static void load_sampler_queries(void) {
 #define GL_TEXTURE_BINDING_3D_VALUE 0x806A
 #define GL_VERTEX_ATTRIB_ARRAY_DIVISOR 0x88FE
 #define GL_COMPRESSED_DXT1 0x83F0
+#define GL_COMPRESSED_DXT1_ALPHA 0x83F1
 #define GL_COMPRESSED_DXT3 0x83F2
 #define GL_COMPRESSED_DXT5 0x83F3
 #define GL_RGBA32F_VALUE 0x8814
@@ -1717,6 +1718,7 @@ static const char *format_name(GLenum format) {
         case GL_RGB: return "RGB";
         case GL_RGB8: return "RGB8";
         case GL_COMPRESSED_DXT1: return "DXT1";
+        case GL_COMPRESSED_DXT1_ALPHA: return "DXT1";
         case GL_COMPRESSED_DXT3: return "DXT3";
         case GL_COMPRESSED_DXT5: return "DXT5";
         case GL_DEPTH_COMPONENT: return "DEPTH";
@@ -1747,6 +1749,20 @@ static int format_is_depth(GLenum internal) {
            internal == GL_DEPTH_COMPONENT24 || internal == GL_DEPTH_COMPONENT32 ||
            internal == GL_DEPTH24_STENCIL8 ||
            internal == GL_DEPTH32F_STENCIL8_VALUE;
+}
+
+/* S3TC textures are captured twice: the existing decoded RGBA8 levels keep
+ * every consumer working, and the original compressed blocks preserve the
+ * representation the live sampler actually decodes.  The Metal replay prefers
+ * the compressed blocks when every level provides them. */
+static int compressed_block_bytes(GLenum internal) {
+    switch (internal) {
+        case GL_COMPRESSED_DXT1:
+        case GL_COMPRESSED_DXT1_ALPHA: return 8;
+        case GL_COMPRESSED_DXT3: return 16;
+        case GL_COMPRESSED_DXT5: return 16;
+        default: return 0;
+    }
 }
 
 /* Reads every mip level of `target`/`name` as normalized RGBA. Emits a JSON
@@ -1876,8 +1892,37 @@ static int read_texture(GLenum target, GLuint name, json_out *out) {
             }
             free(pixels);
             jprintf(out,
-                    "\"bytes\":%zu,\"file\":\"%s\",\"sha256\":\"%s\"}",
+                    "\"bytes\":%zu,\"file\":\"%s\",\"sha256\":\"%s\"",
                     bytes, blob_name, blob_sha);
+            int cblock = compressed_block_bytes((GLenum)internal);
+            if (cblock > 0) {
+                size_t cw = ((size_t)width + 3u) / 4u;
+                size_t ch = ((size_t)height + 3u) / 4u;
+                size_t cbytes = cw * ch * (size_t)cblock;
+                uint8_t *compressed_pixels = malloc(cbytes);
+                if (compressed_pixels != NULL) {
+                    memset(compressed_pixels, 0, cbytes);
+                    while (glGetError() != GL_NO_ERROR) {
+                    }
+                    glGetCompressedTexImage(target, level, compressed_pixels);
+                    if (glGetError() == GL_NO_ERROR) {
+                        char compressed_name[FTRACE_NAME] = "";
+                        char compressed_sha[65] = "";
+                        if (put_blob(compressed_pixels, cbytes, "texc",
+                                     compressed_name, compressed_sha) == 0) {
+                            jprintf(out,
+                                    ",\"compressed\":{\"format\":\"%s\","
+                                    "\"bytes\":%zu,\"row_stride\":%zu,"
+                                    "\"file\":\"%s\",\"sha256\":\"%s\"}",
+                                    format_name((GLenum)internal), cbytes,
+                                    cw * (size_t)cblock, compressed_name,
+                                    compressed_sha);
+                        }
+                    }
+                    free(compressed_pixels);
+                }
+            }
+            jprintf(out, "}");
         } else {
             jprintf(out, "\"bytes\":%zu,\"faces\":[", bytes * (size_t)faces);
             for (int face = 0; face < faces; face++) {

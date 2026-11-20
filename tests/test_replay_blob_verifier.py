@@ -120,6 +120,39 @@ class BlobReferenceVerifierTests(unittest.TestCase):
         self.assertEqual(ran.returncode, 1)
         self.assertIn("conflicting repeated blob reference", ran.stderr)
 
+    def test_nested_compressed_level_blob_is_verified(self):
+        pixel = b"decoded-level-pixels"
+        compressed = b"original-s3tc-blocks"
+        decoded_name = f"tex-{_sha(pixel)}.bin"
+        compressed_name = f"texc-{_sha(compressed)}.bin"
+        directory = Path(self.temporary.name) / "frame-compressed"
+        (directory / "blobs").mkdir(parents=True, exist_ok=True)
+        (directory / "blobs" / decoded_name).write_bytes(pixel)
+        (directory / "blobs" / compressed_name).write_bytes(compressed)
+        events = [{
+            "index": 0,
+            "textures": [{
+                "levels": [{
+                    "file": decoded_name, "sha256": _sha(pixel),
+                    "bytes": len(pixel),
+                    "compressed": {
+                        "format": "DXT5", "file": compressed_name,
+                        "sha256": _sha(compressed),
+                        "bytes": len(compressed),
+                    },
+                }],
+            }],
+        }]
+        (directory / "frame-events.jsonl").write_text(
+            "\n".join(json.dumps(event) for event in events) + "\n")
+        ran = self.run_host(directory)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertIn("blob_references=0", ran.stdout)
+        (directory / "blobs" / compressed_name).write_bytes(b"X" * len(compressed))
+        ran = self.run_host(directory)
+        self.assertEqual(ran.returncode, 1)
+        self.assertIn("digest mismatch", ran.stderr)
+
     def test_disk_digest_is_still_verified(self):
         payload = b"on-disk-content-does-not-match"
         name = f"seed-{_sha(payload)}.bin"
