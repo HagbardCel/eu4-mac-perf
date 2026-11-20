@@ -7,28 +7,29 @@ remain authoritative for scope and acceptance criteria.
 
 ## Status vocabulary
 
-- **Implemented (open PR)** — the change exists on the named branch and its
-  focused tests pass.  It is not on `main`.
-- **Review finding addressed** — a review finding was fixed with a regression
-  test; the new head still needs an independent re-review.
-- **Reviewed** — an independent review of the named SHA reported no blocking
-  finding.  This is not an approval to merge.
-- **Merged** — the change is on `main`.  No entry below is merged.
+- **Local independent review** — a read-only reviewer (separate context) tested
+  the named SHA and reported no blocking finding.  It is not a GitHub review.
+- **GitHub code-review findings** — automated review comments on the PR.  A
+  finding is “addressed” only when a newer head has a regression test and the
+  thread/response records the evidence; it is not an approval.
+- **Formal approval** — a GitHub approving review by a maintainer.  **None of
+  these PRs has one.**
+- **Merge state** — whether the branch is on `main`.  **None is merged.**
 - **Remaining** — recommended step work not yet implemented in these PRs.
 
 ## Open pull requests and observed state
 
-| PR | Step | Head SHA | Scope in the branch | Independent review | Merge |
-|---|---|---|---|---|---|
-| #220 | index | this commit | Assessment, plans and this implementation index. | Corrected after the final gate; final review requested. | Not merged |
-| #221 | 01 | `a776830c` | Authoritative checkpoint exactness, request/binding validation, producer checkpoint-file binding, strict returned-entry declarations, complete-graph gating for every coverage branch, distinct primary/authenticated verdicts. | Reviewed at this head: no blockers; P3 residuals (non-list request/replay containers, docs/status predicate). | Not merged |
-| #227 | 02 | `e8da7907` | Verified case locator: host-locked atomic publication, full-identity race handling, sequence target seals, metadata-only inventory, bounded verification, symlink handling, broken-locator reporting, size/free-space preflight. | Reviewed at this head: no blockers; P3 residuals (copy-window symlink injection, discovery count scoping). | Not merged |
-| #226 | 03 | `80a32e00` | Campaign entry preflight with a host-recorded exclusive probe registry, reaping and freeze filtering, compact startup block. | Reviewed at this head: no blockers; P3 (startup block not yet consumed by launchers). | Not merged |
-| #222 | 04 | `178b2e06` | Integer-ceiling pixel-region spans and edge/tiny-image regressions. | Reviewed at this head: no blockers; P3 test-hardening suggestions only. | Not merged |
-| #223 | 06 | `53197ca7` | Goal identity, clear tombstones, substantive outcomes, terminal/ongoing/unknown-start/unknown-end durations, separate turn/action fields. | Reviewed at this head: no blockers; P3 (edit+clear window, schema documentation). | Not merged |
-| #228 | 09 | `fcfc449e` | Lossless re-encode of one illustrative tracked PNG with identical decoded RGBA. | Reviewed at this head: no blockers. | Not merged |
-| #225 | 10 | `022f347c` | Single shader-receipt identity owner with required/optional semantics. | Reviewed at this head: no blockers; P3 call-site test gap only. | Not merged |
-| #224 | 11 | `f0ab3b76` | Retire the shadowed smoke campaign source and verify both profiles resolve the canonical policy and limits. | Reviewed at this head: no blockers; P3 reader-default pinning only. | Not merged |
+| PR | Step | Head SHA | Scope in the branch | Local independent review | GitHub code-review findings | Formal approval | Merge |
+|---|---|---|---|---|---|---|---|
+| #220 | index | this commit | Assessment, plans and this implementation index. | No blockers at `dc083720`; final wording reviewed at `c8f3722a`; this status refresh follows. | Codex summary at `409bc8b8`, no findings; no open thread. | None | Not merged |
+| #221 | 01 | `51d883e5` | Authoritative checkpoint exactness, request/binding validation, producer checkpoint-file binding, complete-graph gating, exact-control policy. | No blockers at `a776830c`; exact-control policy added after that review. | No open Codex thread; prior summary reviewed. | None | Not merged |
+| #227 | 02 | `de0f15f3` | Verified case locator: durable-root containment, honest verification state, immutable provenance, atomic publication, sequence seals, bounded lookup. | No blockers at `e8da7907`; durable-root/verification/provenance changes follow. | Three Codex P2/P3 threads addressed (identity race, unique temp, sequence seal); evidence recorded at newer heads. | None | Not merged |
+| #226 | 03 | `80a32e00` | Campaign entry preflight with a host-recorded exclusive probe registry. | No blockers at `80a32e00`. | One Codex P2 thread addressed (root-privilege test). | None | Not merged |
+| #222 | 04 | `178b2e06` | Integer-ceiling pixel-region spans and edge/tiny-image regressions. | No blockers at `178b2e06`. | Codex summary, no findings. | None | Not merged |
+| #223 | 06 | `53197ca7` | Goal identity, clear tombstones, substantive outcomes, duration states. | No blockers at `53197ca7`. | Two Codex P2 threads addressed (active end time, goal identity). | None | Not merged |
+| #228 | 09 | `fcfc449e` | Lossless re-encode of one illustrative tracked PNG. | No blockers at `fcfc449e`. | Codex summary, no findings. | None | Not merged |
+| #225 | 10 | `022f347c` | Single shader-receipt identity owner. | No blockers at `022f347c`. | Codex summary, no findings. | None | Not merged |
+| #224 | 11 | `f0ab3b76` | Retire the shadowed smoke source; verify both profiles. | No blockers at `f0ab3b76`. | Codex summary at older head; no open thread. | None | Not merged |
 
 A head SHA that postdates its review is explicitly “re-review requested”; the
 table records the exact SHA tested.  The consolidated review report is attached
@@ -57,12 +58,10 @@ step acceptance criteria; the step documents stay authoritative.
 
 Each change is verified with the focused modules named in its plan, then its
 neighbor suites, using `automation.test_runner` under the offline profile.  The
-combined candidate is the disposable local branch `remediation/final2` at
-`263418dd5ce92be01f983f5f7bc72e01faadba06` (not merged into `main`).  Its full
-offline gate run is `20261120T080353Z-62f5ac38`: **3,996 ran, 3,961 executed,
-35 skipped, 0 failed, 721.4 s**.  Every listed implementation-PR head is an ancestor of that candidate.  The
-index commit itself is docs-only, postdates the gate, and is not part of the
-tested candidate; the table marks it “this commit”.  GitHub Actions runs on each pushed head.
+disposable local integration candidate and its full-gate run/counts are recorded
+when the follow-up gate finishes; the final index commit is docs-only and is not
+presented as tested code.  GitHub Actions runs on each pushed head.
 
 A portable pass does not claim a native Metal correctness result, a local
-archive, or a live EU4 capture.  Independent review remains the merge gate.
+archive, or a live EU4 capture.  Independent review remains the merge gate; no
+entry here is a formal approval.
