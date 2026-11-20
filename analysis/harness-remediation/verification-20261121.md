@@ -131,7 +131,19 @@ classification. Full report: [`efficiency-20261121.md`](efficiency-20261121.md).
 
 ## 5. Final integrated gate
 
-`FINAL_GATE_PLACEHOLDER`
+Run on the merged closure tree (`d3a0ce6b`, merged to `main` as `fecff675`) in
+a **fresh worktree with no `benchmark/.build`**, one full
+`unittest discover -s tests` profile, no module exclusion:
+
+| Field | Value |
+|---|---|
+| Runner | `20261120T234901Z-ea7c5f0d` |
+| Ran / executed / skipped | **4,247 / 4,182 / 65** |
+| Failures / errors | **0 / 0** |
+| Status | `passed` (exit 0, not timed out) |
+| Wall | 584.7 s |
+
+The count decomposes exactly: 4,166 (audit split) + 55 (`test_reconstruction_differential`) + 26 closure tests = 4,247; executed 4,103 + 53 + 26 = 4,182; skipped 63 + 2 = 65. The module that was previously excluded is included and fully executed (53) with its two declared Ghidra-dependent skips. The six clean-tree errors seen in both earlier full-profile runs are gone after #268.
 
 ## 6. Limits
 
