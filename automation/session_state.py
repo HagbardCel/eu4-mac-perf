@@ -551,6 +551,14 @@ class CampaignClaims:
                 self._write_head(rows, at=at)
                 return {"ok": False, "kind": "budget_exhausted", "used": used,
                         "limit": cap, "path": str(self.path)}
+            if not rows and self._read_head() is None:
+                # Persist the witness before the first row. If the append is
+                # fsynced and the process dies before the post-append head
+                # update, the count-0 head lets the existing catch-up path
+                # charge the row; without it the ledger would be refused as
+                # missing_head forever and neither reconnect nor retry could
+                # repair a genuine first initialization.
+                self._write_head([])
             row = {
                 "schema": CLAIM_SCHEMA,
                 "attempt_id": attempt_id,

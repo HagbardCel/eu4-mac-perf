@@ -151,6 +151,34 @@ class ClaimLedgerIntegrityTests(unittest.TestCase):
             self.claims.rows()
         self.assertEqual(caught.exception.kind, "truncated")
 
+    def test_an_interrupted_first_claim_is_charged_and_recoverable(self) -> None:
+        # The head is installed before the first append, so a crash after the
+        # row is durable and before the head update leaves a count-0 head. The
+        # row must stay charged and the next claim must repair the witness,
+        # rather than both failing as missing_head forever.
+        real = self.claims._write_head
+        calls = {"n": 0}
+
+        def flaky(rows, *, at=None):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise session_state.ClaimLedgerError(
+                    "unwritable_head", "simulated crash after append")
+            return real(rows, at=at)
+
+        with mock.patch.object(self.claims, "_write_head", side_effect=flaky):
+            with self.assertRaises(session_state.ClaimLedgerError):
+                self._claim("first")
+        rows = self.claims.rows()
+        self.assertEqual([row["attempt_id"] for row in rows], ["first"])
+        self.assertEqual(json.loads(
+            self.claims.head_path.read_text())["count"], 0)
+        second = self._claim("second", limit=2)
+        self.assertTrue(second["ok"])
+        self.assertEqual(json.loads(
+            self.claims.head_path.read_text())["count"], 2)
+        self.assertEqual(len(self.claims.rows()), 2)
+
     def test_a_failed_lock_is_an_integrity_refusal_and_appends_nothing(self) -> None:
         self._claim("first")
         before = self.claims.path.read_bytes()
