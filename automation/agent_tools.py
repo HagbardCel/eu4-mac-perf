@@ -1034,6 +1034,7 @@ def eu4_capture(args: argparse.Namespace) -> dict:
                 out_dir=args.control_out,
                 resource=args.resource,
                 timeout=args.timeout if args.timeout is not None else 300.0,
+                renderer_authority=args.renderer_authority,
                 drawable=drawable, prestate=prestate)
         except control_qualification.QualificationError as exc:
             return _envelope(
@@ -3806,6 +3807,8 @@ def _parser() -> argparse.ArgumentParser:
                               "qualifier; must write result.bgra and receipt.json")
     capture.add_argument("--control-out", type=Path, default=None,
                          help="empty directory for the renderer receipt/artifact")
+    capture.add_argument("--renderer-authority", type=Path, default=None,
+                         help="operator-pinned qualified renderer authority")
     capture.add_argument("--checkpoint-event", type=int, default=None)
     capture.add_argument("--draw-event", type=int, default=None)
     capture.add_argument("--resource", default="fb:0")

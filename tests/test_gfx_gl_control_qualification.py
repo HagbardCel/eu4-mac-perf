@@ -106,6 +106,7 @@ class ControlQualificationTests(unittest.TestCase):
             "event_stream_verified": True,
         }), encoding="utf-8")
         self.renderer = self.root / "renderer.py"
+        self.authority = self.root / "renderer-authority.json"
         self._write_renderer()
         self.drawable = {"observed": True, "samples": 0,
                          "sample_buffers": 0, "depth_bits": 24,
@@ -189,13 +190,35 @@ if mode != "no_receipt":
     (out / "receipt.json").write_text(json.dumps(receipt))
 if mode == "no_artifact":
     artifact.unlink()
+if mode == "truncated":
+    artifact.write_bytes(bytes(4))
+    receipt["artifact"]["sha256"] = hashlib.sha256(artifact.read_bytes()).hexdigest()
+if mode == "overwrite_sealed":
+    Path(request["frame_dir"], "blobs", "default-checkpoint-live.bin").write_bytes(
+        bytes([1, 2, 3, 255]) * (request["width"] * request["height"]))
+if mode == "toctou":
+    Path(request["live_image"]).write_bytes(
+        bytes([9, 9, 9, 255]) * (request["width"] * request["height"]))
 '''
         self.renderer.write_text(script, encoding="utf-8")
+        self._write_authority()
+
+    def _write_authority(self, **overrides) -> None:
+        value = {
+            "schema": "gfx-gl-control-renderer-authority/v1",
+            "qualified": True,
+            "name": "test-original-api-renderer",
+            "renderer_sha256": _sha(self.renderer),
+            "api": "opengl",
+            "qualified_by": "test",
+        }
+        value.update(overrides)
+        self.authority.write_text(json.dumps(value), encoding="utf-8")
 
     def _qualify(self, *, mode: str = "normal", renderer: Path | None = None,
                  frame_dir: Path | None = None,
                  live: Path | None = None, out_dir: Path | None = None,
-                 drawable=..., prestate=...):
+                 authority=..., drawable=..., prestate=...):
         self._out_index += 1
         target = out_dir or (self.root / f"out-{self._out_index}")
         target.mkdir(parents=True, exist_ok=True)
@@ -204,6 +227,8 @@ if mode == "no_artifact":
             frame_dir=frame_dir or self.frame,
             checkpoint_event=2, draw_event=1,
             renderer=renderer or self.renderer, out_dir=target,
+            renderer_authority=(
+                self.authority if authority is ... else authority),
             drawable=self.drawable if drawable is ... else drawable,
             prestate=self.prestate if prestate is ... else prestate)
 
@@ -218,6 +243,28 @@ if mode == "no_artifact":
         self.assertEqual(value["missing_observation"], [])
         self.assertIsNotNone(value["qualification"]["receipt"])
         self.assertTrue(qualification.attribution(value)["allowed"])
+
+    def test_a_self_attested_renderer_cannot_authorize_blame(self):
+        value = self._qualify(authority=None)
+        self.assertTrue(value["comparison"]["exact"])
+        self.assertFalse(value["qualified"])
+        self.assertFalse(value["metal_blame_allowed"])
+        self.assertIn("self-attested",
+                      " ".join(value["missing_observation"]))
+
+    def test_an_authority_with_a_wrong_renderer_digest_is_not_qualified(self):
+        self._write_authority(renderer_sha256="0" * 64)
+        value = self._qualify()
+        self.assertFalse(value["qualified"])
+        self.assertIn("digest does not match",
+                      " ".join(value["qualification"]["reasons"]))
+
+    def test_an_unqualified_authority_is_not_accepted(self):
+        self._write_authority(qualified=False)
+        value = self._qualify()
+        self.assertFalse(value["qualified"])
+        self.assertIn("not qualified",
+                      " ".join(value["qualification"]["reasons"]))
 
     def test_a_metal_executed_image_is_not_an_original_api_control(self):
         self._write_renderer("api_metal")
@@ -302,7 +349,7 @@ if mode == "no_artifact":
         self.live.write_bytes(bytes(body))
         value = self._qualify()
         self.assertFalse(value["qualified"])
-        self.assertIn("digest is not the sealed checkpoint",
+        self.assertIn("blob digest mismatch",
                       " ".join(value["qualification"]["reasons"]))
 
     def test_four_pixel_residual_is_not_parity(self):
@@ -329,6 +376,40 @@ if mode == "no_artifact":
                             for item in value["missing_observation"]))
         self.assertTrue(any("pre-draw" in item
                             for item in value["missing_observation"]))
+
+    def test_an_intervening_same_target_draw_breaks_the_pair(self):
+        events = [
+            {"index": 1, "kind": "draw", "target": {"framebuffer": 0}},
+            {"index": 2, "kind": "draw", "target": {"framebuffer": 0}},
+            {"index": 3, "kind": "draw", "target": {"framebuffer": 0}},
+        ]
+        intervening = qualification._intervening_writer(events, 1, 3, 0)
+        self.assertIsNotNone(intervening)
+        self.assertEqual(intervening["index"], 2)
+        self.assertIsNone(qualification._intervening_writer(events, 2, 3, 0))
+
+    def test_a_renderer_cannot_change_the_compared_live_bytes(self):
+        # The renderer gets a copy; changing that copy must not change the
+        # authenticated bytes used by the comparison.
+        self._write_renderer("toctou")
+        value = self._qualify()
+        self.assertTrue(value["qualified"], value)
+        self.assertEqual(value["qualification"]["live_sha256"],
+                         value["qualification"]["checkpoint_reference_sha256"])
+
+    def test_a_renderer_that_changes_the_sealed_blob_is_not_qualified(self):
+        self._write_renderer("overwrite_sealed")
+        value = self._qualify()
+        self.assertFalse(value["qualified"])
+        self.assertIn("changed during the renderer run",
+                      " ".join(value["qualification"]["reasons"]))
+
+    def test_a_truncated_artifact_is_unqualified_not_a_traceback(self):
+        self._write_renderer("truncated")
+        value = self._qualify()
+        self.assertFalse(value["qualified"])
+        self.assertIn("bytes, expected",
+                      " ".join(value["qualification"]["reasons"]))
 
     def test_size_mismatch_fails_closed(self):
         self._write_renderer("normal")
@@ -379,6 +460,7 @@ if mode == "no_artifact":
             str(self.live), "--width", "8", "--height", "8",
             "--frame-dir", str(self.frame), "--checkpoint-event", "2",
             "--draw-event", "1", "--renderer", str(self.renderer),
+            "--renderer-authority", str(self.authority),
             "--control-out", str(out), "--out", str(output)])
         self.assertEqual(code, 0, output.read_text() if output.exists() else "")
         self.assertTrue(json.loads(output.read_text())["qualified"])
@@ -398,6 +480,7 @@ if mode == "no_artifact":
                 "--frame-dir", str(self.frame),
                 "--checkpoint-event", "2", "--draw-event", "1",
                 "--renderer", str(self.renderer),
+                "--renderer-authority", str(self.authority),
                 "--control-out", str(out)])
         value = json.loads(buffer.getvalue())
         self.assertEqual(code, 0, value)
