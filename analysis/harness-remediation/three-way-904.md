@@ -54,9 +54,10 @@ with the earlier 916 numbers; different present, draw count and content.
   3,602/119) and not equal to this control.
 - **Not established:** whether the remaining difference is input
   representation, depth/sample/drawable provenance, shader translation or
-  another Metal state. The control has no authentic pre-draw depth image and
-  uses a color-seeded RGBA8 FBO; a live drawable with different depth precision
-  or samples would produce a different result.
+  another Metal state. The control uses the sealed event-7 clear-to-1.0 depth
+  history rather than a captured depth image, and it renders into a
+  color-seeded RGBA8 FBO; a live drawable with different depth precision or
+  samples would produce a different result.
 - **Control unqualified:** under exact four-channel qualification this control
   is not admissible for Metal blame (`metal_blame_allowed=false`); the 4/1
   residual is not parity. The smallest missing observation is the default
