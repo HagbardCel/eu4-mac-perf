@@ -26,7 +26,7 @@ SHAs, audit verdicts and dependency order are in the
 [coverage matrix](../plans/harness-review/implementation.md) and the
 [exact-head audit](../analysis/harness-remediation/audit-20261120.md).
 
-GitHub has no formal `APPROVE` review for #248–#257. The independent DSH audit
+GitHub has no formal `APPROVE` review for #241–#257. The independent DSH audit
 is the review record for those heads; green CI and author tests are not treated
 as approval.
 

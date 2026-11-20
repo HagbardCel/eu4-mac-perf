@@ -27,7 +27,7 @@ The exact-head audit is in [audit-20261120.md](audit-20261120.md).
 | #257 final docs | `b1bacce8` | `a0e3a4e8` | Partial; this follow-up corrects the remaining stale states |
 
 Portable CI passed for every merged head. That is not independent approval.
-GitHub has no formal `APPROVE` review for #248–#257; the earlier report's claim
+GitHub has no formal `APPROVE` review for #241–#257; the earlier report's claim
 that an independent review was recorded for all of them was not supported by
 the review records. The audit in [audit-20261120.md](audit-20261120.md) is the
 explicit independent verdict at the heads above.

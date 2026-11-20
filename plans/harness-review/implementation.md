@@ -27,7 +27,7 @@ review.
 | Audit review | [audit-20261120.md](../../analysis/harness-remediation/audit-20261120.md) |
 | Code follow-up | #258 at `fb717ead` (open; independent review required) |
 | Merged heads | #241 `3be433f7`, #242 `7bcaaa1c`, #243 `f62c7f18`, #244 `cd4245cf`, #245 `ada20dbc`, #246 `8c17f779`, #247 `ab28f2da`, #248 `1bffc7cb`, #249 `555447fb`, #250 `401d6863`, #251 `050f9272`, #252 `275df332`, #253 `2596b50e`, #254 `63a3148e`, #255 `090f2b52`, #256 `c403f06e`, #257 `b1bacce8` |
-| Approval record | Formal GitHub `APPROVE` reviews exist for none of #248–#257. The earlier matrix's "independent APPROVE" labels were not supported by those records. The independent DSH audit at the heads above is the review evidence; the exact verdicts and residual limits are in the audit report. |
+| Approval record | Formal GitHub `APPROVE` reviews exist for none of #241–#257. The earlier matrix's "independent APPROVE" labels were not supported by those records. The independent DSH audit at the heads above is the review evidence; the exact verdicts and residual limits are in the audit report. |
 | Known limitation | No new EU4 launch was performed by this audit. Pixel claims are offline fixture/seal measurements unless the row says otherwise. |
 
 ## Findings, quickwins and follow-ups
