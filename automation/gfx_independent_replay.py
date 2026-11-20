@@ -212,6 +212,20 @@ def _checkpoint_key(item: dict) -> tuple[int, str]:
     return (_as_int(item.get("event"), -1), str(item.get("target")))
 
 
+def _producer_event_list(value) -> list[int]:
+    """A producer list from untrusted evidence, without raising on scalars.
+
+    A malformed ``producer_events`` value (an integer, object or string) is
+    invalid evidence, not a reason to traceback while building an invalid
+    checkpoint record.  Callers that need strict validation still report the
+    malformed container explicitly.
+    """
+    if not isinstance(value, list):
+        return []
+    return [item for item in value
+            if isinstance(item, int) and not isinstance(item, bool)]
+
+
 def _invalid_checkpoint(item: dict, graph: dict, reason: str,
                         *, requested: bool) -> dict:
     target = str(item.get("target"))
@@ -227,7 +241,8 @@ def _invalid_checkpoint(item: dict, graph: dict, reason: str,
         "height": _as_int(item.get("reference_height")
                           or item.get("height"), 0),
         "format": item.get("format") or resource.get("format"),
-        "producer_events": list(item.get("producer_events") or []),
+        "producer_events": _producer_event_list(
+            item.get("producer_events")),
         "metal_file": str(item.get("_metal_path") or ""),
         "reference_file": str(item.get("_reference_path") or ""),
         "authoritative": True,
@@ -546,7 +561,8 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
             "width": width,
             "height": height,
             "format": internal or None,
-            "producer_events": list(wanted.get("producer_events") or []),
+            "producer_events": _producer_event_list(
+                wanted.get("producer_events")),
             "metal_file": str(metal_path),
             "reference_file": str(reference_path),
             "authoritative": not channel_swap,
@@ -2131,6 +2147,18 @@ def _checkpoint_binding_problems(metal_dir: Path, request: dict,
     problems: list[dict] = []
     bindings: list[str] = []
 
+    if shadow is not None and not isinstance(shadow, dict):
+        problems.append(_checkpoint_problem(
+            "malformed_evidence",
+            "shadow report is not an object",
+            severity="invalid"))
+        shadow = None
+    if seal is not None and not isinstance(seal, dict):
+        problems.append(_checkpoint_problem(
+            "malformed_evidence",
+            "capture seal is not an object",
+            severity="invalid"))
+        seal = None
     if not isinstance(request, dict):
         return [_checkpoint_problem(
             "malformed_request",

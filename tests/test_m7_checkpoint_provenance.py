@@ -185,6 +185,39 @@ class ReconcileCaptureStampTests(unittest.TestCase):
                                 for problem in problems))
             self.assertFalse(evidence["bindings"])
 
+    def test_malformed_shadow_and_seal_fail_closed(self):
+        # The binding inputs are evidence containers too.  A scalar/list must
+        # produce an explicit invalid problem, not an AttributeError.
+        (self.out / "checkpoint-request.json").write_text(json.dumps({
+            "schema": "gfx-frame-checkpoint-request/v1",
+            "checkpoints": []}))
+        for shadow, seal in (([], None), ({}, []), ("shadow", None),
+                             ({}, "seal")):
+            _, source, problems, evidence = (
+                gfx_independent_replay.checkpoint_request_evidence(
+                    self.graph, self.out, shadow=shadow, seal=seal))
+            self.assertEqual(source, "published")
+            self.assertEqual(evidence["status"], "invalid")
+            self.assertTrue(any(problem["kind"] == "malformed_evidence"
+                                for problem in problems), (shadow, seal))
+
+    def test_malformed_producer_events_do_not_raise(self):
+        # A nested scalar must become invalid evidence, not a TypeError while
+        # the invalid checkpoint row is assembled.
+        request = {"checkpoints": [{
+            "event": 5, "target": "10", "resource": "tex:10",
+            "file": "intermediate.bgra", "reference_file": "ref.bin",
+            "reference_sha256": hashlib.sha256(self.reference).hexdigest(),
+            "reference_width": 2, "reference_height": 2,
+            "producer_events": 7,
+        }]}
+        results, validation = gfx_independent_replay.reconcile_checkpoints(
+            self.graph, request, {"checkpoints": []}, self.frame, self.out,
+            capture=CAPTURE_A)
+        self.assertEqual(validation["status"], "invalid")
+        self.assertTrue(results)
+        self.assertEqual(results[0]["producer_events"], [])
+
     def test_binding_problems_reject_non_object_request(self):
         problems, bindings = (
             gfx_independent_replay._checkpoint_binding_problems(
