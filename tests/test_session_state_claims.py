@@ -86,6 +86,19 @@ class ClaimLedgerIntegrityTests(unittest.TestCase):
                 with self.assertRaises(session_state.ClaimLedgerError):
                     self.claims.rows()
 
+    def test_row_without_a_usable_attempt_id_is_rejected(self) -> None:
+        for body in (
+                b'{"schema":"' + session_state.CLAIM_SCHEMA.encode() + b'"}\n',
+                b'{"schema":"' + session_state.CLAIM_SCHEMA.encode() +
+                b'","attempt_id":""}\n',
+                b'{"schema":"' + session_state.CLAIM_SCHEMA.encode() +
+                b'","attempt_id":7}\n'):
+            with self.subTest(body=body):
+                self._write(body)
+                with self.assertRaises(session_state.ClaimLedgerError) as caught:
+                    self.claims.rows()
+                self.assertEqual(caught.exception.kind, "malformed_record")
+
     def test_invalid_utf8_is_rejected(self) -> None:
         self._write(b"\xff\xfe\n")
         with self.assertRaises(session_state.ClaimLedgerError) as caught:
