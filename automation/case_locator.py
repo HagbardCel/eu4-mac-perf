@@ -32,6 +32,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import uuid
 from pathlib import Path
@@ -308,6 +309,48 @@ def _adopt_existing(target: Path, identity: dict, key: str) -> dict:
     return existing
 
 
+def _inside(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _evidence_root_problem(case_dir: Path, root: Path) -> str | None:
+    """Reject a root that cannot preserve the case after worktree disposal."""
+    if root == case_dir:
+        return ("evidence root is the case directory; choose a root outside "
+                "the producer worktree")
+    if _inside(root, case_dir):
+        return (f"evidence root {root} is inside the case directory "
+                f"{case_dir}; choose a root outside the producer worktree")
+    # If the root lives in a different registered git worktree, it is likely
+    # disposable alongside the producer.  Prefer refusing it.
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(case_dir), "worktree", "list", "--porcelain"],
+            capture_output=True, text=True, check=False, timeout=10)
+        if completed.returncode == 0:
+            worktrees = []
+            for line in completed.stdout.splitlines():
+                if line.startswith("worktree "):
+                    worktrees.append(Path(line[len("worktree "):]).resolve())
+            current = next((tree for tree in worktrees
+                            if tree == case_dir or _inside(case_dir, tree)),
+                           None)
+            for tree in worktrees:
+                if current is not None and tree == current:
+                    continue
+                if _inside(root, tree) or root == tree:
+                    return (f"evidence root {root} is inside another git "
+                            f"worktree ({tree}); use a durable operator-owned "
+                            "root outside all worktrees")
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
 def publish(case_dir: Path | str, evidence_root: Path | str, *,
             originating_run: str | None = None,
             size_budget: int = DEFAULT_SIZE_BUDGET,
@@ -322,6 +365,9 @@ def publish(case_dir: Path | str, evidence_root: Path | str, *,
     root = Path(evidence_root).expanduser().resolve()
     if not case_dir.is_dir():
         raise CaseLocatorError("case_missing", str(case_dir))
+    root_problem = _evidence_root_problem(case_dir, root)
+    if root_problem is not None:
+        raise CaseLocatorError("evidence_root_inside_case", root_problem)
     verification = _verify(case_dir)
     if verification.get("ok") is not True:
         raise CaseLocatorError(
@@ -386,9 +432,14 @@ def publish(case_dir: Path | str, evidence_root: Path | str, *,
     source_bytes, source_files = _tree_stats(target)
     with _locator_lock(root, key):
         previous = _json(root / LOCATOR_DIR / f"{key}.json")
-        if originating_run is None:
-            originating_run = previous.get("originating_run")
+        previous_origin = previous.get("originating_run")
+        original_run = previous_origin or originating_run
         first_published = previous.get("first_published_utc") or _now()
+        publication_count = int(previous.get("publication_count") or 0) + 1
+        last_published_run = (originating_run
+                              or previous.get("last_published_run")
+                              or original_run)
+        last_published_utc = _now()
         locator = {
             "schema": SCHEMA,
             "key": key,
@@ -397,9 +448,12 @@ def publish(case_dir: Path | str, evidence_root: Path | str, *,
             "relative_path": str(target.relative_to(root)),
             "verification": _verification_summary(verification_now),
             "limitations": _limitations(identity, verification_now),
-            "originating_run": originating_run,
+            "originating_run": original_run,
             "first_published_utc": first_published,
-            "published_utc": _now(),
+            "last_published_run": last_published_run,
+            "last_published_utc": last_published_utc,
+            "publication_count": publication_count,
+            "published_utc": last_published_utc,
             "reused": reused,
             "size_bytes": source_bytes,
             "files": source_files,
@@ -462,14 +516,15 @@ def _locator_metadata(root: Path, locator: dict) -> dict:
     if problem is not None or target is None:
         row = dict(locator, state="invalid_path", detail=problem,
                    resolved_path=None, verified=False,
-                   verification_ok=False)
+                   verification_ok=False,
+                   current_verification="not_run",
+                   recorded_verification=locator.get("verification"))
     else:
         state = "available" if target.is_dir() else "missing_payload"
         row = dict(locator, state=state, resolved_path=str(target),
-                   verified=False,
-                   verification_ok=bool(
-                       (locator.get("verification") or {}).get("ok"))
-                   and state == "available",
+                   verified=False, verification_ok=False,
+                   current_verification="not_run",
+                   recorded_verification=locator.get("verification"),
                    verification=locator.get("verification"))
     return _identity_view(locator, row)
 
@@ -480,11 +535,15 @@ def _resolve_match(root: Path, locator: dict) -> dict:
     if problem is not None or target is None:
         return _identity_view(locator, dict(
             locator, state="invalid_path", detail=problem,
-            resolved_path=None, verified=False, verification_ok=False))
+            resolved_path=None, verified=False, verification_ok=False,
+            current_verification="not_run",
+            recorded_verification=locator.get("verification")))
     if not target.is_dir():
         return _identity_view(locator, dict(
             locator, state="missing_payload", resolved_path=str(target),
-            verified=False, verification_ok=False))
+            verified=False, verification_ok=False,
+            current_verification="missing_payload",
+            recorded_verification=locator.get("verification")))
     verification = _verify(target)
     identity = case_identity(target)
     expected = locator.get("identity") or {}
@@ -492,6 +551,8 @@ def _resolve_match(root: Path, locator: dict) -> dict:
         return _identity_view(locator, dict(
             locator, state="digest_mismatch", resolved_path=str(target),
             verified=False, verification_ok=False,
+            current_verification="failed",
+            recorded_verification=locator.get("verification"),
             verification=_verification_summary(verification),
             detail="; ".join(str(item) for item in
                              (verification.get("problems") or [])[:4])))
@@ -500,11 +561,15 @@ def _resolve_match(root: Path, locator: dict) -> dict:
         return _identity_view(locator, dict(
             locator, state="digest_mismatch", resolved_path=str(target),
             verified=False, verification_ok=False,
+            current_verification="failed",
+            recorded_verification=locator.get("verification"),
             verification=_verification_summary(verification),
             detail=conflict))
     return _identity_view(locator, dict(
         locator, state="available", resolved_path=str(target),
         verified=True, verification_ok=True,
+        current_verification="passed",
+        recorded_verification=locator.get("verification"),
         verification=_verification_summary(verification)))
 
 

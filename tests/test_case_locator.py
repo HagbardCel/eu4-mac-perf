@@ -355,6 +355,57 @@ class CaseLocatorTests(unittest.TestCase):
         self.assertEqual(raised.exception.kind, "insufficient_space")
         self.assertTrue((case / "case.json").is_file())
 
+    def test_evidence_root_cannot_be_the_case_or_inside_it(self) -> None:
+        case = make_case(self.root / "producer" / "case")
+        before = case_locator.case_identity(case)["manifest_sha256"]
+        for root in (case, case / "archive"):
+            with self.assertRaises(case_locator.CaseLocatorError) as raised:
+                case_locator.publish(case, root)
+            self.assertEqual(raised.exception.kind,
+                             "evidence_root_inside_case")
+            self.assertFalse((case / "cases").exists())
+            self.assertEqual(
+                case_locator.case_identity(case)["manifest_sha256"], before)
+        external = self.root / "durable-evidence"
+        published = case_locator.publish(case, external)
+        self.assertTrue(Path(published["locator_path"]).is_file())
+
+    def test_metadata_never_claims_current_verification(self) -> None:
+        case = make_case(self.root / "producer" / "case")
+        published = case_locator.publish(case, self.evidence)
+        target = Path(published["locator_path"]).parents[1] / published[
+            "relative_path"]
+        (target / "report.json").write_text(json.dumps({"status": "tampered"}))
+        inventory = case_locator.inventory(self.evidence)
+        row = inventory["locators"][0]
+        self.assertEqual(row["state"], "available")
+        self.assertFalse(row["verified"])
+        self.assertFalse(row["verification_ok"])
+        self.assertEqual(row["current_verification"], "not_run")
+        self.assertTrue(row["recorded_verification"]["ok"])
+        located = case_locator.locate(self.evidence, session_id="session-1")
+        self.assertEqual(located["state"], "digest_mismatch", located)
+        self.assertEqual(located["matches"][0]["current_verification"],
+                         "failed")
+        self.assertFalse(located["matches"][0]["verification_ok"])
+
+    def test_republish_preserves_original_provenance(self) -> None:
+        case = make_case(self.root / "producer" / "case")
+        first = case_locator.publish(case, self.evidence,
+                                     originating_run="run-1")
+        second = case_locator.publish(case, self.evidence,
+                                      originating_run="run-2")
+        self.assertEqual(second["originating_run"], "run-1")
+        self.assertEqual(second["first_published_utc"],
+                         first["first_published_utc"])
+        self.assertEqual(second["last_published_run"], "run-2")
+        self.assertEqual(second["publication_count"], 2)
+        third = case_locator.publish(case, self.evidence,
+                                     originating_run="run-3")
+        self.assertEqual(third["originating_run"], "run-1")
+        self.assertEqual(third["last_published_run"], "run-3")
+        self.assertEqual(third["publication_count"], 3)
+
     def test_symlink_in_source_is_refused_before_copying(self) -> None:
         case = make_case(self.root / "producer" / "case")
         outside = self.root / "outside.bin"
