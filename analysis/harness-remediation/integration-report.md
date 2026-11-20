@@ -61,13 +61,14 @@ explicit independent verdict at the heads above.
 1. **Scientific: live-GL control equality (B2/B3).** `blocked`. The stored
    904 control is unqualified at checkpoint 15 (5/1) and 16 (4,645/86);
    `metal_blame_allowed=false`. Draw 14 has depth test/write enabled and the
-   capture is marked multisample, but 904 never recorded `GL_SAMPLES`,
-   `GL_SAMPLE_BUFFERS` or drawable bit depths, and the one-draw control clears
-   depth rather than reproducing the earlier depth-writing draw 1. Next test:
-   one targeted same-seal capture of those drawable/depth observations, then
-   the same selected-draw control; require exact four-channel equality before
-   Metal blame. Do not treat the five-pixel residual as parity or substitute a
-   window/10-bit FBO.
+   capture is marked multisample. Draw 1 targets framebuffer 6, not `fb:0`; the
+   first `fb:0` draw is 14, and the event-7 `fb:0` depth clear is 1, which the
+   one-draw control reproduces. The missing observation is the drawable state
+   (`GL_SAMPLES`, `GL_SAMPLE_BUFFERS`, bit depths) and prior-frame contents.
+   Next test: one targeted same-seal capture of those drawable observations,
+   then the same selected-draw control; require exact four-channel equality
+   before Metal blame. Do not treat the five-pixel residual as parity or
+   substitute a window/10-bit FBO.
 2. **Authentic compressed same-seal comparison.** BC1 alpha and orientation are
    verified against the decoded path; an authentic 904 decoded-vs-original-block
    comparison remains.
