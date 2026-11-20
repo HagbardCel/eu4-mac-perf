@@ -27,6 +27,31 @@ MODES = ("seed", "worktree")
 RETRY_MODES = ("deterministic", "stateful")
 DEFAULT_STATE_ROOT = Path("~/.local/share/eu4-dsh/state")
 
+# Reader defaults. A sidecar may omit exactly these fields; the resolved
+# Sidecar value is then the constant below, never a value inferred from the
+# environment or the campaign. They are documented here because the bridge and
+# the launcher profiles use the resolved fields as declarations. A present but
+# malformed value is rejected by ``_optional_*`` instead of being coerced to a
+# default or a truthy string.
+DEFAULT_RUN_ROOT = DEFAULT_STATE_ROOT  # <state root>/<campaign id>
+DEFAULT_WORKSPACE_BASE = "run_root"
+DEFAULT_CANDIDATE_WORKSPACE = "workspace"  # <workspace base>/workspace
+DEFAULT_RETRY_MODE = "deterministic"
+DEFAULT_CONFIRMATION_ROUNDS = 0
+DEFAULT_MAX_IDENTICAL_RETRIES = 0
+DEFAULT_MAX_ROUNDS = 6
+DEFAULT_REQUIRE_CHECKER_PASS = True
+DEFAULT_REQUIRE_INDEPENDENT_REVIEW = False
+DEFAULT_MAX_VALIDATIONS = 8
+DEFAULT_VALIDATION_TIMEOUT_SECONDS = 60.0
+DEFAULT_WALL_CLOCK_SECONDS = 1800.0
+DEFAULT_MAX_REVIEW_ATTEMPTS = 2
+DEFAULT_EVIDENCE_PATHS: tuple[str, ...] = ()
+DEFAULT_REPLAY_INPUTS: tuple[str, ...] = ()
+DEFAULT_ALLOW_INCOMPLETE_INPUTS = False
+DEFAULT_LIVE_CAPTURE_ENABLED = False
+DEFAULT_ALLOW_SYMLINKS = False
+
 
 class SidecarError(RuntimeError):
     """A sidecar, policy or execution-root problem that must fail closed."""
@@ -119,6 +144,53 @@ def _require_object(value, name: str) -> dict:
     return value
 
 
+def _optional_string(value, name: str, default: str) -> str:
+    """A documented default applies only to an absent field."""
+    if value is None:
+        return default
+    if not isinstance(value, str) or not value.strip():
+        raise SidecarError(f"{name} must be a non-empty string")
+    return value
+
+
+def _optional_bool(value, name: str, default: bool) -> bool:
+    if value is None:
+        return default
+    if type(value) is not bool:
+        raise SidecarError(f"{name} must be a boolean")
+    return value
+
+
+def _optional_int(value, name: str, default: int) -> int:
+    if value is None:
+        return default
+    if type(value) is not int:
+        raise SidecarError(f"{name} must be an integer")
+    return value
+
+
+def _optional_number(value, name: str, default: float) -> float:
+    if value is None:
+        return default
+    if type(value) not in (int, float):
+        raise SidecarError(f"{name} must be a number")
+    return float(value)
+
+
+def _string_list(value, name: str) -> tuple[str, ...]:
+    """An absent list is the documented empty default; anything else is typed."""
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise SidecarError(f"{name} must be a list")
+    entries: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item:
+            raise SidecarError(f"{name} entries must be non-empty strings")
+        entries.append(item)
+    return tuple(entries)
+
+
 def load_sidecar(path: Path, *, infra: Path | None = None) -> Sidecar:
     """Read and validate one sidecar. Raises {@link SidecarError} on any doubt."""
     path = Path(path).resolve()
@@ -204,7 +276,9 @@ def load_sidecar(path: Path, *, infra: Path | None = None) -> Sidecar:
         require_checker_pass=require_pass,
         require_independent_review=require_review,
         replay_inputs=_load_replay_inputs(data),
-        allow_incomplete_inputs=bool(data.get("allow_incomplete_inputs", False)),
+        allow_incomplete_inputs=_optional_bool(
+            data.get("allow_incomplete_inputs"), "allow_incomplete_inputs",
+            DEFAULT_ALLOW_INCOMPLETE_INPUTS),
         max_validations=max_validations,
         validation_timeout_seconds=timeout,
         wall_clock_seconds=wall,
@@ -265,22 +339,25 @@ def _require_policy_containment(contract: _Contract) -> None:
 
 def _load_candidate(data: dict, contract: _Contract):
     candidate = _require_object(data.get("candidate"), "candidate")
-    mode = str(candidate.get("mode") or "")
+    mode = _optional_string(candidate.get("mode"), "candidate.mode", "")
     if mode not in MODES:
         raise SidecarError("candidate.mode must be seed or worktree")
 
     declared = data.get("candidate_baseline_commit")
-    baseline = str(declared) if declared else contract.baseline_commit
-    if declared and contract.baseline_commit and str(declared) != contract.baseline_commit:
+    if declared is not None and not isinstance(declared, str):
+        raise SidecarError("candidate_baseline_commit must be a string")
+    baseline = declared or contract.baseline_commit
+    if declared and contract.baseline_commit and declared != contract.baseline_commit:
         raise SidecarError(
             "candidate_baseline_commit does not match the source campaign pin; "
             "these are different identities and must not be substituted"
         )
 
-    workspace_raw = str(candidate.get("workspace") or "")
+    workspace_raw = _optional_string(
+        candidate.get("workspace"), "candidate.workspace", "")
     seed = None
     if mode == "worktree":
-        if not candidate.get("workspace"):
+        if not workspace_raw:
             raise SidecarError("candidate.workspace is required in worktree mode")
         if not baseline:
             raise SidecarError("worktree mode requires a candidate_baseline_commit")
@@ -294,11 +371,13 @@ def _load_candidate(data: dict, contract: _Contract):
 
 
 def _load_run_root(data: dict, infra: Path, campaign_id: str) -> Path:
-    raw = data.get("run_root")
+    raw = _optional_string(data.get("run_root"), "run_root", "")
     if raw:
         return _resolve(infra, raw)
-    # Default: the host-owned trusted state root, one directory per campaign.
-    return (DEFAULT_STATE_ROOT.expanduser() / campaign_id).resolve()
+    # Documented default: the host-owned trusted state root, one directory per
+    # campaign. Absent means this exact path; it is not inherited from a
+    # sibling sidecar or an environment variable.
+    return (DEFAULT_RUN_ROOT.expanduser() / campaign_id).resolve()
 
 
 WORKSPACE_BASES = ("run_root", "infra")
@@ -310,24 +389,24 @@ def _load_replay_inputs(data: dict) -> tuple[str, ...]:
     A reconstruction checker keeps its research checkpoint next to the worktree,
     not inside it, so replay has to reproduce that state or a finished candidate
     looks unfinished. Declared, not guessed: this must never copy arbitrary
-    siblings into a replay directory.
+    siblings into a replay directory. An absent list is the documented empty
+    default; a malformed entry fails closed.
     """
-    raw = data.get("replay_inputs") or []
-    if not isinstance(raw, list):
-        raise SidecarError("replay_inputs must be a list of file names")
-    names: list[str] = []
-    for entry in raw:
-        if not isinstance(entry, str) or not entry.strip():
-            raise SidecarError("replay_inputs entries must be non-empty strings")
+    raw = data.get("replay_inputs")
+    if raw is None:
+        return DEFAULT_REPLAY_INPUTS
+    names = _string_list(raw, "replay_inputs")
+    for entry in names:
         if "/" in entry or "\\" in entry or entry in (".", ".."):
             raise SidecarError(f"replay_inputs must be plain file names: {entry!r}")
-        names.append(entry)
-    return tuple(names)
+    return names
 
 
 def _load_workspace_base(data: dict) -> str:
     candidate = _require_object(data.get("candidate"), "candidate")
-    base = str(candidate.get("workspace_base") or "run_root")
+    base = _optional_string(
+        candidate.get("workspace_base"), "candidate.workspace_base",
+        DEFAULT_WORKSPACE_BASE)
     if base not in WORKSPACE_BASES:
         raise SidecarError("candidate.workspace_base must be run_root or infra")
     return base
@@ -339,10 +418,12 @@ def _load_workspace(raw: str, run_root: Path, base: str, infra: Path) -> Path:
     ``infra`` puts the candidate inside the trusted checkout, which is what the
     DSH sandbox can reach, while the qualification records stay in the host state
     root that the agent cannot write. ``run_root`` keeps them together for
-    throwaway experiments.
+    throwaway experiments. An absent workspace resolves to the documented
+    ``<workspace base>/workspace`` default.
     """
     if not raw:
-        return ((infra if base == "infra" else run_root) / "workspace").resolve()
+        return ((infra if base == "infra" else run_root)
+                / DEFAULT_CANDIDATE_WORKSPACE).resolve()
     declared = Path(raw).expanduser()
     if declared.is_absolute():
         return declared.resolve()
@@ -364,9 +445,13 @@ def _load_policy(data: dict, campaign_root: Path, mode: str, seed: Path | None):
     else:
         document = policy_raw
         digest = digest_text(canonical_json(policy_raw))
-    allowed = tuple(str(item) for item in document.get("allowed_paths") or ())
-    forbidden = tuple(str(item) for item in document.get("forbidden_paths") or ())
-    allow_symlinks = bool(document.get("allow_symlinks") or False)
+    allowed = _string_list(document.get("allowed_paths"),
+                           "candidate.policy.allowed_paths")
+    forbidden = _string_list(document.get("forbidden_paths"),
+                             "candidate.policy.forbidden_paths")
+    allow_symlinks = _optional_bool(
+        document.get("allow_symlinks"), "candidate.policy.allow_symlinks",
+        DEFAULT_ALLOW_SYMLINKS)
     if not allowed and mode == "seed" and seed is not None:
         # A seed campaign with no declared policy permits exactly the seed's own
         # file set plus progress.md, derived rather than hardcoded.
@@ -385,11 +470,16 @@ def _load_policy(data: dict, campaign_root: Path, mode: str, seed: Path | None):
 
 def _load_retry(data: dict):
     retry = _require_object(data.get("checker_retry"), "checker_retry")
-    mode = str(retry.get("mode") or "deterministic")
+    mode = _optional_string(retry.get("mode"), "checker_retry.mode",
+                            DEFAULT_RETRY_MODE)
     if mode not in RETRY_MODES:
         raise SidecarError("checker_retry.mode must be deterministic or stateful")
-    rounds = int(retry.get("confirmation_rounds") or 0)
-    identical = int(retry.get("max_identical_retries") or 0)
+    rounds = _optional_int(retry.get("confirmation_rounds"),
+                           "checker_retry.confirmation_rounds",
+                           DEFAULT_CONFIRMATION_ROUNDS)
+    identical = _optional_int(retry.get("max_identical_retries"),
+                              "checker_retry.max_identical_retries",
+                              DEFAULT_MAX_IDENTICAL_RETRIES)
     if rounds < 0 or identical < 0:
         raise SidecarError("checker_retry counters must be non-negative")
     if mode == "stateful" and rounds < 1:
@@ -404,12 +494,16 @@ def _load_retry(data: dict):
 
 def _load_evidence(data: dict) -> tuple[str, ...]:
     evidence = _require_object(data.get("evidence"), "evidence")
-    return tuple(str(item) for item in evidence.get("paths") or ())
+    raw = evidence.get("paths")
+    if raw is None:
+        return DEFAULT_EVIDENCE_PATHS
+    return _string_list(raw, "evidence.paths")
 
 
 def _load_live(data: dict) -> bool:
     live = _require_object(data.get("live_capture"), "live_capture")
-    enabled = bool(live.get("enabled") or False)
+    enabled = _optional_bool(live.get("enabled"), "live_capture.enabled",
+                             DEFAULT_LIVE_CAPTURE_ENABLED)
     if enabled:
         raise SidecarError(
             "live_capture.enabled is not a sidecar feature: EU4 launch exclusivity is "
@@ -422,17 +516,32 @@ def _load_live(data: dict) -> bool:
 def _load_goal_limits(data: dict):
     goal = _require_object(data.get("goal"), "goal")
     limits = _require_object(data.get("limits"), "limits")
-    max_rounds = int(goal.get("max_rounds") or 6)
+    max_rounds = _optional_int(goal.get("max_rounds"), "goal.max_rounds",
+                               DEFAULT_MAX_ROUNDS)
     if max_rounds < 1:
         raise SidecarError("goal.max_rounds must be positive")
-    require_pass = bool(goal.get("require_checker_pass", True))
-    require_review = bool(goal.get("require_independent_review") or False)
-    max_validations = int(limits.get("max_validations") or 8)
+    require_pass = _optional_bool(goal.get("require_checker_pass"),
+                                  "goal.require_checker_pass",
+                                  DEFAULT_REQUIRE_CHECKER_PASS)
+    require_review = _optional_bool(goal.get("require_independent_review"),
+                                    "goal.require_independent_review",
+                                    DEFAULT_REQUIRE_INDEPENDENT_REVIEW)
+    max_validations = _optional_int(limits.get("max_validations"),
+                                    "limits.max_validations",
+                                    DEFAULT_MAX_VALIDATIONS)
     if max_validations < 1:
         raise SidecarError("limits.max_validations must be positive")
-    timeout = float(limits.get("validation_timeout_seconds") or 60)
-    wall = float(limits.get("wall_clock_seconds") or 1800)
-    review = int(limits.get("max_review_attempts") or 2)
+    timeout = _optional_number(limits.get("validation_timeout_seconds"),
+                               "limits.validation_timeout_seconds",
+                               DEFAULT_VALIDATION_TIMEOUT_SECONDS)
+    wall = _optional_number(limits.get("wall_clock_seconds"),
+                            "limits.wall_clock_seconds",
+                            DEFAULT_WALL_CLOCK_SECONDS)
+    review = _optional_int(limits.get("max_review_attempts"),
+                           "limits.max_review_attempts",
+                           DEFAULT_MAX_REVIEW_ATTEMPTS)
     if timeout <= 0 or wall <= 0:
         raise SidecarError("limits timeouts must be positive")
+    if review < 0:
+        raise SidecarError("limits.max_review_attempts must be non-negative")
     return (max_rounds, require_pass, require_review, max_validations, timeout, wall, review)
