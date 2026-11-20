@@ -272,6 +272,48 @@ class ControlQualificationTests(unittest.TestCase):
         }
         self.assertFalse(qualification.attribution(forged)["allowed"])
 
+    def test_a_forged_authentication_record_cannot_qualify(self):
+        forged = {
+            "schema": qualification.AUTHENTICATION_SCHEMA,
+            "status": "authenticated",
+            "authenticated": True,
+            "reasons": [],
+            "missing": [],
+            "identity": {"draw_event": 1, "checkpoint_event": 2,
+                         "resource": "fb:0"},
+        }
+        value = qualification.qualify(
+            self.live, self.control, 8, 8, authentication=forged)
+        self.assertTrue(value["comparison"]["exact"])
+        self.assertFalse(value["qualified"])
+        self.assertIn("did not re-validate",
+                      " ".join(value["qualification"]["reasons"]))
+
+    def test_a_real_authentication_record_revalidates_on_the_public_api(self):
+        authentication = qualification._authenticate(
+            self.frame, self.live, self.control, 8, 8,
+            checkpoint_request=self.checkpoint_request,
+            checkpoint_event=2, draw_event=1, manifest=self.manifest)
+        self.assertTrue(authentication["authenticated"], authentication)
+        value = qualification.qualify(
+            self.live, self.control, 8, 8, authentication=authentication)
+        self.assertTrue(value["qualified"], value)
+        self.assertTrue(value["qualification"]["authenticated"])
+
+    def test_a_record_with_valid_paths_but_forged_identity_is_rejected(self):
+        authentication = {
+            "seal": {"path": str(self.frame / "frame-seal.json")},
+            "checkpoint_request": {"path": str(self.checkpoint_request)},
+            "control_manifest": {"path": str(self.manifest)},
+            "identity": {"draw_event": 99, "checkpoint_event": 2,
+                         "resource": "fb:0"},
+        }
+        value = qualification.qualify(
+            self.live, self.control, 8, 8, authentication=authentication)
+        self.assertFalse(value["qualified"])
+        self.assertIn("draw event", " ".join(
+            value["qualification"]["reasons"]))
+
     def test_cli_comparison_only_reports_exact_without_qualification(self):
         value = qualification.main([
             str(self.live), str(self.control), "--width", "8",

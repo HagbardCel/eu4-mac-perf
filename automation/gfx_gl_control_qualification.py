@@ -45,6 +45,13 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def _sha_or_none(path: Path) -> str | None:
+    try:
+        return _sha(path)
+    except OSError:
+        return None
+
+
 def _is_sha256(value) -> bool:
     return (isinstance(value, str) and len(value) == 64
             and all(character in "0123456789abcdef" for character in value))
@@ -226,10 +233,14 @@ def _authenticate(frame_dir: Path | str,
             reference_sha = row.get("reference_sha256")
             if not _is_sha256(reference_sha):
                 fail("checkpoint row has no valid reference sha256")
-            elif _sha(live_path) != reference_sha:
-                fail(
-                    "live image is not the checkpoint's declared reference "
-                    "(different seal or different checkpoint)")
+            else:
+                live_sha = _sha_or_none(live_path)
+                if live_sha is None:
+                    fail(f"live image is unreadable: {live_path}")
+                elif live_sha != reference_sha:
+                    fail(
+                        "live image is not the checkpoint's declared "
+                        "reference (different seal or different checkpoint)")
             reference_file = row.get("reference_file")
             if isinstance(reference_file, str) and reference_file:
                 expected_path = (frame_dir / "blobs" / reference_file).resolve()
@@ -370,43 +381,68 @@ def _authenticate(frame_dir: Path | str,
         "missing": missing,
         "identity": identity,
         "seal": ({"path": str(frame_dir / "frame-seal.json"),
-                  "sha256": _sha(frame_dir / "frame-seal.json")}
+                  "sha256": _sha_or_none(frame_dir / "frame-seal.json")}
                  if seal is not None else None),
         "checkpoint_request": (
-            {"path": str(request_path), "sha256": _sha(request_path)}
+            {"path": str(request_path), "sha256": _sha_or_none(request_path)}
             if request_path is not None and request_path.is_file() else None),
         "control_manifest": (
-            {"path": str(manifest_path), "sha256": _sha(manifest_path)}
+            {"path": str(manifest_path), "sha256": _sha_or_none(manifest_path)}
             if manifest_path.is_file() else None),
     }
 
 
-def qualify(live_path: Path | str, control_path: Path | str,
-            width: int, height: int, *, drawable: dict | None = None,
-            prestate: dict | None = None,
-            authentication: dict | None = None) -> dict:
-    """Return exact comparison plus authenticated control qualification.
+def _revalidate(authentication: dict | None, live_path: Path,
+                control_path: Path, width: int, height: int) -> dict:
+    """Re-check an authentication record against the actual evidence files.
 
-    ``qualified`` is true only when the comparison is exact **and** an
-    authentication record proves the images and execution belong to the same
-    sealed observation.  A caller that supplies only two equal images gets an
-    explicit ``unqualified`` result, never a blame permission.
+    ``authentication`` is an output document, not a capability token.  A caller
+    can pass a hand-written dict, so its booleans and reasons are ignored: the
+    recorded seal/checkpoint/manifest paths are re-read and the identity is
+    recomputed.  This makes a forged ``authenticated: true`` record useless and
+    keeps the public :func:`qualify` entry point honest.
     """
-    comparison = compare(live_path, control_path, width, height)
+    if not isinstance(authentication, dict):
+        return {}
+    seal = authentication.get("seal")
+    manifest = authentication.get("control_manifest")
+    request = authentication.get("checkpoint_request")
+    identity = authentication.get("identity") or {}
+    if not isinstance(seal, dict) or not isinstance(seal.get("path"), str) \
+            or not isinstance(manifest, dict) \
+            or not isinstance(manifest.get("path"), str) \
+            or not isinstance(request, dict) \
+            or not isinstance(request.get("path"), str):
+        return {}
+    try:
+        return _authenticate(
+            Path(seal["path"]).parent, live_path, control_path, width, height,
+            checkpoint_request=Path(request["path"]),
+            checkpoint_event=identity.get("checkpoint_event"),
+            draw_event=identity.get("draw_event"),
+            manifest=Path(manifest["path"]),
+            resource=str(identity.get("resource") or DEFAULT_RESOURCE))
+    except (OSError, ValueError, QualificationError):
+        return {}
+
+
+def _assemble(comparison: dict, authentication: dict | None, *,
+              drawable: dict | None, prestate: dict | None) -> dict:
     authenticated = bool(
         isinstance(authentication, dict)
         and authentication.get("authenticated") is True
         and authentication.get("status") == "authenticated")
     reasons = list((authentication or {}).get("reasons") or [])
     missing = list((authentication or {}).get("missing") or [])
-    if not isinstance(authentication, dict):
+    if not isinstance(authentication, dict) or not authentication:
         missing.insert(
             0,
             "authenticated frame/stream/resource/checkpoint identity and "
             "original-API execution provenance were not supplied")
     if not comparison["exact"]:
         missing.extend(_missing(drawable, prestate))
-    qualified = bool(comparison["exact"] and authenticated and not reasons)
+    qualified = bool(
+        comparison["exact"] and authenticated and not reasons and not missing)
     if not qualified and not missing:
         missing.append(
             "reduce the residual by varying one captured input at a time")
@@ -414,8 +450,8 @@ def qualify(live_path: Path | str, control_path: Path | str,
         "schema": SCHEMA,
         "status": "qualified" if qualified else "unqualified",
         "qualified": qualified,
-        "width": width,
-        "height": height,
+        "width": comparison["width"],
+        "height": comparison["height"],
         "comparison": comparison,
         "qualification": {
             "status": "qualified" if qualified else "unqualified",
@@ -438,6 +474,38 @@ def qualify(live_path: Path | str, control_path: Path | str,
     }
 
 
+def qualify(live_path: Path | str, control_path: Path | str,
+            width: int, height: int, *, drawable: dict | None = None,
+            prestate: dict | None = None,
+            authentication: dict | None = None) -> dict:
+    """Return exact comparison plus re-validated control qualification.
+
+    ``qualified`` is true only when the comparison is exact **and** the
+    recorded sealed identity re-validates against the actual files.  A caller
+    that supplies only two equal images, or a hand-written authentication
+    dict, gets an explicit ``unqualified`` result and never a blame permission.
+    """
+    live_path = Path(live_path)
+    control_path = Path(control_path)
+    comparison = compare(live_path, control_path, width, height)
+    if authentication is None:
+        checked = None
+    else:
+        checked = _revalidate(
+            authentication, live_path, control_path, width, height)
+        if not checked:
+            checked = {
+                "authenticated": False,
+                "status": "unauthenticated",
+                "reasons": [
+                    "the supplied authentication record did not re-validate "
+                    "against the evidence files"],
+                "missing": list(authentication.get("missing") or []),
+            }
+    return _assemble(
+        comparison, checked, drawable=drawable, prestate=prestate)
+
+
 def qualify_sealed(live_path: Path | str, control_path: Path | str,
                    width: int, height: int, *, frame_dir: Path | str,
                    checkpoint_request: Path | str | None = None,
@@ -452,9 +520,9 @@ def qualify_sealed(live_path: Path | str, control_path: Path | str,
         checkpoint_request=checkpoint_request,
         checkpoint_event=checkpoint_event, draw_event=draw_event,
         manifest=manifest, resource=resource)
-    return qualify(
-        live_path, control_path, width, height, drawable=drawable,
-        prestate=prestate, authentication=authentication)
+    comparison = compare(live_path, control_path, width, height)
+    return _assemble(
+        comparison, authentication, drawable=drawable, prestate=prestate)
 
 
 def attribution(qualification: dict) -> dict:
