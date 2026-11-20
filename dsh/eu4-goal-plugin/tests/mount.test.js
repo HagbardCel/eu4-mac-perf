@@ -177,3 +177,40 @@ test('plugin unload during an in-flight context install leaves no prompt section
   assert.equal(injects, 0, 'a late bridge answer must not install a section after unload')
   assert.equal(fiber.disposed, 0)
 })
+
+test('a fiber that races past inject is disposed instead of retained', async () => {
+  const ctx = fakeContext()
+  const fiber = { disposed: 0, dispose() { this.disposed += 1 } }
+  let unload = () => {}
+  const agent = {
+    ctx: {
+      inject(_names, register) {
+        register({ systemPrompt: { section() {} } })
+        // Simulate unload re-entering after the fiber is created but before
+        // the install promise's .then runs.
+        unload()
+        return fiber
+      },
+    },
+    session: { id: 's3', header: { cwd: '/tmp/ws' } },
+  }
+  apply(ctx, {
+    sidecar: '/tmp/x.json',
+    infra: INFRA,
+    python: '/bin/false',
+    bridge: async () => ({
+      ok: true,
+      status: 'authorized',
+      startup_text: 'workspace: /tmp/ws',
+      startup: { workspace: '/tmp/ws' },
+    }),
+  })
+  unload = () => {
+    for (const dispose of ctx._state.effects.slice().reverse()) {
+      if (typeof dispose === 'function') dispose()
+    }
+  }
+  const created = ctx._state.handlers['agent/created'][0]
+  await created({ agent })
+  assert.equal(fiber.disposed, 1)
+})
