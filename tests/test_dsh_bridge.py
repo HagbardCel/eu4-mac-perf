@@ -95,6 +95,32 @@ class PrepareTests(BridgeTestCase):
         )
         self.assertEqual(len(out["identity_digest"]), 64)
 
+    def test_candidate_edit_does_not_change_authority(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        code, first = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK)
+        # Editing the candidate is the normal campaign action, not drift.
+        (self.workspace / "marker.txt").write_text("edited\n", encoding="utf-8")
+        code, second = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, second)
+        self.assertNotEqual(first["identity_digest"], second["identity_digest"])
+        code, context = self.run_bridge("context", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, context)
+        self.assertEqual(context["status"], "authorized")
+        self.assertEqual(context["drift"], [])
+        # A committed candidate also remains authorized; only frozen authority
+        # (workspace/policy/budget/checker) refuses.
+        subprocess.run(["git", "-C", str(self.workspace), "init", "-q"],
+                       check=False)
+        subprocess.run(["git", "-C", str(self.workspace), "add", "."],
+                       check=False)
+        subprocess.run(["git", "-C", str(self.workspace), "-c",
+                        "user.email=t@example.invalid", "-c",
+                        "user.name=Test", "commit", "-qm", "edit"],
+                       check=False)
+        code, third = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, third)
+
     def test_prepare_emits_a_compact_startup_block(self) -> None:
         sidecar = self.sidecar(self.campaign("smoke-campaign"))
         code, out = self.run_bridge("prepare", sidecar)

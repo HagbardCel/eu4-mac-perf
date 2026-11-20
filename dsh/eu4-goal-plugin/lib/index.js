@@ -211,7 +211,7 @@ function tool(name, description, execute) {
  * @returns {string} section text, or empty when no verified context exists
  */
 export function authorityPromptText(result) {
-  if (!result || result.ok !== true) return ''
+  if (!result || result.ok !== true || result.status !== 'authorized') return ''
   const text = typeof result.startup_text === 'string' ? result.startup_text.trim() : ''
   if (!text) return ''
   return [

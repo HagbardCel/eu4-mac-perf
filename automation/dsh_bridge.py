@@ -575,8 +575,6 @@ LEGACY_AUTHORITY_PATHS = {
         "identities", "verification_manifest_digest"),
     "campaign.evidence_inputs_digest": ("identities", "evidence_inputs_digest"),
     "candidate.mode": ("identities", "candidate", "mode"),
-    "candidate.commit": ("identities", "candidate", "commit"),
-    "candidate.digest": ("identities", "candidate", "digest"),
 }
 
 
@@ -626,9 +624,11 @@ def _authority_snapshot(sidecar: Sidecar, identities: dict) -> dict:
             "verification_manifest_digest"),
         "campaign.evidence_inputs_digest": identities.get(
             "evidence_inputs_digest"),
+        # Candidate commit/digest are mutable by design: an agent edits and
+        # commits the candidate.  They are qualification inputs, not authority;
+        # only the campaign baseline commit and checker/policy/budget are
+        # frozen by the anchor.
         "candidate.mode": candidate.get("mode"),
-        "candidate.commit": candidate.get("commit"),
-        "candidate.digest": candidate.get("digest"),
     })
     return value
 
