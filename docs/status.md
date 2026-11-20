@@ -3,6 +3,55 @@
 Authoritative summary of what is established, qualified, and in flight.
 Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
 
+## Current navigation — 20 November 2026
+
+This section is the starting point. Everything below it is retained as dated
+history and must be read with its original run/seal identity.
+
+| Question | Canonical document |
+|---|---|
+| What does the original EU4 renderer do, and how was it observed? | [EU4 renderer](eu4_renderer.md) |
+| How does the faithful Metal backend work and what is qualified? | [Metal backend](metal.md) |
+| What is planned for the optimized backend? | [Metal optimized](metal_optimized.md) |
+| How is evidence retained and restored? | [Evidence retention](evidence-retention.md) |
+| Which command should I run, and how do I recover? | [Harness operations](harness.md) |
+| What is the review remediation status? | [Coverage matrix](../plans/harness-review/implementation.md) |
+| What is the reconstruction charter and safety contract? | [Charter](renderer-reconstruction-and-differential-validation.md) · [AGENTS.md](../AGENTS.md) |
+
+### Capability snapshot
+
+| Area | State | Evidence / scope | Smallest missing discriminator |
+|---|---|---|---|
+| Sealed same-frame differential | **Established** | Capture, seal, shadow, offline replay and exact four-channel comparator; all channels are compared | — |
+| Exact verdict semantics | **Implemented, awaiting independent review** | PR #241; policy pass is separate from raw zero statistics | Authentic case with a policy override and alpha-only negative |
+| Event/writer attribution | **Implemented, awaiting independent review** | PR #242; graph-derived `provenance_matrix` | Regenerate present 904/616 rows from the sealed graph |
+| Compressed texture capture/replay | **Implemented, awaiting independent review** | PR #244; complete/partial/mixed/unsupported chain contract | Same-seal decoded-vs-block pixel comparison on present 904 |
+| Live-GL control | **Blocked (scientific)** | Offline GL does not reproduce live GL; depth/sample/drawable provenance missing | Authentic selected-draw control with valid color+depth prestate and all-channel comparison |
+| Sampler/raster state | **Implemented, awaiting independent review** | PR #245; full sampler key, cull faces, signed scissor | Rendered front/back and transparent BC1 fixture |
+| Translation/replay identity | **Implemented, awaiting independent review** | PR #248; effective compiler key, tool identity, recipe-bound receipts | Native function/pipeline cache audit |
+| Campaign lifecycle | **Implemented, awaiting independent review** | PRs #246, #249, #250; safe publication, terminal capture, exactly-once reserving, no-progress | Per-session write roots; live wall-time measurement |
+| Metrics/documentation | **Implemented, awaiting independent review** | PR #251, this PR; explicit unknown GPU time, dated canonical docs | Three paired pilot trials |
+| Authentic renderer parity | **Not established** | Latest authentic pilot localized [14, 15]; no accepted terrain correction | Exact control equality at the first differing writer |
+
+### Current authentic observations
+
+- Present **615** (session `2564021f…`): 325 operations, checkpoints 14 match,
+  17/19/20/284/final differ. Interval **[14, 17]**, next checkpoint 15.
+- Present **616** (session `2da0a8fc…`): checkpoint 14 match, 15 differs
+  607 px/max 2, 16 differs 200,197/max 85.
+- Present **904** (session `afd444f2…`, candidate `34158764`): 327 operations,
+  checkpoints 11/13/14 exact, 15 is 4/1, 16 is 3,602/119, final 425,560/68.
+- These are different seals and must not be combined into a before/after
+  improvement. Original GL remains authoritative.
+
+### Non-claims
+
+Do not claim event-16 parity, contiguous coverage, a faithful reference,
+accepted renderer correction or live wall-time savings without the exact
+qualifying evidence named above.
+
+## Historical status (retained)
+
 ## M7 — READY: implementation, autonomous campaign and bounded authentic pilot (2026-11-19)
 
 The implementation stack is merged on `main` through #218 (`cecc727c`): #214
@@ -140,10 +189,14 @@ closure changed, and it rejects:
 - an unchanged candidate revision, or a substituted candidate artifact;
 - a previously exact-matching regression that no longer recomputes to zero.
 
-`pixel_perfect` is reported only for zero mismatched pixels and zero maximum
-channel error under complete qualification (verified replay identity, complete
-execution, clean checkpoint reconciliation and complete state coverage). An
-accepted partial improvement is explicitly not equivalence.
+`pixel_perfect` is reported only for zero mismatched pixels, zero alpha
+differences and zero maximum channel error under complete qualification:
+verified replay identity; complete execution; graph completeness; exact
+authoritative checkpoint coverage (or a separately permitted final-only
+contract); producer/receipt binding to the current candidate; complete state
+coverage; an exact-control policy that does not mask a channel; and a protected
+independent regression that also recomputes to zero. An accepted partial
+improvement is explicitly not equivalence.
 
 `dsh_pilot.summarize` now runs the checker when a correction is proposed and
 requires an accepted report; a valid `correction_proposed` conclusion alone is

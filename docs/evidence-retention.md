@@ -1,0 +1,73 @@
+# Evidence retention and restore
+
+Historical evidence is read-only and indexed; it is never deleted by a review
+or an agent. This page records the supported discovery, retention and restore
+path. See [harness](harness.md) for commands and [status](status.md) for current
+capability.
+
+## What is retained
+
+| Class | Examples | Rule |
+|---|---|---|
+| Authoritative sealed cases | `frames/frame-*`, `frame-seal.json`, `blobs/`, reference pixels | Retain with their seal, stream and bound inputs |
+| Negative controls | policy/alpha/identity negatives, fault experiments | Retain; never relabel as a qualified match |
+| First divergent checkpoints | event/resource/statistics for the earliest mismatch | Retain with the producer receipt |
+| Native receipts | producer receipt, shader receipt, shadow/coordinator report | Retain with executable/build identity |
+| Campaign records | guard claims/settles, launcher PID/termination, validation history | Retain; interrupted reservations are durable records |
+| Compressed raw traces | session exports (`.jsonl.zstd`) | Retain; verify the decompressed digest |
+| Derived outputs | repeated shader/build copies, display tables | Reproducible only after an isolated restore proves it |
+
+Raw shader, texture and game bytes stay local and are not published. Public
+inventories carry paths, sizes and digests, not payloads or private
+transcripts.
+
+## Discovery
+
+```sh
+export EU4_EVIDENCE_ROOT="<root1>:<root2>"
+python3.14 -m automation.agent_tools eu4_session discover --query <text>
+python3.14 -m automation.agent_tools eu4_session discover --limit 20 \
+  --offset 20 --locator-limit 20 --locator-offset 0
+```
+
+Discovery is bounded to configured roots; it never scans the home directory,
+copies artifacts or mutates history. Locator counts distinguish scanned,
+filtered and returned rows. A verified lookup that truncates its page is
+`truncated_unverified` and not reusable.
+
+## Inventory
+
+```sh
+python3.14 -m automation.case_locator inventory --root <root> --offset 0 --limit 20
+python3.14 -m automation.case_locator inventory --root <root> --verify
+```
+
+`publish` copies regular files only, rejects source and staged symlinks, and
+requires the staged inventory to match the pre-copy inventory. An existing
+published copy is re-verified before it is adopted.
+
+## Restore trial
+
+1. Choose a locator and read its `identity`, `verification`, `relative_path`
+   and `size_bytes`.
+2. From a **fresh directory**, resolve the case and verify the manifest,
+   seal/stream and each declared blob digest.
+3. Recompute the first divergent checkpoint comparison from the sealed
+   reference and the recorded Metal readback, including alpha.
+4. If a blob is missing, report the exact member/digest and the configured
+   discovery roots; do not substitute a same-named file.
+5. Only then consider a separately authorized archive/compression action.
+   Measure allocated space before and after; keep the restore private.
+6. Do not delete a source until every pinned consumer (active cases,
+   regression manifests, reports, tests, scripts, frozen campaigns, docs and
+   parallel worktrees) is proven independent or successfully restored.
+
+## Non-negotiables
+
+- A historical `retired` label or a Git ignore rule is not proof of
+  dispensability.
+- Do not use a directory modification time or a string such as “round 2” to
+  identify an execution.
+- Compressed and expanded traces must be proven byte-identical before either is
+  treated as a duplicate.
+- A failed restore keeps the original and records the unresolved dependency.
