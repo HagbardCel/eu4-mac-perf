@@ -287,7 +287,8 @@ export function apply(ctx, config = {}) {
     let result
     try {
       result = await bridge(
-        infra, python, 'context', sidecar, [], CONTEXT_TIMEOUT_MS
+        infra, python, 'context', sidecar,
+        sessionArgs(sessionIdentity(agent)), CONTEXT_TIMEOUT_MS
       )
     } catch (error) {
       ctx.logger?.warn?.(

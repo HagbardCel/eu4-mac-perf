@@ -683,9 +683,10 @@ def _check_authority(stored: dict, current: dict) -> None:
         )
 
 
-def _qualification_state(sidecar: Sidecar, identities: dict) -> dict:
+def _qualification_state(sidecar: Sidecar, identities: dict,
+                         root: Path | None = None) -> dict:
     """Read-only view of the stored qualification; never a new verdict."""
-    receipt = receipts.load_current_receipt(sidecar.run_root)
+    receipt = receipts.load_current_receipt(root or sidecar.run_root)
     if receipt is None:
         return {"state": "none", "detail": "no validation receipt is recorded"}
     problems = receipts.verify_receipt_digest(receipt)
@@ -855,9 +856,10 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit, session) -> int:
         })
 
     identity_digest = receipts.identity_digest(identities)
-    verification = _qualification_state(sidecar, identities)
-    startup = _startup_block(sidecar, roots)
-    attempts = _validation_attempts(_validation_history(sidecar.run_root))
+    verification = _qualification_state(
+        sidecar, identities, root=session.root)
+    startup = _startup_block(sidecar, roots, session)
+    attempts = _validation_attempts(_campaign_attempt_history(sidecar.run_root))
     startup_text = _startup_text(
         startup, attempts=attempts, identity_digest=identity_digest,
         verification=verification)
@@ -2417,9 +2419,12 @@ def op_context(args) -> int:
         )
 
     identity_digest = receipts.identity_digest(identities)
-    verification = _qualification_state(sidecar, identities)
-    block = _startup_block(sidecar, roots)
-    attempts = _validation_attempts(_validation_history(sidecar.run_root))
+    context_session = _session_layout(
+        sidecar.run_root, getattr(args, "session_id", None), create=False)
+    verification = _qualification_state(
+        sidecar, identities, root=context_session.root)
+    block = _startup_block(sidecar, roots, context_session)
+    attempts = _validation_attempts(_campaign_attempt_history(sidecar.run_root))
     text = _startup_text(
         block, attempts=attempts, identity_digest=identity_digest,
         verification=verification)
@@ -2454,7 +2459,7 @@ def build_parser() -> argparse.ArgumentParser:
                  "checker-compat", "review-run", "review-verify"):
         child = sub.add_parser(name)
         child.add_argument("--sidecar", required=True)
-        if name in ("prepare", "validate", "finalize",
+        if name in ("prepare", "context", "validate", "finalize",
                     "review-run", "review-verify"):
             child.add_argument("--session-id", default=None)
         if name == "prepare":
