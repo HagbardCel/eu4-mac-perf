@@ -65,9 +65,13 @@ class CompressedTextureChainTests(unittest.TestCase):
                 "bytes": len(payload)}
 
     def level(self, index: int, width: int, height: int, block: int,
-              *, raw: int, name: str, compressed: bool = True) -> dict:
+              *, raw: int, name: str, compressed: bool = True,
+              decoded_payload: bytes | None = None,
+              block_payload: bytes | None = None) -> dict:
         decoded = self.blob(
-            f"decoded-{name}.bin", bytes([index]) * (width * height * 4))
+            f"decoded-{name}.bin",
+            decoded_payload if decoded_payload is not None
+            else bytes([index]) * (width * height * 4))
         entry = {
             "level": index, "width": width, "height": height,
             **decoded, "pixel_format": "RGBA8",
@@ -75,8 +79,9 @@ class CompressedTextureChainTests(unittest.TestCase):
         if compressed:
             blocks_wide = (width + 3) // 4
             blocks_high = (height + 3) // 4
-            payload = bytes([0x11 + index]) * (
-                blocks_wide * blocks_high * block)
+            payload = (block_payload if block_payload is not None
+                       else bytes([0x11 + index]) * (
+                           blocks_wide * blocks_high * block))
             entry["compressed"] = {
                 **self.blob(f"compressed-{name}.bin", payload),
                 "format": {0x83F0: "DXT1", 0x83F1: "DXT1_ALPHA",
@@ -99,6 +104,14 @@ class CompressedTextureChainTests(unittest.TestCase):
         return subprocess.run(
             [str(self.binary), str(self.frame), str(path)],
             capture_output=True, text=True, check=False)
+
+    def run_sample(self, path: Path):
+        result = subprocess.run(
+            [str(self.binary), "--sample", str(self.frame), str(path)],
+            capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return [tuple(int(value) for value in line.split(","))
+                for line in result.stdout.splitlines() if line.strip()]
 
     def assert_built(self, levels, name, pixel_format, mip_levels=2):
         result = self.run_texture(self.texture(levels, name))
@@ -133,6 +146,35 @@ class CompressedTextureChainTests(unittest.TestCase):
             self.level(1, 4, 4, 8, raw=0x83F3, name="dec1", compressed=False),
         ]
         self.assert_built(levels, "decoded", MTL_RGBA8_UNORM)
+
+    def test_bc1_transparent_index_alpha_is_preserved_per_gl_enum(self):
+        # color0=0, color1=0xffff, every index=3.  RGBA DXT1 samples the
+        # transparent index (alpha 0); RGB DXT1 must remain opaque and use the
+        # decoded representation because Metal has no BC1 RGB format.
+        block = bytes.fromhex("0000ffffffffffff") * 4
+        opaque = bytes([12, 34, 56, 255]) * (8 * 8)
+        cases = ((0x83F1, "DXT1_ALPHA", 0), (0x83F0, "DXT1", 255))
+        for raw, label, expected_alpha in cases:
+            level = self.level(0, 8, 8, 8, raw=raw, name=f"alpha-{raw:x}",
+                               decoded_payload=opaque, block_payload=block)
+            pixels = self.run_sample(
+                self.texture([level], f"alpha-sample-{raw:x}"))
+            alphas = {pixel[3] for pixel in pixels}
+            self.assertEqual(alphas, {expected_alpha}, label)
+            if raw == 0x83F0:
+                self.assertEqual({pixel[:3] for pixel in pixels},
+                                 {(12, 34, 56)})
+
+    def test_compressed_block_rows_are_flipped_to_metal_orientation(self):
+        # Captured GL rows are lower-left.  A red source row 0 and green row 1
+        # must appear green at Metal's top row and red at its bottom row.
+        red = bytes.fromhex("00f8e00700000000")
+        green = bytes.fromhex("e00700f800000000")
+        level = self.level(0, 8, 8, 8, raw=0x83F1, name="flip",
+                           block_payload=red * 2 + green * 2)
+        pixels = self.run_sample(self.texture([level], "flip-sample"))
+        self.assertEqual(pixels[0][:3], (0, 255, 0))
+        self.assertEqual(pixels[7 * 8][:3], (255, 0, 0))
 
     def test_partial_chain_is_rejected_not_silently_decoded(self):
         levels = [

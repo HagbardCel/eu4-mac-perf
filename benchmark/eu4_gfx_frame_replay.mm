@@ -1551,10 +1551,26 @@ static id<MTLTexture> build_texture(NSDictionary *texture, NSString *frameDir,
                 }
                 return nil;
             }
+            /* Captured GL rows are lower-left; Metal samples top-left.  A
+             * compressed level must be flipped at block-row granularity. */
+            NSData *upload = blob;
+            NSUInteger block_rows = (level_height + 3u) / 4u;
+            if (block_rows > 1) {
+                NSMutableData *flipped =
+                    [NSMutableData dataWithLength:blob.length];
+                const uint8_t *source = (const uint8_t *)blob.bytes;
+                uint8_t *destination = (uint8_t *)flipped.mutableBytes;
+                for (NSUInteger row = 0; row < block_rows; row++) {
+                    memcpy(destination + row * row_bytes,
+                           source + (block_rows - 1 - row) * row_bytes,
+                           row_bytes);
+                }
+                upload = flipped;
+            }
             MTLRegion region = MTLRegionMake2D(0, 0, level_width, level_height);
             [texture_handle replaceRegion:region
                              mipmapLevel:level_index
-                               withBytes:blob.bytes
+                               withBytes:upload.bytes
                              bytesPerRow:row_bytes];
             continue;
         }
@@ -5533,6 +5549,123 @@ extern "C" int eu4_gfx_frame_replay_test_compressed_texture(
         }
         if (out_levels) {
             *out_levels = (int)texture.mipmapLevelCount;
+        }
+        return 0;
+    }
+}
+
+/* Host-test only: build a texture through the production path and render one
+ * nearest-sampled RGBA8 readback.  Used to verify BC1 transparent-index alpha
+ * and captured orientation rather than only enum selection. */
+extern "C" int eu4_gfx_frame_replay_test_sample_texture(
+    const char *frame_dir, const char *json_path, unsigned char *out_pixels,
+    int width, int height, char *out_error, size_t error_capacity) {
+    if (frame_dir == NULL || json_path == NULL || out_pixels == NULL
+        || width <= 0 || height <= 0) {
+        return -1;
+    }
+    @autoreleasepool {
+        NSError *read_error = nil;
+        NSData *data = [NSData dataWithContentsOfFile:@(json_path)
+                                              options:0
+                                                error:&read_error];
+        id value = data == nil ? nil
+            : [NSJSONSerialization JSONObjectWithData:data options:0
+                                                error:&read_error];
+        if (![value isKindOfClass:[NSDictionary class]]) {
+            if (out_error && error_capacity) {
+                snprintf(out_error, error_capacity, "%s",
+                         safe_utf8(failure_text(read_error, @"invalid JSON"),
+                                   "invalid JSON"));
+            }
+            return -1;
+        }
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        if (device == nil) {
+            if (out_error && error_capacity) {
+                snprintf(out_error, error_capacity, "%s", "no Metal device");
+            }
+            return -1;
+        }
+        EU4MetalReplayState *state = [EU4MetalReplayState new];
+        state.device = device;
+        EU4MetalReplayState *previous = g_state;
+        g_state = state;
+        NSError *build_error = nil;
+        id<MTLTexture> texture =
+            build_texture((NSDictionary *)value, @(frame_dir), &build_error);
+        g_state = previous;
+        if (texture == nil) {
+            if (out_error && error_capacity) {
+                snprintf(out_error, error_capacity, "%s",
+                         safe_utf8(failure_text(build_error,
+                                                @"texture build failed"),
+                                   "texture build failed"));
+            }
+            return -1;
+        }
+        NSString *source = @
+            "#include <metal_stdlib>\n"
+            "using namespace metal;\n"
+            "kernel void sample_tex(texture2d<float, access::sample> tex\n"
+            "                       [[texture(0)]],\n"
+            "                       device float4 *out [[buffer(0)]],\n"
+            "                       uint2 gid [[thread_position_in_grid]]) {\n"
+            "  constexpr sampler s(coord::normalized, filter::nearest,\n"
+            "                      address::clamp_to_edge);\n"
+            "  float2 uv = (float2(gid) + 0.5) / float2(8.0, 8.0);\n"
+            "  out[gid.y * 8u + gid.x] = tex.sample(s, uv);\n"
+            "}\n";
+        NSError *library_error = nil;
+        id<MTLLibrary> library =
+            [device newLibraryWithSource:source options:nil
+                                   error:&library_error];
+        id<MTLFunction> function = library == nil ? nil
+            : [library newFunctionWithName:@"sample_tex"];
+        id<MTLComputePipelineState> pipeline = function == nil ? nil
+            : [device newComputePipelineStateWithFunction:function
+                                                    error:&library_error];
+        if (pipeline == nil) {
+            if (out_error && error_capacity) {
+                snprintf(out_error, error_capacity, "%s",
+                         safe_utf8(failure_text(library_error,
+                                                @"sampling pipeline failed"),
+                                   "sampling pipeline failed"));
+            }
+            return -1;
+        }
+        id<MTLBuffer> buffer =
+            [device newBufferWithLength:(NSUInteger)(width * height * 4 * sizeof(float))
+                                options:MTLResourceStorageModeShared];
+        id<MTLCommandQueue> queue = [device newCommandQueue];
+        id<MTLCommandBuffer> command = [queue commandBuffer];
+        id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+        [encoder setComputePipelineState:pipeline];
+        [encoder setTexture:texture atIndex:0];
+        [encoder setBuffer:buffer offset:0 atIndex:0];
+        [encoder dispatchThreads:MTLSizeMake((NSUInteger)width,
+                                             (NSUInteger)height, 1)
+            threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
+        [encoder endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+        if (command.error != nil) {
+            if (out_error && error_capacity) {
+                snprintf(out_error, error_capacity, "%s",
+                         safe_utf8(failure_text(command.error,
+                                                @"sampling failed"),
+                                   "sampling failed"));
+            }
+            return -1;
+        }
+        const float *pixels = (const float *)buffer.contents;
+        for (int index = 0; index < width * height; index++) {
+            for (int channel = 0; channel < 4; channel++) {
+                float clamped = fminf(fmaxf(pixels[index * 4 + channel], 0.0f),
+                                      1.0f);
+                out_pixels[index * 4 + channel] =
+                    (unsigned char)lroundf(clamped * 255.0f);
+            }
         }
         return 0;
     }
