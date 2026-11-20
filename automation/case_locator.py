@@ -512,6 +512,9 @@ def publish(case_dir: Path | str, evidence_root: Path | str, *,
             "size_bytes": source_bytes,
             "files": source_files,
         }
+        problem = _locator_problem(locator)
+        if problem is not None:
+            raise CaseLocatorError("locator_malformed", problem)
         path = _write_locator(root, key, locator)
         locator["locator_path"] = str(path)
         return locator
@@ -522,6 +525,12 @@ _HEX64 = re.compile(r"^[0-9a-fA-F]{64}$")
 
 def _relative_text(value) -> bool:
     if not isinstance(value, str) or not value:
+        return False
+    if "\x00" in value:
+        return False
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
         return False
     path = Path(value)
     return not path.is_absolute() and ".." not in path.parts
@@ -618,7 +627,10 @@ def _target_path(root: Path, locator: dict) -> tuple[Path | None, str | None]:
     relative = str(locator.get("relative_path") or "")
     if not relative:
         return None, "locator has no relative_path"
-    target = (root / relative).resolve()
+    try:
+        target = (root / relative).resolve()
+    except (OSError, ValueError, UnicodeError) as exc:
+        return None, f"locator path cannot be resolved: {exc}"
     try:
         target.relative_to(root)
     except ValueError:

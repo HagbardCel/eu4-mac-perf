@@ -485,6 +485,9 @@ class CaseLocatorTests(unittest.TestCase):
             "identity-list": lambda value: value.update(identity=[]),
             "identity-null": lambda value: value.update(identity=None),
             "path-integer": lambda value: value.update(relative_path=7),
+            "path-nul": lambda value: value.update(relative_path="a\x00b"),
+            "path-surrogate": lambda value: value.update(
+                relative_path="\ud800"),
             "verification-string": lambda value: value.update(
                 verification="ok"),
             "key-integer": lambda value: value.update(key=9),
@@ -514,6 +517,26 @@ class CaseLocatorTests(unittest.TestCase):
                 self.assertEqual(
                     discovered["locator_counts"]["invalid_locators"], 1)
                 self.assertEqual(discovered["case_locators"], [])
+
+    def test_publish_rejects_a_locator_its_scanner_would_reject(self) -> None:
+        case = make_case(self.root / "producer" / "malformed-case")
+        identity = {
+            "case_id": "malformed",
+            "session_id": 5,
+            "capture_frame_id": 7,
+            "event_stream_sha256": "a" * 64,
+            "seal_sha256": "b" * 64,
+            "seal_file": None,
+            "manifest_sha256": "c" * 64,
+            "schema": "case/v1",
+        }
+        with mock.patch("automation.case_locator.case_identity",
+                        return_value=identity):
+            with self.assertRaises(case_locator.CaseLocatorError) as raised:
+                case_locator.publish(case, self.evidence)
+        self.assertEqual(raised.exception.kind, "locator_malformed")
+        self.assertFalse(
+            list((self.evidence / "locators").glob("*.json")))
 
     def test_invalid_locator_count_is_untruncated(self) -> None:
         self.evidence.mkdir(parents=True)
