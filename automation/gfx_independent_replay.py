@@ -3265,7 +3265,9 @@ def write_producer_receipt(out_dir: Path, frame_dir: Path,
     seen_checkpoints: set[str] = set()
     for item in replay.get("checkpoints") or []:
         if not isinstance(item, dict):
-            continue
+            raise ReplayError(
+                "invalid_checkpoint_binding",
+                "a replay checkpoint entry is not an object")
         declared = str(item.get("file") or "")
         name = _safe_member_name(declared)
         if not name:
@@ -3422,12 +3424,41 @@ def _replay_locked(
             pass
         raise
     result_path = out_dir / "replay.json"
+    receipt_error: str | None = None
     if result_path.is_file():
-        write_producer_receipt(out_dir, frame_dir, producer, result_path)
+        try:
+            write_producer_receipt(out_dir, frame_dir, producer, result_path)
+        except ReplayError as exc:
+            # A malformed/failed checkpoint declaration is a diagnostic
+            # result, not a reason to lose the report or leak the host copy.
+            receipt_error = f"{exc.kind}: {exc.detail or exc}"
     try:
         snapshot.unlink()
     except FileNotFoundError:
         pass
+    if receipt_error is not None:
+        diagnosis = analyse_frame(
+            frame_dir, out_dir, policy, graph=graph, request=request,
+            request_source="published", faults=faults)
+        report = {
+            "schema": SCHEMA,
+            "frame_dir": str(frame_dir),
+            "out_dir": str(out_dir),
+            "status": "invalid",
+            "receipt_error": receipt_error,
+            "faults": faults,
+            "returncode": ran.returncode,
+            "stderr": (ran.stderr or "")[-4000:],
+            "graph": graph,
+            "diagnosis": diagnosis,
+            "classification": diagnosis.get("classification"),
+            "qualification": diagnosis.get("qualification"),
+            "first_divergence": diagnosis.get("first_divergence"),
+            "execution": diagnosis.get("execution"),
+        }
+        (out_dir / "replay-report.json").write_text(
+            json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        return report
     if ran.returncode != 0 or not result_path.is_file():
         diagnosis = analyse_frame(
             frame_dir, out_dir, policy, graph=graph, request=request,

@@ -267,10 +267,25 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
                         f"producer receipt has an invalid checkpoint file "
                         f"name {name!r}")
                 bound_map[name] = str(row.get("sha256") or "")
-            replay_names = {
-                Path(str(item.get("file"))).name
-                for item in replay.get("checkpoints") or []
-                if isinstance(item, dict) and item.get("file")}
+            replay_names: set[str] = set()
+            returned = replay.get("checkpoints") or []
+            if not isinstance(returned, list):
+                raise AcceptanceError(
+                    "replay_receipt_mismatch",
+                    "replay checkpoints are not a list")
+            for item in returned:
+                if not isinstance(item, dict):
+                    raise AcceptanceError(
+                        "replay_receipt_mismatch",
+                        "replay has a malformed checkpoint entry")
+                declared = str(item.get("file") or "")
+                if (not declared or Path(declared).name != declared
+                        or declared in replay_names):
+                    raise AcceptanceError(
+                        "replay_receipt_mismatch",
+                        f"replay checkpoint declares an invalid or duplicate "
+                        f"file name {declared!r}")
+                replay_names.add(declared)
             if set(bound_map) != replay_names:
                 missing = sorted(replay_names - set(bound_map))
                 extra = sorted(set(bound_map) - replay_names)
@@ -303,6 +318,7 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
             "problems": request_problems,
             "required_entries": len(request.get("checkpoints") or []),
         },
+        "graph_status": graph.get("status"),
         "state_coverage": states,
         "producer": producer,
         "receipt_present": bool(receipt),
@@ -331,6 +347,9 @@ def _checkpoint_authority(side: dict, *, allow_final_only: bool) -> dict:
     for item in authoritative:
         status = str(item.get("status") or "invalid")
         counts[status] = counts.get(status, 0) + 1
+    for item in diagnostic:
+        if str(item.get("status")) == "divergent_diagnostic":
+            counts["divergent_diagnostic"] += 1
     first = next((item for item in authoritative
                   if item.get("status") != "match"), None)
     if counts["invalid"]:
@@ -346,11 +365,17 @@ def _checkpoint_authority(side: dict, *, allow_final_only: bool) -> dict:
             "required_entries") or 0)
         if required:
             coverage = "missing_authoritative"
+        elif str(side.get("graph_status") or "unknown") != "complete":
+            # An empty plan is legitimate only for a complete capture graph.
+            coverage = "final_only_unqualified"
         else:
             coverage = "final_only" if allow_final_only else \
                 "final_only_unqualified"
-    pixels_match = bool(authoritative) and not (
-        counts["divergent"] or counts["invalid"])
+    if coverage == "final_only":
+        pixels_match = None
+    else:
+        pixels_match = bool(authoritative) and not (
+            counts["divergent"] or counts["invalid"])
     return {
         "requested": len(requested),
         "authoritative": len(authoritative),
@@ -360,6 +385,7 @@ def _checkpoint_authority(side: dict, *, allow_final_only: bool) -> dict:
         "invalid": counts["invalid"],
         "divergent_diagnostic": counts["divergent_diagnostic"],
         "pixels_match": pixels_match,
+        "graph_status": str(side.get("graph_status") or "unknown"),
         "coverage": coverage,
         "exact": coverage in ("verified", "final_only"),
         "final_only": coverage == "final_only",
@@ -893,6 +919,11 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
     # The requirement is the contract when it names cases, otherwise the
     # candidate's own claim.  An empty submission never bypasses either.
     expected = required or claimed_ids
+    # Snapshot primary evidence validity before regression execution adds its
+    # own invalidity.  A broken regression rejects the correction but does not
+    # change whether the candidate's own pixels/checkpoints are exact.
+    primary_evidence_valid = not any(
+        item.get("severity") == "invalid" for item in problems)
     regression_rows: list[dict] = []
     submitted_ids: list[str] = []
     candidate_producer = (after or {}).get("producer") or {}
@@ -1061,16 +1092,27 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
         axes["after"] and axes["after"].get("complete"))
     authoritative_checkpoint_exact = bool(
         axes["after"] and axes["after"].get("authoritative_checkpoint_exact"))
-    observed_checkpoint_equality = bool(
-        axes["after"] and axes["after"].get("checkpoint_pixels_match"))
+    observed_checkpoint_equality = (
+        axes["after"].get("checkpoint_pixels_match")
+        if axes["after"] else None)
     producer_bound = bool(
         axes["after"] and axes["after"].get("checkpoint_producer_bound"))
     if axes["after"] and not axes["after"].get("complete"):
         coverage = axes["after"].get("checkpoint_coverage")
         if coverage == "final_only_unqualified":
-            limitations.append(
-                "the case has no authoritative checkpoints; exactness "
-                "requires an explicit allow_final_only qualification policy")
+            graph_status = str(
+                (axes["after"].get("authoritative_checkpoints") or {}).get(
+                    "graph_status") or "unknown")
+            if graph_status != "complete":
+                limitations.append(
+                    "the case has no authoritative checkpoints and its capture "
+                    "graph is not complete; final-only equivalence requires a "
+                    "complete capture graph")
+            else:
+                limitations.append(
+                    "the case has no authoritative checkpoints; exactness "
+                    "requires an explicit allow_final_only qualification "
+                    "policy")
         elif coverage == "diagnostic_only":
             limitations.append(
                 "all requested checkpoints are diagnostic-only; they cannot "
@@ -1102,7 +1144,7 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
             and set(expected).issubset(
                 {row["case_id"] for row in regression_rows if row["ok"]})))
     pixel_perfect = bool(
-        result == "accepted" and complete_qualification
+        primary_evidence_valid and complete_qualification
         and authoritative_checkpoint_exact and producer_bound
         and recomputed_after is not None
         and recomputed_after["mismatched_pixels"] == 0
@@ -1127,6 +1169,7 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
         "pixel_perfect": pixel_perfect,
         "observed_checkpoint_equality": observed_checkpoint_equality,
         "producer_bound_checkpoint_evidence": producer_bound,
+        "primary_evidence_valid": primary_evidence_valid,
         "authenticated_equivalence": authenticated_equivalence,
         "regression_requirements_met": regression_requirements_met,
         "verdict_semantics": {
@@ -1137,11 +1180,13 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
                 "every authoritative checkpoint recomputed to zero differing "
                 "pixels; independent of the producer receipt"),
             "pixel_perfect": (
-                "exact final image, complete qualification, exact checkpoint "
+                "primary candidate evidence is exact: valid evidence, exact "
+                "final image, complete qualification, exact checkpoint "
                 "coverage and producer-bound required observations"),
             "authenticated_equivalence": (
                 "pixel_perfect and every required exact-match regression "
-                "verified"),
+                "verified; a broken regression can reject the correction "
+                "while the primary image remains pixel_perfect"),
         },
         "improved": improved,
         "case": {

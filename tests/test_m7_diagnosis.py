@@ -106,7 +106,8 @@ def _clear(target, flags=7):
 
 class DiagnosisFixture:
     def __init__(self, root: Path, *, session_id: str = "session-1",
-                 capture_frame_id: int = 7, final_only: bool = False):
+                 capture_frame_id: int = 7, final_only: bool = False,
+                 partial_graph: bool = False):
         self.root = root
         self.session_id = session_id
         self.capture_frame_id = capture_frame_id
@@ -138,6 +139,11 @@ class DiagnosisFixture:
                 _draw(2, 10, [self.asset], program=2),
                 _draw(3, None, [self.rt], program=3),
             ]
+        if partial_graph:
+            for event in self.events:
+                if event.get("kind") == "draw":
+                    event.setdefault("program", {})["uniforms"] = [
+                        {"name": "u_color", "type": "vec4"}]
         self.reference = bytes((index * 7) & 0xFF
                                for index in range(WIDTH * HEIGHT * 4))
         self.write_frame()
