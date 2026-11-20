@@ -445,7 +445,10 @@ class CaseLocatorTests(unittest.TestCase):
                             returncode=0, stdout=output)):
             problem = case_locator._evidence_root_problem(
                 Path("/repo"), Path("/external/evidence"))
+            inside = case_locator._evidence_root_problem(
+                Path("/case"), Path("/repo/linked/evidence"))
         self.assertIsNone(problem)
+        self.assertIn("disposable linked worktree", inside)
 
     def test_symlink_in_source_is_refused_before_copying(self) -> None:
         case = make_case(self.root / "producer" / "case")

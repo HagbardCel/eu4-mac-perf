@@ -377,11 +377,11 @@ def _evidence_root_problem(case_dir: Path, root: Path) -> str | None:
             if current:
                 entries.append(current)
             for index, entry in enumerate(entries):
-                if index == 0 or entry["prunable"]:
-                    continue  # main worktree is durable; prunable is gone
+                if index == 0:
+                    continue  # main worktree is durable
                 tree = entry["path"]
-                if not tree.exists():
-                    continue
+                # A prunable/missing linked worktree path is still unsafe: its
+                # directory can be recreated by a publish and later cleaned.
                 if _same_path(root, tree) or _inside(root, tree):
                     return (f"evidence root {root} is inside a disposable "
                             f"linked worktree ({tree}); use a durable "
