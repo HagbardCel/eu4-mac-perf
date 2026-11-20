@@ -423,7 +423,8 @@ usage error, and `3` is a refusal before the checker ran.
 
 | Operation | Purpose |
 |---|---|
-| `prepare` | validate the sidecar, seed or verify the workspace, record the identity anchor |
+| `prepare` | validate the sidecar, seed or verify the workspace, record the identity anchor, emit startup/goal context |
+| `context` | rebuild the same startup/reconnect facts read-only, without anchoring, probing or locking |
 | `validate` | run the trusted checker under the retry policy and write a receipt |
 | `finalize` | re-run the checker and complete the goal only on a fresh pass |
 | `review-run` | freeze the candidate, run the reviewer in its own worktree, validate the report and write the receipt |
