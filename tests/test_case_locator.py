@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -342,6 +344,281 @@ class CaseLocatorTests(unittest.TestCase):
         self.assertTrue(inventory["truncated"])
         self.assertEqual(inventory["scan_limit"], 1)
 
+
+    def test_verified_lookup_with_an_unreturned_match_is_not_reusable(self):
+        first = make_case(self.root / "one" / "case", capture_frame_id=1)
+        second = make_case(self.root / "two" / "case", capture_frame_id=2)
+        case_locator.publish(first, self.evidence)
+        published = case_locator.publish(second, self.evidence)
+        target = (Path(published["locator_path"]).parents[1]
+                  / published["relative_path"])
+        (target / "report.json").write_bytes(b"corrupt")
+        located = case_locator.locate(
+            self.evidence, session_id="session-1", limit=1, verify=True)
+        self.assertEqual(located["state"], "truncated_unverified", located)
+        self.assertFalse(located["safe_to_reuse"])
+        self.assertFalse(located["verified_all"])
+        self.assertEqual(located["state_scope"], "returned_matches_only")
+        self.assertEqual(located["verification_scope"],
+                         "verified_returned_only")
+        self.assertEqual(located["verified_matches"], 1)
+
+    def test_fully_verified_single_match_is_reusable(self):
+        case = make_case(self.root / "producer" / "case")
+        case_locator.publish(case, self.evidence)
+        located = case_locator.locate(
+            self.evidence, session_id="session-1", limit=10, verify=True)
+        self.assertEqual(located["state"], "available", located)
+        self.assertTrue(located["verified_all"])
+        self.assertTrue(located["safe_to_reuse"])
+        self.assertEqual(located["verified_matches"], 1)
+        self.assertEqual(located["verification_scope"],
+                         "verified_all_matched")
+        self.assertEqual(located["state_scope"], "all_matched")
+        self.assertTrue(located["matches"][0]["verified"])
+
+    def test_metadata_only_lookup_is_explicitly_unverified(self):
+        case = make_case(self.root / "producer" / "case")
+        published = case_locator.publish(case, self.evidence)
+        target = (Path(published["locator_path"]).parents[1]
+                  / published["relative_path"])
+        (target / "report.json").write_bytes(b"corrupt")
+        located = case_locator.locate(
+            self.evidence, session_id="session-1", limit=10, verify=False)
+        # Metadata can locate the package even when its bytes are corrupt...
+        self.assertEqual(located["state"], "available", located)
+        # ...but it must never present that as verified or reusable.
+        self.assertFalse(located["verified_all"])
+        self.assertFalse(located["safe_to_reuse"])
+        self.assertEqual(located["verified_matches"], 0)
+        self.assertEqual(located["verification_scope"], "metadata_only")
+        self.assertEqual(located["state_scope"], "metadata_only")
+        self.assertFalse(located["matches"][0]["verified"])
+        self.assertEqual(located["matches"][0]["current_verification"],
+                         "not_run")
+
+    def test_corrupt_evidence_is_located_unverified_but_rejected_when_verified(self):
+        case = make_case(self.root / "producer" / "case")
+        published = case_locator.publish(case, self.evidence)
+        target = (Path(published["locator_path"]).parents[1]
+                  / published["relative_path"])
+        (target / "report.json").write_bytes(b"corrupt")
+        verified = case_locator.locate(
+            self.evidence, session_id="session-1", limit=10, verify=True)
+        self.assertEqual(verified["state"], "digest_mismatch", verified)
+        self.assertFalse(verified["verified_all"])
+        self.assertFalse(verified["safe_to_reuse"])
+        self.assertEqual(verified["verification_scope"],
+                         "verified_returned_only")
+        self.assertFalse(verified["matches"][0]["verified"])
+        self.assertEqual(verified["matches"][0]["current_verification"],
+                         "failed")
+
+    def test_truncated_and_offset_verified_lookup_cannot_hide_corruption(self):
+        for index in range(3):
+            case = make_case(self.root / f"case-{index}" / "case",
+                             capture_frame_id=index + 1)
+            published = case_locator.publish(case, self.evidence)
+            if index == 1:
+                target = (Path(published["locator_path"]).parents[1]
+                          / published["relative_path"])
+                (target / "report.json").write_bytes(b"corrupt")
+        first = case_locator.locate(
+            self.evidence, session_id="session-1", limit=1, offset=0,
+            verify=True)
+        self.assertEqual(first["state"], "truncated_unverified", first)
+        self.assertFalse(first["verified_all"])
+        self.assertFalse(first["safe_to_reuse"])
+        self.assertEqual(first["verification_scope"],
+                         "verified_returned_only")
+        # A page that starts after the corrupt match must not be presented as
+        # a safe reuse of the whole matches either.
+        last = case_locator.locate(
+            self.evidence, session_id="session-1", limit=1, offset=2,
+            verify=True)
+        self.assertEqual(last["state"], "truncated_unverified", last)
+        self.assertFalse(last["verified_all"])
+        self.assertFalse(last["safe_to_reuse"])
+        # Returning the corrupt match itself must expose the failure.
+        middle = case_locator.locate(
+            self.evidence, session_id="session-1", limit=1, offset=1,
+            verify=True)
+        self.assertEqual(middle["state"], "digest_mismatch", middle)
+        self.assertFalse(middle["safe_to_reuse"])
+        all_matches = case_locator.locate(
+            self.evidence, session_id="session-1", limit=10, verify=True)
+        self.assertEqual(all_matches["state"], "digest_mismatch", all_matches)
+        self.assertFalse(all_matches["verified_all"])
+        self.assertFalse(all_matches["safe_to_reuse"])
+        # Metadata-only pagination also stays explicitly unverified.
+        metadata = case_locator.locate(
+            self.evidence, session_id="session-1", limit=1, offset=2,
+            verify=False)
+        self.assertFalse(metadata["verified_all"])
+        self.assertFalse(metadata["safe_to_reuse"])
+        self.assertEqual(metadata["verification_scope"], "metadata_only")
+
+    def test_truncated_verified_lookup_exits_non_zero(self):
+        for index in range(2):
+            case = make_case(self.root / f"case-{index}" / "case",
+                             capture_frame_id=index + 1)
+            case_locator.publish(case, self.evidence)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            status = case_locator.main([
+                "locate", "--root", str(self.evidence),
+                "--session-id", "session-1"])
+        self.assertEqual(status, 2)
+        value = json.loads(output.getvalue())
+        self.assertEqual(value["state"], "truncated_unverified")
+        self.assertFalse(value["safe_to_reuse"])
+
+    def test_invalid_locator_prevents_claiming_safe_reuse(self):
+        case = make_case(self.root / "producer" / "case")
+        case_locator.publish(case, self.evidence)
+        (self.evidence / "locators" / "broken.json").write_text(
+            "{not json", encoding="utf-8")
+        located = case_locator.locate(
+            self.evidence, session_id="session-1", limit=10, verify=True)
+        self.assertEqual(located["matches"][0]["state"], "available")
+        self.assertEqual(located["invalid_locator_count"], 1)
+        self.assertFalse(located["verified_all"])
+        self.assertFalse(located["safe_to_reuse"])
+
+    def test_inventory_pages_with_offset_and_limit(self):
+        for index in range(3):
+            case = make_case(self.root / f"case-{index}" / "case",
+                             capture_frame_id=index + 1)
+            case_locator.publish(case, self.evidence)
+        page = case_locator.inventory(self.evidence, offset=1, limit=1)
+        self.assertEqual(page["total"], 3)
+        self.assertEqual(page["returned"], 1)
+        self.assertEqual(page["offset"], 1)
+        self.assertTrue(page["truncated"])
+        self.assertIsNotNone(page["next_offset"])
+        self.assertFalse(page["verified_all"])
+        self.assertEqual(page["verification_scope"], "metadata_only")
+        # Inventory is a summary, not a selected reusable lookup; it must not
+        # expose an implicit safe flag.
+        self.assertNotIn("safe_to_reuse", page)
+
+    def test_inventory_pagination_never_upgrades_verification_scope(self):
+        for index in range(3):
+            case = make_case(self.root / f"case-{index}" / "case",
+                             capture_frame_id=index + 1)
+            case_locator.publish(case, self.evidence)
+        page = case_locator.inventory(
+            self.evidence, verify=True, offset=0, limit=1)
+        self.assertTrue(page["verified"])
+        self.assertFalse(page["verified_all"])
+        self.assertEqual(page["verification_scope"],
+                         "verified_returned_only")
+        self.assertEqual(page["verified_matches"], 1)
+        # A positive offset leaves earlier locators unverified even when the
+        # page extends to the end of the scan.
+        offset = case_locator.inventory(self.evidence, verify=True, offset=1)
+        self.assertFalse(offset["verified_all"])
+        self.assertTrue(offset["page_truncated"])
+        self.assertEqual(offset["verification_scope"],
+                         "verified_returned_only")
+        full = case_locator.inventory(self.evidence, verify=True)
+        self.assertTrue(full["verified_all"])
+        self.assertEqual(full["verification_scope"],
+                         "verified_all_matched")
+        self.assertNotIn("safe_to_reuse", full)
+
+    def test_byte_change_between_inventory_and_copy_is_refused(self):
+        case = make_case(self.root / "producer" / "case")
+        real = shutil.copytree
+        changed = {"done": False}
+
+        def copy_after_source_change(source, destination, *args, **kwargs):
+            if not changed["done"] and Path(source).resolve() == case.resolve():
+                changed["done"] = True
+                victim = Path(source) / "report.json"
+                victim.write_bytes(victim.read_bytes() + b"foreign")
+            return real(source, destination, *args, **kwargs)
+
+        with mock.patch("automation.case_locator.shutil.copytree",
+                        side_effect=copy_after_source_change):
+            with self.assertRaises(case_locator.CaseLocatorError) as raised:
+                case_locator.publish(case, self.evidence)
+        self.assertEqual(raised.exception.kind, "copy_changed")
+        self.assertFalse(any((self.evidence / "cases").glob("*/case")))
+        self.assertFalse(list((self.evidence / "locators").glob("*.json")))
+
+    def test_file_injection_between_inventory_and_copy_is_refused(self):
+        case = make_case(self.root / "producer" / "case")
+        real = shutil.copytree
+
+        def copy_with_extra_source_file(source, destination, *args, **kwargs):
+            if Path(source).resolve() == case.resolve():
+                (Path(source) / "injected.bin").write_bytes(b"foreign")
+            return real(source, destination, *args, **kwargs)
+
+        with mock.patch("automation.case_locator.shutil.copytree",
+                        side_effect=copy_with_extra_source_file):
+            with self.assertRaises(case_locator.CaseLocatorError) as raised:
+                case_locator.publish(case, self.evidence)
+        self.assertEqual(raised.exception.kind, "copy_changed")
+        self.assertFalse(any((self.evidence / "cases").glob("*/case")))
+        self.assertFalse(list((self.evidence / "locators").glob("*.json")))
+
+    def test_symlink_injection_between_inventory_and_copy_is_refused(self):
+        case = make_case(self.root / "producer" / "case")
+        outside = self.root / "outside.bin"
+        outside.write_bytes(b"outside bytes")
+        real = shutil.copytree
+
+        def copy_with_swapped_source(source, destination, *args, **kwargs):
+            if Path(source).resolve() == case.resolve():
+                victim = Path(source) / "report.json"
+                victim.unlink()
+                os.symlink(outside, victim)
+            return real(source, destination, *args, **kwargs)
+
+        with mock.patch("automation.case_locator.shutil.copytree",
+                        side_effect=copy_with_swapped_source):
+            with self.assertRaises(case_locator.CaseLocatorError) as raised:
+                case_locator.publish(case, self.evidence)
+        self.assertEqual(raised.exception.kind, "symlink_source")
+        self.assertFalse(any((self.evidence / "cases").glob("*/case")))
+        self.assertFalse(list((self.evidence / "locators").glob("*.json")))
+
+    def test_copy_window_directory_symlink_is_refused(self):
+        case = make_case(self.root / "producer" / "case")
+        foreign = self.root / "foreign"
+        foreign.mkdir()
+        (foreign / "payload.bin").write_bytes(b"foreign")
+        real = shutil.copytree
+
+        def copy_then_swap(source, destination, *args, **kwargs):
+            result = real(source, destination, *args, **kwargs)
+            if Path(destination).parent.name.startswith(".publish-"):
+                shaders = Path(destination) / "shaders"
+                shutil.rmtree(shaders)
+                os.symlink(foreign, shaders)
+            return result
+
+        with mock.patch("automation.case_locator.shutil.copytree",
+                        side_effect=copy_then_swap):
+            with self.assertRaises(case_locator.CaseLocatorError) as raised:
+                case_locator.publish(case, self.evidence)
+        self.assertEqual(raised.exception.kind, "symlink_source")
+        self.assertFalse(any((self.evidence / "cases").glob("*/case")))
+
+    def test_republish_rejects_a_symlinked_published_payload(self):
+        case = make_case(self.root / "producer" / "case")
+        published = case_locator.publish(case, self.evidence)
+        target = (Path(published["locator_path"]).parents[1]
+                  / published["relative_path"])
+        victim = target / "report.json"
+        victim.unlink()
+        os.symlink(case / "report.json", victim)
+        with self.assertRaises(case_locator.CaseLocatorError) as raised:
+            case_locator.publish(case, self.evidence)
+        self.assertEqual(raised.exception.kind, "symlink_source")
+
     def test_size_budget_and_free_space_are_preflighted(self) -> None:
         case = make_case(self.root / "producer" / "case")
         with self.assertRaises(case_locator.CaseLocatorError) as raised:
@@ -460,6 +737,24 @@ class CaseLocatorTests(unittest.TestCase):
         self.assertEqual(raised.exception.kind, "symlink_source")
         self.assertFalse((self.evidence / "cases").exists())
         self.assertFalse((self.evidence / "locators").exists())
+
+    def test_inventory_hash_does_not_follow_a_swapped_symlink(self) -> None:
+        case = make_case(self.root / "producer" / "case")
+        outside = self.root / "outside.bin"
+        outside.write_bytes(b"outside bytes")
+        real = case_locator._sha_nofollow
+
+        def swap_then_hash(path, **kwargs):
+            if Path(path).name == "report.json":
+                Path(path).unlink()
+                os.symlink(outside, path)
+            return real(path, **kwargs)
+
+        with mock.patch("automation.case_locator._sha_nofollow",
+                        side_effect=swap_then_hash):
+            with self.assertRaises(case_locator.CaseLocatorError) as raised:
+                case_locator._tree_inventory(case)
+        self.assertEqual(raised.exception.kind, "symlink_source")
 
     def test_symlink_created_during_copy_is_refused(self) -> None:
         case = make_case(self.root / "producer" / "case")
