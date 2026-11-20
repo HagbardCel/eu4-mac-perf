@@ -6,14 +6,19 @@ worktree is gone.  This module keeps a small operator-owned locator document
 per published case under an explicit evidence root:
 
 * the case bytes are copied once to ``<root>/cases/<key>/case``;
-* the copy is verified before it is published by atomic rename;
+* the copy is verified before publication by atomic rename;
 * ``<root>/locators/<key>.json`` records the capture identity, manifest digest,
-  relative path, verification state and limitations;
+  relative path, recorded verification, limitations and size;
 * lookup is bounded and read-only and reports ``unknown`` for an absent locator
   rather than claiming that evidence was deleted.
 
-It deliberately does not become a general archive service: callers name the
-root, publication is idempotent per key, and no historical artifact is moved.
+Sequence packages resolve the diagnosed target frame through
+``sequence.json`` (``frames/<index>/frame-seal.json``), not the single-frame
+``capture/frame-seal.json`` layout.
+
+Inventory and discovery are metadata-only: they read locator documents and
+check payload existence, but do not hash the full package.  Full verification
+is opt-in for a selected case.
 """
 
 from __future__ import annotations
@@ -35,7 +40,9 @@ SCHEMA = "gfx-case-locator/v1"
 LOCATOR_DIR = "locators"
 CASES_DIR = "cases"
 MAX_LOCATORS = 5000
-_KEY = re.compile(r"^[A-Za-z0-9._-]{1,180}$")
+DEFAULT_SIZE_BUDGET = 4 * 1024 * 1024 * 1024
+DEFAULT_MIN_FREE = 64 * 1024 * 1024
+DEFAULT_LIMIT = 20
 
 
 class CaseLocatorError(RuntimeError):
@@ -68,23 +75,68 @@ def _now() -> str:
     return dt.datetime.now(tz=dt.timezone.utc).isoformat()
 
 
+def _tree_stats(root: Path) -> tuple[int, int]:
+    """Return (regular-file bytes, file count) without following escapes."""
+    total = 0
+    count = 0
+    root = Path(root)
+    if not root.is_dir():
+        return 0, 0
+    for directory, _subdirs, names in os.walk(root):
+        for name in names:
+            path = Path(directory) / name
+            try:
+                if not path.is_file() or path.is_symlink():
+                    continue
+                total += path.stat().st_size
+                count += 1
+            except OSError:
+                continue
+    return total, count
+
+
+def _existing_ancestor(path: Path) -> Path:
+    current = Path(path)
+    while not current.exists() and current != current.parent:
+        current = current.parent
+    return current
+
+
+def _identity_conflict(expected: dict, actual: dict) -> str | None:
+    """Compare the complete publication identity, not just verification."""
+    for key in ("case_id", "schema", "session_id", "capture_frame_id",
+                "event_stream_sha256", "seal_sha256", "manifest_sha256"):
+        if str(expected.get(key)) != str(actual.get(key)):
+            return (f"{key} differs: requested {expected.get(key)!r}, "
+                    f"published {actual.get(key)!r}")
+    return None
+
+
 def case_identity(case_dir: Path | str) -> dict:
     """Capture and manifest identity of one packaged case.
 
-    ``seal_sha256`` is the digest of the frame seal file, which is the stable
-    publication key.  A legacy package without a seal keeps its manifest
-    identity and an explicit limitation.
+    ``seal_sha256`` is the digest of the authoritative seal file, which is the
+    stable publication key.  A sequence case resolves its target frame seal
+    through the shared ``gfx_replay_case`` helper.  A legacy package without a
+    seal keeps its manifest identity and an explicit limitation.
     """
-    case_dir = Path(case_dir)
+    case_dir = Path(case_dir).resolve()
     manifest = _json(case_dir / "case.json")
-    seal_path = case_dir / "capture" / "frame-seal.json"
-    seal = _json(seal_path) if seal_path.is_file() else {}
+    seal_path = gfx_replay_case.case_capture_seal_path(case_dir, manifest)
+    seal = _json(seal_path) if seal_path is not None else {}
+    seal_file = None
+    if seal_path is not None:
+        try:
+            seal_file = seal_path.relative_to(case_dir).as_posix()
+        except ValueError:
+            seal_file = None
     return {
         "case_id": manifest.get("case_id"),
         "session_id": seal.get("session_id"),
         "capture_frame_id": seal.get("capture_frame_id"),
         "event_stream_sha256": seal.get("event_stream_sha256"),
-        "seal_sha256": _sha(seal_path),
+        "seal_sha256": _sha(seal_path) if seal_path is not None else None,
+        "seal_file": seal_file,
         "manifest_sha256": _sha(case_dir / "case.json"),
         "schema": manifest.get("schema"),
     }
@@ -111,6 +163,9 @@ def _limitations(identity: dict, verification: dict) -> list[str]:
         limitations.append(
             "legacy case has no frame seal; the locator is keyed by the case "
             "manifest digest only")
+    elif identity.get("seal_file") not in (None, "capture/frame-seal.json"):
+        limitations.append(
+            f"sequence case seal resolved from {identity.get('seal_file')}")
     producer = (verification.get("producer_identity") or {}).get("status")
     if producer == "legacy_missing":
         limitations.append(
@@ -146,23 +201,88 @@ def _verify(case_dir: Path) -> dict:
                 "problems": [f"{type(exc).__name__}: {exc}"]}
 
 
+def _fsync_directory(directory: Path) -> None:
+    try:
+        descriptor = os.open(directory, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
 def _write_locator(root: Path, key: str, value: dict) -> Path:
+    """Write one locator through an exclusively created unique temp file."""
     directory = root / LOCATOR_DIR
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{key}.json"
-    partial = path.with_name(path.name + ".partial")
-    partial.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n",
-                       encoding="utf-8")
-    os.replace(partial, path)
+    temporary = directory / f".{key}.{uuid.uuid4().hex}.tmp"
+    payload = json.dumps(value, indent=2, sort_keys=True) + "\n"
+    descriptor = os.open(temporary,
+                         os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.replace(temporary, path)
+            _fsync_directory(directory)
+        except OSError as exc:
+            raise CaseLocatorError(
+                "locator_write",
+                f"could not publish locator {path}: {exc}") from exc
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
     return path
 
 
+def _preflight_space(root: Path, source_bytes: int, *,
+                     size_budget: int, min_free: int) -> None:
+    if source_bytes > size_budget:
+        raise CaseLocatorError(
+            "size_budget",
+            f"case is {source_bytes} bytes but the publication budget is "
+            f"{size_budget} bytes; publish the smaller diagnostic package or "
+            "raise --size-budget explicitly")
+    usage = shutil.disk_usage(_existing_ancestor(root))
+    free = usage.free if hasattr(usage, "free") else int(usage[2])
+    if free < source_bytes + max(0, min_free):
+        raise CaseLocatorError(
+            "insufficient_space",
+            f"case needs {source_bytes} bytes plus {max(0, min_free)} free "
+            f"bytes but {_existing_ancestor(root)} has {free} bytes free; "
+            "free space or choose another --root; the source is unchanged")
+
+
+def _adopt_existing(target: Path, identity: dict, key: str) -> dict:
+    """Verify and identity-check an already published copy."""
+    existing = _verify(target)
+    if existing.get("ok") is not True:
+        raise CaseLocatorError(
+            "published_copy_invalid",
+            "; ".join(str(item) for item in
+                      (existing.get("problems") or ["unknown"])[:8]))
+    conflict = _identity_conflict(identity, case_identity(target))
+    if conflict is not None:
+        raise CaseLocatorError("locator_conflict", f"{key}: {conflict}")
+    return existing
+
+
 def publish(case_dir: Path | str, evidence_root: Path | str, *,
-            originating_run: str | None = None) -> dict:
+            originating_run: str | None = None,
+            size_budget: int = DEFAULT_SIZE_BUDGET,
+            min_free_bytes: int = DEFAULT_MIN_FREE) -> dict:
     """Copy and verify one case, then atomically publish its locator.
 
     Re-publishing the same key verifies the existing copy and reuses it.  A
-    different manifest under the same seal is a conflict, never an overwrite.
+    different identity under the same key is a conflict, never an overwrite.
     An interrupted copy leaves the source usable and no locator behind.
     """
     case_dir = Path(case_dir).expanduser().resolve()
@@ -178,50 +298,52 @@ def publish(case_dir: Path | str, evidence_root: Path | str, *,
     identity = case_identity(case_dir)
     key = locator_key(identity)
     cases = root / CASES_DIR
-    cases.mkdir(parents=True, exist_ok=True)
     target = cases / key / "case"
     reused = target.is_dir()
+    source_bytes = 0
+    source_files = 0
     if reused:
-        existing = _verify(target)
-        if existing.get("ok") is not True:
-            raise CaseLocatorError(
-                "published_copy_invalid",
-                "; ".join(str(item) for item in
-                          (existing.get("problems") or ["unknown"])[:8]))
-        published_identity = case_identity(target)
-        if (published_identity.get("manifest_sha256")
-                != identity.get("manifest_sha256")):
-            raise CaseLocatorError(
-                "locator_conflict",
-                f"{key} already names different case bytes")
+        verification_now = _adopt_existing(target, identity, key)
     else:
-        staging_parent = cases / f".publish-{key}-{os.getpid()}-{uuid.uuid4().hex}"
+        source_bytes, source_files = _tree_stats(case_dir)
+        _preflight_space(root, source_bytes,
+                         size_budget=size_budget, min_free=min_free_bytes)
+        cases.mkdir(parents=True, exist_ok=True)
+        staging_parent = (
+            cases / f".publish-{key}-{os.getpid()}-{uuid.uuid4().hex}")
         staging = staging_parent / "case"
         try:
-            shutil.copytree(case_dir, staging)
+            try:
+                shutil.copytree(case_dir, staging)
+            except OSError as exc:
+                raise CaseLocatorError(
+                    "copy_failed",
+                    f"could not copy {case_dir} to staging: {exc}; the source "
+                    "is unchanged") from exc
             copied = _verify(staging)
             if copied.get("ok") is not True:
                 raise CaseLocatorError(
                     "copied_case_invalid",
                     "; ".join(str(item) for item in
                               (copied.get("problems") or ["unknown"])[:8]))
+            staging_identity = case_identity(staging)
+            conflict = _identity_conflict(identity, staging_identity)
+            if conflict is not None:
+                raise CaseLocatorError(
+                    "publish_identity_changed",
+                    f"copied case identity changed: {conflict}")
             target.parent.mkdir(parents=True, exist_ok=True)
             try:
                 os.rename(staging, target)
             except OSError as exc:
                 # A concurrent publisher may have won the same key.  Verify
-                # the winner instead of reporting a spurious failure.
+                # both its bytes and its complete identity before adopting it.
                 if not target.is_dir():
                     raise CaseLocatorError("publish_race", str(exc)) from exc
                 reused = True
+            verification_now = _adopt_existing(target, identity, key)
         finally:
             shutil.rmtree(staging_parent, ignore_errors=True)
-    verification_now = _verify(target)
-    if verification_now.get("ok") is not True:
-        raise CaseLocatorError(
-            "published_copy_invalid",
-            "; ".join(str(item) for item in
-                      (verification_now.get("problems") or ["unknown"])[:8]))
     locator = {
         "schema": SCHEMA,
         "key": key,
@@ -233,65 +355,132 @@ def publish(case_dir: Path | str, evidence_root: Path | str, *,
         "originating_run": originating_run,
         "published_utc": _now(),
         "reused": reused,
+        "size_bytes": source_bytes,
+        "files": source_files,
     }
     path = _write_locator(root, key, locator)
     locator["locator_path"] = str(path)
     return locator
 
 
-def _locators(root: Path) -> list[dict]:
+def _locator_scan(root: Path) -> tuple[list[dict], bool]:
+    """Read locator documents, reporting explicit scan-limit exhaustion."""
     directory = root / LOCATOR_DIR
     if not directory.is_dir():
-        return []
+        return [], False
+    paths = sorted(directory.glob("*.json"))
+    truncated = len(paths) > MAX_LOCATORS
     found: list[dict] = []
-    for path in sorted(directory.glob("*.json"))[:MAX_LOCATORS]:
+    for path in paths[:MAX_LOCATORS]:
         value = _json(path)
         if value.get("schema") != SCHEMA:
             continue
         value["locator_path"] = str(path)
         found.append(value)
-    return found
+    return found, truncated
 
 
-def _resolve_match(root: Path, locator: dict) -> dict:
+def _target_path(root: Path, locator: dict) -> tuple[Path | None, str | None]:
     relative = str(locator.get("relative_path") or "")
+    if not relative:
+        return None, "locator has no relative_path"
     target = (root / relative).resolve()
     try:
         target.relative_to(root)
     except ValueError:
-        return dict(locator, state="invalid_path",
-                    detail="locator path escapes the evidence root")
+        return None, "locator path escapes the evidence root"
+    return target, None
+
+
+def _identity_view(locator: dict, row: dict) -> dict:
+    """Flatten the capture identity for discovery consumers."""
+    identity = locator.get("identity") or {}
+    for key in ("session_id", "capture_frame_id", "seal_sha256",
+                "event_stream_sha256", "manifest_sha256", "seal_file"):
+        row.setdefault(key, identity.get(key))
+    row.setdefault("read_only", True)
+    return row
+
+
+def _locator_metadata(root: Path, locator: dict) -> dict:
+    """Metadata-only state: containment and payload existence, no hashing."""
+    target, problem = _target_path(root, locator)
+    if problem is not None or target is None:
+        row = dict(locator, state="invalid_path", detail=problem,
+                   resolved_path=None, verified=False)
+    else:
+        state = "available" if target.is_dir() else "missing_payload"
+        row = dict(locator, state=state, resolved_path=str(target),
+                   verified=False,
+                   verification=locator.get("verification"))
+    return _identity_view(locator, row)
+
+
+def _resolve_match(root: Path, locator: dict) -> dict:
+    """Full verification of one selected case."""
+    target, problem = _target_path(root, locator)
+    if problem is not None or target is None:
+        return _identity_view(locator, dict(
+            locator, state="invalid_path", detail=problem,
+            resolved_path=None, verified=False))
     if not target.is_dir():
-        return dict(locator, state="missing_payload", resolved_path=str(target))
+        return _identity_view(locator, dict(
+            locator, state="missing_payload", resolved_path=str(target),
+            verified=False))
     verification = _verify(target)
     identity = case_identity(target)
     expected = locator.get("identity") or {}
     if verification.get("ok") is not True:
-        return dict(locator, state="digest_mismatch", resolved_path=str(target),
-                    verification=_verification_summary(verification),
-                    detail="; ".join(str(item) for item in
-                                     (verification.get("problems") or [])[:4]))
-    if (expected.get("manifest_sha256")
-            and identity.get("manifest_sha256")
-            != expected.get("manifest_sha256")):
-        return dict(locator, state="digest_mismatch", resolved_path=str(target),
-                    detail="case manifest no longer matches the locator")
-    if (expected.get("seal_sha256")
-            and identity.get("seal_sha256") != expected.get("seal_sha256")):
-        return dict(locator, state="digest_mismatch", resolved_path=str(target),
-                    detail="frame seal no longer matches the locator")
-    return dict(locator, state="available", resolved_path=str(target),
-                verification=_verification_summary(verification))
+        return _identity_view(locator, dict(
+            locator, state="digest_mismatch", resolved_path=str(target),
+            verified=True,
+            verification=_verification_summary(verification),
+            detail="; ".join(str(item) for item in
+                             (verification.get("problems") or [])[:4])))
+    conflict = _identity_conflict(expected, identity)
+    if conflict is not None:
+        return _identity_view(locator, dict(
+            locator, state="digest_mismatch", resolved_path=str(target),
+            verified=True,
+            verification=_verification_summary(verification),
+            detail=conflict))
+    return _identity_view(locator, dict(
+        locator, state="available", resolved_path=str(target),
+        verified=True,
+        verification=_verification_summary(verification)))
+
+
+def _matches(locator: dict, *, session_id: str | None,
+             capture_frame_id: int | None, seal_sha256: str | None,
+             case_id: str | None, key: str | None) -> bool:
+    identity = locator.get("identity") or {}
+    if key is not None and str(locator.get("key")) != str(key):
+        return False
+    if session_id is not None and str(identity.get("session_id")) != str(
+            session_id):
+        return False
+    if capture_frame_id is not None and str(
+            identity.get("capture_frame_id")) != str(capture_frame_id):
+        return False
+    if seal_sha256 is not None and identity.get("seal_sha256") != seal_sha256:
+        return False
+    if case_id is not None and str(locator.get("case_id")) != str(case_id):
+        return False
+    return True
 
 
 def locate(evidence_root: Path | str, *, session_id: str | None = None,
            capture_frame_id: int | None = None, seal_sha256: str | None = None,
-           case_id: str | None = None) -> dict:
-    """Resolve one published case without searching the filesystem.
+           case_id: str | None = None, key: str | None = None,
+           limit: int = DEFAULT_LIMIT, verify: bool = True) -> dict:
+    """Resolve a bounded, selected set of published cases.
 
-    States are ``available``, ``missing_payload`` (locator but no bytes),
-    ``digest_mismatch`` (bytes changed), ``root_unavailable`` and ``unknown``
-    (no matching locator; never equated with deletion).
+    At least one identity filter is required so a lookup cannot walk and
+    re-verify an entire large archive.  States are ``available``,
+    ``missing_payload`` (locator but no bytes), ``digest_mismatch`` (bytes or
+    identity changed), ``root_unavailable``, ``refused_unbounded`` and
+    ``unknown``/``unknown_truncated`` (no matching locator; never equated with
+    deletion).
     """
     root = Path(evidence_root).expanduser().resolve()
     query = {
@@ -299,25 +488,30 @@ def locate(evidence_root: Path | str, *, session_id: str | None = None,
         "capture_frame_id": capture_frame_id,
         "seal_sha256": seal_sha256,
         "case_id": case_id,
+        "key": key,
     }
+    if all(value is None for value in query.values()):
+        return {"schema": SCHEMA, "root": str(root),
+                "state": "refused_unbounded", "query": query, "matches": [],
+                "detail": "provide at least one identity filter "
+                          "(session/frame/seal/case/key)",
+                "read_only": True}
+    if limit < 1:
+        raise CaseLocatorError("limit", "limit must be >= 1")
     if not root.is_dir():
         return {"schema": SCHEMA, "root": str(root), "state": "root_unavailable",
-                "query": query, "matches": []}
-    matches = []
-    for locator in _locators(root):
-        identity = locator.get("identity") or {}
-        if (session_id is not None
-                and str(identity.get("session_id")) != str(session_id)):
+                "query": query, "matches": [], "read_only": True}
+    locators, scan_truncated = _locator_scan(root)
+    matches: list[dict] = []
+    for locator in locators:
+        if not _matches(locator, session_id=session_id,
+                        capture_frame_id=capture_frame_id,
+                        seal_sha256=seal_sha256, case_id=case_id, key=key):
             continue
-        if (capture_frame_id is not None
-                and str(identity.get("capture_frame_id"))
-                != str(capture_frame_id)):
-            continue
-        if seal_sha256 is not None and identity.get("seal_sha256") != seal_sha256:
-            continue
-        if case_id is not None and str(locator.get("case_id")) != str(case_id):
-            continue
-        matches.append(_resolve_match(root, locator))
+        matches.append(_resolve_match(root, locator) if verify
+                       else _locator_metadata(root, locator))
+        if len(matches) >= limit:
+            break
     state = "unknown"
     if matches:
         for candidate in ("available", "missing_payload", "digest_mismatch",
@@ -325,67 +519,47 @@ def locate(evidence_root: Path | str, *, session_id: str | None = None,
             if any(item["state"] == candidate for item in matches):
                 state = candidate
                 break
+    elif scan_truncated:
+        state = "unknown_truncated"
     return {
         "schema": SCHEMA,
         "root": str(root),
         "state": state,
         "query": query,
         "matches": matches,
+        "returned": len(matches),
+        "limit": limit,
+        "scan_truncated": scan_truncated,
+        "truncated": scan_truncated or len(matches) >= limit,
         "read_only": True,
     }
 
 
 def summaries(evidence_root: Path | str) -> list[dict]:
-    """Locator metadata for discovery; never hashes the full case payload.
-
-    A discovery pass must stay bounded, so it reports the state recorded at
-    publication plus whether the payload directory still exists.  ``locate``
-    re-verifies bytes when a caller is about to use the case.
-    """
+    """Locator metadata for discovery; never hashes the full case payload."""
     root = Path(evidence_root).expanduser().resolve()
     if not root.is_dir():
         return []
-    rows: list[dict] = []
-    for locator in _locators(root):
-        relative = str(locator.get("relative_path") or "")
-        target = (root / relative).resolve()
-        try:
-            target.relative_to(root)
-            inside = True
-        except ValueError:
-            inside = False
-        state = ("available" if inside and target.is_dir()
-                 else "invalid_path" if not inside else "missing_payload")
-        identity = locator.get("identity") or {}
-        rows.append({
-            "kind": "case_locator",
-            "key": locator.get("key"),
-            "case_id": locator.get("case_id"),
-            "session_id": identity.get("session_id"),
-            "capture_frame_id": identity.get("capture_frame_id"),
-            "event_stream_sha256": identity.get("event_stream_sha256"),
-            "seal_sha256": identity.get("seal_sha256"),
-            "manifest_sha256": identity.get("manifest_sha256"),
-            "relative_path": relative,
-            "resolved_path": str(target),
-            "state": state,
-            "verification": locator.get("verification"),
-            "limitations": locator.get("limitations") or [],
-            "originating_run": locator.get("originating_run"),
-            "published_utc": locator.get("published_utc"),
-            "locator_path": locator.get("locator_path"),
-            "read_only": True,
-        })
-    return rows
+    locators, _truncated = _locator_scan(root)
+    return [_locator_metadata(root, locator) for locator in locators]
 
 
-def inventory(evidence_root: Path | str) -> dict:
-    """Bounded summary of published locators under one root."""
+def inventory(evidence_root: Path | str, *, verify: bool = False) -> dict:
+    """Bounded summary of published locators under one root.
+
+    Metadata-only by default.  ``verify=True`` hashes and re-verifies each
+    selected package and is intended for an explicit operator check, not a
+    discovery loop.
+    """
     root = Path(evidence_root).expanduser().resolve()
     if not root.is_dir():
         return {"schema": SCHEMA, "root": str(root),
-                "state": "root_unavailable", "locators": []}
-    rows = [_resolve_match(root, locator) for locator in _locators(root)]
+                "state": "root_unavailable", "locators": [],
+                "counts": {}, "truncated": False, "read_only": True}
+    locators, truncated = _locator_scan(root)
+    rows = [(_resolve_match(root, locator) if verify
+             else _locator_metadata(root, locator))
+            for locator in locators]
     counts: dict[str, int] = {}
     for row in rows:
         counts[row["state"]] = counts.get(row["state"], 0) + 1
@@ -395,6 +569,9 @@ def inventory(evidence_root: Path | str) -> dict:
         "state": "available" if rows else "empty",
         "counts": counts,
         "locators": rows,
+        "verified": verify,
+        "truncated": truncated,
+        "scan_limit": MAX_LOCATORS,
         "read_only": True,
     }
 
@@ -406,14 +583,22 @@ def _parser() -> argparse.ArgumentParser:
     publish_parser.add_argument("--case", required=True, type=Path)
     publish_parser.add_argument("--root", required=True, type=Path)
     publish_parser.add_argument("--originating-run", default=None)
+    publish_parser.add_argument("--size-budget", type=int,
+                                default=DEFAULT_SIZE_BUDGET)
     locate_parser = sub.add_parser("locate")
     locate_parser.add_argument("--root", required=True, type=Path)
     locate_parser.add_argument("--session-id", default=None)
     locate_parser.add_argument("--capture-frame-id", type=int, default=None)
     locate_parser.add_argument("--seal-sha256", default=None)
     locate_parser.add_argument("--case-id", default=None)
+    locate_parser.add_argument("--key", default=None)
+    locate_parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
+    locate_parser.add_argument("--no-verify", action="store_true",
+                               help="metadata-only selected lookup")
     inventory_parser = sub.add_parser("inventory")
     inventory_parser.add_argument("--root", required=True, type=Path)
+    inventory_parser.add_argument("--verify", action="store_true",
+                                  help="hash and fully verify every locator")
     return parser
 
 
@@ -422,16 +607,19 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.operation == "publish":
             value = publish(args.case, args.root,
-                            originating_run=args.originating_run)
+                            originating_run=args.originating_run,
+                            size_budget=args.size_budget)
             status = 0
         elif args.operation == "locate":
             value = locate(
                 args.root, session_id=args.session_id,
                 capture_frame_id=args.capture_frame_id,
-                seal_sha256=args.seal_sha256, case_id=args.case_id)
+                seal_sha256=args.seal_sha256, case_id=args.case_id,
+                key=args.key, limit=args.limit,
+                verify=not args.no_verify)
             status = 0 if value["state"] == "available" else 2
         else:
-            value = inventory(args.root)
+            value = inventory(args.root, verify=args.verify)
             status = 0
     except CaseLocatorError as exc:
         print(json.dumps({"schema": SCHEMA, "ok": False,

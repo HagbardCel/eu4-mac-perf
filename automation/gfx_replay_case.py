@@ -2475,22 +2475,40 @@ def _sequence_inventory(sequence: dict, case_dir: Path) -> list[str]:
 PRODUCER_RECEIPT_SCHEMA = "gfx-replay-producer-receipt/v1"
 
 
-def _case_capture_seal(case_dir: Path, manifest: dict) -> dict:
-    seal = _json(case_dir / "capture" / "frame-seal.json")
-    if seal:
-        return seal
+def case_capture_seal_path(case_dir: Path | str,
+                           manifest: dict) -> Path | None:
+    """Path of the authoritative seal for a v1 or v2 case.
+
+    A sequence package stores its seals under ``frames/<index>/`` and selects
+    the diagnosed target through ``sequence.json``.  Consumers that need the
+    seal bytes or digest must resolve the same target rather than assuming the
+    single-frame ``capture/frame-seal.json`` layout.
+    """
+    case_dir = Path(case_dir)
+    direct = case_dir / "capture" / "frame-seal.json"
+    if direct.is_file():
+        return direct
     if manifest.get("schema") != SEQUENCE_SCHEMA:
-        return {}
+        return None
     try:
         sequence = _json(case_dir / "sequence.json")
         frames = sequence.get("frames") or []
         target = int(sequence.get("target_index") or len(frames))
         entry = frames[target - 1] if 0 < target <= len(frames) else None
-        if isinstance(entry, dict) and isinstance(entry.get("dir"), str):
-            return _json(case_dir / entry["dir"] / "frame-seal.json")
+        if not isinstance(entry, dict) or not isinstance(entry.get("dir"), str):
+            return None
+        path, problem = _case_relative_path(case_dir, entry["dir"])
+        if problem is not None or path is None:
+            return None
+        seal = path / "frame-seal.json"
+        return seal if seal.is_file() else None
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return {}
-    return {}
+        return None
+
+
+def _case_capture_seal(case_dir: Path, manifest: dict) -> dict:
+    path = case_capture_seal_path(case_dir, manifest)
+    return _json(path) if path is not None else {}
 
 
 def verify_producer_receipt(case_dir: Path, manifest: dict) -> dict:

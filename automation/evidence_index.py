@@ -244,10 +244,14 @@ def discover(
             seen.add(key)
             rows.append(_record(directory, root))
     locator_rows: list[dict] = []
+    locator_truncated = False
     for root in root_list:
         if not root.is_dir():
             continue
-        for row in case_locator.summaries(root):
+        inventory = case_locator.inventory(root, verify=False)
+        locator_truncated = (locator_truncated
+                             or bool(inventory.get("truncated")))
+        for row in inventory.get("locators") or []:
             row["evidence_root"] = str(root)
             locator_rows.append(row)
     locator_total = len(locator_rows)
@@ -317,6 +321,8 @@ def discover(
                              if row.get("state") == "available"),
             "missing_payload": sum(1 for row in locator_rows
                                    if row.get("state") == "missing_payload"),
+            "scan_truncated": locator_truncated,
+            "scan_limit": case_locator.MAX_LOCATORS,
         },
         "read_only": True,
         "query": {

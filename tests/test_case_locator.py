@@ -4,19 +4,26 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import case_locator, gfx_replay_case  # noqa: E402
+from automation import (  # noqa: E402
+    case_locator,
+    evidence_index,
+    gfx_replay_case,
+)
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from case_locator_fixtures import make_case  # noqa: E402
+from case_locator_fixtures import make_case, make_sequence_case  # noqa: E402
 
 
 def _sha(payload: bytes) -> str:
@@ -139,6 +146,205 @@ class CaseLocatorTests(unittest.TestCase):
         inventory = case_locator.inventory(self.evidence)
         self.assertEqual(inventory["counts"], {"missing_payload": 1})
         self.assertEqual(inventory["locators"][0]["key"], published["key"])
+
+    def publish_concurrently(self, cases):
+        """Run publishers through a deterministic rename barrier."""
+        results: list[dict] = []
+        errors: list[Exception] = []
+        barrier = threading.Barrier(len(cases))
+        original = os.rename
+
+        def rename(source, destination):
+            if str(destination).endswith("/case"):
+                barrier.wait(timeout=15)
+            return original(source, destination)
+
+        def run(case):
+            try:
+                results.append(case_locator.publish(case, self.evidence))
+            except Exception as exc:  # noqa: BLE001 - captured for the test
+                errors.append(exc)
+
+        with mock.patch("automation.case_locator.os.rename",
+                        side_effect=rename):
+            threads = [threading.Thread(target=run, args=(case,))
+                       for case in cases]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=30)
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        return results, errors
+
+    def test_concurrent_identical_publications_converge(self) -> None:
+        case = make_case(self.root / "producer" / "case")
+        results, errors = self.publish_concurrently([case, case])
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 2)
+        self.assertEqual({row["key"] for row in results},
+                         {results[0]["key"]})
+        resolved = case_locator.locate(
+            self.evidence, session_id="session-1")
+        self.assertEqual(resolved["state"], "available", resolved)
+        payloads = [path for path in (self.evidence / "cases").iterdir()
+                    if path.is_dir() and not path.name.startswith(".")]
+        self.assertEqual(len(payloads), 1)
+        self.assertEqual(
+            [path for path in (self.evidence / "locators").iterdir()
+             if path.suffix == ".tmp"], [])
+
+    def test_concurrent_different_manifests_under_one_seal_conflict(self) -> None:
+        first = make_case(self.root / "one" / "case",
+                          report_status="first")
+        second = make_case(self.root / "two" / "case",
+                           report_status="second")
+        results, errors = self.publish_concurrently([first, second])
+        self.assertEqual(len(results), 1, results)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIsInstance(errors[0], case_locator.CaseLocatorError)
+        self.assertEqual(errors[0].kind, "locator_conflict")
+        # The published locator must describe the bytes it points at.
+        resolved = case_locator.locate(
+            self.evidence, session_id="session-1")
+        self.assertEqual(resolved["state"], "available", resolved)
+        match = resolved["matches"][0]
+        self.assertEqual(match["identity"]["manifest_sha256"],
+                         results[0]["identity"]["manifest_sha256"])
+        self.assertEqual(
+            case_locator.case_identity(match["resolved_path"])[
+                "manifest_sha256"],
+            match["identity"]["manifest_sha256"])
+
+    def test_corrupted_existing_destination_is_not_adopted(self) -> None:
+        case = make_case(self.root / "producer" / "case")
+        published = case_locator.publish(case, self.evidence)
+        target = Path(published["locator_path"]).parents[1] / published[
+            "relative_path"]
+        (target / "report.json").write_text(json.dumps({"status": "corrupt"}))
+        original = case_locator.case_identity(case)["manifest_sha256"]
+        with self.assertRaises(case_locator.CaseLocatorError) as raised:
+            case_locator.publish(case, self.evidence)
+        self.assertEqual(raised.exception.kind, "published_copy_invalid")
+        self.assertEqual(
+            case_locator.case_identity(case)["manifest_sha256"], original)
+
+    def test_interrupted_copy_leaves_no_payload_or_locator(self) -> None:
+        case = make_case(self.root / "producer" / "case")
+        with mock.patch("automation.case_locator.shutil.copytree",
+                        side_effect=OSError("injected copy failure")):
+            with self.assertRaises(case_locator.CaseLocatorError) as raised:
+                case_locator.publish(case, self.evidence)
+        self.assertEqual(raised.exception.kind, "copy_failed")
+        self.assertFalse(any((self.evidence / "cases").glob("*/case")))
+        self.assertFalse(list((self.evidence / "locators").glob("*.json")))
+
+    def test_interrupted_staged_verification_does_not_publish(self) -> None:
+        case = make_case(self.root / "producer" / "case")
+        ok = gfx_replay_case.verify(case)
+        with mock.patch("automation.case_locator._verify",
+                        side_effect=[ok, {"ok": False,
+                                          "problems": ["injected"]}]):
+            with self.assertRaises(case_locator.CaseLocatorError) as raised:
+                case_locator.publish(case, self.evidence)
+        self.assertEqual(raised.exception.kind, "copied_case_invalid")
+        self.assertFalse(any((self.evidence / "cases").glob("*/case")))
+        self.assertFalse(list((self.evidence / "locators").glob("*.json")))
+
+    def test_interrupted_locator_write_removes_only_its_temp(self) -> None:
+        case = make_case(self.root / "producer" / "case")
+        with mock.patch("automation.case_locator.os.replace",
+                        side_effect=OSError("injected locator failure")):
+            with self.assertRaises(case_locator.CaseLocatorError) as raised:
+                case_locator.publish(case, self.evidence)
+        self.assertEqual(raised.exception.kind, "locator_write")
+        self.assertFalse(list((self.evidence / "locators").glob("*.json")))
+        self.assertEqual(
+            [path for path in (self.evidence / "locators").iterdir()
+             if path.suffix == ".tmp"], [])
+        # The verified payload may remain; it is not advertised without a
+        # locator and a later publication reuses it only after verification.
+        resolved = case_locator.locate(self.evidence, session_id="session-1")
+        self.assertEqual(resolved["state"], "unknown", resolved)
+
+    def test_sequence_case_uses_the_target_frame_seal(self) -> None:
+        case = make_sequence_case(self.root / "producer" / "sequence")
+        identity = case_locator.case_identity(case)
+        self.assertEqual(identity["seal_file"],
+                         "frames/000002/frame-seal.json")
+        self.assertEqual(identity["session_id"], "sequence-session")
+        self.assertEqual(identity["capture_frame_id"], 2)
+        self.assertIsNotNone(identity["seal_sha256"])
+        published = case_locator.publish(case, self.evidence)
+        self.assertFalse(any("no frame seal" in item
+                             for item in published["limitations"]))
+        # Relocate away from the producer and resolve by capture identity.
+        shutil.rmtree(self.root / "producer")
+        resolved = case_locator.locate(
+            self.evidence, session_id="sequence-session",
+            capture_frame_id=2,
+            seal_sha256=identity["seal_sha256"])
+        self.assertEqual(resolved["state"], "available", resolved)
+        self.assertTrue(resolved["matches"][0]["verified"])
+        inventory = case_locator.inventory(self.evidence, verify=True)
+        self.assertEqual(inventory["counts"], {"available": 1})
+
+    def test_inventory_and_discovery_are_metadata_only(self) -> None:
+        case = make_case(self.root / "producer" / "case")
+        case_locator.publish(case, self.evidence)
+        with mock.patch("automation.case_locator._verify",
+                        side_effect=AssertionError("must not hash")), \
+                mock.patch("automation.gfx_replay_case.verify",
+                           side_effect=AssertionError("must not verify")):
+            inventory = case_locator.inventory(self.evidence)
+            summaries = case_locator.summaries(self.evidence)
+            discovered = evidence_index.discover(
+                configured_roots=str(self.evidence))
+        self.assertEqual(inventory["counts"], {"available": 1})
+        self.assertFalse(inventory["verified"])
+        self.assertFalse(inventory["locators"][0]["verified"])
+        self.assertEqual(len(summaries), 1)
+        self.assertEqual(discovered["locator_counts"]["available"], 1)
+        verified = case_locator.inventory(self.evidence, verify=True)
+        self.assertTrue(verified["verified"])
+        self.assertTrue(verified["locators"][0]["verified"])
+
+    def test_locate_requires_a_bounded_query(self) -> None:
+        case = make_case(self.root / "producer" / "case")
+        case_locator.publish(case, self.evidence)
+        refused = case_locator.locate(self.evidence)
+        self.assertEqual(refused["state"], "refused_unbounded", refused)
+        self.assertEqual(refused["matches"], [])
+
+    def test_locate_limit_and_locator_cap_are_explicit(self) -> None:
+        first = make_case(self.root / "one" / "case", capture_frame_id=1)
+        second = make_case(self.root / "two" / "case", capture_frame_id=2)
+        case_locator.publish(first, self.evidence)
+        case_locator.publish(second, self.evidence)
+        limited = case_locator.locate(
+            self.evidence, session_id="session-1", limit=1)
+        self.assertEqual(limited["returned"], 1)
+        self.assertTrue(limited["truncated"])
+        with mock.patch("automation.case_locator.MAX_LOCATORS", 1):
+            truncated = case_locator.locate(
+                self.evidence, session_id="absent")
+            inventory = case_locator.inventory(self.evidence)
+        self.assertEqual(truncated["state"], "unknown_truncated", truncated)
+        self.assertTrue(truncated["scan_truncated"])
+        self.assertTrue(inventory["truncated"])
+        self.assertEqual(inventory["scan_limit"], 1)
+
+    def test_size_budget_and_free_space_are_preflighted(self) -> None:
+        case = make_case(self.root / "producer" / "case")
+        with self.assertRaises(case_locator.CaseLocatorError) as raised:
+            case_locator.publish(case, self.evidence, size_budget=1)
+        self.assertEqual(raised.exception.kind, "size_budget")
+        self.assertFalse((self.evidence / "cases").exists())
+        with mock.patch("automation.case_locator.shutil.disk_usage",
+                        return_value=(0, 0, 0)):
+            with self.assertRaises(case_locator.CaseLocatorError) as raised:
+                case_locator.publish(case, self.evidence)
+        self.assertEqual(raised.exception.kind, "insufficient_space")
+        self.assertTrue((case / "case.json").is_file())
 
     def test_legacy_case_without_a_seal_uses_the_manifest_key(self) -> None:
         case = make_case(self.root / "producer" / "case")
