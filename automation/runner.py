@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -237,6 +238,61 @@ class Runner:
             return text
         return feedback
 
+    def _candidate_digest(self) -> str:
+        """Content identity of the mutable candidate, including progress notes."""
+        digest = hashlib.sha256()
+        progress = self.live / "progress.md"
+        if progress.is_file():
+            digest.update(b"progress\0")
+            digest.update(progress.read_bytes())
+        try:
+            status = subprocess.run(
+                ["git", "-C", str(self.live), "status", "--porcelain"],
+                capture_output=True, check=False, timeout=30)
+            diff = subprocess.run(
+                ["git", "-C", str(self.live), "diff", "--binary", "HEAD"],
+                capture_output=True, check=False, timeout=60)
+            digest.update(b"status\0" + (status.stdout or b""))
+            digest.update(b"diff\0" + (diff.stdout or b""))
+        except (OSError, subprocess.SubprocessError):
+            digest.update(b"unavailable")
+        return digest.hexdigest()
+
+    def _no_progress(self, state: dict, outcome: dict) -> bool:
+        """Block an unchanged deterministic failure after one repetition.
+
+        A changed candidate, changed diagnostics or a different verdict is new
+        evidence and permits another round.  The record is durable in state so
+        a resumed runner does not silently retry the same charged work.
+        """
+        if outcome["verdict"] not in ("fail", "inconclusive"):
+            state.pop("no_progress", None)
+            return False
+        candidate = self._candidate_digest()
+        diagnostics = hashlib.sha256(
+            str(outcome.get("diagnostics") or "").encode("utf-8")).hexdigest()
+        fingerprint = {
+            "verdict": outcome["verdict"],
+            "diagnostics_sha256": diagnostics,
+            "candidate_sha256": candidate,
+        }
+        previous = state.get("no_progress") or {}
+        if (previous.get("fingerprint") == fingerprint
+                and int(previous.get("repeats") or 0) >= 1):
+            state["no_progress"] = {
+                "fingerprint": fingerprint,
+                "repeats": int(previous.get("repeats") or 0) + 1,
+                "at_round": state.get("rounds"),
+            }
+            self._pause(state, "no_progress")
+            return True
+        state["no_progress"] = {
+            "fingerprint": fingerprint,
+            "repeats": 1,
+            "at_round": state.get("rounds"),
+        }
+        return False
+
     def _validate(self, state: dict) -> None:
         if not self._digest_matches(state):
             self._pause(state, "checker_modified")
@@ -269,8 +325,10 @@ class Runner:
         )
         save_state(self.state_path, state)
         if outcome["ok"] and outcome["verdict"] == "pass":
+            state.pop("no_progress", None)
             self._complete(state)
         elif outcome["ok"] and outcome["verdict"] in ("fail", "inconclusive"):
+            self._no_progress(state, outcome)
             return
         elif outcome["ok"] and outcome["verdict"] == "blocked":
             self._pause(state, "semantic_blocker")

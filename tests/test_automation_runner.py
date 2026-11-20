@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from automation.agents import ContractError
 from automation.runner import Runner, skill_trust
@@ -308,7 +311,7 @@ class RunnerTests(unittest.TestCase):
         cases = {
             "inconclusive": (
                 "import json\nprint(json.dumps({'verdict':'inconclusive','diagnostics':'not sure'}))\n",
-                "round_limit",
+                "no_progress",
                 2,
             ),
             "crash": ("import sys\nsys.exit(2)\n", "validation_unavailable", 4),
@@ -330,6 +333,49 @@ class RunnerTests(unittest.TestCase):
                     state = runner.execute(resume_only=False)
                     self.assertNotEqual(state["status"], "complete")
                     self.assertEqual(state["pause_reason"], reason)
+
+    def test_identical_deterministic_failure_pauses_after_one_repeat(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            checker = root / "accept.py"
+            checker.write_text(
+                "import json\nprint(json.dumps({'verdict':'fail',"
+                "'diagnostics':'research note missing'}))\n",
+                encoding="utf-8")
+            agent = FakeAgent()  # never changes the candidate
+            runner, _clock = self._runner(
+                root, agent, max_rounds=6, checker=checker)
+            state = runner.execute(resume_only=False)
+        self.assertEqual(state["pause_reason"], "no_progress")
+        self.assertNotEqual(state["status"], "complete")
+        self.assertEqual(state["rounds"], 2)
+        self.assertEqual(state["no_progress"]["repeats"], 2)
+
+    def test_changed_candidate_is_meaningful_continuation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            checker = root / "accept.py"
+            checker.write_text(
+                "import json,pathlib,sys\n"
+                "marker=(pathlib.Path(sys.argv[1])/'marker.txt').read_text().strip()\n"
+                "print(json.dumps({'verdict':'pass' if marker=='ready' "
+                "else 'fail','diagnostics':'research note missing'}))\n",
+                encoding="utf-8")
+            agent = FakeAgent()
+            submits = {"count": 0}
+
+            def change_candidate(workspace):
+                submits["count"] += 1
+                (workspace / "marker.txt").write_text(
+                    "ready\n" if submits["count"] >= 2 else "attempt-1\n")
+
+            agent.on_submit = change_candidate
+            runner, _clock = self._runner(
+                root, agent, max_rounds=4, checker=checker)
+            state = runner.execute(resume_only=False)
+        self.assertEqual(state["status"], "complete")
+        self.assertEqual(state["rounds"], 2)
+        self.assertNotIn("no_progress", state)
 
     def test_restart_compares_against_the_original_checker_digest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

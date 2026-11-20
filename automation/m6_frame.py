@@ -1482,6 +1482,25 @@ def translate_command(args: argparse.Namespace) -> int:
 
 
 def replay_command(args: argparse.Namespace) -> int:
+    """Reserve one replay, then execute the direct frame-replay entry point.
+
+    ``eu4_replay frame`` runs this module as a child process.  Without a
+    reservation here that physical GPU execution was invisible to the campaign,
+    while the higher-level independent path charged one.
+    """
+    from automation import campaign_guard
+
+    try:
+        with campaign_guard.attempt(
+                "replays", evidence={"frame": str(args.frame),
+                                     "out": str(args.out)}):
+            return _replay_command_body(args)
+    except campaign_guard.CampaignRefusal as exc:
+        print(f"replay refused: {exc.kind}: {exc.detail}", file=sys.stderr)
+        return 3
+
+
+def _replay_command_body(args: argparse.Namespace) -> int:
     frame_dir = Path(args.frame).expanduser().resolve()
     out = Path(args.out).expanduser().resolve()
     if out == frame_dir or frame_dir in out.parents or out in frame_dir.parents:

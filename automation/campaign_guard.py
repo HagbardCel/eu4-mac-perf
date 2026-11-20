@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import contextvars
 import fcntl
 import hashlib
 import json
@@ -654,14 +655,36 @@ def claim_launch_reservation(reservation: str | None = None,
     return guard.claim_launch(_launch_token(reservation), evidence=evidence)
 
 
+_ACTIVE_ATTEMPT = contextvars.ContextVar("eu4_active_attempt", default=None)
+
+
 @contextlib.contextmanager
-def attempt(action: str, *, evidence=None):
-    """Reserve and then record one resource-consuming action."""
+def attempt(action: str, *, count: int = 1, evidence=None,
+            consumed: dict | None = None):
+    """Reserve and then record one resource-consuming action exactly once.
+
+    Nested entry points that execute the same action in the same process share
+    the active reservation instead of charging it again.  The outermost caller
+    must reserve the total count; callers must not nest a larger action inside
+    a smaller one.  A process that dies mid-action leaves the persisted
+    reservation open, which is the durable record of interrupted work.
+    """
     guard = from_env()
     if guard is None:
         yield None
         return
-    reservation = guard.reserve({action: 1}, evidence=evidence)
+    active = _ACTIVE_ATTEMPT.get()
+    if (active is not None
+            and active.get("state_path") == str(guard.path)
+            and active.get("action") == action):
+        yield guard
+        return
+    if count < 1:
+        raise CampaignRefusal("attempt_count", "attempt count must be >= 1")
+    reservation = guard.reserve({action: int(count)}, evidence=evidence)
+    token = _ACTIVE_ATTEMPT.set(
+        {"state_path": str(guard.path), "action": action,
+         "count": int(count)})
     try:
         yield guard
     except BaseException as exc:  # noqa: BLE001 - record then propagate
@@ -670,7 +693,10 @@ def attempt(action: str, *, evidence=None):
                        evidence=evidence)
         raise
     else:
-        guard.complete(reservation, outcome="ok", evidence=evidence)
+        guard.complete(reservation, outcome="ok",
+                       consumed=consumed, evidence=evidence)
+    finally:
+        _ACTIVE_ATTEMPT.reset(token)
 
 
 def _budget_pairs(values) -> dict:

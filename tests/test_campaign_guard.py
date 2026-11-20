@@ -58,6 +58,21 @@ class GuardTests(unittest.TestCase):
                          "reserved")
         self.assertTrue(self.guard.validate_reservation(reservation, "replays"))
 
+    def test_nested_attempt_charges_once_for_the_same_action(self):
+        self.init(budgets={"replays": 2})
+        with mock.patch.dict(os.environ,
+                             {"EU4_CAMPAIGN_STATE": str(self.path)}):
+            with campaign_guard.attempt("replays", count=2):
+                with campaign_guard.attempt("replays", count=2):
+                    pass
+        state = self.guard.state()
+        self.assertEqual(state["counts"]["replays"], 2)
+        history = state["history"]
+        self.assertEqual(
+            len([row for row in history if row.get("action") == "reserve"]), 1)
+        self.assertEqual(
+            len([row for row in history if row.get("outcome") == "ok"]), 1)
+
     def test_budget_exhaustion_refuses_without_charging(self):
         self.init(budgets={"replays": 1})
         self.guard.reserve({"replays": 1})
