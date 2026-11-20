@@ -42,6 +42,12 @@ class PreReadyForensicTests(unittest.TestCase):
     def test_measured_193739Z_forensic_when_run_present(self) -> None:
         if not RUN_DIR.is_dir():
             self.skipTest("local 193739Z run artifacts not present")
+        if not (RUN_DIR / "manifest.json").is_file():
+            # A local historical directory can be an interrupted/incomplete
+            # run.  Its presence is not evidence that a manifest exists; do not
+            # delete it, and do not turn a missing manifest into a traceback.
+            self.skipTest(
+                "local 193739Z run directory is incomplete (no manifest.json)")
         payload = build_forensic(RUN_DIR)
         self.assertEqual(payload["probe"]["probe_row_count"], 7)
         self.assertEqual(payload["probe"]["timeout_window_seconds"], 180.0)
