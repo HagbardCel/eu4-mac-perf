@@ -290,24 +290,6 @@ def validate_sequence(frames: list[Path], *, max_frames: int = 64,
     }
 
 
-def _receipt_shader_identity(shader_dir: Path | str | None) -> dict:
-    """Canonical shader-report and shader-artifact identity for a receipt."""
-    if shader_dir is None:
-        return {"shaders_json_sha256": "", "artifacts_sha256": "",
-                "artifact_count": 0}
-    directory = Path(shader_dir)
-    report = directory / "shaders.json"
-    if not directory.is_dir() or not report.is_file():
-        return {"shaders_json_sha256": "", "artifacts_sha256": "",
-                "artifact_count": 0}
-    artifacts_sha256, artifact_count = m6_frame.artifact_digest(directory)
-    return {
-        "shaders_json_sha256": _sha(report),
-        "artifacts_sha256": artifacts_sha256,
-        "artifact_count": artifact_count,
-    }
-
-
 def diagnostic_evidence(diagnosis: dict | None) -> dict:
     """Report whether a diagnostic executed and carries required evidence.
 
@@ -434,7 +416,7 @@ def prepare_sequence_checkpoints(frames: list[Path], out_dir: Path,
         receipt = {
             "schema": "m7-shadow-shader-receipt/v1",
             **identity,
-            **_receipt_shader_identity(shader_dir),
+            **m6_frame.shader_receipt_identity(shader_dir),
             "checkpoint_request_file": request_path.name,
             "checkpoint_request_sha256": request_sha,
             "checkpoint_count": len(request.get("checkpoints") or []),
