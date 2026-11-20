@@ -25,6 +25,7 @@ from pathlib import Path
 from automation import dsh_receipts as receipts
 from automation import dsh_review as review
 from automation import candidate_snapshot as snapshot
+from automation import session_state
 from automation import handoff as handoff_primitives
 from automation.review_result import validate_review
 from automation.dsh_campaign import (
@@ -483,7 +484,7 @@ def _head_or_none(path: Path) -> str | None:
         return None
 
 
-def _startup_block(sidecar: Sidecar, roots: dict) -> dict:
+def _startup_block(sidecar: Sidecar, roots: dict, session=None) -> dict:
     """Compact facts an agent needs before spending a launch or validation."""
     workspace = Path(sidecar.workspace)
     head = _head_or_none(workspace) if sidecar.mode == "worktree" else None
@@ -491,7 +492,7 @@ def _startup_block(sidecar: Sidecar, roots: dict) -> dict:
         ["git", "-C", str(workspace), "status", "--short"]
         if head else ["ls", str(workspace)]
     )
-    return {
+    block = {
         "campaign_id": sidecar.campaign_id,
         "sidecar": str(sidecar.sidecar_path),
         "source_campaign": str(sidecar.source_campaign),
@@ -526,6 +527,9 @@ def _startup_block(sidecar: Sidecar, roots: dict) -> dict:
         },
         "first_command": first_command,
     }
+    if session is not None:
+        block["session"] = session.as_dict()
+    return block
 
 
 def _identity(sidecar: Sidecar, infra_commit: str) -> dict:
@@ -679,9 +683,10 @@ def _check_authority(stored: dict, current: dict) -> None:
         )
 
 
-def _qualification_state(sidecar: Sidecar, identities: dict) -> dict:
+def _qualification_state(sidecar: Sidecar, identities: dict,
+                         root: Path | None = None) -> dict:
     """Read-only view of the stored qualification; never a new verdict."""
-    receipt = receipts.load_current_receipt(sidecar.run_root)
+    receipt = receipts.load_current_receipt(root or sidecar.run_root)
     if receipt is None:
         return {"state": "none", "detail": "no validation receipt is recorded"}
     problems = receipts.verify_receipt_digest(receipt)
@@ -788,6 +793,8 @@ def op_prepare(args) -> int:
     sidecar = load_sidecar(Path(args.sidecar))
     roots = _roots(sidecar)
     stored = _setup(sidecar.run_root)
+    session = _session_layout(sidecar.run_root,
+                              getattr(args, "session_id", None), create=True)
     infra_commit = _git(infra_root(), "rev-parse", "HEAD")
     try:
         lock = campaign_lock(stored.lock)
@@ -799,12 +806,12 @@ def op_prepare(args) -> int:
               "goal_policy": GOAL_POLICY["unavailable"], "detail": str(exc)})
         return EXIT_OK
     try:
-        return _prepare_locked(args, sidecar, roots, stored, infra_commit)
+        return _prepare_locked(args, sidecar, roots, stored, infra_commit, session)
     finally:
         lock.__exit__(None, None, None)
 
 
-def _prepare_locked(args, sidecar, roots, stored, infra_commit) -> int:
+def _prepare_locked(args, sidecar, roots, stored, infra_commit, session) -> int:
     if sidecar.mode == "seed":
         ensure_workspace(sidecar.seed, sidecar.workspace)
     else:
@@ -849,12 +856,22 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit) -> int:
         })
 
     identity_digest = receipts.identity_digest(identities)
-    verification = _qualification_state(sidecar, identities)
-    startup = _startup_block(sidecar, roots)
-    attempts = _validation_attempts(_validation_history(sidecar.run_root))
+    verification = _qualification_state(
+        sidecar, identities, root=session.root)
+    startup = _startup_block(sidecar, roots, session)
+    attempts = _validation_attempts(_campaign_attempt_history(sidecar.run_root))
     startup_text = _startup_text(
         startup, attempts=attempts, identity_digest=identity_digest,
         verification=verification)
+    # The anchor above is campaign-wide trusted material. This record is the
+    # per-session binding: it names the validated session and its writable root,
+    # and a reconnect finds the same file instead of rewriting it.
+    try:
+        session_record, record_created = session_state.write_session_record(
+            session, campaign_id=sidecar.campaign_id)
+    except session_state.SessionRootError as exc:
+        raise Refusal("session_conflict", str(exc)) from exc
+
     emit({
         "ok": True,
         "operation": "prepare",
@@ -867,16 +884,38 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit) -> int:
         "execution_roots": roots,
         "workspace": str(sidecar.workspace),
         "run_root": str(sidecar.run_root),
+        "session": session.as_dict(),
+        "session_record": str(session_record) if session_record else None,
+        "session_record_created": record_created,
         "identities": identities,
         "identity_digest": identity_digest,
         "verification": verification,
         "anchored_now": existing is None,
-        "startup": startup,
+        "startup": _startup_block(sidecar, roots, session),
     })
     return EXIT_OK
 
 
 VALIDATIONS_LOG = "validations.jsonl"
+
+
+def _session_layout(run_root: Path, session_id, *, create: bool):
+    """Resolve the writable root for one DSH session.
+
+    ``session_id=None`` keeps the pre-existing shared run-root layout and is
+    reported as such; an unsafe id is a refusal, never a fallback to the shared
+    root (which would silently mix two sessions).
+    """
+    try:
+        return session_state.layout(run_root, session_id, create=create)
+    except session_state.SessionRootError as exc:
+        raise Refusal("invalid_session", str(exc)) from exc
+
+
+def _state_root(value) -> Path:
+    """Accept a SessionLayout or a plain run root."""
+    root = getattr(value, "root", None)
+    return Path(root if root is not None else value)
 
 
 def _validation_history(run_root: Path) -> list[dict]:
@@ -1013,12 +1052,18 @@ def _startup_text(block: dict, *, attempts: list[dict],
     return "\n".join(lines)
 
 
-def _start_attempt(run_root: Path, *, operation: str,
-                   candidate_digest: str | None) -> str:
-    """Persist an attempt before the expensive checker can start."""
-    attempt_id = (f"val-{time.time_ns()}-{os.getpid()}-"
-                  f"{uuid.uuid4().hex[:8]}")
-    _append_validation(run_root, {
+def _start_attempt(where, *, operation: str,
+                   candidate_digest: str | None,
+                   attempt_id: str | None = None) -> str:
+    """Persist an attempt before the expensive checker can start.
+
+    ``where`` is a session layout or a plain root.  The campaign-wide claim is
+    written separately (:func:`_claim_attempt`) before this detailed row, so an
+    interruption between the two still consumes the allowance.
+    """
+    attempt_id = attempt_id or (
+        f"val-{time.time_ns()}-{os.getpid()}-{uuid.uuid4().hex[:8]}")
+    _append_validation(_state_root(where), {
         "attempt_id": attempt_id,
         "phase": "start",
         "at": time.time(),
@@ -1028,13 +1073,13 @@ def _start_attempt(run_root: Path, *, operation: str,
     return attempt_id
 
 
-def _finish_attempt(run_root: Path, attempt_id: str, *, operation: str,
+def _finish_attempt(where, attempt_id: str, *, operation: str,
                     classification: str, kind: str | None,
                     verdict: str | None, diagnostics: str,
                     exit_code, duration_ms: int,
                     qualified: bool) -> None:
     """Persist the terminal result of an attempt started earlier."""
-    _append_validation(run_root, {
+    _append_validation(_state_root(where), {
         "attempt_id": attempt_id,
         "phase": "result",
         "at": time.time(),
@@ -1047,6 +1092,101 @@ def _finish_attempt(run_root: Path, attempt_id: str, *, operation: str,
         "duration_ms": duration_ms,
         "qualified": bool(qualified),
     })
+
+
+def _campaign_validation_roots(run_root: Path) -> list[Path]:
+    """Every root that can hold this campaign's attempt logs.
+
+    The campaign root keeps the legacy shared log; each isolated session has its
+    own ``sessions/<id>/validations.jsonl``.  Symlinked or non-directory entries
+    are skipped: a log is read-only input to the budget decision, and an
+    unresolved link must not widen what the campaign reads.
+    """
+    root = Path(run_root)
+    roots = [root]
+    sessions = root / session_state.SESSIONS_DIRNAME
+    if sessions.is_dir() and not sessions.is_symlink():
+        for entry in sorted(sessions.iterdir()):
+            if entry.is_symlink() or not entry.is_dir():
+                continue
+            try:
+                session_state.validate_session_id(entry.name)
+            except session_state.SessionRootError:
+                continue
+            roots.append(entry)
+    return roots
+
+
+def _campaign_attempt_history(run_root: Path) -> list[dict]:
+    """Merge the campaign-wide claims with every detailed attempt log.
+
+    Claims come first so that a claimed-but-not-yet-detailed attempt is a
+    ``start`` row; the detailed ``start``/``result`` rows for the same
+    ``attempt_id`` then update that attempt in place.  An interrupted claim
+    therefore stays counted, and a completed attempt is not double-counted.
+    """
+    rows: list[dict] = []
+    for claim in session_state.CampaignClaims(run_root).rows():
+        attempt_id = claim.get("attempt_id")
+        if not attempt_id:
+            continue
+        rows.append({
+            "attempt_id": attempt_id,
+            "phase": "start",
+            "at": claim.get("at"),
+            "operation": claim.get("operation"),
+            "session_id": claim.get("session_id"),
+        })
+    seen: set[tuple[str, str]] = set()
+    for root in _campaign_validation_roots(run_root):
+        for row in _validation_history(root):
+            attempt_id = row.get("attempt_id")
+            if attempt_id:
+                key = (str(attempt_id), str(row.get("phase") or ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+            rows.append(row)
+    return rows
+
+
+def _claim_attempt(sidecar: Sidecar, layout_value, *, operation: str,
+                   session_id: str | None,
+                   candidate_digest: str | None) -> tuple[dict, str | None]:
+    """Atomically claim one checker execution campaign-wide, then log it.
+
+    The claim enforces ``max_validations`` inside the ledger lock, so the
+    advisory :func:`_campaign_budget_stop` check is not the only protection
+    against two sessions spending the same last attempt.
+    """
+    attempt_id = (f"val-{time.time_ns()}-{os.getpid()}-{uuid.uuid4().hex[:8]}")
+    claim = session_state.CampaignClaims(sidecar.run_root).claim(
+        operation=operation,
+        attempt_id=attempt_id,
+        session_id=session_id,
+        limit=sidecar.max_validations,
+    )
+    if not claim.get("ok"):
+        return claim, None
+    _start_attempt(layout_value, operation=operation,
+                   candidate_digest=candidate_digest, attempt_id=attempt_id)
+    return claim, attempt_id
+
+
+def _budget_stop_payload(sidecar: Sidecar, stop: dict,
+                         history: list[dict], current: dict) -> dict:
+    return {
+        "ok": True,
+        "operation": None,  # callers set this
+        "campaign_id": sidecar.campaign_id,
+        "classification": "policy_stop",
+        "kind": stop["kind"],
+        "goal_policy": GOAL_POLICY["unavailable"],
+        "detail": stop.get("detail") or stop.get("kind"),
+        "validations": len(_validation_attempts(history)),
+        "max_validations": sidecar.max_validations,
+        "candidate_digest": (current.get("candidate") or {}).get("digest"),
+    }
 
 
 def _prepared_epoch(run_root: Path) -> float | None:
@@ -1119,6 +1259,8 @@ def op_validate(args) -> int:
     sidecar = load_sidecar(Path(args.sidecar))
     _roots(sidecar)
     stored = _setup(sidecar.run_root)
+    session_id = getattr(args, "session_id", None) or None
+    session = _session_layout(sidecar.run_root, session_id, create=bool(session_id))
     try:
         lock = campaign_lock(stored.lock)
         lock.__enter__()
@@ -1133,30 +1275,34 @@ def op_validate(args) -> int:
         _check_anchor(_prepared_identities(sidecar), before)
         digest = before["candidate"]["digest"]
 
-        # External limits: the bridge refuses before spending another checker
-        # run, independently of what the model intends.
-        history = _validation_history(sidecar.run_root)
-        attempts = _validation_attempts(history)
+        # External limits: the campaign-wide history (legacy shared log, every
+        # session log and the atomic claim ledger) refuses before another
+        # checker run, independently of what the model intends.
+        history = _campaign_attempt_history(sidecar.run_root)
         stop = _campaign_budget_stop(sidecar, history, time.time())
         if stop is not None:
-            emit({
-                "ok": True,
-                "operation": "validate",
-                "campaign_id": sidecar.campaign_id,
-                "classification": "policy_stop",
-                "kind": stop["kind"],
-                "goal_policy": GOAL_POLICY["unavailable"],
-                "detail": stop["detail"],
-                "validations": len(attempts),
-                "max_validations": sidecar.max_validations,
-                "candidate_digest": digest,
-            })
+            payload = _budget_stop_payload(sidecar, stop, history, before)
+            payload["operation"] = "validate"
+            emit(payload)
             return EXIT_OK
 
-        # The attempt is durable before the checker runs: if this process is
-        # interrupted, the start row still consumes one validation allowance.
-        attempt_id = _start_attempt(sidecar.run_root, operation="validate",
-                                    candidate_digest=digest)
+        # The claim is atomic and campaign-wide; the detailed start row is
+        # written beside it in this session's log.  If the process is
+        # interrupted anywhere after this point the attempt stays charged.
+        claim, attempt_id = _claim_attempt(
+            sidecar, session, operation="validate",
+            session_id=session_id, candidate_digest=digest)
+        if not claim.get("ok"):
+            stop = {
+                "kind": claim.get("kind", "budget_exhausted"),
+                "detail": (
+                    f"{claim.get('used')} validation attempt(s) reached "
+                    f"max_validations={sidecar.max_validations} campaign-wide"),
+            }
+            payload = _budget_stop_payload(sidecar, stop, history, before)
+            payload["operation"] = "validate"
+            emit(payload)
+            return EXIT_OK
         started = time.monotonic()
         checker_exception = None
         try:
@@ -1187,7 +1333,7 @@ def op_validate(args) -> int:
         qualified = (not drift and not incomplete
                      and classification == "verdict" and verdict == "pass")
         _finish_attempt(
-            sidecar.run_root, attempt_id, operation="validate",
+            session, attempt_id, operation="validate",
             classification=("identity_drift" if drift else
                             "inputs_incomplete" if incomplete else
                             classification),
@@ -1226,10 +1372,12 @@ def op_validate(args) -> int:
                 "inputs_digest": snapshot.ignored_digest(sidecar.workspace),
                 "replay_inputs": _replay_inputs_rows(sidecar),
             },
-            "session": {"session_id": args.session_id or None},
+            "session": {"session_id": session_id},
+            "session_root": str(session.root),
+            "session_layout": session.kind,
             "created_at": _now(),
         }
-        path, sealed = receipts.write_receipt(sidecar.run_root, receipt)
+        path, sealed = receipts.write_receipt(session.root, receipt)
         emit({
             "ok": True,
             "operation": "validate",
@@ -1245,6 +1393,7 @@ def op_validate(args) -> int:
             "receipt_digest": sealed["receipt_digest"],
             "identity_digest": receipts.identity_digest(before),
             "candidate_digest": digest,
+            "session": session.as_dict(),
         })
         return EXIT_OK
     finally:
@@ -1320,7 +1469,8 @@ def _replay_inputs_rows(sidecar: Sidecar) -> list[dict]:
     return rows
 
 
-def _replay_frozen(sidecar: Sidecar, frozen: dict) -> dict:
+def _replay_frozen(sidecar: Sidecar, frozen: dict, *,
+                   session=None, session_id: str | None = None) -> dict:
     """Run the checker against the frozen candidate rebuilt over its baseline.
 
     The replay worktree stays at the *pinned baseline*, with the frozen delta
@@ -1388,14 +1538,20 @@ def _replay_frozen(sidecar: Sidecar, frozen: dict) -> dict:
                 f"the replay worktree is at {head[:12]}, not the pinned baseline",
             )
         # Reproduction is another physical checker execution: it is charged
-        # against the same campaign limits before it starts.
-        stop = _campaign_budget_stop(
-            sidecar, _validation_history(sidecar.run_root), time.time())
+        # against the same campaign-wide limits before it starts.
+        history = _campaign_attempt_history(sidecar.run_root)
+        stop = _campaign_budget_stop(sidecar, history, time.time())
         if stop is not None:
             raise Refusal(stop["kind"], stop["detail"])
-        attempt_id = _start_attempt(
-            sidecar.run_root, operation="finalize-replay",
+        claim, attempt_id = _claim_attempt(
+            sidecar, session if session is not None else sidecar.run_root,
+            operation="finalize-replay", session_id=session_id,
             candidate_digest=commit)
+        if not claim.get("ok"):
+            raise Refusal(
+                claim.get("kind", "budget_exhausted"),
+                f"{claim.get('used')} validation attempt(s) reached "
+                f"max_validations={sidecar.max_validations} campaign-wide")
         started = time.monotonic()
         checker_exception = None
         try:
@@ -1413,7 +1569,8 @@ def _replay_frozen(sidecar: Sidecar, frozen: dict) -> dict:
         if checker_exception is not None:
             classification, kind = "infrastructure_error", "checker_exception"
         _finish_attempt(
-            sidecar.run_root, attempt_id, operation="finalize-replay",
+            session if session is not None else sidecar.run_root,
+            attempt_id, operation="finalize-replay",
             classification=classification, kind=kind, verdict=verdict,
             diagnostics=str(outcome.get("diagnostics") or ""),
             exit_code=outcome.get("exit_code"), duration_ms=duration_ms,
@@ -1491,8 +1648,13 @@ def _review_paths(sidecar: Sidecar) -> dict:
     }
 
 
-def _review_problem(sidecar: Sidecar, frozen: dict, *, require_live: bool = True) -> list[str]:
-    """Whether an existing review qualifies this frozen candidate."""
+def _review_problem(sidecar: Sidecar, frozen: dict, *, require_live: bool = True,
+                    receipt_root: Path | None = None) -> list[str]:
+    """Whether an existing review qualifies this frozen candidate.
+
+    ``receipt_root`` is the session's writable root when the campaign runs
+    isolated; the review artifacts themselves stay campaign-wide.
+    """
     paths = _review_paths(sidecar)
     if not paths["report"].is_file():
         return ["no independent review report exists for this candidate"]
@@ -1502,7 +1664,9 @@ def _review_problem(sidecar: Sidecar, frozen: dict, *, require_live: bool = True
         return [f"review report unreadable: {exc}"]
     oracle = _oracle_digest(
         sidecar,
-        (receipts.load_current_receipt(sidecar.run_root) or {}).get("identities") or {},
+        (receipts.load_current_receipt(
+            receipt_root if receipt_root is not None else sidecar.run_root) or {}
+         ).get("identities") or {},
     )
     problems = validate_review(
         report,
@@ -1748,6 +1912,8 @@ def op_review_run(args) -> int:
     sidecar = load_sidecar(Path(args.sidecar))
     _roots(sidecar)
     stored = _setup(sidecar.run_root)
+    requested_session = _session_layout(
+        sidecar.run_root, getattr(args, "session_id", None) or None, create=True)
     try:
         lock = campaign_lock(stored.lock)
         lock.__enter__()
@@ -1758,7 +1924,7 @@ def op_review_run(args) -> int:
     try:
         current = _identity(sidecar, _git(infra_root(), "rev-parse", "HEAD"))
         _check_anchor(_prepared_identities(sidecar), current)
-        receipt = receipts.load_current_receipt(sidecar.run_root)
+        receipt = receipts.load_current_receipt(requested_session.root)
         if receipt is None or (receipt.get("outcome") or {}).get("checker_verdict") != "pass":
             raise Refusal("not_qualified", "no passing validation to review")
         frozen = _freeze_once(sidecar, current)
@@ -1913,6 +2079,7 @@ def op_review_run(args) -> int:
             "receipt": str(paths["receipt"]),
             # A completed review task is not the same as a qualified candidate.
             "qualified": payload.get("outcome") == "qualified",
+            "session": requested_session.as_dict(),
         })
         return EXIT_OK
     finally:
@@ -1923,6 +2090,8 @@ def op_review_verify(args) -> int:
     sidecar = load_sidecar(Path(args.sidecar))
     _roots(sidecar)
     stored = _setup(sidecar.run_root)
+    session = _session_layout(sidecar.run_root,
+                              getattr(args, "session_id", None) or None, create=True)
     try:
         lock = campaign_lock(stored.lock)
         lock.__enter__()
@@ -1932,12 +2101,12 @@ def op_review_verify(args) -> int:
               "classification": "policy_stop", "kind": "busy", "detail": str(exc)})
         return EXIT_OK
     try:
-        return _review_verify_locked(args, sidecar)
+        return _review_verify_locked(args, sidecar, session)
     finally:
         lock.__exit__(None, None, None)
 
 
-def _review_verify_locked(args, sidecar) -> int:
+def _review_verify_locked(args, sidecar, session=None) -> int:
     current = _identity(sidecar, _git(infra_root(), "rev-parse", "HEAD"))
     _check_anchor(_prepared_identities(sidecar), current)
     frozen = (_freeze_or_existing(sidecar, current))
@@ -1945,7 +2114,8 @@ def _review_verify_locked(args, sidecar) -> int:
     # completion. --allow-scripted exists so the pipeline itself can be
     # inspected without a live model run.
     problems = _review_problem(
-        sidecar, frozen, require_live=not getattr(args, "allow_scripted", False)
+        sidecar, frozen, require_live=not getattr(args, "allow_scripted", False),
+        receipt_root=session.root if session is not None else None,
     )
     emit({
         "ok": not problems,
@@ -1954,6 +2124,7 @@ def _review_verify_locked(args, sidecar) -> int:
         "candidate_commit": frozen.get("commit"),
         "qualified": not problems,
         "problems": problems,
+        "session": session.as_dict() if session is not None else None,
     })
     return EXIT_OK if not problems else EXIT_INTEGRITY
 
@@ -1976,6 +2147,8 @@ def op_finalize(args) -> int:
     sidecar = load_sidecar(Path(args.sidecar))
     _roots(sidecar)
     stored = _setup(sidecar.run_root)
+    session_id = getattr(args, "session_id", None) or None
+    session = _session_layout(sidecar.run_root, session_id, create=bool(session_id))
     try:
         lock = campaign_lock(stored.lock)
         lock.__enter__()
@@ -1987,7 +2160,10 @@ def op_finalize(args) -> int:
         current = _identity(sidecar, _git(infra_root(), "rev-parse", "HEAD"))
         _check_anchor(_prepared_identities(sidecar), current)
 
-        receipt = receipts.load_current_receipt(sidecar.run_root)
+        # The receipt is read from this session's root: a reconnect resumes it,
+        # while another session's receipt is never adopted as this session's
+        # qualification.
+        receipt = receipts.load_current_receipt(session.root)
         if receipt is None:
             raise Refusal("not_qualified", "no validation record; run validate first")
         problems = receipts.verify_receipt_digest(receipt)
@@ -2029,28 +2205,30 @@ def op_finalize(args) -> int:
 
 
         # A fresh qualification run is a checker execution: it is charged
-        # against the same limits as validate and refuses before starting.
-        history = _validation_history(sidecar.run_root)
-        attempts = _validation_attempts(history)
+        # against the same campaign-wide limits as validate and refuses before
+        # starting.
+        history = _campaign_attempt_history(sidecar.run_root)
         stop = _campaign_budget_stop(sidecar, history, time.time())
         if stop is not None:
-            emit({
-                "ok": True,
-                "operation": "finalize",
-                "campaign_id": sidecar.campaign_id,
-                "classification": "policy_stop",
-                "kind": stop["kind"],
-                "goal_policy": GOAL_POLICY["unavailable"],
-                "detail": stop["detail"],
-                "validations": len(attempts),
-                "max_validations": sidecar.max_validations,
-                "candidate_digest": (current.get("candidate") or {}).get("digest"),
-            })
+            payload = _budget_stop_payload(sidecar, stop, history, current)
+            payload["operation"] = "finalize"
+            emit(payload)
             return EXIT_OK
 
-        attempt_id = _start_attempt(
-            sidecar.run_root, operation="finalize",
+        claim, attempt_id = _claim_attempt(
+            sidecar, session, operation="finalize", session_id=session_id,
             candidate_digest=(current.get("candidate") or {}).get("digest"))
+        if not claim.get("ok"):
+            stop = {
+                "kind": claim.get("kind", "budget_exhausted"),
+                "detail": (
+                    f"{claim.get('used')} validation attempt(s) reached "
+                    f"max_validations={sidecar.max_validations} campaign-wide"),
+            }
+            payload = _budget_stop_payload(sidecar, stop, history, current)
+            payload["operation"] = "finalize"
+            emit(payload)
+            return EXIT_OK
         started = time.monotonic()
         checker_exception = None
         try:
@@ -2071,7 +2249,7 @@ def op_finalize(args) -> int:
         after = _identity(sidecar, _git(infra_root(), "rev-parse", "HEAD"))
         drift = after != current
         _finish_attempt(
-            sidecar.run_root, attempt_id, operation="finalize",
+            session, attempt_id, operation="finalize",
             classification="identity_drift" if drift else classification,
             kind="identity_drift" if drift else kind,
             verdict=verdict,
@@ -2094,7 +2272,7 @@ def op_finalize(args) -> int:
                 "exit_code": outcome.get("exit_code"),
                 "duration_ms": duration_ms,
             }
-            receipts.write_receipt(sidecar.run_root, fresh)
+            receipts.write_receipt(session.root, fresh)
             raise Refusal(
                 "fresh_validation_failed",
                 "the confirmation run for this candidate returned "
@@ -2102,9 +2280,11 @@ def op_finalize(args) -> int:
             )
 
         frozen = _freeze_once(sidecar, current)
-        replay = _replay_frozen(sidecar, frozen)
+        replay = _replay_frozen(sidecar, frozen, session=session,
+                                session_id=session_id)
         if sidecar.require_independent_review:
-            problems = _review_problem(sidecar, frozen, require_live=True)
+            problems = _review_problem(sidecar, frozen, require_live=True,
+                                       receipt_root=session.root)
             if problems:
                 raise Refusal("review_required", "; ".join(problems))
 
@@ -2117,10 +2297,12 @@ def op_finalize(args) -> int:
             "ignored_inputs": snapshot.ignored_inputs(sidecar.workspace),
             "fresh_verdict": verdict,
             "duration_ms": duration_ms,
-            "session": {"session_id": getattr(args, "session_id", None)},
+            "session": {"session_id": session_id},
+            "session_root": str(session.root),
+            "session_layout": session.kind,
             "created_at": _now(),
         }
-        record_path = sidecar.run_root / "finalization.json"
+        record_path = session.finalization_path
         receipts.atomic_write(record_path, receipts.canonical_json(record))
         emit({
             "ok": True,
@@ -2133,6 +2315,7 @@ def op_finalize(args) -> int:
             "replay": replay,
             "identity_digest": receipts.identity_digest(current),
             "finalization": record_path.name,
+            "session": session.as_dict(),
         })
         return EXIT_OK
     finally:
@@ -2236,9 +2419,12 @@ def op_context(args) -> int:
         )
 
     identity_digest = receipts.identity_digest(identities)
-    verification = _qualification_state(sidecar, identities)
-    block = _startup_block(sidecar, roots)
-    attempts = _validation_attempts(_validation_history(sidecar.run_root))
+    context_session = _session_layout(
+        sidecar.run_root, getattr(args, "session_id", None), create=False)
+    verification = _qualification_state(
+        sidecar, identities, root=context_session.root)
+    block = _startup_block(sidecar, roots, context_session)
+    attempts = _validation_attempts(_campaign_attempt_history(sidecar.run_root))
     text = _startup_text(
         block, attempts=attempts, identity_digest=identity_digest,
         verification=verification)
@@ -2273,7 +2459,8 @@ def build_parser() -> argparse.ArgumentParser:
                  "checker-compat", "review-run", "review-verify"):
         child = sub.add_parser(name)
         child.add_argument("--sidecar", required=True)
-        if name in ("validate", "finalize"):
+        if name in ("prepare", "context", "validate", "finalize",
+                    "review-run", "review-verify"):
             child.add_argument("--session-id", default=None)
         if name == "prepare":
             child.add_argument("--create-anchor", action="store_true")

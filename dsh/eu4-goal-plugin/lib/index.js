@@ -53,6 +53,10 @@ export function bridgeTimeoutMs(operation, checkerSeconds) {
 }
 const BRIDGE_OUTPUT_CAP = 1_000_000
 const BINDING_FILE = 'plugin-binding.json'
+// The bridge validates session ids and derives the isolated root. This local
+// check only decides whether an id is safe to embed in a *filename* on the
+// legacy shared root, where no per-session directory exists.
+const SAFE_SESSION_ID = /^[a-z0-9][a-z0-9._-]{0,127}$/
 
 /** The trusted checkout that owns this plugin: <infra>/dsh/eu4-goal-plugin/lib. */
 export function resolveInfra(config = {}) {
@@ -283,7 +287,8 @@ export function apply(ctx, config = {}) {
     let result
     try {
       result = await bridge(
-        infra, python, 'context', sidecar, [], CONTEXT_TIMEOUT_MS
+        infra, python, 'context', sidecar,
+        sessionArgs(sessionIdentity(agent)), CONTEXT_TIMEOUT_MS
       )
     } catch (error) {
       ctx.logger?.warn?.(
@@ -414,10 +419,63 @@ export function apply(ctx, config = {}) {
     return { ...result, goal_policy_applied: true }
   }
 
-  function persistBiding(sessionId, agentId, goal, runRoot) {
+  /**
+   * The writable root a bridge `prepare` reported for this session.
+   *
+   * The bridge owns root derivation and validation; the plugin never builds a
+   * path from a session id itself. An older bridge (or a test double) that does
+   * not report `session` keeps the historical shared run root, and that choice
+   * is visible as `kind: 'legacy-shared'` rather than being passed off as
+   * isolation.
+   */
+  function bindingRoot(prepared, runRoot) {
+    const session = prepared && prepared.session
+    if (session && typeof session.root === 'string' && session.root) {
+      return {
+        root: session.root,
+        kind: typeof session.kind === 'string' ? session.kind : 'session',
+        reason: typeof session.reason === 'string' ? session.reason : '',
+        session_id: typeof session.session_id === 'string' ? session.session_id : null,
+      }
+    }
+    if (typeof runRoot === 'string' && runRoot) {
+      return {
+        root: runRoot,
+        kind: 'legacy-shared',
+        reason: 'prepare reported no session layout; using the shared run root',
+        session_id: null,
+      }
+    }
+    return undefined
+  }
+
+  /** `--session-id` only for a real id; the bridge rejects an empty one. */
+  function sessionArgs(sessionId) {
+    return sessionId && sessionId !== 'unknown'
+      ? ['--session-id', sessionId]
+      : []
+  }
+
+  function bindingFile(layout, sessionId) {
+    if (!layout || typeof layout.root !== 'string' || !layout.root) return undefined
+    if (layout.kind !== 'legacy-shared') {
+      return path.join(layout.root, BINDING_FILE)
+    }
+    // A legacy shared root has no per-session directory. Keep real session ids
+    // from overwriting each other there by naming the record after the session;
+    // the historical shared filename remains readable (and is refused when it
+    // names another session).
+    if (typeof sessionId === 'string' && sessionId !== 'unknown'
+        && SAFE_SESSION_ID.test(sessionId)) {
+      return path.join(layout.root, `plugin-binding.${sessionId}.json`)
+    }
+    return path.join(layout.root, BINDING_FILE)
+  }
+
+  function persistBinding(sessionId, agentId, goal, layout) {
     // Persistence is best-effort; the in-memory binding is what the current
-    // finalization compares against. Dropping it because the run root could not
-    // be resolved turned a live goal into "no binding recorded".
+    // finalization compares against. Dropping it because the root could not be
+    // resolved turned a live goal into "no binding recorded".
     if (!goal) return bindings.get(sessionId)
     const value = {
       schema: 'eu4-dsh-plugin-binding/v1',
@@ -426,31 +484,53 @@ export function apply(ctx, config = {}) {
       goal_id: goal.id,
       revision: goal.revision,
       objective_digest: digestObjective(goal.objective),
+      session_root: layout ? layout.root : null,
+      layout_kind: layout ? layout.kind : 'unavailable',
       bound_at: new Date().toISOString(),
     }
     bindings.set(sessionId, value)
-    if (!runRoot) return value
+    const file = bindingFile(layout, sessionId)
+    if (!file) return value
     try {
-      fs.writeFileSync(path.join(runRoot, BINDING_FILE), JSON.stringify(value, null, 2))
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      fs.writeFileSync(file, JSON.stringify(value, null, 2))
     } catch (error) {
       ctx.logger?.warn?.(`[eu4-goal] could not persist binding: ${error.message}`)
     }
     return value
   }
 
-  function bindingFor(sessionId, runRoot) {
+  function bindingFor(sessionId, layout) {
     if (bindings.has(sessionId)) return bindings.get(sessionId)
-    if (!runRoot) return undefined
-    try {
-      const file = path.join(runRoot, BINDING_FILE)
-      if (!fs.existsSync(file)) return undefined
-      const stored = JSON.parse(fs.readFileSync(file, 'utf8'))
-      bindings.set(sessionId, stored)
-      return stored
-    } catch {
-      // An unreadable binding is no binding: the caller must rebind.
-      return undefined
+    if (!layout || typeof layout.root !== 'string' || !layout.root) return undefined
+    const candidates = [bindingFile(layout, sessionId)]
+    if (layout.kind === 'legacy-shared') {
+      // Older sessions recorded one shared file; read it, but the session-id
+      // check below still refuses to adopt another session's record.
+      candidates.push(path.join(layout.root, BINDING_FILE))
     }
+    for (const file of candidates) {
+      if (!file) continue
+      try {
+        if (!fs.existsSync(file)) continue
+        const stored = JSON.parse(fs.readFileSync(file, 'utf8'))
+        if (!stored || typeof stored !== 'object') continue
+        // A shared legacy root, or a moved session root, can contain another
+        // session's record. Qualification belongs to one session, so never
+        // adopt it: the caller rebinds (validate) or is refused (finalize).
+        if (stored.session_id === sessionId) {
+          bindings.set(sessionId, stored)
+          return stored
+        }
+        ctx.logger?.warn?.(
+          `[eu4-goal] ignoring a binding recorded for ${stored.session_id}; ` +
+          `this session is ${sessionId}`
+        )
+      } catch {
+        // An unreadable binding is no binding: try the next candidate.
+      }
+    }
+    return undefined
   }
 
   // --- completion gate -----------------------------------------------------
@@ -494,7 +574,10 @@ export function apply(ctx, config = {}) {
         // `validate` refuses an unprepared campaign and the model has no tool
         // to prepare one, so a fresh goal would stall here. `prepare` is
         // idempotent and anchors only trusted material, never the candidate.
-        const prepared = await bridge(infra, python, 'prepare', sidecar)
+        // It also resolves this session's isolated writable root.
+        const prepared = await bridge(
+          infra, python, 'prepare', sidecar, sessionArgs(sessionId)
+        )
         if (prepared && prepared.ok === false) return prepared
         const mismatch = workspaceProblem(agentOf(exec), prepared && prepared.workspace)
         if (mismatch) {
@@ -507,8 +590,8 @@ export function apply(ctx, config = {}) {
             detail: mismatch,
           }
         }
-        const runRoot = (prepared && prepared.run_root) || undefined
-        const bound = bindingFor(sessionId, runRoot)
+        const layout = bindingRoot(prepared, prepared && prepared.run_root)
+        const bound = bindingFor(sessionId, layout)
         // No binding yet is the normal first validate; only an existing binding
         // can conflict with the live goal.
         const problems = bound ? goalBindingProblems(bound, goal) : []
@@ -525,13 +608,13 @@ export function apply(ctx, config = {}) {
             detail: problems.join('; '),
           }
         }
-        const validateArgs = sessionId === 'unknown' ? [] : ['--session-id', sessionId]
+        const validateArgs = sessionArgs(sessionId)
         const result = await bridge(
           infra, python, 'validate', sidecar, validateArgs,
           bridgeTimeoutMs('validate', prepared && prepared.checker_timeout_seconds)
         )
         if (!bound) {
-          persistBiding(sessionId, exec?.agent?.id, goal, runRoot || (result && result.run_root))
+          persistBinding(sessionId, exec?.agent?.id, goal, layout)
         }
         return result
       }
@@ -551,15 +634,17 @@ export function apply(ctx, config = {}) {
         const sessionId = sessionIdentity(agent)
         const live = ctx.goals.get(agent)
 
-        // `prepare` is idempotent and reports both the workspace and the run
-        // root, so it replaces a separate status call.
-        const prepared = await bridge(infra, python, 'prepare', sidecar)
+        // `prepare` is idempotent and reports the workspace, the run root and
+        // this session's writable root, so it replaces a separate status call.
+        const prepared = await bridge(
+          infra, python, 'prepare', sidecar, sessionArgs(sessionId)
+        )
         if (prepared && prepared.ok === false) return prepared
-        const runRoot = prepared && prepared.run_root
+        const layout = bindingRoot(prepared, prepared && prepared.run_root)
         // Never rebind here: a binding established by validation is compared,
         // not replaced. Rebinding would let an edited objective inherit the
         // earlier qualification, which is exactly what must not happen.
-        const binding = bindingFor(sessionId, runRoot)
+        const binding = bindingFor(sessionId, layout)
         const problems = goalBindingProblems(binding, live)
         if (problems.length) {
           return {
@@ -582,7 +667,7 @@ export function apply(ctx, config = {}) {
             detail: mismatch,
           }
         }
-        const finalizeArgs = sessionId ? ['--session-id', sessionId] : []
+        const finalizeArgs = sessionArgs(sessionId)
         const result = await bridge(
           infra, python, 'finalize', sidecar, finalizeArgs,
           // Two checker runs, so the budget has to cover both.
@@ -608,7 +693,10 @@ export function apply(ctx, config = {}) {
         async (_args, exec) => {
           requireSidecar()
           const agent = exec?.agent
-          const prepared = await bridge(infra, python, 'prepare', sidecar)
+          const sessionId = sessionIdentity(agent)
+          const prepared = await bridge(
+            infra, python, 'prepare', sidecar, sessionArgs(sessionId)
+          )
           if (prepared && prepared.ok === false) return prepared
           const mismatch = workspaceProblem(agent, prepared && prepared.workspace)
           if (mismatch) {
@@ -621,8 +709,11 @@ export function apply(ctx, config = {}) {
             }
           }
           // The reviewer runs as its own headless session; the bridge freezes
-          // the candidate, validates the report and writes the receipt.
-          return await bridge(infra, python, 'review-run', sidecar)
+          // the candidate, validates the report and writes the receipt. The
+          // requesting session id selects the receipt that may be reviewed.
+          return await bridge(
+            infra, python, 'review-run', sidecar, sessionArgs(sessionId)
+          )
         }
       )
     )
