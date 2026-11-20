@@ -429,6 +429,75 @@ class GoalPhaseTests(unittest.TestCase):
         self.assertIn("terminal transition is outside this window",
                       " ".join(goal["limitations"]))
 
+    def test_edit_then_clear_terminal_window_reports_unknown_end(self):
+        events = [
+            {"type": "goal/change", "time": 7000, "data": {
+                "operation": "edit",
+                "goal": {"id": "g", "phase": "blocked", "revision": 3}}},
+            {"type": "goal/change", "time": 9000, "data": {
+                "operation": "clear",
+                "cleared": {"id": "g", "revision": 3}}},
+            {"type": "turn/end", "time": 10000, "data": {
+                "turn": 2, "reason": {"kind": "completed"}}},
+        ]
+        goal = dsh_efficiency.analyze(events)["goal"]
+        self.assertEqual(goal["outcome"], "blocked")
+        self.assertTrue(goal["cleared"])
+        self.assertTrue(goal["unknown_end"])
+        self.assertEqual(goal["duration_kind"], "unknown_end")
+        self.assertIsNone(goal["ended_utc"])
+        self.assertIsNotNone(goal["cleared_utc"])
+
+    def test_capture_help_is_not_a_physical_launch(self):
+        events = [
+            {"type": "tool/call", "time": 1000, "data": {
+                "callId": "help", "name": "bash",
+                "arguments": {"command":
+                              "python3 -m automation.m6_frame capture --help"}}},
+            {"type": "tool/result", "time": 1100, "data": {
+                "toolCallId": "help", "message": {"isError": False,
+                                                  "content": []}}},
+        ]
+        value = dsh_efficiency.analyze(events)
+        self.assertEqual(value["eu4_launches"]["count"], 0)
+
+    def test_runner_invocations_are_physical_work(self):
+        events = [
+            {"type": "tool/call", "time": 1000, "data": {
+                "callId": "r1", "name": "bash",
+                "arguments": {"command":
+                              "python3.14 -m automation.test_runner run "
+                              "--profile offline --module tests.test_agent_tools"}}},
+            {"type": "tool/result", "time": 2000, "data": {
+                "toolCallId": "r1", "message": {"isError": False,
+                                                "content": []}}},
+        ]
+        value = dsh_efficiency.analyze(events)
+        self.assertEqual(value["physical_work"]["runner_invocations"], 1)
+        self.assertEqual(value["physical_work"]["game_launch_commands"], 0)
+        self.assertIsNone(value["physical_work"]["confirmed_game_launches"])
+        self.assertIsNone(value["service"]["gpu_service_seconds"])
+
+    def test_overlapping_tool_waits_are_not_double_counted(self):
+        events = [
+            {"type": "tool/call", "time": 1000, "data": {
+                "callId": "a", "name": "bash", "arguments": {"command": "true"}}},
+            {"type": "tool/call", "time": 1000, "data": {
+                "callId": "b", "name": "bash", "arguments": {"command": "true"}}},
+            {"type": "tool/result", "time": 4000, "data": {
+                "toolCallId": "a", "message": {"isError": False,
+                                               "content": []}}},
+            {"type": "tool/result", "time": 5000, "data": {
+                "toolCallId": "b", "message": {"isError": False,
+                                               "content": []}}},
+        ]
+        service = dsh_efficiency.analyze(events)["service"]
+        self.assertAlmostEqual(service["tool_wait_sum_seconds"], 7.0, places=3)
+        self.assertAlmostEqual(service["tool_wait_union_seconds"], 4.0,
+                               places=3)
+        self.assertAlmostEqual(service["overlapping_wait_seconds"], 3.0,
+                               places=3)
+
     def test_paused_goal_has_observed_not_terminal_lifetime(self):
         events = [
             {"type": "goal/change", "time": 1000, "data": {

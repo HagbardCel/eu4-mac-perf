@@ -56,6 +56,9 @@ _CAPTURE_COMMAND = re.compile(
     + r"(?:[A-Za-z0-9_./-]*/)?"
       r"(?:python[\d.]*\s+-m\s+(?:automation\.)?m6_frame\s+capture)\b",
     re.IGNORECASE | re.MULTILINE)
+_RUNNER_COMMAND = re.compile(
+    r"(?:python[\d.]*\s+-m\s+automation\.test_runner\s+run|"
+    r"automation\.test_runner\s+run)\b", re.IGNORECASE)
 _SPILL = ("dsh-spill", "use read with offset/limit", "[truncated", "(truncated")
 
 
@@ -246,6 +249,7 @@ def analyze(
     session = {}
     tool_wait = collections.Counter()
     tool_wait_calls = collections.Counter()
+    wait_intervals: list[tuple[float, float]] = []
 
     for event in events:
         kind = event.get("type")
@@ -358,6 +362,7 @@ def analyze(
         delta = max(0.0, result["time"] - call["time"])
         tool_wait[call["name"]] += delta
         tool_wait_calls[call["name"]] += 1
+        wait_intervals.append((call["time"], result["time"]))
 
     by_tool = collections.Counter(call["name"] for call in call_order)
     failures = [call for call in call_order
@@ -448,6 +453,14 @@ def analyze(
     ]
     duplicate_tests.sort(key=lambda row: row["count"], reverse=True)
 
+    runner_invocations = 0
+    runner_evidence = []
+    for call in call_order:
+        command = str(call["arguments"].get("command") or "")
+        command = _command_without_heredoc(command) if command else command
+        if command and _RUNNER_COMMAND.search(command):
+            runner_invocations += 1
+            runner_evidence.append(_sanitize(_excerpt(command)))
     launches = []
     launch_tool_calls = 0
     bash_launches = 0
@@ -464,7 +477,8 @@ def analyze(
             continue
         command = _command_without_heredoc(command) if command else command
         if command:
-            matches = list(_CAPTURE_COMMAND.finditer(command))
+            matches = [match for match in _CAPTURE_COMMAND.finditer(command)
+                       if "--help" not in command[match.start():match.start() + 200]]
             matches.extend(_EU4_COMMAND.finditer(command))
             for match in matches:
                 bash_launches += 1
@@ -475,7 +489,28 @@ def analyze(
                                 match.start() + 160]),
                 })
 
+    def _union_seconds(intervals):
+        if not intervals:
+            return 0.0
+        ordered = sorted((start, end) for start, end in intervals
+                         if end >= start)
+        total = 0.0
+        current_start = current_end = None
+        for start, end in ordered:
+            if current_start is None:
+                current_start, current_end = start, end
+            elif start <= current_end:
+                current_end = max(current_end, end)
+            else:
+                total += current_end - current_start
+                current_start, current_end = start, end
+        if current_start is not None:
+            total += current_end - current_start
+        return total
+
     wall_seconds = (max(timestamps) - min(timestamps)) if timestamps else 0.0
+    wait_sum_seconds = sum(tool_wait.values())
+    wait_union_seconds = _union_seconds(wait_intervals)
     input_tokens = tokens["inputTokens"]
     cache_read = tokens["cacheReadTokens"]
     total_tokens = tokens["totalTokens"] or (input_tokens + cache_read + tokens["outputTokens"])
@@ -519,6 +554,17 @@ def analyze(
                     and row.get("operation") != "edit"):
                 substantive_phase = phase
                 break
+        else:
+            # Issue #232: a window can contain only an edit snapshot of an
+            # already-complete/blocked goal plus its clear tombstone.  Use the
+            # edit's phase as the substantive outcome, but never its timestamp
+            # as the end: the original terminal transition is not in-window.
+            for row in reversed(selected_events[:-1]):
+                phase = row.get("phase")
+                if (phase not in (None, "cleared", "active", "paused")
+                        and row.get("operation") == "edit"):
+                    substantive_phase = phase
+                    break
     terminal_event = None
     terminal_operations = {"complete", "block", "clear", "cancel",
                            "cancelled"}
@@ -646,6 +692,28 @@ def analyze(
             "duplicates": duplicate_tests[:top],
             "distinct_commands": len(test_commands),
         },
+        "physical_work": {
+            "runner_invocations": runner_invocations,
+            "runner_evidence": runner_evidence[:top],
+            "game_launch_commands": launch_tool_calls + bash_launches,
+            "confirmed_game_launches": None,
+            "confirmed_game_launches_note": (
+                "join guard claims, launcher PID and termination records to "
+                "confirm a physical start; a command match alone is a request"),
+            "gpu_service_seconds": None,
+            "gpu_service_note": (
+                "GPU execution is not separable from CPU/filesystem wait in "
+                "this session trace"),
+        },
+        "service": {
+            "client_wall_seconds": round(wall_seconds, 3),
+            "tool_wait_sum_seconds": round(wait_sum_seconds, 3),
+            "tool_wait_union_seconds": round(wait_union_seconds, 3),
+            "overlapping_wait_seconds": round(
+                max(0.0, wait_sum_seconds - wait_union_seconds), 3),
+            "gpu_service_seconds": None,
+            "unknown": ["gpu_service_seconds"],
+        },
         "eu4_launches": {
             "count": launch_tool_calls + bash_launches,
             "launch_tool_calls": launch_tool_calls,
@@ -699,6 +767,7 @@ def analyze(
             "ended_utc": (_iso(goal_end)
                           if terminal_event is not None
                           and not duration_invalid else None),
+            "unknown_end": duration_kind == "unknown_end",
             "duration_kind": duration_kind,
             "duration_invalid": duration_invalid,
             "duration_seconds": (round(goal_elapsed, 3)
