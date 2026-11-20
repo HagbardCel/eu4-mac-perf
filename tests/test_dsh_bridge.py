@@ -95,6 +95,160 @@ class PrepareTests(BridgeTestCase):
         )
         self.assertEqual(len(out["identity_digest"]), 64)
 
+    def test_prepare_emits_a_compact_startup_block(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        code, out = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK)
+        startup = out["startup"]
+        self.assertEqual(startup["campaign_id"], out["campaign_id"])
+        self.assertEqual(startup["workspace"], str(self.workspace.resolve()))
+        self.assertEqual(startup["workspace_mode"], "seed")
+        self.assertTrue(startup["workspace_writable"])
+        self.assertIsNone(startup["workspace_head"])
+        self.assertEqual(startup["checker"], out["execution_roots"]["checker"])
+        self.assertEqual(startup["run_root"], str(self.run_root.resolve()))
+        self.assertEqual(startup["objective_digest"],
+                         out["identities"]["objective_digest"])
+        self.assertEqual(startup["live_capture"]["enabled"], False)
+        self.assertEqual(startup["closing"]["max_rounds"], 4)
+        self.assertEqual(startup["closing"]["max_validations"], 6)
+        self.assertEqual(startup["closing"]["wall_clock_seconds"], 600)
+        self.assertTrue(startup["closing"]["require_checker_pass"])
+        self.assertEqual(startup["allowed_paths"], ["*"])
+        self.assertEqual(startup["forbidden_paths"], [])
+        self.assertIn(startup["first_command"][0], ("git", "ls"))
+        # The writability probe must not leave candidate residue.
+        self.assertEqual(
+            list(self.workspace.glob(".dsh-prepare-probe-*")), [])
+
+    def test_prepare_refuses_an_unwritable_workspace_before_anchoring(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        self.workspace.mkdir(parents=True)
+        # A pre-existing path must never be overwritten or removed by a probe.
+        existing = self.workspace / ".dsh-prepare-probe-existing"
+        existing.write_text("keep", encoding="utf-8")
+        original_open = os.open
+
+        def fail_probe_open(path, *args, **kwargs):
+            if Path(path).name.startswith(dsh_bridge.PROBE_PREFIX):
+                raise PermissionError("injected permission")
+            return original_open(path, *args, **kwargs)
+
+        with mock.patch("automation.dsh_bridge.os.open",
+                        side_effect=fail_probe_open):
+            code, out = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["kind"], "workspace_not_writable")
+        self.assertIn("injected permission", out["detail"])
+        self.assertEqual(existing.read_text(encoding="utf-8"), "keep")
+        self.assertFalse((self.run_root / "identity.json").is_file())
+        self.assertFalse((self.run_root / "validations.jsonl").exists())
+        self.assertEqual(
+            list(self.workspace.glob(".dsh-prepare-probe-*")), [existing])
+
+
+    def test_probe_filters_stale_residue_from_the_candidate_identity(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        self.workspace.mkdir(parents=True)
+        stale = self.workspace / f"{dsh_bridge.PROBE_PREFIX}stale"
+        stale.write_text("left by a killed process", encoding="utf-8")
+        self.addCleanup(lambda: stale.unlink(missing_ok=True))
+        dsh_bridge._register_probe(self.run_root, self.workspace, stale.name)
+        code, out = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertNotIn(stale.name,
+                         out["identities"]["candidate"]["changed_paths"])
+        self.assertFalse(stale.exists())
+
+    def test_probe_cleanup_failure_is_a_refusal(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        self.workspace.mkdir(parents=True)
+        original_unlink = Path.unlink
+
+        def fail_probe_unlink(path, *args, **kwargs):
+            if path.name.startswith(dsh_bridge.PROBE_PREFIX):
+                raise OSError("injected unlink failure")
+            return original_unlink(path, *args, **kwargs)
+
+        with mock.patch("pathlib.Path.unlink", new=fail_probe_unlink):
+            code, out = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
+        self.assertEqual(out["kind"], "workspace_not_writable")
+        self.assertIn("probe cleanup failed", out["detail"])
+        self.assertFalse((self.run_root / "identity.json").is_file())
+        residue = list(self.workspace.glob(f"{dsh_bridge.PROBE_PREFIX}*"))
+        self.assertEqual(len(residue), 1)
+        for path in residue:
+            path.unlink()
+
+
+    def test_nested_probe_prefixed_path_is_still_candidate_work(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"),
+                               allowed=("marker.txt", "progress.md", ".local/*"))
+        data = json.loads(sidecar.read_text())
+        data["candidate"]["policy"]["forbidden_paths"] = [".local"]
+        sidecar.write_text(json.dumps(data), encoding="utf-8")
+        self.workspace.mkdir(parents=True)
+        nested = self.workspace / ".local" / ".dsh-prepare-probe-cheat"
+        nested.parent.mkdir()
+        nested.write_text("candidate work", encoding="utf-8")
+        code, out = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
+        self.assertEqual(out["kind"], "policy")
+        self.assertIn("frozen path modified", out["detail"])
+        self.assertTrue(nested.is_file())
+
+    def test_freeze_ignores_root_level_probe_residue(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        self.run_bridge("prepare", sidecar)
+        stale = self.workspace / f"{dsh_bridge.PROBE_PREFIX}stale"
+        stale.write_text("residue", encoding="utf-8")
+        self.addCleanup(lambda: stale.unlink(missing_ok=True))
+        dsh_bridge._register_probe(self.run_root, self.workspace, stale.name)
+        loaded = dsh_campaign.load_sidecar(sidecar)
+        frozen = dsh_bridge._freeze(loaded)
+        self.assertEqual(frozen["mode"], "seed")
+        self.assertEqual(frozen["entries"], 2)
+
+
+    def test_staged_rename_into_probe_namespace_is_not_filtered(self) -> None:
+        baseline = subprocess.run(
+            ["git", "-C", str(REPO), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        worktree = self.root / "probe-rename-wt"
+        subprocess.run(
+            ["git", "-C", str(REPO), "worktree", "add", "--detach",
+             str(worktree), baseline],
+            capture_output=True, check=True,
+        )
+        self.addCleanup(
+            subprocess.run,
+            ["git", "-C", str(REPO), "worktree", "remove", "--force",
+             "--force", str(worktree)],
+            capture_output=True)
+        subprocess.run(
+            ["git", "-C", str(worktree), "mv", "docs/status.md",
+             ".dsh-prepare-probe-evil"],
+            capture_output=True, check=True)
+        sidecar = self.sidecar(self.campaign("smoke-campaign"),
+                               allowed=("docs/*",))
+        data = json.loads(sidecar.read_text())
+        data["candidate"] = {
+            "mode": "worktree",
+            "workspace": str(worktree),
+            "policy": {"allowed_paths": ["docs/*"]},
+        }
+        data["candidate_baseline_commit"] = baseline
+        sidecar.write_text(json.dumps(data), encoding="utf-8")
+        code, out = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
+        self.assertEqual(out["kind"], "policy")
+        self.assertIn(".dsh-prepare-probe-evil", out["detail"])
+        self.assertTrue((worktree / ".dsh-prepare-probe-evil").is_file())
+        self.assertFalse((worktree / "docs" / "status.md").exists())
+
 
 class ValidationBudgetTests(BridgeTestCase):
     """External sidecar limits are enforced from the bridge's attempt log."""
