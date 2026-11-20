@@ -303,6 +303,26 @@ class GoalPhaseTests(unittest.TestCase):
         self.assertAlmostEqual(goal["duration_seconds"], 10.0, places=3)
         self.assertFalse(goal["duration_invalid"])
 
+    def test_resumed_active_goal_is_ongoing_not_terminated(self):
+        events = [
+            {"type": "goal/change", "time": 1000, "data": {
+                "operation": "create",
+                "goal": {"id": "g", "phase": "active", "revision": 1}}},
+            {"type": "goal/change", "time": 2000, "data": {
+                "operation": "block",
+                "goal": {"id": "g", "phase": "blocked", "revision": 2}}},
+            {"type": "goal/change", "time": 3000, "data": {
+                "operation": "resume",
+                "goal": {"id": "g", "phase": "active", "revision": 3}}},
+            {"type": "turn/end", "time": 10000, "data": {
+                "turn": 1, "reason": {"kind": "completed"}}},
+        ]
+        goal = dsh_efficiency.analyze(events)["goal"]
+        self.assertEqual(goal["outcome"], "active")
+        self.assertIsNone(goal["ended_utc"])
+        self.assertEqual(goal["duration_kind"], "ongoing")
+        self.assertAlmostEqual(goal["duration_seconds"], 9.0, places=3)
+
     def test_missing_goal_timestamps_do_not_emit_a_duration(self):
         events = [
             {"type": "goal/change", "data": {

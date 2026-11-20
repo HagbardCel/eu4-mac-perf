@@ -499,10 +499,11 @@ def analyze(
     last_goal = selected_events[-1] if selected_events else None
     last_phase = last_goal["phase"] if last_goal else None
     terminal_event = None
-    for row in reversed(selected_events):
-        if row.get("phase") in terminal_phases:
-            terminal_event = row
-            break
+    if last_phase != "active":
+        for row in reversed(selected_events):
+            if row.get("phase") in terminal_phases:
+                terminal_event = row
+                break
     start_event = next(
         (row for row in selected_events if row.get("operation") == "create"),
         selected_events[0] if selected_events else None)
