@@ -439,7 +439,14 @@ class Runner:
             # The bounded fingerprint cannot prove the candidate unchanged;
             # allow the reconnect to inspect the substantive work.
             return False
-        if fingerprint.get("candidate_sha256") != self._candidate_digest():
+        current = candidate_fingerprint(self.live)
+        if current.get("truncated"):
+            # The current candidate cannot be proven unchanged; do not block.
+            return False
+        digest = hashlib.sha256(json.dumps(
+            current, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        if fingerprint.get("candidate_sha256") != digest:
             return False
         if fingerprint.get("verdict") != state.get("last_verdict"):
             return False
