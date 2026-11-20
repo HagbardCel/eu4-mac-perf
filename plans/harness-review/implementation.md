@@ -3,22 +3,23 @@
 Durable issue-to-PR coverage for the 20 November 2026 review
 ([assessment](assessment.md), [quickwins](quickwins.md), [roadmap](roadmap.md),
 [steps](steps/01-exact-verdicts.md)). This file records implementation, the
-exact reviewed head, technical verification, independent approval and the
-remaining work. It is not an issue-closure record.
+exact reviewed head, technical verification, the independent review record and
+the remaining work. It is not an issue-closure record.
 
 ## State vocabulary
 
 | State | Meaning |
 |---|---|
-| `accepted` | An independent reviewer approved the exact final head; the PR is merged or merge-ready. |
+| `accepted` | An independent reviewer accepted the exact final head as technically ready; the PR is merged or merge-ready. A formal GitHub `APPROVE` is recorded only when the row says so. |
 | `verified` | The named head contains the change and its focused verification is green. Independent approval or merge is named separately. |
 | `partial` | Part of the issue is implemented, or a review finding is still open at the head. The remainder is named. |
 | `blocked` | The required authentic observation is unavailable; the next discriminating test is named. |
 | `unresolved` | A confirmed defect has no reviewed fix merged; the missing change is named. |
 | `outstanding` | A required observation or experiment has not been performed; no result is claimed. |
 
-Technical readiness and approval are separate columns. A green CI run is not a
-review.
+Technical readiness and the review record are separate columns. A green CI run
+is not a review, and an audit verdict or review comment is not a GitHub
+`APPROVE` state.
 
 ## Baseline and current state
 
