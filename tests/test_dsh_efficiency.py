@@ -374,6 +374,61 @@ class GoalPhaseTests(unittest.TestCase):
         self.assertEqual(summary["actions_attempted"], ["replay"])
         self.assertEqual(summary["action_attempted"], "replay")
 
+    def test_clear_after_complete_keeps_the_completion_outcome(self):
+        events = [
+            {"type": "goal/change", "time": 1000, "data": {
+                "operation": "create",
+                "goal": {"id": "g", "phase": "active", "revision": 1}}},
+            {"type": "goal/change", "time": 2000, "data": {
+                "operation": "complete",
+                "goal": {"id": "g", "phase": "complete", "revision": 2}}},
+            {"type": "goal/change", "time": 60000, "data": {
+                "operation": "clear",
+                "cleared": {"id": "g", "revision": 2}}},
+        ]
+        goal = dsh_efficiency.analyze(events)["goal"]
+        self.assertEqual(goal["outcome"], "completed")
+        self.assertEqual(goal["substantive_phase"], "complete")
+        self.assertTrue(goal["cleared"])
+        self.assertTrue(goal["terminal"])
+        self.assertAlmostEqual(goal["duration_seconds"], 1.0, places=3)
+        self.assertTrue(goal["ended_utc"].startswith(
+            "1970-01-01T00:00:02"))
+        self.assertTrue(goal["cleared_utc"].startswith(
+            "1970-01-01T00:01:00"))
+
+    def test_clear_after_blocked_keeps_the_blocked_outcome(self):
+        events = [
+            {"type": "goal/change", "time": 1000, "data": {
+                "operation": "create",
+                "goal": {"id": "g", "phase": "active", "revision": 1}}},
+            {"type": "goal/change", "time": 2000, "data": {
+                "operation": "block",
+                "goal": {"id": "g", "phase": "blocked", "revision": 2}}},
+            {"type": "goal/change", "time": 60000, "data": {
+                "operation": "clear",
+                "cleared": {"id": "g", "revision": 2}}},
+        ]
+        goal = dsh_efficiency.analyze(events)["goal"]
+        self.assertEqual(goal["outcome"], "blocked")
+        self.assertTrue(goal["cleared"])
+        self.assertAlmostEqual(goal["duration_seconds"], 1.0, places=3)
+
+    def test_edit_only_terminal_window_reports_unknown_end(self):
+        events = [
+            {"type": "goal/change", "time": 7000, "data": {
+                "operation": "edit",
+                "goal": {"id": "g", "phase": "complete", "revision": 3}}},
+            {"type": "turn/end", "time": 10000, "data": {
+                "turn": 2, "reason": {"kind": "completed"}}},
+        ]
+        goal = dsh_efficiency.analyze(events)["goal"]
+        self.assertEqual(goal["outcome"], "completed")
+        self.assertEqual(goal["duration_kind"], "unknown_end")
+        self.assertIsNone(goal["ended_utc"])
+        self.assertIn("terminal transition is outside this window",
+                      " ".join(goal["limitations"]))
+
     def test_paused_goal_has_observed_not_terminal_lifetime(self):
         events = [
             {"type": "goal/change", "time": 1000, "data": {

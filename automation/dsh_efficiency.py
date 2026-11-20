@@ -507,25 +507,37 @@ def analyze(
         selected_events = []
     last_goal = selected_events[-1] if selected_events else None
     last_phase = last_goal["phase"] if last_goal else None
+    # A clear tombstone may follow a substantive terminal phase (complete or
+    # blocked).  Keep that outcome and end time; the clear is recorded
+    # separately rather than replacing the result.
+    cleared_event = last_goal if last_phase == "cleared" else None
+    substantive_phase = last_phase
+    if cleared_event is not None:
+        for row in reversed(selected_events[:-1]):
+            phase = row.get("phase")
+            if (phase not in (None, "cleared")
+                    and row.get("operation") != "edit"):
+                substantive_phase = phase
+                break
     terminal_event = None
     terminal_operations = {"complete", "block", "clear", "cancel",
                            "cancelled"}
-    if last_phase in terminal_phases:
+    if substantive_phase in terminal_phases:
         # The transition that produced the current phase, not an arbitrary
         # historical terminal phase or a later edit of the same phase.
         for row in reversed(selected_events):
-            if (row.get("phase") == last_phase
+            if (row.get("phase") == substantive_phase
                     and row.get("operation") in terminal_operations):
                 terminal_event = row
                 break
         if terminal_event is None:
             for row in reversed(selected_events):
-                if (row.get("phase") == last_phase
+                if (row.get("phase") == substantive_phase
                         and row.get("operation") != "edit"):
                     terminal_event = row
                     break
-        if terminal_event is None:
-            terminal_event = last_goal
+    elif cleared_event is not None:
+        terminal_event = cleared_event
     start_event = next(
         (row for row in selected_events if row.get("operation") == "create"),
         None)
@@ -536,7 +548,9 @@ def analyze(
         "terminal" if terminal_event is not None else "ongoing")
     duration_invalid = False
     goal_elapsed = None
-    if terminal_event is not None:
+    if substantive_phase in terminal_phases and terminal_event is None:
+        duration_kind = "unknown_end"
+    elif terminal_event is not None:
         if goal_start is None:
             duration_kind = "unknown_start"
         elif goal_end is None:
@@ -564,8 +578,8 @@ def analyze(
         # No goal record exists: turn completion is reported separately and is
         # never promoted to a goal outcome.
         goal_outcome = "no_goal"
-    elif last_phase in terminal_phases:
-        goal_outcome = terminal_phases[last_phase]
+    elif substantive_phase in terminal_phases:
+        goal_outcome = terminal_phases[substantive_phase]
     elif last_phase == "active":
         goal_outcome = "active"
     else:
@@ -674,7 +688,13 @@ def analyze(
             "last_phase": last_phase,
             "active": bool(last_goal and last_phase == "active"),
             "paused": bool(last_goal and last_phase == "paused"),
-            "terminal": bool(last_goal and last_phase in terminal_phases),
+            "cleared": bool(cleared_event is not None),
+            "cleared_utc": (_iso(cleared_event["time"])
+                            if cleared_event is not None else None),
+            "substantive_phase": substantive_phase,
+            "terminal": bool(last_goal and (
+                substantive_phase in terminal_phases
+                or cleared_event is not None)),
             "started_utc": _iso(goal_start),
             "ended_utc": (_iso(goal_end)
                           if terminal_event is not None
@@ -703,6 +723,10 @@ def analyze(
                   "start is unknown") if start_event is None else
                  ("the selected goal's create event has no timestamp; its "
                   "start is unknown")] if duration_kind == "unknown_start"
+                else []
+            ) + (
+                ["the selected goal's terminal transition is outside this "
+                 "window; its end is unknown"] if duration_kind == "unknown_end"
                 else []),
         },
     }
