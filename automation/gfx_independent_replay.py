@@ -324,6 +324,10 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
 
     returned: dict[tuple[int, str], list[dict]] = {}
     for item in actual:
+        if not isinstance(item, dict):
+            problems.append({"kind": "malformed_result",
+                             "reason": "checkpoint result is not an object"})
+            continue
         key = _checkpoint_key(item)
         returned.setdefault(key, []).append(item)
 
@@ -3263,7 +3267,12 @@ def write_producer_receipt(out_dir: Path, frame_dir: Path,
     metal = out_dir / "metal-frame.bgra"
     checkpoint_files = []
     seen_checkpoints: set[str] = set()
-    for item in replay.get("checkpoints") or []:
+    declared_checkpoints = replay.get("checkpoints") or []
+    if not isinstance(declared_checkpoints, list):
+        raise ReplayError(
+            "invalid_checkpoint_binding",
+            "replay checkpoints are not a list")
+    for item in declared_checkpoints:
         if not isinstance(item, dict):
             raise ReplayError(
                 "invalid_checkpoint_binding",

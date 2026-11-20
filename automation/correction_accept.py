@@ -222,13 +222,21 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
     request, request_source, request_problems, request_binding = (
         gfx_independent_replay.checkpoint_request_evidence(
             graph, replay_dir, shadow=shadow, seal=seal))
+    invalid_requests = [item for item in request_problems
+                        if item.get("severity") == "invalid"]
+    if request_source == "published" and invalid_requests:
+        # Refuse a malformed/disagreeing plan before reconciliation can touch
+        # its entries; otherwise a bad request crashes instead of producing a
+        # fail-closed report.
+        raise AcceptanceError(
+            "request_invalid",
+            "; ".join(f"{item.get('kind')}: {item.get('detail')}"
+                      for item in invalid_requests[:8]))
     returned_checkpoint_names = _returned_checkpoint_names(replay)
     capture = gfx_independent_replay.capture_identity(seal, trace, replay)
     checkpoints, validation = gfx_independent_replay.reconcile_checkpoints(
         graph, request, replay, capture_dir, replay_dir, capture)
     validation = dict(validation)
-    invalid_requests = [item for item in request_problems
-                        if item.get("severity") == "invalid"]
     if request_source == "derived":
         # A derived plan cannot be bound to the replay that was executed.
         validation["status"] = "incomplete"
@@ -236,11 +244,6 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
             "kind": "request_not_bound",
             "detail": "the replay did not publish its checkpoint request",
         })
-    elif invalid_requests:
-        raise AcceptanceError(
-            "request_invalid",
-            "; ".join(f"{item.get('kind')}: {item.get('detail')}"
-                      for item in invalid_requests[:8]))
     elif request_problems:
         # An unbound or legacy request is visible, not silently upgraded to a
         # complete qualification.

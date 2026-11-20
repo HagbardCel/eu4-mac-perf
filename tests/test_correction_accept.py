@@ -270,6 +270,26 @@ class CorrectionAcceptanceTests(unittest.TestCase):
         self.assertIn("replay_receipt_mismatch",
                       json.dumps(report["problems"]))
 
+    def test_malformed_published_request_is_invalid_without_crashing(self):
+        after = self.model.replay_dir("after-malformed-request",
+                                      self.model.reference)
+        request_path = after / "checkpoint-request.json"
+        request = json.loads(request_path.read_text())
+        request["checkpoints"][0] = "not-an-object"
+        request_path.write_text(json.dumps(request))
+        shadow_path = after / "shadow-report.json"
+        shadow = json.loads(shadow_path.read_text())
+        shadow["checkpoint_request_sha256"] = sha(request_path.read_bytes())
+        shadow["checkpoint_count"] = len(request["checkpoints"])
+        shadow_path.write_text(json.dumps(shadow))
+        report = self.acceptance(
+            after=after,
+            claims=self.model.claims(
+                {"mismatched_pixels": 1, "max_channel_error": 7},
+                {"mismatched_pixels": 0, "max_channel_error": 0}))
+        self.assertEqual(report["result"], "invalid_evidence", report)
+        self.assertIn("request_invalid", json.dumps(report["problems"]))
+
     def test_reader_rejects_malformed_checkpoint_without_crashing(self):
         after = self.model.replay_dir("after-reader-malformed",
                                       self.model.reference)
