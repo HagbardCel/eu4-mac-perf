@@ -509,6 +509,15 @@ if mode == "toctou":
         receipt.write_text(json.dumps(document))
         self.assertFalse(qualification.attribution(value)["allowed"])
 
+    def test_a_malformed_projection_identity_refuses_without_raising(self):
+        # Attribution is a decision boundary: a malformed projection must be a
+        # refusal, not a traceback into the caller.
+        value = self._qualify()
+        self.assertTrue(qualification.attribution(value)["allowed"])
+        value["qualification"]["identity"] = "not-a-dict"
+        verdict = qualification.attribution(value)
+        self.assertFalse(verdict["allowed"])
+
     def test_a_forged_qualification_object_cannot_authorize_blame(self):
         forged = {
             "schema": qualification.SCHEMA,

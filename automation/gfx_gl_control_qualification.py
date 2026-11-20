@@ -868,6 +868,12 @@ def attribution(qualification: dict) -> dict:
         raise QualificationError("invalid_qualification")
     comparison = qualification.get("comparison")
     checked = qualification.get("qualification")
+    try:
+        evidence_ok = _evidence_recheck(qualification)
+    except (AttributeError, TypeError, ValueError, OSError):
+        # A malformed projection is not evidence. Attribution is a decision
+        # boundary, so it refuses instead of raising into its caller.
+        evidence_ok = False
     allowed = bool(
         qualification.get("status") == "qualified"
         and qualification.get("qualified") is True
@@ -876,7 +882,7 @@ def attribution(qualification: dict) -> dict:
         and comparison.get("exact") is True
         and isinstance(checked, dict)
         and checked.get("authenticated") is True
-        and _evidence_recheck(qualification))
+        and evidence_ok)
     return {
         "schema": "gfx-metal-blame/v1",
         "allowed": allowed,
