@@ -1,7 +1,7 @@
 # Implementation index
 
 This file records where the reviewed work is and its observed review/merge
-state as of **2026-11-20 09:15 Europe/Berlin**.  It is not an approval and not a claim that
+state as of **2026-11-20 11:10 Europe/Berlin**.  It is not an approval and not a claim that
 anything has landed on `main`.  The roadmap, step documents and assessment
 remain authoritative for scope and acceptance criteria.
 
@@ -21,9 +21,9 @@ remain authoritative for scope and acceptance criteria.
 
 | PR | Step | Head SHA | Scope in the branch | Local independent review | GitHub code-review findings | Formal approval | Merge |
 |---|---|---|---|---|---|---|---|
-| #220 | index | this commit | Assessment, plans and this implementation index. | No blockers at `dc083720`; final wording reviewed at `c8f3722a`; this status refresh follows. | Codex summary at `409bc8b8`, no findings; no open thread. | None | Not merged |
-| #221 | 01 | `51d883e5` | Authoritative checkpoint exactness, request/binding validation, producer checkpoint-file binding, complete-graph gating, exact-control policy. | No blockers at `a776830c`; exact-control policy added after that review. | No open Codex thread; prior summary reviewed. | None | Not merged |
-| #227 | 02 | `de0f15f3` | Verified case locator: durable-root containment, honest verification state, immutable provenance, atomic publication, sequence seals, bounded lookup. | No blockers at `e8da7907`; durable-root/verification/provenance changes follow. | Three Codex P2/P3 threads addressed (identity race, unique temp, sequence seal); evidence recorded at newer heads. | None | Not merged |
+| #220 | index | this commit | Assessment, plans and this implementation index. | No blockers at `fc213857`; this counts/status refresh follows. | Codex summary at `409bc8b8`, no findings; no open thread. | None | Not merged |
+| #221 | 01 | `51d883e5` | Authoritative checkpoint exactness, request/binding validation, producer checkpoint-file binding, complete-graph gating, exact-control policy. | No blockers at `51d883e5` (exact-control policy re-reviewed). | No open Codex thread; prior summary reviewed. | None | Not merged |
+| #227 | 02 | `fc2962b2` | Verified case locator: durable-root containment, honest verification state, immutable provenance, atomic publication, sequence seals, bounded lookup. | No blockers at `fc2962b2` (containment/verification/provenance/edges re-reviewed). | Three Codex P2/P3 threads resolved with evidence at newer heads. | None | Not merged |
 | #226 | 03 | `80a32e00` | Campaign entry preflight with a host-recorded exclusive probe registry. | No blockers at `80a32e00`. | One Codex P2 thread addressed (root-privilege test). | None | Not merged |
 | #222 | 04 | `178b2e06` | Integer-ceiling pixel-region spans and edge/tiny-image regressions. | No blockers at `178b2e06`. | Codex summary, no findings. | None | Not merged |
 | #223 | 06 | `53197ca7` | Goal identity, clear tombstones, substantive outcomes, duration states. | No blockers at `53197ca7`. | Two Codex P2 threads addressed (active end time, goal identity). | None | Not merged |
@@ -58,9 +58,12 @@ step acceptance criteria; the step documents stay authoritative.
 
 Each change is verified with the focused modules named in its plan, then its
 neighbor suites, using `automation.test_runner` under the offline profile.  The
-disposable local integration candidate and its full-gate run/counts are recorded
-when the follow-up gate finishes; the final index commit is docs-only and is not
-presented as tested code.  GitHub Actions runs on each pushed head.
+combined candidate is the disposable local branch `remediation/final6` at
+`81caeeceedb0140b38f3633718482e7d91b1ed28` (not merged into `main`).  Its full
+offline gate run is `20261120T095939Z-bbae743d`: **4,003 ran, 3,968 executed,
+35 skipped, 0 failed, 723.2 s**.  Every listed implementation head is an
+ancestor of that candidate.  This index commit adds the gate counts and is
+docs-only after the gate.
 
 A portable pass does not claim a native Metal correctness result, a local
 archive, or a live EU4 capture.  Independent review remains the merge gate; no
