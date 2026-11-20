@@ -21,7 +21,8 @@ def sha(payload: bytes) -> str:
 def make_case(root: Path, *, case_id: str = "synthetic",
               session_id: str = "session-1",
               capture_frame_id: int = 7,
-              report_status: str = "partial") -> Path:
+              report_status: str = "partial",
+              extra_files: dict[str, bytes] | None = None) -> Path:
     root.mkdir(parents=True)
     (root / "capture").mkdir()
     (root / "shaders").mkdir()
@@ -38,6 +39,10 @@ def make_case(root: Path, *, case_id: str = "synthetic",
     (root / "shaders" / "shaders.json").write_text("{}")
     (root / "report.json").write_text(json.dumps({"status": report_status}))
     (root / "graph.json").write_text(json.dumps({"status": "partial"}))
+    for relative, payload in (extra_files or {}).items():
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
     files = []
     for path in sorted(root.rglob("*")):
         if not path.is_file():

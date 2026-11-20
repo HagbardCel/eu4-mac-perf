@@ -20,17 +20,22 @@ history and must be read with its original run/seal identity.
 
 ### Capability snapshot
 
+No PR in this snapshot is merged. **Verified locally** means technical evidence
+at the named head, not independent approval. Exact head SHAs, open review
+findings and dependency order are in the
+[coverage matrix](../plans/harness-review/implementation.md).
+
 | Area | State | Evidence / scope | Smallest missing discriminator |
 |---|---|---|---|
 | Sealed same-frame differential | **Established** | Capture, seal, shadow, offline replay and exact four-channel comparator; all channels are compared | — |
-| Exact verdict semantics | **Implemented, awaiting independent review** | PR #241; policy pass is separate from raw zero statistics | Authentic case with a policy override and alpha-only negative |
-| Event/writer attribution | **Implemented, awaiting independent review** | PR #242; graph-derived `provenance_matrix` | Regenerate present 904/616 rows from the sealed graph |
-| Compressed texture capture/replay | **Implemented, awaiting independent review** | PR #244; complete/partial/mixed/unsupported chain contract | Same-seal decoded-vs-block pixel comparison on present 904 |
-| Live-GL control | **Blocked (scientific)** | Offline GL does not reproduce live GL; depth/sample/drawable provenance missing | Authentic selected-draw control with valid color+depth prestate and all-channel comparison |
-| Sampler/raster state | **Implemented, awaiting independent review** | PR #245; full sampler key, cull faces, signed scissor | Rendered front/back and transparent BC1 fixture |
-| Translation/replay identity | **Implemented, awaiting independent review** | PR #248; effective compiler key, tool identity, recipe-bound receipts | Native function/pipeline cache audit |
-| Campaign lifecycle | **Implemented, awaiting independent review** | PRs #246, #249, #250; safe publication, terminal capture, exactly-once reserving, no-progress | Per-session write roots; live wall-time measurement |
-| Metrics/documentation | **Implemented, awaiting independent review** | PR #251, this PR; explicit unknown GPU time, dated canonical docs | Three paired pilot trials |
+| Exact verdict semantics | **Verified locally; approval pending** | PR #241 head `818e8360`; policy pass is separate from raw zero statistics; Codex P2 re-checked fixed | Authentic case with a policy override and alpha-only negative |
+| Event/writer attribution | **Verified locally; approval pending** | PR #242 head `6a52e005`; graph-derived `provenance_matrix`; two Codex P2 findings re-checked fixed | Regenerate present 904/616 rows from the sealed graph |
+| Compressed texture capture/replay | **Verified locally; approval pending** | PR #244 head `b274eeb6`; complete/partial/mixed/unsupported chain contract; synthetic rendered BC1 alpha and row-flip fixtures on the branch (unmerged) | Same-seal decoded-vs-block pixel comparison on present 904 |
+| Live-GL control | **Blocked (scientific)** | Offline GL does not reproduce live GL; depth/sample/drawable provenance missing. A local unmerged recomputation on `analysis/harness-904-three-way` confirms the stored control still differs | Authentic selected-draw control with valid color+depth prestate and all-channel comparison |
+| Sampler/raster state | **Verified locally; approval pending** | PR #245 head `843a05cc`; full sampler key, cull faces, signed scissor; rendered winding fixture on the branch (unmerged, stacked on #244) | Rendered front/back against an authentic draw |
+| Translation/replay identity | **Partial; review findings open** | PR #248 head `aeb4e97d`; effective compiler key, tool identity, recipe-bound receipts; three Codex P2 findings open | Fix recipe/cache findings; native function/pipeline cache audit |
+| Campaign lifecycle | **Partial; review findings open** | PRs #246 `ea204014`, #249 `5270fc1c`, #250 `44e547cb`; safe publication, terminal capture, exactly-once reserving, no-progress; open P2 findings | Per-session write roots; live wall-time measurement |
+| Metrics/documentation | **Verified locally; approval pending** | PR #251 head `7c95d804` and this PR; explicit unknown GPU time, dated canonical docs, byte-identical restore check | Three paired pilot trials |
 | Authentic renderer parity | **Not established** | Latest authentic pilot localized [14, 15]; no accepted terrain correction | Exact control equality at the first differing writer |
 
 ### Current authentic observations
