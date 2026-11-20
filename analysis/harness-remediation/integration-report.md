@@ -12,7 +12,7 @@ closed.
 | #242 attribution | `7bcaaa1c` | `ced6cf25` | 92 pass; generator byte-identical |
 | #243 native builds | `f62c7f18` | `befd49cc` | 34 executed / 12 fixture skips; fixture-backed 54 |
 | #244 compressed textures | `cd4245cf` | `8822c03c` | 18/18 native; transparent-index alpha + orientation |
-| #245 sampler/raster | `ada20dbc` | `d1…` merge | 68 executed / 12 fixture skips |
+| #245 sampler/raster | `ada20dbc` | `fb766200` | 68 executed / 12 fixture skips |
 | #246 publication/discovery | `8c17f779` | `d45a9079` | 155 ran / 154 executed / 1 skip |
 | #247 reconnect context | `ab28f2da` | `8c98db67` | 115/115; plugin 44/44 |
 | #248 identity/recipes | `1bffc7cb` | `755c20c1` | 118 executed; native stale-shader test |
