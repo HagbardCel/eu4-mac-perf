@@ -758,6 +758,17 @@ def qualify_sealed(live_path: Path | str, width: int, height: int, *,
 
 
 def _evidence_recheck(qualification: dict) -> bool:
+    """Re-derive the evidence instead of trusting the returned projection.
+
+    A qualification document is a transport object: a caller can edit its
+    ``status``, ``exact`` or ``authenticated`` booleans without touching the
+    images. Causal attribution therefore re-authenticates the seal, re-derives
+    the checkpoint identity, re-reads the live and control bytes from disk and
+    recomputes exact four-channel equality. A tampered flag on a genuinely
+    divergent control, a mutated sealed reference, a mutated control artifact
+    or a mutated receipt all fail here even though every embedded boolean still
+    says ``true``.
+    """
     checked = qualification.get("qualification") or {}
     identity = checked.get("identity") or {}
     comparison = qualification.get("comparison") or {}
@@ -773,7 +784,11 @@ def _evidence_recheck(qualification: dict) -> bool:
     control_ref = checked.get("control") or {}
     receipt_path = Path(str(receipt_ref.get("path") or ""))
     control_path = Path(str(control_ref.get("path") or ""))
-    if not receipt_path.is_file() or not control_path.is_file():
+    live_path = Path(str((comparison.get("live") or {}).get("path") or ""))
+    frame_dir = checked.get("frame_dir")
+    if not receipt_path.is_file() or not control_path.is_file() \
+            or not live_path.is_file() or not isinstance(frame_dir, str) \
+            or not frame_dir:
         return False
     if _sha_or_none(receipt_path) != receipt_ref.get("sha256"):
         return False
@@ -782,33 +797,69 @@ def _evidence_recheck(qualification: dict) -> bool:
         return False
     if control_sha != (comparison.get("control") or {}).get("sha256"):
         return False
-    if checked.get("live_sha256") != identity.get("checkpoint_reference_sha256"):
+    width = _int_or_none(comparison.get("width"))
+    height = _int_or_none(comparison.get("height"))
+    if width is None or height is None:
         return False
-    if (comparison.get("live") or {}).get("sha256") != checked.get(
-            "live_sha256"):
+    checkpoint_event = _int_or_none(identity.get("checkpoint_event"))
+    draw_event = _int_or_none(identity.get("draw_event"))
+    resource = str(identity.get("checkpoint_resource") or DEFAULT_RESOURCE)
+    if checkpoint_event is None or draw_event is None:
         return False
+    # Re-derive the sealed identity. This re-reads and re-hashes every
+    # referenced blob, so a reference image mutated after qualification can no
+    # longer be the image the comparison used.
+    authentication = _authenticate(
+        Path(frame_dir), live_path, width, height,
+        checkpoint_event=checkpoint_event, draw_event=draw_event,
+        resource=resource)
+    if authentication.get("authenticated") is not True:
+        return False
+    derived = authentication.get("identity") or {}
+    for field in ("session_id", "capture_frame_id", "present_index",
+                  "event_stream_sha256", "checkpoint_event",
+                  "checkpoint_resource", "checkpoint_reference_sha256",
+                  "draw_event"):
+        if derived.get(field) != identity.get(field):
+            return False
     try:
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return False
     if not isinstance(receipt, dict):
         return False
-    width = _int_or_none(comparison.get("width"))
-    height = _int_or_none(comparison.get("height"))
-    if width is None or height is None:
-        return False
     reasons = _validate_receipt(
         receipt, nonce=str(checked.get("nonce") or ""),
         renderer_sha=str(checked.get("renderer_sha256") or ""),
-        identity=identity, width=width, height=height,
+        identity=derived, width=width, height=height,
         artifact=control_path)
     if reasons:
         return False
-    return bool(
-        receipt.get("nonce") == checked.get("nonce")
-        and receipt.get("renderer_sha256") == checked.get("renderer_sha256")
-        and receipt.get("execution") == "completed"
-        and str(receipt.get("api") or "").lower() == ORIGINAL_API)
+    if not (
+            receipt.get("nonce") == checked.get("nonce")
+            and receipt.get("renderer_sha256") == checked.get("renderer_sha256")
+            and receipt.get("execution") == "completed"
+            and str(receipt.get("api") or "").lower() == ORIGINAL_API):
+        return False
+    # Recompute the only evidence that can authorize blame: exact equality of
+    # the bytes on disk right now.
+    try:
+        live_bytes = live_path.read_bytes()
+        control_bytes = control_path.read_bytes()
+    except OSError:
+        return False
+    if hashlib.sha256(live_bytes).hexdigest() != derived.get(
+            "checkpoint_reference_sha256"):
+        return False
+    if hashlib.sha256(control_bytes).hexdigest() != control_sha:
+        return False
+    try:
+        recomputed = compare_payloads(
+            live_bytes, control_bytes, width, height,
+            live_path=live_path, control_path=control_path)
+    except QualificationError:
+        return False
+    return recomputed.get("exact") is True
 
 
 def attribution(qualification: dict) -> dict:
@@ -817,6 +868,12 @@ def attribution(qualification: dict) -> dict:
         raise QualificationError("invalid_qualification")
     comparison = qualification.get("comparison")
     checked = qualification.get("qualification")
+    try:
+        evidence_ok = _evidence_recheck(qualification)
+    except (AttributeError, TypeError, ValueError, OSError):
+        # A malformed projection is not evidence. Attribution is a decision
+        # boundary, so it refuses instead of raising into its caller.
+        evidence_ok = False
     allowed = bool(
         qualification.get("status") == "qualified"
         and qualification.get("qualified") is True
@@ -825,7 +882,7 @@ def attribution(qualification: dict) -> dict:
         and comparison.get("exact") is True
         and isinstance(checked, dict)
         and checked.get("authenticated") is True
-        and _evidence_recheck(qualification))
+        and evidence_ok)
     return {
         "schema": "gfx-metal-blame/v1",
         "allowed": allowed,
