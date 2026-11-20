@@ -1153,12 +1153,29 @@ class ProductionBuildIdentityTests(unittest.TestCase):
         self.assertTrue(any(problem["kind"] in
                             ("substituted_request", "malformed_request")
                             for problem in problems))
-        # A legitimately empty legacy list remains accepted.
+        # A legitimately empty legacy list remains accepted for fb:0.
         item["producer_events"] = []
         problems = (
             gfx_independent_replay._checkpoint_request_plan_problems(
                 graph, [item]))
         self.assertEqual(problems, [])
+        # Sampled textures always carried producer history; erasing it must
+        # not hide a writer.
+        texture_fixture = FrameFixture(self.fixture.root / "texture-graph")
+        texture_graph = gfx_frame_graph.build(texture_fixture.frame)
+        expected_texture = gfx_frame_graph.checkpoint_request(
+            texture_graph)["checkpoints"]
+        texture_item = next(
+            (dict(item) for item in expected_texture
+             if item["resource"].startswith("tex:")), None)
+        self.assertIsNotNone(texture_item)
+        texture_item.pop("writer_authority")
+        texture_item["producer_events"] = []
+        problems = (
+            gfx_independent_replay._checkpoint_request_plan_problems(
+                texture_graph, [texture_item]))
+        self.assertTrue(any("texture" in problem["detail"]
+                            for problem in problems))
 
 
 class ProvenanceMatrixTests(unittest.TestCase):

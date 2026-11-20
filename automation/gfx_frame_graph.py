@@ -1290,9 +1290,10 @@ def checkpoint_request(graph: dict) -> dict:
             "producer_events": item["producer_events"],
             "writer_authority": item["writer_authority"],
         }
-        # Capture identity is additive: a legacy capture without it must
-        # serialize exactly as it did before the multi-checkpoint work, so the
-        # checkpoint request digest is unchanged for portable old cases.
+        # Capture identity and writer_authority are additive.  A request
+        # derived before them therefore has a different digest; legacy
+        # published requests remain valid through the explicit legacy path,
+        # but their exact source digest is not preserved by re-derivation.
         if item.get("session_id") is not None:
             entry["session_id"] = item["session_id"]
         if item.get("capture_frame_id") is not None:
