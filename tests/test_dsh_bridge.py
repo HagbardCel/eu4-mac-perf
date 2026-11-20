@@ -482,6 +482,41 @@ class PrepareTests(BridgeTestCase):
         self.assertFalse((worktree / "docs" / "status.md").exists())
 
 
+    def test_prepare_retightens_an_existing_session_root(self) -> None:
+        from automation import session_state
+
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        code, out = self.run_bridge("prepare", sidecar, session_id="sess-mode")
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        root = session_state.layout(self.run_root, "sess-mode").root
+        root.chmod(0o777)
+        code, out = self.run_bridge("prepare", sidecar, session_id="sess-mode")
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertEqual(root.stat().st_mode & 0o777, 0o700)
+
+    def test_review_operations_do_not_create_a_session_root_on_refusal(self) -> None:
+        from automation import session_state
+
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        code, out = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        (self.run_root / "identity.json").write_text("{not-json}", encoding="utf-8")
+        for operation in ("review-run", "review-verify"):
+            with self.subTest(operation=operation):
+                root = session_state.layout(
+                    self.run_root, f"sess-{operation}", create=False,
+                    must_exist=False).root
+                buffer = io.StringIO()
+                with contextlib.redirect_stdout(buffer):
+                    code = dsh_bridge.main([
+                        operation, "--sidecar", str(sidecar),
+                        "--session-id", f"sess-{operation}",
+                    ])
+                value = json.loads(buffer.getvalue())
+                self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, value)
+                self.assertEqual(value["kind"], "anchor_corrupt")
+                self.assertFalse(root.exists())
+
     def test_a_refused_prepare_does_not_create_the_session_root(self) -> None:
         from automation import session_state
 
@@ -632,6 +667,17 @@ class IntegrityTests(BridgeTestCase):
         # A structured refusal must not be reported as "not prepared": the
         # campaign has protected material that simply cannot be read.
         self.assertNotEqual(out["kind"], "not_prepared")
+        for body in ("null", "[]", "{}"):
+            with self.subTest(anchor=body):
+                anchor.write_text(body, encoding="utf-8")
+                code, out = self.run_bridge("context", sidecar)
+                self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+                self.assertEqual(out["kind"], "anchor_corrupt")
+        anchor.unlink()
+        anchor.mkdir()
+        code, out = self.run_bridge("context", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+        self.assertEqual(out["kind"], "anchor_corrupt")
 
 
 class ExecutionRootTests(BridgeTestCase):

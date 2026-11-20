@@ -756,12 +756,27 @@ def _read_anchor(path: Path) -> dict | None:
     tell an operator to start a campaign that already has protected material,
     and a traceback would lose the classification entirely.
     """
+    anchor_path = Path(path)
+    if not anchor_path.is_file():
+        if anchor_path.exists():
+            raise Refusal(
+                "anchor_corrupt",
+                f"{anchor_path}: exists but is not a regular file")
+        return None
     try:
-        value = receipts.read_json(path)
+        value = receipts.read_json(anchor_path)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise Refusal("anchor_corrupt", f"{path}: {exc}") from exc
-    if value is not None and not isinstance(value, dict):
-        raise Refusal("anchor_corrupt", f"{path}: expected a JSON object")
+        raise Refusal("anchor_corrupt", f"{anchor_path}: {exc}") from exc
+    if value is None:
+        raise Refusal("anchor_corrupt", f"{anchor_path}: JSON null is not an anchor")
+    if not isinstance(value, dict):
+        raise Refusal("anchor_corrupt", f"{anchor_path}: expected a JSON object")
+    if value.get("schema") != "eu4-dsh-identity/v1" \
+            or not isinstance(value.get("identities"), dict):
+        raise Refusal(
+            "anchor_corrupt",
+            f"{anchor_path}: not an identity anchor (missing schema/identities); "
+            "an empty object must not authorize a context")
     return value
 
 
@@ -889,7 +904,9 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit, session) -> int:
     # refusal point, create the isolated session root; the record names the
     # validated session and its writable root, and a reconnect finds the same
     # file instead of rewriting it.
-    if session.isolated and not session.root.is_dir():
+    if session.isolated:
+        # Idempotent: also re-resolves and re-tightens an existing root to 0700,
+        # which the previous create=True-on-every-call path did.
         session = _session_layout(sidecar.run_root,
                                   getattr(args, "session_id", None),
                                   create=True)
@@ -1322,7 +1339,7 @@ def op_validate(args) -> int:
         # written beside it in this session's log.  If the process is
         # interrupted anywhere after this point the attempt stays charged.
         # Only now, after every refusal point, create the isolated root.
-        if session.isolated and not session.root.is_dir():
+        if session.isolated:
             session = _session_layout(sidecar.run_root, session_id, create=True)
         claim, attempt_id = _claim_attempt(
             sidecar, session, operation="validate",
@@ -1948,7 +1965,8 @@ def op_review_run(args) -> int:
     _roots(sidecar)
     stored = _setup(sidecar.run_root)
     requested_session = _session_layout(
-        sidecar.run_root, getattr(args, "session_id", None) or None, create=True)
+        sidecar.run_root, getattr(args, "session_id", None) or None,
+        create=False, must_exist=False)
     try:
         lock = campaign_lock(stored.lock)
         lock.__enter__()
@@ -2126,7 +2144,8 @@ def op_review_verify(args) -> int:
     _roots(sidecar)
     stored = _setup(sidecar.run_root)
     session = _session_layout(sidecar.run_root,
-                              getattr(args, "session_id", None) or None, create=True)
+                              getattr(args, "session_id", None) or None,
+                              create=False, must_exist=False)
     try:
         lock = campaign_lock(stored.lock)
         lock.__enter__()
