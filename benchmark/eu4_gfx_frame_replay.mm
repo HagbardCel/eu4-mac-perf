@@ -599,6 +599,101 @@ static double double_number(id value, double fallback) {
     return fallback;
 }
 
+static int64_t signed_number(id value, int64_t fallback) {
+    if ([value isKindOfClass:[NSNumber class]]) {
+        return (int64_t)[(NSNumber *)value longLongValue];
+    }
+    return fallback;
+}
+
+static NSUInteger enum_value(id value, NSUInteger fallback);
+
+/* Full value identity of the sampler properties Metal consumes.
+ *
+ * R address, compare mode/function and both LOD clamps are part of the
+ * descriptor, so they must be part of the cache key.  The ambient override
+ * flags are included because they change the effective min/mag filters; a
+ * diagnostic override must never reuse a default descriptor. */
+static NSString *sampler_key_for_state(NSDictionary *state) {
+    NSArray<NSString *> *fields = @[
+        @"min", @"mag", @"wrap_s", @"wrap_t", @"wrap_r",
+        @"min_lod", @"max_lod", @"lod_bias",
+        @"compare_mode", @"compare_func",
+    ];
+    NSMutableString *key = [NSMutableString string];
+    for (NSString *field in fields) {
+        id value = state[field];
+        [key appendFormat:@"%@=%@|", field,
+         value != nil ? [value description] : @"<default>"];
+    }
+    const char *linear_min = getenv("EU4_FRAME_REPLAY_LINEAR_MIN");
+    const char *linear_all = getenv("EU4_FRAME_REPLAY_LINEAR_ALL");
+    const char *nearest_all = getenv("EU4_FRAME_REPLAY_NEAREST_ALL");
+    [key appendFormat:@"env=%d%d%d",
+     linear_min != NULL && linear_min[0] == '1',
+     linear_all != NULL && linear_all[0] == '1',
+     nearest_all != NULL && nearest_all[0] == '1'];
+    return key;
+}
+
+/* Map captured GL cull state to Metal.
+ *
+ * GL_FRONT_AND_BACK has no Metal equivalent.  It is represented as an empty
+ * scissor (no fragments, no depth writes) while culling stays disabled, which
+ * is the exact observable outcome for every primitive.  An unknown mode fails
+ * closed instead of silently culling the wrong face.
+ */
+static BOOL cull_mode_for(NSDictionary *cull, MTLCullMode *mode,
+                          BOOL *empty) {
+    NSUInteger raw = enum_value(cull[@"mode"], 0x0405);
+    if (empty != NULL) *empty = NO;
+    switch (raw) {
+        case 0x0404: /* GL_FRONT */
+            if (mode) *mode = MTLCullModeFront;
+            return YES;
+        case 0x0405: /* GL_BACK */
+            if (mode) *mode = MTLCullModeBack;
+            return YES;
+        case 0x0408: /* GL_FRONT_AND_BACK */
+            if (mode) *mode = MTLCullModeNone;
+            if (empty != NULL) *empty = YES;
+            return YES;
+        default:
+            return NO;
+    }
+}
+
+/* Convert a signed GL scissor box to a Metal rect.
+ *
+ * The intersection is computed once from signed near/far endpoints in GL
+ * window coordinates and then converted to Metal's top-left origin.  Clipping
+ * only the origin (while keeping the raw width) enlarged an off-screen box
+ * into visible pixels.  Returns NO for an empty intersection.
+ */
+static BOOL scissor_rect_for(NSArray *box, NSUInteger target_width,
+                             NSUInteger target_height,
+                             MTLScissorRect *rect) {
+    if (![box isKindOfClass:[NSArray class]] || box.count != 4) {
+        return NO;
+    }
+    int64_t x = signed_number(box[0], 0);
+    int64_t y = signed_number(box[1], 0);
+    int64_t w = signed_number(box[2], (int64_t)target_width);
+    int64_t h = signed_number(box[3], (int64_t)target_height);
+    int64_t x0 = MAX((int64_t)0, x);
+    int64_t x1 = MIN((int64_t)target_width, x + w);
+    int64_t y0 = MAX((int64_t)0, y);
+    int64_t y1 = MIN((int64_t)target_height, y + h);
+    if (x1 <= x0 || y1 <= y0) {
+        return NO;
+    }
+    rect->x = (NSUInteger)x0;
+    rect->y = (NSUInteger)((int64_t)target_height - y1);
+    rect->width = (NSUInteger)(x1 - x0);
+    rect->height = (NSUInteger)(y1 - y0);
+    return YES;
+}
+
 /* GL enums are recorded as JSON strings ("0x2600") while counts and flags are
    numbers. Both forms must resolve; a string silently falling back to a default
    would select the wrong sampler or depth state. */
@@ -2517,14 +2612,15 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
         NSArray *vp = state[@"viewport"];
         MTLViewport metal_viewport;
         if ([vp isKindOfClass:[NSArray class]] && vp.count == 4) {
-            NSUInteger x = number(vp[0], 0);
-            NSUInteger y = number(vp[1], 0);
-            NSUInteger w = number(vp[2], target_width);
-            NSUInteger h = number(vp[3], target_height);
-            metal_viewport.originX = (double)x;
-            metal_viewport.originY = (double)((NSInteger)target_height - (NSInteger)y - (NSInteger)h);
-            metal_viewport.width = (double)w;
-            metal_viewport.height = (double)h;
+            double x = double_number(vp[0], 0);
+            double y = double_number(vp[1], 0);
+            double w = double_number(vp[2], (double)target_width);
+            double h = double_number(vp[3], (double)target_height);
+            metal_viewport.originX = x;
+            metal_viewport.originY =
+                (double)target_height - y - h;
+            metal_viewport.width = w;
+            metal_viewport.height = h;
         } else {
             metal_viewport.originX = 0;
             metal_viewport.originY = 0;
@@ -2535,28 +2631,44 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
         metal_viewport.zfar = 1.0;
         [encoder setViewport:metal_viewport];
         NSDictionary *scissor = state[@"scissor"] ?: @{};
+        BOOL cull_empty = NO;
+        MTLCullMode cull_mode = MTLCullModeNone;
+        BOOL cull_known = cull_mode_for(cull, &cull_mode, &cull_empty);
+        BOOL scissor_empty = NO;
         if (number(scissor[@"enabled"], 0) != 0) {
-            NSArray *box = scissor[@"box"];
-            if ([box isKindOfClass:[NSArray class]] && box.count == 4) {
-                NSInteger x = (NSInteger)number(box[0], 0);
-                NSInteger y = (NSInteger)number(box[1], 0);
-                NSInteger w = (NSInteger)number(box[2], target_width);
-                NSInteger h = (NSInteger)number(box[3], target_height);
-                NSInteger top = (NSInteger)target_height - y - h;
-                MTLScissorRect rect;
-                rect.x = (NSUInteger)MAX((NSInteger)0, x);
-                rect.y = (NSUInteger)MAX((NSInteger)0, top);
-                rect.width = (NSUInteger)MAX((NSInteger)0, MIN((NSInteger)target_width - x, w));
-                rect.height = (NSUInteger)MAX((NSInteger)0, MIN((NSInteger)target_height - top, h));
+            MTLScissorRect rect;
+            if (!scissor_rect_for(scissor[@"box"], target_width,
+                                  target_height, &rect)) {
+                scissor_empty = YES;
+            } else {
                 [encoder setScissorRect:rect];
             }
         } else {
             MTLScissorRect rect = {0, 0, target_width, target_height};
             [encoder setScissorRect:rect];
         }
+        if (cull_empty) {
+            MTLScissorRect empty = {0, 0, 0, 0};
+            [encoder setScissorRect:empty];
+        } else if (scissor_empty) {
+            MTLScissorRect empty = {0, 0, 0, 0};
+            [encoder setScissorRect:empty];
+        }
         const char *no_cull = getenv("EU4_FRAME_REPLAY_NO_CULL");
-        if (cull_enabled && !(no_cull != NULL && no_cull[0] == '1')) {
-            [encoder setCullMode:MTLCullModeBack];
+        if (cull_enabled && !cull_known) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:67
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        [NSString stringWithFormat:
+                                                             @"unsupported cull mode %@",
+                                                             cull[@"mode"] ?: @"<missing>"]}];
+            }
+            [encoder endEncoding];
+            return NO;
+        }
+        if (cull_enabled && !cull_empty
+            && !(no_cull != NULL && no_cull[0] == '1')) {
+            [encoder setCullMode:cull_mode];
             /* The captured GL front-face winding maps directly to Metal's
                winding: with the flipped viewport origin, a primitive the engine
                treats as front-facing is front-facing for Metal as well. This is
@@ -2880,12 +2992,8 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                                         atIndex:texture_index];
                 }
                 NSDictionary *sampler_state = texture[@"sampler"] ?: @{};
-                NSString *sampler_key = [NSString stringWithFormat:@"%@-%@-%@-%@-%@",
-                                          sampler_state[@"min"] ?: @0,
-                                          sampler_state[@"mag"] ?: @0,
-                                          sampler_state[@"wrap_s"] ?: @0,
-                                          sampler_state[@"wrap_t"] ?: @0,
-                                          sampler_state[@"lod_bias"] ?: @0];
+                NSString *sampler_key =
+                    sampler_key_for_state(sampler_state);
                 id<MTLSamplerState> sampler = g_samplers[sampler_key];
                 if (sampler == nil) {
                     MTLSamplerDescriptor *descriptor = [MTLSamplerDescriptor new];
@@ -5564,9 +5672,6 @@ extern "C" int eu4_gfx_frame_replay_test_compressed_texture(
     }
 }
 
-/* Host-test only: build a texture through the production path and render one
- * nearest-sampled RGBA8 readback.  Used to verify BC1 transparent-index alpha
- * and captured orientation rather than only enum selection. */
 extern "C" int eu4_gfx_frame_replay_test_sample_texture(
     const char *frame_dir, const char *json_path, unsigned char *out_pixels,
     int width, int height, char *out_error, size_t error_capacity) {
@@ -5677,6 +5782,55 @@ extern "C" int eu4_gfx_frame_replay_test_sample_texture(
                     (unsigned char)lroundf(clamped * 255.0f);
             }
         }
+        return 0;
+    }
+}
+
+extern "C" int eu4_gfx_frame_replay_test_render_state(
+    const char *json_path, char *key_out, size_t key_capacity,
+    int *cull_mode, int *cull_empty, int *scissor_empty,
+    int *scissor_x, int *scissor_y, int *scissor_w, int *scissor_h) {
+    if (json_path == NULL) {
+        return -1;
+    }
+    @autoreleasepool {
+        NSData *data = [NSData dataWithContentsOfFile:@(json_path)];
+        id value = data == nil ? nil : [NSJSONSerialization
+            JSONObjectWithData:data options:0 error:NULL];
+        if (![value isKindOfClass:[NSDictionary class]]) {
+            return -1;
+        }
+        NSDictionary *document = (NSDictionary *)value;
+        NSDictionary *sampler = document[@"sampler"];
+        if ([sampler isKindOfClass:[NSDictionary class]]) {
+            NSString *key = sampler_key_for_state(sampler);
+            if (key_out != NULL && key_capacity > 0) {
+                snprintf(key_out, key_capacity, "%s", key.UTF8String);
+            }
+        }
+        NSDictionary *cull = document[@"cull"] ?: @{};
+        BOOL empty = NO;
+        MTLCullMode mode = MTLCullModeNone;
+        BOOL known = cull_mode_for(cull, &mode, &empty);
+        if (!known) {
+            return -1;
+        }
+        if (cull_mode) *cull_mode = (int)mode;
+        if (cull_empty) *cull_empty = empty ? 1 : 0;
+        NSUInteger width = number(document[@"width"], 0);
+        NSUInteger height = number(document[@"height"], 0);
+        NSDictionary *scissor = document[@"scissor"];
+        BOOL has_box = NO;
+        MTLScissorRect rect = {0, 0, 0, 0};
+        if ([scissor isKindOfClass:[NSDictionary class]]
+            && number(scissor[@"enabled"], 0) != 0) {
+            has_box = scissor_rect_for(scissor[@"box"], width, height, &rect);
+        }
+        if (scissor_empty) *scissor_empty = has_box ? 0 : 1;
+        if (scissor_x) *scissor_x = (int)rect.x;
+        if (scissor_y) *scissor_y = (int)rect.y;
+        if (scissor_w) *scissor_w = (int)rect.width;
+        if (scissor_h) *scissor_h = (int)rect.height;
         return 0;
     }
 }
