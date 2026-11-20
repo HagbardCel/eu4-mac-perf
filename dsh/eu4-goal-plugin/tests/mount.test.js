@@ -135,3 +135,45 @@ test('plugin unload disposes prompt fibers installed on live agents', async () =
   }
   assert.equal(fiber.disposed, 1)
 })
+
+test('plugin unload during an in-flight context install leaves no prompt section', async () => {
+  const ctx = fakeContext()
+  const fiber = { disposed: 0, dispose() { this.disposed += 1 } }
+  let injects = 0
+  const agent = {
+    ctx: {
+      inject(_names, register) {
+        injects += 1
+        register({ systemPrompt: { section() {} } })
+        return fiber
+      },
+    },
+    session: { id: 's2', header: { cwd: '/tmp/ws' } },
+  }
+  let release
+  const gate = new Promise((resolve) => { release = resolve })
+  apply(ctx, {
+    sidecar: '/tmp/x.json',
+    infra: INFRA,
+    python: '/bin/false',
+    bridge: async () => {
+      await gate
+      return {
+        ok: true,
+        status: 'authorized',
+        startup_text: 'workspace: /tmp/ws',
+        startup: { workspace: '/tmp/ws' },
+      }
+    },
+  })
+  const created = ctx._state.handlers['agent/created'][0]
+  const pending = created({ agent })
+  // Unload while the bridge answer is still in flight.
+  for (const dispose of ctx._state.effects.slice().reverse()) {
+    if (typeof dispose === 'function') dispose()
+  }
+  release()
+  await pending
+  assert.equal(injects, 0, 'a late bridge answer must not install a section after unload')
+  assert.equal(fiber.disposed, 0)
+})

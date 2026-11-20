@@ -274,10 +274,14 @@ export function apply(ctx, config = {}) {
   const promptTexts = new WeakMap()
   const promptFibers = new Set()
   const disposedAgents = new WeakSet()
+  let pluginDisposed = false
 
   // An agent that outlives the plugin keeps no prompt section: unload disposes
   // every installed fiber, not only the ones whose agent was disposed first.
+  // `pluginDisposed` also closes the in-flight window below, where a bridge
+  // answer can arrive after this disposer has already run.
   ctx.effect(() => () => {
+    pluginDisposed = true
     for (const fiber of promptFibers) {
       try {
         if (fiber && typeof fiber.dispose === 'function') fiber.dispose()
@@ -343,7 +347,7 @@ export function apply(ctx, config = {}) {
     if (existing) return existing
     const task = (async () => {
       const text = await authorityForAgent(agent)
-      if (!text || disposedAgents.has(agent)) return undefined
+      if (!text || disposedAgents.has(agent) || pluginDisposed) return undefined
       promptTexts.set(agent, text)
       return agent.ctx.inject(['systemPrompt'], (scope) => {
         scope.systemPrompt.section({
@@ -357,7 +361,17 @@ export function apply(ctx, config = {}) {
     promptTasks.set(agent, task)
     task
       .then((fiber) => {
-        if (fiber && typeof fiber.dispose === 'function') promptFibers.add(fiber)
+        if (!fiber || typeof fiber.dispose !== 'function') return fiber
+        if (pluginDisposed) {
+          // The bridge resolved after unload; do not retain a section.
+          try {
+            fiber.dispose()
+          } catch {
+            // already disposed by the harness
+          }
+          return fiber
+        }
+        promptFibers.add(fiber)
         return fiber
       })
       .catch(() => {})
