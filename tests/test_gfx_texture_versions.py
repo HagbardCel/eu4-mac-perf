@@ -169,6 +169,8 @@ class MetalTextureVersionTests(unittest.TestCase):
             "programs": [{"program": 1, "status": "ok",
                           "stages": {"vertex": stage, "pixel": pixel}}]}))
         native_build.require_prerequisites(
+            sources=(m6_frame.REPLAY_HOST_SOURCE,
+                     m6_frame.REPLAY_HOST_CLI_SOURCE),
             frameworks=("Foundation", "Metal"), require_arm64=True)
         cls.host = m6_frame.build_replay_host()
 
