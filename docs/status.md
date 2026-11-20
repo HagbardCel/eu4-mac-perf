@@ -20,8 +20,7 @@ history and must be read with its original run/seal identity.
 
 ### Capability snapshot
 
-As of this snapshot #241–#254 are merged; #255, #256 and #257 are the only
-open PRs. #257 is this documentation reconciliation. Exact head SHAs, review states and dependency order are
+As of this snapshot #241–#254 are merged; #256 and #257 are the only open PRs; #257 is this documentation reconciliation. Exact head SHAs, review states and dependency order are
 in the [coverage matrix](../plans/harness-review/implementation.md).
 
 | Area | State | Evidence / scope | Smallest missing discriminator |
