@@ -638,6 +638,36 @@ def _reap_coordinator(coordinator) -> None:
             pass
 
 
+def _shadow_terminal(shadow_dir: Path) -> bool:
+    """True only for a complete, bound coordinator terminal record.
+
+    A partial JSON write, a running continuous sequence, a missing seal and a
+    record for another run all return False, so the original wait remains in
+    force.  A terminal failure is also terminal: the game must not stay alive
+    waiting for an ops summary that this mode never requests.
+    """
+    path = Path(shadow_dir) / "coordinator.json"
+    try:
+        report = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return False
+    if not isinstance(report, dict):
+        return False
+    if report.get("schema") != "m7-shadow-coordinator/v1":
+        return False
+    status = report.get("status")
+    if status == "failed":
+        return True
+    if status != "ok":
+        return False
+    if report.get("mode") == "continuous":
+        return isinstance(report.get("frames"), list) and bool(
+            report.get("frames")) and report.get("stop_reason") is not None
+    return bool(report.get("seal")) and (
+        report.get("pixel_verdict") is not None
+        or report.get("classification") is not None)
+
+
 def capture(args: argparse.Namespace) -> int:
     import eu4_gfx_startup_trace as startup
     from automation import live_gfx
@@ -895,6 +925,9 @@ def capture(args: argparse.Namespace) -> int:
             background_plan=background_plan,
             game_args=list(getattr(args, "game_arg", []) or []) or None,
             campaign_reservation=reservation,
+            terminal_result=(
+                (lambda: _shadow_terminal(shadow_dir))
+                if shadow_enabled else None),
         )
     except (startup.StartupError, OSError, RuntimeError) as exc:
         _reap_coordinator(coordinator)
@@ -916,6 +949,8 @@ def capture(args: argparse.Namespace) -> int:
         "session": report.get("session"),
         "pid": report.get("pid"),
         "display": report.get("display"),
+        "wait_reason": report.get("wait_reason"),
+        "terminal_shadow": report.get("terminal_shadow"),
         "frame_dir": str(frame_dir),
         "targets": TARGETS,
         "selection": {

@@ -210,6 +210,7 @@ def run(
     game_args: list[str] | None = None,
     background_plan: object | None = None,
     campaign_reservation: str | None = None,
+    terminal_result=None,
 ) -> dict:
     """Launch one startup-trace session.
 
@@ -450,17 +451,35 @@ def preflight_ops(
     return evidence
 
 
-def _wait_pair(run_dir: Path, game: subprocess.Popen, deadline: float) -> bool:
+def _wait_pair(run_dir: Path, game: subprocess.Popen, deadline: float,
+               terminal=None) -> str:
+    """Wait for the requested terminal record, the ops pair, or game exit.
+
+    ``terminal`` is an optional predicate for a capture mode whose authoritative
+    result is not the legacy operations pair.  It is evaluated alongside the
+    original target, so ordinary callers keep their established wait.  The
+    return value records *why* the wait ended; it is not a success claim.
+    """
     summary = run_dir / "summary.json"
     operations = run_dir / "operations-summary.json"
     while time.monotonic() < deadline:
+        if terminal is not None:
+            try:
+                if terminal():
+                    return "terminal"
+            except Exception:  # noqa: BLE001 - a parse race is retried
+                pass
         if summary.is_file() and operations.is_file():
-            return True
+            return "summary_pair"
         if game.poll() is not None:
             time.sleep(0.3)
-            return summary.is_file() and operations.is_file()
+            if terminal is not None and terminal():
+                return "terminal_after_exit"
+            return "game_exit"
         time.sleep(0.2)
-    return summary.is_file() and operations.is_file()
+    if terminal is not None and terminal():
+        return "terminal_at_deadline"
+    return "deadline"
 
 
 def _terminate_owned_process(game: subprocess.Popen) -> dict:
@@ -499,6 +518,7 @@ def run_ops(
     game_args: list[str] | None = None,
     background_plan: object | None = None,
     campaign_reservation: str | None = None,
+    terminal_result=None,
 ) -> dict:
     """Launch one bounded original-process observation session.
 
@@ -659,18 +679,40 @@ def run_ops(
             if game.poll() is not None:
                 break
             time.sleep(0.2)
+        wait_reason = "not_installed"
         if status is not None and status.get("state") == "installed":
-            _wait_pair(run_dir, game, deadline)
+            wait_reason = _wait_pair(
+                run_dir, game, deadline, terminal=terminal_result)
     finally:
-        termination = _terminate_owned_process(game)
-        stdout.close()
-        stderr.close()
+        # Cleanup steps are independent: one failure must not skip process
+        # termination, stream closure, display restoration or lease release.
+        cleanup_errors: list[str] = []
+        termination = {"pid": game.pid, "terminated": False, "killed": False}
+        try:
+            termination = _terminate_owned_process(game)
+        except Exception as exc:  # noqa: BLE001 - reported, not hidden
+            cleanup_errors.append(f"terminate: {type(exc).__name__}: {exc}")
+        for stream, name in ((stdout, "stdout"), (stderr, "stderr")):
+            try:
+                stream.close()
+            except Exception as exc:  # noqa: BLE001
+                cleanup_errors.append(f"close {name}: {type(exc).__name__}: {exc}")
         if display_session is not None:
-            display_record = {
-                "session": display_session.as_dict(),
-                "restore": display_session.restore(),
-            }
-        lease.release()
+            display_record = {"session": display_session.as_dict()}
+            try:
+                display_record["restore"] = display_session.restore()
+            except Exception as exc:  # noqa: BLE001
+                display_record["restore"] = {
+                    "status": "failed",
+                    "error": f"{type(exc).__name__}: {exc}"}
+                cleanup_errors.append(
+                    f"display restore: {type(exc).__name__}: {exc}")
+        try:
+            lease.release()
+        except Exception as exc:  # noqa: BLE001
+            cleanup_errors.append(f"lease release: {type(exc).__name__}: {exc}")
+        if cleanup_errors:
+            termination["cleanup_errors"] = cleanup_errors
     summary = {}
     if (run_dir / "summary.json").is_file():
         try:
@@ -694,6 +736,10 @@ def run_ops(
         "run_dir": str(run_dir),
         "session": session,
         "pid": game.pid,
+        "wait_reason": locals().get("wait_reason", "not_installed"),
+        "cleanup_errors": termination.get("cleanup_errors") or [],
+        "terminal_shadow": locals().get("wait_reason", "").startswith(
+            "terminal"),
         "evidence": evidence,
         "status": status,
         "summary": summary,

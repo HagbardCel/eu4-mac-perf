@@ -287,3 +287,62 @@ class GfxStartupTraceTests(unittest.TestCase):
         self.assertTrue(observed["released"])
         self.assertTrue(report["accepted"])
         self.assertEqual(report["pid"], 4242)
+
+
+class TerminalWaitTests(unittest.TestCase):
+    class Game:
+        def poll(self):
+            return None
+
+    def test_terminal_predicate_ends_the_wait_before_the_deadline(self):
+        import time
+        with tempfile.TemporaryDirectory() as tmp:
+            started = time.monotonic()
+            reason = startup._wait_pair(
+                Path(tmp), self.Game(), time.monotonic() + 30,
+                terminal=lambda: True)
+            elapsed = time.monotonic() - started
+        self.assertEqual(reason, "terminal")
+        self.assertLess(elapsed, 2.0)
+
+    def test_no_terminal_record_keeps_the_original_wait(self):
+        import time
+        with tempfile.TemporaryDirectory() as tmp:
+            started = time.monotonic()
+            reason = startup._wait_pair(
+                Path(tmp), self.Game(), time.monotonic() + 0.4,
+                terminal=lambda: False)
+            elapsed = time.monotonic() - started
+        self.assertEqual(reason, "deadline")
+        self.assertLess(elapsed, 2.0)
+
+
+class ShadowTerminalRecordTests(unittest.TestCase):
+    def terminal(self, document):
+        from automation import m6_frame
+        with tempfile.TemporaryDirectory() as tmp:
+            shadow = Path(tmp)
+            if document is not None:
+                (shadow / "coordinator.json").write_text(
+                    document if isinstance(document, str)
+                    else json.dumps(document))
+            return m6_frame._shadow_terminal(shadow)
+
+    def test_partial_or_running_records_are_not_terminal(self):
+        self.assertFalse(self.terminal(None))
+        self.assertFalse(self.terminal("{partial"))
+        self.assertFalse(self.terminal({
+            "schema": "m7-shadow-coordinator/v1", "status": "running"}))
+        self.assertFalse(self.terminal({
+            "schema": "other", "status": "ok"}))
+
+    def test_bound_completed_record_is_terminal(self):
+        self.assertTrue(self.terminal({
+            "schema": "m7-shadow-coordinator/v1", "status": "ok",
+            "seal": {"capture_frame_id": 1},
+            "pixel_verdict": "divergent"}))
+        self.assertTrue(self.terminal({
+            "schema": "m7-shadow-coordinator/v1", "status": "failed",
+            "error": "gpu"}))
+        self.assertFalse(self.terminal({
+            "schema": "m7-shadow-coordinator/v1", "status": "ok"}))
