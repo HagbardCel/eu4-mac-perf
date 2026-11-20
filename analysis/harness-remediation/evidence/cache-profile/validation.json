@@ -1,0 +1,155 @@
+{
+  "schema": "gfx-cache-profile-validation/v1",
+  "checked_at": "2026-11-21T00:19:39+0100",
+  "cases": {
+    "present-904": {
+      "frame_dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/frame",
+      "sealed": true,
+      "complete": true,
+      "session_id": "afd444f2-6478-459f-8db6-e565c49dbd63",
+      "present_index": 904,
+      "events": 327,
+      "draws": 317,
+      "frame_seal_sha256": "889bf02531216a2da7c7ab7a529a40801b77cd3b846ecc86f653a572af9e8e2f",
+      "frame_trace_sha256": "faf201f01583daf54a44a06432c3be674f00aca3bc7f20736b6986ec69d3027d",
+      "event_stream_sha256": "8801f037a06ed618e973f081fa5a20dca5a705124f92fca50c9d12554e3dd547",
+      "reference_sha256": "d06393582d04fc4a58dfd1cc60bf99757c46537ab7a9aa9c81064f3940208dda",
+      "identity_sha256": "0e057ad50ab6e9daeb7dfb62d3fbd5f51eb6a8735cd064e0596808d14a00637f",
+      "identity_matches_measurement": true,
+      "translation_result": {
+        "programs": 17,
+        "stage_entries": 34,
+        "distinct_compiler_inputs": 33,
+        "glsl_files": 33,
+        "spv_files": 33,
+        "msl_files": 33,
+        "draws": 317
+      },
+      "sealed_shadow_report": {
+        "status": "ok",
+        "events": 327,
+        "encoded": 327,
+        "failed": 0,
+        "command_status": 4,
+        "duration_ns": 2584629000,
+        "total_duration_ns": 6385650000,
+        "checkpoint_count": null
+      },
+      "sealed_translation_identity": {
+        "schema": "gfx-shader-source-identity/v1",
+        "sha256": "567ae14be84f8654e0b29cc50e8ab6f9851d504d1d35ab09a0cd83800b7a9874",
+        "translator": {
+          "path": "gfx_shader_translate.py",
+          "bytes": 31289,
+          "mtime_ns": 1795179592984082145
+        }
+      },
+      "sealed_stage_digests_match_current": true,
+      "sealed_program_count": 17,
+      "sealed_shader_payload": {
+        "msl_content_sets_equal": true,
+        "msl_unique_sealed": 32,
+        "msl_unique_current": 32,
+        "msl_filenames_equal": false,
+        "glsl_content_sets_equal": true,
+        "glsl_unique_sealed": 33,
+        "glsl_unique_current": 33
+      },
+      "metal_frame": {
+        "replayed_sha256": "b73cac940b66f8c5f1faef6e44302ed9e9dd24ec5ee0ba7049a798a0cb10ba6f",
+        "sealed_sha256": "b73cac940b66f8c5f1faef6e44302ed9e9dd24ec5ee0ba7049a798a0cb10ba6f",
+        "identical": true
+      }
+    },
+    "present-916": {
+      "frame_dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-b/frames/frame-000001",
+      "sealed": true,
+      "complete": true,
+      "session_id": "8ee43ade-fb4e-4873-b243-0ff704b225ce",
+      "present_index": 916,
+      "events": 326,
+      "draws": 316,
+      "frame_seal_sha256": "11526582da87662ccb798fecf885ce04173235a39079fe3c505bf24994b0c08b",
+      "frame_trace_sha256": "974ef723b6ec5145ab31032ec0a4b48cdcdb3aea78a85c2337794742a4a048cd",
+      "event_stream_sha256": "e8229f5cee21d803625ec59f8bb737482cfb01a42622cbaca77f1448d656ad74",
+      "reference_sha256": "4e90c6b7ed771c1f30c0e3606102d56490444cc74ab73cfdaed1d20cab86523a",
+      "identity_sha256": "0e057ad50ab6e9daeb7dfb62d3fbd5f51eb6a8735cd064e0596808d14a00637f",
+      "identity_matches_measurement": true,
+      "translation_result": {
+        "programs": 17,
+        "stage_entries": 34,
+        "distinct_compiler_inputs": 33,
+        "glsl_files": 33,
+        "spv_files": 33,
+        "msl_files": 33,
+        "draws": 316
+      },
+      "sealed_shadow_report": {
+        "status": "ok",
+        "events": 326,
+        "encoded": 326,
+        "failed": 0,
+        "command_status": 4,
+        "duration_ns": 1870277000,
+        "total_duration_ns": 5434905000,
+        "checkpoint_count": null
+      },
+      "sealed_translation_identity": {
+        "schema": "gfx-shader-source-identity/v1",
+        "sha256": "567ae14be84f8654e0b29cc50e8ab6f9851d504d1d35ab09a0cd83800b7a9874",
+        "translator": {
+          "path": "gfx_shader_translate.py",
+          "bytes": 31289,
+          "mtime_ns": 1795179592984082145
+        }
+      },
+      "sealed_stage_digests_match_current": true,
+      "sealed_program_count": 17,
+      "sealed_shader_payload": {
+        "msl_content_sets_equal": true,
+        "msl_unique_sealed": 32,
+        "msl_unique_current": 32,
+        "msl_filenames_equal": false,
+        "glsl_content_sets_equal": true,
+        "glsl_unique_sealed": 33,
+        "glsl_unique_current": 33
+      },
+      "metal_frame": {
+        "replayed_sha256": "5143a17a0110819a689a48f38d08855983c8228e31945328dd9b5fe6be86a732",
+        "sealed_sha256": "5143a17a0110819a689a48f38d08855983c8228e31945328dd9b5fe6be86a732",
+        "identical": true
+      }
+    }
+  },
+  "baselines": {
+    "fresh_process_present904": {
+      "reps": 3,
+      "trace_load_s": [
+        0.258205,
+        0.258839,
+        0.257639
+      ],
+      "identity_s": [
+        0.029741,
+        0.028911,
+        0.029657
+      ],
+      "trace_load_median_s": 0.258205,
+      "blobs_verified": 1307,
+      "blob_bytes": 460636055,
+      "reference_bytes": 7720704
+    },
+    "module_start_baseline": {
+      "reps": 5,
+      "samples_s": [
+        0.04042,
+        0.038906,
+        0.040803,
+        0.041674,
+        0.041201
+      ],
+      "median_s": 0.040803
+    }
+  },
+  "identity_equal_across_presents": true
+}

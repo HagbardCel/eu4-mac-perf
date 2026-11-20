@@ -1,0 +1,2548 @@
+{
+  "schema": "gfx-cache-profile-measurements/v1",
+  "label": "present-904",
+  "captured_at": "2026-11-21T00:09:08+0100",
+  "host": {
+    "machine": "arm64",
+    "node": "Fabians-MacBook-Pro.fritz.box",
+    "python": "3.14.10 (main, Oct 25 2026, 17:12:00) [Clang 21.0.0 (clang-2100.3.34.2)]",
+    "executable": "/opt/homebrew/opt/python@3.14/bin/python3.14"
+  },
+  "frame": {
+    "dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/frame",
+    "frame_trace_sha256": "faf201f01583daf54a44a06432c3be674f00aca3bc7f20736b6986ec69d3027d",
+    "frame_seal_sha256": "889bf02531216a2da7c7ab7a529a40801b77cd3b846ecc86f653a572af9e8e2f",
+    "events": 327,
+    "draws": 317,
+    "seal": {
+      "schema": "gfx-frame-seal/v1",
+      "sealed": true,
+      "complete": true,
+      "struct_size": 2256,
+      "abi_version": 2,
+      "capture_frame_id": 1,
+      "session_id": "afd444f2-6478-459f-8db6-e565c49dbd63",
+      "pid": 27161,
+      "process_start_ns": 1650305390400000,
+      "boundary": "scene",
+      "present_index": 904,
+      "scene_index": 904,
+      "operation_count": 327,
+      "draw_count": 317,
+      "clear_count": 9,
+      "copy_count": 1,
+      "event_stream_file": "frame-events.jsonl",
+      "event_stream_bytes": 9219432,
+      "event_stream_sha256": "8801f037a06ed618e973f081fa5a20dca5a705124f92fca50c9d12554e3dd547",
+      "event_stream_verified": true,
+      "width": 1728,
+      "height": 1117,
+      "pixel_format": "BGRA8",
+      "trace_complete": true,
+      "trace_integrity": true,
+      "readback_ok": true,
+      "reference_file": "frame-reference.bgra",
+      "reference_bytes": 7720704,
+      "reference_sha256": "d06393582d04fc4a58dfd1cc60bf99757c46537ab7a9aa9c81064f3940208dda",
+      "manifest_file": "frame-trace.json",
+      "manifest_sha256": "faf201f01583daf54a44a06432c3be674f00aca3bc7f20736b6986ec69d3027d",
+      "capture_dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/frame",
+      "gpu_status": "gl_readpixels_synchronous",
+      "unsupported_dependencies": "",
+      "failure_reason": "",
+      "readback_ns": 24482000,
+      "finalize_ns": 25871000,
+      "seal_ns": 50361000,
+      "sealed_monotonic_ns": 1650338548924000
+    },
+    "trace": {
+      "schema": "gfx-frame-trace/v1",
+      "complete": true,
+      "reason": "scene_present",
+      "truncated": false,
+      "stream_validated": true,
+      "pid": 27161,
+      "present_index": 904,
+      "scene_index": 904,
+      "events": 327,
+      "default_checkpoint_events": [
+        14,
+        15,
+        16,
+        17
+      ],
+      "default_checkpoint_count": 4,
+      "default_checkpoint_event": null,
+      "capacity_exceeded": false,
+      "capacity_limit": "",
+      "texture_cache": {
+        "reads": 2485,
+        "hits": 2424,
+        "invalidations": 0
+      },
+      "gl": {
+        "vendor": "Apple",
+        "renderer": "Apple M5 Max",
+        "version": "2.1 Metal - 91.7"
+      },
+      "frame": {
+        "width": 1728,
+        "height": 1117,
+        "origin": "lower_left",
+        "pixel_format": "BGRA8",
+        "row_stride": 6912,
+        "reference": "frame-reference.bgra",
+        "reference_bytes": 7720704,
+        "reference_sha256": "d06393582d04fc4a58dfd1cc60bf99757c46537ab7a9aa9c81064f3940208dda"
+      },
+      "selection": {
+        "callers": [
+          "0x103b3c8"
+        ],
+        "min_draws": 1,
+        "occurrence": 600,
+        "max_frame_draws": 0,
+        "at_frame": null,
+        "boundary": "scene",
+        "required": true
+      },
+      "seed": {
+        "width": 1728,
+        "height": 1117
+      },
+      "blobs": 1307
+    },
+    "unique_source_blobs": 33,
+    "source_bytes": 544615
+  },
+  "cache_identity": {
+    "sha256": "0e057ad50ab6e9daeb7dfb62d3fbd5f51eb6a8735cd064e0596808d14a00637f",
+    "programs": 17,
+    "translator": {
+      "schema": "gfx-translator-identity/v2",
+      "path": "gfx_shader_translate.py",
+      "bytes": 31961,
+      "sha256": "06470403c10e382d640e6ce036ccb7d33bd59dbc729ad0d4508e699b1975539e",
+      "tools": {
+        "glslang": {
+          "name": "glslangValidator",
+          "available": true,
+          "path": "glslangValidator",
+          "bytes": 160448,
+          "sha256": "6d4f9f2ba82d0762fedbb9214447318342ebf10781c4f91d07cafab94989fb36"
+        },
+        "spirv_cross": {
+          "name": "spirv-cross",
+          "available": true,
+          "path": "spirv-cross",
+          "bytes": 3574376,
+          "sha256": "d9dc197f061b42a575d589fefc9dc236cad78bb0a0db307f007fe4389050a4f4"
+        }
+      }
+    }
+  },
+  "session_probe": [
+    {
+      "probe": "start",
+      "at": "2026-11-21T00:09:08+0100",
+      "loadavg": [
+        7.17,
+        6.99,
+        6.91
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 68.0,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        },
+        {
+          "cpu_percent": 62.5,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 56.4,
+          "command": "Cursor Helper: fileWatcher [1:d85238cc6da6f83e61ce22403e0889a5]"
+        },
+        {
+          "cpu_percent": 49.6,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 44.3,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 35.8,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        }
+      ]
+    },
+    {
+      "probe": "before out",
+      "at": "2026-11-21T00:09:08+0100",
+      "loadavg": [
+        7.17,
+        6.99,
+        6.91
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 70.9,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 61.0,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        },
+        {
+          "cpu_percent": 49.6,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 42.2,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 36.7,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 36.2,
+          "command": "Cursor Helper: fileWatcher [1:d85238cc6da6f83e61ce22403e0889a5]"
+        }
+      ]
+    },
+    {
+      "probe": "after out",
+      "at": "2026-11-21T00:09:11+0100",
+      "loadavg": [
+        6.92,
+        6.94,
+        6.89
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 64.5,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 61.6,
+          "command": "(clang)"
+        },
+        {
+          "cpu_percent": 50.0,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 45.7,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 43.4,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 20.7,
+          "command": "/usr/libexec/opendirectoryd"
+        }
+      ]
+    },
+    {
+      "probe": "before out",
+      "at": "2026-11-21T00:09:11+0100",
+      "loadavg": [
+        6.92,
+        6.94,
+        6.89
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 64.5,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 50.0,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 45.7,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 43.4,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 20.7,
+          "command": "/usr/libexec/opendirectoryd"
+        },
+        {
+          "cpu_percent": 16.1,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        }
+      ]
+    },
+    {
+      "probe": "after out",
+      "at": "2026-11-21T00:09:12+0100",
+      "loadavg": [
+        6.92,
+        6.94,
+        6.89
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 67.4,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 49.2,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 48.7,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 41.9,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 27.5,
+          "command": "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper (Renderer).app/Contents/MacOS/Cursor Helper (Renderer)"
+        },
+        {
+          "cpu_percent": 27.3,
+          "command": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/worktrees/closure-candidate/benchmark/.build/eu4_gfx_shadow_worker"
+        }
+      ]
+    },
+    {
+      "probe": "before out",
+      "at": "2026-11-21T00:09:12+0100",
+      "loadavg": [
+        6.92,
+        6.94,
+        6.89
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 67.4,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 49.2,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 48.7,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 41.9,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 27.5,
+          "command": "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper (Renderer).app/Contents/MacOS/Cursor Helper (Renderer)"
+        },
+        {
+          "cpu_percent": 27.3,
+          "command": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/worktrees/closure-candidate/benchmark/.build/eu4_gfx_shadow_worker"
+        }
+      ]
+    },
+    {
+      "probe": "after out",
+      "at": "2026-11-21T00:09:15+0100",
+      "loadavg": [
+        6.92,
+        6.94,
+        6.89
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 72.6,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 46.1,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 44.8,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 31.1,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 21.8,
+          "command": "/usr/libexec/opendirectoryd"
+        },
+        {
+          "cpu_percent": 18.4,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        }
+      ]
+    },
+    {
+      "probe": "before out",
+      "at": "2026-11-21T00:09:15+0100",
+      "loadavg": [
+        6.92,
+        6.94,
+        6.89
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 72.6,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 46.1,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 44.8,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 31.1,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 21.8,
+          "command": "/usr/libexec/opendirectoryd"
+        },
+        {
+          "cpu_percent": 18.4,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        }
+      ]
+    },
+    {
+      "probe": "after out",
+      "at": "2026-11-21T00:09:15+0100",
+      "loadavg": [
+        6.92,
+        6.94,
+        6.89
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 75.3,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 47.5,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 46.3,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 32.1,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 19.9,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 11.0,
+          "command": "/usr/libexec/opendirectoryd"
+        }
+      ]
+    },
+    {
+      "probe": "before out",
+      "at": "2026-11-21T00:09:15+0100",
+      "loadavg": [
+        6.92,
+        6.94,
+        6.89
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 75.3,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 47.5,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 46.3,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 29.6,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 19.9,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 11.0,
+          "command": "/usr/libexec/opendirectoryd"
+        }
+      ]
+    },
+    {
+      "probe": "after out",
+      "at": "2026-11-21T00:09:19+0100",
+      "loadavg": [
+        6.84,
+        6.93,
+        6.89
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 86.9,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 75.1,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 56.6,
+          "command": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+        },
+        {
+          "cpu_percent": 55.3,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 45.6,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 20.6,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif).app/Contents/MacOS/Codex (Aperitif)"
+        }
+      ]
+    },
+    {
+      "probe": "before out",
+      "at": "2026-11-21T00:09:19+0100",
+      "loadavg": [
+        6.84,
+        6.93,
+        6.89
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 86.9,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 75.1,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 56.6,
+          "command": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+        },
+        {
+          "cpu_percent": 55.3,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 45.6,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 20.6,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif).app/Contents/MacOS/Codex (Aperitif)"
+        }
+      ]
+    },
+    {
+      "probe": "after out",
+      "at": "2026-11-21T00:09:22+0100",
+      "loadavg": [
+        6.94,
+        6.94,
+        6.9
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 89.0,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 77.0,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 52.7,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 43.8,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 37.3,
+          "command": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+        },
+        {
+          "cpu_percent": 36.6,
+          "command": "/System/Library/PrivateFrameworks/Ecosystem.framework/Support/ecosystemd"
+        }
+      ]
+    },
+    {
+      "probe": "before out",
+      "at": "2026-11-21T00:09:22+0100",
+      "loadavg": [
+        6.94,
+        6.94,
+        6.9
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 89.8,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 74.5,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 60.9,
+          "command": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+        },
+        {
+          "cpu_percent": 53.9,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 44.6,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 22.9,
+          "command": "/System/Library/PrivateFrameworks/Ecosystem.framework/Support/ecosystemd"
+        }
+      ]
+    },
+    {
+      "probe": "after out",
+      "at": "2026-11-21T00:09:26+0100",
+      "loadavg": [
+        6.94,
+        6.94,
+        6.9
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 71.9,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 45.9,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 44.9,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 30.2,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 19.4,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 15.8,
+          "command": "/usr/libexec/opendirectoryd"
+        }
+      ]
+    },
+    {
+      "probe": "before out",
+      "at": "2026-11-21T00:09:26+0100",
+      "loadavg": [
+        6.94,
+        6.94,
+        6.9
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 71.9,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 45.9,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 44.9,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 30.2,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 19.4,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 15.8,
+          "command": "/usr/libexec/opendirectoryd"
+        }
+      ]
+    },
+    {
+      "probe": "after out",
+      "at": "2026-11-21T00:09:26+0100",
+      "loadavg": [
+        7.26,
+        7.01,
+        6.92
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 70.2,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 54.0,
+          "command": "(clang)"
+        },
+        {
+          "cpu_percent": 52.7,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 46.5,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 43.7,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 17.6,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        }
+      ]
+    },
+    {
+      "probe": "before out",
+      "at": "2026-11-21T00:09:26+0100",
+      "loadavg": [
+        7.26,
+        7.01,
+        6.92
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 73.9,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 52.7,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 43.4,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 39.5,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 17.7,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 14.2,
+          "command": "/usr/libexec/opendirectoryd"
+        }
+      ]
+    },
+    {
+      "probe": "after out",
+      "at": "2026-11-21T00:09:29+0100",
+      "loadavg": [
+        7.26,
+        7.01,
+        6.92
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 88.1,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 46.5,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 36.8,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 22.9,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 22.2,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 19.2,
+          "command": "/usr/libexec/opendirectoryd"
+        }
+      ]
+    },
+    {
+      "probe": "before full-1",
+      "at": "2026-11-21T00:09:31+0100",
+      "loadavg": [
+        7.26,
+        7.01,
+        6.92
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 82.6,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        },
+        {
+          "cpu_percent": 78.6,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        },
+        {
+          "cpu_percent": 76.0,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 45.8,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 45.2,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 41.6,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        }
+      ]
+    },
+    {
+      "probe": "after full-1",
+      "at": "2026-11-21T00:09:31+0100",
+      "loadavg": [
+        7.64,
+        7.09,
+        6.95
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 78.7,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 46.8,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 44.7,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 35.7,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 30.3,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        },
+        {
+          "cpu_percent": 19.0,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        }
+      ]
+    },
+    {
+      "probe": "before startup-first-draw-1",
+      "at": "2026-11-21T00:09:31+0100",
+      "loadavg": [
+        7.64,
+        7.09,
+        6.95
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 78.7,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 46.8,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 44.7,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 35.7,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 30.3,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        },
+        {
+          "cpu_percent": 19.0,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        }
+      ]
+    },
+    {
+      "probe": "after startup-first-draw-1",
+      "at": "2026-11-21T00:09:31+0100",
+      "loadavg": [
+        7.64,
+        7.09,
+        6.95
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 72.4,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 46.1,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 44.0,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 36.5,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 31.3,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        },
+        {
+          "cpu_percent": 18.2,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        }
+      ]
+    },
+    {
+      "probe": "before startup-no-encode-1",
+      "at": "2026-11-21T00:09:32+0100",
+      "loadavg": [
+        7.64,
+        7.09,
+        6.95
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 72.4,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 46.1,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 44.0,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 36.5,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 31.3,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        },
+        {
+          "cpu_percent": 18.2,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        }
+      ]
+    },
+    {
+      "probe": "after startup-no-encode-1",
+      "at": "2026-11-21T00:09:32+0100",
+      "loadavg": [
+        7.64,
+        7.09,
+        6.95
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 65.6,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 45.2,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 44.7,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 44.4,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 33.6,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        },
+        {
+          "cpu_percent": 16.9,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        }
+      ]
+    },
+    {
+      "probe": "before startup-no-encode-2",
+      "at": "2026-11-21T00:09:32+0100",
+      "loadavg": [
+        7.64,
+        7.09,
+        6.95
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 65.6,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 45.2,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 44.4,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 34.2,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 31.6,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        },
+        {
+          "cpu_percent": 16.9,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        }
+      ]
+    },
+    {
+      "probe": "after startup-no-encode-2",
+      "at": "2026-11-21T00:09:32+0100",
+      "loadavg": [
+        7.64,
+        7.09,
+        6.95
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 70.7,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 46.5,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 45.8,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 34.7,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 30.9,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        },
+        {
+          "cpu_percent": 18.1,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        }
+      ]
+    },
+    {
+      "probe": "before startup-first-draw-2",
+      "at": "2026-11-21T00:09:32+0100",
+      "loadavg": [
+        7.64,
+        7.09,
+        6.95
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 71.9,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 46.9,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 45.1,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 34.7,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 30.9,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        },
+        {
+          "cpu_percent": 18.1,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        }
+      ]
+    },
+    {
+      "probe": "after startup-first-draw-2",
+      "at": "2026-11-21T00:09:32+0100",
+      "loadavg": [
+        7.64,
+        7.09,
+        6.95
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 72.7,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 46.1,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 45.9,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 33.3,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        },
+        {
+          "cpu_percent": 32.0,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 17.9,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        }
+      ]
+    },
+    {
+      "probe": "before full-2",
+      "at": "2026-11-21T00:09:32+0100",
+      "loadavg": [
+        7.64,
+        7.09,
+        6.95
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 72.7,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 46.1,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 45.9,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 33.3,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        },
+        {
+          "cpu_percent": 32.0,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 17.9,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        }
+      ]
+    },
+    {
+      "probe": "after full-2",
+      "at": "2026-11-21T00:09:33+0100",
+      "loadavg": [
+        7.64,
+        7.09,
+        6.95
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 74.6,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 46.4,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 41.7,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 29.8,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        },
+        {
+          "cpu_percent": 28.8,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 18.4,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        }
+      ]
+    },
+    {
+      "probe": "before full-3",
+      "at": "2026-11-21T00:09:33+0100",
+      "loadavg": [
+        7.64,
+        7.09,
+        6.95
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 70.6,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 46.4,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 44.5,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 42.4,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 31.7,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        },
+        {
+          "cpu_percent": 17.6,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        }
+      ]
+    },
+    {
+      "probe": "after full-3",
+      "at": "2026-11-21T00:09:34+0100",
+      "loadavg": [
+        7.64,
+        7.09,
+        6.95
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 74.9,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 45.9,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 45.9,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 36.7,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 36.3,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        },
+        {
+          "cpu_percent": 19.4,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        }
+      ]
+    },
+    {
+      "probe": "before startup-first-draw-3",
+      "at": "2026-11-21T00:09:34+0100",
+      "loadavg": [
+        7.64,
+        7.09,
+        6.95
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 71.9,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 56.9,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 47.2,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 41.4,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 34.2,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        },
+        {
+          "cpu_percent": 16.9,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        }
+      ]
+    },
+    {
+      "probe": "after startup-first-draw-3",
+      "at": "2026-11-21T00:09:34+0100",
+      "loadavg": [
+        7.64,
+        7.09,
+        6.95
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 64.9,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 46.5,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 42.2,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 39.4,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 36.4,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        },
+        {
+          "cpu_percent": 29.1,
+          "command": "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mds"
+        }
+      ]
+    },
+    {
+      "probe": "before startup-no-encode-3",
+      "at": "2026-11-21T00:09:34+0100",
+      "loadavg": [
+        7.64,
+        7.09,
+        6.95
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 64.9,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 43.9,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 42.2,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 39.4,
+          "command": "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/158.0.8127.37/Helpers/Codex (Aperitif Renderer).app/Contents/MacOS/Codex (Aperitif Renderer)"
+        },
+        {
+          "cpu_percent": 36.5,
+          "command": "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mds"
+        },
+        {
+          "cpu_percent": 36.4,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        }
+      ]
+    },
+    {
+      "probe": "after startup-no-encode-3",
+      "at": "2026-11-21T00:09:34+0100",
+      "loadavg": [
+        7.64,
+        7.09,
+        6.95
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 70.0,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        },
+        {
+          "cpu_percent": 50.5,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 49.6,
+          "command": "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd"
+        },
+        {
+          "cpu_percent": 46.6,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 45.6,
+          "command": "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mds"
+        },
+        {
+          "cpu_percent": 45.2,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        }
+      ]
+    },
+    {
+      "probe": "before supported-cli",
+      "at": "2026-11-21T00:09:34+0100",
+      "loadavg": [
+        7.64,
+        7.09,
+        6.95
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 70.0,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        },
+        {
+          "cpu_percent": 50.5,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 49.6,
+          "command": "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd"
+        },
+        {
+          "cpu_percent": 46.6,
+          "command": "/Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container"
+        },
+        {
+          "cpu_percent": 45.6,
+          "command": "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mds"
+        },
+        {
+          "cpu_percent": 45.2,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        }
+      ]
+    },
+    {
+      "probe": "after supported-cli",
+      "at": "2026-11-21T00:09:35+0100",
+      "loadavg": [
+        7.64,
+        7.09,
+        6.95
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 67.8,
+          "command": "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mds"
+        },
+        {
+          "cpu_percent": 50.5,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 44.5,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 35.7,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        },
+        {
+          "cpu_percent": 28.8,
+          "command": "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared"
+        },
+        {
+          "cpu_percent": 27.5,
+          "command": "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared"
+        }
+      ]
+    },
+    {
+      "probe": "end",
+      "at": "2026-11-21T00:09:35+0100",
+      "loadavg": [
+        7.64,
+        7.09,
+        6.95
+      ],
+      "top_cpu": [
+        {
+          "cpu_percent": 67.8,
+          "command": "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mds"
+        },
+        {
+          "cpu_percent": 50.3,
+          "command": "/opt/homebrew/Cellar/python@3.14/3.14.10/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+        },
+        {
+          "cpu_percent": 49.8,
+          "command": "/Applications/Firefox.app/Contents/MacOS/gpu-helper.app/Contents/MacOS/Firefox GPU Helper"
+        },
+        {
+          "cpu_percent": 44.5,
+          "command": "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
+        },
+        {
+          "cpu_percent": 29.4,
+          "command": "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared"
+        },
+        {
+          "cpu_percent": 27.4,
+          "command": "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mdworker_shared"
+        }
+      ]
+    }
+  ],
+  "translation_runs": [
+    {
+      "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/cold-1/out",
+      "cache": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/cold-1/cache",
+      "returncode": 0,
+      "wall_s": 3.211429,
+      "summary": {
+        "status": "ok",
+        "programs": 17,
+        "failed": [],
+        "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/cold-1/out",
+        "draws": 317,
+        "translation_cache": {
+          "hit": false,
+          "key": "0e057ad50ab6e9daeb7dfb62d3fbd5f51eb6a8735cd064e0596808d14a00637f",
+          "dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/cold-1/cache",
+          "publish": "published"
+        }
+      },
+      "kind": "cold",
+      "rep": 1,
+      "cache_dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/cold-1/cache",
+      "cache_valid_after": true,
+      "cache_stats": {
+        "files": 103,
+        "bytes": 1320139
+      },
+      "cache_key_matches_computed": true
+    },
+    {
+      "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/cold-2/out",
+      "cache": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/cold-2/cache",
+      "returncode": 0,
+      "wall_s": 3.313532,
+      "summary": {
+        "status": "ok",
+        "programs": 17,
+        "failed": [],
+        "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/cold-2/out",
+        "draws": 317,
+        "translation_cache": {
+          "hit": false,
+          "key": "0e057ad50ab6e9daeb7dfb62d3fbd5f51eb6a8735cd064e0596808d14a00637f",
+          "dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/cold-2/cache",
+          "publish": "published"
+        }
+      },
+      "kind": "cold",
+      "rep": 2,
+      "cache_dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/cold-2/cache",
+      "cache_valid_after": true,
+      "cache_stats": {
+        "files": 103,
+        "bytes": 1320139
+      },
+      "cache_key_matches_computed": true
+    },
+    {
+      "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/cold-3/out",
+      "cache": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/cold-3/cache",
+      "returncode": 0,
+      "wall_s": 3.206556,
+      "summary": {
+        "status": "ok",
+        "programs": 17,
+        "failed": [],
+        "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/cold-3/out",
+        "draws": 317,
+        "translation_cache": {
+          "hit": false,
+          "key": "0e057ad50ab6e9daeb7dfb62d3fbd5f51eb6a8735cd064e0596808d14a00637f",
+          "dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/cold-3/cache",
+          "publish": "published"
+        }
+      },
+      "kind": "cold",
+      "rep": 3,
+      "cache_dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/cold-3/cache",
+      "cache_valid_after": true,
+      "cache_stats": {
+        "files": 103,
+        "bytes": 1320139
+      },
+      "cache_key_matches_computed": true
+    },
+    {
+      "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/warm-1/out",
+      "cache": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/cold-1/cache",
+      "returncode": 0,
+      "wall_s": 0.375829,
+      "summary": {
+        "status": "ok",
+        "programs": 17,
+        "failed": [],
+        "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/warm-1/out",
+        "draws": 317,
+        "translation_cache": {
+          "hit": true,
+          "key": "0e057ad50ab6e9daeb7dfb62d3fbd5f51eb6a8735cd064e0596808d14a00637f",
+          "dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/cold-1/cache",
+          "publish": null
+        }
+      },
+      "kind": "warm",
+      "rep": 1,
+      "cache_valid_after": true,
+      "summary_hit": true,
+      "summary_publish": null,
+      "cache_key_matches_computed": true,
+      "artifact_digest_excluding_metadata": "8993d7e18496edcb8d8b4456df0bb1df979f989896b70c1e1757fa9a31146e5c",
+      "artifact_count": 103,
+      "shaders_json_sha256": "01923afeed3602995c2fd23366eb01c127401ac69d6f0da8f7034864df544580",
+      "msl_sha256": {
+        "1af1d4d1b8f6af552ca4306fc258c14f031d4c2145828bf4945aa0084f12c7a4.frag.metal": "7507bf5c2a6c9ac3bc187b214ed8aa43153af505249d5f8f678014a190b4bcc1",
+        "2364d1eada401cd8b254db2a6a991a571d199ee9435fed7a10165333062afbdf.frag.metal": "8d911f6c73d2b307e74b50e3f308b1d1b5a3edc785abc0175a9e9cecc36d649a",
+        "2ae362386ea376a44ef63a3ca103d9a7844ce4342097fd6e9e8546e99287f9d0.vert.metal": "a8a7269c2b850d3d5c771678664433cff98cccbce567bd157dcfd1eec980d357",
+        "2e08227755511074ea49369a1beeef8e50f4cc6c6cf329bd66c83e451f656a20.vert.metal": "49e2ec33d72473dd69241c4c20612e8b345b4efee086a25f3c554650910c8c37",
+        "3c23998fbfeeb4928ed83b96f7d04ba9b6bc43a41017a0f4833cbd68487c4f1f.frag.metal": "9e12a2c0ddb7912745d673ea36ebdd485b7b6b2ac9fa8e07168e0a2fe11efd9a",
+        "3c4c7e7c05f666b61ebbf88a8bbe0e71c114aeca95d46e302db789095a795270.frag.metal": "063467d79003350e29c4c7a0c8ac12279948ff86f74aed5cc8e9d570a47dd1d6",
+        "41740a6a5e4e6af0e4a32e30178a44b59593eeb9655c30104a9765a2fed3a881.vert.metal": "a2b78a4fb079916f4fdd26da34418271985feaa00ab2e6ee89dd3fe366a8ae67",
+        "681a7e0edfb6791e209eb77d9689ce6376ce6e3c5cc56bd4cd0eb7ec1501d2a2.frag.metal": "ebdce29a85b75ba108271943f6c6e935d580895d16fff442fb68aaef03b9696e",
+        "73d70446218c8377eb5a9c6f94ebbba5bd0fc0b39178f23a12d65cfdbce210a8.vert.metal": "fc4b32da8d938f5f93e4fae621e89ec176a903e41f3a117310d83ebbde5aa3fb",
+        "78522a01ea314e68035a24128235f5944e8e2b2bada816302dac1626a5998020.frag.metal": "a32781a2350e26202914f07edf4112f7027d49cedbfde449543b8f95effb10b6",
+        "808656133b00bd667417486c4b7f03953bbe97ef10ac97cee4935367bdac8977.vert.metal": "9eb11b507b4ed0ea11722cd7852aca49938947094c9736e656d8b91a2d972f2e",
+        "8aa9e1f3e5a749bcef10051483a6a0c0b19d935e0b034a3bf89d88f1ce2e14c0.vert.metal": "500eb476cf75d7b11ed91a48c2197a107b682a02df68a2f461ce660160119fa4",
+        "91349baa9701347963b25ce06b862ec0ea18f107105c0dc13c8c9417a054a5a7.frag.metal": "b77335788bf951525c2523fe86bfbb4d011fffe9f07b66658b39c323231d5b06",
+        "92379acffa2f08f82f3c7fbe544b47455d04672df988c50007bf6d8b113b4cd6.frag.metal": "4e5ee207d3844ff39c21cecbf0e3cc3c41313a27262e5ba18e6702bccdfef588",
+        "92ab8de75e8f1001ea2b80c65cb7b01a1113485b5bf1722a6a6b9526f39302c2.vert.metal": "85118adebce48bb0f4444334ecccf2809c394baf6ded490cb14e4726661f4917",
+        "92c051b0d9ea379c1456e9d7716c8189f64e0ed1529bb9d8e6ae56656b4313ab.vert.metal": "796225cb0d95b6c78e0277523b69e76589791f5695370a51383840b7c8eb10be",
+        "946f044cc41245b7e43739e2d590e1d12bce468da86d8de8a43abd64e99d8b1e.vert.metal": "dcf08838387bdc72a259c089d243e9cf3bbc226272f1bd2b2be103aebb147979",
+        "9d14b12ca5f0bfcb17ccf452bc0f752921141a3c3b1ce25763721990b14e5d13.vert.metal": "6da05a29f76dcbabe052d58591799fbe290e6e6cc60d3308db4a33b5d1282065",
+        "a5ecb01716efea734ef15c095b8ab30a6c24d8488cd30b1888e639a1b1f90bda.frag.metal": "60ca696ee99e56daf8559042909ba939e5d32b68c831e5d62b6fb7deb1368875",
+        "b553e7b53b8d14617aa2751762de2a3e6e01e49d9013806e2f4c3f98bb685265.vert.metal": "2b491271bbf265800331850045d51f776da43361b551a4e7384e689caad965db",
+        "c3344a81eb97cb95f46690d90ecb67dc12c6ab0f0a57a69fa673a9755660764a.frag.metal": "0d448eb4ff1b7ef35547c1330ee71c3340ebabd75986d107359a58a1ce8c25d5",
+        "cb132dd5487618a3bbbacd7efa1b7f978efb9c6c1e784b746d7406b5de2dfcef.vert.metal": "8f8bc5395319bcefb355498bca5e5ee4c2b89236c9e9ff930ad5c6820286f552",
+        "cb42af02b772931be72695e1a26f4fb15dca88c2cf27c1cf7ae2577a60efeeae.frag.metal": "19097bae2d75c364ce01e817c991c68db49a5c147115c439a347ac5cdd339892",
+        "d2b13cd66879185d80f9d9220945d86132cec47abdf6b8736ba225e3f8158fdd.frag.metal": "3bdd94a7cff953982f0aaa471450bb1e448d48d68fe046ea307e45e4a9d6cf59",
+        "ded85084b5a4c0a14f5f2e1952a3db565358eb724a26bd811c83df11b4ca1e0e.frag.metal": "ef1b3485290e037117de0f98373b1c1c62b013ab2efc525b21105aba8125eca2",
+        "e17047985e691b4dcbda99309e4a0f69fd81a09c29956216f07ebaeb1b982a0b.vert.metal": "9360e1127c441e6922bd4fddc9fccf98d32734cb86e2355d52dcf4b28b98a0cb",
+        "eb4b66150a192368995fb3d124a2327abb609aa43148db055c31b213f34d00ef.frag.metal": "8d9eab7e0eca14aa1f7d2d45690adac444092e1200ea04ef53b44a32d22de5cb",
+        "ef7680b11857ead380038883b37d2249870dac57c89a43140efa8758a3091091.vert.metal": "c675442bd8f2935f845995a3e5d08c09645e496ee97eb764f0a0a0e0e88846e1",
+        "ef9750931d691c1b5e5551535147c07148d1d954c31e6c670f1a25767366f865.frag.metal": "de5bc9be82a8ae611a1329e691ee89c229acfd46cd995db685b764c8ee0e1422",
+        "f18b4220d3d45e0b8673c781f6860b025fc08b7b05d6d898bed4d769e4a6d638.vert.metal": "2b491271bbf265800331850045d51f776da43361b551a4e7384e689caad965db",
+        "f56d22aced962803de3506c80c8afad01b858b9f13e1687b3fb1567540c265b9.frag.metal": "b1bb4da64bb320f031ba810f4d4a8ba45a582cc503551c499f41a7a400a6ae28",
+        "f6bd04568091aaae23446906118e161375b63bbcbc03b5134a1cd62621381a6e.vert.metal": "a94c4997666cd381013884c1ba20a713f3774cae5b87d9d2807e3140ff02f791",
+        "f829593a07cb44cc0962e9fd6a8291d93e66f1587cb6b4490f8cdf84fefd9efe.frag.metal": "9b8c3872eb91f88b854d0b7b6c9a3a3d704eaad9787ce9c66133b665b7bbd10d"
+      }
+    },
+    {
+      "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/warm-2/out",
+      "cache": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/cold-1/cache",
+      "returncode": 0,
+      "wall_s": 0.363849,
+      "summary": {
+        "status": "ok",
+        "programs": 17,
+        "failed": [],
+        "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/warm-2/out",
+        "draws": 317,
+        "translation_cache": {
+          "hit": true,
+          "key": "0e057ad50ab6e9daeb7dfb62d3fbd5f51eb6a8735cd064e0596808d14a00637f",
+          "dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/cold-1/cache",
+          "publish": null
+        }
+      },
+      "kind": "warm",
+      "rep": 2,
+      "cache_valid_after": true,
+      "summary_hit": true,
+      "summary_publish": null,
+      "cache_key_matches_computed": true,
+      "artifact_digest_excluding_metadata": "8993d7e18496edcb8d8b4456df0bb1df979f989896b70c1e1757fa9a31146e5c",
+      "artifact_count": 103,
+      "shaders_json_sha256": "01923afeed3602995c2fd23366eb01c127401ac69d6f0da8f7034864df544580",
+      "msl_sha256": {
+        "1af1d4d1b8f6af552ca4306fc258c14f031d4c2145828bf4945aa0084f12c7a4.frag.metal": "7507bf5c2a6c9ac3bc187b214ed8aa43153af505249d5f8f678014a190b4bcc1",
+        "2364d1eada401cd8b254db2a6a991a571d199ee9435fed7a10165333062afbdf.frag.metal": "8d911f6c73d2b307e74b50e3f308b1d1b5a3edc785abc0175a9e9cecc36d649a",
+        "2ae362386ea376a44ef63a3ca103d9a7844ce4342097fd6e9e8546e99287f9d0.vert.metal": "a8a7269c2b850d3d5c771678664433cff98cccbce567bd157dcfd1eec980d357",
+        "2e08227755511074ea49369a1beeef8e50f4cc6c6cf329bd66c83e451f656a20.vert.metal": "49e2ec33d72473dd69241c4c20612e8b345b4efee086a25f3c554650910c8c37",
+        "3c23998fbfeeb4928ed83b96f7d04ba9b6bc43a41017a0f4833cbd68487c4f1f.frag.metal": "9e12a2c0ddb7912745d673ea36ebdd485b7b6b2ac9fa8e07168e0a2fe11efd9a",
+        "3c4c7e7c05f666b61ebbf88a8bbe0e71c114aeca95d46e302db789095a795270.frag.metal": "063467d79003350e29c4c7a0c8ac12279948ff86f74aed5cc8e9d570a47dd1d6",
+        "41740a6a5e4e6af0e4a32e30178a44b59593eeb9655c30104a9765a2fed3a881.vert.metal": "a2b78a4fb079916f4fdd26da34418271985feaa00ab2e6ee89dd3fe366a8ae67",
+        "681a7e0edfb6791e209eb77d9689ce6376ce6e3c5cc56bd4cd0eb7ec1501d2a2.frag.metal": "ebdce29a85b75ba108271943f6c6e935d580895d16fff442fb68aaef03b9696e",
+        "73d70446218c8377eb5a9c6f94ebbba5bd0fc0b39178f23a12d65cfdbce210a8.vert.metal": "fc4b32da8d938f5f93e4fae621e89ec176a903e41f3a117310d83ebbde5aa3fb",
+        "78522a01ea314e68035a24128235f5944e8e2b2bada816302dac1626a5998020.frag.metal": "a32781a2350e26202914f07edf4112f7027d49cedbfde449543b8f95effb10b6",
+        "808656133b00bd667417486c4b7f03953bbe97ef10ac97cee4935367bdac8977.vert.metal": "9eb11b507b4ed0ea11722cd7852aca49938947094c9736e656d8b91a2d972f2e",
+        "8aa9e1f3e5a749bcef10051483a6a0c0b19d935e0b034a3bf89d88f1ce2e14c0.vert.metal": "500eb476cf75d7b11ed91a48c2197a107b682a02df68a2f461ce660160119fa4",
+        "91349baa9701347963b25ce06b862ec0ea18f107105c0dc13c8c9417a054a5a7.frag.metal": "b77335788bf951525c2523fe86bfbb4d011fffe9f07b66658b39c323231d5b06",
+        "92379acffa2f08f82f3c7fbe544b47455d04672df988c50007bf6d8b113b4cd6.frag.metal": "4e5ee207d3844ff39c21cecbf0e3cc3c41313a27262e5ba18e6702bccdfef588",
+        "92ab8de75e8f1001ea2b80c65cb7b01a1113485b5bf1722a6a6b9526f39302c2.vert.metal": "85118adebce48bb0f4444334ecccf2809c394baf6ded490cb14e4726661f4917",
+        "92c051b0d9ea379c1456e9d7716c8189f64e0ed1529bb9d8e6ae56656b4313ab.vert.metal": "796225cb0d95b6c78e0277523b69e76589791f5695370a51383840b7c8eb10be",
+        "946f044cc41245b7e43739e2d590e1d12bce468da86d8de8a43abd64e99d8b1e.vert.metal": "dcf08838387bdc72a259c089d243e9cf3bbc226272f1bd2b2be103aebb147979",
+        "9d14b12ca5f0bfcb17ccf452bc0f752921141a3c3b1ce25763721990b14e5d13.vert.metal": "6da05a29f76dcbabe052d58591799fbe290e6e6cc60d3308db4a33b5d1282065",
+        "a5ecb01716efea734ef15c095b8ab30a6c24d8488cd30b1888e639a1b1f90bda.frag.metal": "60ca696ee99e56daf8559042909ba939e5d32b68c831e5d62b6fb7deb1368875",
+        "b553e7b53b8d14617aa2751762de2a3e6e01e49d9013806e2f4c3f98bb685265.vert.metal": "2b491271bbf265800331850045d51f776da43361b551a4e7384e689caad965db",
+        "c3344a81eb97cb95f46690d90ecb67dc12c6ab0f0a57a69fa673a9755660764a.frag.metal": "0d448eb4ff1b7ef35547c1330ee71c3340ebabd75986d107359a58a1ce8c25d5",
+        "cb132dd5487618a3bbbacd7efa1b7f978efb9c6c1e784b746d7406b5de2dfcef.vert.metal": "8f8bc5395319bcefb355498bca5e5ee4c2b89236c9e9ff930ad5c6820286f552",
+        "cb42af02b772931be72695e1a26f4fb15dca88c2cf27c1cf7ae2577a60efeeae.frag.metal": "19097bae2d75c364ce01e817c991c68db49a5c147115c439a347ac5cdd339892",
+        "d2b13cd66879185d80f9d9220945d86132cec47abdf6b8736ba225e3f8158fdd.frag.metal": "3bdd94a7cff953982f0aaa471450bb1e448d48d68fe046ea307e45e4a9d6cf59",
+        "ded85084b5a4c0a14f5f2e1952a3db565358eb724a26bd811c83df11b4ca1e0e.frag.metal": "ef1b3485290e037117de0f98373b1c1c62b013ab2efc525b21105aba8125eca2",
+        "e17047985e691b4dcbda99309e4a0f69fd81a09c29956216f07ebaeb1b982a0b.vert.metal": "9360e1127c441e6922bd4fddc9fccf98d32734cb86e2355d52dcf4b28b98a0cb",
+        "eb4b66150a192368995fb3d124a2327abb609aa43148db055c31b213f34d00ef.frag.metal": "8d9eab7e0eca14aa1f7d2d45690adac444092e1200ea04ef53b44a32d22de5cb",
+        "ef7680b11857ead380038883b37d2249870dac57c89a43140efa8758a3091091.vert.metal": "c675442bd8f2935f845995a3e5d08c09645e496ee97eb764f0a0a0e0e88846e1",
+        "ef9750931d691c1b5e5551535147c07148d1d954c31e6c670f1a25767366f865.frag.metal": "de5bc9be82a8ae611a1329e691ee89c229acfd46cd995db685b764c8ee0e1422",
+        "f18b4220d3d45e0b8673c781f6860b025fc08b7b05d6d898bed4d769e4a6d638.vert.metal": "2b491271bbf265800331850045d51f776da43361b551a4e7384e689caad965db",
+        "f56d22aced962803de3506c80c8afad01b858b9f13e1687b3fb1567540c265b9.frag.metal": "b1bb4da64bb320f031ba810f4d4a8ba45a582cc503551c499f41a7a400a6ae28",
+        "f6bd04568091aaae23446906118e161375b63bbcbc03b5134a1cd62621381a6e.vert.metal": "a94c4997666cd381013884c1ba20a713f3774cae5b87d9d2807e3140ff02f791",
+        "f829593a07cb44cc0962e9fd6a8291d93e66f1587cb6b4490f8cdf84fefd9efe.frag.metal": "9b8c3872eb91f88b854d0b7b6c9a3a3d704eaad9787ce9c66133b665b7bbd10d"
+      }
+    },
+    {
+      "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/warm-3/out",
+      "cache": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/cold-3/cache",
+      "returncode": 0,
+      "wall_s": 0.373701,
+      "summary": {
+        "status": "ok",
+        "programs": 17,
+        "failed": [],
+        "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/warm-3/out",
+        "draws": 317,
+        "translation_cache": {
+          "hit": true,
+          "key": "0e057ad50ab6e9daeb7dfb62d3fbd5f51eb6a8735cd064e0596808d14a00637f",
+          "dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/cold-3/cache",
+          "publish": null
+        }
+      },
+      "kind": "warm",
+      "rep": 3,
+      "cache_valid_after": true,
+      "summary_hit": true,
+      "summary_publish": null,
+      "cache_key_matches_computed": true,
+      "artifact_digest_excluding_metadata": "df82753d0857ef5be57dc50d7e69f10abc870655b0d8dbb333e2d094143d0276",
+      "artifact_count": 103,
+      "shaders_json_sha256": "01923afeed3602995c2fd23366eb01c127401ac69d6f0da8f7034864df544580",
+      "msl_sha256": {
+        "1af1d4d1b8f6af552ca4306fc258c14f031d4c2145828bf4945aa0084f12c7a4.frag.metal": "7507bf5c2a6c9ac3bc187b214ed8aa43153af505249d5f8f678014a190b4bcc1",
+        "2364d1eada401cd8b254db2a6a991a571d199ee9435fed7a10165333062afbdf.frag.metal": "8d911f6c73d2b307e74b50e3f308b1d1b5a3edc785abc0175a9e9cecc36d649a",
+        "2ae362386ea376a44ef63a3ca103d9a7844ce4342097fd6e9e8546e99287f9d0.vert.metal": "a8a7269c2b850d3d5c771678664433cff98cccbce567bd157dcfd1eec980d357",
+        "2e08227755511074ea49369a1beeef8e50f4cc6c6cf329bd66c83e451f656a20.vert.metal": "49e2ec33d72473dd69241c4c20612e8b345b4efee086a25f3c554650910c8c37",
+        "3c23998fbfeeb4928ed83b96f7d04ba9b6bc43a41017a0f4833cbd68487c4f1f.frag.metal": "9e12a2c0ddb7912745d673ea36ebdd485b7b6b2ac9fa8e07168e0a2fe11efd9a",
+        "3c4c7e7c05f666b61ebbf88a8bbe0e71c114aeca95d46e302db789095a795270.frag.metal": "063467d79003350e29c4c7a0c8ac12279948ff86f74aed5cc8e9d570a47dd1d6",
+        "41740a6a5e4e6af0e4a32e30178a44b59593eeb9655c30104a9765a2fed3a881.vert.metal": "a2b78a4fb079916f4fdd26da34418271985feaa00ab2e6ee89dd3fe366a8ae67",
+        "681a7e0edfb6791e209eb77d9689ce6376ce6e3c5cc56bd4cd0eb7ec1501d2a2.frag.metal": "ebdce29a85b75ba108271943f6c6e935d580895d16fff442fb68aaef03b9696e",
+        "73d70446218c8377eb5a9c6f94ebbba5bd0fc0b39178f23a12d65cfdbce210a8.vert.metal": "fc4b32da8d938f5f93e4fae621e89ec176a903e41f3a117310d83ebbde5aa3fb",
+        "78522a01ea314e68035a24128235f5944e8e2b2bada816302dac1626a5998020.frag.metal": "a32781a2350e26202914f07edf4112f7027d49cedbfde449543b8f95effb10b6",
+        "808656133b00bd667417486c4b7f03953bbe97ef10ac97cee4935367bdac8977.vert.metal": "9eb11b507b4ed0ea11722cd7852aca49938947094c9736e656d8b91a2d972f2e",
+        "8aa9e1f3e5a749bcef10051483a6a0c0b19d935e0b034a3bf89d88f1ce2e14c0.vert.metal": "500eb476cf75d7b11ed91a48c2197a107b682a02df68a2f461ce660160119fa4",
+        "91349baa9701347963b25ce06b862ec0ea18f107105c0dc13c8c9417a054a5a7.frag.metal": "b77335788bf951525c2523fe86bfbb4d011fffe9f07b66658b39c323231d5b06",
+        "92379acffa2f08f82f3c7fbe544b47455d04672df988c50007bf6d8b113b4cd6.frag.metal": "4e5ee207d3844ff39c21cecbf0e3cc3c41313a27262e5ba18e6702bccdfef588",
+        "92ab8de75e8f1001ea2b80c65cb7b01a1113485b5bf1722a6a6b9526f39302c2.vert.metal": "85118adebce48bb0f4444334ecccf2809c394baf6ded490cb14e4726661f4917",
+        "92c051b0d9ea379c1456e9d7716c8189f64e0ed1529bb9d8e6ae56656b4313ab.vert.metal": "796225cb0d95b6c78e0277523b69e76589791f5695370a51383840b7c8eb10be",
+        "946f044cc41245b7e43739e2d590e1d12bce468da86d8de8a43abd64e99d8b1e.vert.metal": "dcf08838387bdc72a259c089d243e9cf3bbc226272f1bd2b2be103aebb147979",
+        "9d14b12ca5f0bfcb17ccf452bc0f752921141a3c3b1ce25763721990b14e5d13.vert.metal": "6da05a29f76dcbabe052d58591799fbe290e6e6cc60d3308db4a33b5d1282065",
+        "a5ecb01716efea734ef15c095b8ab30a6c24d8488cd30b1888e639a1b1f90bda.frag.metal": "60ca696ee99e56daf8559042909ba939e5d32b68c831e5d62b6fb7deb1368875",
+        "b553e7b53b8d14617aa2751762de2a3e6e01e49d9013806e2f4c3f98bb685265.vert.metal": "2b491271bbf265800331850045d51f776da43361b551a4e7384e689caad965db",
+        "c3344a81eb97cb95f46690d90ecb67dc12c6ab0f0a57a69fa673a9755660764a.frag.metal": "0d448eb4ff1b7ef35547c1330ee71c3340ebabd75986d107359a58a1ce8c25d5",
+        "cb132dd5487618a3bbbacd7efa1b7f978efb9c6c1e784b746d7406b5de2dfcef.vert.metal": "8f8bc5395319bcefb355498bca5e5ee4c2b89236c9e9ff930ad5c6820286f552",
+        "cb42af02b772931be72695e1a26f4fb15dca88c2cf27c1cf7ae2577a60efeeae.frag.metal": "19097bae2d75c364ce01e817c991c68db49a5c147115c439a347ac5cdd339892",
+        "d2b13cd66879185d80f9d9220945d86132cec47abdf6b8736ba225e3f8158fdd.frag.metal": "3bdd94a7cff953982f0aaa471450bb1e448d48d68fe046ea307e45e4a9d6cf59",
+        "ded85084b5a4c0a14f5f2e1952a3db565358eb724a26bd811c83df11b4ca1e0e.frag.metal": "ef1b3485290e037117de0f98373b1c1c62b013ab2efc525b21105aba8125eca2",
+        "e17047985e691b4dcbda99309e4a0f69fd81a09c29956216f07ebaeb1b982a0b.vert.metal": "9360e1127c441e6922bd4fddc9fccf98d32734cb86e2355d52dcf4b28b98a0cb",
+        "eb4b66150a192368995fb3d124a2327abb609aa43148db055c31b213f34d00ef.frag.metal": "8d9eab7e0eca14aa1f7d2d45690adac444092e1200ea04ef53b44a32d22de5cb",
+        "ef7680b11857ead380038883b37d2249870dac57c89a43140efa8758a3091091.vert.metal": "c675442bd8f2935f845995a3e5d08c09645e496ee97eb764f0a0a0e0e88846e1",
+        "ef9750931d691c1b5e5551535147c07148d1d954c31e6c670f1a25767366f865.frag.metal": "de5bc9be82a8ae611a1329e691ee89c229acfd46cd995db685b764c8ee0e1422",
+        "f18b4220d3d45e0b8673c781f6860b025fc08b7b05d6d898bed4d769e4a6d638.vert.metal": "2b491271bbf265800331850045d51f776da43361b551a4e7384e689caad965db",
+        "f56d22aced962803de3506c80c8afad01b858b9f13e1687b3fb1567540c265b9.frag.metal": "b1bb4da64bb320f031ba810f4d4a8ba45a582cc503551c499f41a7a400a6ae28",
+        "f6bd04568091aaae23446906118e161375b63bbcbc03b5134a1cd62621381a6e.vert.metal": "a94c4997666cd381013884c1ba20a713f3774cae5b87d9d2807e3140ff02f791",
+        "f829593a07cb44cc0962e9fd6a8291d93e66f1587cb6b4490f8cdf84fefd9efe.frag.metal": "9b8c3872eb91f88b854d0b7b6c9a3a3d704eaad9787ce9c66133b665b7bbd10d"
+      }
+    },
+    {
+      "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/plain-1/out",
+      "cache": null,
+      "returncode": 0,
+      "wall_s": 3.188433,
+      "summary": {
+        "status": "ok",
+        "programs": 17,
+        "failed": [],
+        "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/plain-1/out",
+        "draws": 317,
+        "translation_cache": {
+          "hit": false,
+          "key": "0e057ad50ab6e9daeb7dfb62d3fbd5f51eb6a8735cd064e0596808d14a00637f",
+          "dir": null,
+          "publish": null
+        }
+      },
+      "kind": "plain-no-cache-dir",
+      "rep": 1
+    },
+    {
+      "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/plain-2/out",
+      "cache": null,
+      "returncode": 0,
+      "wall_s": 3.334181,
+      "summary": {
+        "status": "ok",
+        "programs": 17,
+        "failed": [],
+        "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/plain-2/out",
+        "draws": 317,
+        "translation_cache": {
+          "hit": false,
+          "key": "0e057ad50ab6e9daeb7dfb62d3fbd5f51eb6a8735cd064e0596808d14a00637f",
+          "dir": null,
+          "publish": null
+        }
+      },
+      "kind": "plain-no-cache-dir",
+      "rep": 2
+    },
+    {
+      "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/plain-3/out",
+      "cache": null,
+      "returncode": 0,
+      "wall_s": 3.310447,
+      "summary": {
+        "status": "ok",
+        "programs": 17,
+        "failed": [],
+        "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/plain-3/out",
+        "draws": 317,
+        "translation_cache": {
+          "hit": false,
+          "key": "0e057ad50ab6e9daeb7dfb62d3fbd5f51eb6a8735cd064e0596808d14a00637f",
+          "dir": null,
+          "publish": null
+        }
+      },
+      "kind": "plain-no-cache-dir",
+      "rep": 3
+    }
+  ],
+  "hashing": {
+    "identity_full": {
+      "samples_s": [
+        0.029122,
+        0.026353,
+        0.027828,
+        0.028276,
+        0.026783,
+        0.023046,
+        0.019178
+      ],
+      "median_s": 0.026783,
+      "min_s": 0.019178,
+      "max_s": 0.029122,
+      "reps": 7,
+      "bytes_hashed": 3771330,
+      "breakdown": {
+        "translator_and_tool_binaries": 3766785,
+        "program_identity_canonical_json": 4545
+      }
+    },
+    "translator_identity_only": {
+      "samples_s": [
+        0.020689,
+        0.018229,
+        0.019011,
+        0.018862,
+        0.019102,
+        0.018876,
+        0.019105
+      ],
+      "median_s": 0.019011,
+      "min_s": 0.018229,
+      "max_s": 0.020689,
+      "reps": 7,
+      "bytes_hashed": 3766785
+    },
+    "warm_cache_validation": {
+      "samples_s": [
+        0.004086,
+        0.003733,
+        0.003681,
+        0.003707,
+        0.003391,
+        0.002845,
+        0.002679
+      ],
+      "median_s": 0.003681,
+      "min_s": 0.002679,
+      "max_s": 0.004086,
+      "reps": 7,
+      "bytes_hashed": 976365,
+      "files_hashed": 99
+    },
+    "receipt_artifact_digest": {
+      "samples_s": [
+        0.00374,
+        0.003082,
+        0.003178,
+        0.003219,
+        0.002864,
+        0.002939,
+        0.002924
+      ],
+      "median_s": 0.003082,
+      "min_s": 0.002864,
+      "max_s": 0.00374,
+      "reps": 7,
+      "bytes_hashed": 1320139,
+      "files_hashed": 103
+    },
+    "shader_source_sha256_read_and_hash": {
+      "samples_s": [
+        0.000892,
+        0.000633,
+        0.000633,
+        0.000703,
+        0.000705,
+        0.0007,
+        0.000676
+      ],
+      "median_s": 0.0007,
+      "min_s": 0.000633,
+      "max_s": 0.000892,
+      "reps": 7,
+      "bytes_hashed": 544615,
+      "files_hashed": 33,
+      "kind": "read+sha256, as translate_trace verifies each blob"
+    },
+    "shader_source_sha256_hash_only": {
+      "samples_s": [
+        0.000179,
+        0.000173,
+        0.000173,
+        0.000172,
+        0.000172,
+        0.000172,
+        0.000172
+      ],
+      "median_s": 0.000172,
+      "min_s": 0.000172,
+      "max_s": 0.000179,
+      "reps": 7,
+      "bytes_hashed": 544615,
+      "files_hashed": 33
+    },
+    "msl_sha256": {
+      "samples_s": [
+        0.000738,
+        0.000647,
+        0.000558,
+        0.000503,
+        0.000485,
+        0.000504,
+        0.000514
+      ],
+      "median_s": 0.000514,
+      "min_s": 0.000485,
+      "max_s": 0.000738,
+      "reps": 7,
+      "bytes_hashed": 154043,
+      "files_hashed": 33
+    },
+    "cache_copy": {
+      "samples_s": [
+        0.01644,
+        0.020264,
+        0.021903,
+        0.019642,
+        0.021739
+      ],
+      "median_s": 0.020264,
+      "min_s": 0.01644,
+      "max_s": 0.021903,
+      "reps": 5,
+      "bytes_copied": 1320139,
+      "files_copied": 103
+    },
+    "interpreter_and_import_baseline": {
+      "samples_s": [
+        0.033719,
+        0.037995,
+        0.036513,
+        0.037076,
+        0.041902
+      ],
+      "median_s": 0.037076,
+      "min_s": 0.033719,
+      "max_s": 0.041902,
+      "reps": 5,
+      "note": "empty Python 3.14 process that imports the module only"
+    },
+    "trace_load": {
+      "samples_s": [
+        0.080693,
+        0.077814,
+        0.077637,
+        0.076952,
+        0.085304
+      ],
+      "median_s": 0.077814,
+      "min_s": 0.076952,
+      "max_s": 0.085304,
+      "reps": 5,
+      "bytes_read": 9219432,
+      "files_read": 2,
+      "note": "frame-trace.json + frame-events.jsonl parse"
+    }
+  },
+  "host_runs": [
+    {
+      "label": "full-1",
+      "argv": [
+        "--frame",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/frame",
+        "--shaders",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/warm-1/out",
+        "--out",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/host-full-1"
+      ],
+      "returncode": 0,
+      "wall_s": 0.602544,
+      "status": "ok",
+      "events": 327,
+      "encoded": 327,
+      "failed": 0,
+      "command_status": 4,
+      "readback": true,
+      "partial": false,
+      "has_duration_ns": false,
+      "report_keys": [
+        "command_status",
+        "encoded",
+        "events",
+        "failed",
+        "failures",
+        "first_target",
+        "frame",
+        "history",
+        "manifest_reference_sha256",
+        "partial",
+        "provenance",
+        "readback",
+        "schema",
+        "seed",
+        "stage",
+        "status",
+        "targets",
+        "timed_out",
+        "transfers"
+      ],
+      "stderr_tail": "",
+      "kind": "full",
+      "rep": 1
+    },
+    {
+      "label": "startup-first-draw-1",
+      "argv": [
+        "--frame",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/frame",
+        "--shaders",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/warm-1/out",
+        "--out",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/host-startup-first-draw-1",
+        "--stop-after",
+        "2"
+      ],
+      "returncode": 0,
+      "wall_s": 0.153788,
+      "status": "ok",
+      "events": 327,
+      "encoded": 2,
+      "failed": 0,
+      "command_status": 4,
+      "readback": true,
+      "partial": true,
+      "has_duration_ns": false,
+      "report_keys": [
+        "command_status",
+        "encoded",
+        "events",
+        "failed",
+        "failures",
+        "first_target",
+        "frame",
+        "history",
+        "manifest_reference_sha256",
+        "partial",
+        "provenance",
+        "readback",
+        "schema",
+        "seed",
+        "stage",
+        "status",
+        "targets",
+        "timed_out",
+        "transfers"
+      ],
+      "stderr_tail": "",
+      "kind": "startup-first-draw",
+      "rep": 1
+    },
+    {
+      "label": "startup-no-encode-1",
+      "argv": [
+        "--frame",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/frame",
+        "--shaders",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/warm-1/out",
+        "--out",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/host-startup-no-encode-1",
+        "--stop-after",
+        "0"
+      ],
+      "returncode": 0,
+      "wall_s": 0.111981,
+      "status": "ok",
+      "events": 327,
+      "encoded": 0,
+      "failed": 0,
+      "command_status": 4,
+      "readback": true,
+      "partial": true,
+      "has_duration_ns": false,
+      "report_keys": [
+        "command_status",
+        "encoded",
+        "events",
+        "failed",
+        "failures",
+        "first_target",
+        "frame",
+        "history",
+        "manifest_reference_sha256",
+        "partial",
+        "provenance",
+        "readback",
+        "schema",
+        "seed",
+        "stage",
+        "status",
+        "targets",
+        "timed_out",
+        "transfers"
+      ],
+      "stderr_tail": "",
+      "kind": "startup-no-encode",
+      "rep": 1
+    },
+    {
+      "label": "startup-no-encode-2",
+      "argv": [
+        "--frame",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/frame",
+        "--shaders",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/warm-1/out",
+        "--out",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/host-startup-no-encode-2",
+        "--stop-after",
+        "0"
+      ],
+      "returncode": 0,
+      "wall_s": 0.112857,
+      "status": "ok",
+      "events": 327,
+      "encoded": 0,
+      "failed": 0,
+      "command_status": 4,
+      "readback": true,
+      "partial": true,
+      "has_duration_ns": false,
+      "report_keys": [
+        "command_status",
+        "encoded",
+        "events",
+        "failed",
+        "failures",
+        "first_target",
+        "frame",
+        "history",
+        "manifest_reference_sha256",
+        "partial",
+        "provenance",
+        "readback",
+        "schema",
+        "seed",
+        "stage",
+        "status",
+        "targets",
+        "timed_out",
+        "transfers"
+      ],
+      "stderr_tail": "",
+      "kind": "startup-no-encode",
+      "rep": 2
+    },
+    {
+      "label": "startup-first-draw-2",
+      "argv": [
+        "--frame",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/frame",
+        "--shaders",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/warm-1/out",
+        "--out",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/host-startup-first-draw-2",
+        "--stop-after",
+        "2"
+      ],
+      "returncode": 0,
+      "wall_s": 0.122718,
+      "status": "ok",
+      "events": 327,
+      "encoded": 2,
+      "failed": 0,
+      "command_status": 4,
+      "readback": true,
+      "partial": true,
+      "has_duration_ns": false,
+      "report_keys": [
+        "command_status",
+        "encoded",
+        "events",
+        "failed",
+        "failures",
+        "first_target",
+        "frame",
+        "history",
+        "manifest_reference_sha256",
+        "partial",
+        "provenance",
+        "readback",
+        "schema",
+        "seed",
+        "stage",
+        "status",
+        "targets",
+        "timed_out",
+        "transfers"
+      ],
+      "stderr_tail": "",
+      "kind": "startup-first-draw",
+      "rep": 2
+    },
+    {
+      "label": "full-2",
+      "argv": [
+        "--frame",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/frame",
+        "--shaders",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/warm-1/out",
+        "--out",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/host-full-2"
+      ],
+      "returncode": 0,
+      "wall_s": 0.599272,
+      "status": "ok",
+      "events": 327,
+      "encoded": 327,
+      "failed": 0,
+      "command_status": 4,
+      "readback": true,
+      "partial": false,
+      "has_duration_ns": false,
+      "report_keys": [
+        "command_status",
+        "encoded",
+        "events",
+        "failed",
+        "failures",
+        "first_target",
+        "frame",
+        "history",
+        "manifest_reference_sha256",
+        "partial",
+        "provenance",
+        "readback",
+        "schema",
+        "seed",
+        "stage",
+        "status",
+        "targets",
+        "timed_out",
+        "transfers"
+      ],
+      "stderr_tail": "",
+      "kind": "full",
+      "rep": 2
+    },
+    {
+      "label": "full-3",
+      "argv": [
+        "--frame",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/frame",
+        "--shaders",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/warm-1/out",
+        "--out",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/host-full-3"
+      ],
+      "returncode": 0,
+      "wall_s": 0.757842,
+      "status": "ok",
+      "events": 327,
+      "encoded": 327,
+      "failed": 0,
+      "command_status": 4,
+      "readback": true,
+      "partial": false,
+      "has_duration_ns": false,
+      "report_keys": [
+        "command_status",
+        "encoded",
+        "events",
+        "failed",
+        "failures",
+        "first_target",
+        "frame",
+        "history",
+        "manifest_reference_sha256",
+        "partial",
+        "provenance",
+        "readback",
+        "schema",
+        "seed",
+        "stage",
+        "status",
+        "targets",
+        "timed_out",
+        "transfers"
+      ],
+      "stderr_tail": "",
+      "kind": "full",
+      "rep": 3
+    },
+    {
+      "label": "startup-first-draw-3",
+      "argv": [
+        "--frame",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/frame",
+        "--shaders",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/warm-1/out",
+        "--out",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/host-startup-first-draw-3",
+        "--stop-after",
+        "2"
+      ],
+      "returncode": 0,
+      "wall_s": 0.126317,
+      "status": "ok",
+      "events": 327,
+      "encoded": 2,
+      "failed": 0,
+      "command_status": 4,
+      "readback": true,
+      "partial": true,
+      "has_duration_ns": false,
+      "report_keys": [
+        "command_status",
+        "encoded",
+        "events",
+        "failed",
+        "failures",
+        "first_target",
+        "frame",
+        "history",
+        "manifest_reference_sha256",
+        "partial",
+        "provenance",
+        "readback",
+        "schema",
+        "seed",
+        "stage",
+        "status",
+        "targets",
+        "timed_out",
+        "transfers"
+      ],
+      "stderr_tail": "",
+      "kind": "startup-first-draw",
+      "rep": 3
+    },
+    {
+      "label": "startup-no-encode-3",
+      "argv": [
+        "--frame",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/frame",
+        "--shaders",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/warm-1/out",
+        "--out",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/host-startup-no-encode-3",
+        "--stop-after",
+        "0"
+      ],
+      "returncode": 0,
+      "wall_s": 0.118918,
+      "status": "ok",
+      "events": 327,
+      "encoded": 0,
+      "failed": 0,
+      "command_status": 4,
+      "readback": true,
+      "partial": true,
+      "has_duration_ns": false,
+      "report_keys": [
+        "command_status",
+        "encoded",
+        "events",
+        "failed",
+        "failures",
+        "first_target",
+        "frame",
+        "history",
+        "manifest_reference_sha256",
+        "partial",
+        "provenance",
+        "readback",
+        "schema",
+        "seed",
+        "stage",
+        "status",
+        "targets",
+        "timed_out",
+        "transfers"
+      ],
+      "stderr_tail": "",
+      "kind": "startup-no-encode",
+      "rep": 3
+    }
+  ],
+  "supported_replay_run": {
+    "argv": [
+      "-m",
+      "automation.m6_frame",
+      "replay",
+      "--frame",
+      "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/frame",
+      "--shaders",
+      "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/warm-1/out",
+      "--out",
+      "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/cache-profile/work/present-904/supported-cli"
+    ],
+    "returncode": 0,
+    "wall_s": 0.476217,
+    "stdout": "{\n  \"status\": \"ok\",\n  \"events\": 327,\n  \"encoded\": 327,\n  \"failed\": 0,\n  \"command_status\": 4,\n  \"readback\": true,\n  \"frame\": {\n    \"height\": 1117,\n    \"origin\": \"lower_left\",\n    \"raw_file\": \"metal-frame.bgra\",\n    \"row_stride\": 6912,\n    \"width\": 1728,\n    \"raw_bytes\": 7720704,\n    \"pixel_format\": \"BGRA8\"\n  },\n  \"isolated\": null,\n  \"failures\": []\n}\n",
+    "host_build_stamp": {
+      "schema": "gfx-replay-host-build/v1",
+      "fingerprint": "fa3eb9cb1892249736fef0d7ef808164fbc72001125fbd7141bb2d595a8be814",
+      "binary_sha256": "2866e4cd35890e4bdeb8c12cc5f9f6bf0d0ae26931d218495a75b12da1b2824e",
+      "source_revision": "fb717ead9fc1ca921022c8ec4cde32bbf813262c",
+      "dependencies": {
+        "benchmark/eu4_gfx_draw_semantics.h": "d4509ca33d1b283ebf2b225994caa4f18265aef32da708729acf106b00acccb8",
+        "benchmark/eu4_gfx_frame_replay.mm": "a6e79556dc9b6b093a968f030af55425ddbd8cd012fd79b59f7c3d81c6589683",
+        "benchmark/eu4_gfx_frame_replay_cli.mm": "dca2eaae35f16baab642cb95ef78824e5415bcb91377d20ff0d90f4dd7f586ee",
+        "benchmark/eu4_gfx_metal_replay.h": "ab6d65d2b401014bd6726f8d635891f673059be3857200f04503c6e702f80334",
+        "benchmark/eu4_gfx_replay_semantics.h": "76ee0e0b817fe968228527d2d060f080608e3b698975d1248afa51881c7322e9"
+      },
+      "compiler": {
+        "path": "/usr/bin/clang",
+        "version": "Apple clang version 21.0.0 (clang-2100.4.1.1)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+      },
+      "flags": [
+        "-arch",
+        "arm64",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-fobjc-arc",
+        "-lc++",
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal"
+      ],
+      "environment": {}
+    },
+    "host_binary_sha256": "2866e4cd35890e4bdeb8c12cc5f9f6bf0d0ae26931d218495a75b12da1b2824e"
+  },
+  "gpu_service_time": {
+    "status": "unknown",
+    "reason": "benchmark/eu4_gfx_frame_replay.mm records no GPU service time: the success-path replay.json has no timing field and the host never reads MTLCommandBuffer.GPUStartTime/GPUEndTime. External wall time only bounds it.",
+    "instrumentation": "Add addCompletedHandler: on each committed MTLCommandBuffer, sum completed.GPUEndTime - completed.GPUStartTime, and publish the sum in replay.json; or record with Metal System Trace / an MTLCounterSampleBuffer. benchmark/eu4_gfx_perf.mm:72-86 already implements the addCompletedHandler variant for the live perf harness, but is not linked into this host."
+  },
+  "native_cache": {
+    "persistent": false,
+    "in_process_function_cache": "benchmark/eu4_gfx_frame_replay.mm:2162-2170 keys an NSMutableDictionary by MSL-bytes sha256 + entry + stage + compile options; :2182 newLibraryWithSource per unique key; :2202 stores the function.",
+    "in_process_pipeline_cache": "benchmark/eu4_gfx_frame_replay.mm:2690 newRenderPipelineStateWithDescriptor; :2701 stores in g_pipelines keyed by state_key.",
+    "per_session_state": "benchmark/eu4_gfx_frame_replay.mm:5526/5535-5536 create empty g_pipelines/g_functions dictionaries for each session.",
+    "persistent_archive_search": "no MTLBinaryArchive / metallib / newLibraryWithFile / newLibraryWithData reference in benchmark/eu4_gfx_frame_replay.mm"
+  },
+  "warm_equals_cold": {
+    "shaders_json": true,
+    "artifacts": true,
+    "msl_files": true
+  },
+  "translation_result": {
+    "programs": 17,
+    "stage_entries": 34,
+    "distinct_compiler_inputs": 33,
+    "glsl_files": 33,
+    "spv_files": 33,
+    "msl_files": 33,
+    "draws": 317
+  },
+  "replay_report_timing_keys": [],
+  "diagnostic_environment": {}
+}
