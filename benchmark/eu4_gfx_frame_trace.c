@@ -206,6 +206,17 @@ static struct {
     char gl_vendor[256];
     char gl_renderer[256];
     char gl_version[256];
+    int gl_drawable_valid;
+    int gl_samples;
+    int gl_sample_buffers;
+    int gl_depth_bits;
+    int gl_stencil_bits;
+    int gl_red_bits;
+    int gl_green_bits;
+    int gl_blue_bits;
+    int gl_alpha_bits;
+    int gl_double_buffer;
+    int gl_stereo;
     char pre_image_json[2048];
     int pre_image_valid;
     char seed_json[2048];
@@ -3112,7 +3123,19 @@ static int write_frame_manifest(int complete, const char *reason) {
     fputs("\"gl\":{", file);
     fprintf(file, "\"vendor\":\"%s\",", vendor != NULL ? vendor : "");
     fprintf(file, "\"renderer\":\"%s\",", renderer != NULL ? renderer : "");
-    fprintf(file, "\"version\":\"%s\"},", version != NULL ? version : "");
+    fprintf(file, "\"version\":\"%s\",", version != NULL ? version : "");
+    if (g.gl_drawable_valid) {
+        fprintf(file,
+                "\"drawable\":{\"samples\":%d,\"sample_buffers\":%d,"
+                "\"depth_bits\":%d,\"stencil_bits\":%d,"
+                "\"red_bits\":%d,\"green_bits\":%d,\"blue_bits\":%d,"
+                "\"alpha_bits\":%d,\"double_buffer\":%s,\"stereo\":%s},",
+                g.gl_samples, g.gl_sample_buffers, g.gl_depth_bits,
+                g.gl_stencil_bits, g.gl_red_bits, g.gl_green_bits,
+                g.gl_blue_bits, g.gl_alpha_bits,
+                bool_text(g.gl_double_buffer), bool_text(g.gl_stereo));
+    }
+    fprintf(file, "\"drawable_observed\":%s},", bool_text(g.gl_drawable_valid));
     fputs("\"frame\":{", file);
     fprintf(file, "\"width\":%u,", g.reference_width);
     fprintf(file, "\"height\":%u,", g.reference_height);
@@ -4904,6 +4927,28 @@ static void draw_entry_common(eu4_gfx_capture_frame *frame,
         snprintf(g.gl_renderer, sizeof(g.gl_renderer), "%s",
                  renderer ? renderer : "");
         snprintf(g.gl_version, sizeof(g.gl_version), "%s", version ? version : "");
+        GLint value = 0;
+        glGetIntegerv(GL_SAMPLES, &value);
+        g.gl_samples = (int)value;
+        glGetIntegerv(GL_SAMPLE_BUFFERS, &value);
+        g.gl_sample_buffers = (int)value;
+        glGetIntegerv(GL_DEPTH_BITS, &value);
+        g.gl_depth_bits = (int)value;
+        glGetIntegerv(GL_STENCIL_BITS, &value);
+        g.gl_stencil_bits = (int)value;
+        glGetIntegerv(GL_RED_BITS, &value);
+        g.gl_red_bits = (int)value;
+        glGetIntegerv(GL_GREEN_BITS, &value);
+        g.gl_green_bits = (int)value;
+        glGetIntegerv(GL_BLUE_BITS, &value);
+        g.gl_blue_bits = (int)value;
+        glGetIntegerv(GL_ALPHA_BITS, &value);
+        g.gl_alpha_bits = (int)value;
+        glGetIntegerv(GL_DOUBLEBUFFER, &value);
+        g.gl_double_buffer = (int)value;
+        glGetIntegerv(GL_STEREO, &value);
+        g.gl_stereo = (int)value;
+        g.gl_drawable_valid = 1;
     }
     caller_add(call->caller_rva);
     g.frame_draws++;
