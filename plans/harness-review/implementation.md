@@ -8,7 +8,7 @@ and rollback notes remain in each step document.
 
 | Step | Change | Pull request | Scope landed |
 |---|---|---|---|
-| 01 | Exact authoritative checkpoints for correction equivalence | #221 | Shared request/graph binding, authoritative checkpoint exactness, broken-checkpoint rejection, regression checkpoint exactness, new negatives. |
+| 01 | Exact authoritative checkpoints for correction equivalence | #221 | Shared request/graph binding, authoritative checkpoint exactness, producer checkpoint-file binding, broken-checkpoint rejection, regression checkpoint exactness, new negatives. |
 | 02 | Verified case locator across worktree disposal | #227 | `case_locator.publish/locate/inventory`, atomic verified copy, locator discovery through `evidence_index`, legacy/no-seal keying. |
 | 03 | Campaign entry preflight | #226 | Workspace writability refusal before anchoring, compact startup block with identity, checker, limits and first command. |
 | 04 | Correct pixel-region geometry | #222 | Integer-ceiling region spans, 9×1/1×9/1728×1117 regressions, unused accumulator removed. |
@@ -42,4 +42,5 @@ Every listed change was verified with the focused modules named in its plan,
 then the neighbor suites, using `automation.test_runner` under the offline
 profile. The full offline gate and GitHub Actions run on each PR. A local
 archive, a GPU fixture or a live EU4 capture is never implied by a portable
-pass.
+pass. The merged set was additionally gated as one branch: 3,945 tests ran,
+3,910 executed, 35 skipped and 0 failed (711 s).
