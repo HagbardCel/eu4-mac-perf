@@ -24,7 +24,8 @@ state at draw 14:
   `depth=1`, `stencil=0`, `color=(0,0,0,1)`.
 - No later fb:0 producer occurs before draw 14 (graph writers: `[7]`).
 - Checkpoint 14 is the live pre-draw image and is byte-bound in the checkpoint
-  request (`3f7126…`, 1728 × 1117 × 4).
+  request as `seed-137637b6…`; checkpoint 15 is `default-checkpoint-3f7126…`.
+  The control manifest names seed `137637b6…` and reference `3f7126…`.
 - Draw 14 tests and writes depth (`GL_LEQUAL`, depth test/write true) and
   enables multisampling (`GL_MULTISAMPLE` true).
 
@@ -47,7 +48,7 @@ drawable remains **unobserved** for present 904.
 | 15 | **5 / 1** | 0 | **unqualified** |
 | 16 | **4,645 / 86** | 0 | **unqualified** |
 
-The four-pixel residual at checkpoint 15 is not parity, and the larger
+The five-pixel residual at checkpoint 15 is not parity, and the larger
 checkpoint-16 residual is not explainable by the qualifying inputs alone.
 Per `automation/gfx_gl_control_qualification.py`, `metal_blame_allowed=false`.
 

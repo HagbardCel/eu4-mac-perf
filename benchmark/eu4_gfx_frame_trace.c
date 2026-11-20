@@ -207,6 +207,7 @@ static struct {
     char gl_renderer[256];
     char gl_version[256];
     int gl_drawable_valid;
+    int gl_drawable_binding;
     int gl_samples;
     int gl_sample_buffers;
     int gl_depth_bits;
@@ -3129,11 +3130,13 @@ static int write_frame_manifest(int complete, const char *reason) {
                 "\"drawable\":{\"samples\":%d,\"sample_buffers\":%d,"
                 "\"depth_bits\":%d,\"stencil_bits\":%d,"
                 "\"red_bits\":%d,\"green_bits\":%d,\"blue_bits\":%d,"
-                "\"alpha_bits\":%d,\"double_buffer\":%s,\"stereo\":%s},",
+                "\"alpha_bits\":%d,\"double_buffer\":%s,\"stereo\":%s,"
+                "\"drawn_framebuffer_binding\":%d},",
                 g.gl_samples, g.gl_sample_buffers, g.gl_depth_bits,
                 g.gl_stencil_bits, g.gl_red_bits, g.gl_green_bits,
                 g.gl_blue_bits, g.gl_alpha_bits,
-                bool_text(g.gl_double_buffer), bool_text(g.gl_stereo));
+                bool_text(g.gl_double_buffer), bool_text(g.gl_stereo),
+                g.gl_drawable_binding);
     }
     fprintf(file, "\"drawable_observed\":%s},", bool_text(g.gl_drawable_valid));
     fputs("\"frame\":{", file);
@@ -4927,28 +4930,38 @@ static void draw_entry_common(eu4_gfx_capture_frame *frame,
         snprintf(g.gl_renderer, sizeof(g.gl_renderer), "%s",
                  renderer ? renderer : "");
         snprintf(g.gl_version, sizeof(g.gl_version), "%s", version ? version : "");
-        GLint value = 0;
-        glGetIntegerv(GL_SAMPLES, &value);
-        g.gl_samples = (int)value;
-        glGetIntegerv(GL_SAMPLE_BUFFERS, &value);
-        g.gl_sample_buffers = (int)value;
-        glGetIntegerv(GL_DEPTH_BITS, &value);
-        g.gl_depth_bits = (int)value;
-        glGetIntegerv(GL_STENCIL_BITS, &value);
-        g.gl_stencil_bits = (int)value;
-        glGetIntegerv(GL_RED_BITS, &value);
-        g.gl_red_bits = (int)value;
-        glGetIntegerv(GL_GREEN_BITS, &value);
-        g.gl_green_bits = (int)value;
-        glGetIntegerv(GL_BLUE_BITS, &value);
-        g.gl_blue_bits = (int)value;
-        glGetIntegerv(GL_ALPHA_BITS, &value);
-        g.gl_alpha_bits = (int)value;
-        glGetIntegerv(GL_DOUBLEBUFFER, &value);
-        g.gl_double_buffer = (int)value;
-        glGetIntegerv(GL_STEREO, &value);
-        g.gl_stereo = (int)value;
-        g.gl_drawable_valid = 1;
+    }
+    if (!g.gl_drawable_valid) {
+        /* GL_DRAW_FRAMEBUFFER_BINDING is part of the default drawable state.
+         * A draw bound to an offscreen FBO describes that FBO, not the
+         * window drawable; retry on later draws until the default is bound. */
+        GLint binding = 0;
+        glGetIntegerv(0x8CA6 /* GL_DRAW_FRAMEBUFFER_BINDING */, &binding);
+        g.gl_drawable_binding = (int)binding;
+        if (binding == 0) {
+            GLint value = 0;
+            glGetIntegerv(GL_SAMPLES, &value);
+            g.gl_samples = (int)value;
+            glGetIntegerv(GL_SAMPLE_BUFFERS, &value);
+            g.gl_sample_buffers = (int)value;
+            glGetIntegerv(GL_DEPTH_BITS, &value);
+            g.gl_depth_bits = (int)value;
+            glGetIntegerv(GL_STENCIL_BITS, &value);
+            g.gl_stencil_bits = (int)value;
+            glGetIntegerv(GL_RED_BITS, &value);
+            g.gl_red_bits = (int)value;
+            glGetIntegerv(GL_GREEN_BITS, &value);
+            g.gl_green_bits = (int)value;
+            glGetIntegerv(GL_BLUE_BITS, &value);
+            g.gl_blue_bits = (int)value;
+            glGetIntegerv(GL_ALPHA_BITS, &value);
+            g.gl_alpha_bits = (int)value;
+            glGetIntegerv(GL_DOUBLEBUFFER, &value);
+            g.gl_double_buffer = (int)value;
+            glGetIntegerv(GL_STEREO, &value);
+            g.gl_stereo = (int)value;
+            g.gl_drawable_valid = 1;
+        }
     }
     caller_add(call->caller_rva);
     g.frame_draws++;
