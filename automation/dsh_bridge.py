@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
@@ -333,24 +334,39 @@ def _trusted_modules_digest(checker: Path, strict: bool = True) -> tuple[str, li
 
 
 def _workspace_write_problem(workspace: Path) -> str | None:
-    """Probe the candidate workspace without leaving a file behind.
+    """Probe the candidate workspace without overwriting existing files.
 
     A campaign that cannot write its permitted outputs would fail after a
     launch or validation, so prepare refuses before the anchor is created.
+    The probe is an exclusively created unique file; cleanup removes only that
+    file, never a pre-existing path.
     """
     workspace = Path(workspace)
     if not workspace.is_dir():
         return f"candidate workspace is not a directory: {workspace}"
-    probe = workspace / f".dsh-prepare-probe-{os.getpid()}"
+    probe: Path | None = None
+    descriptor: int | None = None
     try:
-        probe.write_text("probe\n", encoding="utf-8")
+        descriptor, name = tempfile.mkstemp(
+            prefix=".dsh-prepare-probe-", dir=str(workspace))
+        probe = Path(name)
+        os.write(descriptor, b"probe\n")
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
     except OSError as exc:
         return f"candidate workspace is not writable: {workspace}: {exc}"
     finally:
-        try:
-            probe.unlink()
-        except OSError:
-            pass
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        if probe is not None:
+            try:
+                probe.unlink()
+            except OSError:
+                pass
     return None
 
 

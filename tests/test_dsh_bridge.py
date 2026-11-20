@@ -113,6 +113,9 @@ class PrepareTests(BridgeTestCase):
         self.assertEqual(startup["closing"]["max_rounds"], 4)
         self.assertEqual(startup["closing"]["max_validations"], 6)
         self.assertEqual(startup["closing"]["wall_clock_seconds"], 600)
+        self.assertTrue(startup["closing"]["require_checker_pass"])
+        self.assertEqual(startup["allowed_paths"], ["*"])
+        self.assertEqual(startup["forbidden_paths"], [])
         self.assertIn(startup["first_command"][0], ("git", "ls"))
         # The writability probe must not leave candidate residue.
         self.assertEqual(
@@ -121,14 +124,21 @@ class PrepareTests(BridgeTestCase):
     def test_prepare_refuses_an_unwritable_workspace_before_anchoring(self) -> None:
         sidecar = self.sidecar(self.campaign("smoke-campaign"))
         self.workspace.mkdir(parents=True)
-        self.workspace.chmod(0o500)
-        self.addCleanup(self.workspace.chmod, 0o700)
-        code, out = self.run_bridge("prepare", sidecar)
+        # A pre-existing path must never be overwritten or removed by a probe.
+        existing = self.workspace / ".dsh-prepare-probe-existing"
+        existing.write_text("keep", encoding="utf-8")
+        with mock.patch("automation.dsh_bridge.tempfile.mkstemp",
+                        side_effect=PermissionError("injected permission")):
+            code, out = self.run_bridge("prepare", sidecar)
         self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
         self.assertFalse(out["ok"])
         self.assertEqual(out["kind"], "workspace_not_writable")
-        self.assertIn(str(self.workspace), out["detail"])
+        self.assertIn("injected permission", out["detail"])
+        self.assertEqual(existing.read_text(encoding="utf-8"), "keep")
         self.assertFalse((self.run_root / "identity.json").is_file())
+        self.assertFalse((self.run_root / "validations.jsonl").exists())
+        self.assertEqual(
+            list(self.workspace.glob(".dsh-prepare-probe-*")), [existing])
 
 
 class ValidationBudgetTests(BridgeTestCase):
