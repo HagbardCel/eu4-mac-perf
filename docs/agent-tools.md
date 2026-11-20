@@ -217,6 +217,9 @@ authority, nonce and artifact instead of trusting a boolean. An exact image from
 a different seal is explicitly `unqualified`; `--comparison-only` compares two
 files and can never qualify. Missing identity, execution provenance or renderer
 authority is reported as `unqualified` with the missing observation named.
+Supplying `--renderer` executes that file with the caller's privileges; the
+pinned authority is the explicit trust decision, and the qualifier does not
+sandbox the renderer.
 
 `probe` is a pass-through to the existing live launch path and still requires an
 operator ledger.
