@@ -986,7 +986,26 @@ def eu4_capture(args: argparse.Namespace) -> dict:
                 json.dumps(graph, indent=2) + "\n", encoding="utf-8")
         status = {"complete": "ok", "partial": "partial"}.get(
             graph["status"], "invalid")
-        return _envelope("eu4_capture", status, graph,
+        if bool(getattr(args, "full", False)):
+            return _envelope("eu4_capture", status, graph,
+                             reason="; ".join(graph.get("reasons") or []))
+        request = gfx_frame_graph.checkpoint_request(graph)
+        rows = gfx_frame_graph.provenance_matrix(
+            graph, request.get("checkpoints") or [])
+        value = {
+            "schema": graph.get("schema"),
+            "status": graph.get("status"),
+            "reasons": (graph.get("reasons") or [])[:12],
+            "counts": graph.get("counts") or {},
+            "boundary": graph.get("boundary") or {},
+            "checkpoint_count": len(rows),
+            "checkpoints": rows[:32],
+            "truncated": len(rows) > 32,
+            "authority": "graph-derived observation/writer rows; writer "
+                         "history is empty only when the graph records no "
+                         "prior same-resource writer",
+        }
+        return _envelope("eu4_capture", status, value,
                          reason="; ".join(graph.get("reasons") or []))
     run = Path(args.run).expanduser().resolve() if args.run else None
     if args.capture_op == "health":

@@ -1,0 +1,12 @@
+observation_event,resource,phase,writer_events,writer_authority,producer_event,upcoming_entry,upcoming_program,required_generation,present_index,session_id,capture_frame_id
+11,tex:431,pre_event,9,graph,9,_GfxDraw,367,1,616,2da0a8fc-d442-475d-aeb3-8b902ce0caa0,1
+13,tex:432,pre_event,10 11,graph,11,_GfxDraw,370,2,616,2da0a8fc-d442-475d-aeb3-8b902ce0caa0,1
+14,fb:0,pre_event,7,graph,7,_GfxDrawIndexed,301,,616,2da0a8fc-d442-475d-aeb3-8b902ce0caa0,1
+15,fb:0,pre_event,7 14,graph,14,_GfxDrawIndexed,301,,616,2da0a8fc-d442-475d-aeb3-8b902ce0caa0,1
+16,fb:0,pre_event,7 14 15,graph,15,_GfxDrawIndexed,301,,616,2da0a8fc-d442-475d-aeb3-8b902ce0caa0,1
+17,fb:0,pre_event,7 14 15 16,graph,16,_GfxDrawIndexed,301,,616,2da0a8fc-d442-475d-aeb3-8b902ce0caa0,1
+270,tex:433,pre_event,0 1 2 3 4 5 6,graph,6,_GfxDraw,316,7,616,2da0a8fc-d442-475d-aeb3-8b902ce0caa0,1
+284,fb:0,pre_event,276 277 278 279 280 281 282 283,graph,283,,,271,616,2da0a8fc-d442-475d-aeb3-8b902ce0caa0,1
+286,tex:442,pre_event,284,graph,284,_GfxDraw,352,1,616,2da0a8fc-d442-475d-aeb3-8b902ce0caa0,1
+288,tex:447,pre_event,285 286,graph,286,_GfxDraw,349,2,616,2da0a8fc-d442-475d-aeb3-8b902ce0caa0,1
+290,tex:443,pre_event,287 288,graph,288,_GfxDraw,358,2,616,2da0a8fc-d442-475d-aeb3-8b902ce0caa0,1
