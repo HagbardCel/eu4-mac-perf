@@ -270,6 +270,46 @@ class CorrectionAcceptanceTests(unittest.TestCase):
         self.assertIn("replay_receipt_mismatch",
                       json.dumps(report["problems"]))
 
+    def test_reader_rejects_malformed_checkpoint_without_crashing(self):
+        after = self.model.replay_dir("after-reader-malformed",
+                                      self.model.reference)
+        replay_path = after / "replay.json"
+        replay = json.loads(replay_path.read_text())
+        replay["checkpoints"][0] = "not-an-object"
+        replay_path.write_text(json.dumps(replay))
+        receipt_path = after / "producer-receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["result"].pop("checkpoint_files", None)
+        receipt["result"]["replay_json_sha256"] = sha(
+            replay_path.read_bytes())
+        receipt_path.write_text(json.dumps(receipt))
+        report = self.acceptance(
+            after=after,
+            claims=self.model.claims(
+                {"mismatched_pixels": 1, "max_channel_error": 7},
+                {"mismatched_pixels": 0, "max_channel_error": 0}))
+        self.assertEqual(report["result"], "invalid_evidence", report)
+        self.assertIn("replay_receipt_mismatch",
+                      json.dumps(report["problems"]))
+
+    def test_exact_but_not_improved_is_not_authenticated(self):
+        before = self.model.replay_dir("before-exact-idempotent",
+                                       self.model.reference)
+        case_dir = self.model.package(before, "case-exact-idempotent",
+                                      case_id="exact-idempotent")
+        baseline = self.model.baseline(case_dir, "baseline-idempotent.json")
+        after = self.model.replay_dir("after-exact-idempotent",
+                                      self.model.reference)
+        report = correction_accept.evaluate(
+            case_dir=case_dir, baseline_path=baseline,
+            candidate_revision=REVISION, after_replay=after,
+            claimed_before={"mismatched_pixels": 0, "max_channel_error": 0},
+            claimed_after={"mismatched_pixels": 0, "max_channel_error": 0},
+            baseline_revision="baseline-1", qualification_contract=contract())
+        self.assertEqual(report["result"], "rejected", report)
+        self.assertTrue(report["pixel_perfect"], report)
+        self.assertFalse(report["authenticated_equivalence"], report)
+
     def test_tampered_checkpoint_binding_is_invalid(self):
         after = self.model.replay_dir("after-tampered-binding",
                                       self.model.reference)
@@ -354,6 +394,7 @@ class CorrectionAcceptanceTests(unittest.TestCase):
             "checkpoint_validation": {"status": "ok"},
             "state_coverage": {"status": "complete"},
             "checkpoint_binding": "bound",
+            "graph_status": "complete",
             "checkpoint_request": {"required_entries": 1},
             "checkpoints": [{
                 "requested": True, "authoritative": False, "status": "match",
@@ -422,11 +463,30 @@ class CorrectionAcceptanceTests(unittest.TestCase):
         self.assertEqual(report["result"], "accepted", report)
         self.assertEqual(report["after"]["checkpoint_authority"]["graph_status"],
                          "partial")
-        self.assertEqual(report["checkpoint_coverage"],
-                         "final_only_unqualified")
+        self.assertEqual(report["checkpoint_coverage"], "graph_incomplete")
         self.assertFalse(report["pixel_perfect"], report)
         self.assertFalse(report["authenticated_equivalence"], report)
-        self.assertTrue(any("complete capture graph" in item
+        self.assertTrue(any("capture graph is not complete" in item
+                            for item in report["limitations"]))
+
+    def test_partial_graph_with_checkpoints_cannot_be_pixel_perfect(self):
+        model = CorrectionFixture(self.root / "partial-checkpoints",
+                                  partial_graph=True)
+        before = model.replay_dir("before", model.faulty_pixels())
+        case_dir = model.package(before, "case", case_id="partial-checkpoints")
+        baseline = model.baseline(case_dir, "baseline.json")
+        after = model.replay_dir("after", model.reference)
+        report = correction_accept.evaluate(
+            case_dir=case_dir, baseline_path=baseline,
+            candidate_revision=REVISION, after_replay=after,
+            claimed_before={"mismatched_pixels": 1, "max_channel_error": 7},
+            claimed_after={"mismatched_pixels": 0, "max_channel_error": 0},
+            baseline_revision="baseline-1", qualification_contract=contract())
+        self.assertEqual(report["result"], "accepted", report)
+        self.assertEqual(report["checkpoint_coverage"], "graph_incomplete")
+        self.assertFalse(report["pixel_perfect"], report)
+        self.assertFalse(report["authenticated_equivalence"], report)
+        self.assertTrue(any("capture graph is not complete" in item
                             for item in report["limitations"]))
 
     def test_writer_rejects_malformed_or_missing_checkpoint_declarations(self):

@@ -141,6 +141,33 @@ def _within_root(path: Path) -> bool:
         return False
 
 
+def _returned_checkpoint_names(replay: dict) -> set[str]:
+    """Validate returned checkpoint declarations before reconciliation.
+
+    A producer artifact must not crash the independent checker or hide an
+    unbound observation.  Every entry is an object with one unique safe
+    basename.
+    """
+    returned = replay.get("checkpoints") or []
+    if not isinstance(returned, list):
+        raise AcceptanceError("replay_receipt_mismatch",
+                              "replay checkpoints are not a list")
+    names: set[str] = set()
+    for item in returned:
+        if not isinstance(item, dict):
+            raise AcceptanceError("replay_receipt_mismatch",
+                                  "replay has a malformed checkpoint entry")
+        declared = str(item.get("file") or "")
+        if (not declared or Path(declared).name != declared
+                or declared in names):
+            raise AcceptanceError(
+                "replay_receipt_mismatch",
+                f"replay checkpoint declares an invalid or duplicate file "
+                f"name {declared!r}")
+        names.add(declared)
+    return names
+
+
 def _replay_evidence(capture_dir: Path, replay_dir: Path,
                      policy: Path) -> dict:
     """Recompute one side's execution, identity, pixels and checkpoints.
@@ -195,6 +222,7 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
     request, request_source, request_problems, request_binding = (
         gfx_independent_replay.checkpoint_request_evidence(
             graph, replay_dir, shadow=shadow, seal=seal))
+    returned_checkpoint_names = _returned_checkpoint_names(replay)
     capture = gfx_independent_replay.capture_identity(seal, trace, replay)
     checkpoints, validation = gfx_independent_replay.reconcile_checkpoints(
         graph, request, replay, capture_dir, replay_dir, capture)
@@ -267,25 +295,7 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
                         f"producer receipt has an invalid checkpoint file "
                         f"name {name!r}")
                 bound_map[name] = str(row.get("sha256") or "")
-            replay_names: set[str] = set()
-            returned = replay.get("checkpoints") or []
-            if not isinstance(returned, list):
-                raise AcceptanceError(
-                    "replay_receipt_mismatch",
-                    "replay checkpoints are not a list")
-            for item in returned:
-                if not isinstance(item, dict):
-                    raise AcceptanceError(
-                        "replay_receipt_mismatch",
-                        "replay has a malformed checkpoint entry")
-                declared = str(item.get("file") or "")
-                if (not declared or Path(declared).name != declared
-                        or declared in replay_names):
-                    raise AcceptanceError(
-                        "replay_receipt_mismatch",
-                        f"replay checkpoint declares an invalid or duplicate "
-                        f"file name {declared!r}")
-                replay_names.add(declared)
+            replay_names = returned_checkpoint_names
             if set(bound_map) != replay_names:
                 missing = sorted(replay_names - set(bound_map))
                 extra = sorted(set(bound_map) - replay_names)
@@ -352,10 +362,15 @@ def _checkpoint_authority(side: dict, *, allow_final_only: bool) -> dict:
             counts["divergent_diagnostic"] += 1
     first = next((item for item in authoritative
                   if item.get("status") != "match"), None)
+    graph_status = str(side.get("graph_status") or "unknown")
     if counts["invalid"]:
         coverage = "invalid"
     elif counts["divergent"]:
         coverage = "divergent"
+    elif graph_status != "complete":
+        # No equivalence claim - final-only or checkpointed - is qualified on a
+        # capture graph that itself reports incomplete coverage.
+        coverage = "graph_incomplete"
     elif authoritative:
         coverage = "verified"
     elif requested:
@@ -365,9 +380,6 @@ def _checkpoint_authority(side: dict, *, allow_final_only: bool) -> dict:
             "required_entries") or 0)
         if required:
             coverage = "missing_authoritative"
-        elif str(side.get("graph_status") or "unknown") != "complete":
-            # An empty plan is legitimate only for a complete capture graph.
-            coverage = "final_only_unqualified"
         else:
             coverage = "final_only" if allow_final_only else \
                 "final_only_unqualified"
@@ -385,7 +397,7 @@ def _checkpoint_authority(side: dict, *, allow_final_only: bool) -> dict:
         "invalid": counts["invalid"],
         "divergent_diagnostic": counts["divergent_diagnostic"],
         "pixels_match": pixels_match,
-        "graph_status": str(side.get("graph_status") or "unknown"),
+        "graph_status": graph_status,
         "coverage": coverage,
         "exact": coverage in ("verified", "final_only"),
         "final_only": coverage == "final_only",
@@ -1099,7 +1111,11 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
         axes["after"] and axes["after"].get("checkpoint_producer_bound"))
     if axes["after"] and not axes["after"].get("complete"):
         coverage = axes["after"].get("checkpoint_coverage")
-        if coverage == "final_only_unqualified":
+        if coverage == "graph_incomplete":
+            limitations.append(
+                "the capture graph is not complete; no checkpoint coverage or "
+                "equivalence is qualified")
+        elif coverage == "final_only_unqualified":
             graph_status = str(
                 (axes["after"].get("authoritative_checkpoints") or {}).get(
                     "graph_status") or "unknown")
@@ -1150,7 +1166,8 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
         and recomputed_after["mismatched_pixels"] == 0
         and recomputed_after["max_channel_error"] == 0)
     authenticated_equivalence = bool(
-        pixel_perfect and regression_requirements_met)
+        pixel_perfect and regression_requirements_met
+        and result == "accepted")
     if result == "accepted" and not improved:
         # Defensive: improvement is required for acceptance.
         result = "rejected"

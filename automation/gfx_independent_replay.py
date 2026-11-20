@@ -3425,17 +3425,21 @@ def _replay_locked(
         raise
     result_path = out_dir / "replay.json"
     receipt_error: str | None = None
-    if result_path.is_file():
-        try:
-            write_producer_receipt(out_dir, frame_dir, producer, result_path)
-        except ReplayError as exc:
-            # A malformed/failed checkpoint declaration is a diagnostic
-            # result, not a reason to lose the report or leak the host copy.
-            receipt_error = f"{exc.kind}: {exc.detail or exc}"
     try:
-        snapshot.unlink()
-    except FileNotFoundError:
-        pass
+        if result_path.is_file():
+            try:
+                write_producer_receipt(
+                    out_dir, frame_dir, producer, result_path)
+            except ReplayError as exc:
+                # A malformed/failed checkpoint declaration is a diagnostic
+                # result, not a reason to lose the report or leak the host
+                # copy.
+                receipt_error = f"{exc.kind}: {exc.detail or exc}"
+    finally:
+        try:
+            snapshot.unlink()
+        except FileNotFoundError:
+            pass
     if receipt_error is not None:
         diagnosis = analyse_frame(
             frame_dir, out_dir, policy, graph=graph, request=request,
