@@ -217,7 +217,7 @@ if mode == "toctou":
     def _qualify(self, *, mode: str = "normal", renderer: Path | None = None,
                  frame_dir: Path | None = None,
                  live: Path | None = None, out_dir: Path | None = None,
-                 authority=..., drawable=..., prestate=...):
+                 drawable=..., prestate=...):
         self._out_index += 1
         target = out_dir or (self.root / f"out-{self._out_index}")
         target.mkdir(parents=True, exist_ok=True)
@@ -226,8 +226,6 @@ if mode == "toctou":
             frame_dir=frame_dir or self.frame,
             checkpoint_event=2, draw_event=1,
             renderer=renderer or self.renderer, out_dir=target,
-            authority_registry=(
-                self.registry if authority is ... else authority),
             drawable=self.drawable if drawable is ... else drawable,
             prestate=self.prestate if prestate is ... else prestate)
 
@@ -243,8 +241,17 @@ if mode == "toctou":
         self.assertIsNotNone(value["qualification"]["receipt"])
         self.assertTrue(qualification.attribution(value)["allowed"])
 
+    def _pop_registry(self):
+        from automation import gfx_gl_control_authorities as authorities
+        entry = authorities.AUTHORITIES.pop(self.renderer_sha, None)
+        self.addCleanup(
+            lambda: authorities.AUTHORITIES.__setitem__(
+                self.renderer_sha, entry) if entry is not None else None)
+        return entry
+
     def test_an_unregistered_renderer_cannot_authorize_blame(self):
-        value = self._qualify(authority={})
+        self._pop_registry()
+        value = self._qualify()
         self.assertTrue(value["comparison"]["exact"])
         self.assertFalse(value["qualified"])
         self.assertFalse(value["metal_blame_allowed"])
@@ -252,16 +259,21 @@ if mode == "toctou":
                       " ".join(value["missing_observation"]))
 
     def test_a_wrong_registry_digest_is_not_qualified(self):
-        value = self._qualify(authority={"0" * 64: self.registry[_sha(
-            self.renderer)]})
+        self._pop_registry()
+        value = self._qualify()
         self.assertFalse(value["qualified"])
         self.assertIn("not in the checked-in authority registry",
                       " ".join(value["qualification"]["reasons"]))
 
     def test_an_unqualified_registry_entry_is_not_accepted(self):
-        entry = dict(self.registry[_sha(self.renderer)])
-        entry["qualified"] = False
-        value = self._qualify(authority={_sha(self.renderer): entry})
+        from automation import gfx_gl_control_authorities as authorities
+        entry = authorities.AUTHORITIES[self.renderer_sha]
+        authorities.AUTHORITIES[self.renderer_sha] = {
+            **entry, "qualified": False}
+        self.addCleanup(
+            lambda: authorities.AUTHORITIES.__setitem__(
+                self.renderer_sha, entry))
+        value = self._qualify()
         self.assertFalse(value["qualified"])
         self.assertIn("not qualified",
                       " ".join(value["qualification"]["reasons"]))
@@ -399,10 +411,9 @@ if mode == "toctou":
         self.assertEqual(intervening["kind"], "clear")
 
     def test_attribution_rechecks_the_registry_after_qualification(self):
-        from automation import gfx_gl_control_authorities as authorities
         value = self._qualify()
         self.assertTrue(qualification.attribution(value)["allowed"])
-        authorities.AUTHORITIES.pop(self.renderer_sha, None)
+        self._pop_registry()
         self.assertFalse(qualification.attribution(value)["allowed"])
 
     def test_a_renderer_cannot_change_the_compared_live_bytes(self):

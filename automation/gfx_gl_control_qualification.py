@@ -96,8 +96,7 @@ def _intervening_writer(events: list[dict], draw_position: int,
     return None
 
 
-def _load_authority(renderer_sha: str | None,
-                    registry: dict | None = None) -> dict:
+def _load_authority(renderer_sha: str | None) -> dict:
     """Resolve the executed renderer in the checked-in authority registry.
 
     A caller-supplied JSON file is not a pin: any caller can write it. The
@@ -109,7 +108,7 @@ def _load_authority(renderer_sha: str | None,
     if not renderer_sha:
         return {"qualified": False, "self_attested": True,
                 "reasons": ["the renderer was not executed"]}
-    entries = registry_module.AUTHORITIES if registry is None else registry
+    entries = registry_module.AUTHORITIES
     entry = entries.get(renderer_sha) if isinstance(entries, dict) else None
     if not isinstance(entry, dict):
         return {
@@ -674,7 +673,6 @@ def qualify_sealed(live_path: Path | str, width: int, height: int, *,
                    draw_event: int, renderer: Path | str,
                    out_dir: Path | str, resource: str = DEFAULT_RESOURCE,
                    timeout: float = DEFAULT_TIMEOUT,
-                   authority_registry: dict | None = None,
                    drawable: dict | None = None,
                    prestate: dict | None = None) -> dict:
     """Authenticate the seal, execute the renderer, then qualify the control.
@@ -734,8 +732,7 @@ def qualify_sealed(live_path: Path | str, width: int, height: int, *,
         renderer=Path(renderer), frame_dir=frame_dir, live_input=live_input,
         identity=authentication["identity"], width=width, height=height,
         out_dir=out_dir, timeout=timeout)
-    authority = _load_authority(
-        run.get("renderer_sha256") or "", registry=authority_registry)
+    authority = _load_authority(run.get("renderer_sha256") or "")
     control_path = run.get("artifact")
     comparison = None
     if control_path is not None:
