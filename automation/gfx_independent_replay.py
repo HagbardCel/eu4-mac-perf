@@ -3262,18 +3262,33 @@ def write_producer_receipt(out_dir: Path, frame_dir: Path,
     replay = _optional_json(result_path) or {}
     metal = out_dir / "metal-frame.bgra"
     checkpoint_files = []
+    seen_checkpoints: set[str] = set()
     for item in replay.get("checkpoints") or []:
         if not isinstance(item, dict):
             continue
-        name = _safe_member_name(str(item.get("file") or ""))
+        declared = str(item.get("file") or "")
+        name = _safe_member_name(declared)
         if not name:
-            continue
+            # A result that declares a checkpoint must declare a safe basename.
+            # Silently omitting it would leave the acceptance path to discover
+            # an unbound intermediate after the producer has already signed.
+            raise ReplayError(
+                "invalid_checkpoint_binding",
+                f"checkpoint declares an invalid file name {declared!r}")
+        if name in seen_checkpoints:
+            raise ReplayError(
+                "invalid_checkpoint_binding",
+                f"checkpoint file {name!r} is declared more than once")
+        seen_checkpoints.add(name)
         path = out_dir / name
-        if path.is_file():
-            checkpoint_files.append({
-                "file": name,
-                "sha256": _sha256_file(path),
-            })
+        if not path.is_file():
+            raise ReplayError(
+                "invalid_checkpoint_binding",
+                f"declared checkpoint file {name!r} is missing from {out_dir}")
+        checkpoint_files.append({
+            "file": name,
+            "sha256": _sha256_file(path),
+        })
     checkpoint_files.sort(key=lambda row: row["file"])
     value = {
         "schema": PRODUCER_RECEIPT_SCHEMA,
