@@ -879,14 +879,28 @@ def analyze(
     runner_focused = [row for row in runner_unique
                       if row["kind"] in ("focused", "pattern")]
     runner_full = [row for row in runner_unique if row["kind"] == "full"]
+    # Count retained test totals once per tool call.  Re-reading the same
+    # result for every command in one shell call double-counted it; when one
+    # call contains several runner commands, only an unambiguous one-Ran-line
+    # per command is summed, otherwise the total is unknown.
+    rows_by_call: dict[str, list[dict]] = {}
+    for row in runner_unique:
+        rows_by_call.setdefault(row["call_id"], []).append(row)
     runner_tests_executed = None
     runner_test_values = []
-    for row in runner_unique:
-        result = results.get(row["call_id"]) or {}
-        executed = _runner_counted_tests(
-            str(result.get("evidence_text") or ""))
-        if executed is not None:
-            runner_test_values.append(executed)
+    for call_id, rows in rows_by_call.items():
+        text = str((results.get(call_id) or {}).get("evidence_text") or "")
+        if len(rows) == 1:
+            executed = _runner_counted_tests(text)
+            if executed is not None:
+                runner_test_values.append(executed)
+            continue
+        matches = [int(value) for value in
+                   re.findall(r"(?m)^Ran (\d+) tests? in ", text)]
+        if len(matches) == len(rows):
+            runner_test_values.append(sum(matches))
+        # Otherwise leave this call unknown rather than attributing output to
+        # the wrong command.
     if runner_test_values:
         runner_tests_executed = sum(runner_test_values)
 

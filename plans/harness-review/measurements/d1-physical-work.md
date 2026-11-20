@@ -108,3 +108,10 @@ project only selected fields).
 No improvement is claimed for wall time, GPU time or goal duration. The
 baseline and candidate wall/goal numbers are identical by construction; only
 the classification and joins changed.
+
+
+## Provenance
+
+- Base: `e71c15d6` (analyzer unchanged before this PR)
+- Candidate: `0d7de60c`
+- B archive decompressed-prefix SHA-256: `abe86a7b4ebb3da86b70730b5bf269f85bddd27448fb3e26e5787e7a879edc82`; materialized 1,557-line window JSONL SHA-256: `17c4e6fea6b3dcf270e8814087771336b57ec6ca51c00d3c6aedf846025c14d9`.
