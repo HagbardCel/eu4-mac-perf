@@ -14,6 +14,7 @@ class BorderLoopHeadObserverTests(unittest.TestCase):
         if platform.system() != "Darwin":
             self.skipTest("requires macOS")
         out = BENCH / ".build" / "border_loop_head_observer_test"
+        out.parent.mkdir(parents=True, exist_ok=True)
         cmd = [
             "clang",
             "-arch",
