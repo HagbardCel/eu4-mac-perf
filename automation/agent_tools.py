@@ -2730,8 +2730,9 @@ def _truncate_utf8(value, max_bytes: int) -> str:
 def _bound_replay_compact(envelope: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict:
     """Hard-bound the complete serialized replay envelope to ``cap`` bytes.
 
-    Identity/qualification, first divergence, the unresolved interval, the
-    recommended checkpoint and the report locator survive every reduction.
+    Identity/qualification, the first divergent event, the report locator and
+    a bounded unresolved interval/checkpoint survive every reduction; free-text
+    core strings are truncated only when the cap would otherwise be exceeded.
     The bound covers the *whole* envelope, including repeated evaluation
     reasons, ``failure.detail``, truncation metadata and Unicode strings, not
     just ``result``.  The single exit re-measures the exact serialization and
@@ -2810,6 +2811,31 @@ def _bound_replay_compact(envelope: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict
             removed.append("failure.detail")
             return True
 
+        def truncate_first_strings(limit: int) -> bool:
+            first = first_divergence()
+            if not first:
+                return False
+
+            def cut(value):
+                if isinstance(value, str):
+                    return _truncate_utf8(value, limit)
+                if isinstance(value, list):
+                    return [cut(item) for item in value[:4]]
+                if isinstance(value, dict):
+                    return {key: cut(item) for key, item in value.items()}
+                return value
+
+            changed = False
+            for key in list(first):
+                before = first[key]
+                after = cut(before)
+                if after != before:
+                    first[key] = after
+                    changed = True
+            if changed:
+                removed.append("first_divergence.strings")
+            return changed
+
         def simplify_interval() -> bool:
             first = first_divergence()
             interval = first.get("unresolved_interval")
@@ -2837,6 +2863,9 @@ def _bound_replay_compact(envelope: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict
             lambda: drop_first("root_cause"),
             lambda: drop_first("reason"),
             lambda: simplify_interval(),
+            lambda: truncate_first_strings(512),
+            lambda: truncate_first_strings(128),
+            lambda: truncate_first_strings(0),
             lambda: drop("frame"),
             lambda: drop("checkpoint_validation"),
         )
@@ -2867,8 +2896,11 @@ def _bound_replay_compact(envelope: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict
                     "first_divergence": {
                         key: first.get(key) for key in
                         ("kind", "event", "target", "resource", "operation",
-                         "producer_event", "confidence", "next_checkpoint")
-                        if first.get(key) is not None},
+                         "producer_event", "confidence")
+                        if first.get(key) is not None} | (
+                        {"next_checkpoint": _truncate_utf8(
+                            str(first.get("next_checkpoint")), 128)}
+                        if first.get("next_checkpoint") is not None else {}),
                     "report": body().get("report"),
                     "truncated": True,
                     "output_cap_bytes": cap,

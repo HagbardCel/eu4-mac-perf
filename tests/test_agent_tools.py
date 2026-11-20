@@ -381,6 +381,8 @@ class ToolTests(unittest.TestCase):
         report["first_divergence"]["limitations"] = list(reasons)
         report["first_divergence"]["reason"] = "y" * 5000
         report["first_divergence"]["root_cause"] = "z" * 20000
+        report["first_divergence"]["next_checkpoint"] = {
+            "event": 1, "reason": "z" * 30000}
         args = SimpleNamespace(
             replay_op="independent", frame="frame",
             replay_out=str(self.root / "out"), shaders=None,
