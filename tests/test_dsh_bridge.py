@@ -141,6 +141,40 @@ class PrepareTests(BridgeTestCase):
             list(self.workspace.glob(".dsh-prepare-probe-*")), [existing])
 
 
+    def test_probe_filters_stale_residue_from_the_candidate_identity(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        self.workspace.mkdir(parents=True)
+        stale = self.workspace / f"{dsh_bridge.PROBE_PREFIX}stale"
+        stale.write_text("left by a killed process", encoding="utf-8")
+        self.addCleanup(lambda: stale.unlink(missing_ok=True))
+        code, out = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertNotIn(stale.name,
+                         out["identities"]["candidate"]["changed_paths"])
+        self.assertTrue(stale.is_file())
+
+    def test_probe_cleanup_failure_is_a_refusal(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        self.workspace.mkdir(parents=True)
+        original_unlink = Path.unlink
+
+        def fail_probe_unlink(path, *args, **kwargs):
+            if path.name.startswith(dsh_bridge.PROBE_PREFIX):
+                raise OSError("injected unlink failure")
+            return original_unlink(path, *args, **kwargs)
+
+        with mock.patch("pathlib.Path.unlink", new=fail_probe_unlink):
+            code, out = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
+        self.assertEqual(out["kind"], "workspace_not_writable")
+        self.assertIn("probe cleanup failed", out["detail"])
+        self.assertFalse((self.run_root / "identity.json").is_file())
+        residue = list(self.workspace.glob(f"{dsh_bridge.PROBE_PREFIX}*"))
+        self.assertEqual(len(residue), 1)
+        for path in residue:
+            path.unlink()
+
+
 class ValidationBudgetTests(BridgeTestCase):
     """External sidecar limits are enforced from the bridge's attempt log."""
 

@@ -50,6 +50,9 @@ INFRA_ERROR_KINDS = ("timeout", "truncated", "unreadable")
 # Refusals an operator or candidate can resolve without ending the campaign.
 # Everything else is terminal: the campaign cannot safely proceed, so the plugin
 # pauses the goal through the native goal service.
+PROBE_PREFIX = ".dsh-prepare-probe-"
+
+
 REMEDIABLE_REFUSALS = frozenset({
     "fresh_validation_failed",  # the checker said no again; repair and retry
     "not_qualified",            # a validation has to run first
@@ -199,7 +202,8 @@ def _candidate(sidecar: Sidecar) -> dict:
         )
         if detached.returncode == 0:
             raise Refusal("worktree", "candidate worktree is not detached")
-        delta = snapshot.enumerate_delta(sidecar.workspace)
+        delta = [entry for entry in snapshot.enumerate_delta(sidecar.workspace)
+                 if not _is_probe_path(entry["path"])]
         problems = snapshot.validate_delta(
             delta,
             sidecar.allowed_paths,
@@ -237,7 +241,11 @@ def _candidate(sidecar: Sidecar) -> dict:
             "changed_paths": [entry["path"] for entry in delta],
         }
 
-    digest, entries = receipts.tree_digest(sidecar.workspace)
+    _digest, entries = receipts.tree_digest(sidecar.workspace)
+    # A probe left by a killed process is harness residue, not candidate work.
+    entries = [entry for entry in entries
+               if not _is_probe_path(entry["path"])]
+    digest = receipts.digest_text(receipts.canonical_json(entries))
     for entry in entries:
         _require_allowed(sidecar, entry["path"])
     return {
@@ -333,29 +341,36 @@ def _trusted_modules_digest(checker: Path, strict: bool = True) -> tuple[str, li
     return receipts.digest_text(receipts.canonical_json(rows)), rows
 
 
+def _is_probe_path(path: str | Path) -> bool:
+    return Path(path).name.startswith(PROBE_PREFIX)
+
+
 def _workspace_write_problem(workspace: Path) -> str | None:
     """Probe the candidate workspace without overwriting existing files.
 
     A campaign that cannot write its permitted outputs would fail after a
     launch or validation, so prepare refuses before the anchor is created.
     The probe is an exclusively created unique file; cleanup removes only that
-    file, never a pre-existing path.
+    file, never a pre-existing path.  A failed cleanup is itself a refusal:
+    residue would otherwise be mistaken for candidate work or trip the
+    allowlist on the next attempt.
     """
     workspace = Path(workspace)
     if not workspace.is_dir():
         return f"candidate workspace is not a directory: {workspace}"
     probe: Path | None = None
     descriptor: int | None = None
+    problem: str | None = None
     try:
         descriptor, name = tempfile.mkstemp(
-            prefix=".dsh-prepare-probe-", dir=str(workspace))
+            prefix=PROBE_PREFIX, dir=str(workspace))
         probe = Path(name)
         os.write(descriptor, b"probe\n")
         os.fsync(descriptor)
         os.close(descriptor)
         descriptor = None
     except OSError as exc:
-        return f"candidate workspace is not writable: {workspace}: {exc}"
+        problem = f"candidate workspace is not writable: {workspace}: {exc}"
     finally:
         if descriptor is not None:
             try:
@@ -365,9 +380,10 @@ def _workspace_write_problem(workspace: Path) -> str | None:
         if probe is not None:
             try:
                 probe.unlink()
-            except OSError:
-                pass
-    return None
+            except OSError as exc:
+                residue = f"probe cleanup failed: {probe}: {exc}"
+                problem = residue if problem is None else f"{problem}; {residue}"
+    return problem
 
 
 def _head_or_none(path: Path) -> str | None:
