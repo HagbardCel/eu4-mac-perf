@@ -185,7 +185,7 @@ def _string_list(value, name: str) -> tuple[str, ...]:
         raise SidecarError(f"{name} must be a list")
     entries: list[str] = []
     for item in value:
-        if not isinstance(item, str) or not item:
+        if not isinstance(item, str) or not item.strip():
             raise SidecarError(f"{name} entries must be non-empty strings")
         entries.append(item)
     return tuple(entries)
