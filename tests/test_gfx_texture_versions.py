@@ -26,7 +26,7 @@ BENCH = ROOT / "benchmark"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import m6_frame  # noqa: E402
+from automation import m6_frame, native_build  # noqa: E402
 
 VERSION_A = bytes((index * 3) & 0xFF for index in range(64))
 VERSION_B = bytes((255 - index * 3) & 0xFF for index in range(64))
@@ -61,18 +61,18 @@ class CapturedTextureVersionTests(unittest.TestCase):
     def setUpClass(cls):
         cls.temporary = tempfile.TemporaryDirectory()
         cls.binary = Path(cls.temporary.name) / "gfx_texture_mutation_host"
-        built = subprocess.run(
+        sources = [ROOT / "tests" / "gfx_texture_mutation_host.m",
+                   BENCH / "eu4_gfx_frame_trace.c"]
+        native_build.require_prerequisites(
+            sources=sources, frameworks=("AppKit", "OpenGL"))
+        native_build.build(
             [
                 "clang", "-O1", "-Wall", "-Wextra", "-I", str(BENCH),
                 "-o", str(cls.binary),
-                str(ROOT / "tests" / "gfx_texture_mutation_host.m"),
-                str(BENCH / "eu4_gfx_frame_trace.c"),
+                *map(str, sources),
                 "-framework", "AppKit", "-framework", "OpenGL",
             ],
-            capture_output=True, text=True, check=False,
-        )
-        if built.returncode:
-            raise unittest.SkipTest(built.stderr.strip() or "host build failed")
+            label="texture-mutation-host")
 
     @classmethod
     def tearDownClass(cls):
@@ -169,10 +169,9 @@ class MetalTextureVersionTests(unittest.TestCase):
         (cls.shaders / "shaders.json").write_text(json.dumps({
             "programs": [{"program": 1, "status": "ok",
                           "stages": {"vertex": stage, "pixel": pixel}}]}))
-        try:
-            cls.host = m6_frame.build_replay_host()
-        except Exception as exc:  # noqa: BLE001 - explicit skip
-            raise unittest.SkipTest(str(exc))
+        native_build.require_prerequisites(
+            frameworks=("Foundation", "Metal"))
+        cls.host = m6_frame.build_replay_host()
 
     @classmethod
     def tearDownClass(cls):

@@ -22,6 +22,10 @@ ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "benchmark"
 CORE = BENCH / "eu4_gfx_frame_replay.mm"
 HOST = ROOT / "tests" / "gfx_replay_blob_host.mm"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from automation import native_build  # noqa: E402
 
 
 def _sha(data: bytes) -> str:
@@ -34,17 +38,16 @@ class BlobReferenceVerifierTests(unittest.TestCase):
     def setUpClass(cls):
         cls.temporary = tempfile.TemporaryDirectory()
         cls.binary = Path(cls.temporary.name) / "gfx_replay_blob_host"
-        built = subprocess.run(
+        native_build.require_prerequisites(
+            sources=[HOST, CORE], frameworks=("Foundation", "Metal"))
+        native_build.build(
             [
                 "clang", "-arch", "arm64", "-O1", "-fobjc-arc", "-lc++",
                 "-framework", "Foundation", "-framework", "Metal",
                 "-I", str(BENCH), "-o", str(cls.binary),
                 str(HOST), str(CORE),
             ],
-            capture_output=True, text=True, check=False, timeout=300,
-        )
-        if built.returncode:
-            raise unittest.SkipTest(built.stderr.strip() or "core build failed")
+            label="replay-blob-host", timeout=300)
 
     @classmethod
     def tearDownClass(cls):

@@ -23,7 +23,7 @@ BENCH = ROOT / "benchmark"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import m6_compare, m6_frame  # noqa: E402
+from automation import m6_compare, m6_frame, native_build  # noqa: E402
 
 CORE = BENCH / "eu4_gfx_frame_replay.mm"
 CLI = BENCH / "eu4_gfx_frame_replay_cli.mm"
@@ -85,21 +85,18 @@ class MetalReplayLibraryTests(unittest.TestCase):
             "-I",
             str(BENCH),
         ]
+        native_build.require_prerequisites(
+            sources=[CORE, CLI, ABI_HOST, SHADOW_BRIDGE, SHADOW_REPORT_HOST],
+            frameworks=("Foundation", "Metal"))
         for output, sources in (
             (cls.cli, [CORE, CLI]),
             (cls.abi, [CORE, ABI_HOST]),
             (cls.shadow_report,
              [CORE, SHADOW_BRIDGE, SHADOW_REPORT_HOST]),
         ):
-            built = subprocess.run(
+            native_build.build(
                 [*common, "-o", str(output), *map(str, sources)],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=240,
-            )
-            if built.returncode:
-                raise unittest.SkipTest(built.stderr.strip() or "core build failed")
+                label=f"metal-replay:{output.name}", timeout=240)
 
     @classmethod
     def tearDownClass(cls):

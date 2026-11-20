@@ -31,6 +31,10 @@ ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "benchmark"
 HOST = ROOT / "tests" / "gfx_metal_replay_abi_host.mm"
 CORE = BENCH / "eu4_gfx_frame_replay.mm"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from automation import native_build  # noqa: E402
 
 WIDTH = 64
 HEIGHT = 64
@@ -218,7 +222,9 @@ class TargetAttachmentLifetimeTests(unittest.TestCase):
         cls.temporary = tempfile.TemporaryDirectory()
         cls.base = Path(cls.temporary.name)
         cls.binary = cls.base / "gfx_metal_replay_abi"
-        built = subprocess.run(
+        native_build.require_prerequisites(
+            sources=[HOST, CORE], frameworks=("Foundation", "Metal"))
+        native_build.build(
             [
                 "clang",
                 "-arch",
@@ -237,13 +243,7 @@ class TargetAttachmentLifetimeTests(unittest.TestCase):
                 str(HOST),
                 str(CORE),
             ],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=300,
-        )
-        if built.returncode:
-            raise unittest.SkipTest(built.stderr.strip() or "replay build failed")
+            label="target-lifetime-abi", timeout=300)
         cls.shaders = cls.base / "shaders"
         cls._write_shaders(cls.shaders)
         cls.checkpoints = cls.base / "checkpoints.json"
