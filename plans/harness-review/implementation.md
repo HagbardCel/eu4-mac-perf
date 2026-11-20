@@ -1,7 +1,7 @@
 # Implementation index
 
 This file records where the reviewed work is and its observed review/merge
-state as of **2026-11-20**.  It is not an approval and not a claim that
+state as of **2026-11-20 09:15 Europe/Berlin**.  It is not an approval and not a claim that
 anything has landed on `main`.  The roadmap, step documents and assessment
 remain authoritative for scope and acceptance criteria.
 
@@ -20,15 +20,15 @@ remain authoritative for scope and acceptance criteria.
 
 | PR | Step | Head SHA | Scope in the branch | Independent review | Merge |
 |---|---|---|---|---|---|
-| #220 | index | `a032bc57` | Assessment, plans and this implementation index. | Review found stale gate/status claims; index corrected after the final gate (re-review requested). | Not merged |
-| #221 | 01 | `e7caa47c` | Authoritative checkpoint exactness, request/binding validation, producer checkpoint-file binding, strict returned-entry declarations, complete-graph gating for final-only, distinct primary/authenticated verdicts. | First review found two P1 gaps (partial graph, fileless entries) and two P2s; fixed; re-review requested. | Not merged |
-| #227 | 02 | `c16422e4` | Verified case locator: unique atomic publication, full-identity race handling, sequence target seals, metadata-only inventory, bounded verification, symlink refusal, broken-locator reporting, size/free-space preflight. | First review found two P2 gaps (reuse metadata, symlink accounting) and P3s; fixed; re-review requested. | Not merged |
-| #226 | 03 | `c14c54f8` | Campaign entry preflight with an exclusive probe, fail-closed residue handling and compact startup block. | First review found probe-residue and startup-consumption gaps; residue fixed, consumption remains listed below; re-review requested. | Not merged |
-| #222 | 04 | `178b2e06` | Integer-ceiling pixel-region spans and edge/tiny-image regressions. | Reviewed, no blockers (P3 test-hardening suggestions only). | Not merged |
-| #223 | 06 | `101cf6a9` | Goal identity selection, clear tombstones, terminal/ongoing/unknown-start durations and separate turn/action fields. | First review found a resumed-goal P1 and clear/window P2s; fixed; re-review requested. | Not merged |
-| #228 | 09 | `fcfc449e` | Lossless re-encode of one illustrative tracked PNG with identical decoded RGBA. | Reviewed, no blockers. | Not merged |
-| #225 | 10 | `022f347c` | Single shader-receipt identity owner with required/optional semantics. | Reviewed, no blockers; duplicate gate/alias removed after review. | Not merged |
-| #224 | 11 | `f0ab3b76` | Retire the shadowed smoke campaign source and verify both profiles resolve the canonical policy and limits. | Reviewed, no blockers; parity assertions extended after review. | Not merged |
+| #220 | index | this commit | Assessment, plans and this implementation index. | Corrected after the final gate; final review requested. | Not merged |
+| #221 | 01 | `a776830c` | Authoritative checkpoint exactness, request/binding validation, producer checkpoint-file binding, strict returned-entry declarations, complete-graph gating for every coverage branch, distinct primary/authenticated verdicts. | Reviewed at this head: no blockers; P3 residuals (non-list request/replay containers, docs/status predicate). | Not merged |
+| #227 | 02 | `e8da7907` | Verified case locator: host-locked atomic publication, full-identity race handling, sequence target seals, metadata-only inventory, bounded verification, symlink handling, broken-locator reporting, size/free-space preflight. | Reviewed at this head: no blockers; P3 residuals (copy-window symlink injection, discovery count scoping). | Not merged |
+| #226 | 03 | `80a32e00` | Campaign entry preflight with a host-recorded exclusive probe registry, reaping and freeze filtering, compact startup block. | Reviewed at this head: no blockers; P3 (startup block not yet consumed by launchers). | Not merged |
+| #222 | 04 | `178b2e06` | Integer-ceiling pixel-region spans and edge/tiny-image regressions. | Reviewed at this head: no blockers; P3 test-hardening suggestions only. | Not merged |
+| #223 | 06 | `53197ca7` | Goal identity, clear tombstones, substantive outcomes, terminal/ongoing/unknown-start/unknown-end durations, separate turn/action fields. | Reviewed at this head: no blockers; P3 (edit+clear window, schema documentation). | Not merged |
+| #228 | 09 | `fcfc449e` | Lossless re-encode of one illustrative tracked PNG with identical decoded RGBA. | Reviewed at this head: no blockers. | Not merged |
+| #225 | 10 | `022f347c` | Single shader-receipt identity owner with required/optional semantics. | Reviewed at this head: no blockers; P3 call-site test gap only. | Not merged |
+| #224 | 11 | `f0ab3b76` | Retire the shadowed smoke campaign source and verify both profiles resolve the canonical policy and limits. | Reviewed at this head: no blockers; P3 reader-default pinning only. | Not merged |
 
 A head SHA that postdates its review is explicitly “re-review requested”; the
 review report attached to the PRs records the exact SHA tested.
@@ -56,9 +56,11 @@ step acceptance criteria; the step documents stay authoritative.
 
 Each change is verified with the focused modules named in its plan, then its
 neighbor suites, using `automation.test_runner` under the offline profile.  The
-combined candidate is a disposable local integration branch, not `main`; the
-review report records its exact commits, full-gate counts and duration.  GitHub
-Actions runs on every pushed head.
+combined candidate is the disposable local branch `remediation/final2` at
+`263418dd5ce92be01f983f5f7bc72e01faadba06` (not merged into `main`).  Its full
+offline gate run is `20261120T080353Z-62f5ac38`: **3,996 ran, 3,961 executed,
+35 skipped, 0 failed, 721.4 s**.  Every listed PR head is an ancestor of that
+candidate.  GitHub Actions runs on each pushed head.
 
 A portable pass does not claim a native Metal correctness result, a local
 archive, or a live EU4 capture.  Independent review remains the merge gate.
