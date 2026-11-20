@@ -79,8 +79,14 @@ technical review evidence, not a formal approval.
   which reproduces on base `1d7e37df` and is pre-existing. There were no native
   build errors in the sequential split; the earlier six border-loop build
   errors in the parallel full-discovery attempt did not reproduce and are not
-  skips. The split module passes in isolation; report the full-suite hang as a
-  pre-existing harness flake, not a P0 regression.
+  skips. The excluded module passes in isolation. The full-suite hang is
+  **unresolved**: earlier full runs at `int1`
+  (`20261120T171936Z-be673e00`, 4,127 ran / 0 failures) and `c3`
+  (`20261120T165655Z-69e614ab`, 3,993 ran / 0 failures) contain the module's
+  unique `RE2 gate` line, so it completed in full-suite order there; there is
+  no base full-suite run at `1d7e37df` reproducing the hang. This is a split
+  profile, not a green single full gate; do not attribute the hang to a
+  pre-existing flake without that reproduction.
 - Native checks executed on arm64 macOS: compressed texture host 18/18,
   render-state host 10/10, native MSL cache regression 1/1, frame-trace writer,
   texture versions, shadow receipt, target lifetime and blob verifier. Fixture
