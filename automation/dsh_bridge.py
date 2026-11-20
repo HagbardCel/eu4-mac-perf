@@ -2492,6 +2492,15 @@ def main(argv: list[str] | None = None) -> int:
               "kind": "sidecar", "goal_policy": GOAL_POLICY["unavailable"],
               "detail": str(exc)})
         return EXIT_INTEGRITY
+    except session_state.ClaimLedgerError as exc:
+        # The campaign-wide allowance cannot be counted from corrupt state.
+        # Refusing is the only fail-closed outcome: continuing with a partial
+        # or empty read would silently reset the validation budget.
+        emit({"ok": False, "operation": args.operation,
+              "classification": "integrity_refusal", "kind": "claim_ledger",
+              "goal_policy": GOAL_POLICY["unavailable"],
+              "detail": str(exc)})
+        return EXIT_INTEGRITY
     except Refusal as exc:
         emit({"ok": False, "operation": args.operation,
               "classification": "integrity_refusal", "kind": exc.kind,

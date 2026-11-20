@@ -70,6 +70,21 @@ class SessionRootError(ValueError):
     """A session id or session root cannot be used safely."""
 
 
+class ClaimLedgerError(ValueError):
+    """The campaign claim ledger is corrupt, truncated or unreadable.
+
+    The ledger is the campaign-wide budget authority.  A reader that skipped a
+    bad row (or returned zero rows for an unreadable file) would silently reset
+    the allowance and let a caller spend attempts that were already used.  The
+    only safe response is to refuse until the operator inspects the file.
+    """
+
+    def __init__(self, kind: str, detail: str = ""):
+        super().__init__(kind if not detail else f"{kind}: {detail}")
+        self.kind = kind
+        self.detail = detail
+
+
 def validate_session_id(value) -> str:
     """Return *value* as a safe directory component or raise.
 
@@ -301,7 +316,12 @@ class CampaignClaims:
             self.directory.chmod(0o700)
         except OSError:
             pass
-        with self.lock_path.open("a+") as handle:
+        try:
+            handle = self.lock_path.open("a+")
+        except OSError as exc:
+            raise ClaimLedgerError(
+                "unreadable_lock", f"{self.lock_path}: {exc}") from exc
+        with handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             try:
                 yield
@@ -309,21 +329,60 @@ class CampaignClaims:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def rows(self) -> list[dict]:
+        """Return every claim row, or refuse the whole ledger.
+
+        A missing ledger is the legitimate zero-attempt state.  Every other
+        read failure -- permissions, a directory in place of the file, invalid
+        UTF-8, a partial final record, a blank line, or a row that is not a
+        claim object -- is an integrity error.  Skipping such a row would make
+        the corrupted state look like fewer attempts, which is exactly the
+        budget-reset failure this ledger exists to prevent.
+        """
         try:
-            text = self.path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+            raw = self.path.read_bytes()
+        except FileNotFoundError:
             return []
+        except OSError as exc:
+            raise ClaimLedgerError(
+                "unreadable", f"{self.path}: {exc}") from exc
+        if not raw:
+            return []
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ClaimLedgerError(
+                "invalid_encoding", f"{self.path}: {exc}") from exc
+        if not text.endswith("\n"):
+            raise ClaimLedgerError(
+                "truncated",
+                f"{self.path} ends with an incomplete record (no final newline)")
         rows: list[dict] = []
-        for line in text.splitlines():
-            line = line.strip()
-            if not line:
-                continue
+        for number, line in enumerate(text.splitlines(), 1):
+            if not line.strip():
+                raise ClaimLedgerError(
+                    "malformed_record",
+                    f"{self.path}: line {number} is blank")
             try:
                 value = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(value, dict):
-                rows.append(value)
+            except json.JSONDecodeError as exc:
+                raise ClaimLedgerError(
+                    "malformed_record",
+                    f"{self.path}: line {number}: {exc}") from exc
+            if not isinstance(value, dict):
+                raise ClaimLedgerError(
+                    "malformed_record",
+                    f"{self.path}: line {number} is not a JSON object")
+            if value.get("schema") != CLAIM_SCHEMA:
+                raise ClaimLedgerError(
+                    "malformed_record",
+                    f"{self.path}: line {number} has schema "
+                    f"{value.get('schema')!r}, expected {CLAIM_SCHEMA!r}")
+            attempt_id = value.get("attempt_id")
+            if not isinstance(attempt_id, str) or not attempt_id:
+                raise ClaimLedgerError(
+                    "malformed_record",
+                    f"{self.path}: line {number} has no non-empty attempt_id")
+            rows.append(value)
         return rows
 
     def claim(self, *, operation: str, attempt_id: str,
