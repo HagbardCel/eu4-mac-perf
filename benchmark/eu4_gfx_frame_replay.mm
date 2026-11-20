@@ -1759,10 +1759,61 @@ static NSData *pack_uniforms(NSDictionary *stage, NSDictionary *program,
 /* Shader libraries                                                           */
 /* ------------------------------------------------------------------------- */
 
+/* The effective input of one native shader object is the MSL bytes that are
+   actually compiled, the entry point, the stage kind and the compile options.
+   A filename alone is not an identity: a diagnostic override can leave the
+   name unchanged while changing the bytes, and a persistent sequence session
+   can replay a later frame whose shader directory has a different file under
+   the same name. */
+static NSString *shader_compile_options_key(void) {
+    const char *precise_env = getenv("EU4_FRAME_REPLAY_PRECISE_MATH");
+    return (precise_env != NULL && strcmp(precise_env, "1") == 0)
+        ? @"fastmath-off" : @"fastmath-on";
+}
+
+static NSString *shader_source_identity(NSString *path, NSString **source_out,
+                                        NSError **error) {
+    NSError *read_error = nil;
+    NSData *data = [NSData dataWithContentsOfFile:path
+                                          options:0
+                                            error:&read_error];
+    if (data == nil) {
+        if (error != NULL) {
+            *error = read_error ?: [NSError errorWithDomain:kErrorDomain
+                                                       code:51
+                                                   userInfo:@{NSLocalizedDescriptionKey:
+                                                                  @"MSL source unreadable"}];
+        }
+        return nil;
+    }
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(data.bytes, (CC_LONG)data.length, digest);
+    NSMutableString *hex =
+        [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH * 2];
+    for (NSUInteger index = 0; index < CC_SHA256_DIGEST_LENGTH; index++) {
+        [hex appendFormat:@"%02x", digest[index]];
+    }
+    if (source_out != NULL) {
+        NSString *source = [[NSString alloc] initWithData:data
+                                                 encoding:NSUTF8StringEncoding];
+        if (source == nil) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:51
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        @"MSL source is not UTF-8"}];
+            }
+            return nil;
+        }
+        *source_out = source;
+    }
+    return hex;
+}
+
 static id<MTLFunction> function_for(NSString *shaderDir, NSDictionary *stage,
-                                    NSError **error) {
+                                    NSString **identity_out, NSError **error) {
     NSString *file = string_value(stage[@"msl_file"]);
     NSString *entry = string_value(stage[@"msl_entry"]);
+    NSString *kind = string_value(stage[@"stage"]) ?: @"";
     if (file.length == 0 || entry.length == 0) {
         if (error != NULL) {
             *error = [NSError errorWithDomain:kErrorDomain code:50
@@ -1771,23 +1822,21 @@ static id<MTLFunction> function_for(NSString *shaderDir, NSDictionary *stage,
         }
         return nil;
     }
-    NSString *key = [file stringByAppendingFormat:@"#%@", entry];
+    NSString *path = [shaderDir stringByAppendingPathComponent:file];
+    NSString *source = nil;
+    NSString *digest = shader_source_identity(path, &source, error);
+    if (digest == nil) {
+        return nil;
+    }
+    NSString *options_key = shader_compile_options_key();
+    NSString *key = [NSString stringWithFormat:@"%@#%@#%@#%@", digest, entry,
+                                               kind, options_key];
+    if (identity_out != NULL) {
+        *identity_out = key;
+    }
     id<MTLFunction> cached = g_functions[key];
     if (cached != nil) {
         return cached;
-    }
-    NSString *path = [shaderDir stringByAppendingPathComponent:file];
-    NSError *read_error = nil;
-    NSString *source = [NSString stringWithContentsOfFile:path
-                                                encoding:NSUTF8StringEncoding
-                                                   error:&read_error];
-    if (source == nil) {
-        if (error != NULL) {
-            *error = read_error ?: [NSError errorWithDomain:kErrorDomain code:51
-                                                    userInfo:@{NSLocalizedDescriptionKey:
-                                                                   @"MSL source unreadable"}];
-        }
-        return nil;
     }
     MTLCompileOptions *options = [MTLCompileOptions new];
     options.languageVersion = MTLLanguageVersion2_1;
@@ -1798,6 +1847,7 @@ static id<MTLFunction> function_for(NSString *shaderDir, NSDictionary *stage,
     if (precise_env != NULL && strcmp(precise_env, "1") == 0) {
         options.fastMathEnabled = NO;
     }
+    NSError *read_error = nil;
     id<MTLLibrary> library = [g_device newLibraryWithSource:source
                                                     options:options
                                                       error:&read_error];
@@ -1867,8 +1917,13 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             }
             return NO;
         }
-        id<MTLFunction> vertex_function = function_for(shaderDir, vs, error);
-        id<MTLFunction> fragment_function = function_for(shaderDir, fs, error);
+        NSString *vertex_identity = nil;
+        NSString *fragment_identity = nil;
+        id<MTLFunction> vertex_function =
+            function_for(shaderDir, vs, &vertex_identity, error);
+        id<MTLFunction> fragment_function =
+            function_for(shaderDir, fs, &fragment_identity, error);
+        NSString *debug_options = shader_compile_options_key();
         const char *debug_attr_vertex_env = getenv("EU4_FRAME_REPLAY_DEBUG_ATTR_VERTEX");
         if (debug_attr_vertex_env != NULL && debug_attr_vertex_env[0] == '1') {
             if (g_debug_attr_vertex == nil) {
@@ -1880,6 +1935,8 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             }
             if (g_debug_attr_vertex != nil) {
                 vertex_function = g_debug_attr_vertex;
+                vertex_identity = [@"builtin:debug_attr_vertex#"
+                    stringByAppendingString:debug_options];
             }
         }
         const char *debug_vertex_env = getenv("EU4_FRAME_REPLAY_DEBUG_VERTEX");
@@ -1893,6 +1950,8 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             }
             if (g_debug_vertex != nil) {
                 vertex_function = g_debug_vertex;
+                vertex_identity = [@"builtin:debug_vertex#"
+                    stringByAppendingString:debug_options];
             }
         }
         const char *debug_fragment_env = getenv("EU4_FRAME_REPLAY_DEBUG_FRAGMENT");
@@ -1906,6 +1965,8 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             }
             if (g_debug_texture_fragment != nil) {
                 fragment_function = g_debug_texture_fragment;
+                fragment_identity = [@"builtin:debug_texture_fragment#"
+                    stringByAppendingString:debug_options];
             }
         } else if (debug_fragment_env != NULL && strcmp(debug_fragment_env, "uv") == 0) {
             if (g_debug_uv_fragment == nil) {
@@ -1917,6 +1978,8 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             }
             if (g_debug_uv_fragment != nil) {
                 fragment_function = g_debug_uv_fragment;
+                fragment_identity = [@"builtin:debug_uv_fragment#"
+                    stringByAppendingString:debug_options];
             }
         } else if (debug_fragment_env != NULL && debug_fragment_env[0] == '1') {
             if (g_debug_fragment == nil) {
@@ -1928,6 +1991,8 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             }
             if (g_debug_fragment != nil) {
                 fragment_function = g_debug_fragment;
+                fragment_identity = [@"builtin:debug_fragment#"
+                    stringByAppendingString:debug_options];
             }
         }
         if (vertex_function == nil || fragment_function == nil) {
@@ -2210,7 +2275,7 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
         }
         NSString *key = [state_key(event, target_info, attribute_plan)
             stringByAppendingFormat:@"|p%@|v%@|f%@",
-            program[@"name"], vs[@"msl_file"], fs[@"msl_file"]];
+            program[@"name"], vertex_identity ?: @"", fragment_identity ?: @""];
         if (getenv("EU4_FRAME_REPLAY_DEBUG_DESCRIPTOR") != NULL) {
             fprintf(stderr, "debug descriptor program %s:\n",
                     safe_utf8([program[@"name"] description], ""));

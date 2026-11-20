@@ -410,6 +410,14 @@ def _inject_varying_locations(
     return source
 
 
+def _file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def _run(command: list[str], *, timeout: int = 120) -> subprocess.CompletedProcess:
     return subprocess.run(
         command, capture_output=True, text=True, check=False, timeout=timeout
@@ -493,8 +501,11 @@ def translate_stage(
         "compiler_sha256": compiler_key,
         "attribute_locations": complete_locations if stage == "vertex" else {},
         "glsl_file": glsl_path.name,
+        "glsl_sha256": _file_digest(glsl_path),
         "spv_file": spv_path.name,
+        "spv_sha256": _file_digest(spv_path),
         "msl_file": msl_path.name,
+        "msl_sha256": _file_digest(msl_path),
         "msl_entry": _msl_entry(msl, stage),
         "msl_uniform_buffer": _msl_uniform_buffer(msl),
         "msl_samplers": _msl_samplers(msl),

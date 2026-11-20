@@ -1458,27 +1458,62 @@ def _shader_source_identity(trace: dict) -> dict:
     return identity
 
 
+_CACHE_STAGE_ARTIFACTS = (
+    ("msl_file", "msl_sha256"),
+    ("glsl_file", "glsl_sha256"),
+    ("spv_file", "spv_sha256"),
+)
+
+
 def _translation_cache_valid(cache_root: Path, identity: dict) -> bool:
-    """A cache hit requires a matching identity and complete stage outputs."""
+    """A cache entry is valid only when its identity and every stage artifact
+    are present and match the digest recorded by the translator.
+
+    ``shaders.json`` existing is not a cache hit: a concurrent publisher or an
+    interrupted copy can leave a report whose MSL files are missing or
+    truncated.  Adoption requires a complete, content-verified entry.
+    """
     try:
         metadata = json.loads(
             (cache_root / "translation-cache.json").read_text())
         report = json.loads((cache_root / "shaders.json").read_text())
     except (OSError, json.JSONDecodeError):
         return False
-    recorded = ((metadata.get("identity") or {}).get("sha256"))
+    if metadata.get("schema") != "gfx-shader-translation-cache/v1":
+        return False
+    if not isinstance(metadata.get("identity"), dict):
+        return False
+    recorded = metadata["identity"].get("sha256")
     if recorded != identity.get("sha256"):
         return False
-    programs = report.get("programs") or []
-    if not programs:
+    if report.get("schema") != "gfx-shader-translation/v1":
+        return False
+    if report.get("ok") is not True:
+        return False
+    programs = report.get("programs")
+    if not isinstance(programs, list) or not programs:
         return False
     for program in programs:
-        if program.get("status") != "ok":
+        if not isinstance(program, dict) or program.get("status") != "ok":
             return False
-        for stage in (program.get("stages") or {}).values():
-            name = stage.get("msl_file")
-            if not name or not (cache_root / name).is_file():
+        stages = program.get("stages")
+        if not isinstance(stages, dict) or not stages:
+            return False
+        for stage in stages.values():
+            if not isinstance(stage, dict):
                 return False
+            for file_field, hash_field in _CACHE_STAGE_ARTIFACTS:
+                name = stage.get(file_field)
+                expected = stage.get(hash_field)
+                if (not isinstance(name, str) or not name
+                        or Path(name).name != name):
+                    return False
+                path = cache_root / name
+                if not path.is_file():
+                    return False
+                if (not isinstance(expected, str) or len(expected) != 64
+                        or _sha256(path) != expected):
+                    return False
     return True
 
 
@@ -1486,6 +1521,61 @@ def _copy_translation_cache(source: Path, destination: Path) -> None:
     if destination.exists():
         shutil.rmtree(destination)
     shutil.copytree(source, destination)
+
+
+def _publish_translation_cache(source: Path, cache_root: Path,
+                               identity: dict) -> str:
+    """Publish a validated translation without adopting a corrupt winner.
+
+    A unique sibling staging directory means two builders never share a
+    partial directory.  An existing winner is adopted only after full
+    validation; an invalid winner is quarantined and replaced atomically.
+    """
+    cache_root.parent.mkdir(parents=True, exist_ok=True)
+    partial = cache_root.with_name(
+        f"{cache_root.name}.partial-{os.getpid()}-{uuid.uuid4().hex[:8]}")
+    shutil.copytree(source, partial)
+    try:
+        for _ in range(8):
+            if cache_root.exists():
+                if _translation_cache_valid(cache_root, identity):
+                    return "existing"
+                quarantine = cache_root.with_name(
+                    f"{cache_root.name}.invalid-{os.getpid()}-"
+                    f"{uuid.uuid4().hex[:8]}")
+                try:
+                    os.replace(cache_root, quarantine)
+                except FileNotFoundError:
+                    # Another repairer removed or replaced it; re-evaluate.
+                    continue
+                except OSError:
+                    continue
+                shutil.rmtree(quarantine, ignore_errors=True)
+            try:
+                os.replace(partial, cache_root)
+            except FileNotFoundError:
+                return "refused"
+            except OSError:
+                # Another builder published first; adopt only if it verifies.
+                continue
+            if _translation_cache_valid(cache_root, identity):
+                return "published"
+            # Our published copy failed verification (for example a
+            # filesystem error during the rename): remove it so no later
+            # reader can adopt corrupt bytes.
+            rejected = cache_root.with_name(
+                f"{cache_root.name}.invalid-{os.getpid()}-"
+                f"{uuid.uuid4().hex[:8]}")
+            try:
+                os.replace(cache_root, rejected)
+                shutil.rmtree(rejected, ignore_errors=True)
+            except OSError:
+                pass
+            return "refused"
+        return "refused"
+    finally:
+        if partial.exists():
+            shutil.rmtree(partial, ignore_errors=True)
 
 
 def translate_command(args: argparse.Namespace) -> int:
@@ -1509,11 +1599,22 @@ def translate_command(args: argparse.Namespace) -> int:
     identity = _shader_source_identity(trace)
     cache_root = cache_dir / identity["sha256"] if cache_dir else None
     cache_hit = False
+    publish_status = None
     report = None
     if (cache_root is not None and not args.force
             and _translation_cache_valid(cache_root, identity)):
-        _copy_translation_cache(cache_root, out_dir)
-        cache_hit = True
+        copied = False
+        try:
+            _copy_translation_cache(cache_root, out_dir)
+            copied = True
+        except OSError:
+            cache_hit = False
+        else:
+            # A winner can be repaired or removed between validation and the
+            # copy.  Validate the staged copy itself before reusing it.
+            cache_hit = _translation_cache_valid(out_dir, identity)
+        if copied and not cache_hit:
+            shutil.rmtree(out_dir, ignore_errors=True)
     if not cache_hit:
         report = gfx_shader_translate.translate_trace(frame_dir, out_dir)
         (out_dir / "translation-cache.json").write_text(json.dumps({
@@ -1522,21 +1623,15 @@ def translate_command(args: argparse.Namespace) -> int:
             "cache_dir": str(cache_dir) if cache_dir else None,
             "hit": False,
         }, indent=2) + "\n")
-        if cache_root is not None and report.get("ok"):
-            cache_root.parent.mkdir(parents=True, exist_ok=True)
-            # Never delete or replace another builder's work in progress: use a
-            # unique sibling and adopt a verified concurrent winner.
-            partial = cache_root.with_name(
-                f"{cache_root.name}.partial-{os.getpid()}-"
-                f"{uuid.uuid4().hex[:8]}")
-            shutil.copytree(out_dir, partial)
-            try:
-                os.replace(partial, cache_root)
-            except OSError:
-                published = cache_root / "shaders.json"
-                if not published.is_file():
-                    raise
-                shutil.rmtree(partial, ignore_errors=True)
+        if cache_root is not None:
+            if (report.get("ok")
+                    and _translation_cache_valid(out_dir, identity)):
+                publish_status = _publish_translation_cache(
+                    out_dir, cache_root, identity)
+            else:
+                # Never publish a partial or unverified translation; the next
+                # invocation rebuilds rather than adopting it.
+                publish_status = "refused"
     if report is None:
         try:
             report = json.loads((out_dir / "shaders.json").read_text())
@@ -1563,6 +1658,7 @@ def translate_command(args: argparse.Namespace) -> int:
             "hit": cache_hit,
             "key": identity["sha256"],
             "dir": str(cache_dir) if cache_dir else None,
+            "publish": publish_status,
         },
     }
     print(json.dumps(summary, indent=2))
