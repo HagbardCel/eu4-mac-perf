@@ -195,6 +195,19 @@ when a session starts, so continuation after a restart is an explicit operator
 action: resuming the goal in the UI. The project side keeps no recovery state; an
 interrupted validation simply leaves no record, which is already safe, and the next
 `validate` replaces whatever a previous run left behind.
+
+The launcher already places the prepared startup block into the first goal
+message. A resumed session does not see that message again, so the goal plugin
+calls `context` before the resumed agent's first assembly and contributes the
+result as an agent-scoped system-prompt section. The section carries the same
+verified boundary: identity digest, workspace and head, sidecar/candidate mode,
+policy, budget and attempt state, the explicit unbound-case statement and the
+stop path. If the bridge refuses -- no anchor, changed workspace, policy, budget
+or campaign identity -- the plugin logs the refusal and leaves the baseline
+prompt unchanged rather than mounting an authority the bridge did not verify.
+The context call itself is read-only: it never anchors, probes, locks, writes a
+receipt, appends an attempt or touches a lease or binding.
+
 ## Independent review
 
 The reviewer is a separate `dsh --profile headless` process in a detached
@@ -423,8 +436,8 @@ usage error, and `3` is a refusal before the checker ran.
 
 | Operation | Purpose |
 |---|---|
-| `prepare` | validate the sidecar, seed or verify the workspace, record the identity anchor, emit startup/goal context |
-| `context` | rebuild the same startup/reconnect facts read-only, without anchoring, probing or locking |
+| `prepare` | validate the sidecar, seed or verify the workspace, record the identity anchor with its workspace/policy/budget/campaign authority snapshot, emit startup/goal context |
+| `context` | verify the same sidecar, workspace, policy, budget and campaign identities against the anchor read-only; emit authorized startup/reconnect context, or an explicit drift/refusal naming the changed fields; never anchors, probes or locks |
 | `validate` | run the trusted checker under the retry policy and write a receipt |
 | `finalize` | re-run the checker and complete the goal only on a fresh pass |
 | `review-run` | freeze the candidate, run the reviewer in its own worktree, validate the report and write the receipt |

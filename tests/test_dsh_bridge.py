@@ -128,24 +128,186 @@ class PrepareTests(BridgeTestCase):
         self.assertEqual(
             list(self.workspace.glob(".dsh-prepare-probe-*")), [])
 
+    def snapshot_paths(self, *roots) -> dict:
+        """Every relevant path's type, mtime and content digest."""
+        snapshot: dict = {}
+        for root in roots:
+            root = Path(root)
+            candidates = [root] if root.is_file() else sorted(root.rglob("*"))
+            for path in candidates:
+                stat = path.lstat()
+                rel = str(path)
+                if path.is_dir() and not path.is_symlink():
+                    snapshot[rel] = ("dir", stat.st_mtime_ns, None)
+                elif path.is_file() and not path.is_symlink():
+                    snapshot[rel] = (
+                        "file", stat.st_mtime_ns, receipts.digest_file(path))
+                else:
+                    snapshot[rel] = ("link", stat.st_mtime_ns, os.readlink(path))
+        return snapshot
+
     def test_context_is_read_only_and_matches_prepare(self) -> None:
-        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        campaign = self.campaign("smoke-campaign")
+        sidecar = self.sidecar(campaign)
+        self.run_root.mkdir(parents=True)
+        # Representative durable artifacts: a binding, budget/state, a lease,
+        # an append-only log and the campaign lock. Context must not touch any
+        # of them (or create anything new).
+        for name, body in (
+            ("plugin-binding.json", '{"goal_id": "g1"}'),
+            ("state.json", '{"schema": "campaign-state"}'),
+            ("live-launch.json", '{"used": 1}'),
+            ("lease.json", '{"holder": "test"}'),
+            ("validations.jsonl", '{"attempt_id": "kept"}\n'),
+            ("context.log", "kept\n"),
+        ):
+            (self.run_root / name).write_text(body, encoding="utf-8")
         code, prepared = self.run_bridge("prepare", sidecar)
         self.assertEqual(code, dsh_bridge.EXIT_OK)
-        before = sorted(
-            (path.relative_to(self.run_root).as_posix(), path.stat().st_mtime_ns)
-            for path in self.run_root.rglob("*") if path.is_file())
+        before = self.snapshot_paths(
+            self.run_root, self.workspace, sidecar, campaign)
         code, context = self.run_bridge("context", sidecar)
-        self.assertEqual(code, dsh_bridge.EXIT_OK)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, context)
         self.assertTrue(context["anchored"])
+        self.assertEqual(context["status"], "authorized")
+        self.assertEqual(context["outcome"], "authorized")
+        self.assertEqual(context["drift"], [])
+        self.assertEqual(context["identity_digest"], prepared["identity_digest"])
         self.assertEqual(context["startup_text"], prepared["startup_text"])
         self.assertEqual(context["goal_text"], prepared["goal_text"])
+        self.assertIn("identity: digest=", context["startup_text"])
+        self.assertIn("policy: digest=", context["startup_text"])
+        self.assertIn("verification: none", context["startup_text"])
+        self.assertIn("case context: no locator is bound", context["startup_text"])
+        self.assertIn("stop path:", context["startup_text"])
+        self.assertEqual(len(context["startup"]["policy"]["digest"]), 64)
         code, again = self.run_bridge("context", sidecar)
         self.assertEqual(again["startup_text"], context["startup_text"])
-        after = sorted(
-            (path.relative_to(self.run_root).as_posix(), path.stat().st_mtime_ns)
-            for path in self.run_root.rglob("*") if path.is_file())
+        after = self.snapshot_paths(
+            self.run_root, self.workspace, sidecar, campaign)
         self.assertEqual(before, after)
+
+    def test_context_reports_the_stored_qualification_without_revalidating(self) -> None:
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        self.run_bridge("prepare", sidecar)
+        code, validated = self.run_bridge("validate", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, validated)
+        self.assertEqual(validated["checker_verdict"], "pass")
+        before = self.snapshot_paths(self.run_root, self.workspace, sidecar)
+        code, context = self.run_bridge("context", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, context)
+        self.assertEqual(context["verification"]["state"], "pass")
+        self.assertEqual(context["verification"]["checker_verdict"], "pass")
+        self.assertIn("verification: pass", context["startup_text"])
+        after = self.snapshot_paths(self.run_root, self.workspace, sidecar)
+        self.assertEqual(before, after, "context must not re-run or re-record the checker")
+
+    def test_context_refuses_a_changed_budget_and_names_the_field(self) -> None:
+        campaign = self.campaign("smoke-campaign")
+        sidecar = self.sidecar(campaign)
+        self.run_bridge("prepare", sidecar)
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        data["limits"]["max_validations"] = 4
+        sidecar.write_text(json.dumps(data), encoding="utf-8")
+        before = self.snapshot_paths(
+            self.run_root, self.workspace, sidecar, campaign)
+        code, out = self.run_bridge("context", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["status"], "drift")
+        self.assertEqual(out["outcome"], "refused")
+        self.assertEqual(out["kind"], "identity_modified")
+        self.assertIn("budget.max_validations", out["drift"])
+        self.assertIn("budget.max_validations", out["detail"])
+        self.assertNotIn("startup_text", out)
+        self.assertNotIn("goal_text", out)
+        after = self.snapshot_paths(
+            self.run_root, self.workspace, sidecar, campaign)
+        self.assertEqual(before, after)
+
+    def test_context_refuses_a_changed_workspace_and_names_the_field(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        self.run_bridge("prepare", sidecar)
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        # A trusted-tree path would also fail the execution-root check; the
+        # authority comparison must still name the changed workspace first.
+        data["candidate"]["workspace"] = str(REPO / "dsh")
+        sidecar.write_text(json.dumps(data), encoding="utf-8")
+        code, out = self.run_bridge("context", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+        self.assertEqual(out["status"], "drift")
+        self.assertEqual(out["outcome"], "refused")
+        self.assertIn("workspace", out["drift"])
+        self.assertIn("workspace", out["detail"])
+        self.assertNotIn("startup_text", out)
+        self.assertNotIn("goal_text", out)
+
+    def test_context_refuses_a_changed_policy_before_the_candidate_walk(self) -> None:
+        sidecar = self.sidecar(
+            self.campaign("smoke-campaign"),
+            allowed=("marker.txt", "progress.md"))
+        self.run_bridge("prepare", sidecar)
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        data["candidate"]["policy"]["allowed_paths"] = ["marker.txt"]
+        sidecar.write_text(json.dumps(data), encoding="utf-8")
+        code, out = self.run_bridge("context", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+        self.assertEqual(out["status"], "drift")
+        self.assertEqual(out["outcome"], "refused")
+        self.assertIn("policy.digest", out["drift"])
+        self.assertIn("policy.digest", out["detail"])
+        self.assertNotIn("startup_text", out)
+        self.assertNotIn("goal_text", out)
+
+    def test_context_without_an_anchor_is_an_exact_missing_artifact(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        code, out = self.run_bridge("context", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["status"], "unprepared")
+        self.assertEqual(out["outcome"], "refused")
+        self.assertEqual(out["anchored"], False)
+        self.assertEqual(out["kind"], "not_prepared")
+        self.assertIn("no identity anchor", out["detail"])
+        self.assertNotIn("startup_text", out)
+        self.assertNotIn("goal_text", out)
+        self.assertFalse((self.run_root / "identity.json").exists())
+        self.assertFalse(self.run_root.exists())
+
+    def test_worktree_context_authorizes_the_same_worktree_head(self) -> None:
+        baseline = subprocess.run(
+            ["git", "-C", str(REPO), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        worktree = self.root / "context-wt"
+        subprocess.run(
+            ["git", "-C", str(REPO), "worktree", "add", "--detach",
+             str(worktree), baseline],
+            capture_output=True, check=True,
+        )
+        self.addCleanup(
+            subprocess.run,
+            ["git", "-C", str(REPO), "worktree", "remove", "--force",
+             "--force", str(worktree)],
+            capture_output=True)
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        data["candidate"] = {
+            "mode": "worktree",
+            "workspace": str(worktree),
+            "policy": {"allowed_paths": ["*"]},
+        }
+        data["candidate_baseline_commit"] = baseline
+        sidecar.write_text(json.dumps(data), encoding="utf-8")
+        code, prepared = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, prepared)
+        code, context = self.run_bridge("context", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, context)
+        self.assertEqual(context["status"], "authorized")
+        self.assertEqual(context["startup"]["workspace_mode"], "worktree")
+        self.assertEqual(context["startup"]["workspace"], str(worktree.resolve()))
+        self.assertEqual(context["startup"]["workspace_head"], baseline)
+        self.assertIn(f"head={baseline}", context["startup_text"])
 
     def test_startup_text_reports_used_and_remaining_validations(self) -> None:
         sidecar = self.sidecar(self.campaign("smoke-campaign"))

@@ -505,6 +505,12 @@ def _startup_block(sidecar: Sidecar, roots: dict) -> dict:
         "execution_roots": roots,
         "allowed_paths": list(sidecar.allowed_paths),
         "forbidden_paths": list(sidecar.forbidden_paths),
+        "policy": {
+            "digest": sidecar.policy_digest,
+            "allowed_paths": list(sidecar.allowed_paths),
+            "forbidden_paths": list(sidecar.forbidden_paths),
+            "allow_symlinks": bool(sidecar.allow_symlinks),
+        },
         "live_capture": {
             "enabled": sidecar.live_capture_enabled,
             "policy": (
@@ -545,6 +551,153 @@ def _identity(sidecar: Sidecar, infra_commit: str) -> dict:
         "verification_manifest_digest": manifest_digest,
         "evidence_inputs_digest": _evidence_digest(sidecar),
         "candidate": _candidate(sidecar),
+    }
+
+
+AUTHORITY_SCHEMA = "eu4-dsh-authority/v1"
+_MISSING_AUTHORITY = object()
+
+# A legacy anchor predates the authority snapshot. These are the fields it did
+# record; the remaining authority fields are covered by sidecar_sha256, which
+# changes whenever the sidecar -- and therefore the budget or policy source --
+# changes at all.
+LEGACY_AUTHORITY_PATHS = {
+    "campaign_id": ("identities", "campaign_id"),
+    "campaign.source_campaign_sha256": ("identities", "source_campaign_sha256"),
+    "campaign.sidecar_sha256": ("identities", "sidecar_sha256"),
+    "campaign.infrastructure_commit": ("identities", "infrastructure_commit"),
+    "campaign.candidate_baseline_commit": ("identities", "candidate_baseline_commit"),
+    "campaign.policy_digest": ("identities", "policy_digest"),
+    "campaign.objective_digest": ("identities", "objective_digest"),
+    "campaign.checker_sha256": ("identities", "checker_sha256"),
+    "campaign.trusted_modules_digest": ("identities", "trusted_modules_digest"),
+    "campaign.verification_manifest_digest": (
+        "identities", "verification_manifest_digest"),
+    "campaign.evidence_inputs_digest": ("identities", "evidence_inputs_digest"),
+    "candidate.mode": ("identities", "candidate", "mode"),
+    "candidate.commit": ("identities", "candidate", "commit"),
+    "candidate.digest": ("identities", "candidate", "digest"),
+}
+
+
+def _authority_surface(sidecar: Sidecar) -> dict:
+    """Authority facts that need no candidate walk.
+
+    These are enough to name a changed workspace, policy or budget before any
+    candidate inspection can fail for a reason that hides the real drift.
+    """
+    return {
+        "campaign_id": sidecar.campaign_id,
+        "workspace": str(Path(sidecar.workspace).resolve()),
+        "run_root": str(Path(sidecar.run_root).resolve()),
+        "workspace_mode": sidecar.mode,
+        "policy.digest": sidecar.policy_digest,
+        "policy.allowed_paths": list(sidecar.allowed_paths),
+        "policy.forbidden_paths": list(sidecar.forbidden_paths),
+        "policy.allow_symlinks": bool(sidecar.allow_symlinks),
+        "budget.max_rounds": sidecar.max_rounds,
+        "budget.max_validations": sidecar.max_validations,
+        "budget.wall_clock_seconds": sidecar.wall_clock_seconds,
+        "budget.validation_timeout_seconds": sidecar.validation_timeout_seconds,
+        "budget.retry_mode": sidecar.retry_mode,
+        "budget.confirmation_rounds": sidecar.confirmation_rounds,
+        "budget.max_identical_retries": sidecar.max_identical_retries,
+        "budget.max_review_attempts": sidecar.max_review_attempts,
+        "closing.require_checker_pass": bool(sidecar.require_checker_pass),
+        "closing.require_independent_review": bool(
+            sidecar.require_independent_review),
+        "campaign.sidecar_sha256": sidecar.sidecar_sha256,
+        "campaign.source_campaign_sha256": sidecar.source_campaign_sha256,
+        "campaign.objective_digest": sidecar.objective_digest,
+        "campaign.candidate_baseline_commit": sidecar.candidate_baseline_commit,
+        "campaign.checker_sha256": receipts.digest_file(sidecar.checker),
+    }
+
+
+def _authority_snapshot(sidecar: Sidecar, identities: dict) -> dict:
+    """The full boundary an anchored context was authorized against."""
+    candidate = identities.get("candidate") or {}
+    value = _authority_surface(sidecar)
+    value.update({
+        "campaign.infrastructure_commit": identities.get("infrastructure_commit"),
+        "campaign.trusted_modules_digest": identities.get(
+            "trusted_modules_digest"),
+        "campaign.verification_manifest_digest": identities.get(
+            "verification_manifest_digest"),
+        "campaign.evidence_inputs_digest": identities.get(
+            "evidence_inputs_digest"),
+        "candidate.mode": candidate.get("mode"),
+        "candidate.commit": candidate.get("commit"),
+        "candidate.digest": candidate.get("digest"),
+    })
+    return value
+
+
+def _legacy_authority_value(stored: dict, key: str):
+    if key == "workspace":
+        return stored.get("workspace", _MISSING_AUTHORITY)
+    if key == "run_root":
+        return stored.get("run_root", _MISSING_AUTHORITY)
+    path = LEGACY_AUTHORITY_PATHS.get(key)
+    if path is None:
+        return _MISSING_AUTHORITY
+    value = stored
+    for part in path:
+        if not isinstance(value, dict) or part not in value:
+            return _MISSING_AUTHORITY
+        value = value[part]
+    return value
+
+
+def _authority_drift(stored: dict, current: dict) -> list[str]:
+    """Names of authority fields that no longer match the stored anchor.
+
+    A new anchor records the whole snapshot. A legacy anchor is compared on the
+    fields it recorded (including the workspace path); budget and policy source
+    changes are still caught by sidecar_sha256, because both live in the
+    sidecar. Missing anchor fields are not treated as authorization.
+    """
+    anchor = stored.get("authority")
+    if isinstance(anchor, dict) and anchor:
+        return [key for key in current if anchor.get(key) != current[key]]
+    drift: list[str] = []
+    for key, value in current.items():
+        expected = _legacy_authority_value(stored, key)
+        if expected is _MISSING_AUTHORITY:
+            continue
+        if expected != value:
+            drift.append(key)
+    return drift
+
+
+def _check_authority(stored: dict, current: dict) -> None:
+    drift = _authority_drift(stored, current)
+    if drift:
+        raise Refusal(
+            "identity_modified",
+            "protected material changed since prepare: " + ", ".join(drift),
+        )
+
+
+def _qualification_state(sidecar: Sidecar, identities: dict) -> dict:
+    """Read-only view of the stored qualification; never a new verdict."""
+    receipt = receipts.load_current_receipt(sidecar.run_root)
+    if receipt is None:
+        return {"state": "none", "detail": "no validation receipt is recorded"}
+    problems = receipts.verify_receipt_digest(receipt)
+    if problems:
+        return {"state": "corrupt", "detail": "; ".join(problems[:3])}
+    stored_ids = receipt.get("identities") or {}
+    if receipts.identity_digest(stored_ids) != receipts.identity_digest(identities):
+        return {
+            "state": "stale",
+            "detail": "the receipt does not describe the current candidate",
+        }
+    verdict = (receipt.get("outcome") or {}).get("checker_verdict")
+    return {
+        "state": "pass" if verdict == "pass" else "not_passed",
+        "checker_verdict": verdict,
+        "receipt_digest": receipt.get("receipt_digest"),
     }
 
 
@@ -669,6 +822,7 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit) -> int:
         raise Refusal("workspace_not_writable", write_problem)
 
     identities = _identity(sidecar, infra_commit)
+    authority = _authority_snapshot(sidecar, identities)
     existing = receipts.read_json(stored.identity)
     if existing is None and not getattr(args, "create_anchor", False):
         # The plugin calls prepare before every check. If that call could create
@@ -681,8 +835,7 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit) -> int:
             "created from a prepared state",
         )
     if existing is not None:
-        anchored = existing.get("identities") or {}
-        _check_anchor(anchored, identities)
+        _check_authority(existing, authority)
     else:
         receipts.write_identity(sidecar.run_root, {
             "schema": "eu4-dsh-identity/v1",
@@ -692,11 +845,16 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit) -> int:
             "identities": identities,
             "workspace": str(sidecar.workspace),
             "run_root": str(sidecar.run_root),
+            "authority": {"schema": AUTHORITY_SCHEMA, **authority},
         })
 
+    identity_digest = receipts.identity_digest(identities)
+    verification = _qualification_state(sidecar, identities)
     startup = _startup_block(sidecar, roots)
     attempts = _validation_attempts(_validation_history(sidecar.run_root))
-    startup_text = _startup_text(startup, attempts=attempts)
+    startup_text = _startup_text(
+        startup, attempts=attempts, identity_digest=identity_digest,
+        verification=verification)
     emit({
         "ok": True,
         "operation": "prepare",
@@ -710,7 +868,8 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit) -> int:
         "workspace": str(sidecar.workspace),
         "run_root": str(sidecar.run_root),
         "identities": identities,
-        "identity_digest": receipts.identity_digest(identities),
+        "identity_digest": identity_digest,
+        "verification": verification,
         "anchored_now": existing is None,
         "startup": startup,
     })
@@ -787,17 +946,31 @@ def _validation_attempts(history: list[dict]) -> list[dict]:
     return [attempts[key] for key in order]
 
 
-def _startup_text(block: dict, *, attempts: list[dict]) -> str:
+def _startup_text(block: dict, *, attempts: list[dict],
+                 identity_digest: str | None = None,
+                 verification: dict | None = None) -> str:
     """Compact first-context text for the initial goal message.
 
     It is derived only from the prepared anchor and persisted attempt records;
-    it never invents a trusted checker, a case locator, or a remaining budget.
+    it never invents a trusted checker, a case locator, a remaining budget, or
+    an authority that the anchor did not verify.
     """
     closing = block.get("closing") or {}
+    policy = block.get("policy") or {}
+    verification = verification or {"state": "none"}
     used = len(attempts)
     maximum = int(closing.get("max_validations") or 0)
     remaining = max(0, maximum - used) if maximum else None
     last = attempts[-1] if attempts else None
+    verification_line = f"- verification: {verification.get('state')}"
+    if verification.get("checker_verdict"):
+        verification_line += f" (checker_verdict={verification['checker_verdict']})"
+    if verification.get("receipt_digest"):
+        verification_line += (
+            f" (receipt={str(verification['receipt_digest'])[:16]})")
+    if verification.get("detail"):
+        verification_line += f" -- {verification['detail']}"
+    digest = str(identity_digest or "")
     lines = [
         "EU4 harness context (prepared, not model-reported):",
         f"- workspace: {block.get('workspace')} "
@@ -805,6 +978,11 @@ def _startup_text(block: dict, *, attempts: list[dict]) -> str:
         f"head={block.get('workspace_head') or 'seed'})",
         f"- campaign: {block.get('campaign_id')} "
         f"(sidecar={block.get('sidecar')}, run_root={block.get('run_root')})",
+        f"- identity: digest={digest[:16] or 'unavailable'} "
+        "(verified against the prepared anchor: workspace, policy, budget, "
+        "sidecar and campaign)",
+        f"- policy: digest={str(policy.get('digest') or '')[:16] or 'unavailable'}"
+        f"; allow_symlinks={bool(policy.get('allow_symlinks'))}",
         f"- writable scope: {', '.join(block.get('allowed_paths') or []) or 'campaign defaults'}",
         f"- forbidden: {', '.join(block.get('forbidden_paths') or []) or 'none declared'}",
         f"- budget: validations used {used}"
@@ -815,16 +993,18 @@ def _startup_text(block: dict, *, attempts: list[dict]) -> str:
         f"- live capture: "
         f"{'enabled' if (block.get('live_capture') or {}).get('enabled') else 'disabled'}"
         " (host-wide process lease still required)",
+        verification_line,
         "- last attempt: " + (
             f"{last.get('operation')} classification={last.get('classification')} "
             f"qualified={last.get('qualified')} digest={str(last.get('digest') or '')[:16]}"
             if last else "none recorded"),
-        "- case context: no locator is bound at prepare time; use "
-        "`python3.14 -m automation.agent_tools eu4_session discover --query "
-        "<session-or-case>` and verify before reuse",
+        "- case context: no locator is bound at prepare time (unbound case "
+        "locator); use `python3.14 -m automation.agent_tools eu4_session "
+        "discover --query <session-or-case>` and verify before reuse; do not "
+        "authorize on unverified locator metadata",
         "- next: run the focused test/module for the touched contract, then "
         "`eu4_validate_candidate` with the current candidate digest",
-        "- close: `eu4_finalize_candidate` only after a checker pass"
+        "- stop path: `eu4_finalize_candidate` only after a checker pass"
         + (" and independent review" if closing.get("require_independent_review")
            else "")
         + "; an unresolved result must be recorded as a block, not certified",
@@ -1959,25 +2139,121 @@ def op_finalize(args) -> int:
         lock.__exit__(None, None, None)
 
 
+def _context_refusal(sidecar: Sidecar, *, status: str, kind: str,
+                     detail: str, anchored: bool = True,
+                     drift: list[str] | None = None) -> int:
+    """One explicit, non-authorizing context result.
+
+    There is deliberately no ``startup_text`` or ``goal_text`` here: a caller
+    must not be able to mistake a drift or a missing anchor for an authorized
+    startup context.
+    """
+    emit({
+        "ok": False,
+        "operation": "context",
+        "campaign_id": sidecar.campaign_id,
+        "status": status,
+        "outcome": "refused",
+        "anchored": anchored,
+        "classification": "integrity_refusal",
+        "kind": kind,
+        "goal_policy": GOAL_POLICY["unavailable"],
+        "drift": list(drift or []),
+        "detail": detail,
+    })
+    return EXIT_INTEGRITY
+
+
 def op_context(args) -> int:
     """Read-only startup/reconnect context; never anchors, probes or locks.
 
     The initial goal message cannot cover a session resumed after a restart, so
     this operation rebuilds the same compact facts from the sidecar, anchor and
-    durable attempt history without mutating the campaign.
+    durable attempt history without mutating the campaign. It also *verifies*
+    the boundary: the sidecar, workspace, policy, budget and campaign
+    identities must still match the anchor recorded by ``prepare``. Any drift is
+    an explicit refusal that names the changed fields; no authorized-looking
+    startup text is emitted.
     """
-    sidecar = load_sidecar(Path(args.sidecar))
-    roots = _roots(sidecar)
+    try:
+        sidecar = load_sidecar(Path(args.sidecar))
+    except SidecarError as exc:
+        emit({
+            "ok": False,
+            "operation": "context",
+            "status": "refused",
+            "outcome": "refused",
+            "anchored": False,
+            "classification": "integrity_refusal",
+            "kind": "sidecar",
+            "goal_policy": GOAL_POLICY["unavailable"],
+            "drift": [],
+            "detail": str(exc),
+        })
+        return EXIT_INTEGRITY
+    run_paths = receipts.paths(sidecar.run_root)
+    anchor = receipts.read_json(run_paths.identity)
+    if anchor is None:
+        return _context_refusal(
+            sidecar, status="unprepared", kind="not_prepared", anchored=False,
+            detail=(
+                "no identity anchor exists for this campaign, so no startup "
+                "context is authorized; start the campaign through "
+                "dsh/scripts/run.sh --campaign (or run-campaign.sh) so the "
+                "anchor is created from a prepared state"
+            ),
+        )
+
+    # Compare the facts that need no candidate walk first: a changed workspace,
+    # policy or budget must be reported as such even when the new workspace or
+    # policy would make the execution-root or candidate walk refuse for a
+    # different reason.
+    drift = _authority_drift(anchor, _authority_surface(sidecar))
+    if drift:
+        return _context_refusal(
+            sidecar, status="drift", kind="identity_modified", drift=drift,
+            detail=("protected material changed since prepare: "
+                    + ", ".join(drift)),
+        )
+
+    try:
+        roots = _roots(sidecar)
+        identities = _identity(
+            sidecar, _git(infra_root(), "rev-parse", "HEAD"))
+    except Refusal as exc:
+        return _context_refusal(
+            sidecar, status="refused", kind=exc.kind,
+            detail=exc.detail or str(exc),
+        )
+
+    authority = _authority_snapshot(sidecar, identities)
+    drift = _authority_drift(anchor, authority)
+    if drift:
+        return _context_refusal(
+            sidecar, status="drift", kind="identity_modified", drift=drift,
+            detail=("protected material changed since prepare: "
+                    + ", ".join(drift)),
+        )
+
+    identity_digest = receipts.identity_digest(identities)
+    verification = _qualification_state(sidecar, identities)
     block = _startup_block(sidecar, roots)
     attempts = _validation_attempts(_validation_history(sidecar.run_root))
-    text = _startup_text(block, attempts=attempts)
-    anchored = receipts.read_json(
-        receipts.paths(sidecar.run_root).identity) is not None
+    text = _startup_text(
+        block, attempts=attempts, identity_digest=identity_digest,
+        verification=verification)
     emit({
         "ok": True,
         "operation": "context",
         "campaign_id": sidecar.campaign_id,
-        "anchored": anchored,
+        "status": "authorized",
+        "outcome": "authorized",
+        "anchored": True,
+        "anchored_at": anchor.get("prepared_at"),
+        "drift": [],
+        "identity_digest": identity_digest,
+        "authority_digest": receipts.identity_digest(authority),
+        "verification": verification,
         "startup": block,
         "startup_text": text,
         "goal_text": sidecar.objective_text + "\n\n" + text,
