@@ -18,7 +18,9 @@ Sequence packages resolve the diagnosed target frame through
 
 Inventory and discovery are metadata-only: they read locator documents and
 check payload existence, but do not hash the full package.  Full verification
-is opt-in for a selected case.
+is opt-in for a selected case.  Every lookup exposes ``verification_scope`` and
+only sets ``verified_all``/``safe_to_reuse`` when payload bytes were verified
+for every matched locator without truncation or pagination.
 """
 
 from __future__ import annotations
@@ -26,12 +28,14 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime as dt
+import errno
 import fcntl
 import hashlib
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import uuid
@@ -114,13 +118,44 @@ def _symlink_problem(root: Path) -> str | None:
     return None
 
 
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+
+
+def _sha_nofollow(path: Path, *, relative: str = "") -> str | None:
+    """SHA-256 of one regular file, refusing to dereference a symlink."""
+    flags = os.O_RDONLY | _O_NOFOLLOW | _O_CLOEXEC
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise CaseLocatorError(
+                "symlink_source",
+                f"case contains a symlink at {relative or path}; publish a "
+                "self-contained copy instead") from exc
+        raise
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return None
+        digest = hashlib.sha256()
+        while True:
+            block = os.read(descriptor, 1 << 20)
+            if not block:
+                break
+            digest.update(block)
+        return digest.hexdigest()
+    finally:
+        os.close(descriptor)
+
+
 def _tree_inventory(root: Path) -> dict[str, tuple[int, str]]:
     """Regular files under ``root`` with relative path, size and digest.
 
-    Symlinks are rejected rather than followed.  The inventory is taken before
-    copying and re-computed on the staged copy; a path that was swapped for a
-    symlink or changed bytes during the copy window therefore cannot be
-    published as a regular file.
+    Symlinks are rejected rather than followed, and each file is hashed
+    through ``O_NOFOLLOW``.  The inventory is taken before copying and
+    re-computed on the staged copy; a path that was swapped for a symlink or
+    changed bytes during the copy window therefore cannot be published as a
+    regular file.
     """
     root = Path(root)
     inventory: dict[str, tuple[int, str]] = {}
@@ -139,12 +174,21 @@ def _tree_inventory(root: Path) -> dict[str, tuple[int, str]]:
                 elif entry.is_file(follow_symlinks=False):
                     try:
                         size = entry.stat(follow_symlinks=False).st_size
-                        digest = _sha(Path(entry.path))
+                        digest = _sha_nofollow(Path(entry.path),
+                                               relative=relative)
                     except OSError as exc:
                         raise CaseLocatorError(
                             "copy_unreadable",
                             f"cannot inventory {relative}: {exc}") from exc
-                    inventory[relative] = (size, digest or "")
+                    if digest is None:
+                        raise CaseLocatorError(
+                            "copy_unreadable",
+                            f"cannot inventory {relative}: not a regular file")
+                    inventory[relative] = (size, digest)
+                else:
+                    raise CaseLocatorError(
+                        "copy_unreadable",
+                        f"cannot inventory {relative}: unsupported file type")
 
     if root.is_dir():
         walk(root, "")
@@ -479,6 +523,16 @@ def publish(case_dir: Path | str, evidence_root: Path | str, *,
         staging = staging_parent / "case"
         try:
             try:
+                # ``shutil.copytree`` is retained: it preserves empty
+                # directories, modes and the expected tree shape, while the
+                # pre-copy inventory plus the post-copy inventory comparison
+                # below is what guarantees evidence integrity.  A no-follow
+                # streaming copy was evaluated but would add platform-specific
+                # descriptor code without changing the published-bytes
+                # contract: bytes that differ from the inventory are refused,
+                # whether they arrived through a symlink or a regular file.
+                # The source hashing itself is O_NOFOLLOW so a last-instant
+                # link swap cannot be dereferenced into the inventory.
                 shutil.copytree(case_dir, staging, symlinks=True)
             except OSError as exc:
                 raise CaseLocatorError(
@@ -798,12 +852,19 @@ def _matches(locator: dict, *, session_id: str | None,
 def locate(evidence_root: Path | str, *, session_id: str | None = None,
            capture_frame_id: int | None = None, seal_sha256: str | None = None,
            case_id: str | None = None, key: str | None = None,
-           limit: int | None = None, verify: bool = True) -> dict:
+           limit: int | None = None, offset: int = 0,
+           verify: bool = True) -> dict:
     """Resolve a bounded, selected set of published cases.
 
     At least one identity filter is required so a lookup cannot walk and
     re-verify an entire large archive.  Full verification is bounded to one
     match by default; pass a larger ``limit`` or ``verify=False`` explicitly.
+    ``verify=False`` is metadata-only: it locates a package but sets
+    ``verification_scope="metadata_only"`` and never claims reusable bytes.
+    ``offset``/``limit`` select one page of the stable matched set; a page that
+    leaves any match unverified is reported as ``verified_returned_only`` (or
+    ``truncated_unverified`` when the returned page looks available).
+
     States are ``available``, ``missing_payload`` (locator but no bytes),
     ``digest_mismatch`` (bytes or identity changed), ``invalid_path``,
     ``root_unavailable``, ``refused_unbounded`` and
@@ -823,14 +884,23 @@ def locate(evidence_root: Path | str, *, session_id: str | None = None,
                 "state": "refused_unbounded", "query": query, "matches": [],
                 "detail": "provide at least one identity filter "
                           "(session/frame/seal/case/key)",
-                "read_only": True}
+                "returned": 0, "matched": 0, "verified_matches": 0,
+                "verified_all": False, "safe_to_reuse": False,
+                "verification_scope": "not_run",
+                "state_scope": "not_run", "read_only": True}
     if limit is None:
         limit = 1 if verify else DEFAULT_LIMIT
     if limit < 1:
         raise CaseLocatorError("limit", "limit must be >= 1")
+    if offset < 0:
+        raise CaseLocatorError("offset", "offset must be >= 0")
     if not root.is_dir():
         return {"schema": SCHEMA, "root": str(root), "state": "root_unavailable",
-                "query": query, "matches": [], "read_only": True}
+                "query": query, "matches": [],
+                "returned": 0, "matched": 0, "verified_matches": 0,
+                "verified_all": False, "safe_to_reuse": False,
+                "verification_scope": "not_run",
+                "state_scope": "not_run", "read_only": True}
     locators, scan_truncated, invalid_locators = _locator_scan(root)
     matches: list[dict] = []
     matched_metadata_states: dict[str, int] = {}
@@ -840,11 +910,12 @@ def locate(evidence_root: Path | str, *, session_id: str | None = None,
                         capture_frame_id=capture_frame_id,
                         seal_sha256=seal_sha256, case_id=case_id, key=key):
             continue
+        index = matched_total
         matched_total += 1
         metadata = _locator_metadata(root, locator)
         matched_metadata_states[metadata["state"]] = (
             matched_metadata_states.get(metadata["state"], 0) + 1)
-        if len(matches) >= limit:
+        if index < offset or len(matches) >= limit:
             continue
         matches.append(_resolve_match(root, locator) if verify else metadata)
     state = "unknown"
@@ -859,22 +930,38 @@ def locate(evidence_root: Path | str, *, session_id: str | None = None,
     elif scan_truncated:
         state = "unknown_truncated"
     truncated = scan_truncated or matched_total > len(matches)
-    # Metadata for every matched locator was computed even when only ``limit``
-    # were fully verified.  A damaged unreturned match must not leave the
-    # lookup looking like a success.
+    # Metadata for every matched locator was computed even when only the
+    # selected page was fully verified.  A damaged unreturned match must not
+    # leave the lookup looking like a success.
     metadata_worst = "available"
     for candidate in ("invalid_path", "missing_payload"):
         if matched_metadata_states.get(candidate):
             metadata_worst = candidate
             break
-    verified_all = not truncated
-    if verify and truncated and matched_total > len(matches):
-        # An unreturned match could be corrupt; a page-1-only result is not a
-        # reusable success.  The distinct state is non-zero at the CLI.
-        state = "truncated_unverified"
-        metadata_worst = "unknown"
-    elif state == "available" and metadata_worst != "available":
+    verified_matches = sum(
+        1 for item in matches
+        if item.get("verified") is True and item.get("state") == "available")
+    verified_all = bool(
+        verify and matched_total > 0 and not truncated
+        and not invalid_locators and verified_matches == matched_total)
+    if invalid_locators and state == "available":
+        # A malformed locator may describe the requested case; a valid match
+        # must not make that scan defect disappear from the verdict.
+        state = "invalid_locator"
+    if state == "available" and metadata_worst != "available":
         state = metadata_worst
+    if verify and state == "available" and truncated:
+        # The returned page cannot vouch for unreturned matches and is not a
+        # reusable success.  A distinct state is non-zero at the CLI.
+        state = "truncated_unverified"
+    if not verify:
+        verification_scope = "metadata_only"
+    elif verified_all:
+        verification_scope = "verified_all_matched"
+    elif matched_total == 0:
+        verification_scope = "no_matches"
+    else:
+        verification_scope = "verified_returned_only"
     return {
         "schema": SCHEMA,
         "root": str(root),
@@ -884,15 +971,22 @@ def locate(evidence_root: Path | str, *, session_id: str | None = None,
         "returned": len(matches),
         "matched": matched_total,
         "limit": limit,
+        "offset": offset,
+        "next_offset": (offset + len(matches)
+                        if offset + len(matches) < matched_total else None),
         "scan_truncated": scan_truncated,
         "truncated": truncated,
+        "verified_matches": verified_matches,
         "verified_all": verified_all,
         "safe_to_reuse": state == "available" and verified_all,
+        "verification_scope": verification_scope,
         "invalid_locators": invalid_locators[:20],
         "invalid_locator_count": len(invalid_locators),
         "matched_metadata_states": matched_metadata_states,
-        "state_scope": ("all_matched" if verified_all
-                        else "returned_matches_only"),
+        "state_scope": ("metadata_only" if not verify
+                        else "all_matched" if matches and not truncated
+                        else "returned_matches_only" if matches
+                        else "no_matches"),
         "read_only": True,
     }
 
@@ -923,7 +1017,9 @@ def inventory(evidence_root: Path | str, *, verify: bool = False,
     if not root.is_dir():
         return {"schema": SCHEMA, "root": str(root),
                 "state": "root_unavailable", "locators": [],
-                "counts": {}, "truncated": False, "read_only": True}
+                "counts": {}, "truncated": False, "verified": verify,
+                "verification_scope": "not_run", "verified_matches": 0,
+                "verified_all": False, "read_only": True}
     locators, truncated, invalid_locators = _locator_scan(root)
     selected = locators[offset:]
     if limit is not None:
@@ -943,7 +1039,21 @@ def inventory(evidence_root: Path | str, *, verify: bool = False,
         state = "available"
     else:
         state = "degraded"
-    page_truncated = offset + len(rows) < len(locators)
+    page_truncated = (offset > 0 or offset + len(rows) < len(locators))
+    verified_matches = sum(
+        1 for row in rows
+        if row.get("verified") is True and row.get("state") == "available")
+    verified_all = bool(
+        verify and rows and not truncated and not page_truncated
+        and not invalid_locators and verified_matches == len(rows))
+    if not verify:
+        verification_scope = "metadata_only"
+    elif verified_all:
+        verification_scope = "verified_all_matched"
+    elif not rows:
+        verification_scope = "no_matches"
+    else:
+        verification_scope = "verified_returned_only"
     return {
         "schema": SCHEMA,
         "root": str(root),
@@ -954,12 +1064,18 @@ def inventory(evidence_root: Path | str, *, verify: bool = False,
         "offset": offset,
         "limit": limit,
         "returned": len(rows),
-        "next_offset": (offset + len(rows)) if page_truncated else None,
+        "next_offset": (offset + len(rows)
+                        if offset + len(rows) < len(locators) else None),
         "invalid_locators": invalid_locators[:20],
         "invalid_locator_count": invalid_count,
         "verified": verify,
+        "verified_matches": verified_matches,
+        "verified_all": verified_all,
+        "verification_scope": verification_scope,
+        "counts_scope": "returned_page",
         "truncated": truncated or page_truncated,
         "scan_truncated": truncated,
+        "page_truncated": page_truncated,
         "scan_limit": MAX_LOCATORS,
         "read_only": True,
     }
@@ -982,6 +1098,7 @@ def _parser() -> argparse.ArgumentParser:
     locate_parser.add_argument("--case-id", default=None)
     locate_parser.add_argument("--key", default=None)
     locate_parser.add_argument("--limit", type=int, default=None)
+    locate_parser.add_argument("--offset", type=int, default=0)
     locate_parser.add_argument("--no-verify", action="store_true",
                                help="metadata-only selected lookup")
     inventory_parser = sub.add_parser("inventory")
@@ -1006,7 +1123,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.root, session_id=args.session_id,
                 capture_frame_id=args.capture_frame_id,
                 seal_sha256=args.seal_sha256, case_id=args.case_id,
-                key=args.key, limit=args.limit,
+                key=args.key, limit=args.limit, offset=args.offset,
                 verify=not args.no_verify)
             status = 0 if value["state"] == "available" else 2
         else:

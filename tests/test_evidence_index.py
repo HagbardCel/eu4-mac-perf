@@ -172,6 +172,10 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(first["locator_counts"]["returned"], 2)
         self.assertEqual(len(first["case_locators"]), 2)
         self.assertTrue(first["locator_counts"]["filter_truncated"])
+        self.assertEqual(first["locator_counts"]["verification_scope"],
+                         "metadata_only")
+        self.assertFalse(first["locator_counts"]["verified_all"])
+        self.assertNotIn("safe_to_reuse", first["locator_counts"])
         second = evidence_index.discover(
             configured_roots=str(self.root), limit=20,
             locator_limit=2, locator_offset=2)

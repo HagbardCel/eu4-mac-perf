@@ -345,6 +345,12 @@ def discover(
             "scan_truncated": locator_truncated,
             "scan_limit": case_locator.MAX_LOCATORS,
             "invalid_locators": locator_invalid,
+            # Discovery never hashes payload bytes.  These fields are explicit
+            # so a caller cannot mistake a page of locator metadata for
+            # verified, reusable evidence.
+            "verification_scope": "metadata_only",
+            "verified_matches": 0,
+            "verified_all": False,
             "scope": "returned_page",
         },
         "read_only": True,
