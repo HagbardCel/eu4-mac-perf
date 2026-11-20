@@ -127,8 +127,15 @@ class PrepareTests(BridgeTestCase):
         # A pre-existing path must never be overwritten or removed by a probe.
         existing = self.workspace / ".dsh-prepare-probe-existing"
         existing.write_text("keep", encoding="utf-8")
-        with mock.patch("automation.dsh_bridge.tempfile.mkstemp",
-                        side_effect=PermissionError("injected permission")):
+        original_open = os.open
+
+        def fail_probe_open(path, *args, **kwargs):
+            if Path(path).name.startswith(dsh_bridge.PROBE_PREFIX):
+                raise PermissionError("injected permission")
+            return original_open(path, *args, **kwargs)
+
+        with mock.patch("automation.dsh_bridge.os.open",
+                        side_effect=fail_probe_open):
             code, out = self.run_bridge("prepare", sidecar)
         self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
         self.assertFalse(out["ok"])
@@ -147,11 +154,12 @@ class PrepareTests(BridgeTestCase):
         stale = self.workspace / f"{dsh_bridge.PROBE_PREFIX}stale"
         stale.write_text("left by a killed process", encoding="utf-8")
         self.addCleanup(lambda: stale.unlink(missing_ok=True))
+        dsh_bridge._register_probe(self.run_root, self.workspace, stale.name)
         code, out = self.run_bridge("prepare", sidecar)
         self.assertEqual(code, dsh_bridge.EXIT_OK, out)
         self.assertNotIn(stale.name,
                          out["identities"]["candidate"]["changed_paths"])
-        self.assertTrue(stale.is_file())
+        self.assertFalse(stale.exists())
 
     def test_probe_cleanup_failure_is_a_refusal(self) -> None:
         sidecar = self.sidecar(self.campaign("smoke-campaign"))
@@ -197,10 +205,49 @@ class PrepareTests(BridgeTestCase):
         stale = self.workspace / f"{dsh_bridge.PROBE_PREFIX}stale"
         stale.write_text("residue", encoding="utf-8")
         self.addCleanup(lambda: stale.unlink(missing_ok=True))
+        dsh_bridge._register_probe(self.run_root, self.workspace, stale.name)
         loaded = dsh_campaign.load_sidecar(sidecar)
         frozen = dsh_bridge._freeze(loaded)
         self.assertEqual(frozen["mode"], "seed")
         self.assertEqual(frozen["entries"], 2)
+
+
+    def test_staged_rename_into_probe_namespace_is_not_filtered(self) -> None:
+        baseline = subprocess.run(
+            ["git", "-C", str(REPO), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        worktree = self.root / "probe-rename-wt"
+        subprocess.run(
+            ["git", "-C", str(REPO), "worktree", "add", "--detach",
+             str(worktree), baseline],
+            capture_output=True, check=True,
+        )
+        self.addCleanup(
+            subprocess.run,
+            ["git", "-C", str(REPO), "worktree", "remove", "--force",
+             "--force", str(worktree)],
+            capture_output=True)
+        subprocess.run(
+            ["git", "-C", str(worktree), "mv", "docs/status.md",
+             ".dsh-prepare-probe-evil"],
+            capture_output=True, check=True)
+        sidecar = self.sidecar(self.campaign("smoke-campaign"),
+                               allowed=("docs/*",))
+        data = json.loads(sidecar.read_text())
+        data["candidate"] = {
+            "mode": "worktree",
+            "workspace": str(worktree),
+            "policy": {"allowed_paths": ["docs/*"]},
+        }
+        data["candidate_baseline_commit"] = baseline
+        sidecar.write_text(json.dumps(data), encoding="utf-8")
+        code, out = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
+        self.assertEqual(out["kind"], "policy")
+        self.assertIn(".dsh-prepare-probe-evil", out["detail"])
+        self.assertTrue((worktree / ".dsh-prepare-probe-evil").is_file())
+        self.assertFalse((worktree / "docs" / "status.md").exists())
 
 
 class ValidationBudgetTests(BridgeTestCase):

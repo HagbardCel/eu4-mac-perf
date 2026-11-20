@@ -203,8 +203,11 @@ def _candidate(sidecar: Sidecar) -> dict:
         )
         if detached.returncode == 0:
             raise Refusal("worktree", "candidate worktree is not detached")
+        residue = _registered_probe_names(sidecar.run_root, sidecar.workspace)
         delta = [entry for entry in snapshot.enumerate_delta(sidecar.workspace)
-                 if not _is_probe_path(entry["path"])]
+                 if not (entry.get("kind") == "add"
+                         and not entry.get("old_path")
+                         and _is_registered_probe(entry["path"], residue))]
         problems = snapshot.validate_delta(
             delta,
             sidecar.allowed_paths,
@@ -243,9 +246,10 @@ def _candidate(sidecar: Sidecar) -> dict:
         }
 
     _digest, entries = receipts.tree_digest(sidecar.workspace)
-    # A probe left by a killed process is harness residue, not candidate work.
+    # Only host-recorded probes are harness residue, never a prefix guess.
+    residue = _registered_probe_names(sidecar.run_root, sidecar.workspace)
     entries = [entry for entry in entries
-               if not _is_probe_path(entry["path"])]
+               if not _is_registered_probe(entry["path"], residue)]
     digest = receipts.digest_text(receipts.canonical_json(entries))
     for entry in entries:
         _require_allowed(sidecar, entry["path"])
@@ -342,40 +346,112 @@ def _trusted_modules_digest(checker: Path, strict: bool = True) -> tuple[str, li
     return receipts.digest_text(receipts.canonical_json(rows)), rows
 
 
-_PROBE_NAME = re.compile(r"^\.dsh-prepare-probe-[A-Za-z0-9_-]{1,64}$")
+PROBE_REGISTRY = "probe-residue"
 
 
-def _is_probe_path(path: str | Path) -> bool:
-    """Only exact root-level harness probe files are residue.
+def _probe_registry_path(run_root: Path) -> Path:
+    return Path(run_root) / PROBE_REGISTRY
 
-    Nested files that merely share the prefix are candidate work and must
-    still pass the allowlist and enter the digest.
-    """
+
+def _load_probe_rows(run_root: Path) -> list[dict]:
+    value = receipts.read_json(_probe_registry_path(run_root)) or {}
+    rows = value.get("rows") if isinstance(value, dict) else None
+    return [row for row in rows or [] if isinstance(row, dict)]
+
+
+def _save_probe_rows(run_root: Path, rows: list[dict]) -> None:
+    receipts.atomic_write(
+        _probe_registry_path(run_root),
+        receipts.canonical_json({
+            "schema": "eu4-dsh-probe-residue/v1",
+            "rows": rows,
+        }),
+    )
+
+
+def _registered_probe_names(run_root: Path, workspace: Path) -> set[str]:
+    """Names the host itself created in this workspace, never a prefix guess."""
+    resolved = Path(workspace).resolve()
+    names: set[str] = set()
+    for row in _load_probe_rows(run_root):
+        name = str(row.get("name") or "")
+        if (Path(str(row.get("workspace") or "")).resolve() == resolved
+                and Path(name).name == name and name.startswith(PROBE_PREFIX)):
+            names.add(name)
+    return names
+
+
+def _register_probe(run_root: Path, workspace: Path, name: str) -> None:
+    rows = [row for row in _load_probe_rows(run_root)
+            if not (Path(str(row.get("workspace") or "")).resolve()
+                    == Path(workspace).resolve()
+                    and row.get("name") == name)]
+    rows.append({"workspace": str(Path(workspace).resolve()),
+                 "name": name, "created_at": _now()})
+    _save_probe_rows(run_root, rows)
+
+
+def _unregister_probe(run_root: Path, workspace: Path, name: str) -> None:
+    rows = [row for row in _load_probe_rows(run_root)
+            if not (Path(str(row.get("workspace") or "")).resolve()
+                    == Path(workspace).resolve()
+                    and row.get("name") == name)]
+    _save_probe_rows(run_root, rows)
+
+
+def _reap_probe_residue(sidecar: Sidecar) -> str | None:
+    """Remove only probes this host recorded; never a candidate path."""
+    workspace = Path(sidecar.workspace)
+    rows = _load_probe_rows(sidecar.run_root)
+    keep: list[dict] = []
+    problem: str | None = None
+    for row in rows:
+        if Path(str(row.get("workspace") or "")).resolve() != workspace.resolve():
+            keep.append(row)
+            continue
+        name = str(row.get("name") or "")
+        if Path(name).name != name or not name.startswith(PROBE_PREFIX):
+            keep.append(row)
+            continue
+        path = workspace / name
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            keep.append(row)
+            problem = (f"could not remove recorded probe residue {path}: {exc}; "
+                       "repair the workspace before preparing")
+    _save_probe_rows(sidecar.run_root, keep)
+    return problem
+
+
+def _is_registered_probe(path: str | Path, names: set[str]) -> bool:
     candidate = Path(path)
-    return candidate.parent == Path(".") and bool(
-        _PROBE_NAME.match(candidate.name))
+    return candidate.parent == Path(".") and candidate.name in names
 
 
-def _workspace_write_problem(workspace: Path) -> str | None:
-    """Probe the candidate workspace without overwriting existing files.
+def _workspace_write_problem(workspace: Path, run_root: Path) -> str | None:
+    """Probe the candidate workspace with a host-recorded unique file.
 
-    A campaign that cannot write its permitted outputs would fail after a
-    launch or validation, so prepare refuses before the anchor is created.
-    The probe is an exclusively created unique file; cleanup removes only that
-    file, never a pre-existing path.  A failed cleanup is itself a refusal:
-    residue would otherwise be mistaken for candidate work or trip the
-    allowlist on the next attempt.
+    The registry records the exact name before creation; cleanup removes only
+    that path.  A killed prepare leaves a name the next prepare can reap, while
+    a candidate-authored path that merely resembles a probe is never filtered.
     """
     workspace = Path(workspace)
+    run_root = Path(run_root)
     if not workspace.is_dir():
         return f"candidate workspace is not a directory: {workspace}"
-    probe: Path | None = None
+    name = f"{PROBE_PREFIX}{uuid.uuid4().hex}"
+    _register_probe(run_root, workspace, name)
+    probe = workspace / name
     descriptor: int | None = None
+    created = False
     problem: str | None = None
     try:
-        descriptor, name = tempfile.mkstemp(
-            prefix=PROBE_PREFIX, dir=str(workspace))
-        probe = Path(name)
+        descriptor = os.open(probe,
+                             os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        created = True
         os.write(descriptor, b"probe\n")
         os.fsync(descriptor)
         os.close(descriptor)
@@ -388,12 +464,15 @@ def _workspace_write_problem(workspace: Path) -> str | None:
                 os.close(descriptor)
             except OSError:
                 pass
-        if probe is not None:
+        if created:
             try:
                 probe.unlink()
+                _unregister_probe(run_root, workspace, name)
             except OSError as exc:
                 residue = f"probe cleanup failed: {probe}: {exc}"
                 problem = residue if problem is None else f"{problem}; {residue}"
+        else:
+            _unregister_probe(run_root, workspace, name)
     return problem
 
 
@@ -581,7 +660,11 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit) -> int:
             sidecar.candidate_baseline_commit or "",
         )
 
-    write_problem = _workspace_write_problem(sidecar.workspace)
+    residue_problem = _reap_probe_residue(sidecar)
+    if residue_problem:
+        raise Refusal("workspace_not_writable", residue_problem)
+    write_problem = _workspace_write_problem(
+        sidecar.workspace, sidecar.run_root)
     if write_problem:
         raise Refusal("workspace_not_writable", write_problem)
 
@@ -945,16 +1028,21 @@ def _freeze(sidecar: Sidecar) -> dict:
     """
     if sidecar.mode != "worktree":
         _digest, entries = receipts.tree_digest(sidecar.workspace)
+        residue = _registered_probe_names(
+            sidecar.run_root, sidecar.workspace)
         entries = [entry for entry in entries
-                   if not _is_probe_path(entry["path"])]
+                   if not _is_registered_probe(entry["path"], residue)]
         digest = receipts.digest_text(receipts.canonical_json(entries))
         return {"mode": "seed", "digest": digest, "entries": len(entries),
                 "commit": None}
 
     infra = infra_root().resolve()
     baseline = sidecar.candidate_baseline_commit or ""
+    residue = _registered_probe_names(sidecar.run_root, sidecar.workspace)
     delta = [entry for entry in snapshot.enumerate_delta(sidecar.workspace)
-             if not _is_probe_path(entry["path"])]
+             if not (entry.get("kind") == "add"
+                     and not entry.get("old_path")
+                     and _is_registered_probe(entry["path"], residue))]
     problems = snapshot.validate_delta(
         delta, sidecar.allowed_paths, sidecar.forbidden_paths,
         allow_symlinks=sidecar.allow_symlinks,
