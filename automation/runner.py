@@ -186,6 +186,7 @@ def candidate_fingerprint(workspace: Path) -> dict:
                              if head is not None and head.returncode == 0
                              else "unavailable")
             entries = []
+            used = 0
             for record in status.stdout.split(b"\0"):
                 if len(record) < 4:
                     continue
@@ -195,7 +196,12 @@ def candidate_fingerprint(workspace: Path) -> dict:
                     continue
                 if relative.suffix in _CANDIDATE_EXCLUDED_SUFFIXES:
                     continue
-                entries.append(_candidate_row(workspace, relative, code))
+                row = _candidate_row(workspace, relative, code)
+                used += int(row.get("size") or 0)
+                if used > _CANDIDATE_MAX_BYTES:
+                    value["truncated"] = True
+                    continue
+                entries.append(row)
                 if len(entries) >= _CANDIDATE_MAX_FILES:
                     value["truncated"] = True
                     break

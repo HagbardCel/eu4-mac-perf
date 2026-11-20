@@ -2945,7 +2945,7 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                     "replays", count=max(1, len(frame_dirs)),
                     evidence={"frames": [str(item) for item in frame_dirs],
                               "supplied_frames": len(frame_dirs),
-                              "max_frames": max_frames}):
+                              "max_frames": max_frames}) as attempt_handle:
                 report = m7_continuous.run_campaign(
                     frame_dirs, Path(args.replay_out), shaders=shaders,
                     policy=getattr(args, "policy", None),
@@ -2965,6 +2965,20 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                         getattr(args, "require_engine_identity", False)),
                     fault=fault,
                 )
+                if (attempt_handle is not None
+                        and str(report.get("status") or "") in ("failed",
+                                                                "incomplete")):
+                    attempt_handle.fail(
+                        "sequence campaign did not complete: "
+                        + str(report.get("error")
+                              or report.get("stop_reason") or "unknown"),
+                        evidence={
+                            "status": report.get("status"),
+                            "stop_reason": report.get("stop_reason"),
+                            "error": report.get("error"),
+                            "supplied_frames": len(frame_dirs),
+                            "completed_frames": len(report.get("frames") or []),
+                        })
         except m7_continuous.ContinuousError as exc:
             policy_failure = exc.kind in ("policy_unavailable", "policy_invalid")
             return _envelope(
