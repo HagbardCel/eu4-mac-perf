@@ -3,6 +3,60 @@
 Authoritative summary of what is established, qualified, and in flight.
 Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
 
+## Current navigation — 20 November 2026
+
+This section is the starting point. Everything below it is retained as dated
+history and must be read with its original run/seal identity.
+
+| Question | Canonical document |
+|---|---|
+| What does the original EU4 renderer do, and how was it observed? | [EU4 renderer](eu4_renderer.md) |
+| How does the faithful Metal backend work and what is qualified? | [Metal backend](metal.md) |
+| What is planned for the optimized backend? | [Metal optimized](metal_optimized.md) |
+| How is evidence retained and restored? | [Evidence retention](evidence-retention.md) |
+| Which command should I run, and how do I recover? | [Harness operations](harness.md) |
+| What is the review remediation status? | [Coverage matrix](../plans/harness-review/implementation.md) |
+| What is the reconstruction charter and safety contract? | [Charter](renderer-reconstruction-and-differential-validation.md) · [AGENTS.md](../AGENTS.md) |
+
+### Capability snapshot
+
+No PR in this snapshot is merged. **Verified locally** means technical evidence
+at the named head, not independent approval. Exact head SHAs, open review
+findings and dependency order are in the
+[coverage matrix](../plans/harness-review/implementation.md).
+
+| Area | State | Evidence / scope | Smallest missing discriminator |
+|---|---|---|---|
+| Sealed same-frame differential | **Established** | Capture, seal, shadow, offline replay and exact four-channel comparator; all channels are compared | — |
+| Exact verdict semantics | **Verified locally; approval pending** | PR #241 head `818e8360`; policy pass is separate from raw zero statistics; Codex P2 re-checked fixed | Authentic case with a policy override and alpha-only negative |
+| Event/writer attribution | **Verified locally; approval pending** | PR #242 head `6a52e005`; graph-derived `provenance_matrix`; two Codex P2 findings re-checked fixed | Regenerate present 904/616 rows from the sealed graph |
+| Compressed texture capture/replay | **Verified locally; approval pending** | PR #244 head `b274eeb6`; complete/partial/mixed/unsupported chain contract; synthetic rendered BC1 alpha and row-flip fixtures on the branch (unmerged) | Same-seal decoded-vs-block pixel comparison on present 904 |
+| Live-GL control | **Blocked (scientific)** | Offline GL does not reproduce live GL; depth/sample/drawable provenance missing. A local unmerged recomputation on `analysis/harness-904-three-way` confirms the stored control still differs | Authentic selected-draw control with valid color+depth prestate and all-channel comparison |
+| Sampler/raster state | **Verified locally; approval pending** | PR #245 head `843a05cc`; full sampler key, cull faces, signed scissor; rendered winding fixture on the branch (unmerged, stacked on #244) | Rendered front/back against an authentic draw |
+| Translation/replay identity | **Partial; review findings open** | PR #248 head `aeb4e97d`; effective compiler key, tool identity, recipe-bound receipts; three Codex P2 findings open | Fix recipe/cache findings; native function/pipeline cache audit |
+| Campaign lifecycle | **Partial; review findings open** | PRs #246 `ea204014`, #249 `5270fc1c`, #250 `44e547cb`; safe publication, terminal capture, exactly-once reserving, no-progress; open P2 findings | Per-session write roots; live wall-time measurement |
+| Metrics/documentation | **Verified locally; approval pending** | PR #251 head `7c95d804` and this PR; explicit unknown GPU time, dated canonical docs, byte-identical restore check | Three paired pilot trials |
+| Authentic renderer parity | **Not established** | Latest authentic pilot localized [14, 15]; no accepted terrain correction | Exact control equality at the first differing writer |
+
+### Current authentic observations
+
+- Present **615** (session `2564021f…`): 325 operations, checkpoints 14 match,
+  17/19/20/284/final differ. Interval **[14, 17]**, next checkpoint 15.
+- Present **616** (session `2da0a8fc…`): checkpoint 14 match, 15 differs
+  607 px/max 2, 16 differs 200,197/max 85.
+- Present **904** (session `afd444f2…`, candidate `34158764`): 327 operations,
+  checkpoints 11/13/14 exact, 15 is 4/1, 16 is 3,602/119, final 425,560/68.
+- These are different seals and must not be combined into a before/after
+  improvement. Original GL remains authoritative.
+
+### Non-claims
+
+Do not claim event-16 parity, contiguous coverage, a faithful reference,
+accepted renderer correction or live wall-time savings without the exact
+qualifying evidence named above.
+
+## Historical status (retained)
+
 ## M7 — READY: implementation, autonomous campaign and bounded authentic pilot (2026-11-19)
 
 The implementation stack is merged on `main` through #218 (`cecc727c`): #214
@@ -140,10 +194,14 @@ closure changed, and it rejects:
 - an unchanged candidate revision, or a substituted candidate artifact;
 - a previously exact-matching regression that no longer recomputes to zero.
 
-`pixel_perfect` is reported only for zero mismatched pixels and zero maximum
-channel error under complete qualification (verified replay identity, complete
-execution, clean checkpoint reconciliation and complete state coverage). An
-accepted partial improvement is explicitly not equivalence.
+`pixel_perfect` is reported only for zero mismatched pixels, zero alpha
+differences and zero maximum channel error under complete qualification:
+verified replay identity; complete execution; graph completeness; exact
+authoritative checkpoint coverage (or a separately permitted final-only
+contract); producer/receipt binding to the current candidate; complete state
+coverage; an exact-control policy that does not mask a channel; and a protected
+independent regression that also recomputes to zero. An accepted partial
+improvement is explicitly not equivalence.
 
 `dsh_pilot.summarize` now runs the checker when a correction is proposed and
 requires an accepted report; a valid `correction_proposed` conclusion alone is

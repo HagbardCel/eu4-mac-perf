@@ -110,7 +110,8 @@ class CorrectionFixture:
         replay.setdefault("stage", "complete")
         replay_path.write_text(json.dumps(replay))
         gfx_independent_replay.write_producer_receipt(
-            directory, self.frame, self.producer, replay_path)
+            directory, self.frame, self.producer, replay_path,
+            env={}, ambient={})
         (directory / "replay-report.json").write_text(
             json.dumps(_report_for(self.fixture, directory, status=status)))
         return directory
@@ -148,7 +149,8 @@ class CorrectionFixture:
     def rewrite_receipt(self, directory: Path) -> None:
         """Simulate a producer that emitted these bytes with a valid receipt."""
         gfx_independent_replay.write_producer_receipt(
-            directory, self.frame, self.producer, directory / "replay.json")
+            directory, self.frame, self.producer, directory / "replay.json",
+            env={}, ambient={})
 
     def claims(self, before: dict, after: dict) -> tuple[dict, dict]:
         return (
@@ -231,6 +233,37 @@ class CorrectionAcceptanceTests(unittest.TestCase):
         self.assertEqual(
             report["after"]["statistics"]["mismatched_pixels"], 0)
         self.assertEqual(report["candidate"]["revision"], REVISION)
+
+    def test_diagnostic_receipt_is_rejected_even_when_pixels_match(self):
+        # The output bytes are exactly the reference, but the receipt records
+        # a fault that changed execution.  A byte-identical image must not
+        # launder a diagnostic variant into correction evidence.
+        after = self.model.replay_dir("after-diagnostic", self.model.reference)
+        gfx_independent_replay.write_producer_receipt(
+            after, self.model.frame, self.model.producer,
+            after / "replay.json",
+            faults={"sampler_shift": 2},
+            env={"EU4_FRAME_REPLAY_SAMPLER_SHIFT": "2"}, ambient={})
+        claims = self.model.claims(
+            {"mismatched_pixels": 1, "max_channel_error": 7},
+            {"mismatched_pixels": 0, "max_channel_error": 0})
+        rejected = self.acceptance(after=after, claims=claims)
+        self.assertEqual(rejected["result"], "invalid_evidence", rejected)
+        self.assertFalse(rejected["improved"])
+        codes = {item["code"] for item in rejected["problems"]}
+        self.assertIn("after_unverified", codes)
+        self.assertIn("diagnostic_recipe", json.dumps(rejected["problems"]))
+
+        receipt = json.loads(
+            (after / "producer-receipt.json").read_text())
+        digest = receipt["recipe"]["sha256"]
+        approved = contract()
+        approved["approved_canonical_recipes"] = [digest]
+        accepted = self.acceptance(after=after, claims=claims,
+                                   qualification_contract=approved)
+        self.assertEqual(accepted["result"], "accepted", accepted)
+        self.assertTrue(accepted["improved"])
+        self.assertIn("explicitly approved", " ".join(accepted["limitations"]))
 
     def test_corrupted_intermediate_cannot_earn_exactness(self):
         # Reproducer from the review: exact final pixels must not cover damage
@@ -532,12 +565,14 @@ class CorrectionAcceptanceTests(unittest.TestCase):
         (after / first).unlink()
         with self.assertRaises(gfx_independent_replay.ReplayError):
             gfx_independent_replay.write_producer_receipt(
-                after, self.model.frame, self.model.producer, replay_path)
+                after, self.model.frame, self.model.producer, replay_path,
+                env={}, ambient={})
         replay["checkpoints"][0] = "not-an-object"
         replay_path.write_text(json.dumps(replay))
         with self.assertRaises(gfx_independent_replay.ReplayError):
             gfx_independent_replay.write_producer_receipt(
-                after, self.model.frame, self.model.producer, replay_path)
+                after, self.model.frame, self.model.producer, replay_path,
+                env={}, ambient={})
 
     def test_broken_regression_rejects_but_primary_stays_pixel_perfect(self):
         after = self.model.replay_dir("after-reg-distinct",
@@ -853,7 +888,8 @@ class CorrectionAcceptanceTests(unittest.TestCase):
         document["manifest_reference_sha256"] = sha(b"another-frame")
         (replay / "replay.json").write_text(json.dumps(document))
         gfx_independent_replay.write_producer_receipt(
-            replay, other.frame, other.producer, replay / "replay.json")
+            replay, other.frame, other.producer, replay / "replay.json",
+            env={}, ambient={})
         (replay / "replay-report.json").write_text(
             json.dumps(_report_for(other.fixture, replay,
                                    status="confirmed_rendering_difference")))
@@ -1022,7 +1058,7 @@ class CorrectionAcceptanceTests(unittest.TestCase):
         (replay / "replay.json").write_text(json.dumps(document))
         gfx_independent_replay.write_producer_receipt(
             replay, self.model.frame, self.model.producer,
-            replay / "replay.json")
+            replay / "replay.json", env={}, ambient={})
         (replay / "replay-report.json").write_text(
             json.dumps(_report_for(self.model.fixture, replay,
                                    status="failed")))

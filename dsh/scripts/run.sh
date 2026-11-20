@@ -337,6 +337,7 @@ PREPARE=$(cd "$INFRA" && "$EU4_DSH_PYTHON" -m automation.dsh_bridge prepare --cr
 }
 WORKSPACE=$(printf '%s' "$PREPARE" | "$EU4_DSH_PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["workspace"])')
 OBJECTIVE=$(printf '%s' "$PREPARE" | "$EU4_DSH_PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["objective"])')
+GOAL_TEXT=$(printf '%s' "$PREPARE" | "$EU4_DSH_PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(d.get("goal_text") or d.get("objective") or "")')
 RUN_ROOT=$(printf '%s' "$PREPARE" | "$EU4_DSH_PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["run_root"])')
 REQUIRE_REVIEW=$(printf '%s' "$PREPARE" | "$EU4_DSH_PYTHON" -c 'import json,sys; print(str(bool(json.load(sys.stdin)["require_independent_review"])).lower())')
 export EU4_DSH_REQUIRE_REVIEW=$REQUIRE_REVIEW
@@ -362,7 +363,7 @@ Create the session with this workspace:
   $SESSION_DIR
 Then send this as one message (the /goal command):
 --------------------------------------------------------------------
-$OBJECTIVE
+$GOAL_TEXT
 --------------------------------------------------------------------
 
 INFO

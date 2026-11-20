@@ -16,6 +16,9 @@ provenance belong in tracked evidence.
 
 from __future__ import annotations
 
+_MISSING_CLEANUP = object()
+
+
 import argparse
 import fcntl
 import hashlib
@@ -638,6 +641,93 @@ def _reap_coordinator(coordinator) -> None:
             pass
 
 
+def _coordinator_record(shadow_dir: Path) -> dict | None:
+    """Read a complete coordinator JSON object, or None while it is partial."""
+    path = Path(shadow_dir) / "coordinator.json"
+    try:
+        report = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return None
+    return report if isinstance(report, dict) else None
+
+
+def _shadow_terminal_record(
+    shadow_dir: Path,
+    *,
+    capture_id: str,
+    run: Path | str,
+    continuous: bool,
+    max_frames: int | None,
+) -> dict | None:
+    """Return the coordinator record only when it is bound to this capture.
+
+    Binding covers the per-capture identity, the resolved run root, the capture
+    mode and, for a bounded sequence, the requested frame count and a
+    contiguous frame prefix starting at frame 1.  A stale record from an earlier
+    capture, a record for a later frame boundary and an unbound failure record
+    are all rejected rather than consumed.  ``None`` means the original wait
+    stays in force and the post-wait consumer must not apply the record.
+    """
+    if not capture_id:
+        return None
+    report = _coordinator_record(shadow_dir)
+    if report is None:
+        return None
+    if report.get("schema") != "m7-shadow-coordinator/v1":
+        return None
+    if report.get("capture_id") != capture_id:
+        return None
+    if report.get("run") != str(Path(run).expanduser().resolve()):
+        return None
+    status = report.get("status")
+    record_mode = report.get("mode")
+    if continuous:
+        if record_mode != "continuous":
+            return None
+        if not isinstance(max_frames, int) or isinstance(max_frames, bool):
+            return None
+        if report.get("max_frames") != max_frames:
+            return None
+    elif record_mode == "continuous":
+        return None
+    if status == "failed":
+        # A bound failure is terminal: waiting for a later summary cannot make
+        # this capture succeed.  The binding checks above still apply.
+        return report
+    if status != "ok":
+        return None
+    if continuous:
+        frames = report.get("frames")
+        if not isinstance(frames, list) or not frames:
+            return None
+        if len(frames) > max_frames:
+            return None
+        sequences = []
+        for item in frames:
+            if not isinstance(item, dict):
+                return None
+            sequence = item.get("sequence")
+            if (not isinstance(sequence, int) or isinstance(sequence, bool)
+                    or sequence < 1):
+                return None
+            sequences.append(sequence)
+        if sequences != list(range(1, len(sequences) + 1)):
+            return None
+        return report if report.get("stop_reason") is not None else None
+    seal = report.get("seal")
+    if not isinstance(seal, dict) or seal.get("capture_frame_id") is None:
+        return None
+    if (report.get("pixel_verdict") is None
+            and report.get("classification") is None):
+        return None
+    return report
+
+
+def _shadow_terminal(shadow_dir: Path, **identity) -> bool:
+    """True only for the complete terminal record bound to this capture."""
+    return _shadow_terminal_record(shadow_dir, **identity) is not None
+
+
 def capture(args: argparse.Namespace) -> int:
     import eu4_gfx_startup_trace as startup
     from automation import live_gfx
@@ -646,6 +736,9 @@ def capture(args: argparse.Namespace) -> int:
     if output.exists():
         print(f"capture output already exists: {output}", file=sys.stderr)
         return 2
+    # The coordinator record is bound to this capture before any process is
+    # started, so a stale record can never settle this launch.
+    capture_id = str(uuid.uuid4())
     frame_dir = output / "frame"
     max_events = 1024
     evidence = startup.preflight_ops(
@@ -848,6 +941,8 @@ def capture(args: argparse.Namespace) -> int:
                 str(output),
                 "--shadow-dir",
                 str(shadow_dir),
+                "--capture-id",
+                capture_id,
                 "--timeout",
                 str(
                     max(
@@ -895,9 +990,18 @@ def capture(args: argparse.Namespace) -> int:
             background_plan=background_plan,
             game_args=list(getattr(args, "game_arg", []) or []) or None,
             campaign_reservation=reservation,
+            terminal_result=(
+                (lambda: _shadow_terminal(
+                    shadow_dir,
+                    capture_id=capture_id,
+                    run=output,
+                    continuous=continuous,
+                    max_frames=(args.max_frames if continuous else None)))
+                if shadow_enabled else None),
         )
     except (startup.StartupError, OSError, RuntimeError) as exc:
         _reap_coordinator(coordinator)
+        cleanup_errors = list(getattr(exc, "cleanup_errors", None) or [])
         if token is not None:
             live_gfx._finish_launch(
                 Path(args.campaign_run_root), token, pid=None,
@@ -909,13 +1013,19 @@ def capture(args: argparse.Namespace) -> int:
                 detail=f"{type(exc).__name__}: {exc}",
                 failure_action="eu4_launches",
                 evidence={"output": str(output)})
+        if cleanup_errors:
+            print("capture cleanup failed: " + "; ".join(cleanup_errors),
+                  file=sys.stderr)
         print(f"capture failed: {exc}", file=sys.stderr)
         return 4
     result: dict = {
         "schema": "m6-frame-capture/v1",
+        "capture_id": capture_id,
         "session": report.get("session"),
         "pid": report.get("pid"),
         "display": report.get("display"),
+        "wait_reason": report.get("wait_reason"),
+        "terminal_shadow": report.get("terminal_shadow"),
         "frame_dir": str(frame_dir),
         "targets": TARGETS,
         "selection": {
@@ -989,10 +1099,20 @@ def capture(args: argparse.Namespace) -> int:
                     coordinator.communicate(timeout=30)
                 except subprocess.TimeoutExpired:
                     _reap_coordinator(coordinator)
-            coordinator_path = shadow_dir / "coordinator.json"
-            if not coordinator_path.is_file():
-                raise FrameError("in-process shadow coordinator produced no report")
-            shadow_report = _read_json(coordinator_path)
+                if coordinator.poll() is None:
+                    raise FrameError(
+                        "in-process shadow coordinator did not exit after "
+                        "publication")
+            shadow_report = _shadow_terminal_record(
+                shadow_dir,
+                capture_id=capture_id,
+                run=output,
+                continuous=continuous,
+                max_frames=(args.max_frames if continuous else None))
+            if shadow_report is None:
+                raise FrameError(
+                    "in-process shadow coordinator produced no bound "
+                    "terminal report")
             native_failure = apply_shadow_report(result, shadow_report)
             if native_failure is not None:
                 raise FrameError(
@@ -1092,6 +1212,41 @@ def capture(args: argparse.Namespace) -> int:
                 for item in campaign_frames
             ],
         }
+    raw_cleanup_ok = report.get("cleanup_ok", _MISSING_CLEANUP)
+    cleanup_record = report.get("cleanup")
+    cleanup_errors = list(report.get("cleanup_errors") or [])
+    nested_failed = (isinstance(cleanup_record, dict)
+                     and (cleanup_record.get("ok") is False
+                          or bool(cleanup_record.get("errors"))))
+    if raw_cleanup_ok is _MISSING_CLEANUP:
+        # Legacy reports predate the explicit field.  A report with no cleanup
+        # fields at all is not a failure; any explicit failure signal is.
+        cleanup_ok = not nested_failed and not cleanup_errors
+    else:
+        cleanup_ok = (raw_cleanup_ok is True and not nested_failed
+                      and not cleanup_errors)
+    display_record = report.get("display")
+    result["cleanup"] = {
+        "ok": cleanup_ok,
+        "errors": cleanup_errors,
+        "process_alive": report.get("process_alive"),
+        "termination": report.get("termination"),
+        "lease": report.get("lease"),
+        "display_restore": (
+            display_record.get("restore")
+            if isinstance(display_record, dict) else None),
+    }
+    if not cleanup_ok:
+        cleanup_detail = "cleanup failed: " + (
+            "; ".join(cleanup_errors) or "unspecified cleanup failure")
+        result["cleanup_failure"] = cleanup_detail
+        # A cleanup failure can never turn a failed capture into a success.
+        # When the trace/seal/shadow checks already failed, keep their status
+        # and error as the primary reason and report cleanup separately.
+        if status == 0:
+            status = 8
+            result["error"] = cleanup_detail
+    result["outcome"] = "ok" if status == 0 else "failed"
     if capture_guard is not None and reservation is not None:
         seal_value = result.get("seal") or {}
         sealed_frames = (seal_value.get("frames")
@@ -1106,26 +1261,38 @@ def capture(args: argparse.Namespace) -> int:
             consumed["shadow_executions"] = (
                 len(sealed_frames) if continuous else
                 (1 if status == 0 or result.get("shadow") else 0))
-        failure_action = ("shadow_executions"
-                          if shadow_enabled and status != 0
-                          else "eu4_launches")
+        if status == 8:
+            # Cleanup failure is a launch/restore failure, not a shadow
+            # execution failure.
+            failure_action = "eu4_launches"
+        elif shadow_enabled and status != 0:
+            failure_action = "shadow_executions"
+        else:
+            failure_action = "eu4_launches"
+        detail = str(result.get("error") or result.get("seal_error")
+                     or result.get("shadow_error") or "")
+        if not cleanup_ok and detail != result.get("cleanup_failure"):
+            detail = "; ".join(filter(
+                None, [detail, str(result.get("cleanup_failure") or "")]))
         capture_guard.complete(
             reservation,
             outcome="ok" if status == 0 else "failed",
-            detail=str(result.get("error") or result.get("seal_error")
-                       or result.get("shadow_error") or ""),
+            detail=detail,
             consumed=consumed if status == 0 else None,
             failure_action=failure_action,
             evidence={"output": str(output), "status": status,
                       "pid": report.get("pid"),
-                      "frames": len(sealed_frames)})
+                      "frames": len(sealed_frames),
+                      "cleanup_ok": cleanup_ok})
     (output / "capture-report.json").write_text(json.dumps(result, indent=2) + "\n")
     if token is not None:
         live_gfx._finish_launch(
             Path(args.campaign_run_root),
             token,
             pid=report.get("pid"),
-            status="completed" if status == 0 else "failed: frame-trace",
+            status=("completed" if status == 0 else
+                    "failed: cleanup" if status == 8 else
+                    "failed: frame-trace"),
         )
     print(json.dumps(result, indent=2))
     return status
@@ -1365,16 +1532,49 @@ def _discard_build_outputs(temporary: Path, stamp: Path, host: Path) -> None:
             pass
 
 
+def _tool_identity(name: str) -> dict:
+    found = shutil.which(name)
+    if not found:
+        return {"name": name, "available": False, "sha256": None}
+    path = Path(found)
+    try:
+        return {
+            "name": name,
+            "available": True,
+            "path": path.name,
+            "bytes": path.stat().st_size,
+            "sha256": _sha256(path),
+        }
+    except OSError:
+        return {"name": name, "available": True, "sha256": None}
+
+
 def _translator_identity() -> dict:
+    """Content identity of every input that can change a translation.
+
+    A filename/size/mtime fingerprint missed both the external compiler tools
+    and an in-place translator edit that preserved size and time.  Hash the
+    translator bytes and both tool binaries so a stale cache cannot be reused
+    after any of them changes.
+    """
     from automation import gfx_shader_translate
 
     path = Path(gfx_shader_translate.__file__)
     try:
-        stat = path.stat()
-        return {"path": path.name, "bytes": stat.st_size,
-                "mtime_ns": stat.st_mtime_ns}
+        digest = _sha256(path)
+        size = path.stat().st_size
     except OSError:
-        return {"path": path.name, "bytes": 0, "mtime_ns": 0}
+        digest, size = "", 0
+    return {
+        "schema": "gfx-translator-identity/v2",
+        "path": path.name,
+        "bytes": size,
+        "sha256": digest,
+        "tools": {
+            "glslang": _tool_identity("glslangValidator"),
+            "spirv_cross": _tool_identity("spirv-cross"),
+        },
+    }
 
 
 def _shader_source_identity(trace: dict) -> dict:
@@ -1386,32 +1586,163 @@ def _shader_source_identity(trace: dict) -> dict:
     the translator identity, so an older translator's cached output is never
     reused after the translator changes.
     """
-    programs = {}
+    programs: dict[str, dict] = {}
     for event in trace.get("_events") or []:
         if event.get("kind") != "draw":
             continue
         program = event.get("program") or {}
         name = str(program.get("name") or "")
+        if not name:
+            continue
+        record = programs.setdefault(name, {"stages": {}, "attributes": {}})
         for shader in program.get("shaders") or []:
             stage = str(shader.get("stage") or "")
             digest = str(shader.get("sha256") or "")
-            if name and stage and digest:
-                programs.setdefault(name, {})[stage] = digest
+            if stage and digest:
+                record["stages"][stage] = digest
+        for attribute in event.get("attributes") or []:
+            attribute_name = str(attribute.get("name") or "")
+            location = attribute.get("location")
+            if attribute_name and location is not None:
+                record["attributes"][attribute_name] = int(location)
+    # Attribute/varying locations are injected into the compiler input, so two
+    # programs sharing raw stage bytes but differing in linkage are different
+    # compiler inputs.  The attribute map is part of the cache identity.
+    projected = {}
+    for name, record in sorted(programs.items()):
+        projected[name] = {
+            "stages": dict(sorted(record["stages"].items())),
+            "attribute_locations": dict(sorted(
+                record["attributes"].items())),
+        }
     identity = {
-        "schema": "gfx-shader-source-identity/v1",
+        "schema": "gfx-shader-source-identity/v2",
         "translator": _translator_identity(),
-        "programs": {name: dict(sorted(stages.items()))
-                     for name, stages in sorted(programs.items())},
+        "programs": projected,
     }
     canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
     identity["sha256"] = _bytes_sha256(canonical.encode("utf-8"))
     return identity
 
 
+_CACHE_STAGE_ARTIFACTS = (
+    ("msl_file", "msl_sha256"),
+    ("glsl_file", "glsl_sha256"),
+    ("spv_file", "spv_sha256"),
+)
+
+
+def _translation_cache_valid(cache_root: Path, identity: dict) -> bool:
+    """A cache entry is valid only when its identity and every stage artifact
+    are present and match the digest recorded by the translator.
+
+    ``shaders.json`` existing is not a cache hit: a concurrent publisher or an
+    interrupted copy can leave a report whose MSL files are missing or
+    truncated.  Adoption requires a complete, content-verified entry.
+    """
+    try:
+        metadata = json.loads(
+            (cache_root / "translation-cache.json").read_text())
+        report = json.loads((cache_root / "shaders.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    if metadata.get("schema") != "gfx-shader-translation-cache/v1":
+        return False
+    if not isinstance(metadata.get("identity"), dict):
+        return False
+    recorded = metadata["identity"].get("sha256")
+    if recorded != identity.get("sha256"):
+        return False
+    if report.get("schema") != "gfx-shader-translation/v1":
+        return False
+    if report.get("ok") is not True:
+        return False
+    programs = report.get("programs")
+    if not isinstance(programs, list) or not programs:
+        return False
+    for program in programs:
+        if not isinstance(program, dict) or program.get("status") != "ok":
+            return False
+        stages = program.get("stages")
+        if not isinstance(stages, dict) or not stages:
+            return False
+        for stage in stages.values():
+            if not isinstance(stage, dict):
+                return False
+            for file_field, hash_field in _CACHE_STAGE_ARTIFACTS:
+                name = stage.get(file_field)
+                expected = stage.get(hash_field)
+                if (not isinstance(name, str) or not name
+                        or Path(name).name != name):
+                    return False
+                path = cache_root / name
+                if not path.is_file():
+                    return False
+                if (not isinstance(expected, str) or len(expected) != 64
+                        or _sha256(path) != expected):
+                    return False
+    return True
+
+
 def _copy_translation_cache(source: Path, destination: Path) -> None:
     if destination.exists():
         shutil.rmtree(destination)
     shutil.copytree(source, destination)
+
+
+def _publish_translation_cache(source: Path, cache_root: Path,
+                               identity: dict) -> str:
+    """Publish a validated translation without adopting a corrupt winner.
+
+    A unique sibling staging directory means two builders never share a
+    partial directory.  An existing winner is adopted only after full
+    validation; an invalid winner is quarantined and replaced atomically.
+    """
+    cache_root.parent.mkdir(parents=True, exist_ok=True)
+    partial = cache_root.with_name(
+        f"{cache_root.name}.partial-{os.getpid()}-{uuid.uuid4().hex[:8]}")
+    shutil.copytree(source, partial)
+    try:
+        for _ in range(8):
+            if cache_root.exists():
+                if _translation_cache_valid(cache_root, identity):
+                    return "existing"
+                quarantine = cache_root.with_name(
+                    f"{cache_root.name}.invalid-{os.getpid()}-"
+                    f"{uuid.uuid4().hex[:8]}")
+                try:
+                    os.replace(cache_root, quarantine)
+                except FileNotFoundError:
+                    # Another repairer removed or replaced it; re-evaluate.
+                    continue
+                except OSError:
+                    continue
+                shutil.rmtree(quarantine, ignore_errors=True)
+            try:
+                os.replace(partial, cache_root)
+            except FileNotFoundError:
+                return "refused"
+            except OSError:
+                # Another builder published first; adopt only if it verifies.
+                continue
+            if _translation_cache_valid(cache_root, identity):
+                return "published"
+            # Our published copy failed verification (for example a
+            # filesystem error during the rename): remove it so no later
+            # reader can adopt corrupt bytes.
+            rejected = cache_root.with_name(
+                f"{cache_root.name}.invalid-{os.getpid()}-"
+                f"{uuid.uuid4().hex[:8]}")
+            try:
+                os.replace(cache_root, rejected)
+                shutil.rmtree(rejected, ignore_errors=True)
+            except OSError:
+                pass
+            return "refused"
+        return "refused"
+    finally:
+        if partial.exists():
+            shutil.rmtree(partial, ignore_errors=True)
 
 
 def translate_command(args: argparse.Namespace) -> int:
@@ -1435,20 +1766,39 @@ def translate_command(args: argparse.Namespace) -> int:
     identity = _shader_source_identity(trace)
     cache_root = cache_dir / identity["sha256"] if cache_dir else None
     cache_hit = False
+    publish_status = None
     report = None
     if (cache_root is not None and not args.force
-            and (cache_root / "shaders.json").is_file()):
-        _copy_translation_cache(cache_root, out_dir)
-        cache_hit = True
+            and _translation_cache_valid(cache_root, identity)):
+        copied = False
+        try:
+            _copy_translation_cache(cache_root, out_dir)
+            copied = True
+        except OSError:
+            cache_hit = False
+        else:
+            # A winner can be repaired or removed between validation and the
+            # copy.  Validate the staged copy itself before reusing it.
+            cache_hit = _translation_cache_valid(out_dir, identity)
+        if copied and not cache_hit:
+            shutil.rmtree(out_dir, ignore_errors=True)
     if not cache_hit:
         report = gfx_shader_translate.translate_trace(frame_dir, out_dir)
-        if cache_root is not None and report.get("ok"):
-            cache_root.parent.mkdir(parents=True, exist_ok=True)
-            partial = cache_root.with_name(cache_root.name + ".partial")
-            if partial.exists():
-                shutil.rmtree(partial)
-            shutil.copytree(out_dir, partial)
-            os.replace(partial, cache_root)
+        (out_dir / "translation-cache.json").write_text(json.dumps({
+            "schema": "gfx-shader-translation-cache/v1",
+            "identity": identity,
+            "cache_dir": str(cache_dir) if cache_dir else None,
+            "hit": False,
+        }, indent=2) + "\n")
+        if cache_root is not None:
+            if (report.get("ok")
+                    and _translation_cache_valid(out_dir, identity)):
+                publish_status = _publish_translation_cache(
+                    out_dir, cache_root, identity)
+            else:
+                # Never publish a partial or unverified translation; the next
+                # invocation rebuilds rather than adopting it.
+                publish_status = "refused"
     if report is None:
         try:
             report = json.loads((out_dir / "shaders.json").read_text())
@@ -1475,16 +1825,83 @@ def translate_command(args: argparse.Namespace) -> int:
             "hit": cache_hit,
             "key": identity["sha256"],
             "dir": str(cache_dir) if cache_dir else None,
+            "publish": publish_status,
         },
     }
     print(json.dumps(summary, indent=2))
     return 0 if report["ok"] else 2
 
 
+def _replay_evidence(args: argparse.Namespace) -> dict:
+    """Stable identity of the direct replay command for durable evidence."""
+    argv = [sys.executable, "-m", "automation.m6_frame", "replay",
+            "--frame", str(args.frame), "--out", str(args.out)]
+    if getattr(args, "shaders", None):
+        argv += ["--shaders", str(args.shaders)]
+    if getattr(args, "only_event", None) is not None:
+        argv += ["--only-event", str(args.only_event)]
+    return {
+        "entry_point": "automation.m6_frame.replay_command",
+        "tool": "eu4_replay frame",
+        "frame": str(args.frame),
+        "out": str(args.out),
+        "command": argv,
+    }
+
+
+def _replay_mark(evidence: dict | None, **values) -> None:
+    if evidence is None:
+        return
+    for key, value in values.items():
+        if value is not None:
+            evidence[key] = value
+
+
 def replay_command(args: argparse.Namespace) -> int:
+    """Reserve one replay, then execute the direct frame-replay entry point.
+
+    ``eu4_replay frame`` runs this module as a child process.  Without a
+    reservation here that physical GPU execution was invisible to the campaign,
+    while the higher-level independent path charged one.  A nonzero direct
+    replay exit is a failed action: the reservation records the status, exit
+    code, stderr tail and command identity rather than settling success.
+    """
+    from automation import campaign_guard
+
+    evidence = _replay_evidence(args)
+    try:
+        with campaign_guard.attempt(
+                "replays", evidence=evidence) as attempt:
+            code = _replay_command_body(args, evidence=evidence)
+            _replay_mark(evidence, exit_code=int(code))
+            if code != 0:
+                _replay_mark(
+                    evidence,
+                    status=(evidence.get("status")
+                            if evidence.get("status") not in (None, "running")
+                            else "failed"),
+                    stderr_tail=(evidence.get("stderr_tail")
+                                 or f"replay exited {code}"),
+                )
+                if attempt is not None:
+                    attempt.fail(
+                        f"replay exited {code}: "
+                        f"{evidence.get('reason') or ''}",
+                        evidence=evidence)
+            return code
+    except campaign_guard.CampaignRefusal as exc:
+        print(f"replay refused: {exc.kind}: {exc.detail}", file=sys.stderr)
+        return 3
+
+
+def _replay_command_body(args: argparse.Namespace,
+                         evidence: dict | None = None) -> int:
+    _replay_mark(evidence, status="running")
     frame_dir = Path(args.frame).expanduser().resolve()
     out = Path(args.out).expanduser().resolve()
     if out == frame_dir or frame_dir in out.parents or out in frame_dir.parents:
+        _replay_mark(evidence, status="refused",
+                     reason="replay output overlaps the captured frame")
         raise FrameError(
             "replay output must not overlap the captured source frame directory"
         )
@@ -1497,53 +1914,34 @@ def replay_command(args: argparse.Namespace) -> int:
         try:
             trace = load_trace(frame_dir)
         except FrameError as exc:
+            _replay_mark(evidence, status="invalid", reason=str(exc))
             print(json.dumps({"status": "invalid", "reason": str(exc)}, indent=2))
             return 1
         events = trace.get("_events") or []
         if not 0 <= args.only_event < len(events):
-            print(
-                json.dumps(
-                    {
-                        "status": "invalid",
-                        "reason": (
-                            f"event {args.only_event} is outside the "
-                            f"{len(events)}-event frame"
-                        ),
-                    },
-                    indent=2,
-                )
-            )
+            reason = (
+                f"event {args.only_event} is outside the "
+                f"{len(events)}-event frame")
+            _replay_mark(evidence, status="invalid", reason=reason)
+            print(json.dumps({"status": "invalid", "reason": reason}, indent=2))
             return 1
         selected = events[args.only_event]
         if selected.get("kind") != "draw":
-            print(
-                json.dumps(
-                    {
-                        "status": "invalid",
-                        "reason": (
-                            f"event {args.only_event} is a "
-                            f"{selected.get('kind')} event, not a draw"
-                        ),
-                    },
-                    indent=2,
-                )
-            )
+            reason = (f"event {args.only_event} is a "
+                      f"{selected.get('kind')} event, not a draw")
+            _replay_mark(evidence, status="invalid", reason=reason)
+            print(json.dumps({"status": "invalid", "reason": reason}, indent=2))
             return 1
         if not selected.get("pre_image"):
-            print(
-                json.dumps(
-                    {
-                        "status": "invalid",
-                        "reason": (
-                            f"event {args.only_event} has no authentic GL "
-                            "pre-image"
-                        ),
-                    },
-                    indent=2,
-                )
-            )
+            reason = (f"event {args.only_event} has no authentic GL "
+                      "pre-image")
+            _replay_mark(evidence, status="invalid", reason=reason)
+            print(json.dumps({"status": "invalid", "reason": reason}, indent=2))
             return 1
     if out.exists() and not args.force:
+        _replay_mark(evidence, status="refused",
+                     reason=f"replay output already exists: {out}",
+                     stderr_tail=f"replay output already exists: {out}")
         print(f"replay output already exists: {out}", file=sys.stderr)
         return 2
     if out.exists():
@@ -1552,6 +1950,7 @@ def replay_command(args: argparse.Namespace) -> int:
     try:
         host = build_replay_host(force=args.force_build)
     except FrameError as exc:
+        _replay_mark(evidence, status="error", reason=str(exc))
         print(json.dumps({"status": "error", "reason": str(exc)}, indent=2))
         return 1
     command = [
@@ -1578,6 +1977,12 @@ def replay_command(args: argparse.Namespace) -> int:
     ran = subprocess.run(command, capture_output=True, text=True, check=False, timeout=1200)
     result_path = out / "replay.json"
     if ran.returncode != 0 or not result_path.is_file():
+        _replay_mark(evidence, status="error", returncode=ran.returncode,
+                     stderr_tail=(ran.stderr or "")[-2000:],
+                     replay_command=command,
+                     reason=(f"replay host exited {ran.returncode}"
+                             if ran.returncode != 0
+                             else "replay host produced no replay.json"))
         print(
             json.dumps(
                 {
@@ -1590,6 +1995,12 @@ def replay_command(args: argparse.Namespace) -> int:
         )
         return 1
     result = json.loads(result_path.read_text())
+    _replay_mark(evidence, status=result.get("status"),
+                 returncode=ran.returncode,
+                 stderr_tail=(ran.stderr or "")[-2000:],
+                 replay_command=command,
+                 reason=(result.get("status")
+                         if result.get("status") != "ok" else None))
     summary = {
         "status": result.get("status"),
         "events": result.get("events"),
@@ -2092,8 +2503,10 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
         shadow.mkdir(parents=True, exist_ok=True)
         (shadow / "coordinator.json").write_text(
             json.dumps(
-                {"schema": "m7-shadow-coordinator/v1", "status": "failed",
-                 "error": "invalid phase budget"},
+                {"schema": "m7-shadow-coordinator/v1",
+                 "run": str(run), "shadow_dir": str(shadow),
+                 "capture_id": getattr(args, "capture_id", "") or "",
+                 "status": "failed", "error": "invalid phase budget"},
                 indent=2,
             )
             + "\n"
@@ -2106,6 +2519,7 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
         "schema": "m7-shadow-coordinator/v1",
         "run": str(run),
         "shadow_dir": str(shadow),
+        "capture_id": getattr(args, "capture_id", "") or "",
         "status": "incomplete",
     }
     overall_deadline = time.monotonic() + args.timeout
@@ -2739,6 +3153,7 @@ def shadow_coordinator_continuous(args: argparse.Namespace) -> int:
         "mode": "continuous",
         "run": str(run),
         "shadow_dir": str(shadow),
+        "capture_id": getattr(args, "capture_id", "") or "",
         "max_frames": args.max_frames,
         "status": "running",
         "frames": [],
@@ -2991,6 +3406,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     coord.add_argument("--run", required=True)
     coord.add_argument("--shadow-dir", default="")
+    coord.add_argument("--capture-id", default="",
+                       help="per-capture identity written into every "
+                            "coordinator record")
     coord.add_argument("--timeout", type=float, default=900.0)
     coord.add_argument("--seal-timeout", type=float, default=300.0)
     coord.add_argument("--translation-timeout", type=float, default=180.0)

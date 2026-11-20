@@ -701,9 +701,15 @@ def run_campaign(frames: list[Path], out_dir: Path, *,
             "diagnosis_seconds": diagnosis_seconds,
         }
         result["frames"].append(entry)
-        terminal_classification = classification in (
-            "gpu_execution_failure", "invalid_provenance",
-            "incomplete_capture")
+        # Only an execution/identity failure is terminal for a diagnostic
+        # sequence.  Incomplete capture remains a non-qualifying result that
+        # stops the default difference policy, but an explicit diagnostic run
+        # (stop_on_difference=False) may continue and report every frame.
+        fault_fired = bool(
+            (diagnosis.get("fault_evidence") or {}).get("fired"))
+        terminal_classification = (
+            classification == "gpu_execution_failure"
+            or (classification == "invalid_provenance" and not fault_fired))
         hard_stop = (not row.get("ok")
                      or row.get("history_status") not in (1, None)
                      or terminal_classification)
