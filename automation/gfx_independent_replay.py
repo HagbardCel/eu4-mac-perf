@@ -324,6 +324,10 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
 
     returned: dict[tuple[int, str], list[dict]] = {}
     for item in actual:
+        if not isinstance(item, dict):
+            problems.append({"kind": "malformed_result",
+                             "reason": "checkpoint result is not an object"})
+            continue
         key = _checkpoint_key(item)
         returned.setdefault(key, []).append(item)
 
@@ -2056,15 +2060,17 @@ def _checkpoint_binding_problems(metal_dir: Path, request: dict,
     return problems, bindings
 
 
-def _checkpoint_request_state(graph: dict, metal_dir: Path,
-                              shadow: dict | None = None,
-                              seal: dict | None = None
-                              ) -> tuple[dict, str, list[dict], dict]:
+def checkpoint_request_evidence(graph: dict, metal_dir: Path,
+                                shadow: dict | None = None,
+                                seal: dict | None = None
+                                ) -> tuple[dict, str, list[dict], dict]:
     """Load and validate the checkpoint request bound to one Metal result.
 
     An unbound or disagreeing request is reported with an explicit severity;
     it is never silently replaced by a derived plan, and a later valid pixel
-    match cannot repair it.
+    match cannot repair it.  ``correction_accept`` and the in-process diagnosis
+    share this one definition so an acceptance caller cannot bypass the graph
+    agreement and binding checks.
     """
     metal_dir = Path(metal_dir)
     published = _optional_json(metal_dir / "checkpoint-request.json")
@@ -2389,7 +2395,7 @@ def analyse_frame(frame_dir: Path | str, metal_result_dir: Path | str,
     request_binding: dict = {"status": "in_process", "bindings": []}
     if request is None:
         request, request_source, request_problems, request_binding = (
-            _checkpoint_request_state(graph, metal_dir, shadow, seal))
+            checkpoint_request_evidence(graph, metal_dir, shadow, seal))
     else:
         request_source = request_source or "provided"
         request_problems = []
@@ -3259,6 +3265,42 @@ def write_producer_receipt(out_dir: Path, frame_dir: Path,
     capture = capture_identity(seal, trace) or {}
     replay = _optional_json(result_path) or {}
     metal = out_dir / "metal-frame.bgra"
+    checkpoint_files = []
+    seen_checkpoints: set[str] = set()
+    declared_checkpoints = replay.get("checkpoints") or []
+    if not isinstance(declared_checkpoints, list):
+        raise ReplayError(
+            "invalid_checkpoint_binding",
+            "replay checkpoints are not a list")
+    for item in declared_checkpoints:
+        if not isinstance(item, dict):
+            raise ReplayError(
+                "invalid_checkpoint_binding",
+                "a replay checkpoint entry is not an object")
+        declared = str(item.get("file") or "")
+        name = _safe_member_name(declared)
+        if not name:
+            # A result that declares a checkpoint must declare a safe basename.
+            # Silently omitting it would leave the acceptance path to discover
+            # an unbound intermediate after the producer has already signed.
+            raise ReplayError(
+                "invalid_checkpoint_binding",
+                f"checkpoint declares an invalid file name {declared!r}")
+        if name in seen_checkpoints:
+            raise ReplayError(
+                "invalid_checkpoint_binding",
+                f"checkpoint file {name!r} is declared more than once")
+        seen_checkpoints.add(name)
+        path = out_dir / name
+        if not path.is_file():
+            raise ReplayError(
+                "invalid_checkpoint_binding",
+                f"declared checkpoint file {name!r} is missing from {out_dir}")
+        checkpoint_files.append({
+            "file": name,
+            "sha256": _sha256_file(path),
+        })
+    checkpoint_files.sort(key=lambda row: row["file"])
     value = {
         "schema": PRODUCER_RECEIPT_SCHEMA,
         "producer": {
@@ -3273,6 +3315,7 @@ def write_producer_receipt(out_dir: Path, frame_dir: Path,
             "replay_json_sha256": _sha256_file(result_path),
             "metal_frame_sha256": (_sha256_file(metal)
                                    if metal.is_file() else None),
+            "checkpoint_files": checkpoint_files,
             "status": replay.get("status"),
             "stage": replay.get("stage"),
             "readback": replay.get("readback"),
@@ -3390,12 +3433,45 @@ def _replay_locked(
             pass
         raise
     result_path = out_dir / "replay.json"
-    if result_path.is_file():
-        write_producer_receipt(out_dir, frame_dir, producer, result_path)
+    receipt_error: str | None = None
     try:
-        snapshot.unlink()
-    except FileNotFoundError:
-        pass
+        if result_path.is_file():
+            try:
+                write_producer_receipt(
+                    out_dir, frame_dir, producer, result_path)
+            except ReplayError as exc:
+                # A malformed/failed checkpoint declaration is a diagnostic
+                # result, not a reason to lose the report or leak the host
+                # copy.
+                receipt_error = f"{exc.kind}: {exc.detail or exc}"
+    finally:
+        try:
+            snapshot.unlink()
+        except FileNotFoundError:
+            pass
+    if receipt_error is not None:
+        diagnosis = analyse_frame(
+            frame_dir, out_dir, policy, graph=graph, request=request,
+            request_source="published", faults=faults)
+        report = {
+            "schema": SCHEMA,
+            "frame_dir": str(frame_dir),
+            "out_dir": str(out_dir),
+            "status": "invalid",
+            "receipt_error": receipt_error,
+            "faults": faults,
+            "returncode": ran.returncode,
+            "stderr": (ran.stderr or "")[-4000:],
+            "graph": graph,
+            "diagnosis": diagnosis,
+            "classification": diagnosis.get("classification"),
+            "qualification": diagnosis.get("qualification"),
+            "first_divergence": diagnosis.get("first_divergence"),
+            "execution": diagnosis.get("execution"),
+        }
+        (out_dir / "replay-report.json").write_text(
+            json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        return report
     if ran.returncode != 0 or not result_path.is_file():
         diagnosis = analyse_frame(
             frame_dir, out_dir, policy, graph=graph, request=request,

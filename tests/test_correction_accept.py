@@ -49,11 +49,15 @@ def producer_identity(*, revision: str = REVISION) -> dict:
     }
 
 
-def contract(*ids: str, allow_additional: bool = False) -> dict:
+def contract(*ids: str, allow_additional: bool = False,
+             allow_final_only: bool = False,
+             allow_no_exact_control: bool = False) -> dict:
     return {
         "schema": correction_accept.CONTRACT_SCHEMA,
         "required_regressions": list(ids),
         "allow_additional": allow_additional,
+        "allow_final_only": allow_final_only,
+        "allow_no_exact_control": allow_no_exact_control,
     }
 
 
@@ -79,12 +83,14 @@ class CorrectionFixture:
 
     def __init__(self, root: Path, *, dither: bool = False,
                  session_id: str = "session-1",
-                 capture_frame_id: int = 7):
+                 capture_frame_id: int = 7, final_only: bool = False,
+                 partial_graph: bool = False):
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
         self.fixture = DiagnosisFixture(
             root / "fixture", session_id=session_id,
-            capture_frame_id=capture_frame_id)
+            capture_frame_id=capture_frame_id, final_only=final_only,
+            partial_graph=partial_graph)
         if dither:
             self.fixture.write_frame(dither=True)
         self.frame = self.fixture.frame
@@ -139,6 +145,11 @@ class CorrectionFixture:
         case_baseline.record(case_dir, path)
         return path
 
+    def rewrite_receipt(self, directory: Path) -> None:
+        """Simulate a producer that emitted these bytes with a valid receipt."""
+        gfx_independent_replay.write_producer_receipt(
+            directory, self.frame, self.producer, directory / "replay.json")
+
     def claims(self, before: dict, after: dict) -> tuple[dict, dict]:
         return (
             {"mismatched_pixels": before["mismatched_pixels"],
@@ -179,6 +190,19 @@ class CorrectionAcceptanceTests(unittest.TestCase):
         baseline = self.model.baseline(case_dir, "baseline.json")
         return case_dir, baseline
 
+    def rewrite_request(self, directory: Path, mutate) -> dict:
+        """Change the published plan and rebind the shadow report to it."""
+        path = directory / "checkpoint-request.json"
+        request = json.loads(path.read_text())
+        mutate(request)
+        path.write_text(json.dumps(request))
+        shadow_path = directory / "shadow-report.json"
+        shadow = json.loads(shadow_path.read_text())
+        shadow["checkpoint_request_sha256"] = sha(path.read_bytes())
+        shadow["checkpoint_count"] = len(request.get("checkpoints") or [])
+        shadow_path.write_text(json.dumps(shadow))
+        return request
+
     def acceptance(self, *, after: Path, claims, **kwargs):
         case_dir, baseline = self.build_model()
         return correction_accept.evaluate(
@@ -203,9 +227,436 @@ class CorrectionAcceptanceTests(unittest.TestCase):
         self.assertEqual(report["result"], "accepted", report)
         self.assertTrue(report["improved"])
         self.assertTrue(report["pixel_perfect"], report)
+        self.assertTrue(report["authoritative_checkpoint_exact"], report)
         self.assertEqual(
             report["after"]["statistics"]["mismatched_pixels"], 0)
         self.assertEqual(report["candidate"]["revision"], REVISION)
+
+    def test_corrupted_intermediate_cannot_earn_exactness(self):
+        # Reproducer from the review: exact final pixels must not cover damage
+        # to an authoritative intermediate captured by the same case.
+        after = self.model.replay_dir("after-corrupt", self.model.reference)
+        intermediates = sorted(after.glob("intermediate-*.bgra"))
+        self.assertTrue(intermediates, "fixture published no intermediates")
+        pixels = bytearray(intermediates[0].read_bytes())
+        pixels[0] ^= 1
+        intermediates[0].write_bytes(bytes(pixels))
+        # A genuine producer would sign the bytes it emitted; rebind them so
+        # this exercises the checkpoint predicate, not receipt tamper checks.
+        self.model.rewrite_receipt(after)
+        report = self.acceptance(
+            after=after,
+            claims=self.model.claims(
+                {"mismatched_pixels": 1, "max_channel_error": 7},
+                {"mismatched_pixels": 0, "max_channel_error": 0}))
+        self.assertNotEqual(report["result"], "accepted", report)
+        self.assertFalse(report["pixel_perfect"], report)
+        self.assertFalse(report["authoritative_checkpoint_exact"], report)
+        self.assertIn("authoritative_checkpoint_regression",
+                      {item["code"] for item in report["problems"]})
+        self.assertEqual(
+            report["after"]["checkpoint_authority"]["divergent"], 1)
+
+    def test_intermediate_changed_after_receipt_is_invalid(self):
+        after = self.model.replay_dir("after-tamper", self.model.reference)
+        intermediate = sorted(after.glob("intermediate-*.bgra"))[0]
+        pixels = bytearray(intermediate.read_bytes())
+        pixels[0] ^= 1
+        intermediate.write_bytes(bytes(pixels))
+        report = self.acceptance(
+            after=after,
+            claims=self.model.claims(
+                {"mismatched_pixels": 1, "max_channel_error": 7},
+                {"mismatched_pixels": 0, "max_channel_error": 0}))
+        self.assertEqual(report["result"], "invalid_evidence", report)
+        self.assertIn("replay_receipt_mismatch",
+                      json.dumps(report["problems"]))
+
+    def test_malformed_published_request_is_invalid_without_crashing(self):
+        after = self.model.replay_dir("after-malformed-request",
+                                      self.model.reference)
+        request_path = after / "checkpoint-request.json"
+        request = json.loads(request_path.read_text())
+        request["checkpoints"][0] = "not-an-object"
+        request_path.write_text(json.dumps(request))
+        shadow_path = after / "shadow-report.json"
+        shadow = json.loads(shadow_path.read_text())
+        shadow["checkpoint_request_sha256"] = sha(request_path.read_bytes())
+        shadow["checkpoint_count"] = len(request["checkpoints"])
+        shadow_path.write_text(json.dumps(shadow))
+        report = self.acceptance(
+            after=after,
+            claims=self.model.claims(
+                {"mismatched_pixels": 1, "max_channel_error": 7},
+                {"mismatched_pixels": 0, "max_channel_error": 0}))
+        self.assertEqual(report["result"], "invalid_evidence", report)
+        self.assertIn("request_invalid", json.dumps(report["problems"]))
+
+    def test_reader_rejects_malformed_checkpoint_without_crashing(self):
+        after = self.model.replay_dir("after-reader-malformed",
+                                      self.model.reference)
+        replay_path = after / "replay.json"
+        replay = json.loads(replay_path.read_text())
+        replay["checkpoints"][0] = "not-an-object"
+        replay_path.write_text(json.dumps(replay))
+        receipt_path = after / "producer-receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["result"].pop("checkpoint_files", None)
+        receipt["result"]["replay_json_sha256"] = sha(
+            replay_path.read_bytes())
+        receipt_path.write_text(json.dumps(receipt))
+        report = self.acceptance(
+            after=after,
+            claims=self.model.claims(
+                {"mismatched_pixels": 1, "max_channel_error": 7},
+                {"mismatched_pixels": 0, "max_channel_error": 0}))
+        self.assertEqual(report["result"], "invalid_evidence", report)
+        self.assertIn("replay_receipt_mismatch",
+                      json.dumps(report["problems"]))
+
+    def test_exact_but_not_improved_is_not_authenticated(self):
+        before = self.model.replay_dir("before-exact-idempotent",
+                                       self.model.reference)
+        case_dir = self.model.package(before, "case-exact-idempotent",
+                                      case_id="exact-idempotent")
+        baseline = self.model.baseline(case_dir, "baseline-idempotent.json")
+        after = self.model.replay_dir("after-exact-idempotent",
+                                      self.model.reference)
+        report = correction_accept.evaluate(
+            case_dir=case_dir, baseline_path=baseline,
+            candidate_revision=REVISION, after_replay=after,
+            claimed_before={"mismatched_pixels": 0, "max_channel_error": 0},
+            claimed_after={"mismatched_pixels": 0, "max_channel_error": 0},
+            baseline_revision="baseline-1", qualification_contract=contract())
+        self.assertEqual(report["result"], "rejected", report)
+        self.assertTrue(report["pixel_perfect"], report)
+        self.assertFalse(report["authenticated_equivalence"], report)
+
+    def test_tampered_checkpoint_binding_is_invalid(self):
+        after = self.model.replay_dir("after-tampered-binding",
+                                      self.model.reference)
+        receipt_path = after / "producer-receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["result"]["checkpoint_files"][0]["sha256"] = "0" * 64
+        receipt_path.write_text(json.dumps(receipt))
+        report = self.acceptance(
+            after=after,
+            claims=self.model.claims(
+                {"mismatched_pixels": 1, "max_channel_error": 7},
+                {"mismatched_pixels": 0, "max_channel_error": 0}))
+        self.assertEqual(report["result"], "invalid_evidence", report)
+        self.assertIn("replay_receipt_mismatch",
+                      json.dumps(report["problems"]))
+        self.assertFalse(report["authenticated_equivalence"], report)
+
+    def test_receipt_without_intermediate_binding_stays_inspectable(self):
+        after = self.model.replay_dir("after-legacy-receipt",
+                                      self.model.reference)
+        receipt_path = after / "producer-receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["result"].pop("checkpoint_files", None)
+        receipt_path.write_text(json.dumps(receipt))
+        report = self.acceptance(
+            after=after,
+            claims=self.model.claims(
+                {"mismatched_pixels": 1, "max_channel_error": 7},
+                {"mismatched_pixels": 0, "max_channel_error": 0}))
+        # Legacy evidence stays inspectable and its observed pixels still
+        # match, but the receipt cannot authenticate the intermediate bytes.
+        self.assertEqual(report["result"], "accepted", report)
+        self.assertTrue(report["observed_checkpoint_equality"], report)
+        self.assertEqual(report["checkpoint_producer_binding"], "absent")
+        self.assertFalse(report["producer_bound_checkpoint_evidence"], report)
+        self.assertFalse(report["pixel_perfect"], report)
+        self.assertFalse(report["authenticated_equivalence"], report)
+        self.assertEqual(report["checkpoint_coverage"], "verified")
+        self.assertTrue(any("does not bind its intermediate" in item
+                            for item in report["limitations"]))
+
+    def test_verdict_semantics_are_distinct(self):
+        after = self.model.replay_dir("after-semantics", self.model.reference)
+        claims = self.model.claims(
+            {"mismatched_pixels": 1, "max_channel_error": 7},
+            {"mismatched_pixels": 0, "max_channel_error": 0})
+        report = self.acceptance(after=after, claims=claims)
+        self.assertEqual(report["result"], "accepted")
+        self.assertTrue(report["observed_checkpoint_equality"])
+        self.assertTrue(report["producer_bound_checkpoint_evidence"])
+        self.assertEqual(report["checkpoint_coverage"], "verified")
+        self.assertTrue(report["pixel_perfect"])
+        # With no control inventory and no exception, the strongest
+        # certification is withheld while the primary result stays exact.
+        self.assertFalse(report["authenticated_equivalence"])
+        self.assertEqual(report["exact_control_policy"], "none")
+        self.assertTrue(any("no exact-match control" in item
+                            for item in report["limitations"]))
+        exception = self.acceptance(
+            after=after, claims=claims,
+            qualification_contract=contract(allow_no_exact_control=True))
+        self.assertTrue(exception["pixel_perfect"])
+        self.assertTrue(exception["authenticated_equivalence"])
+        self.assertEqual(exception["exact_control_policy"],
+                         "explicit_exception")
+        self.assertEqual(set(report["verdict_semantics"]), {
+            "accepted", "observed_checkpoint_equality", "pixel_perfect",
+            "authenticated_equivalence"})
+
+    def test_missing_required_authoritative_observation_is_invalid(self):
+        after = self.model.replay_dir("after-missing-observation",
+                                      self.model.reference)
+        replay_path = after / "replay.json"
+        replay = json.loads(replay_path.read_text())
+        self.assertGreater(len(replay["checkpoints"]), 0)
+        replay["checkpoints"] = replay["checkpoints"][:-1]
+        replay_path.write_text(json.dumps(replay))
+        self.model.rewrite_receipt(after)
+        report = self.acceptance(
+            after=after,
+            claims=self.model.claims(
+                {"mismatched_pixels": 1, "max_channel_error": 7},
+                {"mismatched_pixels": 0, "max_channel_error": 0}))
+        self.assertEqual(report["result"], "invalid_evidence", report)
+        self.assertIn("after_checkpoints",
+                      {item["code"] for item in report["problems"]})
+        self.assertFalse(report["pixel_perfect"], report)
+
+    def test_diagnostic_only_checkpoints_cannot_establish_exactness(self):
+        side = {
+            "identity": {"status": "verified"},
+            "execution_problems": [],
+            "checkpoint_validation": {"status": "ok"},
+            "state_coverage": {"status": "complete"},
+            "checkpoint_binding": "bound",
+            "graph_status": "complete",
+            "checkpoint_request": {"required_entries": 1},
+            "checkpoints": [{
+                "requested": True, "authoritative": False, "status": "match",
+                "event": 4, "target": "10", "resource": "tex:10",
+            }],
+        }
+        axes = correction_accept._qualification_axes(
+            side, allow_final_only=False)
+        self.assertEqual(axes["checkpoint_coverage"], "diagnostic_only")
+        self.assertFalse(axes["checkpoint_pixels_match"])
+        self.assertFalse(axes["authoritative_checkpoint_exact"])
+        self.assertFalse(axes["checkpoint_producer_bound"])
+        self.assertFalse(axes["complete"])
+
+    def test_final_only_requires_an_explicit_policy(self):
+        final_only = CorrectionFixture(self.root / "final-only",
+                                       final_only=True)
+        before = final_only.replay_dir("before", final_only.faulty_pixels())
+        case_dir = final_only.package(before, "case", case_id="final-only")
+        baseline = final_only.baseline(case_dir, "baseline.json")
+        after = final_only.replay_dir("after", final_only.reference)
+        claims = final_only.claims(
+            {"mismatched_pixels": 1, "max_channel_error": 7},
+            {"mismatched_pixels": 0, "max_channel_error": 0})
+        default = correction_accept.evaluate(
+            case_dir=case_dir, baseline_path=baseline,
+            candidate_revision=REVISION, after_replay=after,
+            claimed_before=claims[0], claimed_after=claims[1],
+            baseline_revision="baseline-1",
+            qualification_contract=contract())
+        self.assertEqual(default["result"], "accepted", default)
+        self.assertEqual(default["checkpoint_coverage"],
+                         "final_only_unqualified")
+        self.assertFalse(default["pixel_perfect"], default)
+        self.assertFalse(default["authenticated_equivalence"], default)
+        allowed = correction_accept.evaluate(
+            case_dir=case_dir, baseline_path=baseline,
+            candidate_revision=REVISION, after_replay=after,
+            claimed_before=claims[0], claimed_after=claims[1],
+            baseline_revision="baseline-1",
+            qualification_contract=contract(
+                allow_final_only=True, allow_no_exact_control=True))
+        self.assertEqual(allowed["result"], "accepted", allowed)
+        self.assertEqual(allowed["checkpoint_coverage"], "final_only")
+        self.assertIsNone(allowed["observed_checkpoint_equality"])
+        self.assertTrue(allowed["pixel_perfect"], allowed)
+        self.assertTrue(allowed["authenticated_equivalence"], allowed)
+        self.assertEqual(
+            allowed["after"]["checkpoint_authority"]["requested"], 0)
+
+    def test_partial_graph_cannot_use_final_only_equivalence(self):
+        final_only = CorrectionFixture(self.root / "partial-final-only",
+                                       final_only=True, partial_graph=True)
+        before = final_only.replay_dir("before", final_only.faulty_pixels())
+        case_dir = final_only.package(before, "case", case_id="partial")
+        baseline = final_only.baseline(case_dir, "baseline.json")
+        after = final_only.replay_dir("after", final_only.reference)
+        claims = final_only.claims(
+            {"mismatched_pixels": 1, "max_channel_error": 7},
+            {"mismatched_pixels": 0, "max_channel_error": 0})
+        report = correction_accept.evaluate(
+            case_dir=case_dir, baseline_path=baseline,
+            candidate_revision=REVISION, after_replay=after,
+            claimed_before=claims[0], claimed_after=claims[1],
+            baseline_revision="baseline-1",
+            qualification_contract=contract(allow_final_only=True))
+        self.assertEqual(report["result"], "accepted", report)
+        self.assertEqual(report["after"]["checkpoint_authority"]["graph_status"],
+                         "partial")
+        self.assertEqual(report["checkpoint_coverage"], "graph_incomplete")
+        self.assertFalse(report["pixel_perfect"], report)
+        self.assertFalse(report["authenticated_equivalence"], report)
+        self.assertTrue(any("capture graph is not complete" in item
+                            for item in report["limitations"]))
+
+    def test_partial_graph_with_checkpoints_cannot_be_pixel_perfect(self):
+        model = CorrectionFixture(self.root / "partial-checkpoints",
+                                  partial_graph=True)
+        before = model.replay_dir("before", model.faulty_pixels())
+        case_dir = model.package(before, "case", case_id="partial-checkpoints")
+        baseline = model.baseline(case_dir, "baseline.json")
+        after = model.replay_dir("after", model.reference)
+        report = correction_accept.evaluate(
+            case_dir=case_dir, baseline_path=baseline,
+            candidate_revision=REVISION, after_replay=after,
+            claimed_before={"mismatched_pixels": 1, "max_channel_error": 7},
+            claimed_after={"mismatched_pixels": 0, "max_channel_error": 0},
+            baseline_revision="baseline-1", qualification_contract=contract())
+        self.assertEqual(report["result"], "accepted", report)
+        self.assertEqual(report["checkpoint_coverage"], "graph_incomplete")
+        self.assertFalse(report["pixel_perfect"], report)
+        self.assertFalse(report["authenticated_equivalence"], report)
+        self.assertTrue(any("capture graph is not complete" in item
+                            for item in report["limitations"]))
+
+    def test_writer_rejects_malformed_or_missing_checkpoint_declarations(self):
+        after = self.model.replay_dir("after-writer-missing",
+                                      self.model.reference)
+        replay_path = after / "replay.json"
+        replay = json.loads(replay_path.read_text())
+        first = replay["checkpoints"][0]["file"]
+        (after / first).unlink()
+        with self.assertRaises(gfx_independent_replay.ReplayError):
+            gfx_independent_replay.write_producer_receipt(
+                after, self.model.frame, self.model.producer, replay_path)
+        replay["checkpoints"][0] = "not-an-object"
+        replay_path.write_text(json.dumps(replay))
+        with self.assertRaises(gfx_independent_replay.ReplayError):
+            gfx_independent_replay.write_producer_receipt(
+                after, self.model.frame, self.model.producer, replay_path)
+
+    def test_broken_regression_rejects_but_primary_stays_pixel_perfect(self):
+        after = self.model.replay_dir("after-reg-distinct",
+                                      self.model.reference)
+        case_dir, baseline_path = self.build_model()
+        regression_case, _ = self.model.exact_regression(
+            "regression-distinct", "regression-distinct")
+        intermediate = sorted(
+            (regression_case / "replay").glob("intermediate-*.bgra"))[0]
+        pixels = bytearray(intermediate.read_bytes())
+        pixels[0] ^= 1
+        intermediate.write_bytes(bytes(pixels))
+        self.model.rewrite_receipt(regression_case / "replay")
+        report = correction_accept.evaluate(
+            case_dir=case_dir, baseline_path=baseline_path,
+            candidate_revision=REVISION, after_replay=after,
+            claimed_before={"mismatched_pixels": 1, "max_channel_error": 7},
+            claimed_after={"mismatched_pixels": 0, "max_channel_error": 0},
+            baseline_revision="baseline-1",
+            regressions=[regression_case],
+            claimed_regressions=["regression-distinct"],
+            qualification_contract=contract("regression-distinct"))
+        self.assertIn(report["result"], ("rejected", "invalid_evidence"))
+        self.assertIn("regression_checkpoints",
+                      {item["code"] for item in report["problems"]})
+        self.assertTrue(report["pixel_perfect"], report)
+        self.assertFalse(report["authenticated_equivalence"], report)
+
+    def test_regression_without_checkpoint_binding_is_not_an_exact_control(self):
+        after = self.model.replay_dir("after-reg-binding",
+                                      self.model.reference)
+        case_dir, baseline_path = self.build_model()
+        regression_case, _ = self.model.exact_regression(
+            "regression-binding", "regression-binding")
+        receipt_path = regression_case / "replay" / "producer-receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["result"].pop("checkpoint_files", None)
+        receipt_path.write_text(json.dumps(receipt))
+        report = correction_accept.evaluate(
+            case_dir=case_dir,
+            baseline_path=baseline_path,
+            candidate_revision=REVISION,
+            after_replay=after,
+            claimed_before={"mismatched_pixels": 1, "max_channel_error": 7},
+            claimed_after={"mismatched_pixels": 0, "max_channel_error": 0},
+            baseline_revision="baseline-1",
+            regressions=[regression_case],
+            claimed_regressions=["regression-binding"],
+            qualification_contract=contract("regression-binding"))
+        self.assertEqual(report["result"], "invalid_evidence", report)
+        self.assertIn("regression_checkpoint_binding",
+                      {item["code"] for item in report["problems"]})
+        self.assertFalse(report["authenticated_equivalence"], report)
+
+    def test_persistent_intermediate_difference_is_not_exact(self):
+        # A checkpoint that was divergent in the baseline and remains divergent
+        # is reported separately: partial progress is allowed, but the
+        # candidate still cannot be called pixel perfect.
+        before = self.model.replay_dir("before-corrupt",
+                                       self.model.faulty_pixels())
+        for path in sorted(before.glob("intermediate-*.bgra")):
+            pixels = bytearray(path.read_bytes())
+            pixels[0] ^= 1
+            path.write_bytes(bytes(pixels))
+        self.model.rewrite_receipt(before)
+        case_dir = self.model.package(before, "case-corrupt",
+                                      case_id="corrupt-baseline")
+        baseline = self.model.baseline(case_dir, "baseline-corrupt.json")
+        after = self.model.replay_dir("after-persistent",
+                                      self.model.reference)
+        for path in sorted(after.glob("intermediate-*.bgra")):
+            pixels = bytearray(path.read_bytes())
+            pixels[0] ^= 1
+            path.write_bytes(bytes(pixels))
+        self.model.rewrite_receipt(after)
+        report = correction_accept.evaluate(
+            case_dir=case_dir,
+            baseline_path=baseline,
+            candidate_revision=REVISION,
+            after_replay=after,
+            claimed_before={"mismatched_pixels": 1, "max_channel_error": 7},
+            claimed_after={"mismatched_pixels": 0, "max_channel_error": 0},
+            baseline_revision="baseline-1",
+            qualification_contract=contract())
+        self.assertEqual(report["result"], "accepted", report)
+        self.assertFalse(report["pixel_perfect"], report)
+        self.assertFalse(report["authoritative_checkpoint_exact"], report)
+        self.assertNotIn("authoritative_checkpoint_regression",
+                         {item["code"] for item in report["problems"]})
+
+    def test_empty_published_request_is_invalid(self):
+        after = self.model.replay_dir("after-empty-request",
+                                      self.model.reference)
+        self.rewrite_request(
+            after, lambda request: request.update(checkpoints=[]))
+        report = self.acceptance(
+            after=after,
+            claims=self.model.claims(
+                {"mismatched_pixels": 1, "max_channel_error": 7},
+                {"mismatched_pixels": 0, "max_channel_error": 0}))
+        self.assertEqual(report["result"], "invalid_evidence", report)
+        self.assertIn("missing_required_request",
+                      json.dumps(report["problems"]))
+
+    def test_substituted_published_request_is_invalid(self):
+        after = self.model.replay_dir("after-substituted-request",
+                                      self.model.reference)
+
+        def mutate(request):
+            request["checkpoints"][0]["event"] = 999
+
+        self.rewrite_request(after, mutate)
+        report = self.acceptance(
+            after=after,
+            claims=self.model.claims(
+                {"mismatched_pixels": 1, "max_channel_error": 7},
+                {"mismatched_pixels": 0, "max_channel_error": 0}))
+        self.assertEqual(report["result"], "invalid_evidence", report)
+        self.assertIn("unexpected_request", json.dumps(report["problems"]))
 
     def test_worse_candidate_is_rejected(self):
         after = self.model.replay_dir("after-worse", self.model.partial_pixels())
