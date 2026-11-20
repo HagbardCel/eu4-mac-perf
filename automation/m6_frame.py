@@ -1832,10 +1832,76 @@ def translate_command(args: argparse.Namespace) -> int:
     return 0 if report["ok"] else 2
 
 
+def _replay_evidence(args: argparse.Namespace) -> dict:
+    """Stable identity of the direct replay command for durable evidence."""
+    argv = [sys.executable, "-m", "automation.m6_frame", "replay",
+            "--frame", str(args.frame), "--out", str(args.out)]
+    if getattr(args, "shaders", None):
+        argv += ["--shaders", str(args.shaders)]
+    if getattr(args, "only_event", None) is not None:
+        argv += ["--only-event", str(args.only_event)]
+    return {
+        "entry_point": "automation.m6_frame.replay_command",
+        "tool": "eu4_replay frame",
+        "frame": str(args.frame),
+        "out": str(args.out),
+        "command": argv,
+    }
+
+
+def _replay_mark(evidence: dict | None, **values) -> None:
+    if evidence is None:
+        return
+    for key, value in values.items():
+        if value is not None:
+            evidence[key] = value
+
+
 def replay_command(args: argparse.Namespace) -> int:
+    """Reserve one replay, then execute the direct frame-replay entry point.
+
+    ``eu4_replay frame`` runs this module as a child process.  Without a
+    reservation here that physical GPU execution was invisible to the campaign,
+    while the higher-level independent path charged one.  A nonzero direct
+    replay exit is a failed action: the reservation records the status, exit
+    code, stderr tail and command identity rather than settling success.
+    """
+    from automation import campaign_guard
+
+    evidence = _replay_evidence(args)
+    try:
+        with campaign_guard.attempt(
+                "replays", evidence=evidence) as attempt:
+            code = _replay_command_body(args, evidence=evidence)
+            _replay_mark(evidence, exit_code=int(code))
+            if code != 0:
+                _replay_mark(
+                    evidence,
+                    status=(evidence.get("status")
+                            if evidence.get("status") not in (None, "running")
+                            else "failed"),
+                    stderr_tail=(evidence.get("stderr_tail")
+                                 or f"replay exited {code}"),
+                )
+                if attempt is not None:
+                    attempt.fail(
+                        f"replay exited {code}: "
+                        f"{evidence.get('reason') or ''}",
+                        evidence=evidence)
+            return code
+    except campaign_guard.CampaignRefusal as exc:
+        print(f"replay refused: {exc.kind}: {exc.detail}", file=sys.stderr)
+        return 3
+
+
+def _replay_command_body(args: argparse.Namespace,
+                         evidence: dict | None = None) -> int:
+    _replay_mark(evidence, status="running")
     frame_dir = Path(args.frame).expanduser().resolve()
     out = Path(args.out).expanduser().resolve()
     if out == frame_dir or frame_dir in out.parents or out in frame_dir.parents:
+        _replay_mark(evidence, status="refused",
+                     reason="replay output overlaps the captured frame")
         raise FrameError(
             "replay output must not overlap the captured source frame directory"
         )
@@ -1848,53 +1914,34 @@ def replay_command(args: argparse.Namespace) -> int:
         try:
             trace = load_trace(frame_dir)
         except FrameError as exc:
+            _replay_mark(evidence, status="invalid", reason=str(exc))
             print(json.dumps({"status": "invalid", "reason": str(exc)}, indent=2))
             return 1
         events = trace.get("_events") or []
         if not 0 <= args.only_event < len(events):
-            print(
-                json.dumps(
-                    {
-                        "status": "invalid",
-                        "reason": (
-                            f"event {args.only_event} is outside the "
-                            f"{len(events)}-event frame"
-                        ),
-                    },
-                    indent=2,
-                )
-            )
+            reason = (
+                f"event {args.only_event} is outside the "
+                f"{len(events)}-event frame")
+            _replay_mark(evidence, status="invalid", reason=reason)
+            print(json.dumps({"status": "invalid", "reason": reason}, indent=2))
             return 1
         selected = events[args.only_event]
         if selected.get("kind") != "draw":
-            print(
-                json.dumps(
-                    {
-                        "status": "invalid",
-                        "reason": (
-                            f"event {args.only_event} is a "
-                            f"{selected.get('kind')} event, not a draw"
-                        ),
-                    },
-                    indent=2,
-                )
-            )
+            reason = (f"event {args.only_event} is a "
+                      f"{selected.get('kind')} event, not a draw")
+            _replay_mark(evidence, status="invalid", reason=reason)
+            print(json.dumps({"status": "invalid", "reason": reason}, indent=2))
             return 1
         if not selected.get("pre_image"):
-            print(
-                json.dumps(
-                    {
-                        "status": "invalid",
-                        "reason": (
-                            f"event {args.only_event} has no authentic GL "
-                            "pre-image"
-                        ),
-                    },
-                    indent=2,
-                )
-            )
+            reason = (f"event {args.only_event} has no authentic GL "
+                      "pre-image")
+            _replay_mark(evidence, status="invalid", reason=reason)
+            print(json.dumps({"status": "invalid", "reason": reason}, indent=2))
             return 1
     if out.exists() and not args.force:
+        _replay_mark(evidence, status="refused",
+                     reason=f"replay output already exists: {out}",
+                     stderr_tail=f"replay output already exists: {out}")
         print(f"replay output already exists: {out}", file=sys.stderr)
         return 2
     if out.exists():
@@ -1903,6 +1950,7 @@ def replay_command(args: argparse.Namespace) -> int:
     try:
         host = build_replay_host(force=args.force_build)
     except FrameError as exc:
+        _replay_mark(evidence, status="error", reason=str(exc))
         print(json.dumps({"status": "error", "reason": str(exc)}, indent=2))
         return 1
     command = [
@@ -1929,6 +1977,12 @@ def replay_command(args: argparse.Namespace) -> int:
     ran = subprocess.run(command, capture_output=True, text=True, check=False, timeout=1200)
     result_path = out / "replay.json"
     if ran.returncode != 0 or not result_path.is_file():
+        _replay_mark(evidence, status="error", returncode=ran.returncode,
+                     stderr_tail=(ran.stderr or "")[-2000:],
+                     replay_command=command,
+                     reason=(f"replay host exited {ran.returncode}"
+                             if ran.returncode != 0
+                             else "replay host produced no replay.json"))
         print(
             json.dumps(
                 {
@@ -1941,6 +1995,12 @@ def replay_command(args: argparse.Namespace) -> int:
         )
         return 1
     result = json.loads(result_path.read_text())
+    _replay_mark(evidence, status=result.get("status"),
+                 returncode=ran.returncode,
+                 stderr_tail=(ran.stderr or "")[-2000:],
+                 replay_command=command,
+                 reason=(result.get("status")
+                         if result.get("status") != "ok" else None))
     summary = {
         "status": result.get("status"),
         "events": result.get("events"),

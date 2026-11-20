@@ -3275,24 +3275,47 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                          getattr(args, "sampler_shift_min", 7))}
             if getattr(args, "fault_event", None) is not None:
                 fault["event"] = int(args.fault_event)
+        from automation import campaign_guard
+
         try:
-            report = m7_continuous.run_campaign(
-                frame_dirs, Path(args.replay_out), shaders=shaders,
-                policy=getattr(args, "policy", None),
-                max_frames=max_frames,
-                max_bytes=int(getattr(args, "max_bytes", 0) or 0),
-                max_seconds=float(getattr(args, "max_seconds", 0.0) or 0.0),
-                stop_on_difference=not bool(
-                    getattr(args, "continue_on_difference", False)),
-                package_dir=getattr(args, "package_dir", None),
-                timeout=float(getattr(args, "timeout", 3600.0) or 3600.0),
-                frame_timeout=float(getattr(args, "frame_timeout", 180.0)
-                                    or 180.0),
-                case_max_bytes=int(getattr(args, "case_max_bytes", 0) or 0),
-                require_engine_identity=bool(
-                    getattr(args, "require_engine_identity", False)),
-                fault=fault,
-            )
+            with campaign_guard.attempt(
+                    "replays", count=max(1, len(frame_dirs)),
+                    evidence={"frames": [str(item) for item in frame_dirs],
+                              "supplied_frames": len(frame_dirs),
+                              "max_frames": max_frames}) as attempt_handle:
+                report = m7_continuous.run_campaign(
+                    frame_dirs, Path(args.replay_out), shaders=shaders,
+                    policy=getattr(args, "policy", None),
+                    max_frames=max_frames,
+                    max_bytes=int(getattr(args, "max_bytes", 0) or 0),
+                    max_seconds=float(getattr(args, "max_seconds", 0.0)
+                                      or 0.0),
+                    stop_on_difference=not bool(
+                        getattr(args, "continue_on_difference", False)),
+                    package_dir=getattr(args, "package_dir", None),
+                    timeout=float(getattr(args, "timeout", 3600.0) or 3600.0),
+                    frame_timeout=float(getattr(args, "frame_timeout", 180.0)
+                                        or 180.0),
+                    case_max_bytes=int(getattr(args, "case_max_bytes", 0)
+                                       or 0),
+                    require_engine_identity=bool(
+                        getattr(args, "require_engine_identity", False)),
+                    fault=fault,
+                )
+                if (attempt_handle is not None
+                        and str(report.get("status") or "") in ("failed",
+                                                                "incomplete")):
+                    attempt_handle.fail(
+                        "sequence campaign did not complete: "
+                        + str(report.get("error")
+                              or report.get("stop_reason") or "unknown"),
+                        evidence={
+                            "status": report.get("status"),
+                            "stop_reason": report.get("stop_reason"),
+                            "error": report.get("error"),
+                            "supplied_frames": len(frame_dirs),
+                            "completed_frames": len(report.get("frames") or []),
+                        })
         except m7_continuous.ContinuousError as exc:
             policy_failure = exc.kind in ("policy_unavailable", "policy_invalid")
             return _envelope(

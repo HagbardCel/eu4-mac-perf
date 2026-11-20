@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -74,6 +75,176 @@ def skill_trust(live: Path, commit: str | None) -> str:
     return "trusted"
 
 
+_CANDIDATE_FINGERPRINT_SCHEMA = "eu4-candidate-fingerprint/v1"
+_CANDIDATE_MAX_FILES = 2000
+_CANDIDATE_MAX_BYTES = 64 * 1024 * 1024
+_CANDIDATE_MAX_FILE_BYTES = 8 * 1024 * 1024
+
+# Evidence, replay and generated-output trees are deliberately excluded from
+# the candidate fingerprint: their churn is not a new attempt.  Everything
+# else in the candidate workspace, including untracked files and non-Git
+# workspaces, is hashed with bounded content reads.
+_CANDIDATE_EXCLUDED_TREES = frozenset({
+    ".git", ".local", "artifacts", "results", "evidence", "output", "outputs",
+    "replays", "captures", "diagnostics", "checkpoints", "runs", "__pycache__",
+    ".venv", "node_modules", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+    ".cache", ".tox", "dist", ".build",
+})
+_CANDIDATE_EXCLUDED_SUFFIXES = (".pyc", ".pyo")
+
+
+def _candidate_excluded(relative: Path) -> bool:
+    return any(part in _CANDIDATE_EXCLUDED_TREES for part in relative.parts)
+
+
+def _bounded_sha256(path: Path, limit: int) -> dict:
+    """Content identity of one file, bounded for large artifacts."""
+    size = path.stat().st_size
+    digest = hashlib.sha256()
+    truncated = False
+    with path.open("rb") as handle:
+        if size <= limit:
+            while True:
+                block = handle.read(1024 * 1024)
+                if not block:
+                    break
+                digest.update(block)
+        else:
+            truncated = True
+            half = max(1, limit // 2)
+            digest.update(handle.read(half))
+            handle.seek(max(0, size - half))
+            digest.update(handle.read(half))
+            digest.update(f"truncated:{size}".encode("ascii"))
+    return {"sha256": digest.hexdigest(), "size": size,
+            "content_truncated": truncated}
+
+
+def _candidate_row(workspace: Path, relative: Path, status: str = "") -> dict:
+    path = workspace / relative
+    row = {"path": relative.as_posix(), "status": status}
+    if path.is_symlink():
+        row.update({
+            "kind": "symlink",
+            "target": os.readlink(path),
+            "sha256": hashlib.sha256(
+                os.readlink(path).encode("utf-8", "surrogateescape")
+            ).hexdigest(),
+        })
+        return row
+    if not path.exists():
+        row.update({"kind": "deleted"})
+        return row
+    if path.is_dir():
+        row.update({"kind": "directory"})
+        return row
+    try:
+        row.update({
+            "kind": "file",
+            "mode": ("exec" if os.stat(path).st_mode & 0o100 else "file")})
+        row.update(_bounded_sha256(path, _CANDIDATE_MAX_FILE_BYTES))
+    except OSError as exc:
+        # A racing deletion or unreadable file is still a candidate change;
+        # record the failure instead of making fingerprinting itself fatal.
+        row.update({"kind": "unreadable", "error": type(exc).__name__})
+    return row
+
+
+def candidate_fingerprint(workspace: Path) -> dict:
+    """Bounded content identity of the mutable candidate.
+
+    A Git worktree contributes its HEAD and every changed or untracked path;
+    a seed/non-Git workspace is walked directly.  Evidence and generated output
+    trees are excluded so only substantive candidate changes affect the digest.
+    """
+    workspace = Path(workspace)
+    value = {
+        "schema": _CANDIDATE_FINGERPRINT_SCHEMA,
+        "workspace": str(workspace.resolve()),
+        "kind": "missing",
+        "head": None,
+        "entries": [],
+        "truncated": False,
+    }
+    if not workspace.is_dir():
+        return value
+    if (workspace / ".git").exists():
+        try:
+            status = subprocess.run(
+                ["git", "-C", str(workspace), "status", "--porcelain=v1",
+                 "-z", "--untracked-files=all", "--no-renames"],
+                capture_output=True, check=False, timeout=30)
+            head = subprocess.run(
+                ["git", "-C", str(workspace), "rev-parse", "HEAD"],
+                capture_output=True, text=True, check=False, timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            status = None
+            head = None
+        if status is not None and status.returncode == 0:
+            value["kind"] = "git"
+            value["head"] = ((head.stdout or "").strip()
+                             if head is not None and head.returncode == 0
+                             else "unavailable")
+            entries = []
+            used = 0
+            for record in status.stdout.split(b"\0"):
+                if len(record) < 4:
+                    continue
+                code = record[:2].decode("ascii", "replace")
+                relative = Path(record[3:].decode("utf-8", "surrogateescape"))
+                if not relative.parts or _candidate_excluded(relative):
+                    continue
+                if relative.suffix in _CANDIDATE_EXCLUDED_SUFFIXES:
+                    continue
+                row = _candidate_row(workspace, relative, code)
+                used += int(row.get("size") or 0)
+                if used > _CANDIDATE_MAX_BYTES:
+                    value["truncated"] = True
+                    continue
+                entries.append(row)
+                if len(entries) >= _CANDIDATE_MAX_FILES:
+                    value["truncated"] = True
+                    break
+            value["entries"] = sorted(entries, key=lambda row: row["path"])
+            return value
+    value["kind"] = "directory"
+    entries = []
+    used = 0
+    all_paths = []
+    for directory, subdirectories, files in os.walk(workspace):
+        relative_dir = Path(directory).relative_to(workspace)
+        subdirectories[:] = sorted(
+            name for name in subdirectories
+            if not _candidate_excluded(relative_dir / name))
+        for name in sorted(files):
+            relative = relative_dir / name
+            if _candidate_excluded(relative):
+                continue
+            if relative.suffix in _CANDIDATE_EXCLUDED_SUFFIXES:
+                continue
+            all_paths.append(relative.as_posix())
+            if len(entries) >= _CANDIDATE_MAX_FILES:
+                value["truncated"] = True
+                continue
+            row = _candidate_row(workspace, relative)
+            used += int(row.get("size") or 0)
+            if used > _CANDIDATE_MAX_BYTES:
+                value["truncated"] = True
+                continue
+            entries.append(row)
+    value["entries"] = sorted(entries, key=lambda row: row["path"])
+    value["path_listing_sha256"] = hashlib.sha256(
+        "\0".join(sorted(all_paths)).encode("utf-8", "surrogateescape")
+    ).hexdigest()
+    return value
+
+
+def candidate_digest(workspace: Path) -> str:
+    payload = json.dumps(candidate_fingerprint(workspace), sort_keys=True,
+                         separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 class Runner:
     def __init__(self, campaign: Campaign, agent, run_root: Path, *,
                  clock=None, sleep=None):
@@ -124,6 +295,18 @@ class Runner:
             if state["status"] == "complete" or state.get("pause_reason") in (
                 "checker_modified", "semantic_blocker"):
                 return state
+            if (state.get("no_progress")
+                    and self._no_progress_blocks_resume(state)):
+                # Reconnect, including after an interruption, must not repeat
+                # an unchanged deterministic failure.  Only a substantive
+                # candidate/evidence change permits another charged attempt.
+                self._pause(state, "no_progress")
+                self._log(state, "runner.paused", _rid("runner"),
+                          reason="no_progress", unchanged=True)
+                return state
+            if state.get("no_progress"):
+                # A substantive candidate/evidence change is a new attempt.
+                state.pop("no_progress", None)
             self._log(state, "runner.resumed" if existed else "runner.started", _rid("runner"))
             try:
                 self._loop(state)
@@ -237,6 +420,83 @@ class Runner:
             return text
         return feedback
 
+    def _candidate_digest(self) -> str:
+        """Content identity of the mutable candidate, including progress notes.
+
+        The fingerprint hashes bounded content for tracked, untracked and
+        non-Git workspace files while excluding evidence/output trees, so a
+        changed file permits a new attempt but checkpoint churn does not.
+        """
+        return candidate_digest(self.live)
+
+    def _no_progress_blocks_resume(self, state: dict) -> bool:
+        """True when reconnecting would repeat the same deterministic failure."""
+        previous = state.get("no_progress") or {}
+        fingerprint = previous.get("fingerprint")
+        if not isinstance(fingerprint, dict):
+            return False
+        if fingerprint.get("truncated"):
+            # The bounded fingerprint cannot prove the candidate unchanged;
+            # allow the reconnect to inspect the substantive work.
+            return False
+        current = candidate_fingerprint(self.live)
+        if current.get("truncated"):
+            # The current candidate cannot be proven unchanged; do not block.
+            return False
+        digest = hashlib.sha256(json.dumps(
+            current, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        if fingerprint.get("candidate_sha256") != digest:
+            return False
+        if fingerprint.get("verdict") != state.get("last_verdict"):
+            return False
+        diagnostics = hashlib.sha256(
+            str(state.get("last_diagnostics") or "").encode("utf-8")
+        ).hexdigest()
+        return fingerprint.get("diagnostics_sha256") == diagnostics
+
+    def _no_progress(self, state: dict, outcome: dict) -> bool:
+        """Block an unchanged deterministic failure after one repetition.
+
+        A changed candidate, changed diagnostics or a different verdict is new
+        evidence and permits another round.  The record is durable in state so
+        a resumed runner does not silently retry the same charged work.
+        """
+        if outcome["verdict"] not in ("fail", "inconclusive"):
+            state.pop("no_progress", None)
+            return False
+        candidate = self._candidate_digest()
+        if candidate_fingerprint(self.live).get("truncated"):
+            # A truncated content fingerprint may hide a substantive change.
+            # Never pause solely on it; the next round may inspect the work.
+            state.pop("no_progress", None)
+            save_state(self.state_path, state)
+            return False
+        diagnostics = hashlib.sha256(
+            str(outcome.get("diagnostics") or "").encode("utf-8")).hexdigest()
+        fingerprint = {
+            "verdict": outcome["verdict"],
+            "diagnostics_sha256": diagnostics,
+            "candidate_sha256": candidate,
+        }
+        previous = state.get("no_progress") or {}
+        if (previous.get("fingerprint") == fingerprint
+                and int(previous.get("repeats") or 0) >= 1):
+            state["no_progress"] = {
+                "fingerprint": fingerprint,
+                "repeats": int(previous.get("repeats") or 0) + 1,
+                "at_round": state.get("rounds"),
+            }
+            self._pause(state, "no_progress")
+            return True
+        state["no_progress"] = {
+            "fingerprint": fingerprint,
+            "repeats": 1,
+            "at_round": state.get("rounds"),
+        }
+        save_state(self.state_path, state)
+        return False
+
     def _validate(self, state: dict) -> None:
         if not self._digest_matches(state):
             self._pause(state, "checker_modified")
@@ -269,8 +529,10 @@ class Runner:
         )
         save_state(self.state_path, state)
         if outcome["ok"] and outcome["verdict"] == "pass":
+            state.pop("no_progress", None)
             self._complete(state)
         elif outcome["ok"] and outcome["verdict"] in ("fail", "inconclusive"):
+            self._no_progress(state, outcome)
             return
         elif outcome["ok"] and outcome["verdict"] == "blocked":
             self._pause(state, "semantic_blocker")
