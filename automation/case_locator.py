@@ -325,12 +325,14 @@ def _inside(path: Path, parent: Path) -> bool:
         return True
     except ValueError:
         pass
+    if not parent.exists():
+        # A deleted/prunable worktree must not make its nearest existing
+        # ancestor look like the worktree itself.
+        return False
     current = path
     while not current.exists() and current != current.parent:
         current = current.parent
     target = parent
-    while not target.exists() and target != target.parent:
-        target = target.parent
     probe = current
     while True:
         try:
@@ -360,13 +362,26 @@ def _evidence_root_problem(case_dir: Path, root: Path) -> str | None:
             ["git", "-C", str(case_dir), "worktree", "list", "--porcelain"],
             capture_output=True, text=True, check=False, timeout=10)
         if completed.returncode == 0:
-            worktrees = []
+            entries: list[dict] = []
+            current: dict = {}
             for line in completed.stdout.splitlines():
                 if line.startswith("worktree "):
-                    worktrees.append(Path(line[len("worktree "):]).resolve())
-            for index, tree in enumerate(worktrees):
-                if index == 0:
-                    continue  # main worktree: durable
+                    if current:
+                        entries.append(current)
+                    current = {
+                        "path": Path(line[len("worktree "):]).resolve(),
+                        "prunable": False,
+                    }
+                elif line.startswith("prunable") and current:
+                    current["prunable"] = True
+            if current:
+                entries.append(current)
+            for index, entry in enumerate(entries):
+                if index == 0 or entry["prunable"]:
+                    continue  # main worktree is durable; prunable is gone
+                tree = entry["path"]
+                if not tree.exists():
+                    continue
                 if _same_path(root, tree) or _inside(root, tree):
                     return (f"evidence root {root} is inside a disposable "
                             f"linked worktree ({tree}); use a durable "
@@ -549,21 +564,30 @@ def _identity_view(locator: dict, row: dict) -> dict:
     return row
 
 
+def _without_verification(locator: dict, **values) -> dict:
+    row = {key: value for key, value in locator.items()
+           if key != "verification"}
+    row.update(values)
+    return row
+
+
 def _locator_metadata(root: Path, locator: dict) -> dict:
     """Metadata-only state: containment and payload existence, no hashing."""
     target, problem = _target_path(root, locator)
     if problem is not None or target is None:
-        row = dict(locator, state="invalid_path", detail=problem,
-                   resolved_path=None, verified=False,
-                   verification_ok=False,
-                   current_verification="not_run",
-                   recorded_verification=locator.get("verification"))
+        row = _without_verification(
+            locator, state="invalid_path", detail=problem,
+            resolved_path=None, verified=False, verification_ok=False,
+            current_verification="not_run",
+            recorded_verification=locator.get("verification"))
     else:
         state = "available" if target.is_dir() else "missing_payload"
-        row = dict(locator, state=state, resolved_path=str(target),
-                   verified=False, verification_ok=False,
-                   current_verification="not_run",
-                   recorded_verification=locator.get("verification"))
+        row = _without_verification(
+            locator, state=state, resolved_path=str(target),
+            verified=False, verification_ok=False,
+            current_verification=("not_run" if state == "available"
+                                  else "missing_payload"),
+            recorded_verification=locator.get("verification"))
     return _identity_view(locator, row)
 
 
@@ -571,13 +595,13 @@ def _resolve_match(root: Path, locator: dict) -> dict:
     """Full verification of one selected case."""
     target, problem = _target_path(root, locator)
     if problem is not None or target is None:
-        return _identity_view(locator, dict(
+        return _identity_view(locator, _without_verification(
             locator, state="invalid_path", detail=problem,
             resolved_path=None, verified=False, verification_ok=False,
             current_verification="not_run",
             recorded_verification=locator.get("verification")))
     if not target.is_dir():
-        return _identity_view(locator, dict(
+        return _identity_view(locator, _without_verification(
             locator, state="missing_payload", resolved_path=str(target),
             verified=False, verification_ok=False,
             current_verification="missing_payload",

@@ -383,6 +383,7 @@ class CaseLocatorTests(unittest.TestCase):
         self.assertFalse(row["verification_ok"])
         self.assertEqual(row["current_verification"], "not_run")
         self.assertTrue(row["recorded_verification"]["ok"])
+        self.assertNotIn("verification", row)
         located = case_locator.locate(self.evidence, session_id="session-1")
         self.assertEqual(located["state"], "digest_mismatch", located)
         self.assertEqual(located["matches"][0]["current_verification"],
@@ -426,6 +427,25 @@ class CaseLocatorTests(unittest.TestCase):
         with self.assertRaises(case_locator.CaseLocatorError) as raised:
             case_locator.publish(case, self.evidence)
         self.assertEqual(raised.exception.kind, "locator_corrupt")
+
+    def test_missing_worktree_parent_does_not_create_false_containment(self) -> None:
+        self.assertFalse(case_locator._inside(
+            Path("/tmp/durable-evidence"), Path("/tmp/missing-worktree")))
+
+    def test_prunable_linked_worktree_does_not_block_external_roots(self) -> None:
+        from types import SimpleNamespace
+        output = (
+            "worktree /repo\n\n"
+            "worktree /repo/linked\n"
+            "HEAD deadbeef\n"
+            "prunable gitdir file points to non-existent location\n\n"
+        )
+        with mock.patch("automation.case_locator.subprocess.run",
+                        return_value=SimpleNamespace(
+                            returncode=0, stdout=output)):
+            problem = case_locator._evidence_root_problem(
+                Path("/repo"), Path("/external/evidence"))
+        self.assertIsNone(problem)
 
     def test_symlink_in_source_is_refused_before_copying(self) -> None:
         case = make_case(self.root / "producer" / "case")
