@@ -212,6 +212,26 @@ def _checkpoint_key(item: dict) -> tuple[int, str]:
     return (_as_int(item.get("event"), -1), str(item.get("target")))
 
 
+def _valid_producer_events(value) -> bool:
+    return (isinstance(value, list)
+            and all(isinstance(item, int) and not isinstance(item, bool)
+                    for item in value))
+
+
+def _producer_event_list(value) -> list[int]:
+    """A producer list from untrusted evidence, without raising on scalars.
+
+    A malformed ``producer_events`` value (an integer, object or string) is
+    invalid evidence, not a reason to traceback while building an invalid
+    checkpoint record.  Callers that need strict validation still report the
+    malformed container explicitly.
+    """
+    if not isinstance(value, list):
+        return []
+    return [item for item in value
+            if isinstance(item, int) and not isinstance(item, bool)]
+
+
 def _invalid_checkpoint(item: dict, graph: dict, reason: str,
                         *, requested: bool) -> dict:
     target = str(item.get("target"))
@@ -227,7 +247,8 @@ def _invalid_checkpoint(item: dict, graph: dict, reason: str,
         "height": _as_int(item.get("reference_height")
                           or item.get("height"), 0),
         "format": item.get("format") or resource.get("format"),
-        "producer_events": list(item.get("producer_events") or []),
+        "producer_events": _producer_event_list(
+            item.get("producer_events")),
         "metal_file": str(item.get("_metal_path") or ""),
         "reference_file": str(item.get("_reference_path") or ""),
         "authoritative": True,
@@ -360,6 +381,13 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
                 "target": key[1],
                 "expected_resource": expected_resource,
                 "actual_resource": item.get("resource")})
+            continue
+        if ("producer_events" in item
+                and not _valid_producer_events(item.get("producer_events"))):
+            problems.append({
+                "kind": "malformed_request", "event": key[0],
+                "target": key[1],
+                "reason": "producer_events is not an integer array"})
             continue
         requested[key] = item
 
@@ -546,7 +574,8 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
             "width": width,
             "height": height,
             "format": internal or None,
-            "producer_events": list(wanted.get("producer_events") or []),
+            "producer_events": _producer_event_list(
+                wanted.get("producer_events")),
             "metal_file": str(metal_path),
             "reference_file": str(reference_path),
             "authoritative": not channel_swap,
@@ -2047,7 +2076,16 @@ def _checkpoint_request_plan_problems(graph: dict,
                     "the validated capture graph",
                     severity="invalid"))
                 break
-        published_producers = item.get("producer_events") or []
+        raw_producers = item.get("producer_events", [])
+        if ("producer_events" in item
+                and not _valid_producer_events(raw_producers)):
+            problems.append(_checkpoint_problem(
+                "malformed_request",
+                f"checkpoint ({key[0]}, {key[1]}) producer history is not "
+                "an integer array",
+                severity="invalid"))
+            continue
+        published_producers = raw_producers if raw_producers is not None else []
         # ``writer_authority`` marks requests produced after writer history was
         # added to the plan.  A legacy published request has no such marker; its
         # empty producer list is retained as declared legacy evidence rather
@@ -2061,6 +2099,7 @@ def _checkpoint_request_plan_problems(graph: dict,
                     severity="invalid"))
             elif (not isinstance(published_producers, list)
                   or any(not isinstance(value, int)
+                         or isinstance(value, bool)
                          for value in published_producers)
                   or published_producers != (wanted.get("producer_events")
                                              or [])):
@@ -2075,6 +2114,7 @@ def _checkpoint_request_plan_problems(graph: dict,
             # checked against the graph rather than trusted by age.
             if (not isinstance(published_producers, list)
                     or any(not isinstance(value, int)
+                           or isinstance(value, bool)
                            for value in published_producers)):
                 problems.append(_checkpoint_problem(
                     "malformed_request",
@@ -2131,11 +2171,26 @@ def _checkpoint_binding_problems(metal_dir: Path, request: dict,
     problems: list[dict] = []
     bindings: list[str] = []
 
+    if shadow is not None and not isinstance(shadow, dict):
+        problems.append(_checkpoint_problem(
+            "malformed_evidence",
+            "shadow report is not an object",
+            severity="invalid"))
+        shadow = None
+    if seal is not None and not isinstance(seal, dict):
+        problems.append(_checkpoint_problem(
+            "malformed_evidence",
+            "capture seal is not an object",
+            severity="invalid"))
+        seal = None
     if not isinstance(request, dict):
-        return [_checkpoint_problem(
-            "malformed_request",
-            "checkpoint request is not an object",
-            severity="invalid")], []
+        return [
+            _checkpoint_problem(
+                "malformed_request",
+                "checkpoint request is not an object",
+                severity="invalid"),
+            *problems,
+        ], []
     request_sha = _sha(path) if path.is_file() else None
     raw_checkpoints = request.get("checkpoints")
     if raw_checkpoints is None:

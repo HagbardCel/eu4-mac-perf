@@ -438,6 +438,75 @@ class ToolTests(unittest.TestCase):
             len(str(value["failure"].get("detail") or "").encode("utf-8")),
             agent_tools.COMPACT_OUTPUT_CAP)
 
+    def test_pathological_report_locator_cannot_break_the_cap(self):
+        # The report locator, frame record and arbitrary outcome metadata are
+        # part of the envelope.  A caller-supplied multi-kilobyte locator must
+        # be reduced instead of bypassing the hard cap.
+        from automation import agent_tools as tools
+        huge = "report/" + "z" * 20_000
+        envelope = tools._envelope(
+            "eu4_replay", "ok", {
+                "classification": "qualified_difference",
+                "qualified": False,
+                "report": huge,
+                "frame": {"path": huge},
+                "first_divergence": {
+                    "kind": "pixel", "event": 15, "target": "0",
+                    "resource": "fb:0", "operation": "draw",
+                    "next_checkpoint": huge,
+                },
+                "checkpoint_validation": {"status": "ok",
+                                          "requested": huge},
+            },
+            diagnostic="complete", verdict="different", evidence="valid",
+            qualified=False)
+        envelope["outcome"]["note"] = huge
+        envelope["failure"]["detail"] = huge
+        bounded = tools._bound_replay_compact(envelope)
+        size = tools._utf8_len(bounded)
+        self.assertLessEqual(size, tools.COMPACT_OUTPUT_CAP)
+        self.assertEqual(bounded["result"]["output_bytes"], size)
+        self.assertTrue(bounded["result"]["report"].startswith("report/"))
+        first = bounded["result"]["first_divergence"]
+        self.assertEqual(first["event"], 15)
+        self.assertEqual(first["kind"], "pixel")
+        self.assertEqual(first["resource"], "fb:0")
+
+    def test_nested_metadata_still_preserves_core_evidence(self):
+        # A legal nested outcome value must not force the evidence-free stub.
+        from automation import agent_tools as tools
+        huge = "report/" + "z" * 20_000
+        nested = {
+            f"a{index}": {f"b{item}": "value-0123456789" for item in range(64)}
+            for index in range(64)
+        }
+        envelope = tools._envelope(
+            "eu4_replay", "ok", {
+                "schema": "gfx-independent-replay/v1",
+                "classification": "qualified_difference",
+                "qualified": False,
+                "report": huge,
+                "first_divergence": {
+                    "kind": "pixel", "event": 15, "target": "0",
+                    "resource": "fb:0", "operation": "draw",
+                    "next_checkpoint": {"event": 99},
+                },
+            },
+            diagnostic="complete", verdict="different", evidence="valid",
+            qualified=False)
+        envelope["outcome"]["evidence"] = nested
+        bounded = tools._bound_replay_compact(envelope)
+        size = tools._utf8_len(bounded)
+        self.assertLessEqual(size, tools.COMPACT_OUTPUT_CAP)
+        self.assertIn("result", bounded)
+        self.assertEqual(bounded["result"]["output_bytes"], size)
+        self.assertTrue(bounded["result"]["report"].startswith("report/"))
+        first = bounded["result"]["first_divergence"]
+        self.assertEqual(first["event"], 15)
+        self.assertIsInstance(first["event"], int)
+        self.assertEqual(first["kind"], "pixel")
+        self.assertIn("next_checkpoint", first)
+
     def test_compact_replay_view_is_bounded(self):
         from automation import agent_tools as tools
         report = self.independent_replay_report("qualified_difference")

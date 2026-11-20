@@ -2752,6 +2752,44 @@ def _truncate_utf8(value, max_bytes: int) -> str:
     return ""
 
 
+def _truncate_tree_strings(value, max_bytes: int):
+    """Recursively cap every string in a JSON-like value.
+
+    The envelope cap must survive arbitrary metadata, not only the reason
+    fields.  A caller can supply a report locator, a frame record or an outcome
+    string that is itself larger than the cap; truncating only the documented
+    fields leaves the complete serialization unbounded.  This helper is the
+    last-resort reducer, so it keeps every structural field and every numeric
+    evidence value while bounding free text.
+    """
+    if isinstance(value, str):
+        return _truncate_utf8(value, max_bytes)
+    if isinstance(value, list):
+        return [_truncate_tree_strings(item, max_bytes) for item in value[:64]]
+    if isinstance(value, dict):
+        return {key: _truncate_tree_strings(item, max_bytes)
+                for key, item in list(value.items())[:64]}
+    return value
+
+
+def _bounded_scalar(value, max_bytes: int = 256):
+    """Bound one evidence value without changing numeric identity.
+
+    Numbers and booleans stay numbers so an agent can compare an event id or a
+    confidence value; free text is truncated; structured values are serialized
+    and then truncated so a nested container cannot bypass the cap.
+    """
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return _truncate_utf8(value, max_bytes)
+    try:
+        text = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        text = str(value)
+    return _truncate_utf8(text, max_bytes)
+
+
 def _bound_replay_compact(envelope: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict:
     """Hard-bound the complete serialized replay envelope to ``cap`` bytes.
 
@@ -2850,8 +2888,16 @@ def _bound_replay_compact(envelope: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict
                     return {key: cut(item) for key, item in value.items()}
                 return value
 
+            # Identity fields are tiny and semantically load-bearing.  Never
+            # reduce them to an empty string while shrinking free text: an
+            # agent must still see *what kind* of divergence and which
+            # resource it belongs to.
+            identity = {"kind", "target", "resource", "operation", "program",
+                        "producer_event", "confidence", "unresolved_interval"}
             changed = False
             for key in list(first):
+                if key in identity:
+                    continue
                 before = first[key]
                 after = cut(before)
                 if after != before:
@@ -2950,6 +2996,74 @@ def _bound_replay_compact(envelope: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict
             body().pop("final", None)
             body().pop("frame", None)
             body().pop("next_action", None)
+            finalize()
+        # Last-resort bound over *every* string in the envelope.  The earlier
+        # reductions name the fields that normally grow; metadata supplied by
+        # a caller (a very long report locator, frame record or outcome value)
+        # is not one of them.  Keep the structure and numeric evidence, cap
+        # free text, and only then fall back to a minimal record.  This is what
+        # makes the returned serialization <= cap for adversarial input.
+        for limit in (1024, 256, 64):
+            if fits():
+                break
+            envelope = _truncate_tree_strings(envelope, limit)
+            finalize()
+        if not fits():
+            # Build a fresh minimal record instead of shrinking the current
+            # one to empty strings.  Classification, the first divergent event
+            # and the report locator are the core evidence an agent needs; they
+            # survive here in bounded form even when arbitrary metadata does
+            # not.
+            first = first_divergence()
+            core_first = {
+                key: _bounded_scalar(first.get(key), 256)
+                for key in ("kind", "event", "target", "resource", "operation",
+                            "producer_event", "confidence", "next_checkpoint",
+                            "recommended_checkpoint")
+                if first.get(key) is not None}
+            envelope = {
+                "schema": envelope.get("schema"),
+                "tool": envelope.get("tool"),
+                "ok": envelope.get("ok"),
+                "status": envelope.get("status"),
+                "reason": "",
+                "result": {
+                    "schema": body().get("schema"),
+                    "classification": body().get("classification"),
+                    "qualified": body().get("qualified"),
+                    "first_divergence": core_first,
+                    "report": _truncate_utf8(
+                        str(body().get("report") or ""), 256),
+                    "truncated": True,
+                    "output_cap_bytes": cap,
+                    "output_bytes": 0,
+                },
+                "outcome": {
+                    key: _bounded_scalar(
+                        (envelope.get("outcome") or {}).get(key), 256)
+                    for key in ("execution", "diagnostic",
+                                "diagnostic_complete", "verdict", "evidence",
+                                "qualified", "failure_kind", "failure_class")},
+                "failure": {
+                    key: _bounded_scalar(
+                        (envelope.get("failure") or {}).get(key), 256)
+                    for key in ("kind", "class")},
+                "runtime": _truncate_tree_strings(
+                    envelope.get("runtime"), 128),
+                "truncated": True,
+                "output_cap_bytes": cap,
+            }
+            envelope = _truncate_tree_strings(envelope, 256)
+            finalize()
+        if not fits():
+            # A cap below the fixed record skeleton cannot carry classification
+            # or a locator.  Keep the truncation contract and an accurate
+            # emitted size; never return an oversized envelope.
+            envelope = {
+                "truncated": True,
+                "output_cap_bytes": cap,
+                "result": {"output_bytes": 0, "truncated": True},
+            }
             finalize()
         return envelope
 
