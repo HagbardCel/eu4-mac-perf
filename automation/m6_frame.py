@@ -2206,21 +2206,14 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
         "source": str(request_path),
         "graph_status": graph.get("status"),
     }
-    def artifact_digest(directory: Path) -> tuple[str, int]:
-        digest = hashlib.sha256()
-        count = 0
-        for path in sorted(directory.rglob("*")):
-            if not path.is_file() or path.name in ("ready", "shader-receipt.json"):
-                continue
-            digest.update(str(path.relative_to(directory)).encode())
-            digest.update(b"\0")
-            digest.update(_sha256(path).encode())
-            digest.update(b"\n")
-            count += 1
-        return digest.hexdigest(), count
-
-    shaders_json = shader_dir / "shaders.json"
-    artifacts_sha256, artifact_count = artifact_digest(shader_dir)
+    try:
+        identity = shader_receipt_identity(shader_dir, required=True)
+    except FrameError as exc:
+        result["status"] = "failed"
+        result["error"] = str(exc)
+        (shadow / "coordinator.json").write_text(
+            json.dumps(result, indent=2) + "\n")
+        return 1
     receipt = {
         "schema": "m7-shadow-shader-receipt/v1",
         "capture_frame_id": seal.get("capture_frame_id"),
@@ -2229,9 +2222,7 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
         "trace_manifest_sha256": seal.get("manifest_sha256"),
         "event_stream_sha256": seal.get("event_stream_sha256"),
         "event_stream_bytes": seal.get("event_stream_bytes"),
-        "shaders_json_sha256": _sha256(shaders_json),
-        "artifacts_sha256": artifacts_sha256,
-        "artifact_count": artifact_count,
+        **identity,
         "checkpoint_request_file": request_path.name,
         "checkpoint_request_sha256": request_sha256,
         "checkpoint_count": len(request.get("checkpoints") or []),
@@ -2471,8 +2462,35 @@ def artifact_digest(directory: Path) -> tuple[str, int]:
     return digest.hexdigest(), count
 
 
-# Backwards-compatible private alias for callers in this module.
-_artifact_digest = artifact_digest
+def shader_receipt_identity(directory: Path | str | None, *,
+                            required: bool = False) -> dict:
+    """Canonical shader-report and shader-artifact identity for a receipt.
+
+    This is the single owner of the three fields written into live receipts.
+    ``required`` is used at live publication: a missing directory or
+    ``shaders.json`` fails instead of yielding an empty identity that could be
+    mistaken for a successful receipt.  Optional and legacy readers get the
+    empty identity and keep their own missing-versus-tampered distinction.
+    """
+    empty = {"shaders_json_sha256": "", "artifacts_sha256": "",
+             "artifact_count": 0}
+    if directory is None:
+        if required:
+            raise FrameError("a translated shader directory is required")
+        return empty
+    root = Path(directory)
+    report = root / "shaders.json"
+    if not root.is_dir() or not report.is_file():
+        if required:
+            raise FrameError(
+                f"translated shader report is missing: {report}")
+        return empty
+    artifacts_sha256, artifact_count = artifact_digest(root)
+    return {
+        "shaders_json_sha256": _sha256(report),
+        "artifacts_sha256": artifacts_sha256,
+        "artifact_count": artifact_count,
+    }
 
 
 def _continuous_frame_coordinator(
@@ -2516,7 +2534,7 @@ def _continuous_frame_coordinator(
     request_path = output / "checkpoint-request.json"
     request = gfx_frame_graph.write_checkpoint_request(graph, request_path)
     request_sha256 = _sha256(request_path)
-    artifacts_sha256, artifact_count = _artifact_digest(shader_dir)
+    identity = shader_receipt_identity(shader_dir, required=True)
     receipt = {
         "schema": "m7-shadow-shader-receipt/v1",
         "capture_frame_id": seal.get("capture_frame_id"),
@@ -2525,9 +2543,7 @@ def _continuous_frame_coordinator(
         "trace_manifest_sha256": seal.get("manifest_sha256"),
         "event_stream_sha256": seal.get("event_stream_sha256"),
         "event_stream_bytes": seal.get("event_stream_bytes"),
-        "shaders_json_sha256": _sha256(shader_dir / "shaders.json"),
-        "artifacts_sha256": artifacts_sha256,
-        "artifact_count": artifact_count,
+        **identity,
         "checkpoint_request_file": request_path.name,
         "checkpoint_request_sha256": request_sha256,
         "checkpoint_count": len(request.get("checkpoints") or []),

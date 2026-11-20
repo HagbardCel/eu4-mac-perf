@@ -307,9 +307,20 @@ def analyze(
                     if isinstance(value, (int, float)):
                         tokens[key] += int(value)
         elif kind == "goal/change":
+            goal = data.get("goal") if isinstance(data.get("goal"), dict) else {}
+            cleared = (data.get("cleared")
+                       if isinstance(data.get("cleared"), dict) else {})
+            operation = data.get("operation")
+            phase = goal.get("phase")
+            if phase is None and operation == "clear":
+                # DSH clear tombstones carry the identity under ``cleared``
+                # and no goal snapshot.
+                phase = "cleared"
             goal_events.append({
-                "operation": data.get("operation"),
-                "phase": (data.get("goal") or {}).get("phase"),
+                "goal_id": goal.get("id") or cleared.get("id"),
+                "revision": goal.get("revision") or cleared.get("revision"),
+                "operation": operation,
+                "phase": phase,
                 "time": moment,
             })
         elif kind == "command/run":
@@ -469,7 +480,110 @@ def analyze(
     cache_read = tokens["cacheReadTokens"]
     total_tokens = tokens["totalTokens"] or (input_tokens + cache_read + tokens["outputTokens"])
     goal_operations = [row["operation"] for row in goal_events]
-    last_goal = goal_events[-1] if goal_events else None
+    terminal_phases = {
+        "complete": "completed",
+        "completed": "completed",
+        "blocked": "blocked",
+        "cancelled": "cancelled",
+        "cleared": "cleared",
+    }
+    goal_ids: list[str] = []
+    for row in goal_events:
+        goal_id = row.get("goal_id")
+        if goal_id is not None and goal_id not in goal_ids:
+            goal_ids.append(goal_id)
+    identity_missing = bool(goal_events) and any(
+        row.get("goal_id") is None for row in goal_events)
+    selected_id = goal_ids[-1] if goal_ids else None
+    if selected_id is not None:
+        selected_events = [row for row in goal_events
+                           if row.get("goal_id") == selected_id]
+    elif identity_missing:
+        # Without ids we cannot separate sequential goals.  Use the only
+        # grouping available and state the limitation instead of silently
+        # attributing one goal's start to another.
+        selected_events = list(goal_events)
+    else:
+        selected_events = []
+    last_goal = selected_events[-1] if selected_events else None
+    last_phase = last_goal["phase"] if last_goal else None
+    # A clear tombstone may follow a substantive terminal phase (complete or
+    # blocked).  Keep that outcome and end time; the clear is recorded
+    # separately rather than replacing the result.
+    cleared_event = last_goal if last_phase == "cleared" else None
+    substantive_phase = last_phase
+    if cleared_event is not None:
+        for row in reversed(selected_events[:-1]):
+            phase = row.get("phase")
+            if (phase not in (None, "cleared")
+                    and row.get("operation") != "edit"):
+                substantive_phase = phase
+                break
+    terminal_event = None
+    terminal_operations = {"complete", "block", "clear", "cancel",
+                           "cancelled"}
+    if substantive_phase in terminal_phases:
+        # The transition that produced the current phase, not an arbitrary
+        # historical terminal phase or a later edit of the same phase.
+        for row in reversed(selected_events):
+            if (row.get("phase") == substantive_phase
+                    and row.get("operation") in terminal_operations):
+                terminal_event = row
+                break
+        if terminal_event is None:
+            for row in reversed(selected_events):
+                if (row.get("phase") == substantive_phase
+                        and row.get("operation") != "edit"):
+                    terminal_event = row
+                    break
+    elif cleared_event is not None:
+        terminal_event = cleared_event
+    start_event = next(
+        (row for row in selected_events if row.get("operation") == "create"),
+        None)
+    goal_start = start_event["time"] if start_event else None
+    goal_end = terminal_event["time"] if terminal_event else None
+    window_end = max(timestamps) if timestamps else None
+    duration_kind = "no_goal" if not selected_events else (
+        "terminal" if terminal_event is not None else "ongoing")
+    duration_invalid = False
+    goal_elapsed = None
+    if substantive_phase in terminal_phases and terminal_event is None:
+        duration_kind = "unknown_end"
+    elif terminal_event is not None:
+        if goal_start is None:
+            duration_kind = "unknown_start"
+        elif goal_end is None:
+            duration_kind = "unknown_timestamp"
+        else:
+            goal_elapsed = goal_end - goal_start
+    elif selected_events:
+        # A non-terminal goal (active or paused) has no end event.  Report
+        # observed elapsed time through the observation window, explicitly
+        # labelled ongoing.
+        if goal_start is None:
+            # The window may start after the goal was created (for example
+            # ``--turn 2``); a zero-length fallback would fabricate a lifetime.
+            duration_kind = "unknown_start"
+        elif window_end is not None:
+            goal_elapsed = window_end - goal_start
+        else:
+            duration_kind = "unknown_timestamp"
+    if goal_elapsed is not None and goal_elapsed < 0:
+        # Out-of-order events cannot yield a negative duration.
+        goal_elapsed = None
+        duration_invalid = True
+        duration_kind = "invalid_order"
+    if last_goal is None:
+        # No goal record exists: turn completion is reported separately and is
+        # never promoted to a goal outcome.
+        goal_outcome = "no_goal"
+    elif substantive_phase in terminal_phases:
+        goal_outcome = terminal_phases[substantive_phase]
+    elif last_phase == "active":
+        goal_outcome = "active"
+    else:
+        goal_outcome = str(last_phase or "unknown")
     value = {
         "schema": SCHEMA,
         "session": session,
@@ -562,19 +676,58 @@ def analyze(
                                           if total_tokens else None),
         },
         "goal": {
+            "goal_schema": "dsh-goal-timeline/v2",
             "operations": goal_operations,
+            "goal_ids": goal_ids,
+            "goal_count": len(goal_ids) + (1 if identity_missing else 0),
+            "selected_goal_id": selected_id,
+            "identity_missing": identity_missing,
+            "selected_operations": [row["operation"]
+                                    for row in selected_events],
             "last_operation": last_goal["operation"] if last_goal else None,
-            "last_phase": last_goal["phase"] if last_goal else None,
-            "active": bool(last_goal and last_goal["phase"] == "active"),
-            "terminal": bool(last_goal and last_goal["phase"] in (
-                "complete", "completed", "blocked", "cancelled")),
+            "last_phase": last_phase,
+            "active": bool(last_goal and last_phase == "active"),
+            "paused": bool(last_goal and last_phase == "paused"),
+            "cleared": bool(cleared_event is not None),
+            "cleared_utc": (_iso(cleared_event["time"])
+                            if cleared_event is not None else None),
+            "substantive_phase": substantive_phase,
+            "terminal": bool(last_goal and (
+                substantive_phase in terminal_phases
+                or cleared_event is not None)),
+            "started_utc": _iso(goal_start),
+            "ended_utc": (_iso(goal_end)
+                          if terminal_event is not None
+                          and not duration_invalid else None),
+            "duration_kind": duration_kind,
+            "duration_invalid": duration_invalid,
+            "duration_seconds": (round(goal_elapsed, 3)
+                                 if goal_elapsed is not None else None),
+            "observed_until_utc": (_iso(window_end)
+                                   if duration_kind == "ongoing" else None),
             "turn_end_reasons": turn_end_reasons,
             "last_turn_reason": (turn_end_reasons[-1]
                                  if turn_end_reasons else None),
-            "outcome": (
-                "active" if last_goal and last_goal["phase"] == "active"
-                else turn_end_reasons[-1] if turn_end_reasons
-                else last_goal["phase"] if last_goal else "unknown"),
+            # The final goal/change record for the selected goal owns the
+            # outcome.  A completed turn after a blocked goal must not read as
+            # a completed migration.
+            "outcome": goal_outcome,
+            "limitations": (
+                ["goal events have no stable goal id; sequential goals cannot "
+                 "be separated"] if identity_missing else []
+            ) + (
+                ["goal event timestamps are missing or out of order"] if
+                duration_kind in ("unknown_timestamp", "invalid_order") else []
+            ) + (
+                [("the selected goal has no create event in this window; its "
+                  "start is unknown") if start_event is None else
+                 ("the selected goal's create event has no timestamp; its "
+                  "start is unknown")] if duration_kind == "unknown_start"
+                else []
+            ) + (
+                ["the selected goal's terminal transition is outside this "
+                 "window; its end is unknown"] if duration_kind == "unknown_end"
+                else []),
         },
     }
     value["summary"] = execution_summary(value)
@@ -609,20 +762,37 @@ def execution_summary(value: dict) -> dict:
     goal = value.get("goal") or {}
     failures = calls.get("failed") or 0
     launch_count = launches.get("count")
-    if launch_count is None:
+    goal_outcome = str(goal.get("outcome") or "unknown")
+    if goal.get("terminal"):
+        # A bounded diagnosis that ends blocked stays blocked even when the
+        # turn itself completed normally.
+        outcome = goal_outcome
+    elif launch_count is None:
         outcome = "unknown"
     elif launch_count:
         outcome = "launch_attempt"
     elif failures:
-        outcome = "blocked" if goal.get("terminal") else "failed_tool_calls"
-    elif goal.get("outcome") == "complete":
-        outcome = "diagnosis_or_correction"
-    elif goal.get("outcome") == "blocked":
-        outcome = "blocked"
-    elif goal.get("outcome") == "active":
+        outcome = "failed_tool_calls"
+    elif goal_outcome == "active":
         outcome = "in_progress"
     else:
-        outcome = str(goal.get("outcome") or "unknown")
+        outcome = goal_outcome
+    actions_attempted = [
+        name for name, performed in (
+            ("launch", bool(launch_count)),
+            ("replay", bool(by_tool.get("eu4_replay"))),
+            ("capture", bool(by_tool.get("eu4_capture"))),
+            ("test", bool(tests.get("test_invocations"))),
+        ) if performed
+    ]
+    if len(actions_attempted) > 1:
+        action_attempted = "multiple"
+    elif actions_attempted:
+        action_attempted = actions_attempted[0]
+    elif launch_count is None:
+        action_attempted = "unknown"
+    else:
+        action_attempted = "none"
     return {
         "schema": "dsh-execution-summary/v1",
         "tool_calls": {
@@ -635,6 +805,9 @@ def execution_summary(value: dict) -> dict:
             "wall_seconds": (value.get("window") or {}).get("elapsed_seconds"),
             "turns": (value.get("window") or {}).get("turns"),
             "model_calls": (value.get("window") or {}).get("model_calls"),
+            "goal_seconds": goal.get("duration_seconds"),
+            "goal_duration_kind": goal.get("duration_kind"),
+            "goal_duration_invalid": goal.get("duration_invalid"),
         },
         "eu4_launches": launch_count,
         "replays": {
@@ -665,6 +838,11 @@ def execution_summary(value: dict) -> dict:
             "note": "checkpoint and readback cost is in the replay report",
         },
         "outcome": outcome,
+        "goal_outcome": goal_outcome,
+        "turn_outcome": goal.get("last_turn_reason"),
+        "launch_attempted": bool(launch_count),
+        "actions_attempted": actions_attempted,
+        "action_attempted": action_attempted,
         "token_telemetry": "excluded until the measurement method is validated",
     }
 

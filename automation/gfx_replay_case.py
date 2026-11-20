@@ -1252,24 +1252,6 @@ def _required_prefix(frames: list[Path]) -> tuple[list[Path], dict]:
         "carried_resources": sorted(carried_union),
     }
 
-def _receipt_shader_identity(shader_dir: Path | None) -> dict:
-    """Canonical shader-report and shader-artifact identity for a receipt."""
-    if shader_dir is None or not Path(shader_dir).is_dir():
-        return {"shaders_json_sha256": "", "artifacts_sha256": "",
-                "artifact_count": 0}
-    directory = Path(shader_dir)
-    report = directory / "shaders.json"
-    if not report.is_file():
-        return {"shaders_json_sha256": "", "artifacts_sha256": "",
-                "artifact_count": 0}
-    artifacts_sha256, artifact_count = m6_frame.artifact_digest(directory)
-    return {
-        "shaders_json_sha256": _sha(report),
-        "artifacts_sha256": artifacts_sha256,
-        "artifact_count": artifact_count,
-    }
-
-
 def _receipt_identity_problems(
     receipt: dict,
     *,
@@ -1333,7 +1315,7 @@ def _receipt_identity_problems(
             "sequence",
             f"receipt sequence {receipt_sequence!r} is not one of "
             f"{sorted(allowed_sequences)}"))
-    for field, value in _receipt_shader_identity(shader_dir).items():
+    for field, value in m6_frame.shader_receipt_identity(shader_dir).items():
         check(field, value)
     return problems
 
@@ -1464,7 +1446,7 @@ def _checkpoint_setup(frames: list[Path], case_dir: Path,
         receipt = {
             "schema": "m7-shadow-shader-receipt/v1",
             **identity,
-            **_receipt_shader_identity(frame / "shaders"),
+            **m6_frame.shader_receipt_identity(frame / "shaders"),
             "checkpoint_request_file": request_path.name,
             "checkpoint_request_sha256": request_sha,
             "checkpoint_count": len(request.get("checkpoints") or []),
@@ -2475,22 +2457,47 @@ def _sequence_inventory(sequence: dict, case_dir: Path) -> list[str]:
 PRODUCER_RECEIPT_SCHEMA = "gfx-replay-producer-receipt/v1"
 
 
-def _case_capture_seal(case_dir: Path, manifest: dict) -> dict:
-    seal = _json(case_dir / "capture" / "frame-seal.json")
-    if seal:
-        return seal
-    if manifest.get("schema") != SEQUENCE_SCHEMA:
-        return {}
+def _sequence_target_seal_path(case_dir: Path) -> Path | None:
     try:
         sequence = _json(case_dir / "sequence.json")
         frames = sequence.get("frames") or []
         target = int(sequence.get("target_index") or len(frames))
         entry = frames[target - 1] if 0 < target <= len(frames) else None
-        if isinstance(entry, dict) and isinstance(entry.get("dir"), str):
-            return _json(case_dir / entry["dir"] / "frame-seal.json")
+        if not isinstance(entry, dict) or not isinstance(entry.get("dir"), str):
+            return None
+        path, problem = _case_relative_path(case_dir, entry["dir"])
+        if problem is not None or path is None:
+            return None
+        seal = path / "frame-seal.json"
+        return seal if seal.is_file() else None
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return {}
-    return {}
+        return None
+
+
+def case_capture_seal_path(case_dir: Path | str,
+                           manifest: dict) -> Path | None:
+    """Path of the authoritative seal for a v1 or v2 case.
+
+    A sequence package stores its seals under ``frames/<index>/`` and selects
+    the diagnosed target through ``sequence.json``.  Consumers that need the
+    seal bytes or digest must resolve the same target rather than assuming the
+    single-frame ``capture/frame-seal.json`` layout.
+    """
+    case_dir = Path(case_dir)
+    if manifest.get("schema") == SEQUENCE_SCHEMA:
+        target = _sequence_target_seal_path(case_dir)
+        if target is not None:
+            return target
+        # Historical v2 packages may carry only a non-empty capture seal.
+        direct = case_dir / "capture" / "frame-seal.json"
+        return direct if direct.is_file() and _json(direct) else None
+    direct = case_dir / "capture" / "frame-seal.json"
+    return direct if direct.is_file() else None
+
+
+def _case_capture_seal(case_dir: Path, manifest: dict) -> dict:
+    path = case_capture_seal_path(case_dir, manifest)
+    return _json(path) if path is not None else {}
 
 
 def verify_producer_receipt(case_dir: Path, manifest: dict) -> dict:
