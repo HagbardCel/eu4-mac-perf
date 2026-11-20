@@ -31,7 +31,8 @@ remain authoritative for scope and acceptance criteria.
 | #224 | 11 | `f0ab3b76` | Retire the shadowed smoke campaign source and verify both profiles resolve the canonical policy and limits. | Reviewed at this head: no blockers; P3 reader-default pinning only. | Not merged |
 
 A head SHA that postdates its review is explicitly “re-review requested”; the
-review report attached to the PRs records the exact SHA tested.
+table records the exact SHA tested.  The consolidated review report is attached
+to PR #220.
 
 ## Remaining recommended work
 
@@ -59,8 +60,9 @@ neighbor suites, using `automation.test_runner` under the offline profile.  The
 combined candidate is the disposable local branch `remediation/final2` at
 `263418dd5ce92be01f983f5f7bc72e01faadba06` (not merged into `main`).  Its full
 offline gate run is `20261120T080353Z-62f5ac38`: **3,996 ran, 3,961 executed,
-35 skipped, 0 failed, 721.4 s**.  Every listed PR head is an ancestor of that
-candidate.  GitHub Actions runs on each pushed head.
+35 skipped, 0 failed, 721.4 s**.  Every listed implementation-PR head is an ancestor of that candidate.  The
+index commit itself is docs-only, postdates the gate, and is not part of the
+tested candidate; the table marks it “this commit”.  GitHub Actions runs on each pushed head.
 
 A portable pass does not claim a native Metal correctness result, a local
 archive, or a live EU4 capture.  Independent review remains the merge gate.
