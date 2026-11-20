@@ -482,6 +482,31 @@ class PrepareTests(BridgeTestCase):
         self.assertFalse((worktree / "docs" / "status.md").exists())
 
 
+    def test_a_refused_prepare_does_not_create_the_session_root(self) -> None:
+        from automation import session_state
+
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        session_root = session_state.layout(
+            self.run_root, "sess-abc", create=False, must_exist=False).root
+        # No --create-anchor: this prepare must refuse as not_prepared. The
+        # direct CLI path used to create sessions/sess-abc before the trusted
+        # check, leaving an empty root a later reconnect could adopt.
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = dsh_bridge.main([
+                "prepare", "--sidecar", str(sidecar),
+                "--session-id", "sess-abc",
+            ])
+        out = json.loads(buffer.getvalue())
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+        self.assertEqual(out["kind"], "not_prepared")
+        self.assertFalse(session_root.exists())
+        # The validated prepare still creates it.
+        code, out = self.run_bridge("prepare", sidecar, session_id="sess-abc")
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertTrue(session_root.is_dir())
+
+
 class ValidationBudgetTests(BridgeTestCase):
     """External sidecar limits are enforced from the bridge's attempt log."""
 
@@ -586,6 +611,27 @@ class IntegrityTests(BridgeTestCase):
         code, out = self.run_bridge("validate", sidecar)
         self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
         self.assertEqual(out["kind"], "not_prepared")
+
+
+    def test_a_corrupt_anchor_is_a_structured_refusal(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        code, out = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        anchor = self.run_root / "identity.json"
+        anchor.write_text("{not-json}\n", encoding="utf-8")
+        code, out = self.run_bridge("context", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["classification"], "integrity_refusal")
+        self.assertEqual(out["kind"], "anchor_corrupt")
+        self.assertEqual(out["status"], "refused")
+        self.assertIn("identity.json", out["detail"])
+        code, out = self.run_bridge("validate", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+        self.assertEqual(out["kind"], "anchor_corrupt")
+        # A structured refusal must not be reported as "not prepared": the
+        # campaign has protected material that simply cannot be read.
+        self.assertNotEqual(out["kind"], "not_prepared")
 
 
 class ExecutionRootTests(BridgeTestCase):
