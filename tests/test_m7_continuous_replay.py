@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import m7_continuous  # noqa: E402
+from automation import m7_continuous, native_build  # noqa: E402
 BENCH = ROOT / "benchmark"
 HOST = ROOT / "tests" / "gfx_metal_replay_abi_host.mm"
 CORE = BENCH / "eu4_gfx_frame_replay.mm"
@@ -57,14 +57,14 @@ class ContinuousReplayHistoryTests(unittest.TestCase):
         if cls.source is None:
             raise unittest.SkipTest("canonical frame fixture is not available")
         cls.host = cls.base / "gfx_metal_replay_abi"
-        built = subprocess.run(
+        native_build.require_build(
             ["clang", "-arch", "arm64", "-O2", "-fobjc-arc", "-lc++",
              "-I", str(BENCH), "-framework", "Foundation",
              "-framework", "Metal", "-o", str(cls.host),
              str(HOST), str(CORE)],
-            capture_output=True, text=True, check=False, timeout=300)
-        if built.returncode:
-            raise unittest.SkipTest(built.stderr.strip() or "replay build failed")
+            label="continuous-replay-abi", sources=[HOST, CORE],
+            frameworks=("Foundation", "Metal"), require_arm64=True,
+            timeout=300)
 
     @classmethod
     def tearDownClass(cls):
