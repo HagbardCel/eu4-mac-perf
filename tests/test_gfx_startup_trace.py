@@ -609,6 +609,22 @@ class RunOpsCleanupTests(unittest.TestCase):
             for patcher in reversed(patches):
                 patcher.stop()
 
+    def test_pid_mismatch_before_wait_reports_cleanup_failures(self):
+        game = _FakeGame(exits_on_terminate=False, exits_on_kill=False)
+        lease = _FakeLease(error=RuntimeError("lease close failed"))
+        with mock.patch.object(
+                startup, "_parse_status",
+                return_value={"state": "installed", "pid": -1}):
+            with self.assertRaises(startup.StartupError) as raised:
+                self.run_ops(game=game, lease=lease,
+                             terminal=lambda: False)
+        written = json.loads(
+            (self.output / "launcher-report.json").read_text())
+        self.assertEqual(written["outcome"], "failed")
+        self.assertFalse(written["cleanup_ok"])
+        self.assertTrue(written["cleanup_errors"])
+        self.assertTrue(getattr(raised.exception, "cleanup_errors", []))
+
     def test_wait_exception_still_reports_cleanup_failures(self):
         game = _FakeGame(exits_on_terminate=False, exits_on_kill=False)
         lease = _FakeLease(error=RuntimeError("lease close failed"))

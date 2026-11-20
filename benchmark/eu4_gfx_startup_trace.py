@@ -304,6 +304,8 @@ def run(
     status_path = run_dir / "startup.status"
     deadline = time.monotonic() + wait_seconds
     status = None
+    wait_error = None
+    wait_reason = "not_installed"
     try:
         while time.monotonic() < deadline:
             if status_path.is_file():
@@ -335,6 +337,8 @@ def run(
                 game.wait(timeout=10)
         # Allow destructor/finalizer to finish.
         time.sleep(1.0)
+    except BaseException as exc:  # cleanup must still run and be reported
+        wait_error = exc
     finally:
         # Each step is attempted even when an earlier one fails.  The
         # aggregate record is the only authority for cleanup success.
@@ -342,6 +346,26 @@ def run(
             game, stdout=stdout, stderr=stderr,
             display_session=display_session, lease=lease)
 
+    if wait_error is not None:
+        cleanup_ok = bool(cleanup.get("ok"))
+        failure_report = {
+            "run_dir": str(run_dir), "session": session, "pid": game.pid,
+            "evidence": evidence, "status": status,
+            "cleanup": cleanup, "cleanup_ok": cleanup_ok,
+            "cleanup_errors": cleanup.get("errors") or [],
+            "process_alive": cleanup.get("process_alive"),
+            "display": cleanup.get("display"), "lease": cleanup.get("lease"),
+            "accepted": False, "outcome": "failed",
+            "failure": f"{type(wait_error).__name__}: {wait_error}",
+        }
+        (run_dir / "launcher-report.json").write_text(
+            json.dumps(failure_report, indent=2) + "\n")
+        setattr(wait_error, "cleanup_errors", cleanup.get("errors") or [])
+        if not cleanup_ok:
+            wait_error.args = (
+                f"{wait_error}; cleanup failed: "
+                + "; ".join(cleanup.get("errors") or []),)
+        raise wait_error
     summary = {}
     if (run_dir / "summary.json").is_file():
         summary = json.loads((run_dir / "summary.json").read_text())
@@ -793,6 +817,7 @@ def run_ops(
     status = None
     deadline = time.monotonic() + timeout_s + 20.0
     wait_error = None
+    wait_reason = "not_installed"
     try:
         while time.monotonic() < deadline:
             if status_path.is_file():
@@ -806,7 +831,6 @@ def run_ops(
             if game.poll() is not None:
                 break
             time.sleep(0.2)
-        wait_reason = "not_installed"
         if status is not None and status.get("state") == "installed":
             wait_reason = _wait_pair(
                 run_dir, game, deadline, terminal=terminal_result)
