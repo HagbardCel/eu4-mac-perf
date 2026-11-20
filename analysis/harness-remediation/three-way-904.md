@@ -90,9 +90,13 @@ PY
 
 ## Smallest next discriminator
 
-Obtain one authentic pre-draw depth/sample/drawable observation for draw 14 on
-this seal and reconstruct the control with that state. If the control then
-matches live GL at checkpoint 15 exactly, the remaining Metal residual is a
-renderer-side candidate; if it still differs, the missing observation is the
-next input to identify. Do not rerun the broad DDS search or a window drawable
-control: the window control already showed 1.4M alpha mismatches.
+The 904 measurements above are retained unchanged. Do not mint a new capture
+with the historical 904 seal and do not treat any image produced under it as a
+control for later observations. The missing drawable and prior-frame
+observations must come from a new sealed capture; that capture must be paired
+with a new original-API control rendered from its own stream, resources and
+checkpoint. Only zero differing BGRA bytes between the new control and the new
+capture's live GL permit a Metal residual to be considered; otherwise name the
+next missing observation before any parity or blame claim. Do not rerun the
+broad DDS search or a window drawable control: the window control already
+showed 1.4M alpha mismatches.

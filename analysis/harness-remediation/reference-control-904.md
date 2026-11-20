@@ -57,13 +57,18 @@ Stored data: [qualification JSON](gl-control-904-qualification.json).
 ## Consequence
 
 Do not use this control to attribute the Metal residual to shader translation,
-raster state or the Metal backend. The smallest next discriminating observation
-is one targeted capture that records the default drawable's sample count,
-sample buffers, depth/stencil bits and color bits (the new recorder fields),
-then re-running the same checkpoint-14 control on the same seal. If that exact
-control then matches live GL at checkpoint 15, the remaining Metal residual is
-a renderer-side candidate; if it still differs, the next missing input must be
-identified before any parity or blame claim.
+raster state or the Metal backend. The present-904 measurements above are
+historical and are preserved unchanged: they are not re-measured, and no new
+capture may reuse the 904 seal.
+
+The missing observations are the default drawable's sample count, sample
+buffers, depth/stencil bits and color bits (the new recorder fields), plus the
+prior-frame contents where the selected draw needs them. Those observations do
+not exist in the 904 seal. Acquire them only from a newly sealed capture, then
+reconstruct a new original-API control from that capture's own stream,
+resources and checkpoint, and require zero differing BGRA pixels against that
+capture's live GL before assigning any residual to Metal. An exact image from
+the 904 seal or any other seal is not a control for the new capture.
 
 Do not substitute a window, 10-bit or sRGB drawable and call the result a
 control: the earlier window experiment produced 1,446,688 differing pixels
