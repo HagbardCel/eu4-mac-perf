@@ -105,7 +105,6 @@ export function buildArgs(tool, args = {}) {
     add('--control-image', 'control_image')
     add('--renderer', 'renderer')
     add('--control-out', 'control_out')
-    add('--renderer-authority', 'renderer_authority')
     add('--checkpoint-event', 'checkpoint_event')
     add('--draw-event', 'draw_event')
     add('--resource', 'resource')

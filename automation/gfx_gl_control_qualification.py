@@ -78,13 +78,16 @@ def _is_sha256(value) -> bool:
             and all(character in "0123456789abcdef" for character in value))
 
 
-def _intervening_writer(events: list[dict], draw_event: int,
-                        checkpoint_event: int, framebuffer: int) -> dict | None:
-    """Return a same-target draw/clear between the pair, if one exists."""
-    for event in events:
-        index = event.get("index")
-        if type(index) is not int or not (draw_event < index < checkpoint_event):
-            continue
+def _intervening_writer(events: list[dict], draw_position: int,
+                        checkpoint_position: int,
+                        framebuffer: int) -> dict | None:
+    """Return a same-target draw/clear between two event-stream positions.
+
+    Positions, not recorded ``index`` values, are authoritative: the recorder
+    emits some clears with a null index, and an unindexed clear still changes
+    the framebuffer.
+    """
+    for event in events[draw_position + 1:checkpoint_position]:
         if event.get("kind") not in ("draw", "clear"):
             continue
         target = event.get("target") or {}
@@ -93,41 +96,45 @@ def _intervening_writer(events: list[dict], draw_event: int,
     return None
 
 
-def _load_authority(path: Path | str | None, renderer_sha: str) -> dict:
-    """Load the operator-pinned renderer authority.
+def _load_authority(renderer_sha: str | None,
+                    registry: dict | None = None) -> dict:
+    """Resolve the executed renderer in the checked-in authority registry.
 
-    Without a pinned authority the renderer is self-attested and cannot
-    authorize Metal blame, however exact its pixels are. The authority is an
-    explicit operator trust decision, not a self-declaration by the renderer.
+    A caller-supplied JSON file is not a pin: any caller can write it. The
+    authority is a reviewed entry in
+    :mod:`automation.gfx_gl_control_authorities`; adding one is a code change.
     """
-    if path is None:
+    from automation import gfx_gl_control_authorities as registry_module
+
+    if not renderer_sha:
         return {"qualified": False, "self_attested": True,
-                "reason": ("no pinned renderer authority was supplied; the "
-                           "renderer is self-attested")}
-    try:
-        value = _read_json(Path(path), "renderer_authority")
-    except QualificationError as exc:
-        return {"qualified": False, "self_attested": True,
-                "reason": exc.detail or str(exc)}
+                "reasons": ["the renderer was not executed"]}
+    entries = registry_module.AUTHORITIES if registry is None else registry
+    entry = entries.get(renderer_sha) if isinstance(entries, dict) else None
+    if not isinstance(entry, dict):
+        return {
+            "qualified": False,
+            "self_attested": False,
+            "registry": registry_module.SCHEMA,
+            "renderer_sha256": renderer_sha,
+            "reasons": [
+                "renderer digest is not in the checked-in authority registry"],
+        }
     reasons = []
-    if value.get("schema") != "gfx-gl-control-renderer-authority/v1":
-        reasons.append("renderer authority has an unexpected schema")
-    if value.get("qualified") is not True:
-        reasons.append("renderer authority is not qualified")
-    if value.get("renderer_sha256") != renderer_sha:
-        reasons.append("renderer authority digest does not match the executed renderer")
-    if str(value.get("api") or "").lower() != ORIGINAL_API:
-        reasons.append("renderer authority does not name the original OpenGL API")
-    if not isinstance(value.get("name"), str) or not value.get("name"):
-        reasons.append("renderer authority has no renderer name")
+    if entry.get("qualified") is not True:
+        reasons.append("renderer registry entry is not qualified")
+    if str(entry.get("api") or "").lower() != ORIGINAL_API:
+        reasons.append("renderer registry entry does not name the original OpenGL API")
+    if not isinstance(entry.get("name"), str) or not entry.get("name"):
+        reasons.append("renderer registry entry has no renderer name")
     return {
         "qualified": not reasons,
         "self_attested": False,
-        "path": str(Path(path)),
-        "sha256": _sha_or_none(Path(path)),
-        "name": value.get("name"),
-        "renderer_sha256": value.get("renderer_sha256"),
-        "qualified_by": value.get("qualified_by"),
+        "registry": registry_module.SCHEMA,
+        "source": "checked-in-registry",
+        "renderer_sha256": renderer_sha,
+        "name": entry.get("name"),
+        "qualified_by": entry.get("qualified_by"),
         "reasons": reasons,
     }
 
@@ -355,14 +362,19 @@ def _authenticate(frame_dir: Path, live_path: Path, width: int, height: int,
         expected_fb = None
         if resource.startswith("fb:"):
             expected_fb = _int_or_none(resource.split(":", 1)[1])
-        if expected_fb is not None:
-            intervening = _intervening_writer(
-                events, draw_event, checkpoint_event, expected_fb)
-            if intervening is not None:
-                fail(
-                    f"{intervening.get('kind')} event {intervening.get('index')} "
-                    "targets the same framebuffer between the draw and the "
-                    "checkpoint")
+        if expected_fb is not None and draw is not None and checkpoint is not None:
+            draw_position = events.index(draw)
+            checkpoint_position = events.index(checkpoint)
+            if draw_position >= checkpoint_position:
+                fail("selected draw appears after the checkpoint in the stream")
+            else:
+                intervening = _intervening_writer(
+                    events, draw_position, checkpoint_position, expected_fb)
+                if intervening is not None:
+                    fail(
+                        f"{intervening.get('kind')} event with recorded index "
+                        f"{intervening.get('index')!r} targets the same "
+                        "framebuffer between the draw and the checkpoint")
         identity["draw_event"] = draw_event
         identity["resource"] = resource
 
@@ -662,7 +674,7 @@ def qualify_sealed(live_path: Path | str, width: int, height: int, *,
                    draw_event: int, renderer: Path | str,
                    out_dir: Path | str, resource: str = DEFAULT_RESOURCE,
                    timeout: float = DEFAULT_TIMEOUT,
-                   renderer_authority: Path | str | None = None,
+                   authority_registry: dict | None = None,
                    drawable: dict | None = None,
                    prestate: dict | None = None) -> dict:
     """Authenticate the seal, execute the renderer, then qualify the control.
@@ -723,7 +735,7 @@ def qualify_sealed(live_path: Path | str, width: int, height: int, *,
         identity=authentication["identity"], width=width, height=height,
         out_dir=out_dir, timeout=timeout)
     authority = _load_authority(
-        renderer_authority, run.get("renderer_sha256") or "")
+        run.get("renderer_sha256") or "", registry=authority_registry)
     control_path = run.get("artifact")
     comparison = None
     if control_path is not None:
@@ -752,8 +764,13 @@ def _evidence_recheck(qualification: dict) -> bool:
     checked = qualification.get("qualification") or {}
     identity = checked.get("identity") or {}
     comparison = qualification.get("comparison") or {}
-    authority = checked.get("renderer_authority") or {}
-    if not isinstance(authority, dict) or authority.get("qualified") is not True:
+    authority = _load_authority(checked.get("renderer_sha256"))
+    if authority.get("qualified") is not True:
+        return False
+    embedded = checked.get("renderer_authority") or {}
+    if embedded.get("renderer_sha256") != checked.get("renderer_sha256"):
+        return False
+    if embedded.get("name") != authority.get("name"):
         return False
     receipt_ref = checked.get("receipt") or {}
     control_ref = checked.get("control") or {}
@@ -779,27 +796,20 @@ def _evidence_recheck(qualification: dict) -> bool:
         return False
     if not isinstance(receipt, dict):
         return False
-    if receipt.get("nonce") != checked.get("nonce"):
+    width = _int_or_none(comparison.get("width"))
+    height = _int_or_none(comparison.get("height"))
+    if width is None or height is None:
         return False
-    if receipt.get("renderer_sha256") != checked.get("renderer_sha256"):
+    reasons = _validate_receipt(
+        receipt, nonce=str(checked.get("nonce") or ""),
+        renderer_sha=str(checked.get("renderer_sha256") or ""),
+        identity=identity, width=width, height=height,
+        artifact=control_path)
+    if reasons:
         return False
-    if authority.get("renderer_sha256") != checked.get("renderer_sha256"):
-        return False
-    frame = receipt.get("frame") or {}
-    if frame.get("session_id") != identity.get("session_id") \
-            or frame.get("capture_frame_id") != identity.get("capture_frame_id") \
-            or frame.get("event_stream_sha256") != identity.get(
-                "event_stream_sha256"):
-        return False
-    checkpoint = receipt.get("checkpoint") or {}
-    if checkpoint.get("event") != identity.get("checkpoint_event") \
-            or checkpoint.get("reference_sha256") != identity.get(
-                "checkpoint_reference_sha256"):
-        return False
-    artifact = receipt.get("artifact")
     return bool(
-        isinstance(artifact, dict)
-        and artifact.get("sha256") == control_sha
+        receipt.get("nonce") == checked.get("nonce")
+        and receipt.get("renderer_sha256") == checked.get("renderer_sha256")
         and receipt.get("execution") == "completed"
         and str(receipt.get("api") or "").lower() == ORIGINAL_API)
 
@@ -848,9 +858,6 @@ def main(argv: list[str] | None = None) -> int:
                         help="executable that renders the control and writes "
                              "result.bgra plus receipt.json")
     parser.add_argument("--control-out", type=Path, default=None)
-    parser.add_argument("--renderer-authority", type=Path, default=None,
-                        help="operator-pinned renderer authority JSON; without "
-                             "it the renderer is self-attested and cannot blame")
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     parser.add_argument("--drawable", help="JSON drawable record")
     parser.add_argument("--prestate", help="JSON pre-draw state record")
@@ -879,7 +886,6 @@ def main(argv: list[str] | None = None) -> int:
             checkpoint_event=args.checkpoint_event,
             draw_event=args.draw_event, renderer=args.renderer,
             out_dir=out_dir, resource=args.resource, timeout=args.timeout,
-            renderer_authority=args.renderer_authority,
             drawable=drawable, prestate=prestate)
         code = 0 if value["qualified"] else 1
     else:

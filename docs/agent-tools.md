@@ -166,8 +166,7 @@ python3 -m automation.agent_tools eu4_capture gl-control-qualify \
   --live-image <sealed-checkpoint.bgra> \
   --width 1728 --height 1117 --frame-dir <sealed-frame> \
   --checkpoint-event 15 --draw-event 14 \
-  --renderer <original-api-control-runner> --control-out <empty-dir> \
-  --renderer-authority <renderer-authority.json>
+  --renderer <original-api-control-runner> --control-out <empty-dir>
 python3 -m automation.agent_tools eu4_capture gl-control-qualify \
   --live-image <sealed-checkpoint.bgra> --control-image <control.bgra> \
   --width 1728 --height 1117 --comparison-only
@@ -205,10 +204,12 @@ completed `opengl` control renderer executed by the qualifier with a fresh
 challenge nonce. The renderer must write `result.bgra` plus `receipt.json` in
 `--control-out`; the receipt must echo the nonce, match the executed renderer's
 digest, and bind the frame, stream, checkpoint, draw, artifact digest, extent,
-pixel format and renderer identity. The renderer also needs an operator-pinned
-`--renderer-authority` whose digest matches the executed file and whose
-`qualified` flag is true. Without that authority the run is `self-attested` and
-`metal_blame_allowed` stays false, however exact the pixels are. The qualifier
+pixel format and renderer identity. The executed renderer must also be listed in the checked-in registry
+[`automation/gfx_gl_control_authorities.py`](https://github.com/HagbardCel/eu4-mac-perf/blob/main/automation/gfx_gl_control_authorities.py);
+adding an entry is a reviewed code change, not a caller-supplied JSON file.
+The registry is currently empty, so no stored control is authorized. Without a
+registry entry the run is `self-attested` and `metal_blame_allowed` stays false,
+however exact the pixels are. The qualifier
 hashes the sealed live blob and reads it once; the renderer receives a copy, and
 the comparison uses the authenticated bytes, so a renderer cannot change what is
 being qualified. All referenced frame blobs are verified before the run, and the
@@ -218,8 +219,8 @@ a different seal is explicitly `unqualified`; `--comparison-only` compares two
 files and can never qualify. Missing identity, execution provenance or renderer
 authority is reported as `unqualified` with the missing observation named.
 Supplying `--renderer` executes that file with the caller's privileges; the
-pinned authority is the explicit trust decision, and the qualifier does not
-sandbox the renderer.
+checked-in registry entry is the explicit trust decision, and the qualifier does
+not sandbox the renderer.
 
 `probe` is a pass-through to the existing live launch path and still requires an
 operator ledger.

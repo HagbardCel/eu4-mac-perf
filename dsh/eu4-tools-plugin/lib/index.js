@@ -103,7 +103,6 @@ export function definitions(run) {
         control_image: string('control BGRA image for --comparison-only'),
         renderer: string('original-API control renderer executed by the qualifier'),
         control_out: string('empty output directory for the renderer receipt/artifact'),
-        renderer_authority: string('operator-pinned qualified renderer authority JSON'),
         checkpoint_event: integer('checkpoint event to qualify'),
         draw_event: integer('draw event that produced the checkpoint'),
         resource: string('checkpoint resource (default fb:0)'),
