@@ -1594,6 +1594,29 @@ class SessionIsolationTests(BridgeTestCase):
         self.assertEqual(out["validations"], 1)
         self.assertEqual(len(claims.rows()), 1)
 
+    def test_a_corrupt_claim_ledger_refuses_before_the_checker_starts(self) -> None:
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        self.prepared(sidecar, "sess-a")
+        claims = session_state.CampaignClaims(self.run_root)
+        claimed = claims.claim(
+            operation="validate", attempt_id="already-spent",
+            session_id="sess-a", limit=None)
+        self.assertTrue(claimed["ok"])
+        # A partial append is what an interrupted writer leaves behind.  A
+        # reader that skipped it would see zero attempts and reset the budget.
+        with claims.path.open("ab") as handle:
+            handle.write(b'{"schema": "eu4-dsh-campaign-claim/v1", '
+                         b'"attempt_id": "half"')
+
+        with mock.patch.object(dsh_bridge, "run_accept",
+                               side_effect=AssertionError(
+                                   "a corrupt ledger must refuse before the checker")):
+            code, out = self.run_bridge("validate", sidecar, session_id="sess-a")
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+        self.assertEqual(out["classification"], "integrity_refusal")
+        self.assertEqual(out["kind"], "claim_ledger")
+        self.assertIn("truncated", out["detail"])
+
     def test_an_unsafe_session_id_is_refused_by_the_bridge(self) -> None:
         sidecar = self.sidecar(self.campaign("pass-campaign"))
         for value in ("../escape", "a/b", "..", "Sess-Upper"):
