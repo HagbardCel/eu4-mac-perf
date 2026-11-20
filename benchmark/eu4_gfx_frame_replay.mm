@@ -1271,8 +1271,126 @@ static MTLPixelFormat pixel_format_for(NSString *name) {
 
 /* Creates and uploads one captured texture dictionary. All captured rows are
  * GL lower-left origin, so rows are flipped for Metal's top-left origin. */
+typedef NS_ENUM(NSInteger, EU4CompressedChain) {
+    EU4CompressedChainDecoded = 0,   /* no block records: legacy decoded path */
+    EU4CompressedChainComplete = 1,  /* every level has matching blocks */
+    EU4CompressedChainPartial = 2,   /* some levels lack blocks */
+    EU4CompressedChainMixed = 3,     /* levels disagree on format/enum */
+    EU4CompressedChainUnsupported = 4, /* all blocks, no Metal equivalent */
+    EU4CompressedChainInvalid = 5,   /* bad geometry/size/stride */
+};
+
+static uint32_t compressed_block_bytes_for_enum(unsigned internal) {
+    switch (internal) {
+        case 0x83F0u: /* GL_COMPRESSED_RGB_S3TC_DXT1_EXT */
+        case 0x83F1u: /* GL_COMPRESSED_RGBA_S3TC_DXT1_EXT */
+            return 8;
+        case 0x83F2u:
+        case 0x83F3u:
+            return 16;
+        default:
+            return 0;
+    }
+}
+
+/* Classify the captured compressed chain without uploading anything.
+ *
+ * The distinction matters: an all-decoded legacy texture is a supported
+ * fallback, while a partially compressed chain is a capture defect and must be
+ * rejected rather than silently decoded.  The original GL enum is preserved so
+ * DXT1 RGB and DXT1 one-bit-alpha are not conflated. */
+static EU4CompressedChain compressed_chain_status(
+    NSArray *levels, NSString **format_out, unsigned *internal_out,
+    NSUInteger *block_out, NSUInteger *bad_level_out) {
+    NSUInteger compressed_count = 0;
+    NSUInteger count = levels.count;
+    NSString *format = nil;
+    unsigned internal = 0;
+    NSUInteger block = 0;
+    for (NSUInteger index = 0; index < count; index++) {
+        NSDictionary *level = levels[index];
+        NSDictionary *compressed = level[@"compressed"];
+        if (![compressed isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
+        compressed_count++;
+        unsigned raw = (unsigned)number(compressed[@"internal_format"], 0);
+        NSString *value = string_value(compressed[@"format"]);
+        if (raw == 0) {
+            /* Pre-enum captures name the format only; preserve the meaning
+             * they were captured with without inventing a raw enum. */
+            if ([value isEqualToString:@"DXT1"]
+                || [value isEqualToString:@"DXT1_ALPHA"]) {
+                raw = 0x83F1u;
+            } else if ([value isEqualToString:@"DXT3"]) {
+                raw = 0x83F2u;
+            } else if ([value isEqualToString:@"DXT5"]) {
+                raw = 0x83F3u;
+            }
+        }
+        if (raw == 0 || value.length == 0) {
+            if (bad_level_out) *bad_level_out = index;
+            return EU4CompressedChainUnsupported;
+        }
+        if (format == nil) {
+            format = value;
+            internal = raw;
+            block = compressed_block_bytes_for_enum(raw);
+            if (block == 0) {
+                if (bad_level_out) *bad_level_out = index;
+                return EU4CompressedChainUnsupported;
+            }
+        } else if (![format isEqualToString:value] || internal != raw) {
+            if (bad_level_out) *bad_level_out = index;
+            return EU4CompressedChainMixed;
+        }
+        NSUInteger width = number(level[@"width"], 0);
+        NSUInteger height = number(level[@"height"], 0);
+        NSUInteger bytes = number(compressed[@"bytes"], 0);
+        NSUInteger stride = number(compressed[@"row_stride"], 0);
+        if (width == 0 || height == 0) {
+            if (bad_level_out) *bad_level_out = index;
+            return EU4CompressedChainInvalid;
+        }
+        NSUInteger blocks_wide = (width + 3u) / 4u;
+        NSUInteger blocks_high = (height + 3u) / 4u;
+        NSUInteger expected = blocks_wide * blocks_high * block;
+        if (bytes != expected || stride != blocks_wide * block) {
+            if (bad_level_out) *bad_level_out = index;
+            return EU4CompressedChainInvalid;
+        }
+        if (number(level[@"level"], index) != index) {
+            if (bad_level_out) *bad_level_out = index;
+            return EU4CompressedChainInvalid;
+        }
+    }
+    if (compressed_count == 0) {
+        return EU4CompressedChainDecoded;
+    }
+    if (compressed_count != count) {
+        for (NSUInteger index = 0; index < count; index++) {
+            if (![levels[index][@"compressed"] isKindOfClass:[NSDictionary class]]) {
+                if (bad_level_out) *bad_level_out = index;
+                break;
+            }
+        }
+        return EU4CompressedChainPartial;
+    }
+    if (format_out) *format_out = format;
+    if (internal_out) *internal_out = internal;
+    if (block_out) *block_out = block;
+    /* Metal has no BC1 RGB format.  Decoding a GL DXT1 RGB level preserves its
+     * guaranteed opaque alpha; using BC1_RGBA would expose the block's
+     * one-bit transparent index and change sampled alpha. */
+    if (internal == 0x83F0u) {
+        return EU4CompressedChainDecoded;
+    }
+    return EU4CompressedChainComplete;
+}
+
 static MTLPixelFormat compressed_pixel_format(NSString *format) {
-    if ([format isEqualToString:@"DXT1"]) {
+    if ([format isEqualToString:@"DXT1"]
+        || [format isEqualToString:@"DXT1_ALPHA"]) {
         return MTLPixelFormatBC1_RGBA;
     }
     if ([format isEqualToString:@"DXT3"]) {
@@ -1282,32 +1400,6 @@ static MTLPixelFormat compressed_pixel_format(NSString *format) {
         return MTLPixelFormatBC3_RGBA;
     }
     return MTLPixelFormatInvalid;
-}
-
-/* Returns YES only when every level carries the original compressed blocks in
- * the same S3TC format.  A partially compressed texture is rejected: mixing a
- * compressed and a decoded upload would silently change the decode path. */
-static BOOL compressed_levels(NSArray *levels, NSString **format_out) {
-    NSString *format = nil;
-    for (NSDictionary *level in levels) {
-        NSDictionary *compressed = level[@"compressed"];
-        if (![compressed isKindOfClass:[NSDictionary class]]) {
-            return NO;
-        }
-        NSString *value = string_value(compressed[@"format"]);
-        if (value.length == 0) {
-            return NO;
-        }
-        if (format == nil) {
-            format = value;
-        } else if (![format isEqualToString:value]) {
-            return NO;
-        }
-    }
-    if (format_out != NULL) {
-        *format_out = format;
-    }
-    return YES;
 }
 
 static id<MTLTexture> build_texture(NSDictionary *texture, NSString *frameDir,
@@ -1328,7 +1420,48 @@ static id<MTLTexture> build_texture(NSDictionary *texture, NSString *frameDir,
     MTLPixelFormat pixel_format = pixel_format_for(format);
     BOOL cube = [string_value(texture[@"target"]) isEqualToString:@"cube"];
     NSString *compressed_format = nil;
-    BOOL compressed = !cube && compressed_levels(levels, &compressed_format);
+    unsigned compressed_internal = 0;
+    NSUInteger compressed_block = 0;
+    NSUInteger bad_level = 0;
+    EU4CompressedChain chain = cube ? EU4CompressedChainDecoded
+        : compressed_chain_status(levels, &compressed_format,
+                                  &compressed_internal, &compressed_block,
+                                  &bad_level);
+    if (chain == EU4CompressedChainPartial
+        || chain == EU4CompressedChainMixed
+        || chain == EU4CompressedChainUnsupported
+        || chain == EU4CompressedChainInvalid) {
+        NSString *reason = nil;
+        switch (chain) {
+            case EU4CompressedChainPartial:
+                reason = [NSString stringWithFormat:
+                          @"compressed texture chain is partial at level %lu",
+                          (unsigned long)bad_level];
+                break;
+            case EU4CompressedChainMixed:
+                reason = [NSString stringWithFormat:
+                          @"compressed texture chain mixes formats at level %lu",
+                          (unsigned long)bad_level];
+                break;
+            case EU4CompressedChainUnsupported:
+                reason = [NSString stringWithFormat:
+                          @"unsupported compressed texture format %@ at level %lu",
+                          compressed_format ?: @"<missing>",
+                          (unsigned long)bad_level];
+                break;
+            default:
+                reason = [NSString stringWithFormat:
+                          @"compressed texture level %lu has invalid geometry, "
+                          @"size or stride", (unsigned long)bad_level];
+                break;
+        }
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:25
+                                     userInfo:@{NSLocalizedDescriptionKey: reason}];
+        }
+        return nil;
+    }
+    BOOL compressed = chain == EU4CompressedChainComplete;
     MTLPixelFormat compressed_pixel = compressed
         ? compressed_pixel_format(compressed_format) : MTLPixelFormatInvalid;
     if (compressed && compressed_pixel == MTLPixelFormatInvalid) {
@@ -1341,6 +1474,18 @@ static id<MTLTexture> build_texture(NSDictionary *texture, NSString *frameDir,
         return nil;
     }
     if (compressed) {
+        BOOL bc_supported = YES;
+        if (@available(macOS 11.0, *)) {
+            bc_supported = g_device.supportsBCTextureCompression;
+        }
+        if (!bc_supported) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:27
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        @"the active Metal device does not support BC texture compression"}];
+            }
+            return nil;
+        }
         pixel_format = compressed_pixel;
     }
     if (pixel_format == MTLPixelFormatInvalid || width == 0 || height == 0) {
@@ -1382,13 +1527,26 @@ static id<MTLTexture> build_texture(NSDictionary *texture, NSString *frameDir,
             NSData *blob = read_blob(frameDir, string_value(block[@"file"]));
             NSUInteger expected = number(block[@"bytes"], 0);
             NSUInteger row_bytes = number(block[@"row_stride"], 0);
-            if (blob == nil || expected == 0 || blob.length != expected ||
-                row_bytes == 0 || cube) {
+            NSUInteger expected_width = width >> level_index;
+            NSUInteger expected_height = height >> level_index;
+            if (expected_width == 0) expected_width = 1;
+            if (expected_height == 0) expected_height = 1;
+            NSUInteger blocks_wide = (level_width + 3u) / 4u;
+            NSUInteger blocks_high = (level_height + 3u) / 4u;
+            NSUInteger expected_bytes =
+                blocks_wide * blocks_high * compressed_block;
+            NSUInteger expected_stride = blocks_wide * compressed_block;
+            if (blob == nil || compressed_block == 0
+                || level_width != expected_width
+                || level_height != expected_height
+                || expected == 0 || blob.length != expected
+                || expected != expected_bytes
+                || row_bytes != expected_stride) {
                 if (error != NULL) {
                     *error = [NSError errorWithDomain:kErrorDomain code:26
                                              userInfo:@{NSLocalizedDescriptionKey:
                                                             [NSString stringWithFormat:
-                                                                 @"compressed texture level %lu is incomplete",
+                                                                 @"compressed texture level %lu is incomplete or has invalid geometry",
                                                                  (unsigned long)level_index]}];
                 }
                 return nil;
@@ -5310,4 +5468,72 @@ extern "C" int eu4_gfx_frame_replay_test_blob_references(const char *frame_dir) 
         return -1;
     }
     return 0;
+}
+
+/* Host-test only: exercise the production compressed-texture selection and
+ * upload path against a synthetic texture dictionary.  Returns 0 on success
+ * and -1 with an error message when the chain is rejected. */
+extern "C" int eu4_gfx_frame_replay_test_compressed_texture(
+    const char *frame_dir, const char *json_path, int *out_format,
+    int *out_levels, char *out_error, size_t error_capacity) {
+    if (frame_dir == NULL || json_path == NULL) {
+        return -1;
+    }
+    @autoreleasepool {
+        NSError *read_error = nil;
+        NSData *data = [NSData dataWithContentsOfFile:@(json_path)
+                                              options:0
+                                                error:&read_error];
+        if (data == nil) {
+            if (out_error && error_capacity) {
+                snprintf(out_error, error_capacity, "%s",
+                         safe_utf8(failure_text(read_error, @"unreadable JSON"),
+                                   "unreadable JSON"));
+            }
+            return -1;
+        }
+        id value = [NSJSONSerialization JSONObjectWithData:data
+                                                   options:0
+                                                     error:&read_error];
+        if (![value isKindOfClass:[NSDictionary class]]) {
+            if (out_error && error_capacity) {
+                snprintf(out_error, error_capacity, "%s",
+                         safe_utf8(failure_text(read_error, @"invalid JSON"),
+                                   "invalid JSON"));
+            }
+            return -1;
+        }
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        if (device == nil) {
+            if (out_error && error_capacity) {
+                snprintf(out_error, error_capacity, "%s",
+                         "no Metal device");
+            }
+            return -1;
+        }
+        EU4MetalReplayState *state = [EU4MetalReplayState new];
+        state.device = device;
+        EU4MetalReplayState *previous = g_state;
+        g_state = state;
+        NSError *build_error = nil;
+        id<MTLTexture> texture =
+            build_texture((NSDictionary *)value, @(frame_dir), &build_error);
+        g_state = previous;
+        if (texture == nil) {
+            if (out_error && error_capacity) {
+                snprintf(out_error, error_capacity, "%s",
+                         safe_utf8(failure_text(build_error,
+                                                @"texture build failed"),
+                                   "texture build failed"));
+            }
+            return -1;
+        }
+        if (out_format) {
+            *out_format = (int)texture.pixelFormat;
+        }
+        if (out_levels) {
+            *out_levels = (int)texture.mipmapLevelCount;
+        }
+        return 0;
+    }
 }

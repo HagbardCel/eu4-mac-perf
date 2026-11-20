@@ -1718,7 +1718,7 @@ static const char *format_name(GLenum format) {
         case GL_RGB: return "RGB";
         case GL_RGB8: return "RGB8";
         case GL_COMPRESSED_DXT1: return "DXT1";
-        case GL_COMPRESSED_DXT1_ALPHA: return "DXT1";
+        case GL_COMPRESSED_DXT1_ALPHA: return "DXT1_ALPHA";
         case GL_COMPRESSED_DXT3: return "DXT3";
         case GL_COMPRESSED_DXT5: return "DXT5";
         case GL_DEPTH_COMPONENT: return "DEPTH";
@@ -1912,9 +1912,11 @@ static int read_texture(GLenum target, GLuint name, json_out *out) {
                                      compressed_name, compressed_sha) == 0) {
                             jprintf(out,
                                     ",\"compressed\":{\"format\":\"%s\","
+                                    "\"internal_format\":%u,"
                                     "\"bytes\":%zu,\"row_stride\":%zu,"
                                     "\"file\":\"%s\",\"sha256\":\"%s\"}",
-                                    format_name((GLenum)internal), cbytes,
+                                    format_name((GLenum)internal),
+                                    (unsigned)internal, cbytes,
                                     cw * (size_t)cblock, compressed_name,
                                     compressed_sha);
                         }
