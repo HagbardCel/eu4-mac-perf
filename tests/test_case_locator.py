@@ -406,6 +406,27 @@ class CaseLocatorTests(unittest.TestCase):
         self.assertEqual(third["last_published_run"], "run-3")
         self.assertEqual(third["publication_count"], 3)
 
+    def test_absent_origin_is_not_backfilled_by_a_later_run(self) -> None:
+        case = make_case(self.root / "producer" / "case")
+        first = case_locator.publish(case, self.evidence)
+        self.assertIsNone(first["originating_run"])
+        second = case_locator.publish(case, self.evidence,
+                                      originating_run="run-2")
+        self.assertIsNone(second["originating_run"])
+        self.assertEqual(second["last_published_run"], "run-2")
+        self.assertEqual(second["publication_count"], 2)
+
+    def test_corrupt_publication_count_is_a_locator_error(self) -> None:
+        case = make_case(self.root / "producer" / "case")
+        published = case_locator.publish(case, self.evidence)
+        path = Path(published["locator_path"])
+        value = json.loads(path.read_text())
+        value["publication_count"] = "not-a-number"
+        path.write_text(json.dumps(value))
+        with self.assertRaises(case_locator.CaseLocatorError) as raised:
+            case_locator.publish(case, self.evidence)
+        self.assertEqual(raised.exception.kind, "locator_corrupt")
+
     def test_symlink_in_source_is_refused_before_copying(self) -> None:
         case = make_case(self.root / "producer" / "case")
         outside = self.root / "outside.bin"

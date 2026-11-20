@@ -309,24 +309,52 @@ def _adopt_existing(target: Path, identity: dict, key: str) -> dict:
     return existing
 
 
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return os.path.samefile(left, right)
+    except OSError:
+        return left.resolve() == right.resolve()
+
+
 def _inside(path: Path, parent: Path) -> bool:
+    """Containment by textual resolve and by inode, defeating case aliases."""
+    path = Path(path)
+    parent = Path(parent)
     try:
         path.resolve().relative_to(parent.resolve())
         return True
     except ValueError:
-        return False
+        pass
+    current = path
+    while not current.exists() and current != current.parent:
+        current = current.parent
+    target = parent
+    while not target.exists() and target != target.parent:
+        target = target.parent
+    probe = current
+    while True:
+        try:
+            if os.path.samefile(probe, target):
+                return True
+        except OSError:
+            pass
+        if probe == probe.parent:
+            break
+        probe = probe.parent
+    return False
 
 
 def _evidence_root_problem(case_dir: Path, root: Path) -> str | None:
     """Reject a root that cannot preserve the case after worktree disposal."""
-    if root == case_dir:
+    if _same_path(root, case_dir):
         return ("evidence root is the case directory; choose a root outside "
                 "the producer worktree")
     if _inside(root, case_dir):
         return (f"evidence root {root} is inside the case directory "
                 f"{case_dir}; choose a root outside the producer worktree")
-    # If the root lives in a different registered git worktree, it is likely
-    # disposable alongside the producer.  Prefer refusing it.
+    # Prefer refusing linked/disposable worktrees.  The main worktree is a
+    # durable operator root (for example <repo>/.local); linked worktrees are
+    # disposed with the experiment.
     try:
         completed = subprocess.run(
             ["git", "-C", str(case_dir), "worktree", "list", "--porcelain"],
@@ -336,16 +364,14 @@ def _evidence_root_problem(case_dir: Path, root: Path) -> str | None:
             for line in completed.stdout.splitlines():
                 if line.startswith("worktree "):
                     worktrees.append(Path(line[len("worktree "):]).resolve())
-            current = next((tree for tree in worktrees
-                            if tree == case_dir or _inside(case_dir, tree)),
-                           None)
-            for tree in worktrees:
-                if current is not None and tree == current:
-                    continue
-                if _inside(root, tree) or root == tree:
-                    return (f"evidence root {root} is inside another git "
-                            f"worktree ({tree}); use a durable operator-owned "
-                            "root outside all worktrees")
+            for index, tree in enumerate(worktrees):
+                if index == 0:
+                    continue  # main worktree: durable
+                if _same_path(root, tree) or _inside(root, tree):
+                    return (f"evidence root {root} is inside a disposable "
+                            f"linked worktree ({tree}); use a durable "
+                            "operator-owned root such as the main checkout's "
+                            ".local")
     except (OSError, subprocess.SubprocessError):
         pass
     return None
@@ -432,13 +458,26 @@ def publish(case_dir: Path | str, evidence_root: Path | str, *,
     source_bytes, source_files = _tree_stats(target)
     with _locator_lock(root, key):
         previous = _json(root / LOCATOR_DIR / f"{key}.json")
-        previous_origin = previous.get("originating_run")
-        original_run = previous_origin or originating_run
-        first_published = previous.get("first_published_utc") or _now()
-        publication_count = int(previous.get("publication_count") or 0) + 1
-        last_published_run = (originating_run
-                              or previous.get("last_published_run")
-                              or original_run)
+        if previous:
+            # The first recorded origin is immutable, even when it is absent;
+            # do not silently attribute the case to a later run.
+            original_run = previous.get("originating_run")
+            try:
+                prior_count = int(previous.get("publication_count") or 0)
+            except (TypeError, ValueError) as exc:
+                raise CaseLocatorError(
+                    "locator_corrupt",
+                    f"locator publication_count is invalid: {exc}") from exc
+            publication_count = prior_count + 1
+            first_published = previous.get("first_published_utc") or _now()
+            last_published_run = (originating_run
+                                  or previous.get("last_published_run")
+                                  or original_run)
+        else:
+            original_run = originating_run
+            publication_count = 1
+            first_published = _now()
+            last_published_run = originating_run
         last_published_utc = _now()
         locator = {
             "schema": SCHEMA,
@@ -524,8 +563,7 @@ def _locator_metadata(root: Path, locator: dict) -> dict:
         row = dict(locator, state=state, resolved_path=str(target),
                    verified=False, verification_ok=False,
                    current_verification="not_run",
-                   recorded_verification=locator.get("verification"),
-                   verification=locator.get("verification"))
+                   recorded_verification=locator.get("verification"))
     return _identity_view(locator, row)
 
 
