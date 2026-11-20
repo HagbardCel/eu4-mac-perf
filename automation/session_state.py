@@ -323,11 +323,18 @@ class CampaignClaims:
     empty file or truncated to fewer complete rows: every remaining row is
     still well formed.  ``claims.head.json`` is a committed witness written
     atomically after each append that records how many rows were committed and
-    the digest of the last one.  It is not a second budget: the allowance is
-    still ``len(rows)``.  It records a prefix so losing or shortening committed
-    rows is refused instead of read as a reset.  A missing ledger and missing
-    head is the legitimate first-initialization state; a missing ledger with a
-    committed head, or a ledger shorter than its head, is an integrity error.
+    a fold over every committed row's digest.  It is not a second budget: the
+    allowance is still ``len(rows)``.  It records a prefix so losing,
+    shortening, editing or reordering committed rows is refused instead of read
+    as a reset.  A missing ledger and missing head is the legitimate
+    first-initialization state; a missing ledger with a committed head, or a
+    ledger shorter than its head, is an integrity error.
+
+    The witness is local to the same writable campaign directory. Deleting both
+    the ledger and its head returns to the indistinguishable first-
+    initialization state, and a non-empty ledger without a head (the short-lived
+    pre-head format) is refused rather than adopted. Those are explicit
+    boundaries of this design, not migrations.
     """
 
     def __init__(self, campaign_root: Path | str):
