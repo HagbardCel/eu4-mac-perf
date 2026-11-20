@@ -32,6 +32,83 @@ def _sha(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+# Generated test data only: no game, shader or texture payload is checked in.
+SYNTHETIC_BLOB = "blobs/synthetic-checker.bgra"
+SYNTHETIC_PAYLOAD = bytes(range(256)) * 16
+
+
+def _tree_stats(root: Path) -> tuple[int, int]:
+    """Regular-file bytes and count, matching the publication inventory."""
+    total = 0
+    count = 0
+    for path in sorted(root.rglob("*")):
+        if path.is_file() and not path.is_symlink():
+            total += path.stat().st_size
+            count += 1
+    return total, count
+
+
+def _valid_digest(value) -> bool:
+    return (isinstance(value, str) and len(value) == 64
+            and all(char in "0123456789abcdef" for char in value.lower()))
+
+
+def _restore_report(case_dir: Path) -> dict:
+    """Check a restored tree against its own declared manifest.
+
+    A restore is byte-identical only when every declared member exists with the
+    declared size and SHA-256.  Missing bytes, a missing digest and a changed
+    size/digest are distinct failures so a caller cannot report a silent
+    "available" or treat an absent digest as zero.
+    """
+    manifest = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
+    report = {
+        "ok": True,
+        "files": 0,
+        "bytes": 0,
+        "missing": [],
+        "missing_digest": [],
+        "size_mismatch": [],
+        "digest_mismatch": [],
+    }
+    for item in manifest.get("files") or []:
+        relative = item.get("path")
+        target = case_dir / relative if isinstance(relative, str) else None
+        expected_size = item.get("bytes")
+        expected_digest = item.get("sha256")
+        if target is None or not target.is_file() or target.is_symlink():
+            report["missing"].append({
+                "path": relative,
+                "bytes": expected_size,
+                "sha256": expected_digest,
+            })
+            continue
+        size = target.stat().st_size
+        report["files"] += 1
+        report["bytes"] += size
+        if size != expected_size:
+            report["size_mismatch"].append({
+                "path": relative,
+                "expected": expected_size,
+                "actual": size,
+            })
+        if not _valid_digest(expected_digest):
+            report["missing_digest"].append({
+                "path": relative,
+                "sha256": expected_digest,
+            })
+            continue
+        if _sha(target.read_bytes()) != expected_digest:
+            report["digest_mismatch"].append({
+                "path": relative,
+                "expected": expected_digest,
+            })
+    report["ok"] = not any(report[key] for key in
+                           ("missing", "missing_digest", "size_mismatch",
+                            "digest_mismatch"))
+    return report
+
+
 class CaseLocatorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -68,6 +145,87 @@ class CaseLocatorTests(unittest.TestCase):
             self.evidence, session_id="session-1",
             seal_sha256=published["identity"]["seal_sha256"])
         self.assertEqual(resolved["state"], "available", resolved)
+
+    def test_restore_after_producer_removal_is_byte_identical(self) -> None:
+        case = make_case(self.root / "producer" / "case",
+                         extra_files={SYNTHETIC_BLOB: SYNTHETIC_PAYLOAD})
+        manifest = json.loads((case / "case.json").read_text(encoding="utf-8"))
+        expected_bytes = sum(int(item["bytes"]) for item in manifest["files"])
+        published = case_locator.publish(case, self.evidence)
+        payload = (Path(published["locator_path"]).parents[1]
+                   / published["relative_path"])
+
+        # The producer worktree disappears; only the retained publication
+        # remains for the restore.
+        shutil.rmtree(self.root / "producer")
+        restored = self.root / "restore" / "case"
+        shutil.copytree(payload, restored)
+
+        report = _restore_report(restored)
+        self.assertTrue(report["ok"], report)
+        self.assertEqual(report["files"], len(manifest["files"]))
+        self.assertEqual(report["bytes"], expected_bytes)
+        self.assertEqual(_tree_stats(restored),
+                         (published["size_bytes"], published["files"]))
+        self.assertEqual(
+            case_locator.case_identity(restored)["manifest_sha256"],
+            published["identity"]["manifest_sha256"])
+        verification = gfx_replay_case.verify(restored)
+        self.assertTrue(verification["ok"], verification["problems"])
+        self.assertEqual((restored / SYNTHETIC_BLOB).read_bytes(),
+                         SYNTHETIC_PAYLOAD)
+
+    def test_restore_rejects_missing_member_digest_and_size_drift(self) -> None:
+        case = make_case(self.root / "producer" / "case",
+                         extra_files={SYNTHETIC_BLOB: SYNTHETIC_PAYLOAD})
+        published = case_locator.publish(case, self.evidence)
+        payload = (Path(published["locator_path"]).parents[1]
+                   / published["relative_path"])
+        expected_digest = _sha(SYNTHETIC_PAYLOAD)
+
+        def fresh(name: str) -> Path:
+            target = self.root / "restore" / name / "case"
+            shutil.copytree(payload, target)
+            return target
+
+        # A declared member whose bytes are absent is not a successful restore,
+        # even though the rest of the tree is intact.
+        missing = fresh("missing")
+        (missing / SYNTHETIC_BLOB).unlink()
+        report = _restore_report(missing)
+        self.assertFalse(report["ok"])
+        self.assertEqual([row["path"] for row in report["missing"]],
+                         [SYNTHETIC_BLOB])
+        self.assertEqual(report["missing"][0]["sha256"], expected_digest)
+        self.assertIn(f"missing {SYNTHETIC_BLOB}",
+                      gfx_replay_case.verify(missing)["problems"])
+
+        # A declared member without a digest is unknown, never byte-identical.
+        missing_digest = fresh("missing-digest")
+        manifest_path = missing_digest / "case.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for item in manifest["files"]:
+            if item["path"] == SYNTHETIC_BLOB:
+                item.pop("sha256", None)
+        manifest_path.write_text(json.dumps(manifest))
+        report = _restore_report(missing_digest)
+        self.assertFalse(report["ok"])
+        self.assertEqual([row["path"] for row in report["missing_digest"]],
+                         [SYNTHETIC_BLOB])
+        self.assertIn(f"digest drift {SYNTHETIC_BLOB}",
+                      gfx_replay_case.verify(missing_digest)["problems"])
+
+        # A present member with a changed size is size/digest drift, not a
+        # silent digest match.
+        size_drift = fresh("size")
+        blob = size_drift / SYNTHETIC_BLOB
+        blob.write_bytes(blob.read_bytes()[:-1])
+        report = _restore_report(size_drift)
+        self.assertFalse(report["ok"])
+        self.assertEqual([row["path"] for row in report["size_mismatch"]],
+                         [SYNTHETIC_BLOB])
+        self.assertIn(f"size drift {SYNTHETIC_BLOB}",
+                      gfx_replay_case.verify(size_drift)["problems"])
 
     def test_two_cases_with_one_name_resolve_separately(self) -> None:
         first = make_case(self.root / "one" / "case", case_id="same-name",
