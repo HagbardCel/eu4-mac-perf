@@ -694,11 +694,16 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit) -> int:
             "run_root": str(sidecar.run_root),
         })
 
+    startup = _startup_block(sidecar, roots)
+    attempts = _validation_attempts(_validation_history(sidecar.run_root))
+    startup_text = _startup_text(startup, attempts=attempts)
     emit({
         "ok": True,
         "operation": "prepare",
         "campaign_id": sidecar.campaign_id,
         "objective": sidecar.objective_text,
+        "goal_text": sidecar.objective_text + "\n\n" + startup_text,
+        "startup_text": startup_text,
         "require_independent_review": sidecar.require_independent_review,
         "checker_timeout_seconds": sidecar.validation_timeout_seconds,
         "execution_roots": roots,
@@ -707,7 +712,7 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit) -> int:
         "identities": identities,
         "identity_digest": receipts.identity_digest(identities),
         "anchored_now": existing is None,
-        "startup": _startup_block(sidecar, roots),
+        "startup": startup,
     })
     return EXIT_OK
 
@@ -780,6 +785,52 @@ def _validation_attempts(history: list[dict]) -> list[dict]:
             if "qualified" not in row:
                 attempt["qualified"] = row.get("checker_verdict") == "pass"
     return [attempts[key] for key in order]
+
+
+def _startup_text(block: dict, *, attempts: list[dict]) -> str:
+    """Compact first-context text for the initial goal message.
+
+    It is derived only from the prepared anchor and persisted attempt records;
+    it never invents a trusted checker, a case locator, or a remaining budget.
+    """
+    closing = block.get("closing") or {}
+    used = len(attempts)
+    maximum = int(closing.get("max_validations") or 0)
+    remaining = max(0, maximum - used) if maximum else None
+    last = attempts[-1] if attempts else None
+    lines = [
+        "EU4 harness context (prepared, not model-reported):",
+        f"- workspace: {block.get('workspace')} "
+        f"(mode={block.get('workspace_mode')}, "
+        f"head={block.get('workspace_head') or 'seed'})",
+        f"- campaign: {block.get('campaign_id')} "
+        f"(sidecar={block.get('sidecar')}, run_root={block.get('run_root')})",
+        f"- writable scope: {', '.join(block.get('allowed_paths') or []) or 'campaign defaults'}",
+        f"- forbidden: {', '.join(block.get('forbidden_paths') or []) or 'none declared'}",
+        f"- budget: validations used {used}"
+        + (f" of {maximum} (remaining {remaining})" if maximum else
+           " (no validation cap declared)")
+        + f"; wall_clock_seconds={closing.get('wall_clock_seconds')}"
+        + f"; max_rounds={closing.get('max_rounds')}",
+        f"- live capture: "
+        f"{'enabled' if (block.get('live_capture') or {}).get('enabled') else 'disabled'}"
+        " (host-wide process lease still required)",
+        "- last attempt: " + (
+            f"{last.get('operation')} classification={last.get('classification')} "
+            f"qualified={last.get('qualified')} digest={str(last.get('digest') or '')[:16]}"
+            if last else "none recorded"),
+        "- case context: no locator is bound at prepare time; use "
+        "`python3.14 -m automation.agent_tools eu4_session discover --query "
+        "<session-or-case>` and verify before reuse",
+        "- next: run the focused test/module for the touched contract, then "
+        "`eu4_validate_candidate` with the current candidate digest",
+        "- close: `eu4_finalize_candidate` only after a checker pass"
+        + (" and independent review" if closing.get("require_independent_review")
+           else "")
+        + "; an unresolved result must be recorded as a block, not certified",
+        f"- first command: {' '.join(block.get('first_command') or [])}",
+    ]
+    return "\n".join(lines)
 
 
 def _start_attempt(run_root: Path, *, operation: str,
@@ -1908,6 +1959,33 @@ def op_finalize(args) -> int:
         lock.__exit__(None, None, None)
 
 
+def op_context(args) -> int:
+    """Read-only startup/reconnect context; never anchors, probes or locks.
+
+    The initial goal message cannot cover a session resumed after a restart, so
+    this operation rebuilds the same compact facts from the sidecar, anchor and
+    durable attempt history without mutating the campaign.
+    """
+    sidecar = load_sidecar(Path(args.sidecar))
+    roots = _roots(sidecar)
+    block = _startup_block(sidecar, roots)
+    attempts = _validation_attempts(_validation_history(sidecar.run_root))
+    text = _startup_text(block, attempts=attempts)
+    anchored = receipts.read_json(
+        receipts.paths(sidecar.run_root).identity) is not None
+    emit({
+        "ok": True,
+        "operation": "context",
+        "campaign_id": sidecar.campaign_id,
+        "anchored": anchored,
+        "startup": block,
+        "startup_text": text,
+        "goal_text": sidecar.objective_text + "\n\n" + text,
+        "next_command": " ".join(block.get("first_command") or []),
+    })
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python3 -m automation.dsh_bridge",
@@ -1915,8 +1993,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="operation", required=True)
 
-    for name in ("prepare", "validate", "finalize", "checker-compat",
-                 "review-run", "review-verify"):
+    for name in ("prepare", "context", "validate", "finalize",
+                 "checker-compat", "review-run", "review-verify"):
         child = sub.add_parser(name)
         child.add_argument("--sidecar", required=True)
         if name in ("validate", "finalize"):
@@ -1933,6 +2011,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 OPERATIONS = {
     "prepare": op_prepare,
+    "context": op_context,
     "validate": op_validate,
     "finalize": op_finalize,
     "review-run": op_review_run,

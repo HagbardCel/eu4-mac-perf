@@ -117,9 +117,51 @@ class PrepareTests(BridgeTestCase):
         self.assertEqual(startup["allowed_paths"], ["*"])
         self.assertEqual(startup["forbidden_paths"], [])
         self.assertIn(startup["first_command"][0], ("git", "ls"))
+        self.assertIn("workspace:", out["startup_text"])
+        self.assertIn(str(self.workspace.resolve()), out["startup_text"])
+        self.assertIn("validations used 0 of 6", out["startup_text"])
+        self.assertIn("last attempt: none recorded", out["startup_text"])
+        self.assertIn("case context: no locator is bound", out["startup_text"])
+        self.assertTrue(out["goal_text"].startswith(out["objective"]))
+        self.assertIn(out["startup_text"], out["goal_text"])
         # The writability probe must not leave candidate residue.
         self.assertEqual(
             list(self.workspace.glob(".dsh-prepare-probe-*")), [])
+
+    def test_context_is_read_only_and_matches_prepare(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        code, prepared = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK)
+        before = sorted(
+            (path.relative_to(self.run_root).as_posix(), path.stat().st_mtime_ns)
+            for path in self.run_root.rglob("*") if path.is_file())
+        code, context = self.run_bridge("context", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK)
+        self.assertTrue(context["anchored"])
+        self.assertEqual(context["startup_text"], prepared["startup_text"])
+        self.assertEqual(context["goal_text"], prepared["goal_text"])
+        code, again = self.run_bridge("context", sidecar)
+        self.assertEqual(again["startup_text"], context["startup_text"])
+        after = sorted(
+            (path.relative_to(self.run_root).as_posix(), path.stat().st_mtime_ns)
+            for path in self.run_root.rglob("*") if path.is_file())
+        self.assertEqual(before, after)
+
+    def test_startup_text_reports_used_and_remaining_validations(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        self.run_root.mkdir(parents=True, exist_ok=True)
+        rows = [{
+            "attempt_id": f"val-{index}", "operation": "validate",
+            "classification": "pass", "checker_verdict": "pass",
+            "digest": "a" * 64, "qualified": True, "at": index + 1,
+        } for index in range(2)]
+        (self.run_root / "validations.jsonl").write_text(
+            "\n".join(json.dumps(row) for row in rows) + "\n")
+        code, out = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK)
+        self.assertIn("validations used 2 of 6 (remaining 4)",
+                      out["startup_text"])
+        self.assertIn("classification=pass", out["startup_text"])
 
     def test_prepare_refuses_an_unwritable_workspace_before_anchoring(self) -> None:
         sidecar = self.sidecar(self.campaign("smoke-campaign"))
