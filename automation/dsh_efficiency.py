@@ -508,11 +508,24 @@ def analyze(
     last_goal = selected_events[-1] if selected_events else None
     last_phase = last_goal["phase"] if last_goal else None
     terminal_event = None
-    if last_phase != "active":
+    terminal_operations = {"complete", "block", "clear", "cancel",
+                           "cancelled"}
+    if last_phase in terminal_phases:
+        # The transition that produced the current phase, not an arbitrary
+        # historical terminal phase or a later edit of the same phase.
         for row in reversed(selected_events):
-            if row.get("phase") in terminal_phases:
+            if (row.get("phase") == last_phase
+                    and row.get("operation") in terminal_operations):
                 terminal_event = row
                 break
+        if terminal_event is None:
+            for row in reversed(selected_events):
+                if (row.get("phase") == last_phase
+                        and row.get("operation") != "edit"):
+                    terminal_event = row
+                    break
+        if terminal_event is None:
+            terminal_event = last_goal
     start_event = next(
         (row for row in selected_events if row.get("operation") == "create"),
         None)
@@ -531,8 +544,9 @@ def analyze(
         else:
             goal_elapsed = goal_end - goal_start
     elif selected_events:
-        # An active goal has no end event.  Report observed elapsed time
-        # through the observation window, explicitly labelled ongoing.
+        # A non-terminal goal (active or paused) has no end event.  Report
+        # observed elapsed time through the observation window, explicitly
+        # labelled ongoing.
         if goal_start is None:
             # The window may start after the goal was created (for example
             # ``--turn 2``); a zero-length fallback would fabricate a lifetime.
@@ -659,6 +673,7 @@ def analyze(
             "last_operation": last_goal["operation"] if last_goal else None,
             "last_phase": last_phase,
             "active": bool(last_goal and last_phase == "active"),
+            "paused": bool(last_goal and last_phase == "paused"),
             "terminal": bool(last_goal and last_phase in terminal_phases),
             "started_utc": _iso(goal_start),
             "ended_utc": (_iso(goal_end)

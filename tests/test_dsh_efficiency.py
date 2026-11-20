@@ -374,6 +374,51 @@ class GoalPhaseTests(unittest.TestCase):
         self.assertEqual(summary["actions_attempted"], ["replay"])
         self.assertEqual(summary["action_attempted"], "replay")
 
+    def test_paused_goal_has_observed_not_terminal_lifetime(self):
+        events = [
+            {"type": "goal/change", "time": 1000, "data": {
+                "operation": "create",
+                "goal": {"id": "g", "phase": "active", "revision": 1}}},
+            {"type": "goal/change", "time": 2000, "data": {
+                "operation": "block",
+                "goal": {"id": "g", "phase": "blocked", "revision": 2}}},
+            {"type": "goal/change", "time": 3000, "data": {
+                "operation": "resume",
+                "goal": {"id": "g", "phase": "active", "revision": 3}}},
+            {"type": "goal/change", "time": 4000, "data": {
+                "operation": "pause",
+                "goal": {"id": "g", "phase": "paused", "revision": 4}}},
+            {"type": "turn/end", "time": 10000, "data": {
+                "turn": 1, "reason": {"kind": "completed"}}},
+        ]
+        goal = dsh_efficiency.analyze(events)["goal"]
+        self.assertEqual(goal["outcome"], "paused")
+        self.assertTrue(goal["paused"])
+        self.assertFalse(goal["terminal"])
+        self.assertIsNone(goal["ended_utc"])
+        self.assertEqual(goal["duration_kind"], "ongoing")
+        self.assertAlmostEqual(goal["duration_seconds"], 9.0, places=3)
+
+    def test_edit_after_complete_does_not_extend_the_duration(self):
+        events = [
+            {"type": "goal/change", "time": 1000, "data": {
+                "operation": "create",
+                "goal": {"id": "g", "phase": "active", "revision": 1}}},
+            {"type": "goal/change", "time": 2000, "data": {
+                "operation": "complete",
+                "goal": {"id": "g", "phase": "complete", "revision": 2}}},
+            {"type": "goal/change", "time": 7000, "data": {
+                "operation": "edit",
+                "goal": {"id": "g", "phase": "complete", "revision": 3}}},
+            {"type": "turn/end", "time": 10000, "data": {
+                "turn": 1, "reason": {"kind": "completed"}}},
+        ]
+        goal = dsh_efficiency.analyze(events)["goal"]
+        self.assertEqual(goal["outcome"], "completed")
+        self.assertAlmostEqual(goal["duration_seconds"], 1.0, places=3)
+        self.assertTrue(goal["ended_utc"].startswith(
+            "1970-01-01T00:00:02"))
+
     def test_missing_goal_timestamps_do_not_emit_a_duration(self):
         events = [
             {"type": "goal/change", "data": {
