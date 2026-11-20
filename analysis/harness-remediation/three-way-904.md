@@ -54,9 +54,10 @@ with the earlier 916 numbers; different present, draw count and content.
   3,602/119) and not equal to this control.
 - **Not established:** whether the remaining difference is input
   representation, depth/sample/drawable provenance, shader translation or
-  another Metal state. The control has no authentic pre-draw depth image and
-  uses a color-seeded RGBA8 FBO; a live drawable with different depth precision
-  or samples would produce a different result.
+  another Metal state. The control uses the sealed event-7 clear-to-1.0 depth
+  history rather than a captured depth image, and it renders into a
+  color-seeded RGBA8 FBO; a live drawable with different depth precision or
+  samples would produce a different result.
 - **Control unqualified:** under exact four-channel qualification this control
   is not admissible for Metal blame (`metal_blame_allowed=false`); the 4/1
   residual is not parity. The smallest missing observation is the default
@@ -90,9 +91,13 @@ PY
 
 ## Smallest next discriminator
 
-Obtain one authentic pre-draw depth/sample/drawable observation for draw 14 on
-this seal and reconstruct the control with that state. If the control then
-matches live GL at checkpoint 15 exactly, the remaining Metal residual is a
-renderer-side candidate; if it still differs, the missing observation is the
-next input to identify. Do not rerun the broad DDS search or a window drawable
-control: the window control already showed 1.4M alpha mismatches.
+The 904 measurements above are retained unchanged. Do not mint a new capture
+with the historical 904 seal and do not treat any image produced under it as a
+control for later observations. The missing drawable and prior-frame
+observations must come from a new sealed capture; that capture must be paired
+with a new original-API control rendered from its own stream, resources and
+checkpoint. Only zero differing BGRA bytes between the new control and the new
+capture's live GL permit a Metal residual to be considered; otherwise name the
+next missing observation before any parity or blame claim. Do not rerun the
+broad DDS search or a window drawable control: the window control already
+showed 1.4M alpha mismatches.
