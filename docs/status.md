@@ -20,18 +20,18 @@ history and must be read with its original run/seal identity.
 
 ### Capability snapshot
 
-As of this snapshot #241–#258 are merged. This documentation follow-up is the
-only open remediation PR; the ledger-integrity and control-authority P0 fixes
-are separate PRs and are not yet opened. Exact head SHAs, review records and
-dependency order are in the [coverage matrix](../plans/harness-review/implementation.md)
-and the [exact-head audit](../analysis/harness-remediation/audit-20261120.md).
+As of this snapshot #241–#261 are merged. This final documentation follow-up is
+the only open remediation PR. Exact head SHAs, review records and dependency
+order are in the [coverage matrix](../plans/harness-review/implementation.md),
+the [exact-head audit](../analysis/harness-remediation/audit-20261120.md) and
+the [scientific continuation](../analysis/harness-remediation/scientific-continuation-20261120.md).
 
-GitHub has no `APPROVE` review for #241–#258. #258's independent exact-head
-review is recorded on the PR as a review comment, not an `APPROVE` state,
-because the only available GitHub identity is the author and GitHub refuses
-self-approval. The historical audit verdicts are technical review evidence, not
-formal approvals; green CI, green tests and an audit session's self-report are
-not approvals.
+GitHub has no `APPROVE` review for #241–#261. Each follow-up's independent
+exact-head review is recorded on its PR as a review comment, not an `APPROVE`
+state, because the only available GitHub identity is the author and GitHub
+refuses self-approval. The historical audit verdicts are technical review
+evidence, not formal approvals; green CI, green tests and an audit session's
+self-report are not approvals.
 
 | Area | State | Evidence / scope | Smallest missing discriminator |
 |---|---|---|---|
@@ -39,13 +39,13 @@ not approvals.
 | Exact verdict semantics | **Merged and audit-reviewed** | PR #241 final `3be433f7`; raw exactness separated from policy; envelope hard cap. #258 `8a5d4bc2` fixes the residual report-locator cap and malformed-evidence tracebacks; merged `d29f45f0` after independent exact-head review. | No missing discriminator for the envelope contract; non-blocking residuals are named in the audit |
 | Event/writer attribution | **Merged; audit-reviewed** | PR #242 final `7bcaaa1c`; capture identity from validated graph/checkpoint records; 616/904 matrices generated | Regenerate present 904/616 rows from the sealed graph |
 | Compressed texture capture/replay | **Merged; audit-reviewed** | PR #244 final `cd4245cf`; complete/partial/mixed/unsupported chains; rendered BC1 alpha and compressed/decoded orientation equality | Same-seal decoded-vs-block pixel comparison on present 904 |
-| Live-GL control | **Blocked (scientific)** | Offline GL does not reproduce live GL; the 904 drawable sample/bit-depth and prior-frame observations are missing, and the stored control is unqualified at 15 (5/1) and 16 (4,645/86). The 904 measurements are historical and preserved unchanged; do not mint a new capture with the 904 seal | A newly sealed capture, paired with a new original-API control from that capture's own stream/resources/checkpoint, exact on all four BGRA channels |
-| Campaign claim integrity | **Unresolved (P0)** | `CampaignClaims.rows()` skips malformed rows and treats an unreadable ledger as zero attempts, so corrupt state can reset the validation budget | Fail-closed read, explicit integrity refusal before the checker, cross-process and interrupted-write regressions |
-| Original-API control authority | **Unresolved (P0)** | Qualification uses pixel equality plus optional drawable/prestate; it does not authenticate frame/stream/resource/checkpoint identity or original-API execution, so an exact image from a different seal can qualify | Separate comparison, authenticated qualification and attribution permission; different-seal and missing-evidence cases explicitly unqualified |
+| Live-GL control | **Blocked (scientific)** | Offline GL does not reproduce live GL; the first non-exact checkpoint is 15 (4 px / max 1, first pixel (209,50)), the 904 drawable sample/bit-depth and prior-frame observations are missing, and the stored control is unqualified at 15 (5/1) and 16 (4,645/86). The 904 measurements are historical and preserved unchanged; do not mint a new capture with the 904 seal | A newly sealed capture, paired with a new original-API control from that capture's own stream/resources/checkpoint, exact on all four BGRA channels; see the [scientific continuation](../analysis/harness-remediation/scientific-continuation-20261120.md) |
+| Campaign claim integrity | **Fixed (P0 #260)** | Corrupt, truncated or unreadable `claims.jsonl` now raises `ClaimLedgerError`; the bridge refuses with exit 3 before the checker, and a corrupt ledger cannot reset the budget | No remaining gap for the reader; a repair tool is deliberately absent |
+| Original-API control authority | **Fixed, fail-closed (P0 #261)** | Checkpoint identity comes from the sealed event record, all referenced blobs are verified, the renderer runs under a challenge and receipt, and only a renderer in the checked-in registry can authorize blame. The registry is empty, so no control qualifies | Populate `AUTHORITIES` only after the receipt is bound to the registered renderer (signed/registered key); that is a separate reviewed change |
 | Sampler/raster state | **Merged; audit-reviewed** | PR #245 final `ada20dbc`; full sampler key incl. compare-to-texture, cull gating and rendered front/back, signed scissor/viewport | Rendered front/back against an authentic draw |
 | Translation/replay identity | **Merged; audit-reviewed** | PR #248 final `1bffc7cb`; exact child env recent recipe, diagnostic-recipe rejection, cache repair, native MSL-byte keys | Fix recipe/cache findings; native function/pipeline cache audit |
 | Campaign lifecycle | **Merged; audit-reviewed** | #246 `8c17f779`, #249 `555447fb`, #250 `401d6863` and #256 `c403f06e`; per-session write roots, exactly-once reservations, terminal cleanup | Live wall-time measurement through restoration |
-| Metrics/documentation | **Merged; trials outstanding** | PR #251 `050f9272` accepted; service unions/GPU unknown, 3 focused runner calls, A/B measurements. #252's matrix needed post-merge state corrections (#257 and this follow-up). | Three paired efficiency trials (`outstanding`), measuring wall time, launches, GPU service where available, cache hits and diagnostic attempts |
+| Metrics/documentation | **Merged; trials outstanding** | PR #251 `050f9272` accepted; service unions/GPU unknown, 3 focused runner calls, A/B measurements. #252's matrix needed post-merge state corrections (#257, #259 and this follow-up). | Three paired efficiency trials (`outstanding`), measuring wall time, launches, GPU service where available, cache hits and diagnostic attempts |
 | Authentic renderer parity | **Not established** | Latest authentic pilot localized [14, 15]; no accepted terrain correction | Exact control equality at the first differing writer |
 
 ### Current authentic observations
@@ -66,7 +66,8 @@ accepted renderer correction or live wall-time savings without the exact
 qualifying evidence named above. Do not create a new capture under the
 historical present-904 seal, and do not combine the 904 measurements with a
 later seal as a before/after comparison. New observations require a new seal
-and a new control for that seal.
+and a new control for that seal. Do not add a renderer to `AUTHORITIES` and do
+not claim Metal attribution while the registry is empty.
 
 ## Historical status (retained)
 
