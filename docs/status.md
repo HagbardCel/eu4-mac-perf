@@ -20,22 +20,20 @@ history and must be read with its original run/seal identity.
 
 ### Capability snapshot
 
-No PR in this snapshot is merged. **Verified locally** means technical evidence
-at the named head, not independent approval. Exact head SHAs, open review
-findings and dependency order are in the
-[coverage matrix](../plans/harness-review/implementation.md).
+As of this snapshot #241–#254 are merged; #256 and #257 are the only open PRs; #257 is this documentation reconciliation. Exact head SHAs, review states and dependency order are
+in the [coverage matrix](../plans/harness-review/implementation.md).
 
 | Area | State | Evidence / scope | Smallest missing discriminator |
 |---|---|---|---|
 | Sealed same-frame differential | **Established** | Capture, seal, shadow, offline replay and exact four-channel comparator; all channels are compared | — |
-| Exact verdict semantics | **Verified locally; approval pending** | PR #241 head `818e8360`; policy pass is separate from raw zero statistics; Codex P2 re-checked fixed | Authentic case with a policy override and alpha-only negative |
-| Event/writer attribution | **Verified locally; approval pending** | PR #242 head `6a52e005`; graph-derived `provenance_matrix`; two Codex P2 findings re-checked fixed | Regenerate present 904/616 rows from the sealed graph |
-| Compressed texture capture/replay | **Verified locally; approval pending** | PR #244 head `b274eeb6`; complete/partial/mixed/unsupported chain contract; synthetic rendered BC1 alpha and row-flip fixtures on the branch (unmerged) | Same-seal decoded-vs-block pixel comparison on present 904 |
-| Live-GL control | **Blocked (scientific)** | Offline GL does not reproduce live GL; depth/sample/drawable provenance missing. A local unmerged recomputation on `analysis/harness-904-three-way` confirms the stored control still differs | Authentic selected-draw control with valid color+depth prestate and all-channel comparison |
-| Sampler/raster state | **Verified locally; approval pending** | PR #245 head `843a05cc`; full sampler key, cull faces, signed scissor; rendered winding fixture on the branch (unmerged, stacked on #244) | Rendered front/back against an authentic draw |
-| Translation/replay identity | **Partial; review findings open** | PR #248 head `aeb4e97d`; effective compiler key, tool identity, recipe-bound receipts; three Codex P2 findings open | Fix recipe/cache findings; native function/pipeline cache audit |
-| Campaign lifecycle | **Partial; review findings open** | PRs #246 `ea204014`, #249 `5270fc1c`, #250 `44e547cb`; safe publication, terminal capture, exactly-once reserving, no-progress; open P2 findings | Per-session write roots; live wall-time measurement |
-| Metrics/documentation | **Verified locally; approval pending** | PR #251 head `7c95d804` and this PR; explicit unknown GPU time, dated canonical docs, byte-identical restore check | Three paired pilot trials |
+| Exact verdict semantics | **Merged and reviewed** | PR #241 final `3be433f7`; raw exactness separated from policy; envelope hard cap | Authentic case with a policy override and alpha-only negative |
+| Event/writer attribution | **Merged and reviewed** | PR #242 final `7bcaaa1c`; capture identity from validated graph/checkpoint records; 616/904 matrices generated | Regenerate present 904/616 rows from the sealed graph |
+| Compressed texture capture/replay | **Merged and reviewed** | PR #244 final `cd4245cf`; complete/partial/mixed/unsupported chains; rendered BC1 alpha and compressed/decoded orientation equality | Same-seal decoded-vs-block pixel comparison on present 904 |
+| Live-GL control | **Blocked (scientific)** | Offline GL does not reproduce live GL; depth/sample/drawable provenance missing. The merged three-way analysis (#253, `2596b50e`) confirms the stored control still differs | Authentic selected-draw control with valid color+depth prestate and all-channel comparison |
+| Sampler/raster state | **Merged and reviewed** | PR #245 final `ada20dbc`; full sampler key incl. compare-to-texture, cull gating and rendered front/back, signed scissor/viewport | Rendered front/back against an authentic draw |
+| Translation/replay identity | **Merged and reviewed** | PR #248 final `1bffc7cb`; exact child env recent recipe, diagnostic-recipe rejection, cache repair, native MSL-byte keys | Fix recipe/cache findings; native function/pipeline cache audit |
+| Campaign lifecycle | **Partial; final approvals pending** | PRs #246 `8c17f779` merged; #249 `555447fb` and #250 `401d6863` await final review | Per-session write roots; live wall-time measurement |
+| Metrics/documentation | **Merged and reviewed** | PR #251 `050f9272`; service unions/GPU unknown, 3 focused runner calls, A/B measurements; docs matrix follow-up | Three paired pilot trials |
 | Authentic renderer parity | **Not established** | Latest authentic pilot localized [14, 15]; no accepted terrain correction | Exact control equality at the first differing writer |
 
 ### Current authentic observations

@@ -80,8 +80,8 @@ campaign checker.
 
 ## Current verification boundary
 
-The authentic 615/616/904 frames localized the first divergence to the
-14→15 interval but have not established a renderer cause. The offline GL control
+The authentic 616/904 frames localized the first divergence to the 14→15
+interval; present 615 remains [14, 17]. No renderer cause is established. The offline GL control
 still disagrees with live GL, so it cannot assign blame. Do not promote a
 control result to parity or an accepted correction. Current capability state:
 [status](status.md). Historical evidence:
