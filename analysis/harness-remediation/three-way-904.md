@@ -57,6 +57,10 @@ with the earlier 916 numbers; different present, draw count and content.
   another Metal state. The control has no authentic pre-draw depth image and
   uses a color-seeded RGBA8 FBO; a live drawable with different depth precision
   or samples would produce a different result.
+- **Control unqualified:** under exact four-channel qualification this control
+  is not admissible for Metal blame (`metal_blame_allowed=false`); the 4/1
+  residual is not parity. The smallest missing observation is the default
+  drawable's sample count, sample buffers and depth/stencil/color bit depths.
 - **Not established:** parity, event-16 equivalence, a contiguous verified
   prefix, or an accepted correction. Do not claim any of these from this table.
 
