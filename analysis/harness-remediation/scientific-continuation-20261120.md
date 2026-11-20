@@ -100,6 +100,10 @@ observation is named and the experiment stops again.
 - No Metal correction was attempted.
 - No independent acceptance test was run.
 - No speculative shader sweep was performed.
+- A new bounded capture was **not** performed in this session: the missing
+  observation is named, and the next run must pair the new seal with its own
+  control and a separately reviewed renderer registry entry. Do not reuse the
+  904 seal to shorten that experiment.
 - Attribution remains **inconclusive**; the next experiment is the bounded
   new-seal capture plus its own control described above.
 
