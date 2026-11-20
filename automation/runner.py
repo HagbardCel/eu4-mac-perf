@@ -435,6 +435,10 @@ class Runner:
         fingerprint = previous.get("fingerprint")
         if not isinstance(fingerprint, dict):
             return False
+        if fingerprint.get("truncated"):
+            # The bounded fingerprint cannot prove the candidate unchanged;
+            # allow the reconnect to inspect the substantive work.
+            return False
         if fingerprint.get("candidate_sha256") != self._candidate_digest():
             return False
         if fingerprint.get("verdict") != state.get("last_verdict"):
@@ -455,6 +459,12 @@ class Runner:
             state.pop("no_progress", None)
             return False
         candidate = self._candidate_digest()
+        if candidate_fingerprint(self.live).get("truncated"):
+            # A truncated content fingerprint may hide a substantive change.
+            # Never pause solely on it; the next round may inspect the work.
+            state.pop("no_progress", None)
+            save_state(self.state_path, state)
+            return False
         diagnostics = hashlib.sha256(
             str(outcome.get("diagnostics") or "").encode("utf-8")).hexdigest()
         fingerprint = {
