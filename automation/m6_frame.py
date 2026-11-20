@@ -1209,7 +1209,7 @@ def capture(args: argparse.Namespace) -> int:
                 for item in campaign_frames
             ],
         }
-    cleanup_ok = report.get("cleanup_ok") is not False
+    cleanup_ok = report.get("cleanup_ok") is True
     cleanup_errors = list(report.get("cleanup_errors") or [])
     display_record = report.get("display")
     result["cleanup"] = {

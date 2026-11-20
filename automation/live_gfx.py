@@ -280,7 +280,7 @@ def _finish_launch(
 
 
 def _capture_status(report: dict, *, until_target_draw: bool = False) -> tuple[str, str]:
-    if report.get("cleanup_ok") is False:
+    if report.get("cleanup_ok") is not True:
         detail = "; ".join(report.get("cleanup_errors") or [])
         return "unavailable", "cleanup_failed" + (f": {detail}" if detail else "")
     status = report.get("status")

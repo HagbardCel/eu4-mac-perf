@@ -296,8 +296,10 @@ def run(
         cleanup = _cleanup_owned_launch(
             None, stdout=stdout, stderr=stderr,
             display_session=display_session, lease=lease)
+        setattr(exc, "cleanup_errors", cleanup["errors"])
         if not cleanup["ok"]:
-            setattr(exc, "cleanup_errors", cleanup["errors"])
+            exc.args = (
+                f"{exc}; cleanup failed: " + "; ".join(cleanup["errors"]),)
         raise
     status_path = run_dir / "startup.status"
     deadline = time.monotonic() + wait_seconds
@@ -782,12 +784,15 @@ def run_ops(
         cleanup = _cleanup_owned_launch(
             None, stdout=stdout, stderr=stderr,
             display_session=display_session, lease=lease)
+        setattr(exc, "cleanup_errors", cleanup["errors"])
         if not cleanup["ok"]:
-            setattr(exc, "cleanup_errors", cleanup["errors"])
+            exc.args = (
+                f"{exc}; cleanup failed: " + "; ".join(cleanup["errors"]),)
         raise
     status_path = run_dir / "startup.status"
     status = None
     deadline = time.monotonic() + timeout_s + 20.0
+    wait_error = None
     try:
         while time.monotonic() < deadline:
             if status_path.is_file():
@@ -805,12 +810,43 @@ def run_ops(
         if status is not None and status.get("state") == "installed":
             wait_reason = _wait_pair(
                 run_dir, game, deadline, terminal=terminal_result)
+    except BaseException as exc:  # cleanup must still run and be reported
+        wait_error = exc
     finally:
         # Each step is attempted even when an earlier one fails.  The
         # aggregate record is the only authority for cleanup success.
         cleanup = _cleanup_owned_launch(
             game, stdout=stdout, stderr=stderr,
             display_session=display_session, lease=lease)
+    if wait_error is not None:
+        # A wait/startup error must not hide termination, display or lease
+        # failures behind an unrelated exception.  Publish the cleanup record
+        # and carry it on the exception before propagating.
+        cleanup_ok = bool(cleanup.get("ok"))
+        failure = ("cleanup failed: " + "; ".join(cleanup.get("errors") or [])
+                   if not cleanup_ok else f"{type(wait_error).__name__}: "
+                                          f"{wait_error}")
+        failure_report = {
+            "schema": "live-gfx-capture-report/v0",
+            "run_dir": str(run_dir), "session": session, "pid": game.pid,
+            "wait_reason": wait_reason,
+            "cleanup": cleanup, "cleanup_ok": cleanup_ok,
+            "cleanup_errors": cleanup.get("errors") or [],
+            "process_alive": cleanup.get("process_alive"),
+            "terminal_shadow": wait_reason.startswith("terminal"),
+            "evidence": evidence, "status": status,
+            "termination": cleanup.get("termination"),
+            "display": cleanup.get("display"), "lease": cleanup.get("lease"),
+            "accepted": False, "outcome": "failed", "failure": failure,
+        }
+        (run_dir / "launcher-report.json").write_text(
+            json.dumps(failure_report, indent=2) + "\n")
+        setattr(wait_error, "cleanup_errors", cleanup.get("errors") or [])
+        if not cleanup_ok:
+            wait_error.args = (
+                f"{wait_error}; cleanup failed: "
+                + "; ".join(cleanup.get("errors") or []),)
+        raise wait_error
     summary = {}
     if (run_dir / "summary.json").is_file():
         try:
