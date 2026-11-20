@@ -17,6 +17,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "benchmark"
 HOST = ROOT / "tests" / "gfx_shadow_receipt_host.mm"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from automation import native_build  # noqa: E402
 
 
 def _sha(path: Path) -> str:
@@ -42,14 +46,14 @@ class ShadowReceiptTests(unittest.TestCase):
     def setUpClass(cls):
         cls.temporary = tempfile.TemporaryDirectory()
         cls.host = Path(cls.temporary.name) / "shadow_receipt_host"
-        built = subprocess.run(
+        native_build.require_build(
             ["clang", "-arch", "arm64", "-O2", "-fobjc-arc", "-I", str(ROOT),
              "-I", str(BENCH), "-framework", "Foundation",
              "-framework", "Metal", "-framework", "CoreGraphics",
              "-Wl,-dead_strip", "-o", str(cls.host), str(HOST)],
-            capture_output=True, text=True, check=False, timeout=180)
-        if built.returncode:
-            raise unittest.SkipTest(built.stderr.strip())
+            label="shadow-receipt-host", sources=[HOST],
+            frameworks=("Foundation", "Metal", "CoreGraphics"),
+            require_arm64=True, timeout=180)
 
     @classmethod
     def tearDownClass(cls):
