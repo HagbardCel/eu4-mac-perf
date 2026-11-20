@@ -181,10 +181,6 @@ class PathAllowlistTests(unittest.TestCase):
                 )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class WorkspaceBaseTests(unittest.TestCase):
     """The candidate is agent-writable; the records must not be."""
 
@@ -270,6 +266,16 @@ class LauncherSmokeCompatibilityTests(unittest.TestCase):
         self.assertEqual(second.validation_timeout_seconds, 60.0)
         self.assertEqual(first.wall_clock_seconds, 900.0)
         self.assertEqual(second.wall_clock_seconds, 1800.0)
+        self.assertEqual(first.max_identical_retries, 0)
+        self.assertEqual(second.max_identical_retries, 0)
+        self.assertEqual(first.max_review_attempts, 2)
+        self.assertEqual(second.max_review_attempts, 2)
+        self.assertEqual(first.evidence_paths, ())
+        self.assertEqual(second.evidence_paths, ())
+        self.assertEqual(first.replay_inputs, ())
+        self.assertEqual(second.replay_inputs, ())
+        self.assertFalse(first.allow_incomplete_inputs)
+        self.assertFalse(second.allow_incomplete_inputs)
         self.assertFalse(first.live_capture_enabled)
         self.assertFalse(second.live_capture_enabled)
         # The sidecar identities, run roots and explicit wall limits stay
@@ -278,3 +284,7 @@ class LauncherSmokeCompatibilityTests(unittest.TestCase):
         self.assertNotEqual(first.run_root, second.run_root)
         self.assertNotEqual(first.wall_clock_seconds,
                             second.wall_clock_seconds)
+
+
+if __name__ == "__main__":
+    unittest.main()
