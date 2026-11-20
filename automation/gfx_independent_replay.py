@@ -2269,10 +2269,15 @@ def classify_diagnosis(*, capture_validity: str, identity: str,
         classification = "gpu_execution_failure"
     elif capture_validity == "invalid" or provenance == "invalid":
         classification = "invalid_provenance"
-    elif capture_validity != "valid":
-        classification = "incomplete_capture"
     elif identity == "mismatch":
         classification = "invalid_provenance"
+    elif identity in ("missing", "incomplete", "unverified_session"):
+        # A standalone/relocated replay has no verified session binding.  That
+        # is an identity limitation, not evidence that the captured frame is
+        # incomplete; report it as missing diagnostic evidence.
+        classification = "incomplete_diagnostics"
+    elif capture_validity != "valid":
+        classification = "incomplete_capture"
     elif identity != "verified":
         # Unknown/unsealed/standalone identities are never positive evidence.
         # A legacy classifier must not be able to advertise equivalence for a
