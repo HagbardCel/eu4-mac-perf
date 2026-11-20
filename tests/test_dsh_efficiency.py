@@ -448,6 +448,25 @@ class GoalPhaseTests(unittest.TestCase):
         self.assertIsNone(goal["ended_utc"])
         self.assertIsNotNone(goal["cleared_utc"])
 
+    def test_clear_tombstone_without_terminal_transition_is_not_completion(self):
+        events = [
+            {"type": "goal/change", "time": 1000, "data": {
+                "operation": "create",
+                "goal": {"id": "g", "phase": "active", "revision": 1}}},
+            {"type": "goal/change", "time": 5000, "data": {
+                "operation": "clear",
+                "cleared": {"id": "g", "revision": 1}}},
+        ]
+        goal = dsh_efficiency.analyze(events)["goal"]
+        self.assertEqual(goal["outcome"], "cleared")
+        self.assertNotEqual(goal["outcome"], "completed")
+        self.assertTrue(goal["cleared"])
+        self.assertTrue(goal["terminal"])
+        self.assertEqual(goal["duration_kind"], "terminal")
+        self.assertAlmostEqual(goal["duration_seconds"], 4.0, places=3)
+        self.assertTrue(goal["ended_utc"].startswith(
+            "1970-01-01T00:00:05"))
+
     def test_capture_help_is_not_a_physical_launch(self):
         events = [
             {"type": "tool/call", "time": 1000, "data": {
@@ -474,9 +493,82 @@ class GoalPhaseTests(unittest.TestCase):
         ]
         value = dsh_efficiency.analyze(events)
         self.assertEqual(value["physical_work"]["runner_invocations"], 1)
+        self.assertEqual(value["physical_work"]["runner_focused_invocations"], 1)
         self.assertEqual(value["physical_work"]["game_launch_commands"], 0)
-        self.assertIsNone(value["physical_work"]["confirmed_game_launches"])
+        self.assertEqual(value["physical_work"]["confirmed_game_launches"], 0)
         self.assertIsNone(value["service"]["gpu_service_seconds"])
+        self.assertIsNone(value["physical_work"]["gpu_service_seconds"])
+
+    def test_duplicate_identical_runner_invocation_counts_once(self):
+        command = ("python3.14 -m automation.test_runner run --profile offline "
+                   "--module tests.test_agent_tools")
+        events = []
+        for index in range(2):
+            call_id = f"r{index}"
+            events.append({"type": "tool/call", "time": 1000 + index,
+                           "data": {"callId": call_id, "name": "bash",
+                                    "arguments": {"command": command}}})
+            events.append({"type": "tool/result", "time": 2000 + index,
+                           "data": {"toolCallId": call_id,
+                                    "message": {"isError": False, "content": [
+                                        {"type": "text",
+                                         "text": "Ran 5 tests in 0.1s\n"}]}}})
+        value = dsh_efficiency.analyze(events)
+        self.assertEqual(value["physical_work"]["runner_invocations"], 1)
+        self.assertEqual(
+            value["physical_work"]["runner_repeated_invocations"], 1)
+        self.assertEqual(value["tests"]["test_invocations"], 1)
+        self.assertEqual(value["tests"]["runner_tests_executed"], 5)
+
+    def test_runner_help_discovery_and_status_are_not_focused_work(self):
+        events = []
+        commands = [
+            "python3.14 -m automation.test_runner run --help",
+            "python3.14 -m automation.test_runner status --id abc",
+            "python3.14 -m automation.test_runner run --profile offline",
+        ]
+        for index, command in enumerate(commands):
+            call_id = f"c{index}"
+            events.append({"type": "tool/call", "time": 1000 + index,
+                           "data": {"callId": call_id, "name": "bash",
+                                    "arguments": {"command": command}}})
+            events.append({"type": "tool/result", "time": 2000 + index,
+                           "data": {"toolCallId": call_id,
+                                    "message": {"isError": False,
+                                                "content": []}}})
+        value = dsh_efficiency.analyze(events)
+        self.assertEqual(value["physical_work"]["runner_invocations"], 0)
+        self.assertEqual(value["physical_work"]["runner_full_invocations"], 1)
+        self.assertEqual(value["physical_work"]["game_launch_commands"], 0)
+
+    def test_gpu_service_time_is_explicitly_unknown(self):
+        events = [
+            {"type": "tool/call", "time": 1000, "data": {
+                "callId": "r1", "name": "bash",
+                "arguments": {"command":
+                              "python3.14 -m automation.test_runner run "
+                              "--module tests.test_dsh_efficiency"}}},
+            {"type": "job/registered", "time": 1001, "data": {
+                "jobId": "j1", "startedAt": 1001000, "label": "gate"}},
+            {"type": "job/settled", "time": 9000, "data": {
+                "jobId": "j1", "startedAt": 1001000, "finishedAt": 9001000,
+                "status": "completed"}},
+            {"type": "tool/result", "time": 9500, "data": {
+                "toolCallId": "r1", "message": {"isError": False,
+                                                "content": []}}},
+        ]
+        value = dsh_efficiency.analyze(events)
+        service = value["service"]
+        self.assertIsNone(service["gpu_service_seconds"])
+        self.assertIn("gpu_service_seconds", service["unknown"])
+        self.assertIsNone(value["summary"]["gpu_work"][
+            "gpu_service_seconds"])
+        self.assertAlmostEqual(service["job_service_union_seconds"], 8000.0,
+                               places=3)
+        self.assertAlmostEqual(service["client_wall_seconds"], 8.5, places=3)
+        # Service time is never promoted to a GPU measurement.
+        self.assertNotEqual(service["gpu_service_seconds"],
+                            service["client_wall_seconds"])
 
     def test_overlapping_tool_waits_are_not_double_counted(self):
         events = [
@@ -604,9 +696,6 @@ class GoalPhaseTests(unittest.TestCase):
                          ("completed", "diagnosis_or_correction"))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class LaunchCommandBoundaryTests(unittest.TestCase):
     def analyze(self, *commands):
@@ -661,3 +750,107 @@ class LaunchCommandBoundaryTests(unittest.TestCase):
             "PY\n"
             "python3 -m automation.m6_frame capture --output /tmp/b")
         self.assertEqual(value["eu4_launches"]["count"], 1)
+
+
+class PhysicalLaunchJoinTests(unittest.TestCase):
+    OUTPUT = ".local/m7/goal-round1/capture-a"
+    STATE = ".local/m7/goal-round1/state.json"
+
+    def analyze(self, *, claim=True, process=True, termination=True):
+        events = []
+
+        def call(call_id, moment, command, text):
+            events.append({"type": "tool/call", "time": moment, "data": {
+                "callId": call_id, "name": "bash",
+                "arguments": {"command": command}}})
+            events.append({"type": "tool/result", "time": moment + 100, "data": {
+                "toolCallId": call_id,
+                "message": {"isError": False, "content": [
+                    {"type": "text", "text": text}]}}})
+
+        call("capture", 1000,
+             f'export EU4_CAMPAIGN_STATE="$PWD/{self.STATE}" && '
+             f"python3.14 -m automation.m6_frame capture "
+             f"--output {self.OUTPUT}",
+             "started background job bash-1")
+        if claim:
+            call("guard", 2000,
+                 "python3.14 -m automation.campaign_guard status "
+                 f"--state {self.STATE}",
+                 "counts {'corrections': 0, 'eu4_launches': 1, "
+                 "'replays': 0, 'sealed_frames': 1} remaining {}")
+        if process:
+            call("ps", 3000, "ps -axo pid,etime,comm | grep eu4",
+                 "12345       00:07 ./eu4")
+        if termination:
+            call("launcher", 4000,
+                 f"cat {self.OUTPUT}/launcher-report.json",
+                 ('termination {"pid": 12345, "terminated": true, '
+                  '"killed": false, "executable": '
+                  '"/Applications/EuropaUniversalisIV/eu4.app/Contents/'
+                  'MacOS/eu4"}' if process else
+                  "capture-a terminated True killed False"))
+        return dsh_efficiency.analyze(events)
+
+    def test_guard_claim_pid_and_termination_join_one_launch(self):
+        value = self.analyze()
+        self.assertEqual(value["eu4_launches"]["count"], 1)
+        self.assertEqual(value["physical_work"]["confirmed_game_launches"], 1)
+        confirmed = value["physical_work"]["confirmed_launch_evidence"][0]
+        self.assertEqual(confirmed["claim"]["kind"], "guard_count")
+        self.assertEqual(confirmed["process"]["pid"], 12345)
+        self.assertEqual(confirmed["termination"]["pid"], 12345)
+        self.assertEqual(
+            value["physical_work"]["ambiguous_launch_attempts"], [])
+
+    def test_claim_without_termination_is_not_confirmed(self):
+        value = self.analyze(termination=False)
+        self.assertEqual(value["physical_work"]["confirmed_game_launches"], 0)
+        ambiguous = value["physical_work"]["ambiguous_launch_attempts"]
+        self.assertEqual(len(ambiguous), 1)
+        self.assertEqual(ambiguous[0]["reason"], "claim_without_termination")
+        self.assertEqual(ambiguous[0]["missing"], ["termination"])
+
+    def test_claim_without_process_identity_is_not_confirmed(self):
+        value = self.analyze(process=False)
+        self.assertEqual(value["physical_work"]["confirmed_game_launches"], 0)
+        ambiguous = value["physical_work"]["ambiguous_launch_attempts"]
+        self.assertEqual(ambiguous[0]["reason"],
+                         "claim_without_process_identity")
+
+    def test_launch_without_guard_claim_is_not_confirmed(self):
+        value = self.analyze(claim=False)
+        self.assertEqual(value["physical_work"]["confirmed_game_launches"], 0)
+        ambiguous = value["physical_work"]["ambiguous_launch_attempts"]
+        self.assertEqual(ambiguous[0]["reason"], "launch_without_guard_claim")
+
+    def test_failed_attempt_stays_separate_from_confirmed_launches(self):
+        events = []
+        events.append({"type": "tool/call", "time": 1000, "data": {
+            "callId": "capture", "name": "bash",
+            "arguments": {"command":
+                          "python3.14 -m automation.m6_frame capture "
+                          "--output .local/m7/capture-a"}}})
+        events.append({"type": "tool/result", "time": 1100, "data": {
+            "toolCallId": "capture", "message": {"isError": False, "content": [
+                {"type": "text", "text": "capture failed: refused\n"
+                                         "[exit code: 4]"}]}}})
+        events.append({"type": "tool/call", "time": 2000, "data": {
+            "callId": "guard", "name": "bash",
+            "arguments": {"command":
+                          "python3.14 -m automation.campaign_guard status "
+                          "--state .local/m7/state.json"}}})
+        events.append({"type": "tool/result", "time": 2100, "data": {
+            "toolCallId": "guard", "message": {"isError": False, "content": [
+                {"type": "text", "text":
+                 "counts {'eu4_launches': 1} remaining {}"}]}}})
+        value = dsh_efficiency.analyze(events)
+        physical = value["physical_work"]
+        self.assertEqual(physical["confirmed_game_launches"], 0)
+        self.assertEqual(len(physical["failed_launch_attempts"]), 1)
+        self.assertEqual(physical["failed_launch_attempts"][0]["status"],
+                         "failed")
+
+
+if __name__ == "__main__":
+    unittest.main()
