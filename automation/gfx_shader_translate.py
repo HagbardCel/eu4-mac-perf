@@ -455,9 +455,14 @@ def translate_stage(
             text, varying_locations, "out" if stage == "vertex" else "in"
         )
     suffix = _stage_kind(stage)
-    glsl_path = out_dir / f"{sha}.{suffix}.glsl"
-    spv_path = out_dir / f"{sha}.{suffix}.spv"
-    msl_path = out_dir / f"{sha}.{suffix}.metal"
+    # The effective compiler input is the normalized source *after* explicit
+    # attribute/varying locations are injected.  Keying output paths by the raw
+    # source SHA let two programs that share source but differ in linkage
+    # overwrite one another even on a cold build.
+    compiler_key = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    glsl_path = out_dir / f"{compiler_key}.{suffix}.glsl"
+    spv_path = out_dir / f"{compiler_key}.{suffix}.spv"
+    msl_path = out_dir / f"{compiler_key}.{suffix}.metal"
     glsl_path.write_text(text)
     compiled = _run(
         [glslang, "-V", "--aml", "-S", suffix, str(glsl_path), "-o", str(spv_path)]
@@ -485,9 +490,7 @@ def translate_stage(
     return {
         "stage": stage,
         "source_sha256": sha,
-        "compiler_sha256": hashlib.sha256(
-            compiler_input(source_text).encode()
-        ).hexdigest(),
+        "compiler_sha256": compiler_key,
         "attribute_locations": complete_locations if stage == "vertex" else {},
         "glsl_file": glsl_path.name,
         "spv_file": spv_path.name,

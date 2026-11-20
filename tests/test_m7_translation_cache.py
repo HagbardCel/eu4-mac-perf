@@ -83,6 +83,34 @@ class TranslationCacheTests(unittest.TestCase):
             m6_frame._shader_source_identity(other),
             identity)
 
+    def test_swapped_attribute_locations_change_the_cache_identity(self):
+        trace = m6_frame.load_trace(self.frame)
+        event = trace["_events"][0]
+        event["attributes"] = [
+            {"name": "in_POSITION", "location": 0},
+            {"name": "in_TEXCOORD", "location": 1},
+        ]
+        first = m6_frame._shader_source_identity(trace)
+        event["attributes"] = [
+            {"name": "in_POSITION", "location": 1},
+            {"name": "in_TEXCOORD", "location": 0},
+        ]
+        second = m6_frame._shader_source_identity(trace)
+        self.assertNotEqual(first["sha256"], second["sha256"])
+        self.assertEqual(
+            first["programs"]["7"]["attribute_locations"],
+            {"in_POSITION": 0, "in_TEXCOORD": 1})
+        self.assertEqual(
+            second["programs"]["7"]["attribute_locations"],
+            {"in_POSITION": 1, "in_TEXCOORD": 0})
+
+    def test_translator_identity_hashes_content_and_tools(self):
+        identity = m6_frame._translator_identity()
+        self.assertEqual(identity["schema"], "gfx-translator-identity/v2")
+        self.assertEqual(len(identity["sha256"]), 64)
+        self.assertIn("glslang", identity["tools"])
+        self.assertIn("spirv_cross", identity["tools"])
+
     def test_second_translation_is_a_cache_hit(self):
         def fake_translate(frame_dir, out_dir):
             out_dir.mkdir(parents=True, exist_ok=True)
@@ -107,6 +135,25 @@ class TranslationCacheTests(unittest.TestCase):
             self.assertTrue(second["hit"])
             self.assertEqual(second["identity"], first["identity"])
             self.assertTrue((self.out / "program.metal").is_file())
+
+    def test_replay_recipe_records_consumed_overrides_and_faults(self):
+        import os
+        from automation import gfx_independent_replay
+
+        with mock.patch.dict(os.environ, {
+                "EU4_FRAME_REPLAY_PRECISE_MATH": "1",
+                "EU4_FRAME_REPLAY_SAMPLER_SHIFT": "2",
+                "UNRELATED_OVERRIDE": "ignored"}, clear=False):
+            recipe = gfx_independent_replay.replay_recipe(
+                faults={"sampler_shift": 2})
+        self.assertEqual(recipe["schema"], "gfx-replay-recipe/v1")
+        self.assertTrue(recipe["diagnostic"])
+        self.assertEqual(recipe["faults"], {"sampler_shift": 2})
+        self.assertEqual(recipe["consumed_env"],
+                         {"EU4_FRAME_REPLAY_PRECISE_MATH": "1",
+                          "EU4_FRAME_REPLAY_SAMPLER_SHIFT": "2"})
+        self.assertEqual(recipe["precise_math"], "1")
+        self.assertNotIn("UNRELATED_OVERRIDE", recipe["consumed_env"])
 
     def test_force_bypasses_the_cache(self):
         cache_key = self.root / "cache" / "placeholder"

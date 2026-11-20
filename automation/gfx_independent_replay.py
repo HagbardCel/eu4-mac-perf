@@ -3257,8 +3257,71 @@ def _sha256_file(path: Path) -> str | None:
 
 
 
+_CONSUMED_REPLAY_ENV = (
+    "EU4_FRAME_REPLAY_COPY_FAULT",
+    "EU4_FRAME_REPLAY_DEBUG_ATTR_VERTEX",
+    "EU4_FRAME_REPLAY_DEBUG_DESCRIPTOR",
+    "EU4_FRAME_REPLAY_DEBUG_FRAGMENT",
+    "EU4_FRAME_REPLAY_DEBUG_VERTEX",
+    "EU4_FRAME_REPLAY_DISABLE_RT_FLIP",
+    "EU4_FRAME_REPLAY_FAULT_EVENT",
+    "EU4_FRAME_REPLAY_FAULT_FRAME",
+    "EU4_FRAME_REPLAY_FLIP_WINDING",
+    "EU4_FRAME_REPLAY_LINEAR_ALL",
+    "EU4_FRAME_REPLAY_LINEAR_MIN",
+    "EU4_FRAME_REPLAY_NEAREST_ALL",
+    "EU4_FRAME_REPLAY_NO_CULL",
+    "EU4_FRAME_REPLAY_PRECISE_MATH",
+    "EU4_FRAME_REPLAY_SAMPLER_SHIFT",
+    "EU4_FRAME_REPLAY_SAMPLER_SHIFT_MIN",
+)
+
+
+def replay_recipe(*, shaders: Path | str | None = None,
+                  policy: Path | str | None = None,
+                  faults: dict | None = None) -> dict:
+    """The effective, consumed inputs of one replay invocation.
+
+    A byte hash of the output proves which bytes were saved; it cannot explain
+    which ambient override produced them.  This recipe is deliberately limited
+    to consumed options: unknown environment variables are not evidence.
+    """
+    consumed = {
+        key: os.environ[key] for key in _CONSUMED_REPLAY_ENV
+        if key in os.environ
+    }
+    shader_identity = {"shaders_json_sha256": "", "artifacts_sha256": "",
+                       "artifact_count": 0}
+    if shaders is not None:
+        try:
+            shader_identity = m6_frame.shader_receipt_identity(
+                Path(shaders), required=False)
+        except (OSError, m6_frame.FrameError):
+            shader_identity = {"shaders_json_sha256": "",
+                               "artifacts_sha256": "", "artifact_count": 0}
+    policy_sha = None
+    if policy is not None:
+        try:
+            policy_sha = _sha256_file(Path(policy))
+        except OSError:
+            policy_sha = None
+    faults = dict(faults or {})
+    return {
+        "schema": "gfx-replay-recipe/v1",
+        "diagnostic": bool(faults),
+        "faults": faults,
+        "consumed_env": dict(sorted(consumed.items())),
+        "shader_identity": shader_identity,
+        "policy_sha256": policy_sha,
+        "precise_math": consumed.get("EU4_FRAME_REPLAY_PRECISE_MATH"),
+    }
+
+
 def write_producer_receipt(out_dir: Path, frame_dir: Path,
-                           producer: dict, result_path: Path) -> dict:
+                           producer: dict, result_path: Path, *,
+                           shaders: Path | str | None = None,
+                           policy: Path | str | None = None,
+                           faults: dict | None = None) -> dict:
     """Bind a replay result to the exact executable and build that produced it."""
     seal = _optional_json(frame_dir / "frame-seal.json") or {}
     trace = _optional_json(frame_dir / "frame-trace.json") or {}
@@ -3311,6 +3374,7 @@ def write_producer_receipt(out_dir: Path, frame_dir: Path,
             "source_revision": producer.get("source_revision"),
         },
         "capture": capture,
+        "recipe": replay_recipe(shaders=shaders, policy=policy, faults=faults),
         "result": {
             "replay_json_sha256": _sha256_file(result_path),
             "metal_frame_sha256": (_sha256_file(metal)
@@ -3438,7 +3502,8 @@ def _replay_locked(
         if result_path.is_file():
             try:
                 write_producer_receipt(
-                    out_dir, frame_dir, producer, result_path)
+                    out_dir, frame_dir, producer, result_path,
+                    shaders=shader_dir, policy=policy, faults=faults)
             except ReplayError as exc:
                 # A malformed/failed checkpoint declaration is a diagnostic
                 # result, not a reason to lose the report or leak the host

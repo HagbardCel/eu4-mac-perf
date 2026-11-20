@@ -263,6 +263,13 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
                     "replay_capture_mismatch",
                     f"producer receipt capture.{key} does not match the "
                     "sealed case capture")
+        recipe = receipt.get("recipe") if isinstance(
+            receipt.get("recipe"), dict) else {}
+        if recipe.get("diagnostic") is True:
+            raise AcceptanceError(
+                "diagnostic_recipe",
+                "producer receipt records a diagnostic replay recipe; a "
+                "diagnostic variant is never correction evidence")
         result = receipt.get("result") if isinstance(
             receipt.get("result"), dict) else {}
         if result.get("replay_json_sha256") != _sha256(
@@ -334,6 +341,8 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
         "graph_status": graph.get("status"),
         "state_coverage": states,
         "producer": producer,
+        "recipe": (receipt.get("recipe")
+                   if isinstance(receipt.get("recipe"), dict) else None),
         "receipt_present": bool(receipt),
         "checkpoint_binding": checkpoint_binding,
     }
