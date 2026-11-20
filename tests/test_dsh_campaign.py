@@ -181,10 +181,6 @@ class PathAllowlistTests(unittest.TestCase):
                 )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class WorkspaceBaseTests(unittest.TestCase):
     """The candidate is agent-writable; the records must not be."""
 
@@ -228,3 +224,67 @@ class WorkspaceBaseTests(unittest.TestCase):
             with self.assertRaises(SidecarError) as caught:
                 load_sidecar(path)
         self.assertIn("workspace_base", str(caught.exception))
+
+
+class LauncherSmokeCompatibilityTests(unittest.TestCase):
+    """Both public smoke profiles select one canonical source campaign."""
+
+    def test_both_sidecars_resolve_the_same_source_and_objective(self) -> None:
+        from automation.dsh_campaign import load_sidecar
+
+        sidecars = {
+            name: load_sidecar(REPO / "dsh" / "campaigns" / f"{name}.json")
+            for name in ("m7-launcher-smoke", "multiround-smoke")
+        }
+        first, second = sidecars.values()
+        canonical = REPO / "dsh" / "campaigns" / "multiround" / "campaign.json"
+        self.assertEqual(first.source_campaign, canonical)
+        self.assertEqual(second.source_campaign, canonical)
+        self.assertEqual(first.objective_digest, second.objective_digest)
+        self.assertEqual(first.source_campaign_sha256,
+                         second.source_campaign_sha256)
+        self.assertEqual(first.checker, second.checker)
+        self.assertEqual(first.objective_text, second.objective_text)
+        self.assertEqual(first.mode, "seed")
+        self.assertEqual(second.mode, "seed")
+        self.assertEqual(first.allowed_paths, ("marker.txt", "progress.md"))
+        self.assertEqual(second.allowed_paths, first.allowed_paths)
+        self.assertEqual(first.forbidden_paths, ())
+        self.assertEqual(second.forbidden_paths, ())
+        self.assertEqual(first.policy_digest, second.policy_digest)
+        self.assertEqual(first.retry_mode, "deterministic")
+        self.assertEqual(second.retry_mode, "deterministic")
+        self.assertEqual(first.max_rounds, 6)
+        self.assertEqual(second.max_rounds, 6)
+        self.assertTrue(first.require_checker_pass)
+        self.assertTrue(second.require_checker_pass)
+        self.assertFalse(first.require_independent_review)
+        self.assertFalse(second.require_independent_review)
+        self.assertEqual(first.max_validations, 8)
+        self.assertEqual(second.max_validations, 8)
+        self.assertEqual(first.validation_timeout_seconds, 60.0)
+        self.assertEqual(second.validation_timeout_seconds, 60.0)
+        self.assertEqual(first.wall_clock_seconds, 900.0)
+        self.assertEqual(second.wall_clock_seconds, 1800.0)
+        self.assertEqual(first.max_identical_retries, 0)
+        self.assertEqual(second.max_identical_retries, 0)
+        self.assertEqual(first.max_review_attempts, 2)
+        self.assertEqual(second.max_review_attempts, 2)
+        self.assertEqual(first.evidence_paths, ())
+        self.assertEqual(second.evidence_paths, ())
+        self.assertEqual(first.replay_inputs, ())
+        self.assertEqual(second.replay_inputs, ())
+        self.assertFalse(first.allow_incomplete_inputs)
+        self.assertFalse(second.allow_incomplete_inputs)
+        self.assertFalse(first.live_capture_enabled)
+        self.assertFalse(second.live_capture_enabled)
+        # The sidecar identities, run roots and explicit wall limits stay
+        # distinct; only the canonical source and its policy are shared.
+        self.assertNotEqual(first.campaign_id, second.campaign_id)
+        self.assertNotEqual(first.run_root, second.run_root)
+        self.assertNotEqual(first.wall_clock_seconds,
+                            second.wall_clock_seconds)
+
+
+if __name__ == "__main__":
+    unittest.main()

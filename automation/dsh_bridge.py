@@ -12,9 +12,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
@@ -49,6 +51,9 @@ INFRA_ERROR_KINDS = ("timeout", "truncated", "unreadable")
 # Refusals an operator or candidate can resolve without ending the campaign.
 # Everything else is terminal: the campaign cannot safely proceed, so the plugin
 # pauses the goal through the native goal service.
+PROBE_PREFIX = ".dsh-prepare-probe-"
+
+
 REMEDIABLE_REFUSALS = frozenset({
     "fresh_validation_failed",  # the checker said no again; repair and retry
     "not_qualified",            # a validation has to run first
@@ -198,7 +203,11 @@ def _candidate(sidecar: Sidecar) -> dict:
         )
         if detached.returncode == 0:
             raise Refusal("worktree", "candidate worktree is not detached")
-        delta = snapshot.enumerate_delta(sidecar.workspace)
+        residue = _registered_probe_names(sidecar.run_root, sidecar.workspace)
+        delta = [entry for entry in snapshot.enumerate_delta(sidecar.workspace)
+                 if not (entry.get("kind") == "add"
+                         and not entry.get("old_path")
+                         and _is_registered_probe(entry["path"], residue))]
         problems = snapshot.validate_delta(
             delta,
             sidecar.allowed_paths,
@@ -236,7 +245,12 @@ def _candidate(sidecar: Sidecar) -> dict:
             "changed_paths": [entry["path"] for entry in delta],
         }
 
-    digest, entries = receipts.tree_digest(sidecar.workspace)
+    _digest, entries = receipts.tree_digest(sidecar.workspace)
+    # Only host-recorded probes are harness residue, never a prefix guess.
+    residue = _registered_probe_names(sidecar.run_root, sidecar.workspace)
+    entries = [entry for entry in entries
+               if not _is_registered_probe(entry["path"], residue)]
+    digest = receipts.digest_text(receipts.canonical_json(entries))
     for entry in entries:
         _require_allowed(sidecar, entry["path"])
     return {
@@ -330,6 +344,182 @@ def _trusted_modules_digest(checker: Path, strict: bool = True) -> tuple[str, li
         raise Refusal("checker_dependency_unresolved", ", ".join(missing[:6]))
     rows.sort(key=lambda row: row["module"])
     return receipts.digest_text(receipts.canonical_json(rows)), rows
+
+
+PROBE_REGISTRY = "probe-residue"
+
+
+def _probe_registry_path(run_root: Path) -> Path:
+    return Path(run_root) / PROBE_REGISTRY
+
+
+def _load_probe_rows(run_root: Path) -> list[dict]:
+    value = receipts.read_json(_probe_registry_path(run_root)) or {}
+    rows = value.get("rows") if isinstance(value, dict) else None
+    return [row for row in rows or [] if isinstance(row, dict)]
+
+
+def _save_probe_rows(run_root: Path, rows: list[dict]) -> None:
+    receipts.atomic_write(
+        _probe_registry_path(run_root),
+        receipts.canonical_json({
+            "schema": "eu4-dsh-probe-residue/v1",
+            "rows": rows,
+        }),
+    )
+
+
+def _registered_probe_names(run_root: Path, workspace: Path) -> set[str]:
+    """Names the host itself created in this workspace, never a prefix guess."""
+    resolved = Path(workspace).resolve()
+    names: set[str] = set()
+    for row in _load_probe_rows(run_root):
+        name = str(row.get("name") or "")
+        if (Path(str(row.get("workspace") or "")).resolve() == resolved
+                and Path(name).name == name and name.startswith(PROBE_PREFIX)):
+            names.add(name)
+    return names
+
+
+def _register_probe(run_root: Path, workspace: Path, name: str) -> None:
+    rows = [row for row in _load_probe_rows(run_root)
+            if not (Path(str(row.get("workspace") or "")).resolve()
+                    == Path(workspace).resolve()
+                    and row.get("name") == name)]
+    rows.append({"workspace": str(Path(workspace).resolve()),
+                 "name": name, "created_at": _now()})
+    _save_probe_rows(run_root, rows)
+
+
+def _unregister_probe(run_root: Path, workspace: Path, name: str) -> None:
+    rows = [row for row in _load_probe_rows(run_root)
+            if not (Path(str(row.get("workspace") or "")).resolve()
+                    == Path(workspace).resolve()
+                    and row.get("name") == name)]
+    _save_probe_rows(run_root, rows)
+
+
+def _reap_probe_residue(sidecar: Sidecar) -> str | None:
+    """Remove only probes this host recorded; never a candidate path."""
+    workspace = Path(sidecar.workspace)
+    rows = _load_probe_rows(sidecar.run_root)
+    keep: list[dict] = []
+    problem: str | None = None
+    for row in rows:
+        if Path(str(row.get("workspace") or "")).resolve() != workspace.resolve():
+            keep.append(row)
+            continue
+        name = str(row.get("name") or "")
+        if Path(name).name != name or not name.startswith(PROBE_PREFIX):
+            keep.append(row)
+            continue
+        path = workspace / name
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            keep.append(row)
+            problem = (f"could not remove recorded probe residue {path}: {exc}; "
+                       "repair the workspace before preparing")
+    _save_probe_rows(sidecar.run_root, keep)
+    return problem
+
+
+def _is_registered_probe(path: str | Path, names: set[str]) -> bool:
+    candidate = Path(path)
+    return candidate.parent == Path(".") and candidate.name in names
+
+
+def _workspace_write_problem(workspace: Path, run_root: Path) -> str | None:
+    """Probe the candidate workspace with a host-recorded unique file.
+
+    The registry records the exact name before creation; cleanup removes only
+    that path.  A killed prepare leaves a name the next prepare can reap, while
+    a candidate-authored path that merely resembles a probe is never filtered.
+    """
+    workspace = Path(workspace)
+    run_root = Path(run_root)
+    if not workspace.is_dir():
+        return f"candidate workspace is not a directory: {workspace}"
+    name = f"{PROBE_PREFIX}{uuid.uuid4().hex}"
+    _register_probe(run_root, workspace, name)
+    probe = workspace / name
+    descriptor: int | None = None
+    created = False
+    problem: str | None = None
+    try:
+        descriptor = os.open(probe,
+                             os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        created = True
+        os.write(descriptor, b"probe\n")
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+    except OSError as exc:
+        problem = f"candidate workspace is not writable: {workspace}: {exc}"
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        if created:
+            try:
+                probe.unlink()
+                _unregister_probe(run_root, workspace, name)
+            except OSError as exc:
+                residue = f"probe cleanup failed: {probe}: {exc}"
+                problem = residue if problem is None else f"{problem}; {residue}"
+        else:
+            _unregister_probe(run_root, workspace, name)
+    return problem
+
+
+def _head_or_none(path: Path) -> str | None:
+    try:
+        return _git(path, "rev-parse", "HEAD")
+    except Refusal:
+        return None
+
+
+def _startup_block(sidecar: Sidecar, roots: dict) -> dict:
+    """Compact facts an agent needs before spending a launch or validation."""
+    workspace = Path(sidecar.workspace)
+    head = _head_or_none(workspace) if sidecar.mode == "worktree" else None
+    first_command = (
+        ["git", "-C", str(workspace), "status", "--short"]
+        if head else ["ls", str(workspace)]
+    )
+    return {
+        "campaign_id": sidecar.campaign_id,
+        "sidecar": str(sidecar.sidecar_path),
+        "source_campaign": str(sidecar.source_campaign),
+        "objective_digest": sidecar.objective_digest,
+        "workspace": str(workspace),
+        "workspace_mode": sidecar.mode,
+        "workspace_head": head,
+        "workspace_writable": True,
+        "run_root": str(sidecar.run_root),
+        "checker": str(sidecar.checker),
+        "execution_roots": roots,
+        "allowed_paths": list(sidecar.allowed_paths),
+        "forbidden_paths": list(sidecar.forbidden_paths),
+        "live_capture": {
+            "enabled": sidecar.live_capture_enabled,
+            "policy": (
+                "EU4 launch exclusivity is enforced by the host-wide process "
+                "lease; a sidecar cannot enable live capture"),
+        },
+        "closing": {
+            "require_checker_pass": sidecar.require_checker_pass,
+            "require_independent_review": sidecar.require_independent_review,
+            "max_rounds": sidecar.max_rounds,
+            "max_validations": sidecar.max_validations,
+            "wall_clock_seconds": sidecar.wall_clock_seconds,
+        },
+        "first_command": first_command,
+    }
 
 
 def _identity(sidecar: Sidecar, infra_commit: str) -> dict:
@@ -470,6 +660,14 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit) -> int:
             sidecar.candidate_baseline_commit or "",
         )
 
+    residue_problem = _reap_probe_residue(sidecar)
+    if residue_problem:
+        raise Refusal("workspace_not_writable", residue_problem)
+    write_problem = _workspace_write_problem(
+        sidecar.workspace, sidecar.run_root)
+    if write_problem:
+        raise Refusal("workspace_not_writable", write_problem)
+
     identities = _identity(sidecar, infra_commit)
     existing = receipts.read_json(stored.identity)
     if existing is None and not getattr(args, "create_anchor", False):
@@ -509,6 +707,7 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit) -> int:
         "identities": identities,
         "identity_digest": receipts.identity_digest(identities),
         "anchored_now": existing is None,
+        "startup": _startup_block(sidecar, roots),
     })
     return EXIT_OK
 
@@ -828,13 +1027,22 @@ def _freeze(sidecar: Sidecar) -> dict:
     less — or the review evidence would describe a candidate nobody validated.
     """
     if sidecar.mode != "worktree":
-        digest, entries = receipts.tree_digest(sidecar.workspace)
+        _digest, entries = receipts.tree_digest(sidecar.workspace)
+        residue = _registered_probe_names(
+            sidecar.run_root, sidecar.workspace)
+        entries = [entry for entry in entries
+                   if not _is_registered_probe(entry["path"], residue)]
+        digest = receipts.digest_text(receipts.canonical_json(entries))
         return {"mode": "seed", "digest": digest, "entries": len(entries),
                 "commit": None}
 
     infra = infra_root().resolve()
     baseline = sidecar.candidate_baseline_commit or ""
-    delta = snapshot.enumerate_delta(sidecar.workspace)
+    residue = _registered_probe_names(sidecar.run_root, sidecar.workspace)
+    delta = [entry for entry in snapshot.enumerate_delta(sidecar.workspace)
+             if not (entry.get("kind") == "add"
+                     and not entry.get("old_path")
+                     and _is_registered_probe(entry["path"], residue))]
     problems = snapshot.validate_delta(
         delta, sidecar.allowed_paths, sidecar.forbidden_paths,
         allow_symlinks=sidecar.allow_symlinks,

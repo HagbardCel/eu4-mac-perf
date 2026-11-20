@@ -27,6 +27,8 @@ import json
 import os
 from pathlib import Path
 
+from automation import case_locator
+
 SCHEMA = "gfx-evidence-index/v1"
 ROOT_ENV = "EU4_EVIDENCE_ROOT"
 MAX_DIRECTORIES = 20000
@@ -241,6 +243,20 @@ def discover(
                 continue
             seen.add(key)
             rows.append(_record(directory, root))
+    locator_rows: list[dict] = []
+    locator_truncated = False
+    locator_invalid = 0
+    for root in root_list:
+        if not root.is_dir():
+            continue
+        inventory = case_locator.inventory(root, verify=False)
+        locator_truncated = (locator_truncated
+                             or bool(inventory.get("truncated")))
+        locator_invalid += int(inventory.get("invalid_locator_count") or 0)
+        for row in inventory.get("locators") or []:
+            row["evidence_root"] = str(root)
+            locator_rows.append(row)
+    locator_total = len(locator_rows)
     discovered_total = len(rows)
     discovered_counts = {name: sum(1 for row in rows if row["classification"] == name)
                          for name in CLASSIFICATIONS}
@@ -259,6 +275,20 @@ def discover(
             row for row in rows
             if str(row.get("finished_utc") or row.get("created_utc") or "")
             >= str(since)
+        ]
+    if needle:
+        locator_rows = [
+            row for row in locator_rows
+            if needle in json.dumps(row, sort_keys=True).lower()
+        ]
+    if classification:
+        # A locator carries a recorded verification, not a campaign
+        # classification; it is only visible in an unfiltered listing.
+        locator_rows = []
+    if since:
+        locator_rows = [
+            row for row in locator_rows
+            if str(row.get("published_utc") or "") >= str(since)
         ]
     rows.sort(
         key=lambda row: str(row.get("finished_utc") or row.get("created_utc") or ""),
@@ -285,6 +315,18 @@ def discover(
         "limit": limit,
         "truncated": offset + len(page) < len(rows),
         "next_offset": (offset + len(page)) if offset + len(page) < len(rows) else None,
+        "case_locators": locator_rows[:limit],
+        "locator_counts": {
+            "total": locator_total,
+            "returned": min(len(locator_rows), limit),
+            "available": sum(1 for row in locator_rows
+                             if row.get("state") == "available"),
+            "missing_payload": sum(1 for row in locator_rows
+                                   if row.get("state") == "missing_payload"),
+            "scan_truncated": locator_truncated,
+            "scan_limit": case_locator.MAX_LOCATORS,
+            "invalid_locators": locator_invalid,
+        },
         "read_only": True,
         "query": {
             "text": query or None,
