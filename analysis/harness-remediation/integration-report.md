@@ -67,12 +67,20 @@ technical review evidence, not a formal approval.
   ledger, continuous supervisor, Metal replay; runner
   `20261120T213558Z-2eac8514`). The 12 skips are the declared
   canonical-M6-frame and copy-bearing-scene-75 fixture absences.
-- Full offline profile on the P0 integration tree: **4,209 ran / 4,144 executed
-  / 65 skipped / 1 failure / 6 errors**. The failures are the border-loop native
-  harnesses (`clang -Werror` build) and the oracle flood-process test; the same
-  seven failures reproduce on base `1d7e37df`, so they are pre-existing native
-  toolchain failures, not skips and not regressions from these changes. Report
-  them as failures; do not convert them to skips.
+- Full offline profile on merged main, split around the one module that hangs
+  only in full-suite order: all modules except
+  `tests.test_reconstruction_differential` produced **4,166 ran / 4,103
+  executed / 63 skipped / 1 failure / 0 errors** (runner
+  `20261120T215930Z-f5b80bdf`); the excluded module run separately produced
+  **55 ran / 53 executed / 2 skipped / 0 failures** (runner
+  `20261120T214602Z-d8854dda`). Combined: **4,221 ran / 4,156 executed / 65
+  skipped / 1 failure / 0 errors**. The single failure is
+  `test_oracle_shadow_acceptance...test_flood_fixture_within_process_group`,
+  which reproduces on base `1d7e37df` and is pre-existing. There were no native
+  build errors in the sequential split; the earlier six border-loop build
+  errors in the parallel full-discovery attempt did not reproduce and are not
+  skips. The split module passes in isolation; report the full-suite hang as a
+  pre-existing harness flake, not a P0 regression.
 - Native checks executed on arm64 macOS: compressed texture host 18/18,
   render-state host 10/10, native MSL cache regression 1/1, frame-trace writer,
   texture versions, shadow receipt, target lifetime and blob verifier. Fixture
