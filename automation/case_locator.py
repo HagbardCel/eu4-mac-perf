@@ -517,6 +517,74 @@ def publish(case_dir: Path | str, evidence_root: Path | str, *,
         return locator
 
 
+_HEX64 = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
+def _relative_text(value) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    path = Path(value)
+    return not path.is_absolute() and ".." not in path.parts
+
+
+def _locator_problem(value: dict) -> str | None:
+    """Reject schema-valid locators whose field types would crash readers."""
+    key = value.get("key")
+    if not isinstance(key, str) or not key:
+        return "locator key is not a nonempty string"
+    relative = value.get("relative_path")
+    if not _relative_text(relative):
+        return "locator relative_path is not a safe relative string"
+    identity = value.get("identity")
+    if not isinstance(identity, dict):
+        return "locator identity is not an object"
+    if identity.get("session_id") is not None and not isinstance(
+            identity.get("session_id"), str):
+        return "identity.session_id is not a string"
+    frame = identity.get("capture_frame_id")
+    if frame is not None and (isinstance(frame, bool)
+                              or not isinstance(frame, (int, str))):
+        return "identity.capture_frame_id is not an integer or string"
+    for field in ("event_stream_sha256", "manifest_sha256", "seal_sha256"):
+        digest = identity.get(field)
+        if digest is not None and not (
+                isinstance(digest, str) and _HEX64.match(digest)):
+            return f"identity.{field} is not a 64-character hex digest"
+    seal_file = identity.get("seal_file")
+    if seal_file is not None and not _relative_text(seal_file):
+        return "identity.seal_file is not a safe relative string"
+    for field in ("schema", "case_id"):
+        if identity.get(field) is not None and not isinstance(
+                identity.get(field), str):
+            return f"identity.{field} is not a string"
+    for field in ("case_id", "originating_run", "last_published_run",
+                  "first_published_utc", "last_published_utc",
+                  "published_utc"):
+        if value.get(field) is not None and not isinstance(
+                value.get(field), str):
+            return f"locator {field} is not a string"
+    verification = value.get("verification")
+    if verification is not None:
+        if not isinstance(verification, dict):
+            return "locator verification is not an object"
+        if "ok" in verification and not isinstance(verification["ok"], bool):
+            return "locator verification.ok is not a boolean"
+    for field in ("limitations",):
+        items = value.get(field)
+        if items is not None and (
+                not isinstance(items, list)
+                or any(not isinstance(item, str) for item in items)):
+            return f"locator {field} is not a list of strings"
+    for field in ("publication_count", "size_bytes", "files"):
+        number = value.get(field)
+        if number is not None and (isinstance(number, bool)
+                                   or not isinstance(number, int)):
+            return f"locator {field} is not an integer"
+    if "reused" in value and not isinstance(value["reused"], bool):
+        return "locator reused is not a boolean"
+    return None
+
+
 def _locator_scan(root: Path) -> tuple[list[dict], bool, list[dict]]:
     """Read locator documents, reporting scan exhaustion and broken files."""
     directory = root / LOCATOR_DIR
@@ -536,6 +604,10 @@ def _locator_scan(root: Path) -> tuple[list[dict], bool, list[dict]]:
         if not isinstance(value, dict) or value.get("schema") != SCHEMA:
             invalid.append({"locator_path": str(path),
                             "error": "locator schema is invalid"})
+            continue
+        problem = _locator_problem(value)
+        if problem is not None:
+            invalid.append({"locator_path": str(path), "error": problem})
             continue
         value["locator_path"] = str(path)
         found.append(value)

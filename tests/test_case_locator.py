@@ -479,6 +479,42 @@ class CaseLocatorTests(unittest.TestCase):
         self.assertFalse(any((self.evidence / "cases").glob("*/case")))
         self.assertFalse(list((self.evidence / "locators").glob("*.json")))
 
+    def test_malformed_schema_valid_locators_are_invalid(self) -> None:
+        mutations = {
+            "identity-string": lambda value: value.update(identity="not-a-dict"),
+            "identity-list": lambda value: value.update(identity=[]),
+            "identity-null": lambda value: value.update(identity=None),
+            "path-integer": lambda value: value.update(relative_path=7),
+            "verification-string": lambda value: value.update(
+                verification="ok"),
+            "key-integer": lambda value: value.update(key=9),
+            "session-integer": lambda value: value["identity"].update(
+                session_id=5),
+            "seal-short": lambda value: value["identity"].update(
+                seal_sha256="abc"),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                evidence = self.root / f"malformed-{name}"
+                case = make_case(self.root / f"producer-{name}" / "case")
+                published = case_locator.publish(case, evidence)
+                path = Path(published["locator_path"])
+                value = json.loads(path.read_text())
+                mutate(value)
+                path.write_text(json.dumps(value))
+                inventory = case_locator.inventory(evidence)
+                self.assertEqual(inventory["state"], "degraded")
+                self.assertEqual(inventory["locators"], [])
+                self.assertEqual(inventory["invalid_locator_count"], 1)
+                self.assertEqual(case_locator.summaries(evidence), [])
+                located = case_locator.locate(evidence, session_id="session-1")
+                self.assertEqual(located["state"], "invalid_locator", located)
+                discovered = evidence_index.discover(
+                    configured_roots=str(evidence))
+                self.assertEqual(
+                    discovered["locator_counts"]["invalid_locators"], 1)
+                self.assertEqual(discovered["case_locators"], [])
+
     def test_invalid_locator_count_is_untruncated(self) -> None:
         self.evidence.mkdir(parents=True)
         directory = self.evidence / "locators"
