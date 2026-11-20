@@ -266,10 +266,27 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
                     "replay_capture_mismatch",
                     f"producer receipt capture.{key} does not match the "
                     "sealed case capture")
-        recipe = receipt.get("recipe") if isinstance(
-            receipt.get("recipe"), dict) else None
+        raw_recipe = receipt.get("recipe")
+        if raw_recipe is not None and not isinstance(raw_recipe, dict):
+            raise AcceptanceError(
+                "invalid_recipe",
+                "producer receipt recipe is present but is not an object")
+        recipe = raw_recipe if isinstance(raw_recipe, dict) else None
         recipe_approved = False
         if recipe is not None:
+            if not isinstance(recipe.get("consumed_env"), dict):
+                raise AcceptanceError(
+                    "invalid_recipe",
+                    "producer receipt consumed_env is not an object")
+            if not isinstance(recipe.get("effective_env"), dict):
+                raise AcceptanceError(
+                    "invalid_recipe",
+                    "producer receipt effective_env is not an object")
+            if recipe.get("faults") is not None and not isinstance(
+                    recipe.get("faults"), dict):
+                raise AcceptanceError(
+                    "invalid_recipe",
+                    "producer receipt faults are not an object")
             if recipe.get("schema") != gfx_independent_replay.RECIPE_SCHEMA:
                 raise AcceptanceError(
                     "invalid_recipe",
