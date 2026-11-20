@@ -2733,9 +2733,9 @@ def _bound_replay_compact(envelope: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict
     Identity/qualification, first divergence, the unresolved interval, the
     recommended checkpoint and the report locator survive every reduction.
     The bound covers the *whole* envelope, including repeated evaluation
-    reasons, ``failure.detail`` and metadata, not just ``result``.  If even the
-    core cannot fit, the envelope says so explicitly instead of returning a
-    silently oversized or silently truncated "complete" view.
+    reasons, ``failure.detail``, truncation metadata and Unicode strings, not
+    just ``result``.  The single exit re-measures the exact serialization and
+    keeps reducing until it fits.
     """
     original = _utf8_len(envelope)
     envelope = json.loads(json.dumps(envelope))
@@ -2743,82 +2743,209 @@ def _bound_replay_compact(envelope: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict
     if not isinstance(result, dict):
         result = {}
         envelope["result"] = result
-    # Keep the exact public UTF-8 size, reserving room for the field itself.
     result["output_bytes"] = 0
+    removed: list[str] = []
 
-    def fits(margin: int = 32) -> bool:
-        return _utf8_len(envelope) <= max(1, cap - margin)
+    def body() -> dict:
+        value = envelope.get("result")
+        return value if isinstance(value, dict) else {}
 
-    def finalize() -> dict:
-        # Re-measure with the ``output_bytes`` field present: its own digits
-        # are part of the emitted envelope.
-        for _attempt in range(8):
+    def first_divergence() -> dict:
+        value = body().get("first_divergence")
+        return value if isinstance(value, dict) else {}
+
+    def fits() -> bool:
+        return _utf8_len(envelope) <= cap
+
+    def finalize() -> None:
+        for _attempt in range(10):
             size = _utf8_len(envelope)
-            if result.get("output_bytes") == size:
+            if body().get("output_bytes") == size:
                 break
-            result["output_bytes"] = size
+            body()["output_bytes"] = size
+
+    def seal() -> dict:
+        nonlocal envelope
+        envelope["truncated"] = True
+        envelope.setdefault("truncated_fields", removed)
+        envelope["output_cap_bytes"] = cap
+        envelope["output_bytes_before_cap"] = original
+        body()["truncated"] = True
+        finalize()
+
+        def drop(name: str) -> bool:
+            if name in body():
+                body().pop(name, None)
+                removed.append(name)
+                return True
+            return False
+
+        def drop_first(name: str) -> bool:
+            first = first_divergence()
+            if name in first:
+                first.pop(name, None)
+                removed.append(f"first_divergence.{name}")
+                return True
+            return False
+
+        def truncate_reason() -> bool:
+            value = str(envelope.get("reason") or "")
+            if not value:
+                return False
+            envelope["reason"] = _truncate_utf8(value, len(value.encode()) // 2)
+            if not envelope["reason"]:
+                envelope["reason"] = ""
+            removed.append("reason")
+            return True
+
+        def truncate_detail() -> bool:
+            failure = envelope.get("failure")
+            if not isinstance(failure, dict):
+                return False
+            value = str(failure.get("detail") or "")
+            if not value:
+                return False
+            failure["detail"] = _truncate_utf8(
+                value, max(0, len(value.encode()) // 2))
+            removed.append("failure.detail")
+            return True
+
+        def simplify_interval() -> bool:
+            first = first_divergence()
+            interval = first.get("unresolved_interval")
+            if not isinstance(interval, dict):
+                return False
+            first["unresolved_interval"] = {
+                key: interval.get(key) for key in
+                ("start_event", "end_event", "lower_bound", "search_start_event")
+                if interval.get(key) is not None}
+            removed.append("first_divergence.unresolved_interval")
+            return True
+
+        steps = (
+            lambda: drop("final"),
+            lambda: drop("inputs"),
+            lambda: drop("checkpoints"),
+            lambda: drop("axes"),
+            lambda: drop("checkpoint_selection"),
+            lambda: drop("execution"),
+            lambda: drop("next_action"),
+            lambda: drop_first("limitations"),
+            lambda: drop_first("recommended_checkpoint"),
+            lambda: truncate_reason(),
+            lambda: truncate_detail(),
+            lambda: drop_first("root_cause"),
+            lambda: drop_first("reason"),
+            lambda: simplify_interval(),
+            lambda: drop("frame"),
+            lambda: drop("checkpoint_validation"),
+        )
+        for _attempt in range(len(steps) + 2):
+            if fits():
+                break
+            progressed = False
+            for step in steps:
+                if fits():
+                    break
+                before = _utf8_len(envelope)
+                if step() and _utf8_len(envelope) <= before:
+                    progressed = True
+                finalize()
+            if not progressed:
+                break
+        if not fits():
+            first = first_divergence()
+            envelope = {
+                "schema": envelope.get("schema"),
+                "tool": envelope.get("tool") or "eu4_replay",
+                "ok": envelope.get("ok"),
+                "status": envelope.get("status"),
+                "reason": "",
+                "result": {
+                    "classification": body().get("classification"),
+                    "qualified": body().get("qualified"),
+                    "first_divergence": {
+                        key: first.get(key) for key in
+                        ("kind", "event", "target", "resource", "operation",
+                         "producer_event", "confidence", "next_checkpoint")
+                        if first.get(key) is not None},
+                    "report": body().get("report"),
+                    "truncated": True,
+                    "output_cap_bytes": cap,
+                },
+                "outcome": envelope.get("outcome"),
+                "failure": {
+                    key: (envelope.get("failure") or {}).get(key)
+                    for key in ("kind", "class")},
+                "truncated": True,
+                "output_cap_bytes": cap,
+            }
+            finalize()
+        # A pathological cap or locator is the only remaining source of
+        # overflow; reduce metadata to zero before giving up the locator.
+        for _attempt in range(8):
+            if fits():
+                break
+            envelope["reason"] = ""
+            failure = envelope.get("failure")
+            if isinstance(failure, dict):
+                failure["detail"] = ""
+            body().pop("final", None)
+            body().pop("frame", None)
+            body().pop("next_action", None)
+            finalize()
         return envelope
 
-    if _utf8_len(envelope) <= max(1, cap - 32):
-        return finalize()
-
-    removed: list[str] = []
+    if _utf8_len(envelope) <= max(1, cap - 256):
+        finalize()
+        return envelope
 
     def shrink_result() -> None:
         for name, keep in (("checkpoints", 8), ("inputs", 4)):
-            value = result.get(name)
+            value = body().get(name)
             if isinstance(value, list) and len(value) > keep:
-                result[name] = value[:keep]
+                body()[name] = value[:keep]
                 removed.append(name)
-        selection = result.get("checkpoint_selection")
+        selection = body().get("checkpoint_selection")
         if isinstance(selection, dict):
-            result["checkpoint_selection"] = {
+            body()["checkpoint_selection"] = {
                 key: selection.get(key)
                 for key in ("total", "selected", "bounded")}
             removed.append("checkpoint_selection.detail")
-        axes = result.get("axes")
+        axes = body().get("axes")
         if isinstance(axes, dict) and len(axes) > 8:
-            result["axes"] = {
+            body()["axes"] = {
                 key: value for key, value in axes.items()
                 if key in ("capture_validity", "frame_shader_identity",
                            "gpu_execution", "resource_provenance",
                            "operation_coverage", "rendering_state_coverage",
                            "pixel_comparison", "first_divergence_confidence")}
             removed.append("axes.extra")
-        first = result.get("first_divergence")
-        if isinstance(first, dict):
-            limitations = first.get("limitations")
-            if isinstance(limitations, list) and len(limitations) > 2:
-                first["limitations"] = [
-                    _truncate_utf8(item, 160) for item in limitations[:2]]
-                removed.append("first_divergence.limitations")
-            inputs = first.get("inputs")
-            if isinstance(inputs, list) and len(inputs) > 4:
-                first["inputs"] = inputs[:4]
-                removed.append("first_divergence.inputs")
+        first = first_divergence()
+        limitations = first.get("limitations")
+        if isinstance(limitations, list) and len(limitations) > 2:
+            first["limitations"] = [
+                _truncate_utf8(item, 160) for item in limitations[:2]]
+            removed.append("first_divergence.limitations")
+        inputs = first.get("inputs")
+        if isinstance(inputs, list) and len(inputs) > 4:
+            first["inputs"] = inputs[:4]
+            removed.append("first_divergence.inputs")
 
     shrink_result()
-    # Bound duplicated free text before dropping evidence fields.  Reasons and
-    # failure detail are metadata copies of the diagnosis, not the diagnosis.
     for max_bytes in (1200, 400, 120, 0):
         envelope["reason"] = _truncate_utf8(envelope.get("reason"), max_bytes)
         failure = envelope.get("failure")
         if isinstance(failure, dict):
             failure["detail"] = _truncate_utf8(
                 failure.get("detail"), min(max_bytes, 600))
-        if fits():
+        if _utf8_len(envelope) <= max(1, cap - 256):
             break
-    if fits():
-        envelope["truncated"] = True
-        envelope["truncated_fields"] = removed
-        envelope["output_cap_bytes"] = cap
-        envelope["output_bytes_before_cap"] = original
-        result["truncated"] = True
-        return finalize()
+    if _utf8_len(envelope) <= max(1, cap - 256):
+        return seal()
 
-    first = result.get("first_divergence")
-    if not isinstance(first, dict):
-        first = {}
+    # Core fallback: the smallest result that still points at the evidence.
+    first = first_divergence()
     core_first = {
         key: first.get(key) for key in
         ("kind", "event", "target", "resource", "operation", "program",
@@ -2826,88 +2953,25 @@ def _bound_replay_compact(envelope: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict
          "next_checkpoint", "recommended_checkpoint")
         if first.get(key) is not None
     }
-    checkpoint_validation = result.get("checkpoint_validation")
+    checkpoint_validation = body().get("checkpoint_validation")
     core_validation = {
         key: (checkpoint_validation or {}).get(key)
         for key in ("status", "requested", "returned", "matched",
                     "diagnostic", "divergent", "invalid")
     } if isinstance(checkpoint_validation, dict) else {
         "status": checkpoint_validation}
-    result = {
-        "schema": result.get("schema"),
-        "classification": result.get("classification"),
-        "qualified": result.get("qualified"),
-        "frame": result.get("frame"),
+    envelope["result"] = {
+        "schema": body().get("schema"),
+        "classification": body().get("classification"),
+        "qualified": body().get("qualified"),
+        "frame": body().get("frame"),
         "first_divergence": core_first,
         "checkpoint_validation": core_validation,
-        "final": result.get("final"),
-        "next_action": result.get("next_action"),
-        "report": result.get("report"),
-        "truncated": True,
-        "output_bytes_before_cap": original,
-        "output_cap_bytes": cap,
+        "final": body().get("final"),
+        "next_action": body().get("next_action"),
+        "report": body().get("report"),
     }
-    envelope["result"] = result
-    envelope["truncated"] = True
-    envelope["truncated_fields"] = removed
-    envelope["output_cap_bytes"] = cap
-    envelope["output_bytes_before_cap"] = original
-
-    for max_bytes in (600, 160, 0):
-        envelope["reason"] = _truncate_utf8(envelope.get("reason"), max_bytes)
-        failure = envelope.get("failure")
-        if isinstance(failure, dict):
-            failure["detail"] = _truncate_utf8(
-                failure.get("detail"), min(max_bytes, 300))
-        if fits():
-            break
-    if not fits():
-        # Statistics are reproducible from the referenced report; the locator
-        # and the causal interval are not.
-        result.pop("final", None)
-        removed.append("final")
-    if not fits():
-        envelope.pop("runtime", None)
-        envelope.pop("truncated_fields", None)
-        removed.append("runtime")
-    if not fits():
-        envelope = {
-            "schema": envelope.get("schema"),
-            "tool": envelope.get("tool") or "eu4_replay",
-            "ok": envelope.get("ok"),
-            "status": envelope.get("status"),
-            "reason": _truncate_utf8(envelope.get("reason"), 120),
-            "result": {
-                "classification": result.get("classification"),
-                "qualified": result.get("qualified"),
-                "frame": result.get("frame"),
-                "first_divergence": core_first,
-                "report": result.get("report"),
-                "truncated": True,
-                "output_cap_bytes": cap,
-            },
-            "outcome": envelope.get("outcome"),
-            "failure": {
-                key: envelope.get("failure", {}).get(key)
-                for key in ("kind", "class")},
-            "truncated": True,
-            "output_cap_bytes": cap,
-        }
-        result = envelope["result"]
-    finalize()
-    for _attempt in range(8):
-        if _utf8_len(envelope) <= cap:
-            break
-        # Last resort: reduce metadata further; never drop the locator.
-        envelope["reason"] = _truncate_utf8(envelope.get("reason"), 0)
-        failure = envelope.get("failure")
-        if isinstance(failure, dict):
-            failure["detail"] = ""
-        result.pop("final", None)
-        result.pop("frame", None)
-        result.pop("next_action", None)
-        finalize()
-    return envelope
+    return seal()
 
 
 def _replay_report_view(report: dict) -> dict:
@@ -3042,6 +3106,8 @@ def eu4_replay(args: argparse.Namespace) -> dict:
             _diagnosis_outcome(report))
         if bool(getattr(args, "full", False)):
             result = _replay_report_view(report)
+            result["report"] = str(
+                Path(args.replay_out) / "replay-report.json")
         else:
             result = _replay_compact_view(
                 report, str(Path(args.replay_out) / "replay-report.json"))
@@ -3100,6 +3166,8 @@ def eu4_replay(args: argparse.Namespace) -> dict:
             report)
         if bool(getattr(args, "full", False)):
             result = _replay_report_view(report)
+            result["report"] = str(
+                Path(args.replay_out) / "diagnostic-report.json")
         else:
             result = _replay_compact_view(
                 report, str(Path(args.replay_out) / "diagnostic-report.json"))

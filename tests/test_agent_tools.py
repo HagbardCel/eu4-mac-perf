@@ -380,10 +380,44 @@ class ToolTests(unittest.TestCase):
         report["evaluation"] = {"status": "complete", "reasons": reasons}
         report["first_divergence"]["limitations"] = list(reasons)
         report["first_divergence"]["reason"] = "y" * 5000
-        report["artifacts"] = {
-            f"artifact-{index}": f"path/{index}/" + "z" * 80
-            for index in range(60)
-        }
+        report["first_divergence"]["root_cause"] = "z" * 20000
+        args = SimpleNamespace(
+            replay_op="independent", frame="frame",
+            replay_out=str(self.root / "out"), shaders=None,
+            disable_render_target_vflip=False, sampler_shift=None,
+            sampler_shift_min=7,
+        )
+        for count in (0, 10, 37, 60, 200):
+            report["artifacts"] = {
+                f"artifact-{index}": f"path/{index}/" + "z" * 80
+                for index in range(count)
+            }
+            with mock.patch.object(gfx_independent_replay, "replay",
+                                   return_value=report):
+                value = agent_tools.eu4_replay(args)
+            size = agent_tools._utf8_len(value)
+            self.assertLessEqual(size, agent_tools.COMPACT_OUTPUT_CAP, count)
+            self.assertEqual(value["result"]["output_bytes"], size, count)
+            self.assertEqual(value["result"]["report"],
+                             str(self.root / "out" / "replay-report.json"))
+            self.assertEqual(value["result"]["first_divergence"]["event"], 15)
+            self.assertEqual(value["result"]["classification"],
+                             "qualified_difference")
+            self.assertTrue(value["truncated"])
+            self.assertLessEqual(len(value["reason"].encode("utf-8")), 8192)
+            if isinstance(value.get("failure"), dict):
+                self.assertLessEqual(
+                    len(str(value["failure"].get("detail") or "").encode(
+                        "utf-8")), 8192)
+
+    def test_invalid_envelope_with_huge_failure_detail_stays_bounded(self):
+        from types import SimpleNamespace
+        from automation import gfx_independent_replay
+
+        reasons = ["Δειγμα 😀 " * 200
+                   for _ in range(300)]
+        report = self.independent_replay_report("invalid_provenance")
+        report["evaluation"] = {"status": "invalid", "reasons": reasons}
         args = SimpleNamespace(
             replay_op="independent", frame="frame",
             replay_out=str(self.root / "out"), shaders=None,
@@ -398,15 +432,9 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(value["result"]["output_bytes"], size)
         self.assertEqual(value["result"]["report"],
                          str(self.root / "out" / "replay-report.json"))
-        self.assertEqual(value["result"]["first_divergence"]["event"], 15)
-        self.assertEqual(value["result"]["classification"],
-                         "qualified_difference")
-        self.assertTrue(value["truncated"])
-        self.assertLessEqual(len(value["reason"].encode("utf-8")), 8192)
-        if isinstance(value.get("failure"), dict):
-            self.assertLessEqual(
-                len(str(value["failure"].get("detail") or "").encode("utf-8")),
-                8192)
+        self.assertLessEqual(
+            len(str(value["failure"].get("detail") or "").encode("utf-8")),
+            agent_tools.COMPACT_OUTPUT_CAP)
 
     def test_compact_replay_view_is_bounded(self):
         from automation import agent_tools as tools
