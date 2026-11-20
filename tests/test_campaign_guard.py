@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -872,6 +873,338 @@ class CaptureLaunchBoundaryTests(unittest.TestCase):
                     authorize_live=True, timeout_s=10,
                     output=self.root / "direct")
         self.assertIn("launch reservation", str(raised.exception))
+
+
+class AttemptExactlyOnceTests(unittest.TestCase):
+    """One physical action is reserved and settled exactly once."""
+
+    def setUp(self):
+        base = ROOT / ".local" / "test-runs"
+        base.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(dir=base)
+        self.root = Path(self.temporary.name)
+        self.path = self.root / "state.json"
+        self.guard = campaign_guard.Guard(self.path)
+        for key in ("EU4_CAMPAIGN_STATE", "EU4_CAMPAIGN_ATTEMPT",
+                    "EU4_CAMPAIGN_RESERVATION"):
+            os.environ.pop(key, None)
+
+    def tearDown(self):
+        for key in ("EU4_CAMPAIGN_STATE", "EU4_CAMPAIGN_ATTEMPT"):
+            os.environ.pop(key, None)
+        self.temporary.cleanup()
+
+    def _environment(self):
+        return {**os.environ, "EU4_CAMPAIGN_STATE": str(self.path),
+                "PYTHONPATH": str(ROOT)}
+
+    def _child(self, source: str, **kwargs):
+        return subprocess.run(
+            [sys.executable, "-c", source], env=self._environment(),
+            capture_output=True, text=True, timeout=60, **kwargs)
+
+    def test_sequence_reserves_supplied_frames_not_max_frames(self):
+        from automation import agent_tools, m7_continuous
+
+        self.guard.init(campaign_id="frames", budgets={"replays": 8})
+        frame_a = self.root / "frame-a"
+        frame_b = self.root / "frame-b"
+        report = {"status": "complete", "stop_reason": "frame_limit",
+                  "qualified": True, "frames": []}
+        args = agent_tools._parser().parse_args([
+            "--out", str(self.root / "tool.json"),
+            "eu4_replay", "sequence",
+            "--frame-dir", str(frame_a), "--frame-dir", str(frame_b),
+            "--shaders", str(self.root / "shaders"),
+            "--replay-out", str(self.root / "sequence-out"),
+            "--max-frames", "8",
+        ])
+        with mock.patch.dict(os.environ,
+                             {"EU4_CAMPAIGN_STATE": str(self.path)}), \
+             mock.patch.object(m7_continuous, "run_campaign",
+                               return_value=report):
+            value = agent_tools.eu4_replay(args)
+        self.assertEqual(value["status"], "ok")
+        state = self.guard.state()
+        self.assertEqual(state["counts"]["replays"], 2)
+        reservation = next(iter(state["reservations"].values()))
+        self.assertEqual(reservation["actions"], {"replays": 2})
+        self.assertEqual(reservation["state"], "completed")
+
+    def test_case_replay_reserves_supplied_frames_not_target_index(self):
+        from automation import gfx_replay_case
+
+        self.guard.init(campaign_id="case-frames", budgets={"replays": 8})
+        case = self.root / "sequence-case"
+        case.mkdir()
+        (case / "case.json").write_text(json.dumps({
+            "schema": gfx_replay_case.SEQUENCE_SCHEMA,
+            "case_id": "sequence-case",
+        }), encoding="utf-8")
+        (case / "sequence.json").write_text(json.dumps({
+            "target_index": 1,
+            "frames": [
+                {"index": 1, "dir": "frames/000001"},
+                {"index": 2, "dir": "frames/000002"},
+            ],
+        }), encoding="utf-8")
+        with mock.patch.dict(os.environ,
+                             {"EU4_CAMPAIGN_STATE": str(self.path)}), \
+             mock.patch.object(gfx_replay_case, "verify",
+                               return_value={"ok": True, "problems": []}), \
+             mock.patch.object(gfx_replay_case, "_replay_sequence_case",
+                               return_value={"status": "ok"}):
+            gfx_replay_case.replay_case(case, self.root / "case-out")
+        state = self.guard.state()
+        self.assertEqual(state["counts"]["replays"], 2)
+        reservation = next(iter(state["reservations"].values()))
+        self.assertEqual(reservation["actions"], {"replays": 2})
+
+    def test_direct_replay_nonzero_settles_failed_with_evidence(self):
+        self.guard.init(campaign_id="direct", budgets={"replays": 2})
+        frame = self.root / "frame"
+        frame.mkdir()
+        out = self.root / "out"
+        args = m6_frame._parser().parse_args(
+            ["replay", "--frame", str(frame), "--out", str(out)])
+
+        def fail_run(*_args, **_kwargs):
+            return types.SimpleNamespace(returncode=7,
+                                         stderr="host exploded\n",
+                                         stdout="")
+
+        with mock.patch.dict(os.environ,
+                             {"EU4_CAMPAIGN_STATE": str(self.path)}), \
+             mock.patch.object(m6_frame, "build_replay_host",
+                               return_value=Path("/nonexistent/replay-host")), \
+             mock.patch.object(m6_frame.subprocess, "run",
+                               side_effect=fail_run):
+            code = m6_frame.replay_command(args)
+        self.assertEqual(code, 1)
+        state = self.guard.state()
+        self.assertEqual(state["counts"]["replays"], 1)
+        reservation = next(iter(state["reservations"].values()))
+        self.assertEqual(reservation["state"], "failed")
+        evidence = reservation["completion_evidence"]
+        self.assertEqual(evidence["status"], "error")
+        self.assertEqual(evidence["exit_code"], 1)
+        self.assertEqual(evidence["returncode"], 7)
+        self.assertIn("host exploded", evidence["stderr_tail"])
+        self.assertIn("automation.m6_frame", " ".join(evidence["command"]))
+        completions = [row for row in state["history"]
+                       if row.get("action") == "complete"]
+        self.assertEqual(len(completions), 1)
+
+    def test_failed_nested_attempt_settles_once(self):
+        self.guard.init(campaign_id="nested-failure", budgets={"replays": 2})
+        with mock.patch.dict(os.environ,
+                             {"EU4_CAMPAIGN_STATE": str(self.path)}):
+            with campaign_guard.attempt("replays", count=2):
+                with self.assertRaises(RuntimeError):
+                    with campaign_guard.attempt("replays", count=2):
+                        raise RuntimeError("inner replay failed")
+        state = self.guard.state()
+        self.assertEqual(state["counts"]["replays"], 2)
+        self.assertEqual(
+            len([row for row in state["history"]
+                 if row.get("action") == "reserve"]), 1)
+        completions = [row for row in state["history"]
+                       if row.get("action") == "complete"]
+        self.assertEqual(len(completions), 1)
+        self.assertEqual(completions[0]["outcome"], "failed")
+        reservation = next(iter(state["reservations"].values()))
+        self.assertEqual(reservation["state"], "failed")
+
+    def test_separate_process_joins_the_ancestor_reservation(self):
+        self.guard.init(campaign_id="child-join", budgets={"replays": 2})
+        child = """
+from automation import campaign_guard
+with campaign_guard.attempt("replays", count=2):
+    pass
+"""
+        with mock.patch.dict(os.environ,
+                             {"EU4_CAMPAIGN_STATE": str(self.path)}):
+            with campaign_guard.attempt("replays", count=2):
+                ran = self._child(child)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        state = self.guard.state()
+        self.assertEqual(state["counts"]["replays"], 2)
+        self.assertEqual(
+            len([row for row in state["history"]
+                 if row.get("action") == "reserve"]), 1)
+        self.assertEqual(len(state["reservations"]), 1)
+
+    def test_failed_child_settles_exactly_once(self):
+        self.guard.init(campaign_id="child-failure", budgets={"replays": 2})
+        child = """
+import sys
+from automation import campaign_guard
+with campaign_guard.attempt("replays", count=2) as attempt:
+    attempt.fail("child replay failed", evidence={
+        "status": "failed", "exit_code": 9,
+        "stderr_tail": "child stderr", "command": ["child"],})
+sys.exit(9)
+"""
+        with mock.patch.dict(os.environ,
+                             {"EU4_CAMPAIGN_STATE": str(self.path)}):
+            with campaign_guard.attempt("replays", count=2):
+                ran = self._child(child)
+                self.assertEqual(ran.returncode, 9)
+        state = self.guard.state()
+        self.assertEqual(state["counts"]["replays"], 2)
+        completions = [row for row in state["history"]
+                       if row.get("action") == "complete"]
+        self.assertEqual(len(completions), 1)
+        self.assertEqual(completions[0]["outcome"], "failed")
+        reservation = next(iter(state["reservations"].values()))
+        self.assertEqual(reservation["state"], "failed")
+        self.assertEqual(reservation["completion_evidence"]["exit_code"], 9)
+        self.assertIn("child stderr",
+                      reservation["completion_evidence"]["stderr_tail"])
+
+    def test_direct_replay_failure_without_a_campaign_still_returns_its_exit(self):
+        frame = self.root / "frame"
+        frame.mkdir()
+        out = self.root / "out"
+        args = m6_frame._parser().parse_args(
+            ["replay", "--frame", str(frame), "--out", str(out)])
+
+        def fail_run(*_args, **_kwargs):
+            return types.SimpleNamespace(returncode=7,
+                                         stderr="host exploded\n",
+                                         stdout="")
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("EU4_CAMPAIGN_STATE", None)
+            os.environ.pop("EU4_CAMPAIGN_ATTEMPT", None)
+            with mock.patch.object(m6_frame, "build_replay_host",
+                                   return_value=Path("/nonexistent/host")), \
+                 mock.patch.object(m6_frame.subprocess, "run",
+                                   side_effect=fail_run):
+                code = m6_frame.replay_command(args)
+        self.assertEqual(code, 1)
+        self.assertFalse(self.path.exists())
+
+    def test_direct_subprocess_failure_without_a_campaign_keeps_its_report(self):
+        from automation import gfx_independent_replay
+
+        report = {"status": "invalid", "returncode": 4,
+                  "stderr": "native host failed\n", "command": ["native"],
+                  "execution": {"status": "failed"}}
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("EU4_CAMPAIGN_STATE", None)
+            os.environ.pop("EU4_CAMPAIGN_ATTEMPT", None)
+            with mock.patch.object(gfx_independent_replay, "_replay_locked",
+                                   return_value=report):
+                result = gfx_independent_replay.replay(
+                    self.root / "frame", self.root / "out")
+        self.assertEqual(result, report)
+        self.assertFalse(self.path.exists())
+
+    def test_outer_sequence_and_inner_case_replay_share_one_reservation(self):
+        from automation import (agent_tools, gfx_independent_replay,
+                                gfx_replay_case, m7_continuous)
+
+        self.guard.init(campaign_id="nested-case", budgets={"replays": 8})
+        frame_a = self.root / "frame-a"
+        frame_b = self.root / "frame-b"
+        case = self.root / "case"
+        case.mkdir()
+        (case / "case.json").write_text(json.dumps({
+            "schema": "gfx-strategy-b-case/v1", "case_id": "inner",
+        }), encoding="utf-8")
+        inner_report = {"status": "confirmed_rendering_difference",
+                        "execution": {"status": "ok"},
+                        "command": ["inner-host"], "returncode": 0,
+                        "stderr": ""}
+        outer_report = {"status": "complete", "stop_reason": "frame_limit",
+                        "qualified": True, "frames": []}
+
+        def run_inner(*_args, **_kwargs):
+            inner = gfx_replay_case.replay_case(case, self.root / "inner-out")
+            self.assertEqual(inner["status"],
+                             "confirmed_rendering_difference")
+            with campaign_guard.attempt("replays", count=1):
+                pass
+            return outer_report
+
+        args = agent_tools._parser().parse_args([
+            "--out", str(self.root / "tool.json"),
+            "eu4_replay", "sequence",
+            "--frame-dir", str(frame_a), "--frame-dir", str(frame_b),
+            "--shaders", str(self.root / "shaders"),
+            "--replay-out", str(self.root / "sequence-out"),
+            "--max-frames", "8",
+        ])
+        with mock.patch.dict(os.environ,
+                             {"EU4_CAMPAIGN_STATE": str(self.path)}), \
+             mock.patch.object(gfx_replay_case, "verify",
+                               return_value={"ok": True, "problems": []}), \
+             mock.patch.object(gfx_independent_replay, "_replay_locked",
+                               return_value=inner_report), \
+             mock.patch.object(m7_continuous, "run_campaign",
+                               side_effect=run_inner):
+            value = agent_tools.eu4_replay(args)
+        self.assertEqual(value["status"], "ok")
+        state = self.guard.state()
+        self.assertEqual(len(state["reservations"]), 1)
+        reservation = next(iter(state["reservations"].values()))
+        self.assertEqual(reservation["actions"], {"replays": 2})
+        self.assertEqual(state["counts"]["replays"], 2)
+
+    def test_direct_subprocess_failure_is_recorded_with_its_identity(self):
+        from automation import gfx_independent_replay
+
+        self.guard.init(campaign_id="subprocess", budgets={"replays": 1})
+        report = {
+            "status": "invalid", "returncode": 4,
+            "stderr": "native host failed\n", "command": ["native-host"],
+            "execution": {"status": "failed",
+                          "error": "native host exited"},
+        }
+        with mock.patch.dict(os.environ,
+                             {"EU4_CAMPAIGN_STATE": str(self.path)}), \
+             mock.patch.object(gfx_independent_replay, "_replay_locked",
+                               return_value=report):
+            result = gfx_independent_replay.replay(
+                self.root / "frame", self.root / "out")
+        self.assertEqual(result, report)
+        reservation = next(iter(self.guard.state()["reservations"].values()))
+        self.assertEqual(reservation["state"], "failed")
+        evidence = reservation["completion_evidence"]
+        self.assertEqual(evidence["status"], "invalid")
+        self.assertEqual(evidence["exit_code"], 4)
+        self.assertIn("native host failed", evidence["stderr_tail"])
+        self.assertEqual(evidence["command"], ["native-host"])
+
+    def test_two_processes_contend_for_the_same_budget(self):
+        self.guard.init(campaign_id="contend", budgets={"replays": 1})
+        child = """
+import sys, time
+from automation import campaign_guard
+try:
+    with campaign_guard.attempt("replays"):
+        time.sleep(0.4)
+except campaign_guard.CampaignRefusal as exc:
+    print(exc.kind)
+    sys.exit(2)
+"""
+        processes = [
+            subprocess.Popen([sys.executable, "-c", child],
+                             env=self._environment(),
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True)
+            for _ in range(2)
+        ]
+        results = [process.communicate(timeout=60) for process in processes]
+        codes = sorted(process.returncode for process in processes)
+        self.assertEqual(codes, [0, 2], results)
+        state = self.guard.state()
+        self.assertEqual(state["counts"]["replays"], 1)
+        self.assertEqual(len(state["reservations"]), 1)
+        self.assertEqual(
+            len([row for row in state["history"]
+                 if row.get("action") == "reserve"]), 1)
 
 
 if __name__ == "__main__":

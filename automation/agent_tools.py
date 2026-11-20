@@ -2942,8 +2942,10 @@ def eu4_replay(args: argparse.Namespace) -> dict:
 
         try:
             with campaign_guard.attempt(
-                    "replays", count=max(1, max_frames),
-                    evidence={"frames": [str(item) for item in frame_dirs]}):
+                    "replays", count=max(1, len(frame_dirs)),
+                    evidence={"frames": [str(item) for item in frame_dirs],
+                              "supplied_frames": len(frame_dirs),
+                              "max_frames": max_frames}):
                 report = m7_continuous.run_campaign(
                     frame_dirs, Path(args.replay_out), shaders=shaders,
                     policy=getattr(args, "policy", None),
