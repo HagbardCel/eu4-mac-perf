@@ -236,21 +236,23 @@ class ReconcileCaptureStampTests(unittest.TestCase):
         self.assertEqual(kinds[0], "malformed_request")
         self.assertIn("malformed_evidence", kinds)
 
-    def test_bool_producer_events_are_rejected_not_filtered(self):
-        request = {"checkpoints": [{
-            "event": 5, "target": "10", "resource": "tex:10",
-            "file": "intermediate.bgra", "reference_file": "ref.bin",
-            "reference_sha256": hashlib.sha256(self.reference).hexdigest(),
-            "reference_width": 2, "reference_height": 2,
-            "producer_events": [True, 5],
-        }]}
-        results, validation = gfx_independent_replay.reconcile_checkpoints(
-            self.graph, request, {"checkpoints": []}, self.frame, self.out,
-            capture=CAPTURE_A)
-        self.assertEqual(validation["status"], "invalid")
-        self.assertTrue(any(problem["kind"] == "malformed_request"
-                            for problem in validation["problems"]))
-        self.assertEqual(results, [])
+    def test_malformed_producer_histories_are_rejected_not_filtered(self):
+        for value in ([True, 5], 0, True, 5.0, "5", {"event": 5}):
+            request = {"checkpoints": [{
+                "event": 5, "target": "10", "resource": "tex:10",
+                "file": "intermediate.bgra", "reference_file": "ref.bin",
+                "reference_sha256": hashlib.sha256(self.reference).hexdigest(),
+                "reference_width": 2, "reference_height": 2,
+                "producer_events": value,
+            }]}
+            results, validation = (
+                gfx_independent_replay.reconcile_checkpoints(
+                    self.graph, request, {"checkpoints": []}, self.frame,
+                    self.out, capture=CAPTURE_A))
+            self.assertEqual(validation["status"], "invalid", value)
+            self.assertTrue(any(problem["kind"] == "malformed_request"
+                                for problem in validation["problems"]), value)
+            self.assertEqual(results, [], value)
 
     def test_non_object_request_entry_fails_closed(self):
         request = {"checkpoints": ["not-an-object", 7]}

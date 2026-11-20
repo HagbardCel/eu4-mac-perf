@@ -2076,7 +2076,16 @@ def _checkpoint_request_plan_problems(graph: dict,
                     "the validated capture graph",
                     severity="invalid"))
                 break
-        published_producers = item.get("producer_events") or []
+        raw_producers = item.get("producer_events", [])
+        if ("producer_events" in item
+                and not _valid_producer_events(raw_producers)):
+            problems.append(_checkpoint_problem(
+                "malformed_request",
+                f"checkpoint ({key[0]}, {key[1]}) producer history is not "
+                "an integer array",
+                severity="invalid"))
+            continue
+        published_producers = raw_producers if raw_producers is not None else []
         # ``writer_authority`` marks requests produced after writer history was
         # added to the plan.  A legacy published request has no such marker; its
         # empty producer list is retained as declared legacy evidence rather
