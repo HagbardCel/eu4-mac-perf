@@ -1080,6 +1080,25 @@ def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
     }
 
 
+def _producer_events(resources: dict, resource_key: str,
+                     event: int) -> list[int]:
+    """Graph-derived same-resource writers strictly before an observation.
+
+    The list is intentionally explicit: an empty result means the graph found
+    no writer before the observation, not that the previous event is assumed
+    to be the writer.
+    """
+    resource = resources.get(resource_key) or {}
+    return [
+        int(item["event"]) for item in resource.get("producers") or []
+        if item.get("event") is not None and int(item["event"]) < int(event)
+    ]
+
+
+def _writer_authority(events: list[int]) -> str:
+    return "graph" if events else "unknown"
+
+
 def checkpoint_plan(graph: dict) -> list[dict]:
     """First-consumer checkpoints for every sampled in-frame target.
 
@@ -1113,9 +1132,10 @@ def checkpoint_plan(graph: dict) -> list[dict]:
             "reference_sha256": version["sha256"],
             "reference_width": version["width"],
             "reference_height": version["height"],
-            "producer_events": [item["event"] for item in
-                                resource.get("producers") or []
-                                if item["event"] < first["event"]],
+            "producer_events": _producer_events(
+                resources, key, first["event"]),
+            "writer_authority": _writer_authority(
+                _producer_events(resources, key, first["event"])),
         })
     # A captured in-frame copy may include the effective default-framebuffer
     # source pixels.  That is the authoritative checkpoint for the copy input,
@@ -1133,6 +1153,7 @@ def checkpoint_plan(graph: dict) -> list[dict]:
             if key in seen_sources:
                 continue
             seen_sources.add(key)
+            producers = _producer_events(resources, "fb:0", event)
             plan.append({
                 "event": event,
                 "target": "0",
@@ -1141,7 +1162,8 @@ def checkpoint_plan(graph: dict) -> list[dict]:
                 "reference_sha256": image.get("sha256"),
                 "reference_width": image.get("width"),
                 "reference_height": image.get("height"),
-                "producer_events": [],
+                "producer_events": producers,
+                "writer_authority": _writer_authority(producers),
             })
     # The opt-in capture-side checkpoint is authoritative reference evidence for
     # the default framebuffer immediately before its event.  It is never a
@@ -1152,6 +1174,7 @@ def checkpoint_plan(graph: dict) -> list[dict]:
         if key in existing:
             continue
         existing.add(key)
+        producers = _producer_events(resources, "fb:0", int(item["event"]))
         plan.append({
             "event": int(item["event"]),
             "target": "0",
@@ -1160,7 +1183,8 @@ def checkpoint_plan(graph: dict) -> list[dict]:
             "reference_sha256": item["reference_sha256"],
             "reference_width": item["reference_width"],
             "reference_height": item["reference_height"],
-            "producer_events": [],
+            "producer_events": producers,
+            "writer_authority": _writer_authority(producers),
             "session_id": item.get("session_id"),
             "capture_frame_id": item.get("capture_frame_id"),
         })
@@ -1188,6 +1212,7 @@ def checkpoint_request(graph: dict) -> dict:
             "reference_width": item["reference_width"],
             "reference_height": item["reference_height"],
             "producer_events": item["producer_events"],
+            "writer_authority": item["writer_authority"],
         }
         # Capture identity is additive: a legacy capture without it must
         # serialize exactly as it did before the multi-checkpoint work, so the
@@ -1201,6 +1226,103 @@ def checkpoint_request(graph: dict) -> dict:
         "schema": "gfx-frame-checkpoint-request/v1",
         "checkpoints": checkpoints,
     }
+
+
+def provenance_matrix(graph: dict, checkpoints: list[dict] | None = None,
+                      frame_identity: dict | None = None,
+                      writer_limit: int = 8) -> list[dict]:
+    """Render observation/writer rows from the graph, not by arithmetic.
+
+    Every requested or reconciled observation is projected with:
+
+    * its own event, target, resource and ``phase="pre_event"`` scope;
+    * the graph's same-resource writers strictly before that event, newest
+      last, with ``writer_authority="unknown"`` when the graph records none;
+    * the operation *at* the observation event separately, explicitly marked
+      as not the writer of the observed pre-event content;
+    * the frame/capture identity, and checkpoint statistics when supplied.
+
+    Callers must not infer a writer as ``event - 1`` or by subtracting one
+    producer from a list.  A graph with no prior same-resource writer yields an
+    explicit unknown rather than a misleading adjacency.
+    """
+    resources = graph.get("resources") or {}
+    events = {int(row.get("event")): row
+              for row in graph.get("events") or []
+              if row.get("event") is not None}
+    observations = checkpoints
+    if observations is None:
+        observations = checkpoint_plan(graph)
+    identity = dict(frame_identity or {})
+    if not identity:
+        boundary = graph.get("boundary") or {}
+        identity = {
+            key: boundary.get(key) for key in
+            ("session_id", "capture_frame_id", "event_stream_sha256",
+             "reference_sha256")
+            if boundary.get(key) is not None
+        }
+    rows: list[dict] = []
+    for item in observations:
+        if not isinstance(item, dict) or item.get("event") is None:
+            continue
+        event = int(item["event"])
+        resource_key = str(item.get("resource") or (
+            "fb:0" if str(item.get("target")) == "0"
+            else f"tex:{item.get('target')}"))
+        producer_events = _producer_events(resources, resource_key, event)
+        writers = []
+        for writer_event in producer_events[-writer_limit:]:
+            writer = events.get(writer_event) or {}
+            writers.append({
+                "event": writer_event,
+                "kind": writer.get("kind"),
+                "operation": writer.get("operation"),
+                "entry": writer.get("entry"),
+                "caller_rva": writer.get("caller_rva"),
+                "program": writer.get("program"),
+            })
+        upcoming = events.get(event) or {}
+        resource = resources.get(resource_key) or {}
+        generations = [
+            row for row in resource.get("consumer_generations") or []
+            if int(row.get("event", -1)) == event
+        ]
+        row = {
+            "observation": {
+                "event": event,
+                "target": item.get("target"),
+                "resource": resource_key,
+                "phase": "pre_event",
+                "authority": ("authoritative" if item.get("authoritative")
+                              else item.get("authority") or "requested"),
+                "status": item.get("status"),
+            },
+            "writers": writers,
+            "writer_events": producer_events[-writer_limit:],
+            "writer_authority": _writer_authority(producer_events),
+            "producer_event": (producer_events[-1]
+                               if producer_events else None),
+            "generation": {
+                "required": (generations[0].get("required_generation")
+                             if generations else None),
+                "producers_before": len(producer_events),
+                "captured_writes": len(resource.get("producers") or []),
+            },
+            "upcoming_event": {
+                "event": event,
+                "kind": upcoming.get("kind"),
+                "operation": upcoming.get("operation"),
+                "entry": upcoming.get("entry"),
+                "program": upcoming.get("program"),
+                "note": "the operation at the observation event; it has not "
+                        "written the observed pre-event content",
+            },
+            "frame": identity,
+            "statistics": item.get("statistics"),
+        }
+        rows.append(row)
+    return rows
 
 
 def write_checkpoint_request(graph: dict, path: Path | str) -> dict:

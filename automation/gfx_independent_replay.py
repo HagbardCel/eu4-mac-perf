@@ -1922,15 +1922,27 @@ def _checkpoint_request_plan_problems(graph: dict,
                     severity="invalid"))
                 break
         published_producers = item.get("producer_events") or []
-        if (not isinstance(published_producers, list)
-                or any(not isinstance(value, int)
-                       for value in published_producers)
-                or published_producers != (wanted.get("producer_events") or [])):
-            problems.append(_checkpoint_problem(
-                "substituted_request",
-                f"checkpoint ({key[0]}, {key[1]}) producer history disagrees "
-                "with the validated capture graph",
-                severity="invalid"))
+        # ``writer_authority`` marks requests produced after writer history was
+        # added to the plan.  A legacy published request has no such marker; its
+        # empty producer list is retained as declared legacy evidence rather
+        # than being reinterpreted against a newer derived plan.
+        if "writer_authority" in item:
+            if item.get("writer_authority") != wanted.get("writer_authority"):
+                problems.append(_checkpoint_problem(
+                    "substituted_request",
+                    f"checkpoint ({key[0]}, {key[1]}) writer authority "
+                    "disagrees with the validated capture graph",
+                    severity="invalid"))
+            elif (not isinstance(published_producers, list)
+                  or any(not isinstance(value, int)
+                         for value in published_producers)
+                  or published_producers != (wanted.get("producer_events")
+                                             or [])):
+                problems.append(_checkpoint_problem(
+                    "substituted_request",
+                    f"checkpoint ({key[0]}, {key[1]}) producer history "
+                    "disagrees with the validated capture graph",
+                    severity="invalid"))
     for key in expected_by_key:
         if key not in seen:
             problems.append(_checkpoint_problem(

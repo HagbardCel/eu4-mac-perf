@@ -474,11 +474,14 @@ class DefaultCheckpointGraphTests(unittest.TestCase):
         request = gfx_frame_graph.checkpoint_request(graph)
         item = next(item for item in request["checkpoints"]
                     if item["event"] == 4 and item["target"] == "0")
-        # Byte-identical legacy key order and no identity keys.
+        # Byte-identical legacy key order plus the additive writer authority;
+        # no capture identity keys.
         self.assertEqual(list(item), [
             "event", "target", "resource", "file", "reference_file",
             "reference_sha256", "reference_width", "reference_height",
-            "producer_events"])
+            "producer_events", "writer_authority"])
+        self.assertIn(item["writer_authority"], ("graph", "unknown"))
+        self.assertIsInstance(item["producer_events"], list)
         self.assertNotIn("session_id", item)
         self.assertNotIn("capture_frame_id", item)
 
@@ -1027,6 +1030,85 @@ class FirstDivergenceTests(unittest.TestCase):
         value = gfx_independent_replay.first_divergence(
             {"resources": {}, "events": []}, [], {"status": "divergent"})
         self.assertEqual(value["kind"], "final_only")
+
+
+class ProvenanceMatrixTests(unittest.TestCase):
+    def graph(self):
+        return {
+            "boundary": {
+                "session_id": "session-a", "capture_frame_id": 1,
+                "event_stream_sha256": "a" * 64,
+                "reference_sha256": "b" * 64,
+            },
+            "events": [
+                {"event": 0, "kind": "clear", "operation": "glClear"},
+                {"event": 1, "kind": "draw", "operation": "_GfxDraw",
+                 "entry": "_GfxDraw", "program": "300",
+                 "caller_rva": "0x100"},
+                {"event": 2, "kind": "draw", "operation": "_GfxDrawIndexed",
+                 "entry": "_GfxDrawIndexed", "program": "301",
+                 "caller_rva": "0x10d4e50"},
+            ],
+            "resources": {
+                "fb:0": {
+                    "producers": [
+                        {"event": 0, "kind": "clear", "writes": ["color"]},
+                        {"event": 1, "kind": "draw", "entry": "_GfxDraw",
+                         "program": "300", "caller_rva": "0x100"},
+                    ],
+                    "consumer_generations": [
+                        {"event": 2, "required_generation": 2}],
+                },
+            },
+        }
+
+    def test_writers_come_from_the_graph_not_from_event_minus_one(self):
+        rows = gfx_frame_graph.provenance_matrix(self.graph(), [{
+            "event": 2, "target": "0", "resource": "fb:0",
+            "status": "divergent", "authoritative": True,
+            "statistics": {"mismatched_pixels": 607, "max_channel_error": 2},
+        }])
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["observation"]["event"], 2)
+        self.assertEqual(row["observation"]["phase"], "pre_event")
+        self.assertEqual(row["observation"]["target"], "0")
+        self.assertEqual(row["writer_events"], [0, 1])
+        self.assertEqual(row["producer_event"], 1)
+        self.assertEqual(row["writer_authority"], "graph")
+        self.assertEqual([writer["entry"] for writer in row["writers"]],
+                         [None, "_GfxDraw"])
+        # The operation at the observation event is reported separately and
+        # never presented as the writer of the observed pre-event content.
+        self.assertEqual(row["upcoming_event"]["entry"], "_GfxDrawIndexed")
+        self.assertIn("not", row["upcoming_event"]["note"])
+        self.assertEqual(row["generation"]["required"], 2)
+        self.assertEqual(row["frame"]["session_id"], "session-a")
+        self.assertEqual(row["frame"]["capture_frame_id"], 1)
+        self.assertEqual(row["statistics"]["mismatched_pixels"], 607)
+
+    def test_no_same_resource_writer_is_explicit_unknown(self):
+        graph = self.graph()
+        graph["resources"]["fb:0"]["producers"] = []
+        rows = gfx_frame_graph.provenance_matrix(graph, [{
+            "event": 2, "target": "0", "resource": "fb:0",
+        }])
+        self.assertEqual(rows[0]["writer_events"], [])
+        self.assertIsNone(rows[0]["producer_event"])
+        self.assertEqual(rows[0]["writer_authority"], "unknown")
+
+    def test_default_checkpoint_request_uses_graph_producer_history(self):
+        graph = self.graph()
+        graph["default_checkpoints"] = [{
+            "event": 2, "target": "0", "reference_file": "ref.bin",
+            "reference_sha256": "c" * 64, "reference_width": 8,
+            "reference_height": 8,
+        }]
+        request = gfx_frame_graph.checkpoint_request(graph)
+        item = next(item for item in request["checkpoints"]
+                    if item["event"] == 2 and item["target"] == "0")
+        self.assertEqual(item["producer_events"], [0, 1])
+        self.assertEqual(item["writer_authority"], "graph")
 
 
 if __name__ == "__main__":
