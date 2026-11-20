@@ -200,7 +200,8 @@ def _refuse_symlinked(path: Path, what: str) -> None:
 
 
 def layout(run_root: Path | str, session_id: str | None = None, *,
-           create: bool = False) -> SessionLayout:
+           create: bool = False,
+           must_exist: bool = True) -> SessionLayout:
     """Resolve the writable root for *session_id* beneath *run_root*.
 
     ``session_id=None`` selects the legacy shared layout explicitly.  An empty
@@ -211,6 +212,11 @@ def layout(run_root: Path | str, session_id: str | None = None, *,
     re-resolves it before returning.  Every path component between the campaign
     root and the session root is checked for a symlink, and the final resolved
     directory must still be inside the campaign root.
+
+    ``must_exist=False`` (with ``create=False``) resolves and validates the
+    same path without requiring it to exist yet.  The bridge uses that to
+    validate a session id and learn its root *before* any trusted check, so a
+    refused prepare cannot create an empty directory.
     """
     campaign_root = _campaign_root(run_root)
     if session_id is None:
@@ -254,7 +260,7 @@ def layout(run_root: Path | str, session_id: str | None = None, *,
                 "the session root resolves outside the campaign root; refusing "
                 "a symlink escape")
         target = resolved
-    elif not target.is_dir():
+    elif not target.is_dir() and must_exist:
         raise SessionRootError(
             f"session root does not exist; prepare must run first: {target}")
 

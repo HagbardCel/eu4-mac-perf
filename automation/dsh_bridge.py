@@ -748,9 +748,42 @@ ANCHORED_IDENTITIES = (
 )
 
 
+def _read_anchor(path: Path) -> dict | None:
+    """Read the identity anchor; corrupt state is a structured refusal.
+
+    ``receipts.read_json`` lets a decode error escape. An unreadable anchor is
+    not the same state as a missing one: reporting it as ``not_prepared`` would
+    tell an operator to start a campaign that already has protected material,
+    and a traceback would lose the classification entirely.
+    """
+    anchor_path = Path(path)
+    if not anchor_path.is_file():
+        if anchor_path.exists():
+            raise Refusal(
+                "anchor_corrupt",
+                f"{anchor_path}: exists but is not a regular file")
+        return None
+    try:
+        value = receipts.read_json(anchor_path)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise Refusal("anchor_corrupt", f"{anchor_path}: {exc}") from exc
+    if value is None:
+        raise Refusal("anchor_corrupt", f"{anchor_path}: JSON null is not an anchor")
+    if not isinstance(value, dict):
+        raise Refusal("anchor_corrupt", f"{anchor_path}: expected a JSON object")
+    identities = value.get("identities")
+    if value.get("schema") != "eu4-dsh-identity/v1" \
+            or not isinstance(identities, dict) or not identities:
+        raise Refusal(
+            "anchor_corrupt",
+            f"{anchor_path}: not an identity anchor (missing schema/identities); "
+            "an empty object must not authorize a context")
+    return value
+
+
 def _prepared_identities(sidecar: Sidecar) -> dict:
     """Trusted material captured by ``prepare``; the anchor later runs compare to."""
-    stored = receipts.read_json(receipts.paths(sidecar.run_root).identity)
+    stored = _read_anchor(receipts.paths(sidecar.run_root).identity)
     if not stored:
         raise Refusal("not_prepared", "run `prepare` before `validate`")
     identities = stored.get("identities")
@@ -793,8 +826,13 @@ def op_prepare(args) -> int:
     sidecar = load_sidecar(Path(args.sidecar))
     roots = _roots(sidecar)
     stored = _setup(sidecar.run_root)
+    # Resolve (not create) the per-session root before any trusted check. A
+    # refused prepare must not leave an empty session directory that a later
+    # reconnect could adopt. `_prepare_locked` creates it immediately before the
+    # session record is written, after every refusal point.
     session = _session_layout(sidecar.run_root,
-                              getattr(args, "session_id", None), create=True)
+                              getattr(args, "session_id", None),
+                              create=False, must_exist=False)
     infra_commit = _git(infra_root(), "rev-parse", "HEAD")
     try:
         lock = campaign_lock(stored.lock)
@@ -830,7 +868,7 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit, session) -> int:
 
     identities = _identity(sidecar, infra_commit)
     authority = _authority_snapshot(sidecar, identities)
-    existing = receipts.read_json(stored.identity)
+    existing = _read_anchor(stored.identity)
     if existing is None and not getattr(args, "create_anchor", False):
         # The plugin calls prepare before every check. If that call could create
         # the anchor, a session started in the wrong directory could anchor
@@ -863,9 +901,16 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit, session) -> int:
     startup_text = _startup_text(
         startup, attempts=attempts, identity_digest=identity_digest,
         verification=verification)
-    # The anchor above is campaign-wide trusted material. This record is the
-    # per-session binding: it names the validated session and its writable root,
-    # and a reconnect finds the same file instead of rewriting it.
+    # The anchor above is campaign-wide trusted material. Only now, after every
+    # refusal point, create the isolated session root; the record names the
+    # validated session and its writable root, and a reconnect finds the same
+    # file instead of rewriting it.
+    if session.isolated:
+        # Idempotent: also re-resolves and re-tightens an existing root to 0700,
+        # which the previous create=True-on-every-call path did.
+        session = _session_layout(sidecar.run_root,
+                                  getattr(args, "session_id", None),
+                                  create=True)
     try:
         session_record, record_created = session_state.write_session_record(
             session, campaign_id=sidecar.campaign_id)
@@ -899,7 +944,8 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit, session) -> int:
 VALIDATIONS_LOG = "validations.jsonl"
 
 
-def _session_layout(run_root: Path, session_id, *, create: bool):
+def _session_layout(run_root: Path, session_id, *, create: bool,
+                    must_exist: bool = True):
     """Resolve the writable root for one DSH session.
 
     ``session_id=None`` keeps the pre-existing shared run-root layout and is
@@ -907,7 +953,8 @@ def _session_layout(run_root: Path, session_id, *, create: bool):
     root (which would silently mix two sessions).
     """
     try:
-        return session_state.layout(run_root, session_id, create=create)
+        return session_state.layout(
+            run_root, session_id, create=create, must_exist=must_exist)
     except session_state.SessionRootError as exc:
         raise Refusal("invalid_session", str(exc)) from exc
 
@@ -1190,7 +1237,7 @@ def _budget_stop_payload(sidecar: Sidecar, stop: dict,
 
 
 def _prepared_epoch(run_root: Path) -> float | None:
-    anchor = receipts.read_json(receipts.paths(run_root).identity) or {}
+    anchor = _read_anchor(receipts.paths(run_root).identity) or {}
     stamped = str(anchor.get("prepared_at") or "")
     if not stamped:
         return None
@@ -1260,7 +1307,10 @@ def op_validate(args) -> int:
     _roots(sidecar)
     stored = _setup(sidecar.run_root)
     session_id = getattr(args, "session_id", None) or None
-    session = _session_layout(sidecar.run_root, session_id, create=bool(session_id))
+    # Resolve, do not create: a refusal (missing/corrupt anchor, exhausted
+    # budget) must not leave an empty per-session root behind.
+    session = _session_layout(sidecar.run_root, session_id, create=False,
+                              must_exist=False)
     try:
         lock = campaign_lock(stored.lock)
         lock.__enter__()
@@ -1289,6 +1339,9 @@ def op_validate(args) -> int:
         # The claim is atomic and campaign-wide; the detailed start row is
         # written beside it in this session's log.  If the process is
         # interrupted anywhere after this point the attempt stays charged.
+        # Only now, after every refusal point, create the isolated root.
+        if session.isolated:
+            session = _session_layout(sidecar.run_root, session_id, create=True)
         claim, attempt_id = _claim_attempt(
             sidecar, session, operation="validate",
             session_id=session_id, candidate_digest=digest)
@@ -1913,7 +1966,8 @@ def op_review_run(args) -> int:
     _roots(sidecar)
     stored = _setup(sidecar.run_root)
     requested_session = _session_layout(
-        sidecar.run_root, getattr(args, "session_id", None) or None, create=True)
+        sidecar.run_root, getattr(args, "session_id", None) or None,
+        create=False, must_exist=False)
     try:
         lock = campaign_lock(stored.lock)
         lock.__enter__()
@@ -2091,7 +2145,8 @@ def op_review_verify(args) -> int:
     _roots(sidecar)
     stored = _setup(sidecar.run_root)
     session = _session_layout(sidecar.run_root,
-                              getattr(args, "session_id", None) or None, create=True)
+                              getattr(args, "session_id", None) or None,
+                              create=False, must_exist=False)
     try:
         lock = campaign_lock(stored.lock)
         lock.__enter__()
@@ -2148,7 +2203,10 @@ def op_finalize(args) -> int:
     _roots(sidecar)
     stored = _setup(sidecar.run_root)
     session_id = getattr(args, "session_id", None) or None
-    session = _session_layout(sidecar.run_root, session_id, create=bool(session_id))
+    # Resolve, do not create: a refusal (missing/corrupt anchor, exhausted
+    # budget) must not leave an empty per-session root behind.
+    session = _session_layout(sidecar.run_root, session_id, create=False,
+                              must_exist=False)
     try:
         lock = campaign_lock(stored.lock)
         lock.__enter__()
@@ -2375,7 +2433,13 @@ def op_context(args) -> int:
         })
         return EXIT_INTEGRITY
     run_paths = receipts.paths(sidecar.run_root)
-    anchor = receipts.read_json(run_paths.identity)
+    try:
+        anchor = _read_anchor(run_paths.identity)
+    except Refusal as exc:
+        return _context_refusal(
+            sidecar, status="refused", kind=exc.kind,
+            detail=exc.detail or str(exc),
+        )
     if anchor is None:
         return _context_refusal(
             sidecar, status="unprepared", kind="not_prepared", anchored=False,
