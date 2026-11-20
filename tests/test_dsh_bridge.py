@@ -667,7 +667,8 @@ class IntegrityTests(BridgeTestCase):
         # A structured refusal must not be reported as "not prepared": the
         # campaign has protected material that simply cannot be read.
         self.assertNotEqual(out["kind"], "not_prepared")
-        for body in ("null", "[]", "{}"):
+        for body in ("null", "[]", "{}",
+                     '{"schema": "eu4-dsh-identity/v1", "identities": {}}'):
             with self.subTest(anchor=body):
                 anchor.write_text(body, encoding="utf-8")
                 code, out = self.run_bridge("context", sidecar)

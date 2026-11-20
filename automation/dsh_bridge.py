@@ -771,8 +771,9 @@ def _read_anchor(path: Path) -> dict | None:
         raise Refusal("anchor_corrupt", f"{anchor_path}: JSON null is not an anchor")
     if not isinstance(value, dict):
         raise Refusal("anchor_corrupt", f"{anchor_path}: expected a JSON object")
+    identities = value.get("identities")
     if value.get("schema") != "eu4-dsh-identity/v1" \
-            or not isinstance(value.get("identities"), dict):
+            or not isinstance(identities, dict) or not identities:
         raise Refusal(
             "anchor_corrupt",
             f"{anchor_path}: not an identity anchor (missing schema/identities); "
