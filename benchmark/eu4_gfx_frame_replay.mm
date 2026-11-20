@@ -626,7 +626,7 @@ static NSString *sampler_key_for_state(NSDictionary *state) {
     }
     /* compare_function is inert unless compare-to-texture is enabled. */
     NSUInteger compare_mode = enum_value(state[@"compare_mode"], 0);
-    if (compare_mode == 0x884Cu) {
+    if (compare_mode == 0x884Eu) { /* GL_COMPARE_REF_TO_TEXTURE */
         [key appendFormat:@"compare_func=%lu|",
          (unsigned long)enum_value(state[@"compare_func"], 0x0203u)];
     }
@@ -2301,7 +2301,6 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
         BOOL blend_enabled = number(blend[@"enabled"], 0) != 0;
         BOOL depth_test = number(depth_state[@"test"], 0) != 0;
         BOOL depth_write = number(depth_state[@"write"], 0) != 0;
-        BOOL cull_enabled = number(cull[@"enabled"], 0) != 0;
         NSMutableDictionary *target_info = target_for(event[@"target"] ?: @{}, error);
         if (target_info == nil) {
             return NO;
@@ -3058,7 +3057,7 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                     descriptor.lodMinClamp = (float)double_number(sampler_state[@"min_lod"], 0);
                     descriptor.lodMaxClamp = (float)double_number(sampler_state[@"max_lod"], 1000);
                     descriptor.lodBias = (float)double_number(sampler_state[@"lod_bias"], 0);
-                    if (enum_value(sampler_state[@"compare_mode"], 0) == 0x884C) {
+                    if (enum_value(sampler_state[@"compare_mode"], 0) == 0x884E) {
                         descriptor.compareFunction = compare_function(
                             enum_value(sampler_state[@"compare_func"], 0x0203));
                     }

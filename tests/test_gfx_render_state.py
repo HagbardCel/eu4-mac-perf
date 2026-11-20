@@ -83,17 +83,20 @@ class RenderStateProjectionTests(unittest.TestCase):
     def test_every_consumed_sampler_field_changes_the_key(self):
         base = self.query({"sampler": self.sampler(), "width": 8, "height": 8})
         for name, value in (
-                ("wrap_r", "0x812f"), ("min_lod", 2), ("max_lod", 7),
-                ("compare_mode", "0x884c")):
+                ("min", "0x2600"), ("mag", "0x2600"),
+                ("wrap_s", "0x812f"), ("wrap_t", "0x812f"),
+                ("wrap_r", "0x812f"), ("lod_bias", 1),
+                ("min_lod", 2), ("max_lod", 7),
+                ("compare_mode", "0x884e")):
             changed = self.query({
                 "sampler": self.sampler(**{name: value}),
                 "width": 8, "height": 8})
             self.assertNotEqual(base["key"], changed["key"], name)
         compare = self.query({"sampler": self.sampler(
-            compare_mode="0x884c", compare_func="0x0203"),
+            compare_mode="0x884e", compare_func="0x0203"),
             "width": 8, "height": 8})["key"]
         changed = self.query({"sampler": self.sampler(
-            compare_mode="0x884c", compare_func="0x0201"),
+            compare_mode="0x884e", compare_func="0x0201"),
             "width": 8, "height": 8})["key"]
         self.assertNotEqual(compare, changed)
         # compare_func is inert without compare-to-texture.
