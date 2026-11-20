@@ -175,6 +175,34 @@ class PrepareTests(BridgeTestCase):
             path.unlink()
 
 
+    def test_nested_probe_prefixed_path_is_still_candidate_work(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"),
+                               allowed=("marker.txt", "progress.md", ".local/*"))
+        data = json.loads(sidecar.read_text())
+        data["candidate"]["policy"]["forbidden_paths"] = [".local"]
+        sidecar.write_text(json.dumps(data), encoding="utf-8")
+        self.workspace.mkdir(parents=True)
+        nested = self.workspace / ".local" / ".dsh-prepare-probe-cheat"
+        nested.parent.mkdir()
+        nested.write_text("candidate work", encoding="utf-8")
+        code, out = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
+        self.assertEqual(out["kind"], "policy")
+        self.assertIn("frozen path modified", out["detail"])
+        self.assertTrue(nested.is_file())
+
+    def test_freeze_ignores_root_level_probe_residue(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        self.run_bridge("prepare", sidecar)
+        stale = self.workspace / f"{dsh_bridge.PROBE_PREFIX}stale"
+        stale.write_text("residue", encoding="utf-8")
+        self.addCleanup(lambda: stale.unlink(missing_ok=True))
+        loaded = dsh_campaign.load_sidecar(sidecar)
+        frozen = dsh_bridge._freeze(loaded)
+        self.assertEqual(frozen["mode"], "seed")
+        self.assertEqual(frozen["entries"], 2)
+
+
 class ValidationBudgetTests(BridgeTestCase):
     """External sidecar limits are enforced from the bridge's attempt log."""
 

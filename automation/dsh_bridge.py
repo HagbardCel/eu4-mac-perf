@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -341,8 +342,18 @@ def _trusted_modules_digest(checker: Path, strict: bool = True) -> tuple[str, li
     return receipts.digest_text(receipts.canonical_json(rows)), rows
 
 
+_PROBE_NAME = re.compile(r"^\.dsh-prepare-probe-[A-Za-z0-9_-]{1,64}$")
+
+
 def _is_probe_path(path: str | Path) -> bool:
-    return Path(path).name.startswith(PROBE_PREFIX)
+    """Only exact root-level harness probe files are residue.
+
+    Nested files that merely share the prefix are candidate work and must
+    still pass the allowlist and enter the digest.
+    """
+    candidate = Path(path)
+    return candidate.parent == Path(".") and bool(
+        _PROBE_NAME.match(candidate.name))
 
 
 def _workspace_write_problem(workspace: Path) -> str | None:
@@ -933,13 +944,17 @@ def _freeze(sidecar: Sidecar) -> dict:
     less — or the review evidence would describe a candidate nobody validated.
     """
     if sidecar.mode != "worktree":
-        digest, entries = receipts.tree_digest(sidecar.workspace)
+        _digest, entries = receipts.tree_digest(sidecar.workspace)
+        entries = [entry for entry in entries
+                   if not _is_probe_path(entry["path"])]
+        digest = receipts.digest_text(receipts.canonical_json(entries))
         return {"mode": "seed", "digest": digest, "entries": len(entries),
                 "commit": None}
 
     infra = infra_root().resolve()
     baseline = sidecar.candidate_baseline_commit or ""
-    delta = snapshot.enumerate_delta(sidecar.workspace)
+    delta = [entry for entry in snapshot.enumerate_delta(sidecar.workspace)
+             if not _is_probe_path(entry["path"])]
     problems = snapshot.validate_delta(
         delta, sidecar.allowed_paths, sidecar.forbidden_paths,
         allow_symlinks=sidecar.allow_symlinks,
