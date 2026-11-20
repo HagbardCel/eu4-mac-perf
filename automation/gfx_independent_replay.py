@@ -21,6 +21,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from automation import gfx_frame_graph, m6_compare, m6_frame
@@ -3880,41 +3881,42 @@ def replay(
     """
     from automation import campaign_guard
 
-    guard = campaign_guard.from_env()
-    reservation = None
-    if guard is not None:
-        try:
-            # Reserve before the host is built or any output is prepared.
-            reservation = guard.reserve(
-                {"replays": 1},
-                evidence={"frame_dir": str(frame_dir),
-                          "out_dir": str(out_dir)})
-        except campaign_guard.CampaignRefusal as exc:
-            raise ReplayError("campaign_refused",
-                              f"{exc.kind}: {exc.detail}") from exc
+    evidence = {
+        "entry_point": "automation.gfx_independent_replay.replay",
+        "frame_dir": str(frame_dir),
+        "out_dir": str(out_dir),
+        "command": [sys.executable, "-m",
+                    "automation.gfx_independent_replay",
+                    "replay", "--frame", str(frame_dir),
+                    "--out", str(out_dir)],
+    }
     try:
-        report = _replay_locked(
-            frame_dir, out_dir, shaders=shaders, faults=faults, policy=policy,
-            timeout=timeout)
-    except BaseException as exc:  # noqa: BLE001 - record then propagate
-        if guard is not None and reservation is not None:
-            guard.complete(reservation, outcome="failed",
-                           detail=f"{type(exc).__name__}: {exc}",
-                           evidence={"frame_dir": str(frame_dir),
-                                     "out_dir": str(out_dir)})
-        raise
-    if guard is not None and reservation is not None:
-        failed = (report.get("status") == "invalid"
-                  or (report.get("execution") or {}).get("status")
-                  == "failed")
-        guard.complete(
-            reservation, outcome="failed" if failed else "ok",
-            detail=" ".join(str(item) for item in (
-                (report.get("execution") or {}).get("error"),
-                (report.get("execution") or {}).get("failure")) if item),
-            evidence={"frame_dir": str(frame_dir), "out_dir": str(out_dir),
-                      "status": report.get("status")})
-    return report
+        # Reserve before the host is built or any output is prepared.  The
+        # attempt boundary is shared with nested case/sequence entry points so
+        # exactly one reservation covers the physical replay.
+        with campaign_guard.attempt(
+                "replays", evidence=evidence) as attempt:
+            report = _replay_locked(
+                frame_dir, out_dir, shaders=shaders, faults=faults,
+                policy=policy, timeout=timeout)
+            failed = (report.get("status") == "invalid"
+                      or (report.get("execution") or {}).get("status")
+                      == "failed")
+            if failed and attempt is not None:
+                detail = " ".join(str(item) for item in (
+                    (report.get("execution") or {}).get("error"),
+                    (report.get("execution") or {}).get("failure"),
+                    report.get("status")) if item)
+                attempt.fail(detail, evidence={
+                    "status": report.get("status"),
+                    "exit_code": report.get("returncode"),
+                    "stderr_tail": str(report.get("stderr") or "")[-2000:],
+                    "command": report.get("command") or evidence["command"],
+                })
+            return report
+    except campaign_guard.CampaignRefusal as exc:
+        raise ReplayError("campaign_refused",
+                          f"{exc.kind}: {exc.detail}") from exc
 
 
 def _replay_locked(
@@ -3991,6 +3993,7 @@ def _replay_locked(
             "status": "invalid",
             "receipt_error": receipt_error,
             "faults": faults,
+            "command": command,
             "returncode": ran.returncode,
             "stderr": (ran.stderr or "")[-4000:],
             "graph": graph,
@@ -4013,6 +4016,7 @@ def _replay_locked(
             "out_dir": str(out_dir),
             "status": "invalid",
             "faults": faults,
+            "command": command,
             "returncode": ran.returncode,
             "stderr": (ran.stderr or "")[-4000:],
             "graph": graph,
@@ -4058,6 +4062,9 @@ def _replay_locked(
         "out_dir": str(out_dir),
         "status": status,
         "outcome": outcome,
+        "command": command,
+        "returncode": ran.returncode,
+        "stderr": (ran.stderr or "")[-4000:],
         "classification": diagnosis.get("classification"),
         "qualification": diagnosis.get("qualification"),
         "faults": faults,
