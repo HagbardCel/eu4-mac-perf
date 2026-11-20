@@ -150,6 +150,33 @@ class ReconcileCaptureStampTests(unittest.TestCase):
         self.assertEqual(results[0]["capture"], CAPTURE_A)
         self.assertEqual(results[0]["status"], "match")
 
+    def test_non_list_checkpoint_containers_fail_closed(self):
+        # Issue #233: a scalar/string container must produce invalid evidence,
+        # never a TypeError from len()/list().
+        for bad in (7, "not-a-list", {"event": 5}):
+            for request, replay in (
+                    ({"checkpoints": bad}, {"checkpoints": []}),
+                    ({"checkpoints": []}, {"checkpoints": bad})):
+                results, validation = (
+                    gfx_independent_replay.reconcile_checkpoints(
+                        self.graph, request, replay, self.frame, self.out,
+                        capture=CAPTURE_A))
+                self.assertEqual(validation["status"], "invalid", bad)
+                self.assertTrue(validation["problems"])
+                self.assertTrue(any(
+                    problem.get("kind") in
+                    ("malformed_request", "malformed_result")
+                    for problem in validation["problems"]))
+                self.assertEqual(results, [])
+
+    def test_non_object_request_fails_closed(self):
+        results, validation = gfx_independent_replay.reconcile_checkpoints(
+            self.graph, ["not", "an", "object"], {"checkpoints": []},
+            self.frame, self.out)
+        self.assertEqual(validation["status"], "invalid")
+        self.assertEqual(validation["problems"][0]["kind"], "malformed_request")
+        self.assertEqual(results, [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -145,6 +145,7 @@ export function buildArgs(tool, args = {}) {
     if (args.continue_on_difference) output.push('--continue-on-difference')
     add('--package-dir', 'package_dir')
     add('--only-event', 'only_event')
+    if (args.full) output.push('--full')
     if (args.disable_render_target_vflip) output.push('--disable-render-target-vflip')
     add('--sampler-shift', 'sampler_shift')
     add('--sampler-shift-min', 'sampler_shift_min')

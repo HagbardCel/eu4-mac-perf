@@ -2368,37 +2368,24 @@ def _case_diagnosis_view(case_path: Path, manifest: dict) -> dict:
 def _diagnosis_outcome(report: dict, *, verification_ok: bool = True,
                        reproduction_complete: bool = True
                        ) -> tuple[str, str, str | None, str | None, bool]:
-    """Map a PR3 diagnosis to envelope outcome without promoting evidence.
+    """Map a canonical diagnosis to the envelope outcome without promotion.
 
-    Incomplete or invalid evidence never becomes a qualified result, and a
-    confirmed difference is a completed diagnostic rather than a tool failure.
+    This delegates to the single shared projection in
+    :mod:`automation.gfx_independent_replay`.  Incomplete or invalid evidence
+    never becomes a qualified result, and a completed difference is a completed
+    diagnostic rather than a tool failure.
     """
     if not verification_ok:
         return "invalid", "invalid", None, "invalid", False
     if not reproduction_complete:
         return "incomplete", "incomplete", None, "unverified", False
-    classification = str(report.get("classification")
-                         or report.get("status") or "")
-    qualification = report.get("qualification") or {}
-    qualified = bool(qualification.get("qualified"))
-    if classification == "qualified_match":
-        return "ok", "complete", "equal", "valid", qualified
-    if classification == "qualified_difference":
-        return "ok", "complete", "different", "valid", False
-    if classification == "difference_with_partial_state_coverage":
-        return "ok", "partial", "different", "valid", False
-    if classification == "fault_experiment":
-        axes = qualification.get("axes") or {}
-        verdict = "different" if axes.get("pixel_comparison") == "divergent" \
-            else "unverified"
-        return "ok", "partial", verdict, "valid", False
-    if classification == "unsupported_state":
-        return "ok", "partial", "unverified", "valid", False
-    if classification == "invalid_provenance":
-        return "invalid", "invalid", None, "invalid", False
-    if classification == "gpu_execution_failure":
-        return "failed", "failed", None, "invalid", False
-    return "incomplete", "incomplete", None, "unverified", False
+    canonical = gfx_independent_replay.classification_outcome(report)
+    execution = canonical["execution"]
+    status = "ok" if execution == "ok" else execution
+    if status not in ("ok", "invalid", "failed", "incomplete"):
+        status = "incomplete"
+    return (status, canonical["diagnostic"], canonical["verdict"],
+            canonical["evidence"], canonical["qualified"])
 
 
 _CAMPAIGN_TERMINAL_CLASSIFICATIONS = {
@@ -2693,6 +2680,115 @@ def _campaign_outcome(report: dict) -> tuple[str, str, str | None, str | None,
     return "incomplete", "incomplete", None, "unverified", False, details
 
 
+def _replay_compact_view(report: dict, report_path: str | None = None) -> dict:
+    """Compact replay projection for the default agent-facing path.
+
+    ``replay()`` reports carry the full diagnosis under ``diagnosis`` and the
+    comparison under top-level ``final``.  This adapts that shape to the shared
+    compact projection without synthesizing evidence, then appends the
+    on-disk report locator so detail remains reachable.
+    """
+    diagnosis = report.get("diagnosis") if isinstance(
+        report.get("diagnosis"), dict) else report
+    projection = dict(diagnosis)
+    pixels = report.get("pixels") or diagnosis.get("pixels")
+    if not isinstance(pixels, dict):
+        pixels = {
+            "status": (report.get("final") or {}).get("status"),
+            "final": report.get("final"),
+        }
+    projection["pixels"] = pixels
+    for key in ("checkpoints", "checkpoint_validation", "qualification",
+                "first_divergence", "execution", "frame"):
+        if key not in projection and report.get(key) is not None:
+            projection[key] = report.get(key)
+    compact = gfx_independent_replay.compact_diagnosis(projection)
+    if report.get("policy") is not None:
+        compact["policy"] = report.get("policy")
+    if report_path:
+        compact["report"] = report_path
+    return compact
+
+
+def _bound_replay_compact(envelope: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict:
+    """Bound a compact replay envelope while retaining the evidence contract.
+
+    Identity/qualification, first divergence, the unresolved interval, the
+    recommended checkpoint and the report locator survive every reduction.  If
+    even that core cannot fit, the envelope says so explicitly instead of
+    returning a silently truncated "complete" view.
+    """
+    limit = max(1, cap - 64)
+    if _utf8_len(envelope) <= limit:
+        envelope["result"]["output_bytes"] = _utf8_len(envelope)
+        return envelope
+    reduced = json.loads(json.dumps(envelope))
+    result = reduced.get("result") or {}
+    removed: list[str] = []
+    for name, keep in (("checkpoints", 8), ("inputs", 4)):
+        value = result.get(name)
+        if isinstance(value, list) and len(value) > keep:
+            result[name] = value[:keep]
+            removed.append(name)
+    selection = result.get("checkpoint_selection")
+    if isinstance(selection, dict):
+        result["checkpoint_selection"] = {
+            key: selection.get(key) for key in ("total", "selected", "bounded")}
+        removed.append("checkpoint_selection.detail")
+    if result.get("axes"):
+        result["axes"] = {
+            key: value for key, value in result["axes"].items()
+            if key in ("capture_validity", "frame_shader_identity",
+                       "gpu_execution", "resource_provenance",
+                       "operation_coverage", "rendering_state_coverage",
+                       "pixel_comparison", "first_divergence_confidence")}
+        removed.append("axes.extra")
+    if _utf8_len(reduced) <= limit:
+        reduced["truncated"] = True
+        reduced["truncated_fields"] = removed
+        reduced["output_cap_bytes"] = cap
+        reduced["result"]["output_bytes"] = _utf8_len(reduced)
+        return reduced
+    # Final fallback: the smallest result that still points at the evidence.
+    first = result.get("first_divergence") or {}
+    result = {
+        "schema": result.get("schema"),
+        "classification": result.get("classification"),
+        "qualified": result.get("qualified"),
+        "frame": result.get("frame"),
+        "first_divergence": {
+            key: first.get(key) for key in
+            ("kind", "event", "target", "resource", "operation", "program",
+             "producer_event", "confidence", "root_cause",
+             "unresolved_interval", "next_checkpoint", "recommended_checkpoint",
+             "limitations")
+            if first.get(key) is not None
+        },
+        "checkpoint_validation": {
+            key: (result.get("checkpoint_validation") or {}).get(key)
+            for key in ("status", "requested", "returned", "matched",
+                        "diagnostic", "divergent", "invalid")
+        },
+        "final": result.get("final"),
+        "next_action": result.get("next_action"),
+        "report": result.get("report"),
+        "truncated": True,
+        "output_bytes_before_cap": _utf8_len(envelope),
+        "output_cap_bytes": cap,
+    }
+    reduced["result"] = result
+    reduced["truncated"] = True
+    reduced["output_cap_bytes"] = cap
+    if _utf8_len(reduced) > cap:
+        # Never let the locator itself be lost: drop the final statistics and
+        # limitations, which are reproducible from the referenced report.
+        result.pop("final", None)
+        result["first_divergence"].pop("limitations", None)
+        reduced["reason"] = (reduced.get("reason") or "")[:160]
+    result["output_bytes"] = _utf8_len(reduced)
+    return reduced
+
+
 def _replay_report_view(report: dict) -> dict:
     """Bounded, JSON-safe view of a v1 or v2 replay diagnosis."""
     diagnosis = report.get("diagnosis") if isinstance(
@@ -2821,34 +2917,21 @@ def eu4_replay(args: argparse.Namespace) -> dict:
             faults["sampler_shift_min"] = args.sampler_shift_min
         report = gfx_independent_replay.replay(
             Path(args.frame), Path(args.replay_out), shaders=args.shaders, faults=faults)
-        outcome = report.get("outcome") or {}
-        status = report.get("status") or "invalid"
-        envelope = _envelope("eu4_replay", status, {
-            "status": report.get("status"),
-            "outcome": outcome,
-            "qualified": outcome.get("qualified"),
-            "evaluation": report.get("evaluation"),
-            "checkpoints": report.get("checkpoints"),
-            "checkpoint_validation": report.get("checkpoint_validation"),
-            "state_coverage": report.get("state_coverage"),
-            "binding_audit": report.get("binding_audit"),
-            "final": report.get("final"),
-            "first_divergence": report.get("first_divergence"),
-            "graph": {
-                "status": (report.get("graph") or {}).get("status"),
-                "counts": (report.get("graph") or {}).get("counts"),
-                "reasons": (report.get("graph") or {}).get("reasons"),
-                "boundary": (report.get("graph") or {}).get("boundary"),
-            },
-            "report": str(Path(args.replay_out) / "replay-report.json"),
-        }, reason="; ".join((report.get("evaluation") or {}).get("reasons") or []),
-            diagnostic="complete" if status not in ("invalid", "unavailable") else status,
-            verdict=(outcome.get("pixels") if isinstance(outcome.get("pixels"), str)
-                     else None),
-            evidence=("valid" if report.get("checkpoint_validation", {}).get("status")
-                      == "valid" and outcome.get("execution") == "ok" else "unverified"),
-            qualified=bool(outcome.get("qualified")))
-        envelope["ok"] = bool(outcome.get("qualified"))
+        status, diagnostic, verdict, evidence, qualified = (
+            _diagnosis_outcome(report))
+        if bool(getattr(args, "full", False)):
+            result = _replay_report_view(report)
+        else:
+            result = _replay_compact_view(
+                report, str(Path(args.replay_out) / "replay-report.json"))
+        envelope = _envelope(
+            "eu4_replay", status, result,
+            reason="; ".join((report.get("evaluation") or {}).get("reasons")
+                             or []),
+            diagnostic=diagnostic, verdict=verdict, evidence=evidence,
+            qualified=qualified)
+        if not bool(getattr(args, "full", False)):
+            envelope = _bound_replay_compact(envelope)
         return envelope
     if args.replay_op == "verify":
         if not args.case:
@@ -2894,12 +2977,20 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                 reason=f"M7 diagnosis did not complete: {exc}")
         status, diagnostic, verdict, evidence, qualified = _diagnosis_outcome(
             report)
-        return _envelope(
-            "eu4_replay", status, _replay_report_view(report),
+        if bool(getattr(args, "full", False)):
+            result = _replay_report_view(report)
+        else:
+            result = _replay_compact_view(
+                report, str(Path(args.replay_out) / "diagnostic-report.json"))
+        envelope = _envelope(
+            "eu4_replay", status, result,
             diagnostic=diagnostic, verdict=verdict, evidence=evidence,
             qualified=qualified,
             reason="; ".join((report.get("evaluation") or {}).get("reasons")
                              or []))
+        if not bool(getattr(args, "full", False)):
+            envelope = _bound_replay_compact(envelope)
+        return envelope
     if args.replay_op == "sequence":
         from automation import m7_continuous
 
@@ -3326,6 +3417,9 @@ def _parser() -> argparse.ArgumentParser:
     replay.add_argument("--package-dir", type=Path, default=None,
                         help="explicit reproduction case destination")
     replay.add_argument("--only-event", type=int, default=None)
+    replay.add_argument("--full", action="store_true",
+                        help="return the complete replay report instead of the "
+                             "bounded agent projection")
     replay.add_argument("--disable-render-target-vflip", action="store_true")
     replay.add_argument("--sampler-shift", type=int, default=None)
     replay.add_argument("--sampler-shift-min", type=int, default=7)
