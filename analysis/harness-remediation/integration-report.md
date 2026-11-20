@@ -88,7 +88,7 @@ technical review evidence, not a formal approval.
 
 1. **Scientific: authentic live-GL control equivalence (B2/B3).** `blocked`.
    The first non-exact checkpoint in 904 is 15 (4 px / max 1, first differing
-   pixel (209,50), all channels and alpha 0). The stored control is unqualified
+   pixel (209,50), zero alpha-differing pixels). The stored control is unqualified
    at 15 (5/1) and 16 (4,645/86); `metal_blame_allowed=false`. The drawable
    state (`GL_SAMPLES`, `GL_SAMPLE_BUFFERS`, bit depths) and prior-frame
    contents were never observed in 904. **The 904 measurements are historical

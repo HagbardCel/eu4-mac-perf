@@ -36,7 +36,8 @@ intermediates:
 
 The first non-exact checkpoint is **15**, i.e. the state produced by the
 `fb:0` draw at event 14 (program 301, depth test/write enabled). The first
-differing byte is the green channel of pixel (209, 50), changed by one LSB.
+differing byte is the red channel (BGRA component 2) of pixel (209, 50),
+changed by one LSB (82 → 83; blue and green are equal).
 
 ## Stored control
 
@@ -59,11 +60,12 @@ at checkpoint 15 are:
 | (224, 50) | (57,92,75,255) | (57,92,75,255) | (56,92,75,255) |
 | (226, 58) | (148,117,104,255) | (148,117,103,255) | (148,117,104,255) |
 
-Every difference is one LSB in one non-alpha channel. Metal and control share
-only the (30,166) difference; the other differences are disjoint. This is
-consistent with a sub-LSB rounding/drawable-precision residual, but it is not
-proof: the stored control is unqualified, so the residual cannot be assigned
-to rounding, shader translation or Metal.
+Every differing byte is one LSB and none is alpha; pixel (10,191) differs in
+both blue and green. Metal and control share only the (30,166) difference; the
+other differences are disjoint. This is consistent with a sub-LSB
+rounding/drawable-precision residual, but it is not proof: the stored control is
+unqualified, so the residual cannot be assigned to rounding, shader translation
+or Metal.
 
 ## Qualification state
 
