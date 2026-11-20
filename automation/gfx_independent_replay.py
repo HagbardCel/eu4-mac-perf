@@ -340,6 +340,12 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
 
     requested: dict[tuple[int, str], dict] = {}
     for item in plan:
+        if not isinstance(item, dict):
+            problems.append({
+                "kind": "malformed_request",
+                "reason": "checkpoint request entry is not an object",
+            })
+            continue
         key = _checkpoint_key(item)
         if key in requested:
             problems.append({"kind": "duplicate_request", "event": key[0],
@@ -1792,11 +1798,21 @@ def state_coverage(frame_dir: Path, *, trace: dict | None = None,
 
 
 def _optional_json(path: Path) -> dict | None:
+    value = _optional_json_value(path)
+    return value if isinstance(value, dict) else None
+
+
+def _optional_json_value(path: Path):
+    """Read a JSON value, distinguishing absence from a malformed container.
+
+    ``None`` means the file is missing or unparseable.  A present scalar,
+    array or string is returned as-is so validation can reject it explicitly
+    instead of silently treating it as absent.
+    """
     try:
-        value = json.loads(Path(path).read_text(encoding="utf-8"))
+        return json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return None
-    return value if isinstance(value, dict) else None
 
 
 def load_policy(policy_path: Path | str | None) -> tuple[dict, dict]:
@@ -2067,10 +2083,26 @@ def _checkpoint_binding_problems(metal_dir: Path, request: dict,
     agree.
     """
     path = Path(metal_dir) / "checkpoint-request.json"
-    request_sha = _sha(path)
-    count = len(request.get("checkpoints") or [])
     problems: list[dict] = []
     bindings: list[str] = []
+
+    if not isinstance(request, dict):
+        return [_checkpoint_problem(
+            "malformed_request",
+            "checkpoint request is not an object",
+            severity="invalid")], []
+    request_sha = _sha(path) if path.is_file() else None
+    raw_checkpoints = request.get("checkpoints")
+    if raw_checkpoints is None:
+        count = 0
+    elif isinstance(raw_checkpoints, list):
+        count = len(raw_checkpoints)
+    else:
+        count = 0
+        problems.append(_checkpoint_problem(
+            "malformed_request",
+            "checkpoint request checkpoints is not an array",
+            severity="invalid"))
 
     if shadow is not None:
         sha = shadow.get("checkpoint_request_sha256")
@@ -2107,6 +2139,12 @@ def _checkpoint_binding_problems(metal_dir: Path, request: dict,
                     "published request",
                     severity="invalid"))
 
+    if receipt is not None and not isinstance(receipt, dict):
+        problems.append(_checkpoint_problem(
+            "receipt_schema",
+            "shader receipt is not an object",
+            severity="invalid"))
+        receipt = None
     if receipt is not None:
         bindings.append("shader-receipt")
         if receipt.get("schema") != "m7-shadow-shader-receipt/v1":
@@ -2182,12 +2220,26 @@ def checkpoint_request_evidence(graph: dict, metal_dir: Path,
     agreement and binding checks.
     """
     metal_dir = Path(metal_dir)
-    published = _optional_json(metal_dir / "checkpoint-request.json")
+    request_path = metal_dir / "checkpoint-request.json"
+    published = _optional_json_value(request_path)
     if published is None:
         return gfx_frame_graph.checkpoint_request(graph), "derived", [], {
             "status": "derived",
             "bindings": [],
             "sha256": None,
+        }
+    if not isinstance(published, dict):
+        # A present but malformed container must be rejected, not treated as
+        # absent and silently replaced by a derived plan.
+        problem = _checkpoint_problem(
+            "malformed_request",
+            "checkpoint request is not an object",
+            severity="invalid")
+        return {}, "published", [problem], {
+            "status": "invalid",
+            "bindings": [],
+            "sha256": _sha(request_path),
+            "receipt": _checkpoint_receipt_dict(metal_dir) is not None,
         }
     problems: list[dict] = []
     if published.get("schema") != "gfx-frame-checkpoint-request/v1":

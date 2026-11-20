@@ -169,6 +169,39 @@ class ReconcileCaptureStampTests(unittest.TestCase):
                     for problem in validation["problems"]))
                 self.assertEqual(results, [])
 
+    def test_malformed_published_request_container_fails_closed(self):
+        # Issue #233: a present but non-object checkpoint request is rejected
+        # explicitly and never replaced by a derived plan.
+        for payload in (["not", "an", "object"], "scalar", 17):
+            (self.out / "checkpoint-request.json").write_text(
+                json.dumps(payload))
+            request, source, problems, evidence = (
+                gfx_independent_replay.checkpoint_request_evidence(
+                    self.graph, self.out))
+            self.assertEqual(source, "published")
+            self.assertEqual(request, {})
+            self.assertEqual(evidence["status"], "invalid")
+            self.assertTrue(any(problem["kind"] == "malformed_request"
+                                for problem in problems))
+            self.assertFalse(evidence["bindings"])
+
+    def test_binding_problems_reject_non_object_request(self):
+        problems, bindings = (
+            gfx_independent_replay._checkpoint_binding_problems(
+                self.out, ["not", "an", "object"], None, None, None))
+        self.assertEqual(bindings, [])
+        self.assertEqual(problems[0]["kind"], "malformed_request")
+        self.assertEqual(problems[0]["severity"], "invalid")
+
+    def test_non_object_request_entry_fails_closed(self):
+        request = {"checkpoints": ["not-an-object", 7]}
+        results, validation = gfx_independent_replay.reconcile_checkpoints(
+            self.graph, request, {"checkpoints": []}, self.frame, self.out)
+        self.assertEqual(validation["status"], "invalid")
+        self.assertTrue(any(problem["kind"] == "malformed_request"
+                            for problem in validation["problems"]))
+        self.assertEqual(results, [])
+
     def test_non_object_request_fails_closed(self):
         results, validation = gfx_independent_replay.reconcile_checkpoints(
             self.graph, ["not", "an", "object"], {"checkpoints": []},

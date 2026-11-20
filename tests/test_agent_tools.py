@@ -366,6 +366,48 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(value["outcome"]["evidence"], "unverified")
         self.assertFalse(value["outcome"]["qualified"])
 
+    def test_adversarial_replay_envelope_stays_within_the_cap(self):
+        """Hundreds of Unicode reasons and metadata cannot exceed the cap."""
+        from types import SimpleNamespace
+        from automation import gfx_independent_replay
+
+        reasons = [
+            f"evaluación {index}: motivo repetido Δειγμα-😀 "
+            + "x" * 60
+            for index in range(400)
+        ]
+        report = self.independent_replay_report("qualified_difference")
+        report["evaluation"] = {"status": "complete", "reasons": reasons}
+        report["first_divergence"]["limitations"] = list(reasons)
+        report["first_divergence"]["reason"] = "y" * 5000
+        report["artifacts"] = {
+            f"artifact-{index}": f"path/{index}/" + "z" * 80
+            for index in range(60)
+        }
+        args = SimpleNamespace(
+            replay_op="independent", frame="frame",
+            replay_out=str(self.root / "out"), shaders=None,
+            disable_render_target_vflip=False, sampler_shift=None,
+            sampler_shift_min=7,
+        )
+        with mock.patch.object(gfx_independent_replay, "replay",
+                               return_value=report):
+            value = agent_tools.eu4_replay(args)
+        size = agent_tools._utf8_len(value)
+        self.assertLessEqual(size, agent_tools.COMPACT_OUTPUT_CAP)
+        self.assertEqual(value["result"]["output_bytes"], size)
+        self.assertEqual(value["result"]["report"],
+                         str(self.root / "out" / "replay-report.json"))
+        self.assertEqual(value["result"]["first_divergence"]["event"], 15)
+        self.assertEqual(value["result"]["classification"],
+                         "qualified_difference")
+        self.assertTrue(value["truncated"])
+        self.assertLessEqual(len(value["reason"].encode("utf-8")), 8192)
+        if isinstance(value.get("failure"), dict):
+            self.assertLessEqual(
+                len(str(value["failure"].get("detail") or "").encode("utf-8")),
+                8192)
+
     def test_compact_replay_view_is_bounded(self):
         from automation import agent_tools as tools
         report = self.independent_replay_report("qualified_difference")
