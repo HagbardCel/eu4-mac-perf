@@ -12,6 +12,7 @@ TESTS = ROOT / "tests"
 
 class BorderLoopHeadDetourTests(unittest.TestCase):
     def _clang(self, out: Path, *sources: str, extra: list[str] | None = None) -> None:
+        out.parent.mkdir(parents=True, exist_ok=True)
         cmd = [
             "clang",
             "-arch",

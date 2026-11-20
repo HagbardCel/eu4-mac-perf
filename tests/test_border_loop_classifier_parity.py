@@ -31,6 +31,9 @@ class BorderLoopClassifierParityTests(unittest.TestCase):
         fixture = TESTS / "border_loop_classifier_parity_cases.h"
         write_c_parity_fixture(fixture)
         out = BENCH / ".build" / "border_loop_classifier_parity"
+        # A clean checkout has no benchmark/.build: the linker would fail with
+        # "open() failed, errno=2" before any assertion ran.
+        out.parent.mkdir(parents=True, exist_ok=True)
         cmd = [
             "clang",
             "-arch",

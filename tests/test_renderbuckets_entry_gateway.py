@@ -26,6 +26,7 @@ def _darwin_rosetta_x86_64_available() -> bool:
 class RenderBucketsEntryGatewayTests(unittest.TestCase):
     def test_entry_gateway_abi_and_trampoline(self):
         out = BENCH / ".build" / "renderbuckets_entry_gateway_selftest"
+        out.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
             [
                 "clang",

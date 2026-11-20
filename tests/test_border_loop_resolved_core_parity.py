@@ -29,6 +29,7 @@ class ResolvedCoreParityTests(unittest.TestCase):
         fixture = TESTS / "border_loop_resolved_parity_cases.h"
         write_c_resolved_fixture(fixture)
         out = BENCH / ".build" / "border_loop_resolved_core_parity"
+        out.parent.mkdir(parents=True, exist_ok=True)
         cmd = [
             "clang",
             "-arch",
