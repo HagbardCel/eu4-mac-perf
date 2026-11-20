@@ -1,5 +1,7 @@
 # Implementation roadmap
 
+Implementation and review status is tracked in [implementation.md](implementation.md); no entry there is merged.
+
 **Smallest useful release:** close the checkpoint false positive (01), pin the open case and hand off its exact location (02), then make the Web campaign consume that handoff and check its workspace before spending a launch (03). This protects the answer, the evidence and the execution environment. The first renderer patch should address the demonstrated sampler collision, with a controlled GPU fixture. Before the next live campaign, also implement the consumer-aware stop in 08. It has a measured ~202 s opportunity on this pilot. A fresh capture is unnecessary for starting any of these changes.
 
 **Smallest useful cleanup release.** Pin the active case and exact controls (02), then archive the single verified 36.99 GiB duplicate batch (09). In parallel with the next shader-identity change, replace the duplicate receipt writers (10). Remove the unused two-file campaign source in an independent change (11). These slices address disk, semantic drift and misleading configuration respectively. The larger report schema migration can follow once compatibility tests exist.
