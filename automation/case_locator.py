@@ -24,7 +24,9 @@ is opt-in for a selected case.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
+import fcntl
 import hashlib
 import json
 import os
@@ -230,6 +232,21 @@ def _fsync_directory(directory: Path) -> None:
         os.close(descriptor)
 
 
+@contextlib.contextmanager
+def _locator_lock(root: Path, key: str):
+    """Serialize the read-modify-write of one locator document."""
+    directory = root / LOCATOR_DIR
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f".{key}.lock"
+    handle = path.open("a+")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+
+
 def _write_locator(root: Path, key: str, value: dict) -> Path:
     """Write one locator through an exclusively created unique temp file."""
     directory = root / LOCATOR_DIR
@@ -333,12 +350,15 @@ def publish(case_dir: Path | str, evidence_root: Path | str, *,
         staging = staging_parent / "case"
         try:
             try:
-                shutil.copytree(case_dir, staging)
+                shutil.copytree(case_dir, staging, symlinks=True)
             except OSError as exc:
                 raise CaseLocatorError(
                     "copy_failed",
                     f"could not copy {case_dir} to staging: {exc}; the source "
                     "is unchanged") from exc
+            staged_symlink = _symlink_problem(staging)
+            if staged_symlink is not None:
+                raise CaseLocatorError("symlink_source", staged_symlink)
             copied = _verify(staging)
             if copied.get("ok") is not True:
                 raise CaseLocatorError(
@@ -364,28 +384,29 @@ def publish(case_dir: Path | str, evidence_root: Path | str, *,
         finally:
             shutil.rmtree(staging_parent, ignore_errors=True)
     source_bytes, source_files = _tree_stats(target)
-    previous = _json(root / LOCATOR_DIR / f"{key}.json")
-    if originating_run is None:
-        originating_run = previous.get("originating_run")
-    first_published = previous.get("first_published_utc") or _now()
-    locator = {
-        "schema": SCHEMA,
-        "key": key,
-        "identity": identity,
-        "case_id": identity.get("case_id"),
-        "relative_path": str(target.relative_to(root)),
-        "verification": _verification_summary(verification_now),
-        "limitations": _limitations(identity, verification_now),
-        "originating_run": originating_run,
-        "first_published_utc": first_published,
-        "published_utc": _now(),
-        "reused": reused,
-        "size_bytes": source_bytes,
-        "files": source_files,
-    }
-    path = _write_locator(root, key, locator)
-    locator["locator_path"] = str(path)
-    return locator
+    with _locator_lock(root, key):
+        previous = _json(root / LOCATOR_DIR / f"{key}.json")
+        if originating_run is None:
+            originating_run = previous.get("originating_run")
+        first_published = previous.get("first_published_utc") or _now()
+        locator = {
+            "schema": SCHEMA,
+            "key": key,
+            "identity": identity,
+            "case_id": identity.get("case_id"),
+            "relative_path": str(target.relative_to(root)),
+            "verification": _verification_summary(verification_now),
+            "limitations": _limitations(identity, verification_now),
+            "originating_run": originating_run,
+            "first_published_utc": first_published,
+            "published_utc": _now(),
+            "reused": reused,
+            "size_bytes": source_bytes,
+            "files": source_files,
+        }
+        path = _write_locator(root, key, locator)
+        locator["locator_path"] = str(path)
+        return locator
 
 
 def _locator_scan(root: Path) -> tuple[list[dict], bool, list[dict]]:
@@ -544,6 +565,7 @@ def locate(evidence_root: Path | str, *, session_id: str | None = None,
                 "query": query, "matches": [], "read_only": True}
     locators, scan_truncated, invalid_locators = _locator_scan(root)
     matches: list[dict] = []
+    matched_metadata_states: dict[str, int] = {}
     matched_total = 0
     for locator in locators:
         if not _matches(locator, session_id=session_id,
@@ -551,10 +573,12 @@ def locate(evidence_root: Path | str, *, session_id: str | None = None,
                         seal_sha256=seal_sha256, case_id=case_id, key=key):
             continue
         matched_total += 1
+        metadata = _locator_metadata(root, locator)
+        matched_metadata_states[metadata["state"]] = (
+            matched_metadata_states.get(metadata["state"], 0) + 1)
         if len(matches) >= limit:
             continue
-        matches.append(_resolve_match(root, locator) if verify
-                       else _locator_metadata(root, locator))
+        matches.append(_resolve_match(root, locator) if verify else metadata)
     state = "unknown"
     if matches:
         for candidate in ("invalid_path", "digest_mismatch", "missing_payload",
@@ -579,6 +603,9 @@ def locate(evidence_root: Path | str, *, session_id: str | None = None,
         "scan_truncated": scan_truncated,
         "truncated": truncated,
         "invalid_locators": invalid_locators[:20],
+        "invalid_locator_count": len(invalid_locators),
+        "matched_metadata_states": matched_metadata_states,
+        "state_scope": "returned_matches",
         "read_only": True,
     }
 
@@ -611,6 +638,7 @@ def inventory(evidence_root: Path | str, *, verify: bool = False) -> dict:
     counts: dict[str, int] = {}
     for row in rows:
         counts[row["state"]] = counts.get(row["state"], 0) + 1
+    invalid_count = len(invalid_locators)
     if invalid_locators:
         state = "degraded"
     elif not rows:
@@ -626,6 +654,7 @@ def inventory(evidence_root: Path | str, *, verify: bool = False) -> dict:
         "counts": counts,
         "locators": rows,
         "invalid_locators": invalid_locators[:20],
+        "invalid_locator_count": invalid_count,
         "verified": verify,
         "truncated": truncated,
         "scan_limit": MAX_LOCATORS,
@@ -649,7 +678,7 @@ def _parser() -> argparse.ArgumentParser:
     locate_parser.add_argument("--seal-sha256", default=None)
     locate_parser.add_argument("--case-id", default=None)
     locate_parser.add_argument("--key", default=None)
-    locate_parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
+    locate_parser.add_argument("--limit", type=int, default=None)
     locate_parser.add_argument("--no-verify", action="store_true",
                                help="metadata-only selected lookup")
     inventory_parser = sub.add_parser("inventory")

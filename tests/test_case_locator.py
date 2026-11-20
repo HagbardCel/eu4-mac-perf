@@ -366,6 +366,40 @@ class CaseLocatorTests(unittest.TestCase):
         self.assertFalse((self.evidence / "cases").exists())
         self.assertFalse((self.evidence / "locators").exists())
 
+    def test_symlink_created_during_copy_is_refused(self) -> None:
+        case = make_case(self.root / "producer" / "case")
+        original = shutil.copytree
+
+        def copy_with_late_symlink(source, destination, *args, **kwargs):
+            result = original(source, destination, *args, **kwargs)
+            (Path(destination) / "late.bin").symlink_to(
+                self.root / "outside.bin")
+            return result
+
+        with mock.patch("automation.case_locator.shutil.copytree",
+                        side_effect=copy_with_late_symlink):
+            with self.assertRaises(case_locator.CaseLocatorError) as raised:
+                case_locator.publish(case, self.evidence)
+        self.assertEqual(raised.exception.kind, "symlink_source")
+        self.assertFalse(any((self.evidence / "cases").glob("*/case")))
+        self.assertFalse(list((self.evidence / "locators").glob("*.json")))
+
+    def test_invalid_locator_count_is_untruncated(self) -> None:
+        self.evidence.mkdir(parents=True)
+        directory = self.evidence / "locators"
+        directory.mkdir()
+        for index in range(25):
+            (directory / f"bad-{index:02d}.json").write_text(
+                "{not json", encoding="utf-8")
+        inventory = case_locator.inventory(self.evidence)
+        self.assertEqual(inventory["state"], "degraded")
+        self.assertEqual(len(inventory["invalid_locators"]), 20)
+        self.assertEqual(inventory["invalid_locator_count"], 25)
+        discovered = evidence_index.discover(
+            configured_roots=str(self.evidence))
+        self.assertEqual(
+            discovered["locator_counts"]["invalid_locators"], 25)
+
     def test_broken_locator_is_reported_not_silently_absent(self) -> None:
         case = make_case(self.root / "producer" / "case")
         case_locator.publish(case, self.evidence)

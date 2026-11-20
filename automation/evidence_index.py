@@ -252,7 +252,7 @@ def discover(
         inventory = case_locator.inventory(root, verify=False)
         locator_truncated = (locator_truncated
                              or bool(inventory.get("truncated")))
-        locator_invalid += len(inventory.get("invalid_locators") or [])
+        locator_invalid += int(inventory.get("invalid_locator_count") or 0)
         for row in inventory.get("locators") or []:
             row["evidence_root"] = str(root)
             locator_rows.append(row)
