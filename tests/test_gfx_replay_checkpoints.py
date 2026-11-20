@@ -214,6 +214,8 @@ class QualificationClassificationTests(unittest.TestCase):
             "semantic": "match", "pixels": "match",
             "checkpoints": [], "checkpoint_validation": {"status": "ok"},
             "faults": None,
+            "identity": "verified", "capture_validity": "valid",
+            "provenance": "verified",
         }
         value.update(overrides)
         status, outcome = gfx_independent_replay.classify_replay(**value)
@@ -305,6 +307,20 @@ class QualificationClassificationTests(unittest.TestCase):
         self.assertEqual(status, "qualified")
         self.assertTrue(outcome["qualified"])
         self.assertEqual(code, 0)
+
+    def test_unverified_identity_can_never_qualify(self):
+        status, outcome, _code = self.outcome(
+            identity="unverified_session", capture_validity="incomplete",
+            provenance="incomplete")
+        self.assertEqual(status, "partial")
+        self.assertFalse(outcome["qualified"])
+        self.assertEqual(outcome["identity"], "unverified_session")
+        # A completed divergence is still a diagnostic result, not invalid.
+        status, outcome, _code = self.outcome(
+            pixels="divergent", identity="unverified_session",
+            capture_validity="incomplete", provenance="incomplete")
+        self.assertEqual(status, "confirmed_rendering_difference")
+        self.assertFalse(outcome["qualified"])
 
 
 if __name__ == "__main__":

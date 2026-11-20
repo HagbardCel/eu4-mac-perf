@@ -125,6 +125,10 @@ test('argument mapping covers each tool', () => {
   }), ['eu4_replay', 'independent', '--frame', '/f', '--shaders', '/s',
     '--replay-out', '/o', '--disable-render-target-vflip',
     '--sampler-shift', '-1', '--sampler-shift-min', '7'])
+  assert.deepEqual(buildArgs('eu4_replay', {
+    op: 'independent', frame: '/f', replay_out: '/o', full: true,
+  }), ['eu4_replay', 'independent', '--frame', '/f', '--replay-out', '/o',
+    '--full'])
   assert.deepEqual(buildArgs('eu4_case_inspect', { case: '/c' }),
     ['eu4_case_inspect', '--case', '/c'])
 })

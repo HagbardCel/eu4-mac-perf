@@ -300,12 +300,52 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
     is an instrumentation/qualification failure.  A later matching final frame
     cannot hide it.
     """
-    plan = list(request.get("checkpoints") or [])
-    actual = list(replay.get("checkpoints") or [])
     problems: list[dict] = []
+
+    if not isinstance(request, dict):
+        plan = []
+        problems.append({
+            "kind": "malformed_request",
+            "reason": "checkpoint request is not an object",
+        })
+    else:
+        raw_plan = request.get("checkpoints")
+        if raw_plan is None:
+            plan = []
+        elif isinstance(raw_plan, list):
+            plan = raw_plan
+        else:
+            plan = []
+            problems.append({
+                "kind": "malformed_request",
+                "reason": "checkpoint request checkpoints is not an array",
+            })
+
+    if not isinstance(replay, dict):
+        actual = []
+        problems.append({"kind": "malformed_result",
+                         "reason": "replay result is not an object"})
+    else:
+        raw_actual = replay.get("checkpoints")
+        if raw_actual is None:
+            actual = []
+        elif isinstance(raw_actual, list):
+            actual = raw_actual
+        else:
+            actual = []
+            problems.append({
+                "kind": "malformed_result",
+                "reason": "replay checkpoints is not an array",
+            })
 
     requested: dict[tuple[int, str], dict] = {}
     for item in plan:
+        if not isinstance(item, dict):
+            problems.append({
+                "kind": "malformed_request",
+                "reason": "checkpoint request entry is not an object",
+            })
+            continue
         key = _checkpoint_key(item)
         if key in requested:
             problems.append({"kind": "duplicate_request", "event": key[0],
@@ -686,6 +726,63 @@ _FINAL_STATISTICS = (
 )
 
 
+def exact_comparison_statistics(statistics: dict, width: int,
+                                height: int) -> tuple[bool | None, str]:
+    """Return raw four-channel exactness for a comparison statistics block.
+
+    A policy pass is not exactness.  Exact equality requires a complete,
+    dimensionally consistent BGRA8 measurement with zero mismatched pixels,
+    zero alpha differences and zero maximum channel error on all four
+    channels.  Missing or inconsistent statistics return ``(None, reason)`` so
+    callers fail closed instead of advertising a match.
+
+    The function deliberately consumes the raw statistics rather than the
+    policy verdict: a caller-supplied threshold must never be able to promote
+    a one-byte difference into an exact match.
+    """
+    if not isinstance(statistics, dict):
+        return None, "comparison statistics are absent"
+    try:
+        pixels = int(statistics["pixels"])
+        mismatched = int(statistics["mismatched_pixels"])
+        max_error = int(statistics["max_channel_error"])
+        alpha = int(statistics["alpha_different_pixels"])
+    except (KeyError, TypeError, ValueError) as exc:
+        return None, f"comparison statistics are incomplete: {exc}"
+    mean_abs = statistics.get("mean_abs_error")
+    if not isinstance(mean_abs, (list, tuple)) or len(mean_abs) != 4:
+        return None, "comparison did not measure all four BGRA channels"
+    if pixels <= 0 or width <= 0 or height <= 0:
+        return None, "comparison extent is missing or empty"
+    if pixels != width * height:
+        return None, (f"comparison pixel count {pixels} disagrees with "
+                      f"{width}x{height}")
+    if mismatched < 0 or mismatched > pixels:
+        return None, f"comparison mismatch count is out of range: {mismatched}"
+    if alpha < 0 or alpha > mismatched:
+        return None, f"comparison alpha count is out of range: {alpha}"
+    if max_error < 0 or max_error > 255:
+        return None, f"comparison maximum error is out of range: {max_error}"
+    if (mismatched == 0 and max_error == 0
+            and alpha == 0 and all(float(value) == 0.0 for value in mean_abs)):
+        return True, ""
+    return False, ""
+
+
+def _exact_report_status(report: dict) -> tuple[str, bool | None, str]:
+    """Status for a full comparison report, ignoring policy tolerances."""
+    reference = report.get("reference") or {}
+    width = reference.get("width")
+    height = reference.get("height")
+    if not isinstance(width, int) or not isinstance(height, int):
+        return "invalid", None, "comparison reference extent is missing"
+    exact, reason = exact_comparison_statistics(
+        report.get("statistics") or {}, width, height)
+    if exact is None:
+        return "invalid", None, reason
+    return ("match" if exact else "divergent"), exact, ""
+
+
 def final_comparison_report(frame_dir: Path, out_dir: Path,
                             policy_path: Path | str | None = None) -> dict:
     """Full-frame differential through the shared comparison engine.
@@ -693,6 +790,11 @@ def final_comparison_report(frame_dir: Path, out_dir: Path,
     The complete ``m6_compare`` report (statistics, worst region and draw
     attribution) is retained under ``detail`` so the diagnostic does not
     duplicate the comparison engine or discard region evidence.
+
+    ``status`` is raw exactness under the four-channel BGRA measurement.  The
+    caller's policy remains available as ``policy_status``/``policy_pass`` for
+    callers that explicitly want a tolerance decision; it can never turn a
+    nonzero difference into ``match``.
     """
     policy_path = Path(policy_path or DEFAULT_POLICY)
     try:
@@ -704,8 +806,15 @@ def final_comparison_report(frame_dir: Path, out_dir: Path,
     except (m6_compare.CompareError, OSError, ValueError) as exc:
         return {"status": "invalid", "reason": str(exc)}
     statistics = report.get("statistics") or {}
+    status, exact, exact_reason = _exact_report_status(report)
+    if exact is None:
+        return {"status": "invalid", "reason": exact_reason,
+                "policy_status": report.get("status")}
     value = {
-        "status": "match" if report.get("status") == "pass" else "divergent",
+        "status": status,
+        "exact": exact,
+        "policy_status": report.get("status"),
+        "policy_pass": report.get("status") == "pass",
         "width": report["reference"]["width"],
         "height": report["reference"]["height"],
         "reference_sha256": report["reference"]["sha256"],
@@ -743,19 +852,25 @@ def final_comparison(frame_dir: Path, out_dir: Path,
         return {"status": "invalid", "reason": "Metal final readback is absent"}
     statistics = m6_compare.compare_images(
         reference.read_bytes(), candidate.read_bytes(), width, height)
+    exact, exact_reason = exact_comparison_statistics(statistics, width, height)
+    if exact is None:
+        return {"status": "invalid", "reason": exact_reason}
     policy = json.loads(Path(policy_path or DEFAULT_POLICY).read_text())
     thresholds = policy.get("thresholds") or {}
     max_channel = int(thresholds.get("max_channel_error", 0))
     max_fraction = float(thresholds.get("mismatched_fraction", 0.0))
     max_mean = float(thresholds.get("mean_abs_error", 0.0))
     mean_total = sum(float(value) for value in statistics["mean_abs_error"])
-    passed = (
+    policy_pass = (
         statistics["max_channel_error"] <= max_channel
         and statistics["mismatched_fraction"] <= max_fraction
         and mean_total <= max_mean
     )
     return {
-        "status": "match" if passed else "divergent",
+        "status": "match" if exact else "divergent",
+        "exact": exact,
+        "policy_status": "pass" if policy_pass else "fail",
+        "policy_pass": policy_pass,
         "width": width,
         "height": height,
         "reference_sha256": _sha(reference),
@@ -1683,11 +1798,21 @@ def state_coverage(frame_dir: Path, *, trace: dict | None = None,
 
 
 def _optional_json(path: Path) -> dict | None:
+    value = _optional_json_value(path)
+    return value if isinstance(value, dict) else None
+
+
+def _optional_json_value(path: Path):
+    """Read a JSON value, distinguishing absence from a malformed container.
+
+    ``None`` means the file is missing or unparseable.  A present scalar,
+    array or string is returned as-is so validation can reject it explicitly
+    instead of silently treating it as absent.
+    """
     try:
-        value = json.loads(Path(path).read_text(encoding="utf-8"))
+        return json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return None
-    return value if isinstance(value, dict) else None
 
 
 def load_policy(policy_path: Path | str | None) -> tuple[dict, dict]:
@@ -1958,10 +2083,26 @@ def _checkpoint_binding_problems(metal_dir: Path, request: dict,
     agree.
     """
     path = Path(metal_dir) / "checkpoint-request.json"
-    request_sha = _sha(path)
-    count = len(request.get("checkpoints") or [])
     problems: list[dict] = []
     bindings: list[str] = []
+
+    if not isinstance(request, dict):
+        return [_checkpoint_problem(
+            "malformed_request",
+            "checkpoint request is not an object",
+            severity="invalid")], []
+    request_sha = _sha(path) if path.is_file() else None
+    raw_checkpoints = request.get("checkpoints")
+    if raw_checkpoints is None:
+        count = 0
+    elif isinstance(raw_checkpoints, list):
+        count = len(raw_checkpoints)
+    else:
+        count = 0
+        problems.append(_checkpoint_problem(
+            "malformed_request",
+            "checkpoint request checkpoints is not an array",
+            severity="invalid"))
 
     if shadow is not None:
         sha = shadow.get("checkpoint_request_sha256")
@@ -1998,6 +2139,12 @@ def _checkpoint_binding_problems(metal_dir: Path, request: dict,
                     "published request",
                     severity="invalid"))
 
+    if receipt is not None and not isinstance(receipt, dict):
+        problems.append(_checkpoint_problem(
+            "receipt_schema",
+            "shader receipt is not an object",
+            severity="invalid"))
+        receipt = None
     if receipt is not None:
         bindings.append("shader-receipt")
         if receipt.get("schema") != "m7-shadow-shader-receipt/v1":
@@ -2073,12 +2220,26 @@ def checkpoint_request_evidence(graph: dict, metal_dir: Path,
     agreement and binding checks.
     """
     metal_dir = Path(metal_dir)
-    published = _optional_json(metal_dir / "checkpoint-request.json")
+    request_path = metal_dir / "checkpoint-request.json"
+    published = _optional_json_value(request_path)
     if published is None:
         return gfx_frame_graph.checkpoint_request(graph), "derived", [], {
             "status": "derived",
             "bindings": [],
             "sha256": None,
+        }
+    if not isinstance(published, dict):
+        # A present but malformed container must be rejected, not treated as
+        # absent and silently replaced by a derived plan.
+        problem = _checkpoint_problem(
+            "malformed_request",
+            "checkpoint request is not an object",
+            severity="invalid")
+        return {}, "published", [problem], {
+            "status": "invalid",
+            "bindings": [],
+            "sha256": _sha(request_path),
+            "receipt": _checkpoint_receipt_dict(metal_dir) is not None,
         }
     problems: list[dict] = []
     if published.get("schema") != "gfx-frame-checkpoint-request/v1":
@@ -2158,23 +2319,35 @@ def classify_diagnosis(*, capture_validity: str, identity: str,
     checkpoint_status = (checkpoint_validation or {}).get("status")
     if execution == "failed":
         classification = "gpu_execution_failure"
+    elif capture_validity == "invalid" or provenance == "invalid":
+        classification = "invalid_provenance"
     elif identity == "mismatch":
         classification = "invalid_provenance"
     elif identity in ("missing", "incomplete", "unverified_session"):
+        # A standalone/relocated replay has no verified session binding.  That
+        # is an identity limitation, not evidence that the captured frame is
+        # incomplete; report it as missing diagnostic evidence.
         classification = "incomplete_diagnostics"
-    elif capture_validity == "invalid" or provenance == "invalid":
-        classification = "invalid_provenance"
+    elif capture_validity != "valid":
+        classification = "incomplete_capture"
+    elif identity != "verified":
+        # Unknown/unsealed/standalone identities are never positive evidence.
+        # A legacy classifier must not be able to advertise equivalence for a
+        # replay whose session/frame binding was not verified.
+        classification = "incomplete_diagnostics"
+    elif provenance != "verified":
+        classification = "incomplete_diagnostics"
     elif checkpoint_status == "invalid":
         classification = "invalid_provenance"
-    elif execution == "missing" or pixels == "unavailable":
+    elif checkpoint_status != "ok":
         classification = "incomplete_diagnostics"
-    elif checkpoint_status == "incomplete" or divergence == "invalid_checkpoint":
+    elif execution != "ok":
         classification = "incomplete_diagnostics"
-    elif capture_validity == "incomplete":
+    elif pixels not in ("match", "divergent"):
+        classification = "incomplete_diagnostics"
+    elif operation_coverage != "complete":
         classification = "incomplete_capture"
-    elif operation_coverage in ("partial", "invalid"):
-        classification = "incomplete_capture"
-    elif provenance == "incomplete":
+    elif divergence == "invalid_checkpoint":
         classification = "incomplete_diagnostics"
     elif pixels == "divergent" or divergence in (
             "semantic", "intermediate", "final_only", "confirmed"):
@@ -3043,18 +3216,25 @@ def full_frame_completion_problems(replay: dict) -> list[str]:
 def classify_replay(*, execution_ok: bool, coverage: str, semantic: str,
                     pixels: str, checkpoints: list[dict],
                     checkpoint_validation: dict, faults: dict | None,
-                    state_cov: str = "complete"
+                    state_cov: str = "complete",
+                    identity: str = "unverified_session",
+                    capture_validity: str = "incomplete",
+                    provenance: str = "incomplete",
                     ) -> tuple[str, dict]:
     """Pure qualification classification used by replay() and its tests.
 
     Invalid or unknown required evidence is always an instrumentation failure.
     It can never fall through to a merely nonqualifying or qualified result.
+    Qualification additionally requires an explicit positive identity,
+    capture validity and resource provenance; a legacy caller that supplies
+    none of them can still receive a completed *diagnostic* result but never a
+    qualified equivalence claim.
     """
     intermediate_divergent = any(
         item.get("status") == "divergent" and item.get("authoritative")
         for item in checkpoints)
     checkpoint_invalid = (
-        (checkpoint_validation or {}).get("status") != "ok"
+        (checkpoint_validation or {}).get("status") not in ("ok",)
         or any(item.get("status") == "invalid" for item in checkpoints))
     fault_injection = bool(faults)
     invalid_verdict = (
@@ -3065,12 +3245,16 @@ def classify_replay(*, execution_ok: bool, coverage: str, semantic: str,
         or state_cov not in ("complete", "partial")
         or checkpoint_invalid
     )
+    positive_identity = (
+        identity == "verified" and capture_validity == "valid"
+        and provenance == "verified")
     qualified = bool(
         not invalid_verdict
         and coverage == "complete" and state_cov == "complete"
         and semantic == "match" and pixels == "match"
         and not intermediate_divergent
         and not fault_injection
+        and positive_identity
     )
     if invalid_verdict:
         status = "invalid"
@@ -3095,6 +3279,9 @@ def classify_replay(*, execution_ok: bool, coverage: str, semantic: str,
         "semantic_scope": "binding_audit",
         "state_coverage": state_cov,
         "checkpoints": "invalid" if checkpoint_invalid else "ok",
+        "identity": identity,
+        "capture_validity": capture_validity,
+        "provenance": provenance,
         "qualified": qualified,
         "intermediate_divergence": intermediate_divergent,
         "fault_injection": fault_injection,
@@ -3128,6 +3315,71 @@ def qualification_exit_code(report: dict) -> int:
     if outcome.get("fault_injection"):
         return 3
     return 2
+
+
+# Canonical classification -> public outcome mapping.  Every agent-facing
+# surface (diagnose, independent replay, DSH bridge, tools plugin) consumes this
+# instead of re-deriving a verdict from status strings.
+_OUTCOME_BY_CLASSIFICATION = {
+    "qualified_match": ("ok", "complete", "equal", "valid", True),
+    "qualified_difference": ("ok", "complete", "different", "valid", False),
+    "difference_with_partial_state_coverage": (
+        "ok", "partial", "different", "valid", False),
+    "unsupported_state": ("ok", "partial", "unverified", "valid", False),
+    "invalid_provenance": ("invalid", "invalid", None, "invalid", False),
+    "gpu_execution_failure": ("failed", "failed", None, "invalid", False),
+    "incomplete_capture": ("incomplete", "incomplete", None, "unverified",
+                           False),
+    "incomplete_diagnostics": ("incomplete", "incomplete", None,
+                               "unverified", False),
+    "invalid": ("invalid", "invalid", None, "invalid", False),
+    "failed": ("failed", "failed", None, "invalid", False),
+    "unavailable": ("incomplete", "unavailable", None, "unverified", False),
+}
+
+
+def classification_outcome(report: dict) -> dict:
+    """Project one canonical classification into the agent outcome contract.
+
+    The projection never infers qualification from the legacy replay status.
+    A completed comparison is a completed diagnostic even when it reports a
+    difference; only execution/evidence failures are tool failures.  Fault
+    experiments remain explicit and non-qualifying.
+    """
+    classification = str(report.get("classification")
+                         or report.get("status") or "")
+    qualification = report.get("qualification") or {}
+    axes = qualification.get("axes") or {}
+    if classification == "fault_experiment":
+        execution, diagnostic, verdict, evidence, qualified = (
+            "ok", "partial", None, "valid", False)
+        verdict = ("different" if axes.get("pixel_comparison") == "divergent"
+                   else "unverified")
+        base = str(axes.get("base_classification") or "")
+        if base in ("incomplete_capture", "incomplete_diagnostics"):
+            execution, diagnostic, verdict, evidence = (
+                "incomplete", "incomplete", None, "unverified")
+    elif classification in _OUTCOME_BY_CLASSIFICATION:
+        execution, diagnostic, verdict, evidence, qualified = (
+            _OUTCOME_BY_CLASSIFICATION[classification])
+    else:
+        # Unknown/future classifications fail closed: they are not a
+        # successful comparison and cannot be promoted to equivalence.
+        execution, diagnostic, verdict, evidence, qualified = (
+            "incomplete", "incomplete", None, "unverified", False)
+    return {
+        "classification": classification or None,
+        "execution": execution,
+        "diagnostic": diagnostic,
+        "diagnostic_complete": diagnostic == "complete",
+        "verdict": verdict,
+        "evidence": evidence,
+        "qualified": bool(qualified and qualification.get("qualified")),
+        "axes": axes or None,
+        "renderer_equivalence": bool(
+            qualification.get("renderer_equivalence")),
+    }
+
 
 
 def _parser():
@@ -3514,7 +3766,13 @@ def _replay_locked(
         execution_ok=execution_ok, coverage=coverage, semantic=semantic,
         pixels=pixels, checkpoints=checkpoints,
         checkpoint_validation=checkpoint_validation, faults=faults,
-        state_cov=str(states.get("status") or "invalid"))
+        state_cov=str(states.get("status") or "invalid"),
+        identity=str((diagnosis.get("identity") or {}).get("status")
+                     or "unverified_session"),
+        capture_validity=str(
+            (diagnosis.get("capture") or {}).get("validity") or "incomplete"),
+        provenance=str((diagnosis.get("provenance") or {}).get("status")
+                       or "incomplete"))
     report = {
         "schema": SCHEMA,
         "frame_dir": str(frame_dir),

@@ -354,6 +354,75 @@ class DiagnosisContractTests(unittest.TestCase):
         self.assertEqual(report["operation_coverage"]["status"], "complete")
         self.assertEqual(report["state_coverage"]["status"], "complete")
 
+    def test_permissive_policy_cannot_promote_one_byte_to_exact_match(self):
+        """A caller threshold is a policy decision, never raw equality."""
+        self.fixture.alter_candidate(offset=0, delta=1)
+        policy = json.loads(
+            gfx_independent_replay.DEFAULT_POLICY.read_text())
+        policy["thresholds"] = {
+            "max_channel_error": 1,
+            "mismatched_fraction": 1,
+            "mean_abs_error": 1,
+        }
+        path = self.fixture.root / "permissive-policy.json"
+        path.write_text(json.dumps(policy))
+        report = self.fixture.diagnose(policy=path)
+        self.assertEqual(report["classification"], "qualified_difference")
+        final = report["pixels"]["final"]
+        self.assertEqual(final["status"], "divergent")
+        self.assertFalse(final["exact"])
+        self.assertTrue(final["policy_pass"])
+        statistics = final["statistics"]
+        self.assertEqual(statistics["mismatched_pixels"], 1)
+        self.assertEqual(statistics["max_channel_error"], 1)
+        self.assertFalse(report["qualification"]["qualified"])
+
+    def test_alpha_only_one_byte_delta_is_not_an_exact_match(self):
+        self.fixture.alter_candidate(offset=3, delta=1)
+        policy = json.loads(
+            gfx_independent_replay.DEFAULT_POLICY.read_text())
+        path = self.fixture.root / "alpha-permissive-policy.json"
+        policy["alpha"] = {"ignored": True}
+        policy["thresholds"] = {
+            "max_channel_error": 1,
+            "mismatched_fraction": 1,
+            "mean_abs_error": 1,
+        }
+        path.write_text(json.dumps(policy))
+        report = self.fixture.diagnose(policy=path)
+        self.assertEqual(report["classification"], "qualified_difference")
+        final = report["pixels"]["final"]
+        self.assertEqual(final["status"], "divergent")
+        self.assertFalse(final["exact"])
+        self.assertEqual(
+            final["statistics"]["alpha_different_pixels"], 1)
+        self.assertEqual(final["statistics"]["mismatched_pixels"], 1)
+
+    def test_exact_comparison_rejects_inconsistent_statistics(self):
+        valid = {
+            "pixels": 4, "mismatched_pixels": 0, "alpha_different_pixels": 0,
+            "max_channel_error": 0, "mean_abs_error": [0, 0, 0, 0],
+        }
+        exact, reason = gfx_independent_replay.exact_comparison_statistics(
+            valid, 2, 2)
+        self.assertTrue(exact, reason)
+        missing = dict(valid)
+        missing.pop("max_channel_error")
+        exact, reason = gfx_independent_replay.exact_comparison_statistics(
+            missing, 2, 2)
+        self.assertIsNone(exact)
+        self.assertIn("incomplete", reason)
+        wrong_extent = dict(valid, pixels=3)
+        exact, reason = gfx_independent_replay.exact_comparison_statistics(
+            wrong_extent, 2, 2)
+        self.assertIsNone(exact)
+        self.assertIn("disagrees", reason)
+        three_channels = dict(valid, mean_abs_error=[0, 0, 0])
+        exact, reason = gfx_independent_replay.exact_comparison_statistics(
+            three_channels, 2, 2)
+        self.assertIsNone(exact)
+        self.assertIn("four", reason)
+
     def test_diagnosis_does_not_execute_a_host(self):
         with mock.patch.object(
                 m6_frame, "build_replay_host",
