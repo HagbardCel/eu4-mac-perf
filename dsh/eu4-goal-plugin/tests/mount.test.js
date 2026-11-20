@@ -11,11 +11,16 @@ const INFRA = path.resolve(HERE, '..', '..', '..')
 
 /** A minimal stand-in for the harness context: enough to prove registration. */
 function fakeContext() {
-  const state = { tools: [], guards: [], completed: [] }
+  const state = { tools: [], guards: [], completed: [], effects: [], handlers: {} }
   const ctx = {
     logger: { warn() {}, info() {} },
     effect(fn) {
-      return fn()
+      const dispose = fn()
+      state.effects.push(dispose)
+      return dispose
+    },
+    on(name, fn) {
+      ;(state.handlers[name] = state.handlers[name] || []).push(fn)
     },
     tools: {
       register(definition) {
@@ -97,4 +102,36 @@ test('finalization gets twice the checker budget, other operations do not', () =
   assert.equal(single, 15 * 60 * 1000)
   assert.ok(both > 2 * 900 * 1000, `finalize budget ${both} must cover two runs`)
   assert.ok(both < 40 * 60 * 1000, 'and stay finite')
+})
+
+test('plugin unload disposes prompt fibers installed on live agents', async () => {
+  const ctx = fakeContext()
+  const fiber = { disposed: 0, dispose() { this.disposed += 1 } }
+  const agent = {
+    ctx: {
+      inject(_names, register) {
+        register({ systemPrompt: { section() {} } })
+        return fiber
+      },
+    },
+    session: { id: 's1', header: { cwd: '/tmp/ws' } },
+  }
+  apply(ctx, {
+    sidecar: '/tmp/x.json',
+    infra: INFRA,
+    python: '/bin/false',
+    bridge: async () => ({
+      ok: true,
+      status: 'authorized',
+      startup_text: 'workspace: /tmp/ws',
+      startup: { workspace: '/tmp/ws' },
+    }),
+  })
+  const created = ctx._state.handlers['agent/created'][0]
+  await created({ agent })
+  assert.equal(fiber.disposed, 0)
+  for (const dispose of ctx._state.effects.slice().reverse()) {
+    if (typeof dispose === 'function') dispose()
+  }
+  assert.equal(fiber.disposed, 1)
 })

@@ -272,7 +272,21 @@ export function apply(ctx, config = {}) {
 
   const promptTasks = new WeakMap()
   const promptTexts = new WeakMap()
+  const promptFibers = new Set()
   const disposedAgents = new WeakSet()
+
+  // An agent that outlives the plugin keeps no prompt section: unload disposes
+  // every installed fiber, not only the ones whose agent was disposed first.
+  ctx.effect(() => () => {
+    for (const fiber of promptFibers) {
+      try {
+        if (fiber && typeof fiber.dispose === 'function') fiber.dispose()
+      } catch {
+        // A fiber the harness already disposed must not block unload.
+      }
+    }
+    promptFibers.clear()
+  })
 
   /**
    * Load the verified reconnect context for one agent.
@@ -341,6 +355,12 @@ export function apply(ctx, config = {}) {
       })
     })()
     promptTasks.set(agent, task)
+    task
+      .then((fiber) => {
+        if (fiber && typeof fiber.dispose === 'function') promptFibers.add(fiber)
+        return fiber
+      })
+      .catch(() => {})
     task.catch((error) => {
       ctx.logger?.warn?.(
         `[eu4-goal] could not install reconnect context: ${error && error.message ? error.message : error}`
@@ -361,7 +381,9 @@ export function apply(ctx, config = {}) {
       if (!task) return
       task
         .then((fiber) => {
-          if (fiber && typeof fiber.dispose === 'function') fiber.dispose()
+          if (!fiber) return
+          promptFibers.delete(fiber)
+          if (typeof fiber.dispose === 'function') fiber.dispose()
         })
         .catch(() => {})
     })
