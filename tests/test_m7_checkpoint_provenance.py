@@ -215,8 +215,9 @@ class ReconcileCaptureStampTests(unittest.TestCase):
             self.graph, request, {"checkpoints": []}, self.frame, self.out,
             capture=CAPTURE_A)
         self.assertEqual(validation["status"], "invalid")
-        self.assertTrue(results)
-        self.assertEqual(results[0]["producer_events"], [])
+        self.assertEqual(results, [])
+        self.assertTrue(any(problem["kind"] == "malformed_request"
+                            for problem in validation["problems"]))
 
     def test_binding_problems_reject_non_object_request(self):
         problems, bindings = (
@@ -225,6 +226,31 @@ class ReconcileCaptureStampTests(unittest.TestCase):
         self.assertEqual(bindings, [])
         self.assertEqual(problems[0]["kind"], "malformed_request")
         self.assertEqual(problems[0]["severity"], "invalid")
+
+    def test_non_object_request_keeps_malformed_evidence_problems(self):
+        problems, bindings = (
+            gfx_independent_replay._checkpoint_binding_problems(
+                self.out, ["not", "an", "object"], [], None, []))
+        self.assertEqual(bindings, [])
+        kinds = [problem["kind"] for problem in problems]
+        self.assertEqual(kinds[0], "malformed_request")
+        self.assertIn("malformed_evidence", kinds)
+
+    def test_bool_producer_events_are_rejected_not_filtered(self):
+        request = {"checkpoints": [{
+            "event": 5, "target": "10", "resource": "tex:10",
+            "file": "intermediate.bgra", "reference_file": "ref.bin",
+            "reference_sha256": hashlib.sha256(self.reference).hexdigest(),
+            "reference_width": 2, "reference_height": 2,
+            "producer_events": [True, 5],
+        }]}
+        results, validation = gfx_independent_replay.reconcile_checkpoints(
+            self.graph, request, {"checkpoints": []}, self.frame, self.out,
+            capture=CAPTURE_A)
+        self.assertEqual(validation["status"], "invalid")
+        self.assertTrue(any(problem["kind"] == "malformed_request"
+                            for problem in validation["problems"]))
+        self.assertEqual(results, [])
 
     def test_non_object_request_entry_fails_closed(self):
         request = {"checkpoints": ["not-an-object", 7]}

@@ -2772,6 +2772,24 @@ def _truncate_tree_strings(value, max_bytes: int):
     return value
 
 
+def _bounded_scalar(value, max_bytes: int = 256):
+    """Bound one evidence value without changing numeric identity.
+
+    Numbers and booleans stay numbers so an agent can compare an event id or a
+    confidence value; free text is truncated; structured values are serialized
+    and then truncated so a nested container cannot bypass the cap.
+    """
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return _truncate_utf8(value, max_bytes)
+    try:
+        text = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        text = str(value)
+    return _truncate_utf8(text, max_bytes)
+
+
 def _bound_replay_compact(envelope: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict:
     """Hard-bound the complete serialized replay envelope to ``cap`` bytes.
 
@@ -2998,9 +3016,10 @@ def _bound_replay_compact(envelope: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict
             # not.
             first = first_divergence()
             core_first = {
-                key: _truncate_utf8(str(first.get(key)), 256)
+                key: _bounded_scalar(first.get(key), 256)
                 for key in ("kind", "event", "target", "resource", "operation",
-                            "producer_event", "confidence")
+                            "producer_event", "confidence", "next_checkpoint",
+                            "recommended_checkpoint")
                 if first.get(key) is not None}
             envelope = {
                 "schema": envelope.get("schema"),
@@ -3009,6 +3028,7 @@ def _bound_replay_compact(envelope: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict
                 "status": envelope.get("status"),
                 "reason": "",
                 "result": {
+                    "schema": body().get("schema"),
                     "classification": body().get("classification"),
                     "qualified": body().get("qualified"),
                     "first_divergence": core_first,
@@ -3016,26 +3036,34 @@ def _bound_replay_compact(envelope: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict
                         str(body().get("report") or ""), 256),
                     "truncated": True,
                     "output_cap_bytes": cap,
+                    "output_bytes": 0,
                 },
                 "outcome": {
-                    key: (envelope.get("outcome") or {}).get(key)
+                    key: _bounded_scalar(
+                        (envelope.get("outcome") or {}).get(key), 256)
                     for key in ("execution", "diagnostic",
                                 "diagnostic_complete", "verdict", "evidence",
                                 "qualified", "failure_kind", "failure_class")},
                 "failure": {
-                    key: (envelope.get("failure") or {}).get(key)
+                    key: _bounded_scalar(
+                        (envelope.get("failure") or {}).get(key), 256)
                     for key in ("kind", "class")},
+                "runtime": _truncate_tree_strings(
+                    envelope.get("runtime"), 128),
                 "truncated": True,
                 "output_cap_bytes": cap,
             }
             envelope = _truncate_tree_strings(envelope, 256)
             finalize()
         if not fits():
-            # A cap below the fixed record skeleton cannot carry evidence.
-            # Return only the truncation contract rather than an oversized
-            # envelope that would violate the caller's byte budget.
-            envelope = {"truncated": True, "output_cap_bytes": cap,
-                        "output_bytes": 0}
+            # A cap below the fixed record skeleton cannot carry classification
+            # or a locator.  Keep the truncation contract and an accurate
+            # emitted size; never return an oversized envelope.
+            envelope = {
+                "truncated": True,
+                "output_cap_bytes": cap,
+                "result": {"output_bytes": 0, "truncated": True},
+            }
             finalize()
         return envelope
 
