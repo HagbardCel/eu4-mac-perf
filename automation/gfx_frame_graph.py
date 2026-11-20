@@ -557,6 +557,63 @@ def load_frame_history(frame_dir: Path | str, trace: dict) -> dict:
     }
 
 
+CAPTURE_IDENTITY_FIELDS = (
+    "session_id", "capture_frame_id", "present_index", "event_stream_sha256",
+    "reference_sha256", "manifest_sha256", "pid",
+)
+
+
+def _graph_capture_identity(frame_dir: Path, trace: dict,
+                            history: dict | None = None) -> dict:
+    """Frame identity from the graph's own records, never an invented schema.
+
+    The authoritative source is the same-process frame seal.  A fixture or
+    legacy frame without a seal may still carry identity on its default
+    checkpoints or its frame history; those are used only when they are
+    internally consistent.  Missing fields stay ``None`` rather than being
+    guessed from a neighbouring frame or a present index.
+    """
+    from automation import m6_frame
+
+    seal = None
+    try:
+        seal = m6_frame.load_seal(
+            frame_dir, trace=trace, verify_counts=False, verify_blobs=False)
+    except m6_frame.FrameError:
+        seal = None
+    if seal is not None:
+        identity = {key: seal.get(key) for key in CAPTURE_IDENTITY_FIELDS}
+        identity["source"] = "seal"
+        return identity
+    identity = {key: None for key in CAPTURE_IDENTITY_FIELDS}
+    identity["source"] = "absent"
+    checkpoints = [
+        event.get("default_checkpoint") for event in trace.get("_events") or []
+        if isinstance(event.get("default_checkpoint"), dict)]
+    sessions = {item.get("session_id") for item in checkpoints
+                if item.get("session_id") is not None}
+    frames = {item.get("capture_frame_id") for item in checkpoints
+              if item.get("capture_frame_id") is not None}
+    if len(sessions) == 1:
+        identity["session_id"] = next(iter(sessions))
+        identity["source"] = "checkpoints"
+    if len(frames) == 1:
+        identity["capture_frame_id"] = next(iter(frames))
+        identity["source"] = "checkpoints"
+    if identity["session_id"] is None and (history or {}).get("session_id"):
+        identity["session_id"] = history["session_id"]
+        identity["source"] = "history"
+    if identity["capture_frame_id"] is None and (
+            history or {}).get("capture_frame_id") is not None:
+        identity["capture_frame_id"] = history["capture_frame_id"]
+        identity["source"] = "history"
+    identity["present_index"] = trace.get("present_index")
+    frame = trace.get("frame") or {}
+    if identity["reference_sha256"] is None:
+        identity["reference_sha256"] = frame.get("reference_sha256")
+    return identity
+
+
 def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
     """Derive the resource graph and coverage classification for one frame.
 
@@ -585,6 +642,7 @@ def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
     events = trace.get("_events") or []
     manifest = trace
     history = load_frame_history(frame_dir, trace)
+    capture = _graph_capture_identity(frame_dir, trace, history)
     logical = [
         int((manifest.get("frame") or {}).get("width") or 0),
         int((manifest.get("frame") or {}).get("height") or 0),
@@ -1029,6 +1087,7 @@ def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
         "frame_dir": str(frame_dir),
         "status": status,
         "reasons": reasons,
+        "capture": capture,
         "boundary": {
             "logical_extent": logical,
             "seed": seed,
@@ -1228,6 +1287,26 @@ def checkpoint_request(graph: dict) -> dict:
     }
 
 
+def _graph_capture_identity_from_records(graph: dict) -> dict:
+    """Best-effort identity from a serialized graph's checkpoint records."""
+    identity = {}
+    for item in field_checkpoints(graph):
+        for key in ("session_id", "capture_frame_id"):
+            if item.get(key) is not None:
+                identity[key] = item[key]
+    if identity:
+        identity["source"] = "checkpoints"
+    return identity
+
+
+def field_checkpoints(graph: dict) -> list[dict]:
+    rows = []
+    for item in graph.get("default_checkpoints") or []:
+        if isinstance(item, dict):
+            rows.append(item)
+    return rows
+
+
 def provenance_matrix(graph: dict, checkpoints: list[dict] | None = None,
                       frame_identity: dict | None = None,
                       writer_limit: int = 8) -> list[dict]:
@@ -1253,15 +1332,11 @@ def provenance_matrix(graph: dict, checkpoints: list[dict] | None = None,
     observations = checkpoints
     if observations is None:
         observations = checkpoint_plan(graph)
-    identity = dict(frame_identity or {})
+    identity = dict(frame_identity or graph.get("capture") or {})
     if not identity:
-        boundary = graph.get("boundary") or {}
-        identity = {
-            key: boundary.get(key) for key in
-            ("session_id", "capture_frame_id", "event_stream_sha256",
-             "reference_sha256")
-            if boundary.get(key) is not None
-        }
+        # A legacy caller may pass a graph serialized before the captured
+        # identity projection existed; recover only records actually present.
+        identity = _graph_capture_identity_from_records(graph)
     rows: list[dict] = []
     for item in observations:
         if not isinstance(item, dict) or item.get("event") is None:

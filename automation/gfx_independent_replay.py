@@ -1943,6 +1943,26 @@ def _checkpoint_request_plan_problems(graph: dict,
                     f"checkpoint ({key[0]}, {key[1]}) producer history "
                     "disagrees with the validated capture graph",
                     severity="invalid"))
+        else:
+            # Legacy compatibility is limited to captures that legitimately
+            # published no writer history.  A nonempty legacy list is still
+            # checked against the graph rather than trusted by age.
+            if (not isinstance(published_producers, list)
+                    or any(not isinstance(value, int)
+                           for value in published_producers)):
+                problems.append(_checkpoint_problem(
+                    "malformed_request",
+                    f"checkpoint ({key[0]}, {key[1]}) legacy producer history "
+                    "is not an integer array",
+                    severity="invalid"))
+            elif (published_producers
+                  and published_producers != (wanted.get("producer_events")
+                                              or [])):
+                problems.append(_checkpoint_problem(
+                    "substituted_request",
+                    f"checkpoint ({key[0]}, {key[1]}) nonempty legacy producer "
+                    "history disagrees with the validated capture graph",
+                    severity="invalid"))
     for key in expected_by_key:
         if key not in seen:
             problems.append(_checkpoint_problem(

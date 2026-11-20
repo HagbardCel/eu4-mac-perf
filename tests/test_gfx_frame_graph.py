@@ -1032,13 +1032,123 @@ class FirstDivergenceTests(unittest.TestCase):
         self.assertEqual(value["kind"], "final_only")
 
 
+class ProductionBuildIdentityTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.fixture = FrameFixture(Path(self.temporary.name))
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def add_checkpoint(self):
+        self.fixture.events[3]["default_checkpoint"] = {
+            "file": "cp.bin",
+            "sha256": sha(self.fixture.reference),
+            "bytes": len(self.fixture.reference),
+            "width": WIDTH,
+            "height": HEIGHT,
+            "session_id": "session-checkpoint",
+            "capture_frame_id": 2,
+        }
+        self.fixture.write()
+        self.fixture.write_blob("cp.bin", self.fixture.reference)
+
+    def write_seal(self):
+        events = self.fixture.frame / "frame-events.jsonl"
+        reference = self.fixture.frame / "frame-reference.bgra"
+        manifest = self.fixture.frame / "frame-trace.json"
+        seal = {
+            "schema": "gfx-frame-seal/v1", "sealed": True, "complete": True,
+            "struct_size": 2256, "abi_version": 2,
+            "capture_frame_id": 3, "session_id": "session-seal", "pid": 123,
+            "boundary": "scene", "present_index": 904,
+            "operation_count": len(self.fixture.events), "draw_count": 0,
+            "clear_count": 0, "copy_count": 0,
+            "event_stream_file": events.name,
+            "event_stream_bytes": events.stat().st_size,
+            "event_stream_sha256": sha(events.read_bytes()),
+            "event_stream_verified": True,
+            "width": WIDTH, "height": HEIGHT, "pixel_format": "BGRA8",
+            "trace_complete": True, "trace_integrity": True,
+            "readback_ok": True,
+            "reference_file": reference.name,
+            "reference_bytes": reference.stat().st_size,
+            "reference_sha256": sha(reference.read_bytes()),
+            "manifest_file": manifest.name,
+            "manifest_sha256": sha(manifest.read_bytes()),
+            "capture_dir": str(self.fixture.frame.resolve()),
+            "gpu_status": "ok",
+        }
+        (self.fixture.frame / "frame-seal.json").write_text(json.dumps(seal))
+
+    def test_build_projects_checkpoint_capture_identity(self):
+        self.add_checkpoint()
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        self.assertEqual(graph["capture"]["session_id"],
+                         "session-checkpoint")
+        self.assertEqual(graph["capture"]["capture_frame_id"], 2)
+        self.assertEqual(graph["capture"]["source"], "checkpoints")
+        rows = gfx_frame_graph.provenance_matrix(graph, [{
+            "event": 4, "target": "0", "resource": "fb:0"}])
+        self.assertEqual(rows[0]["frame"]["session_id"],
+                         "session-checkpoint")
+        self.assertEqual(rows[0]["frame"]["capture_frame_id"], 2)
+
+    def test_build_projects_seal_stream_identity(self):
+        self.write_seal()
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        self.assertEqual(graph["capture"]["source"], "seal")
+        self.assertEqual(graph["capture"]["session_id"], "session-seal")
+        self.assertEqual(graph["capture"]["capture_frame_id"], 3)
+        self.assertEqual(graph["capture"]["present_index"], 904)
+        events = self.fixture.frame / "frame-events.jsonl"
+        self.assertEqual(graph["capture"]["event_stream_sha256"],
+                         sha(events.read_bytes()))
+        rows = gfx_frame_graph.provenance_matrix(graph, [{
+            "event": 4, "target": "0", "resource": "fb:0"}])
+        self.assertEqual(rows[0]["frame"]["event_stream_sha256"],
+                         sha(events.read_bytes()))
+
+    def test_legacy_nonempty_producer_history_is_validated(self):
+        graph = {
+            "events": [
+                {"event": 0, "kind": "clear"},
+                {"event": 2, "kind": "draw", "entry": "_GfxDrawIndexed"},
+            ],
+            "resources": {"fb:0": {"producers": [
+                {"event": 0, "kind": "clear"}]}},
+            "default_checkpoints": [{
+                "event": 2, "target": "0", "resource": "fb:0",
+                "reference_file": "ref.bin", "reference_sha256": "c" * 64,
+                "reference_width": 8, "reference_height": 8,
+            }],
+        }
+        expected = gfx_frame_graph.checkpoint_request(graph)["checkpoints"]
+        item = dict(expected[0])
+        item.pop("writer_authority")
+        item["producer_events"] = [99]
+        problems = (
+            gfx_independent_replay._checkpoint_request_plan_problems(
+                graph, [item]))
+        self.assertTrue(any(problem["kind"] in
+                            ("substituted_request", "malformed_request")
+                            for problem in problems))
+        # A legitimately empty legacy list remains accepted.
+        item["producer_events"] = []
+        problems = (
+            gfx_independent_replay._checkpoint_request_plan_problems(
+                graph, [item]))
+        self.assertEqual(problems, [])
+
+
 class ProvenanceMatrixTests(unittest.TestCase):
     def graph(self):
         return {
-            "boundary": {
+            "capture": {
                 "session_id": "session-a", "capture_frame_id": 1,
                 "event_stream_sha256": "a" * 64,
                 "reference_sha256": "b" * 64,
+                "source": "seal",
             },
             "events": [
                 {"event": 0, "kind": "clear", "operation": "glClear"},
