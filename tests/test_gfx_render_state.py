@@ -65,6 +65,9 @@ class RenderStateProjectionTests(unittest.TestCase):
                 values["scissor_empty"] = int(parts[2].split("=")[1])
                 rect = parts[3].split("=")[1].split(",")
                 values["rect"] = tuple(int(item) for item in rect)
+            elif line.startswith("viewport="):
+                values["viewport"] = tuple(
+                    float(item) for item in line.split("=", 1)[1].split(","))
         return values
 
     def sampler(self, **overrides):
@@ -81,11 +84,23 @@ class RenderStateProjectionTests(unittest.TestCase):
         base = self.query({"sampler": self.sampler(), "width": 8, "height": 8})
         for name, value in (
                 ("wrap_r", "0x812f"), ("min_lod", 2), ("max_lod", 7),
-                ("compare_mode", "0x884c"), ("compare_func", "0x0201")):
+                ("compare_mode", "0x884c")):
             changed = self.query({
                 "sampler": self.sampler(**{name: value}),
                 "width": 8, "height": 8})
             self.assertNotEqual(base["key"], changed["key"], name)
+        compare = self.query({"sampler": self.sampler(
+            compare_mode="0x884c", compare_func="0x0203"),
+            "width": 8, "height": 8})["key"]
+        changed = self.query({"sampler": self.sampler(
+            compare_mode="0x884c", compare_func="0x0201"),
+            "width": 8, "height": 8})["key"]
+        self.assertNotEqual(compare, changed)
+        # compare_func is inert without compare-to-texture.
+        inert = self.query({"sampler": self.sampler(
+            compare_mode=0, compare_func="0x0201"),
+            "width": 8, "height": 8})["key"]
+        self.assertEqual(base["key"], inert)
 
     def test_six_observed_max_lods_do_not_alias(self):
         keys = {
@@ -101,6 +116,52 @@ class RenderStateProjectionTests(unittest.TestCase):
         second = self.query({"sampler": self.sampler(), "width": 8,
                              "height": 8})["key"]
         self.assertEqual(first, second)
+
+    def test_equivalent_enum_representations_share_one_identity(self):
+        # GL enums arrive sometimes as "0x2701" and sometimes as integers.
+        numeric = self.sampler(min=0x2701, mag=0x2601, wrap_s=0x2901,
+                               wrap_t=0x2901, wrap_r=0x2901,
+                               compare_func=0x0203)
+        first = self.query({"sampler": self.sampler(), "width": 8,
+                            "height": 8})["key"]
+        second = self.query({"sampler": numeric, "width": 8,
+                             "height": 8})["key"]
+        self.assertEqual(first, second)
+        # Float and integer LODs are the same effective value.
+        third = self.query({"sampler": self.sampler(
+            min_lod=-1000.0, max_lod=1000.0, lod_bias=0.0),
+            "width": 8, "height": 8})["key"]
+        self.assertEqual(first, third)
+
+    def cull_render(self, mode, enabled, primitive=0x0004, no_cull=0):
+        result = subprocess.run(
+            [str(self.binary), "--cull", str(mode), str(enabled),
+             str(primitive), str(no_cull)],
+            capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        values = dict(item.split("=") for item in result.stdout.split())
+        return int(values["left"]), int(values["right"])
+
+    def test_rendered_winding_respects_front_and_back_culling(self):
+        left, right = self.cull_render(0x0405, 1)  # GL_BACK
+        self.assertEqual(left, 0)
+        self.assertGreater(right, 0)
+        left, right = self.cull_render(0x0404, 1)  # GL_FRONT
+        self.assertGreater(left, 0)
+        self.assertEqual(right, 0)
+
+    def test_front_and_back_is_empty_only_when_culling_is_effective(self):
+        left, right = self.cull_render(0x0408, 1)
+        self.assertEqual((left, right), (0, 0))
+        left, right = self.cull_render(0x0408, 0)  # cull disabled
+        self.assertGreater(left, 0)
+        self.assertGreater(right, 0)
+        left, right = self.cull_render(0x0408, 1, no_cull=1)
+        self.assertGreater(left, 0)
+        self.assertGreater(right, 0)
+        left, right = self.cull_render(0x0408, 1, primitive=0x0001)  # lines
+        self.assertGreater(left, 0)
+        self.assertGreater(right, 0)
 
     def test_cull_faces_and_front_and_back(self):
         back = self.query({"cull": {"enabled": 1, "mode": "0x405",
@@ -121,6 +182,20 @@ class RenderStateProjectionTests(unittest.TestCase):
         result = subprocess.run([str(self.binary), str(path)],
                                 capture_output=True, text=True, check=False)
         self.assertNotEqual(result.returncode, 0)
+
+    def test_viewport_conversion_at_negative_and_outside_boundaries(self):
+        negative = self.query({"width": 8, "height": 8,
+                               "viewport": [-2, -2, 4, 4]})
+        self.assertEqual(negative["viewport"], (-2.0, 6.0, 4.0, 4.0))
+        outside = self.query({"width": 8, "height": 8,
+                              "viewport": [10, 10, 4, 4]})
+        self.assertEqual(outside["viewport"], (10.0, -6.0, 4.0, 4.0))
+        full = self.query({"width": 8, "height": 8,
+                           "viewport": [0, 0, 8, 8]})
+        self.assertEqual(full["viewport"], (0.0, 0.0, 8.0, 8.0))
+        oversized = self.query({"width": 8, "height": 8,
+                                "viewport": [-4, -4, 16, 16]})
+        self.assertEqual(oversized["viewport"], (-4.0, -4.0, 16.0, 16.0))
 
     def test_signed_scissor_intersects_both_endpoints(self):
         inside = self.query({"width": 8, "height": 8, "scissor": {

@@ -615,17 +615,27 @@ static NSUInteger enum_value(id value, NSUInteger fallback);
  * flags are included because they change the effective min/mag filters; a
  * diagnostic override must never reuse a default descriptor. */
 static NSString *sampler_key_for_state(NSDictionary *state) {
-    NSArray<NSString *> *fields = @[
-        @"min", @"mag", @"wrap_s", @"wrap_t", @"wrap_r",
-        @"min_lod", @"max_lod", @"lod_bias",
-        @"compare_mode", @"compare_func",
-    ];
     NSMutableString *key = [NSMutableString string];
-    for (NSString *field in fields) {
-        id value = state[field];
-        [key appendFormat:@"%@=%@|", field,
-         value != nil ? [value description] : @"<default>"];
+    for (NSString *field in @[@"min", @"mag", @"wrap_s", @"wrap_t",
+                              @"wrap_r", @"compare_mode"]) {
+        NSUInteger default_value = [field isEqualToString:@"compare_mode"]
+            ? 0u : 0x2601u;
+        if ([field hasPrefix:@"wrap_"]) default_value = 0x812Fu;
+        [key appendFormat:@"%@=%lu|", field,
+         (unsigned long)enum_value(state[field], default_value)];
     }
+    /* compare_function is inert unless compare-to-texture is enabled. */
+    NSUInteger compare_mode = enum_value(state[@"compare_mode"], 0);
+    if (compare_mode == 0x884Cu) {
+        [key appendFormat:@"compare_func=%lu|",
+         (unsigned long)enum_value(state[@"compare_func"], 0x0203u)];
+    }
+    [key appendFormat:@"min_lod=%.17g|",
+     double_number(state[@"min_lod"], 0)];
+    [key appendFormat:@"max_lod=%.17g|",
+     double_number(state[@"max_lod"], 1000)];
+    [key appendFormat:@"lod_bias=%.17g|",
+     double_number(state[@"lod_bias"], 0)];
     const char *linear_min = getenv("EU4_FRAME_REPLAY_LINEAR_MIN");
     const char *linear_all = getenv("EU4_FRAME_REPLAY_LINEAR_ALL");
     const char *nearest_all = getenv("EU4_FRAME_REPLAY_NEAREST_ALL");
@@ -692,6 +702,48 @@ static BOOL scissor_rect_for(NSArray *box, NSUInteger target_width,
     rect->width = (NSUInteger)(x1 - x0);
     rect->height = (NSUInteger)(y1 - y0);
     return YES;
+}
+
+static BOOL topology_supports_culling(NSUInteger mode) {
+    return mode >= 0x0004u && mode <= 0x0006u;
+}
+
+/* Effective polygon culling after enabled state, topology and the diagnostic
+ * NO_CULL override.  GL_FRONT_AND_BACK is only emulated when culling would
+ * actually be active; a disabled cull state or a non-polygon topology must
+ * render normally. */
+static BOOL effective_cull(NSDictionary *cull, NSUInteger primitive_mode,
+                           BOOL no_cull, MTLCullMode *mode, BOOL *empty) {
+    if (mode) *mode = MTLCullModeNone;
+    if (empty) *empty = NO;
+    if (no_cull || number(cull[@"enabled"], 0) == 0
+        || !topology_supports_culling(primitive_mode)) {
+        return YES;
+    }
+    return cull_mode_for(cull, mode, empty);
+}
+
+static MTLViewport viewport_for(NSArray *viewport, NSUInteger target_width,
+                                NSUInteger target_height) {
+    MTLViewport value;
+    if ([viewport isKindOfClass:[NSArray class]] && viewport.count == 4) {
+        double x = double_number(viewport[0], 0);
+        double y = double_number(viewport[1], 0);
+        double w = double_number(viewport[2], (double)target_width);
+        double h = double_number(viewport[3], (double)target_height);
+        value.originX = x;
+        value.originY = (double)target_height - y - h;
+        value.width = w;
+        value.height = h;
+    } else {
+        value.originX = 0;
+        value.originY = 0;
+        value.width = (double)target_width;
+        value.height = (double)target_height;
+    }
+    value.znear = 0.0;
+    value.zfar = 1.0;
+    return value;
 }
 
 /* GL enums are recorded as JSON strings ("0x2600") while counts and flags are
@@ -2609,31 +2661,29 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
         [encoder setRenderPipelineState:pipeline];
         NSUInteger target_width = number(target_info[@"width"], g_default_target.width);
         NSUInteger target_height = number(target_info[@"height"], g_default_target.height);
-        NSArray *vp = state[@"viewport"];
-        MTLViewport metal_viewport;
-        if ([vp isKindOfClass:[NSArray class]] && vp.count == 4) {
-            double x = double_number(vp[0], 0);
-            double y = double_number(vp[1], 0);
-            double w = double_number(vp[2], (double)target_width);
-            double h = double_number(vp[3], (double)target_height);
-            metal_viewport.originX = x;
-            metal_viewport.originY =
-                (double)target_height - y - h;
-            metal_viewport.width = w;
-            metal_viewport.height = h;
-        } else {
-            metal_viewport.originX = 0;
-            metal_viewport.originY = 0;
-            metal_viewport.width = (double)target_width;
-            metal_viewport.height = (double)target_height;
-        }
-        metal_viewport.znear = 0.0;
-        metal_viewport.zfar = 1.0;
+        MTLViewport metal_viewport = viewport_for(
+            state[@"viewport"], target_width, target_height);
         [encoder setViewport:metal_viewport];
         NSDictionary *scissor = state[@"scissor"] ?: @{};
+        NSDictionary *draw_event = event[@"draw"] ?: @{};
+        NSUInteger primitive_mode = number(draw_event[@"mode"], 0x0004);
+        const char *no_cull_env = getenv("EU4_FRAME_REPLAY_NO_CULL");
+        BOOL no_cull = no_cull_env != NULL && no_cull_env[0] == '1';
         BOOL cull_empty = NO;
         MTLCullMode cull_mode = MTLCullModeNone;
-        BOOL cull_known = cull_mode_for(cull, &cull_mode, &cull_empty);
+        BOOL cull_known = effective_cull(
+            cull, primitive_mode, no_cull, &cull_mode, &cull_empty);
+        if (!cull_known) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:67
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        [NSString stringWithFormat:
+                                                             @"unsupported cull mode %@",
+                                                             cull[@"mode"] ?: @"<missing>"]}];
+            }
+            [encoder endEncoding];
+            return NO;
+        }
         BOOL scissor_empty = NO;
         if (number(scissor[@"enabled"], 0) != 0) {
             MTLScissorRect rect;
@@ -2647,33 +2697,19 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             MTLScissorRect rect = {0, 0, target_width, target_height};
             [encoder setScissorRect:rect];
         }
-        if (cull_empty) {
-            MTLScissorRect empty = {0, 0, 0, 0};
-            [encoder setScissorRect:empty];
-        } else if (scissor_empty) {
+        if (cull_empty || scissor_empty) {
             MTLScissorRect empty = {0, 0, 0, 0};
             [encoder setScissorRect:empty];
         }
-        const char *no_cull = getenv("EU4_FRAME_REPLAY_NO_CULL");
-        if (cull_enabled && !cull_known) {
-            if (error != NULL) {
-                *error = [NSError errorWithDomain:kErrorDomain code:67
-                                         userInfo:@{NSLocalizedDescriptionKey:
-                                                        [NSString stringWithFormat:
-                                                             @"unsupported cull mode %@",
-                                                             cull[@"mode"] ?: @"<missing>"]}];
-            }
-            [encoder endEncoding];
-            return NO;
-        }
-        if (cull_enabled && !cull_empty
-            && !(no_cull != NULL && no_cull[0] == '1')) {
+        if (cull_known && !cull_empty && !no_cull
+            && number(cull[@"enabled"], 0) != 0
+            && topology_supports_culling(primitive_mode)) {
             [encoder setCullMode:cull_mode];
             /* The captured GL front-face winding maps directly to Metal's
                winding: with the flipped viewport origin, a primitive the engine
                treats as front-facing is front-facing for Metal as well. This is
-               validated by the per-draw differential (a complemented mapping
-               culls the menu's sprite quads). */
+               validated by the rendered two-winding fixture in
+               test_gfx_render_state. */
             NSUInteger gl_front = (NSUInteger)strtoul(
                 [string_value(cull[@"front"]) ?: @"0x901" UTF8String], NULL, 0);
             const char *flip = getenv("EU4_FRAME_REPLAY_FLIP_WINDING");
@@ -3054,7 +3090,7 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                              atIndex:kVertexBufferBase + [location unsignedIntegerValue]];
         }
         NSDictionary *draw = event[@"draw"] ?: @{};
-        NSUInteger mode = number(draw[@"mode"], 4);
+        NSUInteger mode = primitive_mode;
         NSUInteger count = number(draw[@"count"], 0);
         NSInteger base_vertex = [draw[@"base_vertex"] isKindOfClass:[NSNumber class]]
             ? [draw[@"base_vertex"] integerValue] : 0;
@@ -5789,7 +5825,9 @@ extern "C" int eu4_gfx_frame_replay_test_sample_texture(
 extern "C" int eu4_gfx_frame_replay_test_render_state(
     const char *json_path, char *key_out, size_t key_capacity,
     int *cull_mode, int *cull_empty, int *scissor_empty,
-    int *scissor_x, int *scissor_y, int *scissor_w, int *scissor_h) {
+    int *scissor_x, int *scissor_y, int *scissor_w, int *scissor_h,
+    double *viewport_x, double *viewport_y, double *viewport_w,
+    double *viewport_h) {
     if (json_path == NULL) {
         return -1;
     }
@@ -5831,6 +5869,119 @@ extern "C" int eu4_gfx_frame_replay_test_render_state(
         if (scissor_y) *scissor_y = (int)rect.y;
         if (scissor_w) *scissor_w = (int)rect.width;
         if (scissor_h) *scissor_h = (int)rect.height;
+        MTLViewport vp = viewport_for(document[@"viewport"], width, height);
+        if (viewport_x) *viewport_x = vp.originX;
+        if (viewport_y) *viewport_y = vp.originY;
+        if (viewport_w) *viewport_w = vp.width;
+        if (viewport_h) *viewport_h = vp.height;
+        return 0;
+    }
+}
+
+/* Host-test only: render two oppositely wound triangles through the shared
+ * effective-cull projection and read back which half survived. */
+extern "C" int eu4_gfx_frame_replay_test_cull_render(
+    int gl_cull_mode, int cull_enabled, int primitive_mode, int no_cull,
+    int *left_pixels, int *right_pixels) {
+    @autoreleasepool {
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        if (device == nil) {
+            return -1;
+        }
+        const NSUInteger size = 16;
+        MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                         width:size height:size mipmapped:NO];
+        descriptor.usage = MTLTextureUsageRenderTarget;
+        descriptor.storageMode = MTLStorageModeManaged;
+        id<MTLTexture> target = [device newTextureWithDescriptor:descriptor];
+        NSString *source = @
+            "#include <metal_stdlib>\n"
+            "using namespace metal;\n"
+            "vertex float4 vertex_main(uint vid [[vertex_id]]) {\n"
+            "  const float2 p[6] = { float2(-1.0,-1.0), float2(-1.0,1.0),\n"
+            "                        float2(0.0,0.0),\n"
+            "                        float2(1.0,-1.0), float2(1.0,1.0),\n"
+            "                        float2(0.0,0.0) };\n"
+            "  return float4(p[vid], 0.0, 1.0);\n"
+            "}\n"
+            "fragment float4 fragment_main() {\n"
+            "  return float4(1.0, 0.0, 0.0, 1.0);\n"
+            "}\n";
+        NSError *error = nil;
+        id<MTLLibrary> library =
+            [device newLibraryWithSource:source options:nil error:&error];
+        if (library == nil) {
+            return -1;
+        }
+        MTLRenderPipelineDescriptor *pipeline_descriptor =
+            [MTLRenderPipelineDescriptor new];
+        pipeline_descriptor.vertexFunction =
+            [library newFunctionWithName:@"vertex_main"];
+        pipeline_descriptor.fragmentFunction =
+            [library newFunctionWithName:@"fragment_main"];
+        pipeline_descriptor.colorAttachments[0].pixelFormat =
+            MTLPixelFormatRGBA8Unorm;
+        id<MTLRenderPipelineState> pipeline =
+            [device newRenderPipelineStateWithDescriptor:pipeline_descriptor
+                                                   error:&error];
+        if (pipeline == nil) {
+            return -1;
+        }
+        NSDictionary *cull = @{
+            @"enabled": @(cull_enabled),
+            @"mode": [NSString stringWithFormat:@"0x%x", gl_cull_mode],
+            @"front": @"0x901",
+        };
+        MTLCullMode mode = MTLCullModeNone;
+        BOOL empty = NO;
+        BOOL known = effective_cull(cull, (NSUInteger)primitive_mode,
+                                    no_cull != 0, &mode, &empty);
+        if (!known) {
+            return -1;
+        }
+        MTLRenderPassDescriptor *pass =
+            [MTLRenderPassDescriptor renderPassDescriptor];
+        pass.colorAttachments[0].texture = target;
+        pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+        pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
+        id<MTLCommandQueue> queue = [device newCommandQueue];
+        id<MTLCommandBuffer> command = [queue commandBuffer];
+        id<MTLRenderCommandEncoder> encoder =
+            [command renderCommandEncoderWithDescriptor:pass];
+        [encoder setRenderPipelineState:pipeline];
+        [encoder setFrontFacingWinding:MTLWindingCounterClockwise];
+        [encoder setCullMode:empty ? MTLCullModeNone : mode];
+        if (empty) {
+            MTLScissorRect zero = {0, 0, 0, 0};
+            [encoder setScissorRect:zero];
+        }
+        [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                    vertexStart:0 vertexCount:6];
+        [encoder endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+        if (command.error != nil) {
+            return -1;
+        }
+        uint8_t pixels[size * size * 4];
+        MTLRegion region = MTLRegionMake2D(0, 0, size, size);
+        [target getBytes:pixels bytesPerRow:size * 4
+           fromRegion:region mipmapLevel:0];
+        int left = 0;
+        int right = 0;
+        for (NSUInteger y = 0; y < size; y++) {
+            for (NSUInteger x = 0; x < size; x++) {
+                const uint8_t *pixel = pixels + (y * size + x) * 4;
+                if (pixel[0] > 128 && pixel[1] < 64) {
+                    if (x < size / 2) left++;
+                    else right++;
+                }
+            }
+        }
+        if (left_pixels) *left_pixels = left;
+        if (right_pixels) *right_pixels = right;
         return 0;
     }
 }
