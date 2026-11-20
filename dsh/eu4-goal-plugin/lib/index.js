@@ -28,9 +28,19 @@ import {
 export const name = 'eu4-goal'
 
 /** Services this plugin needs before apply() runs. */
-export const inject = ['tools', 'goals', 'agents']
+export const inject = ['tools', 'goals', 'agents', 'systemPrompt']
 
 const BRIDGE_TIMEOUT_MS = 15 * 60 * 1000
+
+/**
+ * The reconnect context is a read-only bridge call. It verifies the anchor
+ * before the first model assembly, so a slow verification delays the resumed
+ * agent's first turn rather than letting it act on an unverified boundary.
+ */
+const CONTEXT_TIMEOUT_MS = 60 * 1000
+const AUTHORITY_SECTION = 'campaign:eu4-authority'
+/** External prompt contributors may use any finite order; keep this early. */
+const AUTHORITY_SECTION_ORDER = 700
 
 /**
  * Finalization runs the checker twice -- the live candidate and its frozen
@@ -190,6 +200,29 @@ function tool(name, description, execute) {
 }
 
 /**
+ * Render one authorized reconnect context as a system-prompt section.
+ *
+ * Only an `ok: true` bridge result becomes prompt text. A refusal -- drift,
+ * missing anchor, unavailable interpreter -- returns an empty string so the
+ * baseline prompt is unchanged rather than carrying authority that was never
+ * verified.
+ *
+ * @param {object|undefined} result parsed `automation.dsh_bridge context` output
+ * @returns {string} section text, or empty when no verified context exists
+ */
+export function authorityPromptText(result) {
+  if (!result || result.ok !== true || result.status !== 'authorized') return ''
+  const text = typeof result.startup_text === 'string' ? result.startup_text.trim() : ''
+  if (!text) return ''
+  return [
+    'EU4 campaign authority boundary (verified by the trusted bridge against ' +
+      'the prepared anchor). These facts are authoritative over model-reported ' +
+      'summaries and survive a resumed session:',
+    text,
+  ].join('\n')
+}
+
+/**
  * Mount the plugin on the host plane.
  * @param {object} ctx - cordis context
  * @param {object} config - resolved profile configuration
@@ -231,6 +264,105 @@ export function apply(ctx, config = {}) {
 
   function workspaceProblem(agent, campaignWorkspace) {
     return workspaceRefusal(sessionCwd(agent), campaignWorkspace, path.sep)
+  }
+
+  const promptTasks = new WeakMap()
+  const promptTexts = new WeakMap()
+  const disposedAgents = new WeakSet()
+
+  /**
+   * Load the verified reconnect context for one agent.
+   *
+   * The trusted bridge performs the anchor comparison, so this path does not
+   * duplicate identity, policy or budget rules in JavaScript. The session's
+   * validated cwd is compared with the authorized workspace here: the same
+   * context must not be mounted on a session that cannot write to it.
+   */
+  async function authorityForAgent(agent) {
+    if (!sidecar) return ''
+    let result
+    try {
+      result = await bridge(
+        infra, python, 'context', sidecar, [], CONTEXT_TIMEOUT_MS
+      )
+    } catch (error) {
+      ctx.logger?.warn?.(
+        `[eu4-goal] context could not be read: ${error && error.message ? error.message : error}`
+      )
+      return ''
+    }
+    if (!result || result.ok !== true) {
+      const kind = result && result.kind ? result.kind : 'unavailable'
+      const detail = result && result.detail ? `: ${result.detail}` : ''
+      ctx.logger?.warn?.(
+        `[eu4-goal] no verified reconnect context (${kind}${detail}); baseline prompt preserved`
+      )
+      return ''
+    }
+    const mismatch = workspaceProblem(agent, result.startup && result.startup.workspace)
+    if (mismatch) {
+      ctx.logger?.warn?.(
+        `[eu4-goal] reconnect context not mounted on this session: ${mismatch}`
+      )
+      return ''
+    }
+    return authorityPromptText(result)
+  }
+
+  /**
+   * Install the verified boundary as a per-agent prompt section.
+   *
+   * Registering through `agent.ctx` scopes the section to that agent, so a
+   * later session (including a resume after restart) gets its own freshly
+   * verified text rather than inheriting another session's snapshot.
+   */
+  function installAuthorityPrompt(agent) {
+    if (!agent || !agent.ctx || typeof agent.ctx.inject !== 'function') {
+      return Promise.resolve(undefined)
+    }
+    const existing = promptTasks.get(agent)
+    if (existing) return existing
+    const task = (async () => {
+      const text = await authorityForAgent(agent)
+      if (!text || disposedAgents.has(agent)) return undefined
+      promptTexts.set(agent, text)
+      return agent.ctx.inject(['systemPrompt'], (scope) => {
+        scope.systemPrompt.section({
+          name: AUTHORITY_SECTION,
+          order: AUTHORITY_SECTION_ORDER,
+          interpolate: false,
+          text: () => promptTexts.get(agent) || '',
+        })
+      })
+    })()
+    promptTasks.set(agent, task)
+    task.catch((error) => {
+      ctx.logger?.warn?.(
+        `[eu4-goal] could not install reconnect context: ${error && error.message ? error.message : error}`
+      )
+    })
+    return task
+  }
+
+  if (typeof ctx.on === 'function') {
+    ctx.on('agent/created', async ({ agent }) => {
+      await installAuthorityPrompt(agent)
+    })
+    ctx.on('agent/disposed', ({ agent }) => {
+      disposedAgents.add(agent)
+      const task = promptTasks.get(agent)
+      promptTasks.delete(agent)
+      promptTexts.delete(agent)
+      if (!task) return
+      task
+        .then((fiber) => {
+          if (fiber && typeof fiber.dispose === 'function') fiber.dispose()
+        })
+        .catch(() => {})
+    })
+  }
+  if (ctx.agents && typeof ctx.agents.list === 'function') {
+    for (const agent of ctx.agents.list()) installAuthorityPrompt(agent)
   }
 
   const agentOf = (exec) => exec && exec.agent
