@@ -6,6 +6,22 @@ import unittest
 from pathlib import Path
 
 from automation.dsh_campaign import (
+    DEFAULT_ALLOW_INCOMPLETE_INPUTS,
+    DEFAULT_ALLOW_SYMLINKS,
+    DEFAULT_CONFIRMATION_ROUNDS,
+    DEFAULT_LIVE_CAPTURE_ENABLED,
+    DEFAULT_MAX_IDENTICAL_RETRIES,
+    DEFAULT_MAX_REVIEW_ATTEMPTS,
+    DEFAULT_MAX_ROUNDS,
+    DEFAULT_MAX_VALIDATIONS,
+    DEFAULT_REQUIRE_CHECKER_PASS,
+    DEFAULT_REQUIRE_INDEPENDENT_REVIEW,
+    DEFAULT_RETRY_MODE,
+    DEFAULT_RUN_ROOT,
+    DEFAULT_STATE_ROOT,
+    DEFAULT_VALIDATION_TIMEOUT_SECONDS,
+    DEFAULT_WALL_CLOCK_SECONDS,
+    DEFAULT_WORKSPACE_BASE,
     SidecarError,
     load_sidecar,
     path_allowed,
@@ -156,6 +172,134 @@ class SidecarTests(unittest.TestCase):
                 candidate={"mode": "seed", "workspace": str(self.root / "ws"),
                            "policy": {"allowed_paths": ["marker.txt"]}},
             ))
+
+
+class ReaderDefaultTests(unittest.TestCase):
+    """Omitted optional fields resolve to one documented value; malformed fail."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.counter = 0
+
+    def base(self) -> dict:
+        return {
+            "schema": "eu4-dsh-campaign/v1",
+            "campaign_id": "dsh-defaults",
+            "source_campaign": SMOKE,
+            "candidate": {
+                "mode": "seed",
+                "policy": {"allowed_paths": ["marker.txt"]},
+            },
+        }
+
+    def write(self, data: dict) -> Path:
+        self.counter += 1
+        path = self.root / f"sidecar-{self.counter}.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        return path
+
+    def test_absent_optional_fields_resolve_to_documented_defaults(self) -> None:
+        sidecar = load_sidecar(self.write(self.base()))
+        # The constants themselves are the documented defaults.
+        self.assertEqual(DEFAULT_RUN_ROOT, DEFAULT_STATE_ROOT)
+        self.assertEqual(DEFAULT_WORKSPACE_BASE, "run_root")
+        self.assertEqual(DEFAULT_RETRY_MODE, "deterministic")
+        self.assertEqual(DEFAULT_CONFIRMATION_ROUNDS, 0)
+        self.assertEqual(DEFAULT_MAX_IDENTICAL_RETRIES, 0)
+        self.assertEqual(DEFAULT_MAX_ROUNDS, 6)
+        self.assertTrue(DEFAULT_REQUIRE_CHECKER_PASS)
+        self.assertFalse(DEFAULT_REQUIRE_INDEPENDENT_REVIEW)
+        self.assertEqual(DEFAULT_MAX_VALIDATIONS, 8)
+        self.assertEqual(DEFAULT_VALIDATION_TIMEOUT_SECONDS, 60.0)
+        self.assertEqual(DEFAULT_WALL_CLOCK_SECONDS, 1800.0)
+        self.assertEqual(DEFAULT_MAX_REVIEW_ATTEMPTS, 2)
+        self.assertFalse(DEFAULT_ALLOW_INCOMPLETE_INPUTS)
+        self.assertFalse(DEFAULT_LIVE_CAPTURE_ENABLED)
+        self.assertFalse(DEFAULT_ALLOW_SYMLINKS)
+        expected_run_root = (DEFAULT_STATE_ROOT.expanduser()
+                             / "dsh-defaults").resolve()
+        self.assertEqual(sidecar.run_root, expected_run_root)
+        # candidate.workspace is omitted: <workspace base>/workspace.
+        self.assertEqual(sidecar.workspace,
+                         (expected_run_root / "workspace").resolve())
+        self.assertEqual(sidecar.retry_mode, DEFAULT_RETRY_MODE)
+        self.assertEqual(sidecar.confirmation_rounds,
+                         DEFAULT_CONFIRMATION_ROUNDS)
+        self.assertEqual(sidecar.max_identical_retries,
+                         DEFAULT_MAX_IDENTICAL_RETRIES)
+        self.assertEqual(sidecar.max_rounds, DEFAULT_MAX_ROUNDS)
+        self.assertEqual(sidecar.require_checker_pass,
+                         DEFAULT_REQUIRE_CHECKER_PASS)
+        self.assertEqual(sidecar.require_independent_review,
+                         DEFAULT_REQUIRE_INDEPENDENT_REVIEW)
+        self.assertEqual(sidecar.max_validations, DEFAULT_MAX_VALIDATIONS)
+        self.assertEqual(sidecar.validation_timeout_seconds,
+                         DEFAULT_VALIDATION_TIMEOUT_SECONDS)
+        self.assertEqual(sidecar.wall_clock_seconds,
+                         DEFAULT_WALL_CLOCK_SECONDS)
+        self.assertEqual(sidecar.max_review_attempts,
+                         DEFAULT_MAX_REVIEW_ATTEMPTS)
+        self.assertEqual(sidecar.evidence_paths, ())
+        self.assertEqual(sidecar.replay_inputs, ())
+        self.assertEqual(sidecar.allow_incomplete_inputs,
+                         DEFAULT_ALLOW_INCOMPLETE_INPUTS)
+        self.assertEqual(sidecar.live_capture_enabled,
+                         DEFAULT_LIVE_CAPTURE_ENABLED)
+
+    def test_malformed_optional_fields_fail_closed(self) -> None:
+        def set_goal(key, value):
+            return lambda data: data.setdefault("goal", {}).__setitem__(key, value)
+
+        def set_limits(key, value):
+            return lambda data: data.setdefault("limits", {}).__setitem__(key, value)
+
+        def set_retry(key, value):
+            return lambda data: data.setdefault(
+                "checker_retry", {}).__setitem__(key, value)
+
+        def set_candidate(key, value):
+            return lambda data: data["candidate"].__setitem__(key, value)
+
+        cases = {
+            "schema absent": lambda data: data.pop("schema"),
+            "run_root": lambda data: data.__setitem__("run_root", 5),
+            "candidate.workspace": set_candidate("workspace", ["ws"]),
+            "candidate.workspace_base": set_candidate("workspace_base", 3),
+            "candidate.policy.allow_symlinks": lambda data: data["candidate"][
+                "policy"].__setitem__("allow_symlinks", "true"),
+            "checker_retry.mode": set_retry("mode", 1),
+            "checker_retry.confirmation_rounds": set_retry(
+                "confirmation_rounds", "1"),
+            "checker_retry.max_identical_retries": set_retry(
+                "max_identical_retries", 1.5),
+            "goal.max_rounds": set_goal("max_rounds", "6"),
+            "goal.require_checker_pass": set_goal("require_checker_pass", "yes"),
+            "goal.require_independent_review": set_goal(
+                "require_independent_review", 0),
+            "limits.max_validations": set_limits("max_validations", "8"),
+            "limits.validation_timeout_seconds": set_limits(
+                "validation_timeout_seconds", "60"),
+            "limits.wall_clock_seconds": set_limits("wall_clock_seconds", "1800"),
+            "limits.max_review_attempts": set_limits("max_review_attempts", 1.5),
+            "evidence.paths": lambda data: data.__setitem__(
+                "evidence", {"paths": "progress.md"}),
+            "live_capture.enabled": lambda data: data.__setitem__(
+                "live_capture", {"enabled": "false"}),
+            "replay_inputs": lambda data: data.__setitem__(
+                "replay_inputs", "checkpoint.md"),
+            "replay_inputs whitespace entry": lambda data: data.__setitem__(
+                "replay_inputs", ["   "]),
+            "allow_incomplete_inputs": lambda data: data.__setitem__(
+                "allow_incomplete_inputs", "false"),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(field=name):
+                data = self.base()
+                mutate(data)
+                with self.assertRaises(SidecarError):
+                    load_sidecar(self.write(data))
 
 
 class PathAllowlistTests(unittest.TestCase):
