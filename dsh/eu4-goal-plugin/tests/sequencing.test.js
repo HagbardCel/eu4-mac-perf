@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import test from 'node:test'
 
 import { apply, resolveInfra } from '../lib/index.js'
@@ -36,7 +39,7 @@ function harness(results) {
     ops.push(operation)
     if (extra && extra.length) calls.push([operation, ...extra])
     const value = results[operation]
-    return typeof value === 'function' ? value() : value
+    return typeof value === 'function' ? value(extra) : value
   }
   apply(ctx, { sidecar: '/tmp/campaign.json', infra: INFRA, bridge })
   return { ctx, ops, calls }
@@ -134,7 +137,10 @@ test('the session identity comes from the harness object, not argv', async () =>
   // `agent.sessionId` is absent in headless; the id lives on the session.
   const headlessAgent = { id: 'agent-1', session: { id: 'sess-1', header: { cwd: '/tmp/ws' } } }
   await tool(ctx, 'eu4_validate_candidate').execute({}, { agent: headlessAgent })
-  assert.deepEqual(calls, [['validate', '--session-id', 'sess-1']])
+  assert.deepEqual(calls, [
+    ['prepare', '--session-id', 'sess-1'],
+    ['validate', '--session-id', 'sess-1'],
+  ])
 })
 
 test('an agent with no session identity does not send the flag at all', async () => {
@@ -283,4 +289,115 @@ test('a passing validation never completes the goal by itself', async () => {
   assert.equal(result.checker_verdict, 'pass')
   assert.equal(ctx._state.completed.length, 0)
   assert.equal(ctx._state.paused.length, 0)
+})
+
+
+/** A scripted bridge that reports a per-session root exactly like the real one. */
+function sessionScript(runRoot) {
+  const prepare = (extra) => {
+    const index = Array.isArray(extra) ? extra.indexOf('--session-id') : -1
+    const sessionId = index >= 0 ? extra[index + 1] : null
+    const root = sessionId ? path.join(runRoot, 'sessions', sessionId) : runRoot
+    fs.mkdirSync(root, { recursive: true })
+    return {
+      ok: true,
+      workspace: '/tmp/ws',
+      run_root: runRoot,
+      session: {
+        session_id: sessionId,
+        root,
+        kind: sessionId ? 'session' : 'legacy-shared',
+        reason: sessionId ? 'isolated' : 'no session id was supplied',
+      },
+    }
+  }
+  return {
+    prepare,
+    validate: { ok: true, classification: 'verdict', checker_verdict: 'pass' },
+    finalize: { ok: true, operation: 'finalize', classification: 'verdict',
+                checker_verdict: 'pass' },
+  }
+}
+
+test('two sessions bind into their own roots and a reconnect resumes the same root', async () => {
+  const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'eu4-goal-bind-'))
+  try {
+    const a = { sessionId: 'sess-a', id: 'a1', session: { header: { cwd: '/tmp/ws' } } }
+    const b = { sessionId: 'sess-b', id: 'b1', session: { header: { cwd: '/tmp/ws' } } }
+
+    const first = harness(sessionScript(runRoot))
+    await tool(first.ctx, 'eu4_validate_candidate').execute({}, { agent: a })
+    const aFile = path.join(runRoot, 'sessions', 'sess-a', 'plugin-binding.json')
+    assert.ok(fs.existsSync(aFile), 'session A binds in its own root')
+
+    await tool(first.ctx, 'eu4_validate_candidate').execute({}, { agent: b })
+    const bFile = path.join(runRoot, 'sessions', 'sess-b', 'plugin-binding.json')
+    assert.ok(fs.existsSync(bFile), 'session B binds in its own root')
+    assert.notEqual(aFile, bFile)
+
+    const storedA = JSON.parse(fs.readFileSync(aFile, 'utf8'))
+    const storedB = JSON.parse(fs.readFileSync(bFile, 'utf8'))
+    assert.equal(storedA.session_id, 'sess-a')
+    assert.equal(storedB.session_id, 'sess-b')
+
+    // A fresh plugin instance is a reconnect: no in-memory binding, so the
+    // record is read back from the same session root.
+    const reconnected = harness(sessionScript(runRoot))
+    const result = await tool(reconnected.ctx, 'eu4_finalize_candidate')
+      .execute({}, { agent: a })
+    assert.equal(result.completion, 'completed')
+    assert.equal(reconnected.ctx._state.completed.length, 1)
+  } finally {
+    fs.rmSync(runRoot, { recursive: true, force: true })
+  }
+})
+
+test('two sessions in a legacy shared root do not overwrite each other', async () => {
+  const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'eu4-goal-legacy-'))
+  try {
+    const plugin = harness({
+      prepare: { ok: true, workspace: '/tmp/ws', run_root: runRoot },
+      validate: { ok: true, classification: 'verdict', checker_verdict: 'pass' },
+    })
+    const a = { sessionId: 'sess-a', id: 'a1', session: { header: { cwd: '/tmp/ws' } } }
+    const b = { sessionId: 'sess-b', id: 'b1', session: { header: { cwd: '/tmp/ws' } } }
+    await tool(plugin.ctx, 'eu4_validate_candidate').execute({}, { agent: a })
+    const aFile = path.join(runRoot, 'plugin-binding.sess-a.json')
+    assert.ok(fs.existsSync(aFile))
+    const before = fs.readFileSync(aFile, 'utf8')
+
+    await tool(plugin.ctx, 'eu4_validate_candidate').execute({}, { agent: b })
+    assert.ok(fs.existsSync(path.join(runRoot, 'plugin-binding.sess-b.json')))
+    assert.equal(fs.readFileSync(aFile, 'utf8'), before)
+    assert.equal(JSON.parse(before).session_id, 'sess-a')
+  } finally {
+    fs.rmSync(runRoot, { recursive: true, force: true })
+  }
+})
+
+test('a reconnect does not adopt another session binding in a shared root', async () => {
+  const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'eu4-goal-adopt-'))
+  try {
+    // No session layout reported: the bridge fell back to the legacy shared
+    // root, where another session already recorded its binding.
+    fs.writeFileSync(path.join(runRoot, 'plugin-binding.json'), JSON.stringify({
+      schema: 'eu4-dsh-plugin-binding/v1',
+      session_id: 'sess-other',
+      goal_id: 'g1',
+      objective_digest: 'not-this-session',
+    }))
+    const plugin = harness({
+      prepare: { ok: true, workspace: '/tmp/ws', run_root: runRoot },
+      validate: { ok: true, classification: 'verdict', checker_verdict: 'pass' },
+      finalize: { ok: true, operation: 'finalize', classification: 'verdict',
+                  checker_verdict: 'pass' },
+    })
+    const result = await tool(plugin.ctx, 'eu4_finalize_candidate')
+      .execute({}, { agent })
+    assert.equal(result.kind, 'goal_binding')
+    assert.match(result.detail, /no campaign binding has been recorded/)
+    assert.equal(plugin.ctx._state.completed.length, 0)
+  } finally {
+    fs.rmSync(runRoot, { recursive: true, force: true })
+  }
 })

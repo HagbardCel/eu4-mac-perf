@@ -16,6 +16,8 @@ from unittest import mock
 from automation import dsh_bridge
 from automation import dsh_campaign
 from automation import dsh_receipts as receipts
+from automation import launch_lease
+from automation import session_state
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -1430,3 +1432,266 @@ class CheckerAttemptAccountingTests(BridgeTestCase):
             dsh_bridge._campaign_budget_stop(sidecar, rows + [rows[-1]],
                                             4.0)["kind"],
             "budget_exhausted")
+
+
+class SessionLayoutTests(unittest.TestCase):
+    """The writable session root is derived from a validated session id."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.run_root = self.root / "run"
+
+    def test_two_sessions_resolve_distinct_roots(self) -> None:
+        first = session_state.layout(self.run_root, "sess-a", create=True)
+        second = session_state.layout(self.run_root, "sess-b", create=True)
+        self.assertEqual(first.kind, "session")
+        self.assertTrue(first.isolated)
+        self.assertNotEqual(first.root, second.root)
+        self.assertEqual(first.root, self.run_root.resolve() / "sessions" / "sess-a")
+        self.assertTrue(first.root.is_dir())
+        self.assertEqual(first.root.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(
+            first.binding_path, first.root / "plugin-binding.json")
+        self.assertEqual(
+            first.validations_path, first.root / "validations.jsonl")
+
+    def test_unsafe_session_ids_are_rejected(self) -> None:
+        for value in ("", " ", "../escape", "a/b", "a\\b", "..", ".",
+                      "Sess-Upper", "a b", "a\x00b", "a" * 129):
+            with self.subTest(value=value):
+                with self.assertRaises(session_state.SessionRootError):
+                    session_state.validate_session_id(value)
+        with self.assertRaises(session_state.SessionRootError):
+            session_state.layout(self.run_root, "../escape", create=True)
+        self.assertFalse((self.root / "escape").exists())
+
+    def test_an_empty_id_is_not_a_legacy_session(self) -> None:
+        with self.assertRaises(session_state.SessionRootError):
+            session_state.layout(self.run_root, "", create=True)
+
+    def test_legacy_layout_is_explicitly_the_shared_root(self) -> None:
+        value = session_state.layout(self.run_root)
+        self.assertEqual(value.kind, "legacy-shared")
+        self.assertFalse(value.isolated)
+        self.assertIsNone(value.session_id)
+        self.assertEqual(value.root, self.run_root.resolve())
+        self.assertIn("no session id was supplied", value.reason)
+
+    def test_a_symlinked_session_root_cannot_escape(self) -> None:
+        outside = self.root / "outside"
+        outside.mkdir()
+        sessions = self.run_root / "sessions"
+        sessions.mkdir(parents=True)
+        os.symlink(outside, sessions / "sess-a")
+        with self.assertRaises(session_state.SessionRootError):
+            session_state.layout(self.run_root, "sess-a", create=True)
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_a_symlinked_sessions_directory_cannot_escape(self) -> None:
+        outside = self.root / "outside"
+        outside.mkdir()
+        self.run_root.mkdir()
+        os.symlink(outside, self.run_root / "sessions")
+        with self.assertRaises(session_state.SessionRootError):
+            session_state.layout(self.run_root, "sess-a", create=True)
+
+    def test_a_plain_file_at_the_session_path_is_refused(self) -> None:
+        sessions = self.run_root / "sessions"
+        sessions.mkdir(parents=True)
+        (sessions / "sess-a").write_text("not a directory", encoding="utf-8")
+        with self.assertRaises(session_state.SessionRootError):
+            session_state.layout(self.run_root, "sess-a", create=True)
+
+
+class SessionIsolationTests(BridgeTestCase):
+    """Two DSH sessions on one campaign bind, log and qualify independently."""
+
+    def session_root(self, session_id: str) -> Path:
+        return self.run_root.resolve() / "sessions" / session_id
+
+    def prepared(self, sidecar: Path, session_id: str) -> dict:
+        code, out = self.run_bridge("prepare", sidecar, session_id=session_id)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        return out
+
+    def test_two_sessions_write_independent_records_and_logs(self) -> None:
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        first = self.prepared(sidecar, "sess-a")
+        second = self.prepared(sidecar, "sess-b")
+        self.assertEqual(first["session"]["kind"], "session")
+        self.assertNotEqual(first["session"]["root"], second["session"]["root"])
+
+        code, out = self.run_bridge("validate", sidecar, session_id="sess-a")
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        a_root = Path(first["session"]["root"])
+        b_root = Path(second["session"]["root"])
+        self.assertTrue((a_root / "qualification.json").is_file())
+        self.assertEqual(len(dsh_bridge._validation_history(a_root)), 2)
+        self.assertFalse((a_root / "validations.jsonl").read_text() == "")
+        self.assertFalse((b_root / "qualification.json").exists())
+        self.assertFalse((b_root / "validations.jsonl").exists())
+        a_receipt = (a_root / "qualification.json").read_bytes()
+
+        code, out = self.run_bridge("validate", sidecar, session_id="sess-b")
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertTrue((b_root / "qualification.json").is_file())
+        # Session B's validation did not overwrite session A's record.
+        self.assertEqual((a_root / "qualification.json").read_bytes(), a_receipt)
+        self.assertEqual(len(dsh_bridge._validation_history(b_root)), 2)
+
+    def test_the_campaign_budget_is_charged_exactly_once_campaign_wide(self) -> None:
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        data["limits"]["max_validations"] = 1
+        sidecar.write_text(json.dumps(data), encoding="utf-8")
+        self.prepared(sidecar, "sess-a")
+        self.prepared(sidecar, "sess-b")
+
+        self.assertEqual(self.run_bridge(
+            "validate", sidecar, session_id="sess-a")[0], dsh_bridge.EXIT_OK)
+        claims = session_state.CampaignClaims(self.run_root)
+        self.assertEqual(len(claims.rows()), 1)
+
+        with mock.patch.object(dsh_bridge, "run_accept",
+                               side_effect=AssertionError(
+                                   "the checker must not start in session B")):
+            code, out = self.run_bridge("validate", sidecar, session_id="sess-b")
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertEqual(out["classification"], "policy_stop")
+        self.assertEqual(out["kind"], "budget_exhausted")
+        self.assertEqual(out["validations"], 1)
+        # Still exactly one campaign-wide claim, not one per session.
+        self.assertEqual(len(claims.rows()), 1)
+        self.assertFalse(
+            (self.session_root("sess-b") / "qualification.json").exists())
+
+    def test_an_interrupted_claim_in_one_session_still_counts(self) -> None:
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        data["limits"]["max_validations"] = 1
+        sidecar.write_text(json.dumps(data), encoding="utf-8")
+        self.prepared(sidecar, "sess-a")
+        claims = session_state.CampaignClaims(self.run_root)
+        claimed = claims.claim(
+            operation="validate", attempt_id="interrupted-attempt",
+            session_id="sess-a", limit=None)
+        self.assertTrue(claimed["ok"])
+        dsh_bridge._append_validation(self.session_root("sess-a"), {
+            "attempt_id": "interrupted-attempt",
+            "phase": "start",
+            "at": 1.0,
+            "operation": "validate",
+        })
+
+        with mock.patch.object(dsh_bridge, "run_accept",
+                               side_effect=AssertionError(
+                                   "an interrupted attempt still consumes budget")):
+            code, out = self.run_bridge("validate", sidecar, session_id="sess-a")
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertEqual(out["kind"], "budget_exhausted")
+        self.assertEqual(out["validations"], 1)
+        self.assertEqual(len(claims.rows()), 1)
+
+    def test_an_unsafe_session_id_is_refused_by_the_bridge(self) -> None:
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        for value in ("../escape", "a/b", "..", "Sess-Upper"):
+            with self.subTest(value=value):
+                code, out = self.run_bridge("prepare", sidecar, session_id=value)
+                self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+                self.assertEqual(out["kind"], "invalid_session")
+                self.assertEqual(out["goal_policy"], "pause")
+        self.assertFalse((self.run_root.parent / "escape").exists())
+        self.assertFalse((self.run_root / "sessions").exists())
+
+    def test_a_legacy_session_uses_the_shared_root_with_a_reason(self) -> None:
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        code, out = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertEqual(out["session"]["kind"], "legacy-shared")
+        self.assertFalse(out["session"]["isolated"])
+        self.assertIn("no session id was supplied", out["session"]["reason"])
+        self.assertEqual(Path(out["session"]["root"]),
+                         self.run_root.resolve())
+
+        code, out = self.run_bridge("validate", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertTrue((self.run_root / "qualification.json").is_file())
+        self.assertEqual(
+            len(dsh_bridge._validation_history(self.run_root)), 2)
+        self.assertFalse((self.run_root / "sessions").exists())
+
+    def test_a_reconnect_resumes_the_same_session_root(self) -> None:
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        first = self.prepared(sidecar, "sess-a")
+        self.assertTrue(first["session_record_created"])
+        again = self.prepared(sidecar, "sess-a")
+        self.assertEqual(again["session"]["root"], first["session"]["root"])
+        self.assertFalse(again["session_record_created"])
+        other = self.prepared(sidecar, "sess-b")
+        self.assertNotEqual(other["session"]["root"], first["session"]["root"])
+
+        self.assertEqual(self.run_bridge(
+            "validate", sidecar, session_id="sess-a")[0], dsh_bridge.EXIT_OK)
+        self.assertEqual(self.run_bridge(
+            "validate", sidecar, session_id="sess-a")[0], dsh_bridge.EXIT_OK)
+        a_root = Path(first["session"]["root"])
+        self.assertEqual(len(dsh_bridge._validation_history(a_root)), 4)
+        self.assertFalse(
+            (self.session_root("sess-b") / "validations.jsonl").exists())
+
+    def test_another_sessions_receipt_is_not_adopted(self) -> None:
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        self.prepared(sidecar, "sess-a")
+        self.prepared(sidecar, "sess-b")
+        self.assertEqual(self.run_bridge(
+            "validate", sidecar, session_id="sess-a")[0], dsh_bridge.EXIT_OK)
+
+        code, out = self.run_bridge("finalize", sidecar, session_id="sess-b")
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+        self.assertEqual(out["kind"], "not_qualified")
+        self.assertFalse(
+            (self.session_root("sess-b") / "finalization.json").exists())
+
+        code, out = self.run_bridge("finalize", sidecar, session_id="sess-a")
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertTrue(
+            (self.session_root("sess-a") / "finalization.json").is_file())
+
+
+class SessionLeaseTests(unittest.TestCase):
+    """The host-wide EU4 lease is shared, not duplicated per session."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.executable = self.root / "fake-eu4"
+        self.executable.write_bytes(b"#!/bin/sh\nexit 0\n")
+        self.executable.chmod(0o755)
+        self.lease_dir = self.root / "lease"
+        patcher = mock.patch.dict(
+            os.environ, {"EU4_LAUNCH_LEASE_DIR": str(self.lease_dir)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_only_one_session_owns_the_live_lease(self) -> None:
+        first = launch_lease.acquire(self.executable)
+        try:
+            with self.assertRaises(launch_lease.LeaseError) as raised:
+                launch_lease.acquire(self.executable)
+            self.assertEqual(raised.exception.kind, "busy")
+        finally:
+            first.release()
+
+    def test_an_interrupted_session_releases_the_lease_for_a_reconnect(self) -> None:
+        first = launch_lease.acquire(self.executable)
+        # The interrupted session's launcher exits: its descriptor closes and
+        # the kernel lock is released, so the reconnect may acquire it.
+        first.release()
+        second = launch_lease.acquire(self.executable)
+        try:
+            self.assertEqual(second.holder()["pid"], os.getpid())
+        finally:
+            second.release()

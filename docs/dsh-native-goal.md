@@ -89,9 +89,62 @@ Operator control is unaffected: `/goal` and the goal bar reach the goal service
 directly rather than through the tool pipeline.
 
 Qualification is bound to one goal. `goal_id`, `revision` and an objective
-digest are recorded per session in `<run-root>/plugin-binding.json`; editing or
-replacing the goal invalidates prior qualification instead of authorizing a
-different objective.
+digest are recorded per session in that session's writable root (see below);
+editing or replacing the goal invalidates prior qualification instead of
+authorizing a different objective.
+
+## Session isolation
+
+Every agent session gets its own writable root beneath the campaign run root:
+
+```text
+<run-root>/                      campaign-wide authority, shared by every session
+├── identity.json                trusted binding anchor, written once by the launcher
+├── dsh.lock                     campaign-wide serialization for validate/finalize
+├── campaign/claims.jsonl        atomic campaign-wide validation claims
+└── sessions/<session-id>/       one session's writable state
+    ├── session.json             session -> campaign binding record
+    ├── plugin-binding.json      goal/revision/objective binding for this session
+    ├── validations.jsonl        this session's detailed attempt log
+    ├── qualification.json       this session's latest receipt (read by its finalize)
+    └── finalization.json        this session's finalization record
+```
+
+`automation.session_state.layout` derives the directory from a validated session
+id. Only a lowercase ASCII identifier is accepted; path separators, `.`/`..`
+components, whitespace and control characters, over-long ids, a symlinked
+session directory and a resolved path outside the campaign root are refused.
+The bridge reports the choice in every `prepare`/`validate`/`finalize` result as
+`session: {session_id, root, kind, isolated, reason}`, and the plugin never
+builds a root path from an id itself.
+
+The campaign-wide authorities stay single:
+
+* The validation budget is claimed atomically in
+  `<run-root>/campaign/claims.jsonl` under `flock(2)`. A claim is written
+  before the checker starts and is never removed, so an interrupted attempt
+  stays charged across sessions and reconnects. Per-session
+  `validations.jsonl` files are the detailed audit trail, not the allowance
+  counter; a resumed session and a concurrent session both count against the
+  same campaign ledger.
+* The host-wide EU4 process lease (`automation.launch_lease`) remains one
+  lease for the installation. Session roots neither fork it nor gain a second
+  way to own the game.
+* Only `validate`/`finalize` (the actions that run the checker) take the
+  campaign lock. Independent offline work in different sessions is not
+  serialized.
+* A receipt is read from the calling session's root, so session B's
+  `finalize` refuses with `not_qualified` instead of adopting session A's pass.
+  Reconnecting with the same session id resumes the same root and record.
+
+A caller that supplies no session id uses the shared run root explicitly and
+the bridge reports `kind: "legacy-shared"` with a reason, rather than presenting
+the session as isolated. On that legacy path the plugin names its binding
+`plugin-binding.<session-id>.json` when it has a real id, and still refuses to
+adopt a `plugin-binding.json` that names another session. Two sessions with no
+id at all cannot be distinguished; that is the documented limit of the legacy
+path. The `--session-id` flag is accepted by `prepare`, `validate`, `finalize`,
+`review-run` and `review-verify`.
 
 ## Candidate snapshots and the qualification record
 
@@ -103,11 +156,13 @@ re-diffed, and the rebuild must reproduce the intended delta exactly before it i
 accepted. Finalization freezes that commit, so review evidence describes the
 candidate the passing run actually saw.
 
-Validation writes **one** qualification record per campaign, replacing the
-previous one. It is a record, not authority: finalization re-runs the checker and
-only that result completes a goal. There is no journal, no per-attempt history and
-no retry scheduler -- DSH owns the session history and its round cap bounds the
-campaign.
+Validation writes **one** qualification record per session, replacing that
+session's previous record (a directory-based campaign keeps the historical shared
+record when no session id is supplied). It is a record, not authority:
+finalization re-runs the checker and only that result completes a goal. There is
+no journal, no retry scheduler and no scheduler at all -- DSH owns the session
+history and its round cap bounds the campaign. The campaign-wide pieces are the
+atomic claim ledger and the launch lease described above.
 
 Before any run the bridge asserts its execution roots. The boundary between the
 candidate and the trusted checkout is the **session workspace**: the plugin
@@ -355,7 +410,7 @@ code**.
 | Model declares success | yes | every model-initiated completion is denied; only finalize completes, after a fresh pass |
 | Receipt edited to `pass` | yes | finalize re-runs the checker; the record is not authority |
 | Stale candidate, checker or checkpoint | yes | identities re-verified before and after every run; replay inputs bound at validation |
-| Accidental state drift | yes | state root outside the workspace, atomic writes, one record per campaign |
+| Accidental state drift | yes | state root outside the workspace, atomic writes, one receipt per session, atomic campaign-wide claims |
 | Checker or guest test exfiltrating a provider key it sees | partially | keys are removed from the checker environment, but a privileged process can read them elsewhere |
 | **Malicious candidate code with the operator's privileges** | **no** | accepted: candidate code is trusted. Qualification integrity does not survive it, and no local mechanism would |
 
