@@ -1042,6 +1042,14 @@ class ProductionBuildIdentityTests(unittest.TestCase):
 
     def add_checkpoint(self):
         self.fixture.events[3]["default_checkpoint"] = {
+            "schema": "gfx-default-framebuffer-checkpoint/v1",
+            "status": "captured",
+            "event": 3,
+            "target": "0",
+            "resource": "fb:0",
+            "pixel_format": "BGRA8",
+            "origin": "lower_left",
+            "timing": "pre_event",
             "file": "cp.bin",
             "sha256": sha(self.fixture.reference),
             "bytes": len(self.fixture.reference),
@@ -1108,6 +1116,18 @@ class ProductionBuildIdentityTests(unittest.TestCase):
             "event": 4, "target": "0", "resource": "fb:0"}])
         self.assertEqual(rows[0]["frame"]["event_stream_sha256"],
                          sha(events.read_bytes()))
+
+    def test_present_but_invalid_seal_is_not_treated_as_absent(self):
+        self.write_seal()
+        seal_path = self.fixture.frame / "frame-seal.json"
+        seal = json.loads(seal_path.read_text())
+        seal["manifest_sha256"] = "0" * 64
+        seal_path.write_text(json.dumps(seal))
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        self.assertEqual(graph["status"], "invalid")
+        self.assertEqual(graph["capture"]["source"], "invalid_seal")
+        self.assertTrue(any("seal is present but invalid" in reason
+                            for reason in graph["reasons"]))
 
     def test_legacy_nonempty_producer_history_is_validated(self):
         graph = {

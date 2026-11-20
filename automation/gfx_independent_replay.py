@@ -1963,6 +1963,18 @@ def _checkpoint_request_plan_problems(graph: dict,
                     f"checkpoint ({key[0]}, {key[1]}) nonempty legacy producer "
                     "history disagrees with the validated capture graph",
                     severity="invalid"))
+            elif (not published_producers
+                  and (wanted.get("producer_events") or [])
+                  and str(item.get("resource") or expected_resource).startswith(
+                      "tex:")):
+                # Only fb:0 copy/default-checkpoint entries were legitimately
+                # empty in old captures.  Sampled textures always carried
+                # their writer history; dropping it must not erase a writer.
+                problems.append(_checkpoint_problem(
+                    "substituted_request",
+                    f"checkpoint ({key[0]}, {key[1]}) legacy request omits "
+                    "nonempty graph producer history for a texture",
+                    severity="invalid"))
     for key in expected_by_key:
         if key not in seen:
             problems.append(_checkpoint_problem(

@@ -564,7 +564,8 @@ CAPTURE_IDENTITY_FIELDS = (
 
 
 def _graph_capture_identity(frame_dir: Path, trace: dict,
-                            history: dict | None = None) -> dict:
+                            history: dict | None = None,
+                            checkpoints: list[dict] | None = None) -> dict:
     """Frame identity from the graph's own records, never an invented schema.
 
     The authoritative source is the same-process frame seal.  A fixture or
@@ -576,10 +577,18 @@ def _graph_capture_identity(frame_dir: Path, trace: dict,
     from automation import m6_frame
 
     seal = None
+    seal_path = Path(frame_dir) / "frame-seal.json"
     try:
         seal = m6_frame.load_seal(
             frame_dir, trace=trace, verify_counts=False, verify_blobs=False)
-    except m6_frame.FrameError:
+    except m6_frame.FrameError as exc:
+        if seal_path.exists():
+            # A present but invalid seal is not the same as an unsealed
+            # fixture.  Never fall back to weaker records and call it valid.
+            identity = {key: None for key in CAPTURE_IDENTITY_FIELDS}
+            identity["source"] = "invalid_seal"
+            identity["problem"] = str(exc)
+            return identity
         seal = None
     if seal is not None:
         identity = {key: seal.get(key) for key in CAPTURE_IDENTITY_FIELDS}
@@ -587,9 +596,11 @@ def _graph_capture_identity(frame_dir: Path, trace: dict,
         return identity
     identity = {key: None for key in CAPTURE_IDENTITY_FIELDS}
     identity["source"] = "absent"
-    checkpoints = [
-        event.get("default_checkpoint") for event in trace.get("_events") or []
-        if isinstance(event.get("default_checkpoint"), dict)]
+    if checkpoints is None:
+        checkpoints = [
+            event.get("default_checkpoint")
+            for event in trace.get("_events") or []
+            if isinstance(event.get("default_checkpoint"), dict)]
     sessions = {item.get("session_id") for item in checkpoints
                 if item.get("session_id") is not None}
     frames = {item.get("capture_frame_id") for item in checkpoints
@@ -642,7 +653,6 @@ def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
     events = trace.get("_events") or []
     manifest = trace
     history = load_frame_history(frame_dir, trace)
-    capture = _graph_capture_identity(frame_dir, trace, history)
     logical = [
         int((manifest.get("frame") or {}).get("width") or 0),
         int((manifest.get("frame") or {}).get("height") or 0),
@@ -1079,6 +1089,13 @@ def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
         key for key in generated
         if resources[key]["consumers"] and not key.startswith("fb:")
     )
+    capture = _graph_capture_identity(
+        frame_dir, trace, history, checkpoints=default_checkpoints)
+    if capture.get("source") == "invalid_seal":
+        problem = ("frame seal is present but invalid: "
+                   + str(capture.get("problem") or "unknown seal problem"))
+        contract_problems.append(problem)
+        reasons.append(problem)
     status = "invalid" if (
         not manifest.get("complete") or unknown_events or contract_problems
     ) else ("partial" if reasons else "complete")

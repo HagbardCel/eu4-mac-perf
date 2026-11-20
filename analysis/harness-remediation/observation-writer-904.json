@@ -24,6 +24,7 @@
     "renderer_generated_sampled": 6,
     "unproven": 0
   },
+  "generator": "analysis/harness-remediation/generate_observation_matrices.py",
   "rows": [
     {
       "observation": {
