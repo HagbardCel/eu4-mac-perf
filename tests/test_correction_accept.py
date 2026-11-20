@@ -50,12 +50,14 @@ def producer_identity(*, revision: str = REVISION) -> dict:
 
 
 def contract(*ids: str, allow_additional: bool = False,
-             allow_final_only: bool = False) -> dict:
+             allow_final_only: bool = False,
+             allow_no_exact_control: bool = False) -> dict:
     return {
         "schema": correction_accept.CONTRACT_SCHEMA,
         "required_regressions": list(ids),
         "allow_additional": allow_additional,
         "allow_final_only": allow_final_only,
+        "allow_no_exact_control": allow_no_exact_control,
     }
 
 
@@ -373,17 +375,28 @@ class CorrectionAcceptanceTests(unittest.TestCase):
 
     def test_verdict_semantics_are_distinct(self):
         after = self.model.replay_dir("after-semantics", self.model.reference)
-        report = self.acceptance(
-            after=after,
-            claims=self.model.claims(
-                {"mismatched_pixels": 1, "max_channel_error": 7},
-                {"mismatched_pixels": 0, "max_channel_error": 0}))
+        claims = self.model.claims(
+            {"mismatched_pixels": 1, "max_channel_error": 7},
+            {"mismatched_pixels": 0, "max_channel_error": 0})
+        report = self.acceptance(after=after, claims=claims)
         self.assertEqual(report["result"], "accepted")
         self.assertTrue(report["observed_checkpoint_equality"])
         self.assertTrue(report["producer_bound_checkpoint_evidence"])
         self.assertEqual(report["checkpoint_coverage"], "verified")
         self.assertTrue(report["pixel_perfect"])
-        self.assertTrue(report["authenticated_equivalence"])
+        # With no control inventory and no exception, the strongest
+        # certification is withheld while the primary result stays exact.
+        self.assertFalse(report["authenticated_equivalence"])
+        self.assertEqual(report["exact_control_policy"], "none")
+        self.assertTrue(any("no exact-match control" in item
+                            for item in report["limitations"]))
+        exception = self.acceptance(
+            after=after, claims=claims,
+            qualification_contract=contract(allow_no_exact_control=True))
+        self.assertTrue(exception["pixel_perfect"])
+        self.assertTrue(exception["authenticated_equivalence"])
+        self.assertEqual(exception["exact_control_policy"],
+                         "explicit_exception")
         self.assertEqual(set(report["verdict_semantics"]), {
             "accepted", "observed_checkpoint_equality", "pixel_perfect",
             "authenticated_equivalence"})
@@ -455,7 +468,8 @@ class CorrectionAcceptanceTests(unittest.TestCase):
             candidate_revision=REVISION, after_replay=after,
             claimed_before=claims[0], claimed_after=claims[1],
             baseline_revision="baseline-1",
-            qualification_contract=contract(allow_final_only=True))
+            qualification_contract=contract(
+                allow_final_only=True, allow_no_exact_control=True))
         self.assertEqual(allowed["result"], "accepted", allowed)
         self.assertEqual(allowed["checkpoint_coverage"], "final_only")
         self.assertIsNone(allowed["observed_checkpoint_equality"])

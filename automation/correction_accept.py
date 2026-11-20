@@ -623,10 +623,16 @@ def _load_contract(value) -> tuple[dict, list[str]]:
         problems.append(
             "qualification contract allow_final_only must be a boolean")
         allow_final_only = False
+    allow_no_exact_control = contract.get("allow_no_exact_control", False)
+    if not isinstance(allow_no_exact_control, bool):
+        problems.append(
+            "qualification contract allow_no_exact_control must be a boolean")
+        allow_no_exact_control = False
     return {"schema": contract.get("schema"),
             "required_regressions": cleaned,
             "allow_additional": allow_additional,
-            "allow_final_only": allow_final_only}, problems
+            "allow_final_only": allow_final_only,
+            "allow_no_exact_control": allow_no_exact_control}, problems
 
 
 def evaluate(*, case_dir: Path | str, baseline_path: Path | str,
@@ -909,6 +915,7 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
     required = list(contract.get("required_regressions") or [])
     allow_additional = bool(contract.get("allow_additional"))
     allow_final_only = bool(contract.get("allow_final_only"))
+    allow_no_exact_control = bool(contract.get("allow_no_exact_control"))
     claimed_ids: list[str] = []
     for entry in claimed_regressions or ():
         value = entry
@@ -1157,11 +1164,22 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
     else:
         result = "accepted"
 
-    regression_requirements_met = bool(
-        not expected or (
+    if expected:
+        exact_control_policy = "required_inventory"
+        regression_requirements_met = bool(
             not missing and (allow_additional or not unexpected)
             and set(expected).issubset(
-                {row["case_id"] for row in regression_rows if row["ok"]})))
+                {row["case_id"] for row in regression_rows if row["ok"]}))
+    elif allow_no_exact_control:
+        exact_control_policy = "explicit_exception"
+        regression_requirements_met = True
+    else:
+        exact_control_policy = "none"
+        regression_requirements_met = False
+        limitations.append(
+            "no exact-match control inventory was required; authenticated "
+            "equivalence is not certified (use allow_no_exact_control only as "
+            "an explicit exception)")
     pixel_perfect = bool(
         primary_evidence_valid and complete_qualification
         and authoritative_checkpoint_exact and producer_bound
@@ -1192,6 +1210,8 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
         "primary_evidence_valid": primary_evidence_valid,
         "authenticated_equivalence": authenticated_equivalence,
         "regression_requirements_met": regression_requirements_met,
+        "exact_control_policy": exact_control_policy,
+        "no_exact_control_exception": allow_no_exact_control,
         "verdict_semantics": {
             "accepted": (
                 "valid evidence and a recomputed improvement; not necessarily "
@@ -1204,9 +1224,11 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
                 "final image, complete qualification, exact checkpoint "
                 "coverage and producer-bound required observations"),
             "authenticated_equivalence": (
-                "pixel_perfect and every required exact-match regression "
-                "verified; a broken regression can reject the correction "
-                "while the primary image remains pixel_perfect"),
+                "pixel_perfect, an accepted result, and either every required "
+                "exact-match regression verified or an explicit "
+                "allow_no_exact_control exception; a broken regression can "
+                "reject the correction while the primary image remains "
+                "pixel_perfect"),
         },
         "improved": improved,
         "case": {
