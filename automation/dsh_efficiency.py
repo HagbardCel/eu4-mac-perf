@@ -308,11 +308,19 @@ def analyze(
                         tokens[key] += int(value)
         elif kind == "goal/change":
             goal = data.get("goal") if isinstance(data.get("goal"), dict) else {}
+            cleared = (data.get("cleared")
+                       if isinstance(data.get("cleared"), dict) else {})
+            operation = data.get("operation")
+            phase = goal.get("phase")
+            if phase is None and operation == "clear":
+                # DSH clear tombstones carry the identity under ``cleared``
+                # and no goal snapshot.
+                phase = "cleared"
             goal_events.append({
-                "goal_id": goal.get("id"),
-                "revision": goal.get("revision"),
-                "operation": data.get("operation"),
-                "phase": goal.get("phase"),
+                "goal_id": goal.get("id") or cleared.get("id"),
+                "revision": goal.get("revision") or cleared.get("revision"),
+                "operation": operation,
+                "phase": phase,
                 "time": moment,
             })
         elif kind == "command/run":
@@ -477,6 +485,7 @@ def analyze(
         "completed": "completed",
         "blocked": "blocked",
         "cancelled": "cancelled",
+        "cleared": "cleared",
     }
     goal_ids: list[str] = []
     for row in goal_events:
@@ -506,7 +515,7 @@ def analyze(
                 break
     start_event = next(
         (row for row in selected_events if row.get("operation") == "create"),
-        selected_events[0] if selected_events else None)
+        None)
     goal_start = start_event["time"] if start_event else None
     goal_end = terminal_event["time"] if terminal_event else None
     window_end = max(timestamps) if timestamps else None
@@ -515,14 +524,20 @@ def analyze(
     duration_invalid = False
     goal_elapsed = None
     if terminal_event is not None:
-        if goal_start is None or goal_end is None:
+        if goal_start is None:
+            duration_kind = "unknown_start"
+        elif goal_end is None:
             duration_kind = "unknown_timestamp"
         else:
             goal_elapsed = goal_end - goal_start
     elif selected_events:
         # An active goal has no end event.  Report observed elapsed time
         # through the observation window, explicitly labelled ongoing.
-        if goal_start is not None and window_end is not None:
+        if goal_start is None:
+            # The window may start after the goal was created (for example
+            # ``--turn 2``); a zero-length fallback would fabricate a lifetime.
+            duration_kind = "unknown_start"
+        elif window_end is not None:
             goal_elapsed = window_end - goal_start
         else:
             duration_kind = "unknown_timestamp"
@@ -633,6 +648,7 @@ def analyze(
                                           if total_tokens else None),
         },
         "goal": {
+            "goal_schema": "dsh-goal-timeline/v2",
             "operations": goal_operations,
             "goal_ids": goal_ids,
             "goal_count": len(goal_ids) + (1 if identity_missing else 0),
@@ -645,8 +661,9 @@ def analyze(
             "active": bool(last_goal and last_phase == "active"),
             "terminal": bool(last_goal and last_phase in terminal_phases),
             "started_utc": _iso(goal_start),
-            "ended_utc": (_iso(goal_end) if terminal_event is not None
-                          else None),
+            "ended_utc": (_iso(goal_end)
+                          if terminal_event is not None
+                          and not duration_invalid else None),
             "duration_kind": duration_kind,
             "duration_invalid": duration_invalid,
             "duration_seconds": (round(goal_elapsed, 3)
@@ -665,7 +682,13 @@ def analyze(
                  "be separated"] if identity_missing else []
             ) + (
                 ["goal event timestamps are missing or out of order"] if
-                duration_kind in ("unknown_timestamp", "invalid_order") else []),
+                duration_kind in ("unknown_timestamp", "invalid_order") else []
+            ) + (
+                [("the selected goal has no create event in this window; its "
+                  "start is unknown") if start_event is None else
+                 ("the selected goal's create event has no timestamp; its "
+                  "start is unknown")] if duration_kind == "unknown_start"
+                else []),
         },
     }
     value["summary"] = execution_summary(value)
@@ -715,6 +738,22 @@ def execution_summary(value: dict) -> dict:
         outcome = "in_progress"
     else:
         outcome = goal_outcome
+    actions_attempted = [
+        name for name, performed in (
+            ("launch", bool(launch_count)),
+            ("replay", bool(by_tool.get("eu4_replay"))),
+            ("capture", bool(by_tool.get("eu4_capture"))),
+            ("test", bool(tests.get("test_invocations"))),
+        ) if performed
+    ]
+    if len(actions_attempted) > 1:
+        action_attempted = "multiple"
+    elif actions_attempted:
+        action_attempted = actions_attempted[0]
+    elif launch_count is None:
+        action_attempted = "unknown"
+    else:
+        action_attempted = "none"
     return {
         "schema": "dsh-execution-summary/v1",
         "tool_calls": {
@@ -762,9 +801,9 @@ def execution_summary(value: dict) -> dict:
         "outcome": outcome,
         "goal_outcome": goal_outcome,
         "turn_outcome": goal.get("last_turn_reason"),
-        "action_attempted": (
-            "launch" if launch_count else
-            "none" if launch_count == 0 else "unknown"),
+        "launch_attempted": bool(launch_count),
+        "actions_attempted": actions_attempted,
+        "action_attempted": action_attempted,
         "token_telemetry": "excluded until the measurement method is validated",
     }
 

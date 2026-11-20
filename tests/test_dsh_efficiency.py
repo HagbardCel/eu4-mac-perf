@@ -323,6 +323,57 @@ class GoalPhaseTests(unittest.TestCase):
         self.assertEqual(goal["duration_kind"], "ongoing")
         self.assertAlmostEqual(goal["duration_seconds"], 9.0, places=3)
 
+    def test_clear_tombstone_ends_the_selected_goal(self):
+        events = [
+            {"type": "goal/change", "time": 1000, "data": {
+                "operation": "create",
+                "goal": {"id": "g", "phase": "active", "revision": 1}}},
+            {"type": "goal/change", "time": 2000, "data": {
+                "operation": "clear",
+                "cleared": {"id": "g", "revision": 1},
+                "clearedAt": "2026-01-01T00:00:02Z"}},
+            {"type": "turn/end", "time": 3000, "data": {
+                "turn": 1, "reason": {"kind": "completed"}}},
+        ]
+        goal = dsh_efficiency.analyze(events)["goal"]
+        self.assertEqual(goal["selected_goal_id"], "g")
+        self.assertEqual(goal["outcome"], "cleared")
+        self.assertFalse(goal["active"])
+        self.assertTrue(goal["terminal"])
+        self.assertFalse(goal["identity_missing"])
+        self.assertEqual(goal["duration_kind"], "terminal")
+        self.assertAlmostEqual(goal["duration_seconds"], 1.0, places=3)
+        self.assertIsNotNone(goal["ended_utc"])
+
+    def test_window_without_the_create_reports_unknown_start(self):
+        events = [
+            {"type": "goal/change", "time": 2000, "data": {
+                "operation": "block",
+                "goal": {"id": "g", "phase": "blocked", "revision": 2}}},
+            {"type": "turn/end", "time": 3000, "data": {
+                "turn": 2, "reason": {"kind": "completed"}}},
+        ]
+        goal = dsh_efficiency.analyze(events)["goal"]
+        self.assertEqual(goal["outcome"], "blocked")
+        self.assertIsNone(goal["duration_seconds"])
+        self.assertEqual(goal["duration_kind"], "unknown_start")
+        self.assertIn("no create event", " ".join(goal["limitations"]))
+
+    def test_action_attempt_is_not_launch_only(self):
+        events = [
+            {"type": "tool/call", "time": 1000, "data": {
+                "callId": "r1", "name": "eu4_replay",
+                "arguments": {"operation": "verify"}}},
+            {"type": "tool/result", "time": 2000, "data": {
+                "toolCallId": "r1",
+                "message": {"isError": False, "content": [
+                    {"type": "text", "text": "ok"}]}}},
+        ]
+        summary = dsh_efficiency.analyze(events)["summary"]
+        self.assertFalse(summary["launch_attempted"])
+        self.assertEqual(summary["actions_attempted"], ["replay"])
+        self.assertEqual(summary["action_attempted"], "replay")
+
     def test_missing_goal_timestamps_do_not_emit_a_duration(self):
         events = [
             {"type": "goal/change", "data": {
@@ -335,8 +386,8 @@ class GoalPhaseTests(unittest.TestCase):
         goal = dsh_efficiency.analyze(events)["goal"]
         self.assertEqual(goal["outcome"], "blocked")
         self.assertIsNone(goal["duration_seconds"])
-        self.assertEqual(goal["duration_kind"], "unknown_timestamp")
-        self.assertIn("timestamps are missing",
+        self.assertEqual(goal["duration_kind"], "unknown_start")
+        self.assertIn("create event has no timestamp",
                       " ".join(goal["limitations"]))
 
     def test_out_of_order_goal_events_never_create_a_negative_duration(self):
@@ -352,6 +403,7 @@ class GoalPhaseTests(unittest.TestCase):
         self.assertIsNone(goal["duration_seconds"])
         self.assertTrue(goal["duration_invalid"])
         self.assertEqual(goal["duration_kind"], "invalid_order")
+        self.assertIsNone(goal["ended_utc"])
 
     def test_goal_events_without_ids_are_explicitly_limited(self):
         events = [
