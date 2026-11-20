@@ -1252,24 +1252,6 @@ def _required_prefix(frames: list[Path]) -> tuple[list[Path], dict]:
         "carried_resources": sorted(carried_union),
     }
 
-def _receipt_shader_identity(shader_dir: Path | None) -> dict:
-    """Canonical shader-report and shader-artifact identity for a receipt."""
-    if shader_dir is None or not Path(shader_dir).is_dir():
-        return {"shaders_json_sha256": "", "artifacts_sha256": "",
-                "artifact_count": 0}
-    directory = Path(shader_dir)
-    report = directory / "shaders.json"
-    if not report.is_file():
-        return {"shaders_json_sha256": "", "artifacts_sha256": "",
-                "artifact_count": 0}
-    artifacts_sha256, artifact_count = m6_frame.artifact_digest(directory)
-    return {
-        "shaders_json_sha256": _sha(report),
-        "artifacts_sha256": artifacts_sha256,
-        "artifact_count": artifact_count,
-    }
-
-
 def _receipt_identity_problems(
     receipt: dict,
     *,
@@ -1333,7 +1315,7 @@ def _receipt_identity_problems(
             "sequence",
             f"receipt sequence {receipt_sequence!r} is not one of "
             f"{sorted(allowed_sequences)}"))
-    for field, value in _receipt_shader_identity(shader_dir).items():
+    for field, value in m6_frame.shader_receipt_identity(shader_dir).items():
         check(field, value)
     return problems
 
@@ -1464,7 +1446,7 @@ def _checkpoint_setup(frames: list[Path], case_dir: Path,
         receipt = {
             "schema": "m7-shadow-shader-receipt/v1",
             **identity,
-            **_receipt_shader_identity(frame / "shaders"),
+            **m6_frame.shader_receipt_identity(frame / "shaders"),
             "checkpoint_request_file": request_path.name,
             "checkpoint_request_sha256": request_sha,
             "checkpoint_count": len(request.get("checkpoints") or []),

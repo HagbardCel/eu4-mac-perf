@@ -399,6 +399,90 @@ class FrameTraceTests(unittest.TestCase):
             )
 
 
+class ShaderReceiptIdentityTests(unittest.TestCase):
+    """One owner for the three shader-receipt fields, with a pinned digest."""
+
+    FILES = {
+        "shaders.json": b'{"schema":"test"}\n',
+        "nested/a.metal": b"// a\n",
+        "nested/deep/b.metal": b"// b\n",
+        "ready": b'{"status":"ready"}\n',
+        "shader-receipt.json": b'{"schema":"receipt"}\n',
+    }
+    # Independently precomputed from FILES, sorted by relative path, with the
+    # two publish markers excluded.  A production-helper bug must not be able
+    # to redefine the expected value.
+    EXPECTED_DIGEST = (
+        "af863d3f805230d2681c7e68cf8ed9efa00bc1bd01b6879e893796ffd7078e0c")
+
+    def write(self, directory: Path, *,
+              files: dict | None = None) -> Path:
+        for name, payload in (files or self.FILES).items():
+            path = directory / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(payload)
+        return directory
+
+    def test_nested_tree_digest_and_count_are_pinned(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            shader_dir = self.write(Path(temporary) / "shaders")
+            identity = m6_frame.shader_receipt_identity(shader_dir)
+        self.assertEqual(identity["artifacts_sha256"], self.EXPECTED_DIGEST)
+        self.assertEqual(identity["artifact_count"], 3)
+        self.assertEqual(list(identity), [
+            "shaders_json_sha256", "artifacts_sha256", "artifact_count"])
+        self.assertEqual(
+            identity["shaders_json_sha256"],
+            hashlib.sha256(self.FILES["shaders.json"]).hexdigest())
+
+    def test_creation_order_does_not_change_the_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            first = Path(temporary) / "first"
+            second = Path(temporary) / "second"
+            self.write(first)
+            self.write(second, files=dict(reversed(list(self.FILES.items()))))
+            one = m6_frame.shader_receipt_identity(first)
+            two = m6_frame.shader_receipt_identity(second)
+        self.assertEqual(one, two)
+
+    def test_tampered_payload_changes_the_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            shader_dir = self.write(Path(temporary) / "shaders")
+            before = m6_frame.shader_receipt_identity(shader_dir)
+            (shader_dir / "nested" / "a.metal").write_bytes(b"// altered\n")
+            after = m6_frame.shader_receipt_identity(shader_dir)
+        self.assertNotEqual(before["artifacts_sha256"],
+                            after["artifacts_sha256"])
+        self.assertEqual(before["artifact_count"], after["artifact_count"])
+
+    def test_optional_reader_returns_empty_for_missing_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            missing = Path(temporary) / "absent"
+            self.assertEqual(
+                m6_frame.shader_receipt_identity(missing),
+                {"shaders_json_sha256": "", "artifacts_sha256": "",
+                 "artifact_count": 0})
+            self.assertEqual(
+                m6_frame.shader_receipt_identity(None)["artifact_count"], 0)
+            no_report = self.write(
+                Path(temporary) / "no-report",
+                files={"nested/a.metal": b"// a\n"})
+            self.assertEqual(
+                m6_frame.shader_receipt_identity(no_report)["artifact_count"],
+                0)
+
+    def test_live_publication_requires_the_shader_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            missing = Path(temporary) / "absent"
+            with self.assertRaises(m6_frame.FrameError):
+                m6_frame.shader_receipt_identity(missing, required=True)
+            no_report = self.write(
+                Path(temporary) / "no-report",
+                files={"nested/a.metal": b"// a\n"})
+            with self.assertRaises(m6_frame.FrameError):
+                m6_frame.shader_receipt_identity(no_report, required=True)
+
+
 class CompareTests(unittest.TestCase):
     def _replay(self, directory: Path, image: bytes, **overrides) -> None:
         directory.mkdir(parents=True, exist_ok=True)
