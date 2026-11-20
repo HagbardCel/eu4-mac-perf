@@ -1,8 +1,10 @@
 """Original-API GL control qualification before any Metal blame.
 
 The qualification is only allowed when the exact BGRA comparison and the
-authenticated sealed-observation binding both hold.  An exact image from a
-different seal is not a control.
+authenticated sealed-observation binding both hold, and when the declared
+renderer actually ran and produced a receipt that echoes the qualifier's
+challenge. An exact image from a different seal, a copied live image without
+the renderer receipt, or any missing evidence is explicitly unqualified.
 """
 
 from __future__ import annotations
@@ -14,6 +16,10 @@ import unittest
 from pathlib import Path
 
 from automation import gfx_gl_control_qualification as qualification
+
+
+def _sha_bytes(body: bytes) -> str:
+    return hashlib.sha256(body).hexdigest()
 
 
 def _sha(path: Path) -> str:
@@ -29,14 +35,29 @@ class ControlQualificationTests(unittest.TestCase):
         self.base = bytes([10, 20, 30, 255]) * (8 * 8)
         self.live = self.frame / "blobs" / "default-checkpoint-live.bin"
         self.live.write_bytes(self.base)
-        self.control = self.root / "control.bgra"
-        self.control.write_bytes(self.base)
         self.reference = self.frame / "frame-reference.bgra"
         self.reference.write_bytes(self.base)
         self.events_path = self.frame / "frame-events.jsonl"
         events = [
             {"index": 1, "kind": "draw", "target": {"framebuffer": 0}},
-            {"index": 2, "kind": "draw", "target": {"framebuffer": 0}},
+            {"index": 2, "kind": "draw", "target": {"framebuffer": 0},
+             "default_checkpoint": {
+                 "schema": "gfx-default-framebuffer-checkpoint/v1",
+                 "event": 2,
+                 "target": "0",
+                 "resource": "fb:0",
+                 "width": 8,
+                 "height": 8,
+                 "bytes": len(self.base),
+                 "file": self.live.name,
+                 "sha256": _sha(self.live),
+                 "pixel_format": "BGRA8",
+                 "origin": "lower_left",
+                 "timing": "pre_event",
+                 "status": "captured",
+                 "session_id": "sess-1",
+                 "capture_frame_id": 1,
+             }},
         ]
         self.events_path.write_text(
             "".join(json.dumps(event) + "\n" for event in events),
@@ -84,70 +105,107 @@ class ControlQualificationTests(unittest.TestCase):
             "readback_ok": True,
             "event_stream_verified": True,
         }), encoding="utf-8")
-        self.checkpoint_request = self.root / "checkpoint-request.json"
-        self.checkpoint_request.write_text(json.dumps({
-            "schema": "gfx-frame-checkpoint-request/v1",
-            "checkpoints": [{
-                "event": 2,
-                "target": "0",
-                "resource": "fb:0",
-                "reference_file": self.live.name,
-                "reference_sha256": _sha(self.live),
-                "reference_width": 8,
-                "reference_height": 8,
-                "producer_events": [],
-                "session_id": "sess-1",
-                "capture_frame_id": 1,
-            }],
-        }), encoding="utf-8")
-        self.manifest = self.root / "control-manifest.json"
-        self._write_manifest()
+        self.renderer = self.root / "renderer.py"
+        self._write_renderer()
         self.drawable = {"observed": True, "samples": 0,
                          "sample_buffers": 0, "depth_bits": 24,
                          "stencil_bits": 8, "red_bits": 8, "green_bits": 8,
                          "blue_bits": 8, "alpha_bits": 8}
         self.prestate = {"depth_clear": 1.0, "stencil_clear": 0,
                          "color": [0, 0, 0, 1]}
+        self._out_index = 0
 
     def tearDown(self):
         self.temporary.cleanup()
 
-    def _write_manifest(self, **overrides) -> None:
-        value = {
-            "schema": qualification.MANIFEST_SCHEMA,
-            "api": "opengl",
-            "execution": "completed",
-            "session_id": "sess-1",
-            "capture_frame_id": 1,
-            "present_index": 904,
-            "event_stream_sha256": _sha(self.events_path),
-            "checkpoint_event": 2,
-            "draw_event": 1,
-            "resource": "fb:0",
-            "artifact_sha256": _sha(self.control),
-            "width": 8,
-            "height": 8,
-            "pixel_format": "BGRA8",
-            "renderer": {"vendor": "Apple", "renderer": "Apple M5",
-                         "version": "2.1"},
-            "executable_sha256": "a" * 64,
-        }
-        value.update(overrides)
-        self.manifest.write_text(json.dumps(value), encoding="utf-8")
+    def _write_renderer(self, mode: str = "normal") -> None:
+        script = f'''\
+import hashlib, json, shutil, sys
+from pathlib import Path
+args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
+request = json.loads(Path(args["--request"]).read_text())
+out = Path(args["--out"])
+artifact = out / "result.bgra"
+shutil.copyfile(request["live_image"], artifact)
+mode = {mode!r}
+if mode == "fail":
+    sys.exit(7)
+if mode == "residual":
+    body = bytearray(artifact.read_bytes())
+    for offset in (0, 4, len(body) - 4, len(body) - 8):
+        body[offset] ^= 1
+    artifact.write_bytes(bytes(body))
+if mode == "alpha":
+    body = bytearray(artifact.read_bytes())
+    body[3] = 254
+    artifact.write_bytes(bytes(body))
+checkpoint = request["checkpoint"]
+receipt = {{
+    "schema": "gfx-gl-control-receipt/v1",
+    "nonce": request["nonce"],
+    "renderer_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+    "api": "opengl",
+    "execution": "completed",
+    "frame": {{
+        "session_id": request["session_id"],
+        "capture_frame_id": request["capture_frame_id"],
+        "present_index": request["present_index"],
+        "event_stream_sha256": request["event_stream_sha256"],
+    }},
+    "checkpoint": {{
+        "event": checkpoint["event"],
+        "resource": checkpoint["resource"],
+        "reference_sha256": checkpoint["reference_sha256"],
+    }},
+    "draw": {{"event": request["draw"]["event"]}},
+    "artifact": {{
+        "file": "result.bgra",
+        "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        "width": request["width"],
+        "height": request["height"],
+        "pixel_format": "BGRA8",
+    }},
+    "renderer": {{"vendor": "Apple", "renderer": "Apple M5",
+                  "version": "2.1"}},
+}}
+if mode == "api_metal":
+    receipt["api"] = "metal"
+if mode == "failed_exec":
+    receipt["execution"] = "failed"
+if mode == "wrong_frame":
+    receipt["frame"]["session_id"] = "other-session"
+    receipt["frame"]["event_stream_sha256"] = "b" * 64
+if mode == "wrong_checkpoint":
+    receipt["checkpoint"]["event"] = 3
+if mode == "wrong_draw":
+    receipt["draw"]["event"] = 99
+if mode == "wrong_nonce":
+    receipt["nonce"] = "0" * 32
+if mode == "bad_artifact":
+    receipt["artifact"]["sha256"] = "0" * 64
+if mode == "bad_width":
+    receipt["artifact"]["width"] = "big"
+if mode != "no_receipt":
+    (out / "receipt.json").write_text(json.dumps(receipt))
+if mode == "no_artifact":
+    artifact.unlink()
+'''
+        self.renderer.write_text(script, encoding="utf-8")
 
-    def _qualify(self, **overrides):
-        options = {
-            "frame_dir": self.frame,
-            "checkpoint_request": self.checkpoint_request,
-            "checkpoint_event": 2,
-            "draw_event": 1,
-            "manifest": self.manifest,
-            "drawable": self.drawable,
-            "prestate": self.prestate,
-        }
-        options.update(overrides)
+    def _qualify(self, *, mode: str = "normal", renderer: Path | None = None,
+                 frame_dir: Path | None = None,
+                 live: Path | None = None, out_dir: Path | None = None,
+                 drawable=..., prestate=...):
+        self._out_index += 1
+        target = out_dir or (self.root / f"out-{self._out_index}")
+        target.mkdir(parents=True, exist_ok=True)
         return qualification.qualify_sealed(
-            self.live, self.control, 8, 8, **options)
+            live or self.live, 8, 8,
+            frame_dir=frame_dir or self.frame,
+            checkpoint_event=2, draw_event=1,
+            renderer=renderer or self.renderer, out_dir=target,
+            drawable=self.drawable if drawable is ... else drawable,
+            prestate=self.prestate if prestate is ... else prestate)
 
     def test_exact_authenticated_control_is_qualified_and_can_blame_metal(self):
         value = self._qualify()
@@ -158,70 +216,97 @@ class ControlQualificationTests(unittest.TestCase):
         self.assertTrue(value["comparison"]["exact"])
         self.assertEqual(value["statistics"]["mismatched_pixels"], 0)
         self.assertEqual(value["missing_observation"], [])
+        self.assertIsNotNone(value["qualification"]["receipt"])
         self.assertTrue(qualification.attribution(value)["allowed"])
 
-    def test_an_exact_image_without_authentication_is_not_qualified(self):
-        value = qualification.qualify(
-            self.live, self.control, 8, 8, drawable=self.drawable,
-            prestate=self.prestate)
-        self.assertEqual(value["status"], "unqualified")
-        self.assertTrue(value["comparison"]["exact"])
-        self.assertFalse(value["qualified"])
-        self.assertFalse(value["metal_blame_allowed"])
-        self.assertIn("authenticated frame/stream", value["missing_observation"][0])
-
-    def test_an_exact_image_from_a_different_seal_is_not_qualified(self):
-        self._write_manifest(session_id="other-session",
-                             event_stream_sha256="b" * 64)
-        value = self._qualify()
-        self.assertTrue(value["comparison"]["exact"])
-        self.assertFalse(value["qualified"])
-        reasons = " ".join(value["qualification"]["reasons"])
-        self.assertIn("session_id", reasons)
-        self.assertIn("event stream", reasons)
-
     def test_a_metal_executed_image_is_not_an_original_api_control(self):
-        self._write_manifest(api="metal")
+        self._write_renderer("api_metal")
         value = self._qualify()
         self.assertFalse(value["qualified"])
         self.assertIn("original OpenGL API",
                       " ".join(value["qualification"]["reasons"]))
 
     def test_a_failed_execution_is_not_a_control(self):
-        self._write_manifest(execution="failed")
+        self._write_renderer("failed_exec")
         value = self._qualify()
         self.assertFalse(value["qualified"])
         self.assertIn("not declared complete",
                       " ".join(value["qualification"]["reasons"]))
 
-    def test_a_mismatched_checkpoint_or_draw_event_is_not_qualified(self):
-        self._write_manifest(checkpoint_event=3)
+    def test_a_receipt_from_a_different_seal_is_not_qualified(self):
+        self._write_renderer("wrong_frame")
+        value = self._qualify()
+        self.assertTrue(value["comparison"]["exact"])
+        self.assertFalse(value["qualified"])
+        reasons = " ".join(value["qualification"]["reasons"])
+        self.assertIn("frame session_id", reasons)
+        self.assertIn("event stream", reasons)
+
+    def test_a_mismatched_checkpoint_or_draw_is_not_qualified(self):
+        for mode, needle in (("wrong_checkpoint", "checkpoint event"),
+                             ("wrong_draw", "draw event")):
+            with self.subTest(mode=mode):
+                self._write_renderer(mode)
+                value = self._qualify()
+                self.assertFalse(value["qualified"])
+                self.assertIn(needle,
+                              " ".join(value["qualification"]["reasons"]))
+
+    def test_a_renderer_that_does_not_echo_the_challenge_is_not_qualified(self):
+        self._write_renderer("wrong_nonce")
         value = self._qualify()
         self.assertFalse(value["qualified"])
-        self.assertIn("checkpoint event",
+        self.assertIn("challenge",
                       " ".join(value["qualification"]["reasons"]))
+
+    def test_a_receipt_with_a_wrong_artifact_digest_is_not_qualified(self):
+        self._write_renderer("bad_artifact")
+        value = self._qualify()
+        self.assertFalse(value["qualified"])
+        self.assertIn("artifact digest",
+                      " ".join(value["qualification"]["reasons"]))
+
+    def test_a_renderer_failure_is_an_explicit_unqualified_outcome(self):
+        self._write_renderer("fail")
+        value = self._qualify()
+        self.assertFalse(value["qualified"])
+        self.assertIn("renderer failed",
+                      " ".join(value["qualification"]["reasons"]))
+
+    def test_a_missing_receipt_or_artifact_is_unqualified(self):
+        for mode in ("no_receipt", "no_artifact"):
+            with self.subTest(mode=mode):
+                self._write_renderer(mode)
+                value = self._qualify()
+                self.assertFalse(value["qualified"])
+                self.assertIn("did not produce",
+                              " ".join(value["qualification"]["reasons"]))
+
+    def test_a_malformed_receipt_field_is_unqualified_not_a_traceback(self):
+        self._write_renderer("bad_width")
+        value = self._qualify()
+        self.assertFalse(value["qualified"])
+        self.assertIn("extent", " ".join(value["qualification"]["reasons"]))
 
     def test_a_live_image_outside_the_sealed_checkpoint_is_not_qualified(self):
         other = self.root / "other.bin"
         other.write_bytes(self.base)
-        value = self._qualify()
-        self.assertTrue(value["qualified"])
-        # Same bytes, but not the checkpoint's named blob: the binding must
-        # reject the path rather than accept a copied digest.
-        value = qualification.qualify_sealed(
-            other, self.control, 8, 8, frame_dir=self.frame,
-            checkpoint_request=self.checkpoint_request,
-            checkpoint_event=2, draw_event=1, manifest=self.manifest)
+        value = self._qualify(live=other)
         self.assertFalse(value["qualified"])
         self.assertIn("sealed checkpoint blob",
                       " ".join(value["qualification"]["reasons"]))
 
-    def test_four_pixel_residual_is_not_parity(self):
+    def test_a_swapped_live_blob_is_not_qualified(self):
         body = bytearray(self.base)
-        for offset in (0, 4, 8 * 8 * 4 - 4, 8 * 8 * 4 - 8):
-            body[offset] ^= 1
-        self.control.write_bytes(bytes(body))
-        self._write_manifest()
+        body[0] ^= 1
+        self.live.write_bytes(bytes(body))
+        value = self._qualify()
+        self.assertFalse(value["qualified"])
+        self.assertIn("digest is not the sealed checkpoint",
+                      " ".join(value["qualification"]["reasons"]))
+
+    def test_four_pixel_residual_is_not_parity(self):
+        self._write_renderer("residual")
         value = self._qualify()
         self.assertEqual(value["status"], "unqualified")
         self.assertEqual(value["statistics"]["mismatched_pixels"], 4)
@@ -231,19 +316,13 @@ class ControlQualificationTests(unittest.TestCase):
         self.assertIn("not an authenticated exact", verdict["reason"])
 
     def test_alpha_only_residual_is_unqualified(self):
-        body = bytearray(self.base)
-        body[3] = 254
-        self.control.write_bytes(bytes(body))
-        self._write_manifest()
+        self._write_renderer("alpha")
         value = self._qualify()
         self.assertFalse(value["qualified"])
         self.assertEqual(value["statistics"]["alpha_different_pixels"], 1)
 
     def test_missing_drawable_and_prestate_are_named(self):
-        body = bytearray(self.base)
-        body[0] ^= 1
-        self.control.write_bytes(bytes(body))
-        self._write_manifest()
+        self._write_renderer("residual")
         value = self._qualify(drawable=None, prestate=None)
         self.assertFalse(value["qualified"])
         self.assertTrue(any("drawable" in item
@@ -252,9 +331,11 @@ class ControlQualificationTests(unittest.TestCase):
                             for item in value["missing_observation"]))
 
     def test_size_mismatch_fails_closed(self):
-        self.control.write_bytes(b"\x00" * 4)
+        self._write_renderer("normal")
+        value = self._qualify()
+        self.assertTrue(value["qualified"])
         with self.assertRaises(qualification.QualificationError):
-            qualification.compare(self.live, self.control, 8, 8)
+            qualification.compare(self.live, self.live, 4, 4)
 
     def test_missing_seal_fails_closed_as_unqualified(self):
         self.seal_path.unlink()
@@ -263,68 +344,28 @@ class ControlQualificationTests(unittest.TestCase):
         self.assertIn("frame seal is not authentic",
                       " ".join(value["qualification"]["reasons"]))
 
-    def test_a_forged_qualified_object_cannot_authorize_blame(self):
+    def test_a_forged_qualification_object_cannot_authorize_blame(self):
         forged = {
             "schema": qualification.SCHEMA,
             "status": "qualified",
             "qualified": True,
             "metal_blame_allowed": True,
+            "comparison": {"exact": True},
+            "qualification": {"authenticated": True},
         }
         self.assertFalse(qualification.attribution(forged)["allowed"])
 
-    def test_a_forged_authentication_record_cannot_qualify(self):
-        forged = {
-            "schema": qualification.AUTHENTICATION_SCHEMA,
-            "status": "authenticated",
-            "authenticated": True,
-            "reasons": [],
-            "missing": [],
-            "identity": {"draw_event": 1, "checkpoint_event": 2,
-                         "resource": "fb:0"},
-        }
-        value = qualification.qualify(
-            self.live, self.control, 8, 8, authentication=forged)
-        self.assertTrue(value["comparison"]["exact"])
-        self.assertFalse(value["qualified"])
-        self.assertIn("did not re-validate",
-                      " ".join(value["qualification"]["reasons"]))
-
-    def test_a_real_authentication_record_revalidates_on_the_public_api(self):
-        authentication = qualification._authenticate(
-            self.frame, self.live, self.control, 8, 8,
-            checkpoint_request=self.checkpoint_request,
-            checkpoint_event=2, draw_event=1, manifest=self.manifest)
-        self.assertTrue(authentication["authenticated"], authentication)
-        value = qualification.qualify(
-            self.live, self.control, 8, 8, authentication=authentication)
-        self.assertTrue(value["qualified"], value)
-        self.assertTrue(value["qualification"]["authenticated"])
-
-    def test_a_record_with_valid_paths_but_forged_identity_is_rejected(self):
-        authentication = {
-            "seal": {"path": str(self.frame / "frame-seal.json")},
-            "checkpoint_request": {"path": str(self.checkpoint_request)},
-            "control_manifest": {"path": str(self.manifest)},
-            "identity": {"draw_event": 99, "checkpoint_event": 2,
-                         "resource": "fb:0"},
-        }
-        value = qualification.qualify(
-            self.live, self.control, 8, 8, authentication=authentication)
-        self.assertFalse(value["qualified"])
-        self.assertIn("draw event", " ".join(
-            value["qualification"]["reasons"]))
-
     def test_cli_comparison_only_reports_exact_without_qualification(self):
         value = qualification.main([
-            str(self.live), str(self.control), "--width", "8",
-            "--height", "8", "--comparison-only"])
+            str(self.live), "--width", "8", "--height", "8",
+            "--comparison-only", str(self.live), str(self.live)])
         self.assertEqual(value, 0)
 
-    def test_cli_refuses_to_qualify_on_pixels_alone(self):
+    def test_cli_refuses_to_qualify_without_a_renderer(self):
         output = self.root / "refused.json"
         code = qualification.main([
-            str(self.live), str(self.control), "--width", "8",
-            "--height", "8", "--out", str(output)])
+            str(self.live), "--width", "8", "--height", "8",
+            "--out", str(output)])
         self.assertEqual(code, 2)
         value = json.loads(output.read_text())
         self.assertFalse(value["qualified"])
@@ -332,14 +373,14 @@ class ControlQualificationTests(unittest.TestCase):
                       " ".join(value["missing_observation"]))
 
     def test_cli_qualifies_the_authenticated_sealed_control(self):
+        out = self.root / "cli-out"
         output = self.root / "qualified.json"
         code = qualification.main([
-            str(self.live), str(self.control), "--width", "8",
-            "--height", "8", "--frame-dir", str(self.frame),
-            "--checkpoint-request", str(self.checkpoint_request),
-            "--checkpoint-event", "2", "--draw-event", "1",
-            "--manifest", str(self.manifest), "--out", str(output)])
-        self.assertEqual(code, 0)
+            str(self.live), "--width", "8", "--height", "8",
+            "--frame-dir", str(self.frame), "--checkpoint-event", "2",
+            "--draw-event", "1", "--renderer", str(self.renderer),
+            "--control-out", str(out), "--out", str(output)])
+        self.assertEqual(code, 0, output.read_text() if output.exists() else "")
         self.assertTrue(json.loads(output.read_text())["qualified"])
 
     def test_agent_tool_exposes_the_same_qualification(self):
@@ -347,17 +388,17 @@ class ControlQualificationTests(unittest.TestCase):
         import io
         from automation import agent_tools
 
+        out = self.root / "agent-out"
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer):
             code = agent_tools.main([
                 "eu4_capture", "gl-control-qualify",
                 "--live-image", str(self.live),
-                "--control-image", str(self.control),
                 "--width", "8", "--height", "8",
                 "--frame-dir", str(self.frame),
-                "--checkpoint-request", str(self.checkpoint_request),
                 "--checkpoint-event", "2", "--draw-event", "1",
-                "--control-manifest", str(self.manifest)])
+                "--renderer", str(self.renderer),
+                "--control-out", str(out)])
         value = json.loads(buffer.getvalue())
         self.assertEqual(code, 0, value)
         self.assertTrue(value["result"]["qualified"])
@@ -373,7 +414,6 @@ class ControlQualificationTests(unittest.TestCase):
             code = agent_tools.main([
                 "eu4_capture", "gl-control-qualify",
                 "--live-image", str(self.live),
-                "--control-image", str(self.control),
                 "--width", "8", "--height", "8"])
         value = json.loads(buffer.getvalue())
         self.assertNotEqual(code, 0, value)

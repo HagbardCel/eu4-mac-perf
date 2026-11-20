@@ -64,6 +64,15 @@ def _sha_or_none(path: Path) -> str | None:
         return None
 
 
+def _int_or_none(value) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _is_sha256(value) -> bool:
     return (isinstance(value, str) and len(value) == 64
             and all(character in "0123456789abcdef" for character in value))
@@ -184,8 +193,11 @@ def _authenticate(frame_dir: Path, live_path: Path, width: int, height: int,
         for field in ("session_id", "capture_frame_id", "present_index",
                       "event_stream_sha256", "reference_sha256"):
             identity[field] = seal.get(field)
-        if int(seal.get("width") or 0) != width \
-                or int(seal.get("height") or 0) != height:
+        seal_width = _int_or_none(seal.get("width"))
+        seal_height = _int_or_none(seal.get("height"))
+        if seal_width is None or seal_height is None:
+            fail("frame seal extent is not integral")
+        elif seal_width != width or seal_height != height:
             fail(
                 f"comparison extent {width}x{height} does not match the seal "
                 f"{seal.get('width')}x{seal.get('height')}")
@@ -237,8 +249,11 @@ def _authenticate(frame_dir: Path, live_path: Path, width: int, height: int,
                         fail(
                             "live image digest is not the sealed checkpoint "
                             "reference (swapped or different seal)")
-                if int(record.get("width") or 0) != width \
-                        or int(record.get("height") or 0) != height:
+                record_width = _int_or_none(record.get("width"))
+                record_height = _int_or_none(record.get("height"))
+                if record_width is None or record_height is None:
+                    fail("checkpoint record extent is not integral")
+                elif record_width != width or record_height != height:
                     fail("checkpoint record extent does not match the comparison")
                 if seal is not None:
                     if record.get("session_id") not in (None, seal.get("session_id")):
@@ -349,8 +364,11 @@ def _validate_receipt(receipt: dict, *, nonce: str, renderer_sha: str,
             fail("control artifact digest does not match the receipt")
         if artifact_record.get("file") not in (None, artifact.name):
             fail("control artifact path does not match the receipt")
-        if int(artifact_record.get("width") or 0) != width \
-                or int(artifact_record.get("height") or 0) != height:
+        artifact_width = _int_or_none(artifact_record.get("width"))
+        artifact_height = _int_or_none(artifact_record.get("height"))
+        if artifact_width is None or artifact_height is None:
+            fail("control artifact extent is not integral")
+        elif artifact_width != width or artifact_height != height:
             fail("control artifact extent does not match the comparison")
         if str(artifact_record.get("pixel_format") or "").upper() != "BGRA8":
             fail("control artifact pixel format is not BGRA8")

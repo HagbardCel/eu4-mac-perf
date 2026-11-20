@@ -163,11 +163,13 @@ python3 -m automation.agent_tools eu4_capture probe --checkpoint after-present \
   --output <dir> --campaign-run-root <authorized-root>
 python3 -m automation.agent_tools eu4_capture gl-control --run <capture-root>
 python3 -m automation.agent_tools eu4_capture gl-control-qualify \
-  --live-image <sealed-checkpoint.bgra> --control-image <control.bgra> \
+  --live-image <sealed-checkpoint.bgra> \
   --width 1728 --height 1117 --frame-dir <sealed-frame> \
-  --checkpoint-request <checkpoint-request.json> \
   --checkpoint-event 15 --draw-event 14 \
-  --control-manifest <control-manifest.json>
+  --renderer <original-api-control-runner> --control-out <empty-dir>
+python3 -m automation.agent_tools eu4_capture gl-control-qualify \
+  --live-image <sealed-checkpoint.bgra> --control-image <control.bgra> \
+  --width 1728 --height 1117 --comparison-only
 ```
 
 `frames` applies exact `--frame` filtering (repeatable), optional `--role`
@@ -195,13 +197,20 @@ transfer/readback path; it is not a full-frame GL replay. A mismatch is
 `gl-control-qualify` is the selected-draw original-API gate. It reports three
 separate outcomes: exact BGRA comparison, authenticated sealed-observation
 qualification, and permission for causal Metal attribution. Qualification
-requires the frame seal to validate, the live image to be the checkpoint's
-declared reference blob, the event stream digest to match the seal, a completed
-`opengl` control manifest for the selected draw/checkpoint/resource, and a
-matching control artifact digest. An exact image from a different seal is
-explicitly `unqualified`, and `--comparison-only` can never qualify. Missing
-identity or execution provenance is reported as `unqualified` with the missing
-observation named.
+requires the frame seal to validate; the checkpoint identity to come from the
+seal-verified event stream's own `default_checkpoint` record (not a mutable
+request sidecar); the live image to be that exact sealed blob and digest; and a
+completed `opengl` control renderer executed by the qualifier with a fresh
+challenge nonce. The renderer must write `result.bgra` plus `receipt.json` in
+`--control-out`; the receipt must echo the nonce, match the executed renderer's
+digest, and bind the frame, stream, checkpoint, draw, artifact digest, extent,
+pixel format and renderer identity. A copied live image cannot qualify without
+that executed receipt. `attribution()` re-reads the receipt and artifact instead
+of trusting a boolean. An exact image from a different seal is explicitly
+`unqualified`; `--comparison-only` compares two files and can never qualify.
+Missing identity or execution provenance is reported as `unqualified` with the
+missing observation named. The residual trust boundary is explicit: a renderer
+that lies about its own GL calls is outside what a receipt chain can prove.
 
 `probe` is a pass-through to the existing live launch path and still requires an
 operator ledger.

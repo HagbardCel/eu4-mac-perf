@@ -984,44 +984,56 @@ def eu4_capture(args: argparse.Namespace) -> dict:
     if args.capture_op == "gl-control-qualify":
         from automation import gfx_gl_control_qualification as control_qualification
 
-        if args.live_image is None or args.control_image is None \
-                or args.width is None or args.height is None:
+        if args.live_image is None or args.width is None \
+                or args.height is None:
             return _envelope(
                 "eu4_capture", "error",
-                reason="gl-control-qualify requires --live-image, "
-                       "--control-image, --width and --height")
-        try:
-            if args.comparison_only:
+                reason="gl-control-qualify requires --live-image, --width and "
+                       "--height")
+        if args.comparison_only:
+            if args.control_image is None:
+                return _envelope(
+                    "eu4_capture", "error",
+                    reason="--comparison-only requires --control-image")
+            try:
                 value = control_qualification.compare(
                     args.live_image, args.control_image,
                     args.width, args.height)
+            except control_qualification.QualificationError as exc:
                 return _envelope(
-                    "eu4_capture", "ok", value, diagnostic="complete",
-                    verdict="equal" if value["exact"] else "different",
-                    evidence="valid", qualified=False,
-                    reason=("BGRA comparison only; this is not an "
-                            "authenticated control"))
-            if args.frame_dir is None or args.control_manifest is None \
-                    or args.checkpoint_event is None \
-                    or args.draw_event is None:
-                return _envelope(
-                    "eu4_capture", "refused",
-                    reason="qualification requires --frame-dir, "
-                           "--control-manifest, --checkpoint-event and "
-                           "--draw-event; pixel equality alone is not a "
-                           "control")
+                    "eu4_capture", "invalid",
+                    {"kind": exc.kind, "detail": exc.detail},
+                    diagnostic="invalid", verdict=None, evidence="invalid",
+                    qualified=False, reason=str(exc))
+            return _envelope(
+                "eu4_capture", "ok", value, diagnostic="complete",
+                verdict="equal" if value["exact"] else "different",
+                evidence="valid", qualified=False,
+                reason=("BGRA comparison only; this is not an authenticated "
+                        "control"))
+        if args.frame_dir is None or args.renderer is None \
+                or args.control_out is None \
+                or args.checkpoint_event is None \
+                or args.draw_event is None:
+            return _envelope(
+                "eu4_capture", "refused",
+                reason="qualification requires --frame-dir, --renderer, "
+                       "--control-out, --checkpoint-event and --draw-event; "
+                       "pixel equality alone is not a control")
+        try:
             drawable = (json.loads(args.drawable.read_text(encoding="utf-8"))
                         if args.drawable else None)
             prestate = (json.loads(args.prestate.read_text(encoding="utf-8"))
                         if args.prestate else None)
             value = control_qualification.qualify_sealed(
-                args.live_image, args.control_image, args.width, args.height,
+                args.live_image, args.width, args.height,
                 frame_dir=args.frame_dir,
-                checkpoint_request=args.checkpoint_request,
                 checkpoint_event=args.checkpoint_event,
                 draw_event=args.draw_event,
-                manifest=args.control_manifest,
+                renderer=args.renderer,
+                out_dir=args.control_out,
                 resource=args.resource,
+                timeout=args.timeout if args.timeout is not None else 300.0,
                 drawable=drawable, prestate=prestate)
         except control_qualification.QualificationError as exc:
             return _envelope(
@@ -1039,13 +1051,15 @@ def eu4_capture(args: argparse.Namespace) -> dict:
             return _envelope(
                 "eu4_capture", "ok", value, diagnostic="complete",
                 verdict="equal", evidence="valid", qualified=True,
-                reason="authenticated original-API control reproduces live "
-                       "GL exactly")
+                reason="executed authenticated original-API control "
+                       "reproduces live GL exactly")
         return _envelope(
             "eu4_capture", "ok", value, diagnostic="complete",
             verdict="unqualified", evidence="valid", qualified=False,
-            reason=("; ".join(value.get("missing_observation") or [])
-                    or "control is not authenticated and exact"))
+            reason=("; ".join(
+                (value.get("qualification") or {}).get("reasons") or [])
+                or "; ".join(value.get("missing_observation") or [])
+                or "control is not authenticated and exact"))
 
     if args.capture_op == "graph":
         if not args.frame_dir:
@@ -3787,8 +3801,11 @@ def _parser() -> argparse.ArgumentParser:
         "gl-control-qualify"))
     capture.add_argument("--live-image", type=Path, default=None)
     capture.add_argument("--control-image", type=Path, default=None)
-    capture.add_argument("--control-manifest", type=Path, default=None)
-    capture.add_argument("--checkpoint-request", type=Path, default=None)
+    capture.add_argument("--renderer", type=Path, default=None,
+                         help="original-API control renderer executed by the "
+                              "qualifier; must write result.bgra and receipt.json")
+    capture.add_argument("--control-out", type=Path, default=None,
+                         help="empty directory for the renderer receipt/artifact")
     capture.add_argument("--checkpoint-event", type=int, default=None)
     capture.add_argument("--draw-event", type=int, default=None)
     capture.add_argument("--resource", default="fb:0")
