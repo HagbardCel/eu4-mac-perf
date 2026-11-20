@@ -38,16 +38,16 @@ class BlobReferenceVerifierTests(unittest.TestCase):
     def setUpClass(cls):
         cls.temporary = tempfile.TemporaryDirectory()
         cls.binary = Path(cls.temporary.name) / "gfx_replay_blob_host"
-        native_build.require_prerequisites(
-            sources=[HOST, CORE], frameworks=("Foundation", "Metal"))
-        native_build.build(
+        native_build.require_build(
             [
                 "clang", "-arch", "arm64", "-O1", "-fobjc-arc", "-lc++",
                 "-framework", "Foundation", "-framework", "Metal",
                 "-I", str(BENCH), "-o", str(cls.binary),
                 str(HOST), str(CORE),
             ],
-            label="replay-blob-host", timeout=300)
+            label="replay-blob-host", sources=[HOST, CORE],
+            frameworks=("Foundation", "Metal"), require_arm64=True,
+            timeout=300)
 
     @classmethod
     def tearDownClass(cls):

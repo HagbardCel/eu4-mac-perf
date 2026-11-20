@@ -222,9 +222,7 @@ class TargetAttachmentLifetimeTests(unittest.TestCase):
         cls.temporary = tempfile.TemporaryDirectory()
         cls.base = Path(cls.temporary.name)
         cls.binary = cls.base / "gfx_metal_replay_abi"
-        native_build.require_prerequisites(
-            sources=[HOST, CORE], frameworks=("Foundation", "Metal"))
-        native_build.build(
+        native_build.require_build(
             [
                 "clang",
                 "-arch",
@@ -243,7 +241,9 @@ class TargetAttachmentLifetimeTests(unittest.TestCase):
                 str(HOST),
                 str(CORE),
             ],
-            label="target-lifetime-abi", timeout=300)
+            label="target-lifetime-abi", sources=[HOST, CORE],
+            frameworks=("Foundation", "Metal"), require_arm64=True,
+            timeout=300)
         cls.shaders = cls.base / "shaders"
         cls._write_shaders(cls.shaders)
         cls.checkpoints = cls.base / "checkpoints.json"

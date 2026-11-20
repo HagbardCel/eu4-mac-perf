@@ -46,15 +46,14 @@ class ShadowReceiptTests(unittest.TestCase):
     def setUpClass(cls):
         cls.temporary = tempfile.TemporaryDirectory()
         cls.host = Path(cls.temporary.name) / "shadow_receipt_host"
-        native_build.require_prerequisites(
-            sources=[HOST],
-            frameworks=("Foundation", "Metal", "CoreGraphics"))
-        native_build.build(
+        native_build.require_build(
             ["clang", "-arch", "arm64", "-O2", "-fobjc-arc", "-I", str(ROOT),
              "-I", str(BENCH), "-framework", "Foundation",
              "-framework", "Metal", "-framework", "CoreGraphics",
              "-Wl,-dead_strip", "-o", str(cls.host), str(HOST)],
-            label="shadow-receipt-host", timeout=180)
+            label="shadow-receipt-host", sources=[HOST],
+            frameworks=("Foundation", "Metal", "CoreGraphics"),
+            require_arm64=True, timeout=180)
 
     @classmethod
     def tearDownClass(cls):

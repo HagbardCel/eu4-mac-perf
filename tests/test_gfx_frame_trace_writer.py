@@ -30,9 +30,7 @@ class FrameTraceWriterTests(unittest.TestCase):
         cls.binary = Path(cls.temporary.name) / "gfx_frame_trace_scenarios"
         sources = [ROOT / "tests" / "gfx_frame_trace_scenarios.c",
                    BENCH / "eu4_gfx_frame_trace.c"]
-        native_build.require_prerequisites(sources=sources,
-                                          frameworks=("OpenGL",))
-        native_build.build(
+        native_build.require_build(
             [
                 "clang",
                 "-O1",
@@ -46,7 +44,8 @@ class FrameTraceWriterTests(unittest.TestCase):
                 "-framework",
                 "OpenGL",
             ],
-            label="frame-trace-scenarios")
+            label="frame-trace-scenarios", sources=sources,
+            frameworks=("OpenGL",), require_arm64=False)
 
     @classmethod
     def tearDownClass(cls):

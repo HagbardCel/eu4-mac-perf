@@ -63,16 +63,15 @@ class CapturedTextureVersionTests(unittest.TestCase):
         cls.binary = Path(cls.temporary.name) / "gfx_texture_mutation_host"
         sources = [ROOT / "tests" / "gfx_texture_mutation_host.m",
                    BENCH / "eu4_gfx_frame_trace.c"]
-        native_build.require_prerequisites(
-            sources=sources, frameworks=("AppKit", "OpenGL"))
-        native_build.build(
+        native_build.require_build(
             [
                 "clang", "-O1", "-Wall", "-Wextra", "-I", str(BENCH),
                 "-o", str(cls.binary),
                 *map(str, sources),
                 "-framework", "AppKit", "-framework", "OpenGL",
             ],
-            label="texture-mutation-host")
+            label="texture-mutation-host", sources=sources,
+            frameworks=("AppKit", "OpenGL"), require_arm64=False)
 
     @classmethod
     def tearDownClass(cls):
@@ -170,7 +169,7 @@ class MetalTextureVersionTests(unittest.TestCase):
             "programs": [{"program": 1, "status": "ok",
                           "stages": {"vertex": stage, "pixel": pixel}}]}))
         native_build.require_prerequisites(
-            frameworks=("Foundation", "Metal"))
+            frameworks=("Foundation", "Metal"), require_arm64=True)
         cls.host = m6_frame.build_replay_host()
 
     @classmethod

@@ -87,7 +87,7 @@ class MetalReplayLibraryTests(unittest.TestCase):
         ]
         native_build.require_prerequisites(
             sources=[CORE, CLI, ABI_HOST, SHADOW_BRIDGE, SHADOW_REPORT_HOST],
-            frameworks=("Foundation", "Metal"))
+            frameworks=("Foundation", "Metal"), require_arm64=True)
         for output, sources in (
             (cls.cli, [CORE, CLI]),
             (cls.abi, [CORE, ABI_HOST]),

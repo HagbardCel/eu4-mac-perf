@@ -57,14 +57,14 @@ class ContinuousReplayHistoryTests(unittest.TestCase):
         if cls.source is None:
             raise unittest.SkipTest("canonical frame fixture is not available")
         cls.host = cls.base / "gfx_metal_replay_abi"
-        native_build.require_prerequisites(
-            sources=[HOST, CORE], frameworks=("Foundation", "Metal"))
-        native_build.build(
+        native_build.require_build(
             ["clang", "-arch", "arm64", "-O2", "-fobjc-arc", "-lc++",
              "-I", str(BENCH), "-framework", "Foundation",
              "-framework", "Metal", "-o", str(cls.host),
              str(HOST), str(CORE)],
-            label="continuous-replay-abi", timeout=300)
+            label="continuous-replay-abi", sources=[HOST, CORE],
+            frameworks=("Foundation", "Metal"), require_arm64=True,
+            timeout=300)
 
     @classmethod
     def tearDownClass(cls):
