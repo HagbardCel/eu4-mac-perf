@@ -3094,7 +3094,12 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                 "eu4_replay", "error",
                 reason="frame replay requires --frame and --replay-out/--out")
         argv = ["automation.m6_frame", "replay", "--frame", args.frame,
-                "--shaders", args.shaders, "--out", str(args.replay_out)]
+                "--out", str(args.replay_out)]
+        # ``m6_frame`` resolves ``<frame>/shaders`` when no explicit
+        # translation is supplied.  Passing an empty ``--shaders`` value here
+        # would crash argv construction before that fallback can run.
+        if args.shaders:
+            argv += ["--shaders", args.shaders]
         if args.only_event is not None:
             argv += ["--only-event", str(args.only_event)]
             argv += ["--capture-pre", "--capture-post"]

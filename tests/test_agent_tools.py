@@ -2149,6 +2149,25 @@ class SubprocessDiagnosticTests(unittest.TestCase):
         self.assertEqual(command[1:4], ["-m", "automation.m6_frame", "replay"])
         self.assertEqual(value["result"]["subprocess"]["exit_code"], 2)
 
+    def test_frame_replay_without_explicit_shaders_omits_the_argument(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with mock.patch.object(
+                    agent_tools.subprocess, "run",
+                    return_value=self.completed(
+                        {"status": "pass", "pixels": 48,
+                         "mismatched_pixels": 0}, code=0)) as run:
+                code_value, value = self.call([
+                    "eu4_replay", "frame", "--frame", str(root / "frame"),
+                    "--out", str(root / "out"),
+                ])
+        self.assertEqual(code_value, 0)
+        self.assertTrue(value["ok"], value.get("reason"))
+        command = run.call_args.args[0]
+        self.assertEqual(command[1:4], ["-m", "automation.m6_frame", "replay"])
+        self.assertNotIn("--shaders", command)
+        self.assertIn(str(root / "frame"), command)
+
     def test_frame_replay_invalid_is_a_failed_execution(self):
         code, value, run = self.replay_call(
             {"status": "error", "reason": "frame is invalid"}, code=1,
