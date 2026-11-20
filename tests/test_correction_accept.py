@@ -268,6 +268,23 @@ class CorrectionAcceptanceTests(unittest.TestCase):
         self.assertIn("replay_receipt_mismatch",
                       json.dumps(report["problems"]))
 
+    def test_tampered_checkpoint_binding_is_invalid(self):
+        after = self.model.replay_dir("after-tampered-binding",
+                                      self.model.reference)
+        receipt_path = after / "producer-receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["result"]["checkpoint_files"][0]["sha256"] = "0" * 64
+        receipt_path.write_text(json.dumps(receipt))
+        report = self.acceptance(
+            after=after,
+            claims=self.model.claims(
+                {"mismatched_pixels": 1, "max_channel_error": 7},
+                {"mismatched_pixels": 0, "max_channel_error": 0}))
+        self.assertEqual(report["result"], "invalid_evidence", report)
+        self.assertIn("replay_receipt_mismatch",
+                      json.dumps(report["problems"]))
+        self.assertFalse(report["authenticated_equivalence"], report)
+
     def test_receipt_without_intermediate_binding_stays_inspectable(self):
         after = self.model.replay_dir("after-legacy-receipt",
                                       self.model.reference)
