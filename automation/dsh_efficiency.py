@@ -307,9 +307,12 @@ def analyze(
                     if isinstance(value, (int, float)):
                         tokens[key] += int(value)
         elif kind == "goal/change":
+            goal = data.get("goal") if isinstance(data.get("goal"), dict) else {}
             goal_events.append({
+                "goal_id": goal.get("id"),
+                "revision": goal.get("revision"),
                 "operation": data.get("operation"),
-                "phase": (data.get("goal") or {}).get("phase"),
+                "phase": goal.get("phase"),
                 "time": moment,
             })
         elif kind == "command/run":
@@ -469,20 +472,64 @@ def analyze(
     cache_read = tokens["cacheReadTokens"]
     total_tokens = tokens["totalTokens"] or (input_tokens + cache_read + tokens["outputTokens"])
     goal_operations = [row["operation"] for row in goal_events]
-    last_goal = goal_events[-1] if goal_events else None
-    first_goal = goal_events[0] if goal_events else None
-    goal_start = first_goal["time"] if first_goal else None
-    goal_end = last_goal["time"] if last_goal else None
-    goal_elapsed = (goal_end - goal_start
-                    if goal_start is not None and goal_end is not None
-                    else None)
-    last_phase = last_goal["phase"] if last_goal else None
     terminal_phases = {
         "complete": "completed",
         "completed": "completed",
         "blocked": "blocked",
         "cancelled": "cancelled",
     }
+    goal_ids: list[str] = []
+    for row in goal_events:
+        goal_id = row.get("goal_id")
+        if goal_id is not None and goal_id not in goal_ids:
+            goal_ids.append(goal_id)
+    identity_missing = bool(goal_events) and any(
+        row.get("goal_id") is None for row in goal_events)
+    selected_id = goal_ids[-1] if goal_ids else None
+    if selected_id is not None:
+        selected_events = [row for row in goal_events
+                           if row.get("goal_id") == selected_id]
+    elif identity_missing:
+        # Without ids we cannot separate sequential goals.  Use the only
+        # grouping available and state the limitation instead of silently
+        # attributing one goal's start to another.
+        selected_events = list(goal_events)
+    else:
+        selected_events = []
+    last_goal = selected_events[-1] if selected_events else None
+    last_phase = last_goal["phase"] if last_goal else None
+    terminal_event = None
+    for row in reversed(selected_events):
+        if row.get("phase") in terminal_phases:
+            terminal_event = row
+            break
+    start_event = next(
+        (row for row in selected_events if row.get("operation") == "create"),
+        selected_events[0] if selected_events else None)
+    goal_start = start_event["time"] if start_event else None
+    goal_end = terminal_event["time"] if terminal_event else None
+    window_end = max(timestamps) if timestamps else None
+    duration_kind = "no_goal" if not selected_events else (
+        "terminal" if terminal_event is not None else "ongoing")
+    duration_invalid = False
+    goal_elapsed = None
+    if terminal_event is not None:
+        if goal_start is None or goal_end is None:
+            duration_kind = "unknown_timestamp"
+        else:
+            goal_elapsed = goal_end - goal_start
+    elif selected_events:
+        # An active goal has no end event.  Report observed elapsed time
+        # through the observation window, explicitly labelled ongoing.
+        if goal_start is not None and window_end is not None:
+            goal_elapsed = window_end - goal_start
+        else:
+            duration_kind = "unknown_timestamp"
+    if goal_elapsed is not None and goal_elapsed < 0:
+        # Out-of-order events cannot yield a negative duration.
+        goal_elapsed = None
+        duration_invalid = True
+        duration_kind = "invalid_order"
     if last_goal is None:
         # No goal record exists: turn completion is reported separately and is
         # never promoted to a goal outcome.
@@ -586,21 +633,38 @@ def analyze(
         },
         "goal": {
             "operations": goal_operations,
+            "goal_ids": goal_ids,
+            "goal_count": len(goal_ids) + (1 if identity_missing else 0),
+            "selected_goal_id": selected_id,
+            "identity_missing": identity_missing,
+            "selected_operations": [row["operation"]
+                                    for row in selected_events],
             "last_operation": last_goal["operation"] if last_goal else None,
             "last_phase": last_phase,
             "active": bool(last_goal and last_phase == "active"),
-            "terminal": bool(last_goal and last_phase in (
-                "complete", "completed", "blocked", "cancelled")),
+            "terminal": bool(last_goal and last_phase in terminal_phases),
             "started_utc": _iso(goal_start),
-            "ended_utc": _iso(goal_end),
+            "ended_utc": (_iso(goal_end) if terminal_event is not None
+                          else None),
+            "duration_kind": duration_kind,
+            "duration_invalid": duration_invalid,
             "duration_seconds": (round(goal_elapsed, 3)
                                  if goal_elapsed is not None else None),
+            "observed_until_utc": (_iso(window_end)
+                                   if duration_kind == "ongoing" else None),
             "turn_end_reasons": turn_end_reasons,
             "last_turn_reason": (turn_end_reasons[-1]
                                  if turn_end_reasons else None),
-            # The final goal/change record owns the goal outcome.  A completed
-            # turn after a blocked goal must not read as a completed migration.
+            # The final goal/change record for the selected goal owns the
+            # outcome.  A completed turn after a blocked goal must not read as
+            # a completed migration.
             "outcome": goal_outcome,
+            "limitations": (
+                ["goal events have no stable goal id; sequential goals cannot "
+                 "be separated"] if identity_missing else []
+            ) + (
+                ["goal event timestamps are missing or out of order"] if
+                duration_kind in ("unknown_timestamp", "invalid_order") else []),
         },
     }
     value["summary"] = execution_summary(value)
@@ -663,6 +727,8 @@ def execution_summary(value: dict) -> dict:
             "turns": (value.get("window") or {}).get("turns"),
             "model_calls": (value.get("window") or {}).get("model_calls"),
             "goal_seconds": goal.get("duration_seconds"),
+            "goal_duration_kind": goal.get("duration_kind"),
+            "goal_duration_invalid": goal.get("duration_invalid"),
         },
         "eu4_launches": launch_count,
         "replays": {
