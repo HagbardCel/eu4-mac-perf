@@ -1303,12 +1303,16 @@ static EU4CompressedChain compressed_chain_status(
     NSArray *levels, NSString **format_out, unsigned *internal_out,
     NSUInteger *block_out, NSUInteger *bad_level_out) {
     NSUInteger compressed_count = 0;
+    NSUInteger expected_count = 0;
     NSUInteger count = levels.count;
     NSString *format = nil;
     unsigned internal = 0;
     NSUInteger block = 0;
     for (NSUInteger index = 0; index < count; index++) {
         NSDictionary *level = levels[index];
+        if (number(level[@"compressed_expected"], 0) != 0) {
+            expected_count++;
+        }
         NSDictionary *compressed = level[@"compressed"];
         if (![compressed isKindOfClass:[NSDictionary class]]) {
             continue;
@@ -1363,6 +1367,17 @@ static EU4CompressedChain compressed_chain_status(
             if (bad_level_out) *bad_level_out = index;
             return EU4CompressedChainInvalid;
         }
+    }
+    if (compressed_count == 0 && expected_count > 0) {
+        if (bad_level_out) {
+            for (NSUInteger index = 0; index < count; index++) {
+                if (number(levels[index][@"compressed_expected"], 0) != 0) {
+                    *bad_level_out = index;
+                    break;
+                }
+            }
+        }
+        return EU4CompressedChainInvalid;
     }
     if (compressed_count == 0) {
         return EU4CompressedChainDecoded;
@@ -1478,6 +1493,12 @@ static id<MTLTexture> build_texture(NSDictionary *texture, NSString *frameDir,
         if (@available(macOS 11.0, *)) {
             bc_supported = g_device.supportsBCTextureCompression;
         }
+        /* Host-test only: exercise the unsupported-device refusal on a device
+         * that does support BC.  Never used by a normal replay. */
+        const char *force_no_bc = getenv("EU4_FRAME_REPLAY_FORCE_NO_BC");
+        if (force_no_bc != NULL && strcmp(force_no_bc, "1") == 0) {
+            bc_supported = NO;
+        }
         if (!bc_supported) {
             if (error != NULL) {
                 *error = [NSError errorWithDomain:kErrorDomain code:27
@@ -1551,26 +1572,15 @@ static id<MTLTexture> build_texture(NSDictionary *texture, NSString *frameDir,
                 }
                 return nil;
             }
-            /* Captured GL rows are lower-left; Metal samples top-left.  A
-             * compressed level must be flipped at block-row granularity. */
-            NSData *upload = blob;
-            NSUInteger block_rows = (level_height + 3u) / 4u;
-            if (block_rows > 1) {
-                NSMutableData *flipped =
-                    [NSMutableData dataWithLength:blob.length];
-                const uint8_t *source = (const uint8_t *)blob.bytes;
-                uint8_t *destination = (uint8_t *)flipped.mutableBytes;
-                for (NSUInteger row = 0; row < block_rows; row++) {
-                    memcpy(destination + row * row_bytes,
-                           source + (block_rows - 1 - row) * row_bytes,
-                           row_bytes);
-                }
-                upload = flipped;
-            }
+            /* The uncompressed path deliberately uploads rows unchanged:
+             * captured UVs address the first uploaded row as coordinate 0 in
+             * both APIs.  Compressed blocks must follow the same convention;
+             * flipping only block rows would mirror BC textures relative to
+             * the decoded path and would not flip intra-block texels. */
             MTLRegion region = MTLRegionMake2D(0, 0, level_width, level_height);
             [texture_handle replaceRegion:region
                              mipmapLevel:level_index
-                               withBytes:upload.bytes
+                               withBytes:blob.bytes
                              bytesPerRow:row_bytes];
             continue;
         }

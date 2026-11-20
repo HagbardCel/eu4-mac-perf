@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -165,16 +166,57 @@ class CompressedTextureChainTests(unittest.TestCase):
                 self.assertEqual({pixel[:3] for pixel in pixels},
                                  {(12, 34, 56)})
 
-    def test_compressed_block_rows_are_flipped_to_metal_orientation(self):
-        # Captured GL rows are lower-left.  A red source row 0 and green row 1
-        # must appear green at Metal's top row and red at its bottom row.
+    def test_compressed_and_decoded_paths_sample_the_same_orientation(self):
+        # The qualified uncompressed convention uploads rows unchanged; the
+        # compressed path must match it.  Encode the same logical rows as RGBA8
+        # and BC1 and require identical sampled pixels.
         red = bytes.fromhex("00f8e00700000000")
         green = bytes.fromhex("e00700f800000000")
-        level = self.level(0, 8, 8, 8, raw=0x83F1, name="flip",
-                           block_payload=red * 2 + green * 2)
-        pixels = self.run_sample(self.texture([level], "flip-sample"))
-        self.assertEqual(pixels[0][:3], (0, 255, 0))
-        self.assertEqual(pixels[7 * 8][:3], (255, 0, 0))
+        decoded = (bytes([255, 0, 0, 255]) * (8 * 4)
+                   + bytes([0, 255, 0, 255]) * (8 * 4))
+        compressed = self.level(0, 8, 8, 8, raw=0x83F1, name="orient-comp",
+                                block_payload=red * 2 + green * 2)
+        decoded_level = self.level(0, 8, 8, 8, raw=0x83F1, name="orient-dec",
+                                   compressed=False, decoded_payload=decoded)
+        compressed_pixels = self.run_sample(
+            self.texture([compressed], "orient-compressed"))
+        decoded_pixels = self.run_sample(
+            self.texture([decoded_level], "orient-decoded"))
+        self.assertEqual(compressed_pixels, decoded_pixels)
+
+    def test_missing_all_expected_blocks_is_not_the_decoded_legacy_path(self):
+        level = self.level(0, 8, 8, 8, raw=0x83F1, name="lost", compressed=False)
+        level["compressed_expected"] = True
+        result = self.run_texture(self.texture([level], "lost-blocks"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("invalid geometry", result.stderr)
+
+    def test_wrong_mip_extent_bytes_and_level_index_are_rejected(self):
+        cases = {
+            "extent": lambda levels: levels[1].update({"width": 2, "height": 2}),
+            "bytes": lambda levels: levels[0]["compressed"].update(
+                {"bytes": 8}),
+            "level": lambda levels: levels[1].update({"level": 0}),
+        }
+        for name, mutate in cases.items():
+            levels = [
+                self.level(0, 8, 8, 16, raw=0x83F3, name=f"m-{name}-0"),
+                self.level(1, 4, 4, 16, raw=0x83F3, name=f"m-{name}-1"),
+            ]
+            mutate(levels)
+            result = self.run_texture(self.texture(levels, f"mip-{name}"))
+            self.assertNotEqual(result.returncode, 0, name)
+            self.assertIn("invalid", result.stderr.lower(), name)
+
+    def test_unsupported_bc_device_refuses_the_texture(self):
+        level = self.level(0, 8, 8, 8, raw=0x83F1, name="no-bc")
+        path = self.texture([level], "no-bc")
+        result = subprocess.run(
+            [str(self.binary), str(self.frame), str(path)],
+            capture_output=True, text=True, check=False,
+            env={**os.environ, "EU4_FRAME_REPLAY_FORCE_NO_BC": "1"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not support BC", result.stderr)
 
     def test_partial_chain_is_rejected_not_silently_decoded(self):
         levels = [

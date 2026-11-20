@@ -1896,6 +1896,11 @@ static int read_texture(GLenum target, GLuint name, json_out *out) {
                     bytes, blob_name, blob_sha);
             int cblock = compressed_block_bytes((GLenum)internal);
             if (cblock > 0) {
+                /* Declare that this level was expected to carry original
+                 * blocks before attempting the read.  A capture that loses
+                 * every block record must not look like a legacy decoded
+                 * texture. */
+                jprintf(out, ",\"compressed_expected\":true");
                 size_t cw = ((size_t)width + 3u) / 4u;
                 size_t ch = ((size_t)height + 3u) / 4u;
                 size_t cbytes = cw * ch * (size_t)cblock;
