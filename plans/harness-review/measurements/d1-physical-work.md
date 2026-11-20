@@ -7,7 +7,7 @@ Date: 2026-11-20. Branch: `fix/harness-d1-physical-work` (PR #251).
 | Window | Source | Identity | Decompressed SHA-256 |
 |---|---|---|---|
 | A | `0e6ae30c-54a4-4c33-bd24-20e86c9663af` session archive | complete export, 1,626 records | `d0daf3d5772b5855e0388b682df7615264af7f7f93b88d00524e3c9673ee2c25` |
-| B | `3dc697da-68ac-45e3-8579-bdf3814a7ec3` session archive | header through **seq 1555** (turns 1–2) | `17c4e6fea6b3dcf270e8814087771336b57ec6ca51c00d3c6aedf846025c14d9` (1,557 records) |
+| B (materialized window) | `3dc697da-68ac-45e3-8579-bdf3814a7ec3` session archive | header through **seq 1555** (turns 1–2) | `17c4e6fea6b3dcf270e8814087771336b57ec6ca51c00d3c6aedf846025c14d9` (1,557 records) |
 
 The A hash equals the SHA-256 recorded in `plans/harness-review/assessment.md`.
 
@@ -115,3 +115,5 @@ the classification and joins changed.
 - Base: `e71c15d6` (analyzer unchanged before this PR)
 - Candidate: `0d7de60c`
 - B archive decompressed-prefix SHA-256: `abe86a7b4ebb3da86b70730b5bf269f85bddd27448fb3e26e5787e7a879edc82`; materialized 1,557-line window JSONL SHA-256: `17c4e6fea6b3dcf270e8814087771336b57ec6ca51c00d3c6aedf846025c14d9`.
+
+Final accounting SHA: `0fffdd42` (multi-call count fix); measurements reproduced unchanged.

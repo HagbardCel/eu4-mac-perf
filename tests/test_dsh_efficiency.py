@@ -520,6 +520,32 @@ class GoalPhaseTests(unittest.TestCase):
         self.assertEqual(value["tests"]["test_invocations"], 1)
         self.assertEqual(value["tests"]["runner_tests_executed"], 5)
 
+    def test_two_runner_commands_in_one_call_are_not_double_counted(self):
+        command = (
+            "python3.14 -m automation.test_runner run --profile offline "
+            "--module tests.test_agent_tools; "
+            "python3.14 -m automation.test_runner run --profile offline "
+            "--module tests.test_gfx_case")
+        events = [
+            {"type": "tool/call", "time": 1000, "data": {
+                "callId": "r1", "name": "bash",
+                "arguments": {"command": command}}},
+            {"type": "tool/result", "time": 2000, "data": {
+                "toolCallId": "r1", "message": {"isError": False, "content": [
+                    {"type": "text",
+                     "text": "Ran 5 tests in 0.1s\nRan 7 tests in 0.2s\n"}]}}},
+        ]
+        value = dsh_efficiency.analyze(events)
+        self.assertEqual(value["physical_work"]["runner_invocations"], 2)
+        self.assertEqual(value["tests"]["runner_tests_executed"], 12)
+        # Two JSON summaries cannot be attributed unambiguously without one
+        # Ran-line each, so the total is explicitly unknown.
+        events[1]["data"]["message"]["content"][0]["text"] = (
+            '{"counts": {"executed": 4}}\n'
+            '{"counts": {"executed": 6}}\n')
+        value = dsh_efficiency.analyze(events)
+        self.assertIsNone(value["tests"]["runner_tests_executed"])
+
     def test_runner_help_discovery_and_status_are_not_focused_work(self):
         events = []
         commands = [
