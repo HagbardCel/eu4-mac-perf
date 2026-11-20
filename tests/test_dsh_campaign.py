@@ -289,6 +289,8 @@ class ReaderDefaultTests(unittest.TestCase):
                 "live_capture", {"enabled": "false"}),
             "replay_inputs": lambda data: data.__setitem__(
                 "replay_inputs", "checkpoint.md"),
+            "replay_inputs whitespace entry": lambda data: data.__setitem__(
+                "replay_inputs", ["   "]),
             "allow_incomplete_inputs": lambda data: data.__setitem__(
                 "allow_incomplete_inputs", "false"),
         }
