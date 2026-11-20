@@ -11,11 +11,16 @@ const INFRA = path.resolve(HERE, '..', '..', '..')
 
 /** A minimal stand-in for the harness context: enough to prove registration. */
 function fakeContext() {
-  const state = { tools: [], guards: [], completed: [] }
+  const state = { tools: [], guards: [], completed: [], effects: [], handlers: {} }
   const ctx = {
     logger: { warn() {}, info() {} },
     effect(fn) {
-      return fn()
+      const dispose = fn()
+      state.effects.push(dispose)
+      return dispose
+    },
+    on(name, fn) {
+      ;(state.handlers[name] = state.handlers[name] || []).push(fn)
     },
     tools: {
       register(definition) {
@@ -97,4 +102,115 @@ test('finalization gets twice the checker budget, other operations do not', () =
   assert.equal(single, 15 * 60 * 1000)
   assert.ok(both > 2 * 900 * 1000, `finalize budget ${both} must cover two runs`)
   assert.ok(both < 40 * 60 * 1000, 'and stay finite')
+})
+
+test('plugin unload disposes prompt fibers installed on live agents', async () => {
+  const ctx = fakeContext()
+  const fiber = { disposed: 0, dispose() { this.disposed += 1 } }
+  const agent = {
+    ctx: {
+      inject(_names, register) {
+        register({ systemPrompt: { section() {} } })
+        return fiber
+      },
+    },
+    session: { id: 's1', header: { cwd: '/tmp/ws' } },
+  }
+  apply(ctx, {
+    sidecar: '/tmp/x.json',
+    infra: INFRA,
+    python: '/bin/false',
+    bridge: async () => ({
+      ok: true,
+      status: 'authorized',
+      startup_text: 'workspace: /tmp/ws',
+      startup: { workspace: '/tmp/ws' },
+    }),
+  })
+  const created = ctx._state.handlers['agent/created'][0]
+  await created({ agent })
+  assert.equal(fiber.disposed, 0)
+  for (const dispose of ctx._state.effects.slice().reverse()) {
+    if (typeof dispose === 'function') dispose()
+  }
+  assert.equal(fiber.disposed, 1)
+})
+
+test('plugin unload during an in-flight context install leaves no prompt section', async () => {
+  const ctx = fakeContext()
+  const fiber = { disposed: 0, dispose() { this.disposed += 1 } }
+  let injects = 0
+  const agent = {
+    ctx: {
+      inject(_names, register) {
+        injects += 1
+        register({ systemPrompt: { section() {} } })
+        return fiber
+      },
+    },
+    session: { id: 's2', header: { cwd: '/tmp/ws' } },
+  }
+  let release
+  const gate = new Promise((resolve) => { release = resolve })
+  apply(ctx, {
+    sidecar: '/tmp/x.json',
+    infra: INFRA,
+    python: '/bin/false',
+    bridge: async () => {
+      await gate
+      return {
+        ok: true,
+        status: 'authorized',
+        startup_text: 'workspace: /tmp/ws',
+        startup: { workspace: '/tmp/ws' },
+      }
+    },
+  })
+  const created = ctx._state.handlers['agent/created'][0]
+  const pending = created({ agent })
+  // Unload while the bridge answer is still in flight.
+  for (const dispose of ctx._state.effects.slice().reverse()) {
+    if (typeof dispose === 'function') dispose()
+  }
+  release()
+  await pending
+  assert.equal(injects, 0, 'a late bridge answer must not install a section after unload')
+  assert.equal(fiber.disposed, 0)
+})
+
+test('a fiber that races past inject is disposed instead of retained', async () => {
+  const ctx = fakeContext()
+  const fiber = { disposed: 0, dispose() { this.disposed += 1 } }
+  let unload = () => {}
+  const agent = {
+    ctx: {
+      inject(_names, register) {
+        register({ systemPrompt: { section() {} } })
+        // Simulate unload re-entering after the fiber is created but before
+        // the install promise's .then runs.
+        unload()
+        return fiber
+      },
+    },
+    session: { id: 's3', header: { cwd: '/tmp/ws' } },
+  }
+  apply(ctx, {
+    sidecar: '/tmp/x.json',
+    infra: INFRA,
+    python: '/bin/false',
+    bridge: async () => ({
+      ok: true,
+      status: 'authorized',
+      startup_text: 'workspace: /tmp/ws',
+      startup: { workspace: '/tmp/ws' },
+    }),
+  })
+  unload = () => {
+    for (const dispose of ctx._state.effects.slice().reverse()) {
+      if (typeof dispose === 'function') dispose()
+    }
+  }
+  const created = ctx._state.handlers['agent/created'][0]
+  await created({ agent })
+  assert.equal(fiber.disposed, 1)
 })

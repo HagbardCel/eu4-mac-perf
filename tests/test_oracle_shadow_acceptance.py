@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
 from hashlib import sha256
 from pathlib import Path
+from unittest import mock
 
 from oracle.function import synthetic
 from oracle.function.fixture import load_descriptor
@@ -133,3 +137,41 @@ class RunOwnedImplementationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SupervisedPidCleanupTests(unittest.TestCase):
+    """The cleanup observation must not fail closed on one slow ``ps`` query."""
+
+    def test_a_transient_ps_failure_is_retried_within_the_deadline(self):
+        from tests.oracle_shadow_acceptance import contract
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pid_file = Path(tmp) / "flood.pid"
+            pid_file.write_text(f"{os.getpid()}\n")
+            calls = {"n": 0}
+            real = contract.subprocess.run
+
+            def flaky(command, **kwargs):
+                calls["n"] += 1
+                # Three consecutive transient failures: the old single-shot
+                # form re-queried exactly three times and then failed closed.
+                if calls["n"] <= 3:
+                    raise contract.subprocess.TimeoutExpired(command, 1.0)
+                return subprocess.CompletedProcess(command, 1, "", "")
+
+            with mock.patch.object(
+                    contract.subprocess, "run", side_effect=flaky):
+                contract.assert_no_running_pids(pid_file, timeout=3.0)
+            self.assertGreaterEqual(calls["n"], 2)
+
+    def test_a_live_supervised_pid_is_still_refused(self):
+        from tests.oracle_shadow_acceptance import contract
+
+        with tempfile.TemporaryDirectory() as tmp:
+            pid_file = Path(tmp) / "flood.pid"
+            sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+            self.addCleanup(sleeper.wait)
+            self.addCleanup(sleeper.terminate)
+            pid_file.write_text(f"{sleeper.pid}\n")
+            with self.assertRaisesRegex(AssertionError, "still running"):
+                contract.assert_no_running_pids(pid_file, timeout=0.5)

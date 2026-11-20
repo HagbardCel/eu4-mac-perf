@@ -82,43 +82,78 @@ def read_observed_output_bytes(work_dir: Path) -> int:
     return total
 
 
-def pid_process_state(pid: int) -> str:
-    """Return running, zombie, gone, or unknown (inconclusive)."""
+def _pid_liveness(pid: int) -> str:
+    """Classify a pid without ``ps`` (``os.kill`` cannot prove a zombie)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return "gone"
+    except PermissionError:
+        return "running"
+    except OSError:
+        return "unknown"
+    # The pid still exists.  A reaped-but-unwaited child is a zombie, which
+    # ``os.kill`` cannot distinguish from a live process, so an existence
+    # answer that ``ps`` could not refine is conservatively "running".
+    return "running"
+
+
+def pid_process_state(pid: int, *, timeout: float = 1.0) -> str:
+    """Return running, zombie, gone, or unknown (inconclusive).
+
+    ``ps`` can transiently fail (a timeout under heavy load, or an empty row
+    when the pid vanished during the query).  Those cases fall back to
+    ``os.kill`` so one slow process-table query cannot turn a clean containment
+    result into an unverifiable one.
+    """
     try:
         proc = subprocess.run(
             ["ps", "-p", str(pid), "-o", "state="],
             capture_output=True,
             text=True,
-            timeout=2,
+            timeout=timeout,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired:
+        # Retried by assert_no_running_pids inside its bounded deadline.
         return "unknown"
+    except OSError:
+        # ``ps`` is unavailable; os.kill is the only remaining answer.
+        return _pid_liveness(pid)
     if proc.returncode != 0:
         return "gone"
     state = proc.stdout.strip()
     if not state:
+        # The pid disappeared between the snapshot and the row lookup: retry.
         return "unknown"
     if state[0] == "Z":
         return "zombie"
     return "running"
 
 
-def assert_no_running_pids(pid_file: Path, *, timeout: float = 2.0) -> None:
+def assert_no_running_pids(pid_file: Path, *, timeout: float = 5.0) -> None:
+    """Wait, bounded, until every supervised pid is gone or a zombie.
+
+    A transient ``ps`` failure is retried inside the deadline instead of
+    aborting the observation: the previous single-shot form failed closed on a
+    clean run when one process-table query timed out under full-suite load.
+    """
     if not pid_file.is_file():
         raise AssertionError("flood fixture did not write pid file")
     pids = [int(line) for line in pid_file.read_text().split() if line.strip()]
     deadline = time.monotonic() + timeout
+    states: dict[int, str] = {pid: "unknown" for pid in pids}
     while time.monotonic() < deadline:
-        states = [pid_process_state(pid) for pid in pids]
-        if all(state in ("gone", "zombie") for state in states):
+        states = {pid: pid_process_state(pid) for pid in pids}
+        if all(state in ("gone", "zombie") for state in states.values()):
             return
-        if any(state == "unknown" for state in states):
-            break
+        if any(state == "running" for state in states.values()):
+            time.sleep(0.05)
+            continue
         time.sleep(0.05)
-    running = [pid for pid in pids if pid_process_state(pid) == "running"]
+    running = [pid for pid, state in states.items() if state == "running"]
     if running:
         raise AssertionError(f"supervised PIDs still running: {running}")
-    unknown = [pid for pid in pids if pid_process_state(pid) == "unknown"]
+    unknown = [pid for pid, state in states.items() if state == "unknown"]
     if unknown:
         raise AssertionError(
             f"cannot verify supervised process cleanup for PIDs: {unknown}")

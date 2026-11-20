@@ -9,6 +9,7 @@ the renderer receipt, or any missing evidence is explicitly unqualified.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import tempfile
@@ -211,8 +212,17 @@ if mode == "toctou":
         from automation import gfx_gl_control_authorities as authorities
         authorities.AUTHORITIES.pop(self.renderer_sha, None)
         authorities.AUTHORITIES.update(self.registry)
-        self.addCleanup(
-            lambda: authorities.AUTHORITIES.pop(self.renderer_sha, None))
+        # A test may rewrite the renderer more than once (one sha per mode).
+        # Track every digest it registered so the shipped registry is restored
+        # exactly: popping only the latest digest would leak earlier entries
+        # into later tests and into the shipped-registry assertion.
+        registered = getattr(self, "_registered_shas", None)
+        if registered is None:
+            registered = self._registered_shas = set()
+            self.addCleanup(
+                lambda: [authorities.AUTHORITIES.pop(sha, None)
+                         for sha in self._registered_shas])
+        registered.add(self.renderer_sha)
 
     def _qualify(self, *, mode: str = "normal", renderer: Path | None = None,
                  frame_dir: Path | None = None,
@@ -453,6 +463,61 @@ if mode == "toctou":
         self.assertIn("frame seal is not authentic",
                       " ".join(value["qualification"]["reasons"]))
 
+    def test_flipped_flags_cannot_authorize_a_divergent_control(self):
+        # The qualification document is transportable JSON. Editing its status
+        # and exactness booleans must not turn four genuinely different pixels
+        # into a causal control: attribution recomputes equality from the bytes.
+        self._write_renderer("residual")
+        value = self._qualify()
+        self.assertEqual(value["statistics"]["mismatched_pixels"], 4)
+        forged = copy.deepcopy(value)
+        forged["status"] = "qualified"
+        forged["qualified"] = True
+        forged["metal_blame_allowed"] = True
+        forged["qualification"]["status"] = "qualified"
+        forged["qualification"]["qualified"] = True
+        forged["qualification"]["authenticated"] = True
+        forged["comparison"]["exact"] = True
+        forged["comparison"]["status"] = "exact"
+        forged["missing_observation"] = []
+        verdict = qualification.attribution(forged)
+        self.assertFalse(verdict["allowed"])
+
+    def test_mutating_the_sealed_reference_after_qualification_refuses_blame(self):
+        value = self._qualify()
+        self.assertTrue(qualification.attribution(value)["allowed"])
+        body = bytearray(self.live.read_bytes())
+        body[0] ^= 0xFF
+        self.live.write_bytes(bytes(body))
+        self.assertFalse(qualification.attribution(value)["allowed"])
+
+    def test_mutating_the_control_artifact_after_qualification_refuses_blame(self):
+        value = self._qualify()
+        self.assertTrue(qualification.attribution(value)["allowed"])
+        control = Path(value["qualification"]["control"]["path"])
+        body = bytearray(control.read_bytes())
+        body[-1] ^= 0xFF
+        control.write_bytes(bytes(body))
+        self.assertFalse(qualification.attribution(value)["allowed"])
+
+    def test_mutating_the_receipt_after_qualification_refuses_blame(self):
+        value = self._qualify()
+        self.assertTrue(qualification.attribution(value)["allowed"])
+        receipt = Path(value["qualification"]["receipt"]["path"])
+        document = json.loads(receipt.read_text())
+        document["execution"] = "failed"
+        receipt.write_text(json.dumps(document))
+        self.assertFalse(qualification.attribution(value)["allowed"])
+
+    def test_a_malformed_projection_identity_refuses_without_raising(self):
+        # Attribution is a decision boundary: a malformed projection must be a
+        # refusal, not a traceback into the caller.
+        value = self._qualify()
+        self.assertTrue(qualification.attribution(value)["allowed"])
+        value["qualification"]["identity"] = "not-a-dict"
+        verdict = qualification.attribution(value)
+        self.assertFalse(verdict["allowed"])
+
     def test_a_forged_qualification_object_cannot_authorize_blame(self):
         forged = {
             "schema": qualification.SCHEMA,
@@ -527,6 +592,28 @@ if mode == "toctou":
         value = json.loads(buffer.getvalue())
         self.assertNotEqual(code, 0, value)
         self.assertIn("pixel equality alone", value["reason"])
+
+
+class ShippedAuthorityRegistryTests(unittest.TestCase):
+    """The production registry stays fail-closed until a receipt is bound.
+
+    Populating it is a separately reviewed code change that must also bind the
+    receipt to the renderer (a hand-written receipt could otherwise impersonate
+    a registered renderer). This test pins the shipped state; changing it is a
+    deliberate, reviewable edit rather than an accident.
+    """
+
+    def test_the_shipped_registry_is_empty(self):
+        from automation import gfx_gl_control_authorities as authorities
+
+        self.assertEqual(authorities.AUTHORITIES, {})
+        self.assertEqual(authorities.SCHEMA,
+                         "gfx-gl-control-renderer-authorities/v1")
+
+    def test_an_arbitrary_renderer_digest_is_refused_without_a_registry_entry(self):
+        authority = qualification._load_authority("f" * 64)
+        self.assertFalse(authority["qualified"])
+        self.assertFalse(authority["self_attested"])
 
 
 if __name__ == "__main__":
