@@ -61,10 +61,11 @@ technical review evidence, not a formal approval.
   executed / 1 skipped / 0 failures** with neighbours, plugin **9/9**. The
   registry is empty, so the gate authorizes no blame; real 616 draw 14 /
   checkpoint 15 verifies 1,123 blobs but remains unqualified.
-- Targeted native suites on the P0 tree: **246 ran / 234 executed / 12 skipped
-  / 0 failures** (compressed textures, render state, translation/cache,
+- Targeted native suites on merged `main`: **255 ran / 243 executed / 12
+  skipped / 0 failures** (compressed textures, render state, translation/cache,
   checkpoint reconciliation, control qualification, campaign guard, claim
-  ledger, continuous supervisor, Metal replay). The 12 skips are the declared
+  ledger, continuous supervisor, Metal replay; runner
+  `20261120T213558Z-2eac8514`). The 12 skips are the declared
   canonical-M6-frame and copy-bearing-scene-75 fixture absences.
 - Full offline profile on the P0 integration tree: **4,209 ran / 4,144 executed
   / 65 skipped / 1 failure / 6 errors**. The failures are the border-loop native

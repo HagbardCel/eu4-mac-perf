@@ -123,6 +123,8 @@ author evidence rather than audit evidence.
 | This docs follow-up | `--module tests.test_dsh_docs --module tests.test_check_doc_links --module tests.test_case_locator --module tests.test_pre_ready_forensic` + strict `check_doc_links.py` selection | 70 ran / 69 executed / 1 skipped / 0 failures; strict links exit 0 | runner `20261120T195902Z-f4c8ed6d` at #259 |
 | #260 review | `--module tests.test_session_state_claims --module tests.test_dsh_bridge` + neighbours | 103 ran / 103 executed / 0 failures; neighbours 214/214 | independent review at `63d00d31`, runner `20261120T203912Z-1a36ca95` |
 | #261 review | `--module tests.test_gfx_gl_control_qualification --module tests.test_agent_tools` + neighbours + plugin | 32/32 qualification; 353 ran / 352 executed / 1 skipped / 0 failures; plugin 9/9 | independent review at `60e70b62`, runner `20261120T213011Z-971b2722` |
+| Targeted native on merged main | compressed DXT1, sampler/raster, translation/cache, checkpoint reconciliation, GL control, campaign budgets, claim ledger, continuous supervisor, Metal replay | 255 ran / 243 executed / 12 skipped / 0 failures | runner `20261120T213558Z-2eac8514` at `4bf03285` |
+| Full offline profile | `test_runner run --profile offline --label p0-final-full` | 4,209 ran / 4,144 executed / 65 skipped / 1 failure / 6 errors; the same seven fail on base `1d7e37df` (pre-existing border-loop native builds and oracle flood test, reported as failures not skips) | runner `20261120T202921Z-941c7587` (P0 integration tree; official merged-main run recorded in the integration report) |
 
 ## Unresolved scientific blockers
 
