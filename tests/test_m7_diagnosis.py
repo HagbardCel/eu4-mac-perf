@@ -106,7 +106,8 @@ def _clear(target, flags=7):
 
 class DiagnosisFixture:
     def __init__(self, root: Path, *, session_id: str = "session-1",
-                 capture_frame_id: int = 7):
+                 capture_frame_id: int = 7, final_only: bool = False,
+                 partial_graph: bool = False):
         self.root = root
         self.session_id = session_id
         self.capture_frame_id = capture_frame_id
@@ -122,13 +123,27 @@ class DiagnosisFixture:
         self.asset = _texture(1, 1, self.asset_payload)
         self.rt = _texture(10, 10, self.rt_payload,
                            width=WIDTH, height=HEIGHT)
-        self.events = [
-            _clear(None, 7),
-            _draw(1, None, [self.asset], program=1),
-            _clear(10, 1),
-            _draw(2, 10, [self.asset], program=2),
-            _draw(3, None, [self.rt], program=3),
-        ]
+        if final_only:
+            # No renderer-generated resource is sampled in this frame, so the
+            # capture graph requires no intermediate checkpoint.  The final
+            # readback is the only authoritative observation.
+            self.events = [
+                _clear(None, 7),
+                _draw(1, None, [self.asset], program=1),
+            ]
+        else:
+            self.events = [
+                _clear(None, 7),
+                _draw(1, None, [self.asset], program=1),
+                _clear(10, 1),
+                _draw(2, 10, [self.asset], program=2),
+                _draw(3, None, [self.rt], program=3),
+            ]
+        if partial_graph:
+            for event in self.events:
+                if event.get("kind") == "draw":
+                    event.setdefault("program", {})["uniforms"] = [
+                        {"name": "u_color", "type": "vec4"}]
         self.reference = bytes((index * 7) & 0xFF
                                for index in range(WIDTH * HEIGHT * 4))
         self.write_frame()

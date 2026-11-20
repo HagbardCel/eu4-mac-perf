@@ -23,10 +23,16 @@ Fail-closed rules:
   zero mismatched pixels under the same candidate producer.
 
 ``pixel_perfect`` is only reported for zero mismatched pixels with zero maximum
-channel error *and* a complete qualification: verified replay identity,
-complete full-frame execution, clean checkpoint reconciliation and complete
-captured-state coverage.  An accepted partial improvement is still valuable,
-but it is not equivalence.
+channel error, complete qualification (verified replay identity, complete
+full-frame execution, clean checkpoint reconciliation and complete captured
+state coverage), exact authoritative checkpoint coverage, and a producer
+receipt that binds the required checkpoint bytes.  ``authenticated_equivalence``
+additionally requires every configured exact-match regression.
+
+``observed_checkpoint_equality`` is narrower: it says the recomputed
+authoritative bytes match, even if the producer receipt does not bind them.
+``accepted`` only says the evidence is valid and the final image improved.  An
+accepted partial improvement remains valuable, but it is not equivalence.
 """
 
 from __future__ import annotations
@@ -135,6 +141,33 @@ def _within_root(path: Path) -> bool:
         return False
 
 
+def _returned_checkpoint_names(replay: dict) -> set[str]:
+    """Validate returned checkpoint declarations before reconciliation.
+
+    A producer artifact must not crash the independent checker or hide an
+    unbound observation.  Every entry is an object with one unique safe
+    basename.
+    """
+    returned = replay.get("checkpoints") or []
+    if not isinstance(returned, list):
+        raise AcceptanceError("replay_receipt_mismatch",
+                              "replay checkpoints are not a list")
+    names: set[str] = set()
+    for item in returned:
+        if not isinstance(item, dict):
+            raise AcceptanceError("replay_receipt_mismatch",
+                                  "replay has a malformed checkpoint entry")
+        declared = str(item.get("file") or "")
+        if (not declared or Path(declared).name != declared
+                or declared in names):
+            raise AcceptanceError(
+                "replay_receipt_mismatch",
+                f"replay checkpoint declares an invalid or duplicate file "
+                f"name {declared!r}")
+        names.add(declared)
+    return names
+
+
 def _replay_evidence(capture_dir: Path, replay_dir: Path,
                      policy: Path) -> dict:
     """Recompute one side's execution, identity, pixels and checkpoints.
@@ -183,27 +216,46 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
     except (m6_compare.CompareError, OSError) as exc:
         raise AcceptanceError("pixels_unverified", str(exc)) from exc
     graph = gfx_frame_graph.build(capture_dir, trace=trace)
-    request_path = replay_dir / "checkpoint-request.json"
-    published = _json(request_path) if request_path.is_file() else None
-    request_source = "published" if published is not None else "derived"
-    request = published or gfx_frame_graph.checkpoint_request(graph)
+    # The published request is only a plan.  Reuse the independent replay's
+    # graph-agreement and binding checks instead of reading the request file
+    # directly, so an acceptance caller cannot skip them.
+    request, request_source, request_problems, request_binding = (
+        gfx_independent_replay.checkpoint_request_evidence(
+            graph, replay_dir, shadow=shadow, seal=seal))
+    invalid_requests = [item for item in request_problems
+                        if item.get("severity") == "invalid"]
+    if request_source == "published" and invalid_requests:
+        # Refuse a malformed/disagreeing plan before reconciliation can touch
+        # its entries; otherwise a bad request crashes instead of producing a
+        # fail-closed report.
+        raise AcceptanceError(
+            "request_invalid",
+            "; ".join(f"{item.get('kind')}: {item.get('detail')}"
+                      for item in invalid_requests[:8]))
+    returned_checkpoint_names = _returned_checkpoint_names(replay)
     capture = gfx_independent_replay.capture_identity(seal, trace, replay)
     checkpoints, validation = gfx_independent_replay.reconcile_checkpoints(
         graph, request, replay, capture_dir, replay_dir, capture)
+    validation = dict(validation)
     if request_source == "derived":
         # A derived plan cannot be bound to the replay that was executed.
-        validation = dict(validation)
         validation["status"] = "incomplete"
         validation.setdefault("problems", []).append({
             "kind": "request_not_bound",
             "detail": "the replay did not publish its checkpoint request",
         })
+    elif request_problems:
+        # An unbound or legacy request is visible, not silently upgraded to a
+        # complete qualification.
+        validation["status"] = "incomplete"
+        validation.setdefault("problems", []).extend(request_problems)
     states = gfx_independent_replay.state_coverage(capture_dir, trace=trace)
     receipt = _json(replay_dir / "producer-receipt.json")
     producer = receipt.get("producer") if isinstance(
         receipt.get("producer"), dict) else {}
     receipt_capture = receipt.get("capture") if isinstance(
         receipt.get("capture"), dict) else {}
+    checkpoint_binding = "absent"
     if receipt:
         for key in ("session_id", "capture_frame_id", "event_stream_sha256"):
             if str(receipt_capture.get(key)) != str(seal.get(key)):
@@ -222,6 +274,44 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
             raise AcceptanceError("replay_receipt_mismatch",
                                   "producer receipt does not bind the Metal "
                                   "readback")
+        bound = result.get("checkpoint_files")
+        if bound is None:
+            # Receipts written before intermediate binding remain inspectable;
+            # they cannot establish checkpoint exactness independently.
+            checkpoint_binding = "absent"
+        else:
+            if not isinstance(bound, list):
+                raise AcceptanceError(
+                    "replay_receipt_mismatch",
+                    "producer receipt checkpoint binding is not a list")
+            bound_map: dict[str, str] = {}
+            for row in bound:
+                if not isinstance(row, dict):
+                    raise AcceptanceError(
+                        "replay_receipt_mismatch",
+                        "producer receipt has a malformed checkpoint entry")
+                name = str(row.get("file") or "")
+                if (not name or Path(name).name != name
+                        or name in bound_map):
+                    raise AcceptanceError(
+                        "replay_receipt_mismatch",
+                        f"producer receipt has an invalid checkpoint file "
+                        f"name {name!r}")
+                bound_map[name] = str(row.get("sha256") or "")
+            replay_names = returned_checkpoint_names
+            if set(bound_map) != replay_names:
+                missing = sorted(replay_names - set(bound_map))
+                extra = sorted(set(bound_map) - replay_names)
+                raise AcceptanceError(
+                    "replay_receipt_mismatch",
+                    "producer receipt does not bind exactly the returned "
+                    f"checkpoints (missing={missing!r}, extra={extra!r})")
+            for name, expected in bound_map.items():
+                if _sha256(replay_dir / name) != expected:
+                    raise AcceptanceError(
+                        "replay_receipt_mismatch",
+                        f"producer receipt does not bind checkpoint {name}")
+            checkpoint_binding = "bound"
     return {
         "capture_dir": str(capture_dir),
         "replay_dir": str(replay_dir),
@@ -235,26 +325,126 @@ def _replay_evidence(capture_dir: Path, replay_dir: Path,
         "pixels_status": comparison.get("status"),
         "checkpoints": checkpoints,
         "checkpoint_validation": validation,
+        "checkpoint_request": {
+            "source": request_source,
+            "binding": request_binding,
+            "problems": request_problems,
+            "required_entries": len(request.get("checkpoints") or []),
+        },
+        "graph_status": graph.get("status"),
         "state_coverage": states,
         "producer": producer,
         "receipt_present": bool(receipt),
+        "checkpoint_binding": checkpoint_binding,
     }
 
 
-def _qualification_axes(side: dict) -> dict:
+def _checkpoint_authority(side: dict, *, allow_final_only: bool) -> dict:
+    """Separate observed checkpoint equality from qualification coverage.
+
+    Three questions are deliberately independent:
+
+    * ``pixels_match`` -- did every authoritative observation recompute to
+      zero differing pixels?
+    * ``coverage`` -- were the required authoritative observations present and
+      verified?  A diagnostic-only plan cannot establish equivalence, and an
+      empty plan is exact only under an explicit final-only policy.
+    * ``producer_binding`` -- does the producer receipt bind the intermediate
+      bytes (reported by the caller, not inferred here)?
+    """
+    requested = [item for item in side["checkpoints"] if item.get("requested")]
+    authoritative = [item for item in requested if item.get("authoritative")]
+    diagnostic = [item for item in requested if not item.get("authoritative")]
+    counts = {"match": 0, "divergent": 0, "divergent_diagnostic": 0,
+              "invalid": 0}
+    for item in authoritative:
+        status = str(item.get("status") or "invalid")
+        counts[status] = counts.get(status, 0) + 1
+    for item in diagnostic:
+        if str(item.get("status")) == "divergent_diagnostic":
+            counts["divergent_diagnostic"] += 1
+    first = next((item for item in authoritative
+                  if item.get("status") != "match"), None)
+    graph_status = str(side.get("graph_status") or "unknown")
+    if counts["invalid"]:
+        coverage = "invalid"
+    elif counts["divergent"]:
+        coverage = "divergent"
+    elif graph_status != "complete":
+        # No equivalence claim - final-only or checkpointed - is qualified on a
+        # capture graph that itself reports incomplete coverage.
+        coverage = "graph_incomplete"
+    elif authoritative:
+        coverage = "verified"
+    elif requested:
+        coverage = "diagnostic_only"
+    else:
+        required = int((side.get("checkpoint_request") or {}).get(
+            "required_entries") or 0)
+        if required:
+            coverage = "missing_authoritative"
+        else:
+            coverage = "final_only" if allow_final_only else \
+                "final_only_unqualified"
+    if coverage == "final_only":
+        pixels_match = None
+    else:
+        pixels_match = bool(authoritative) and not (
+            counts["divergent"] or counts["invalid"])
+    return {
+        "requested": len(requested),
+        "authoritative": len(authoritative),
+        "diagnostic": len(diagnostic),
+        "matched": counts["match"],
+        "divergent": counts["divergent"],
+        "invalid": counts["invalid"],
+        "divergent_diagnostic": counts["divergent_diagnostic"],
+        "pixels_match": pixels_match,
+        "graph_status": graph_status,
+        "coverage": coverage,
+        "exact": coverage in ("verified", "final_only"),
+        "final_only": coverage == "final_only",
+        "first_difference": None if first is None else {
+            "event": first.get("event"),
+            "target": first.get("target"),
+            "resource": first.get("resource"),
+            "status": first.get("status"),
+            "reason": first.get("reason"),
+        },
+    }
+
+
+def _qualification_axes(side: dict, *, allow_final_only: bool) -> dict:
     identity_ok = side["identity"].get("status") == "verified"
     execution_ok = not side["execution_problems"]
     checkpoints_ok = side["checkpoint_validation"].get("status") == "ok"
     state_ok = side["state_coverage"].get("status") == "complete"
+    checkpoints = _checkpoint_authority(
+        side, allow_final_only=allow_final_only)
+    binding = str(side.get("checkpoint_binding") or "absent")
+    binding_required = checkpoints["authoritative"] > 0
+    if checkpoints["coverage"] == "final_only":
+        # There are no intermediate bytes to bind; the explicit final-only
+        # policy is the qualification, not a producer receipt claim.
+        producer_bound = True
+    else:
+        producer_bound = binding == "bound" and binding_required
     return {
         "replay_identity": "verified" if identity_ok else
                            str(side["identity"].get("status")),
         "full_frame_execution": "complete" if execution_ok else "incomplete",
         "checkpoint_reconciliation": str(
             side["checkpoint_validation"].get("status")),
+        "authoritative_checkpoints": checkpoints,
+        "checkpoint_pixels_match": checkpoints["pixels_match"],
+        "checkpoint_coverage": checkpoints["coverage"],
+        "authoritative_checkpoint_exact": checkpoints["exact"],
+        "checkpoint_binding_required": binding_required,
+        "checkpoint_producer_binding": binding,
+        "checkpoint_producer_bound": producer_bound,
         "state_coverage": str(side["state_coverage"].get("status")),
         "complete": (identity_ok and execution_ok and checkpoints_ok
-                     and state_ok),
+                     and state_ok and checkpoints["exact"]),
     }
 
 
@@ -288,6 +478,36 @@ def _improved(before: dict, after: dict) -> bool:
         return True
     return (after["mismatched_pixels"] == before["mismatched_pixels"]
             and after["max_channel_error"] < before["max_channel_error"])
+
+
+def _checkpoint_regressions(before: dict, after: dict) -> list[dict]:
+    """Return authoritative checkpoints that matched before but not after.
+
+    A final pixel improvement cannot hide damage at a boundary the baseline
+    itself proved exact.  Checkpoints are paired by event and target inside one
+    sealed capture; they are never compared across captures.
+    """
+    def rows(side: dict) -> dict:
+        return {(item.get("event"), str(item.get("target"))): item
+                for item in side["checkpoints"]
+                if item.get("requested") and item.get("authoritative")}
+
+    before_rows = rows(before)
+    after_rows = rows(after)
+    broken: list[dict] = []
+    for key, row in before_rows.items():
+        if row.get("status") != "match":
+            continue
+        candidate = after_rows.get(key)
+        if candidate is None:
+            broken.append({"event": key[0], "target": key[1],
+                           "resource": row.get("resource"),
+                           "status": "missing"})
+        elif candidate.get("status") != "match":
+            broken.append({"event": key[0], "target": key[1],
+                           "resource": row.get("resource"),
+                           "status": candidate.get("status")})
+    return broken
 
 
 def _baseline_problems(case_dir: Path, baseline: dict, before_dir: Path,
@@ -395,9 +615,24 @@ def _load_contract(value) -> tuple[dict, list[str]]:
         problems.append(
             "qualification contract allow_additional must be a boolean")
         allow_additional = False
+    # A final-only case has no authoritative intermediate to bind.  It may be
+    # treated as exact only when the operator's contract explicitly says so;
+    # an absent plan is not silently promoted to equivalence.
+    allow_final_only = contract.get("allow_final_only", False)
+    if not isinstance(allow_final_only, bool):
+        problems.append(
+            "qualification contract allow_final_only must be a boolean")
+        allow_final_only = False
+    allow_no_exact_control = contract.get("allow_no_exact_control", False)
+    if not isinstance(allow_no_exact_control, bool):
+        problems.append(
+            "qualification contract allow_no_exact_control must be a boolean")
+        allow_no_exact_control = False
     return {"schema": contract.get("schema"),
             "required_regressions": cleaned,
-            "allow_additional": allow_additional}, problems
+            "allow_additional": allow_additional,
+            "allow_final_only": allow_final_only,
+            "allow_no_exact_control": allow_no_exact_control}, problems
 
 
 def evaluate(*, case_dir: Path | str, baseline_path: Path | str,
@@ -582,6 +817,12 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
                     "the candidate replay has no producer receipt",
                     severity="invalid")
         else:
+            if after.get("checkpoint_binding") == "absent":
+                limitations.append(
+                    "the candidate producer receipt does not bind its "
+                    "intermediate checkpoint files; checkpoint exactness is "
+                    "recomputed from the sealed reference but not bound to the "
+                    "producer")
             try:
                 current = case_baseline.current_producer()
             except case_baseline.BaselineError as exc:
@@ -656,6 +897,16 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
             problem("not_improved",
                     "the recomputed candidate does not improve any pixel "
                     "statistic over the baseline")
+    if before is not None and after is not None:
+        broken = _checkpoint_regressions(before, after)
+        if broken:
+            problem(
+                "authoritative_checkpoint_regression",
+                "the candidate no longer matches previously exact "
+                "authoritative checkpoints: "
+                + ", ".join(
+                    f"event {row['event']} {row['resource']} "
+                    f"({row['status']})" for row in broken[:8]))
 
     # The configured qualification contract defines the required exact-match
     # inventory.  The supplied evidence must map one-to-one onto it: an omitted,
@@ -663,6 +914,8 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
     # submission cannot bypass a non-empty requirement.
     required = list(contract.get("required_regressions") or [])
     allow_additional = bool(contract.get("allow_additional"))
+    allow_final_only = bool(contract.get("allow_final_only"))
+    allow_no_exact_control = bool(contract.get("allow_no_exact_control"))
     claimed_ids: list[str] = []
     for entry in claimed_regressions or ():
         value = entry
@@ -688,6 +941,11 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
     # The requirement is the contract when it names cases, otherwise the
     # candidate's own claim.  An empty submission never bypasses either.
     expected = required or claimed_ids
+    # Snapshot primary evidence validity before regression execution adds its
+    # own invalidity.  A broken regression rejects the correction but does not
+    # change whether the candidate's own pixels/checkpoints are exact.
+    primary_evidence_valid = not any(
+        item.get("severity") == "invalid" for item in problems)
     regression_rows: list[dict] = []
     submitted_ids: list[str] = []
     candidate_producer = (after or {}).get("producer") or {}
@@ -798,6 +1056,20 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
                         "candidate build", severity="invalid")
             statistics = _statistics(replay_side["pixels"])
             row["statistics"] = statistics
+            checkpoint_axes = _qualification_axes(
+                replay_side, allow_final_only=allow_final_only)
+            row["checkpoints"] = checkpoint_axes["authoritative_checkpoints"]
+            if not checkpoint_axes["authoritative_checkpoint_exact"]:
+                problem("regression_checkpoints",
+                        f"regression {case_id} changed an authoritative "
+                        "checkpoint while its final image matched",
+                        severity="invalid")
+            if (checkpoint_axes["checkpoint_binding_required"]
+                    and not checkpoint_axes["checkpoint_producer_bound"]):
+                problem("regression_checkpoint_binding",
+                        f"regression {case_id} matches pixels but its producer "
+                        "receipt does not bind the required checkpoints",
+                        severity="invalid")
             if statistics is None or statistics["mismatched_pixels"] != 0:
                 problem("regression_failed",
                         f"regression {case_id} is not an exact match "
@@ -832,14 +1104,57 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
             "neither the qualification contract nor the conclusion requires "
             "an exact-match regression")
 
-    axes = {"before": _qualification_axes(before) if before else None,
-            "after": _qualification_axes(after) if after else None}
+    axes = {"before": (_qualification_axes(
+                 before, allow_final_only=allow_final_only)
+                 if before else None),
+            "after": (_qualification_axes(
+                after, allow_final_only=allow_final_only)
+                if after else None)}
     complete_qualification = bool(
         axes["after"] and axes["after"].get("complete"))
+    authoritative_checkpoint_exact = bool(
+        axes["after"] and axes["after"].get("authoritative_checkpoint_exact"))
+    observed_checkpoint_equality = (
+        axes["after"].get("checkpoint_pixels_match")
+        if axes["after"] else None)
+    producer_bound = bool(
+        axes["after"] and axes["after"].get("checkpoint_producer_bound"))
     if axes["after"] and not axes["after"].get("complete"):
+        coverage = axes["after"].get("checkpoint_coverage")
+        if coverage == "graph_incomplete":
+            limitations.append(
+                "the capture graph is not complete; no checkpoint coverage or "
+                "equivalence is qualified")
+        elif coverage == "final_only_unqualified":
+            graph_status = str(
+                (axes["after"].get("authoritative_checkpoints") or {}).get(
+                    "graph_status") or "unknown")
+            if graph_status != "complete":
+                limitations.append(
+                    "the case has no authoritative checkpoints and its capture "
+                    "graph is not complete; final-only equivalence requires a "
+                    "complete capture graph")
+            else:
+                limitations.append(
+                    "the case has no authoritative checkpoints; exactness "
+                    "requires an explicit allow_final_only qualification "
+                    "policy")
+        elif coverage == "diagnostic_only":
+            limitations.append(
+                "all requested checkpoints are diagnostic-only; they cannot "
+                "establish authoritative equivalence")
+        else:
+            limitations.append(
+                "the candidate replay does not have complete qualification; a "
+                "zero-pixel result is not equivalence")
+    if axes["after"] and not authoritative_checkpoint_exact:
         limitations.append(
-            "the candidate replay does not have complete qualification; a "
-            "zero-pixel result is not equivalence")
+            "the candidate changed or was unable to verify an authoritative "
+            "checkpoint; final equality cannot establish equivalence")
+    if axes["after"] and not producer_bound:
+        limitations.append(
+            "the required checkpoint bytes are not bound to the producer "
+            "receipt; observed equality is not authenticated equivalence")
 
     severities = {item["severity"] for item in problems}
     if "invalid" in severities:
@@ -849,11 +1164,31 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
     else:
         result = "accepted"
 
+    if expected:
+        exact_control_policy = "required_inventory"
+        regression_requirements_met = bool(
+            not missing and (allow_additional or not unexpected)
+            and set(expected).issubset(
+                {row["case_id"] for row in regression_rows if row["ok"]}))
+    elif allow_no_exact_control:
+        exact_control_policy = "explicit_exception"
+        regression_requirements_met = True
+    else:
+        exact_control_policy = "none"
+        regression_requirements_met = False
+        limitations.append(
+            "no exact-match control inventory was required; authenticated "
+            "equivalence is not certified (use allow_no_exact_control only as "
+            "an explicit exception)")
     pixel_perfect = bool(
-        result == "accepted" and complete_qualification
+        primary_evidence_valid and complete_qualification
+        and authoritative_checkpoint_exact and producer_bound
         and recomputed_after is not None
         and recomputed_after["mismatched_pixels"] == 0
         and recomputed_after["max_channel_error"] == 0)
+    authenticated_equivalence = bool(
+        pixel_perfect and regression_requirements_met
+        and result == "accepted")
     if result == "accepted" and not improved:
         # Defensive: improvement is required for acceptance.
         result = "rejected"
@@ -870,6 +1205,31 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
         "ok": result == "accepted",
         "result": result,
         "pixel_perfect": pixel_perfect,
+        "observed_checkpoint_equality": observed_checkpoint_equality,
+        "producer_bound_checkpoint_evidence": producer_bound,
+        "primary_evidence_valid": primary_evidence_valid,
+        "authenticated_equivalence": authenticated_equivalence,
+        "regression_requirements_met": regression_requirements_met,
+        "exact_control_policy": exact_control_policy,
+        "no_exact_control_exception": allow_no_exact_control,
+        "verdict_semantics": {
+            "accepted": (
+                "valid evidence and a recomputed improvement; not necessarily "
+                "exact and not necessarily producer-bound"),
+            "observed_checkpoint_equality": (
+                "every authoritative checkpoint recomputed to zero differing "
+                "pixels; independent of the producer receipt"),
+            "pixel_perfect": (
+                "primary candidate evidence is exact: valid evidence, exact "
+                "final image, complete qualification, exact checkpoint "
+                "coverage and producer-bound required observations"),
+            "authenticated_equivalence": (
+                "pixel_perfect, an accepted result, and either every required "
+                "exact-match regression verified or an explicit "
+                "allow_no_exact_control exception; a broken regression can "
+                "reject the correction while the primary image remains "
+                "pixel_perfect"),
+        },
         "improved": improved,
         "case": {
             "dir": str(case_dir),
@@ -895,6 +1255,9 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
             "capture": before["capture"],
             "producer": before["producer"],
             "checkpoint_validation": before["checkpoint_validation"],
+            "checkpoint_request": before["checkpoint_request"],
+            "checkpoint_authority": (axes["before"] or {}).get(
+                "authoritative_checkpoints"),
             "checkpoints": before["checkpoints"],
             "state_coverage": before["state_coverage"],
         }),
@@ -903,6 +1266,9 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
             "capture": after["capture"],
             "producer": after["producer"],
             "checkpoint_validation": after["checkpoint_validation"],
+            "checkpoint_request": after["checkpoint_request"],
+            "checkpoint_authority": (axes["after"] or {}).get(
+                "authoritative_checkpoints"),
             "checkpoints": after["checkpoints"],
             "state_coverage": after["state_coverage"],
         }),
@@ -920,14 +1286,21 @@ def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,
             "allow_additional": allow_additional,
         },
         "qualification": axes,
+        "authoritative_checkpoint_exact": authoritative_checkpoint_exact,
+        "checkpoint_coverage": ((axes["after"] or {}).get(
+            "checkpoint_coverage")),
+        "checkpoint_producer_binding": ((axes["after"] or {}).get(
+            "checkpoint_producer_binding")),
         "complete_qualification": complete_qualification,
         "problems": problems,
         "problems_count": len(problems),
         "limitations": limitations,
         "note": (
             "a valid correction_proposed claim is not an accepted correction "
-            "until this report says accepted; pixel equivalence additionally "
-            "requires complete qualification and zero differing pixels"),
+            "until this report says accepted; pixel_perfect requires complete "
+            "qualification, exact authoritative checkpoints and producer "
+            "binding; authenticated_equivalence additionally requires every "
+            "configured exact-match regression"),
     }
 
 
