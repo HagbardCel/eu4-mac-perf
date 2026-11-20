@@ -904,14 +904,15 @@ def _campaign_attempt_history(run_root: Path) -> list[dict]:
             "operation": claim.get("operation"),
             "session_id": claim.get("session_id"),
         })
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     for root in _campaign_validation_roots(run_root):
         for row in _validation_history(root):
             attempt_id = row.get("attempt_id")
             if attempt_id:
-                if attempt_id in seen:
+                key = (str(attempt_id), str(row.get("phase") or ""))
+                if key in seen:
                     continue
-                seen.add(attempt_id)
+                seen.add(key)
             rows.append(row)
     return rows
 
