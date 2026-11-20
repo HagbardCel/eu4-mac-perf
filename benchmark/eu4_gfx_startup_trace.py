@@ -258,7 +258,6 @@ def run(
     stderr = (run_dir / "game.stderr").open("wb")
     lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
     display_session = None
-    display_record = None
     try:
         if background_plan is not None:
             from automation import gfx_display
@@ -291,12 +290,14 @@ def run(
             stdin=subprocess.DEVNULL,
             pass_fds=lease.child_fds(),
         )
-    except BaseException:
-        if display_session is not None:
-            display_session.restore()
-        lease.release()
-        stdout.close()
-        stderr.close()
+    except BaseException as exc:
+        # Setup failed before an owned game existed; still attempt every
+        # independent restoration step and keep the original exception.
+        cleanup = _cleanup_owned_launch(
+            None, stdout=stdout, stderr=stderr,
+            display_session=display_session, lease=lease)
+        if not cleanup["ok"]:
+            setattr(exc, "cleanup_errors", cleanup["errors"])
         raise
     status_path = run_dir / "startup.status"
     deadline = time.monotonic() + wait_seconds
@@ -333,21 +334,17 @@ def run(
         # Allow destructor/finalizer to finish.
         time.sleep(1.0)
     finally:
-        stdout.close()
-        stderr.close()
-        if game.poll() is None:
-            game.kill()
-            game.wait(timeout=10)
-        if display_session is not None:
-            display_record = {
-                "session": display_session.as_dict(),
-                "restore": display_session.restore(),
-            }
-        lease.release()
+        # Each step is attempted even when an earlier one fails.  The
+        # aggregate record is the only authority for cleanup success.
+        cleanup = _cleanup_owned_launch(
+            game, stdout=stdout, stderr=stderr,
+            display_session=display_session, lease=lease)
 
     summary = {}
     if (run_dir / "summary.json").is_file():
         summary = json.loads((run_dir / "summary.json").read_text())
+    cleanup_ok = bool(cleanup.get("ok"))
+    accepted = bool(summary.get("complete") and cleanup_ok)
     report = {
         "run_dir": str(run_dir),
         "session": session,
@@ -355,12 +352,21 @@ def run(
         "evidence": evidence,
         "status": status,
         "summary": summary,
-        "display": display_record,
-        "accepted": bool(summary.get("complete")),
+        "cleanup": cleanup,
+        "cleanup_ok": cleanup_ok,
+        "cleanup_errors": cleanup.get("errors") or [],
+        "process_alive": cleanup.get("process_alive"),
+        "display": cleanup.get("display"),
+        "lease": cleanup.get("lease"),
+        "accepted": accepted,
+        "outcome": "ok" if accepted else "failed",
     }
     (run_dir / "launcher-report.json").write_text(json.dumps(report, indent=2) + "\n")
-    if not report["accepted"]:
-        raise StartupError(f"startup capture incomplete: {summary}")
+    if not accepted:
+        detail = "; ".join(cleanup.get("errors") or [])
+        raise StartupError(
+            f"startup capture incomplete: {summary}"
+            + (f"; cleanup failed: {detail}" if detail else ""))
     return report
 
 
@@ -501,6 +507,121 @@ def _terminate_owned_process(game: subprocess.Popen) -> dict:
     return info
 
 
+def _cleanup_error(step: str, exc: BaseException) -> str:
+    return f"{step}: {type(exc).__name__}: {exc}"
+
+
+def _cleanup_owned_launch(
+    game: subprocess.Popen | None,
+    *,
+    stdout=None,
+    stderr=None,
+    display_session=None,
+    lease=None,
+) -> dict:
+    """Attempt every cleanup step, then report the aggregate outcome.
+
+    The steps are deliberately independent: a failure to terminate the owned
+    process must not skip stream closure, display/settings restoration or the
+    host-wide lease release.  Each attempt is recorded, and ``ok`` is true only
+    when every mandatory step succeeded and the owned process is confirmed
+    gone.  A caller must not report success when this record is not ok.
+    """
+    errors: list[str] = []
+    record: dict = {
+        "schema": "live-gfx-cleanup/v1",
+        "termination": None,
+        "process_alive": None,
+        "streams": {},
+        "display": None,
+        "lease": None,
+        "errors": errors,
+        "ok": False,
+    }
+
+    if game is not None:
+        termination = {"pid": getattr(game, "pid", None),
+                       "terminated": False, "killed": False}
+        try:
+            termination = _terminate_owned_process(game)
+        except Exception as exc:  # noqa: BLE001 - reported, not hidden
+            termination["error"] = f"{type(exc).__name__}: {exc}"
+            errors.append(_cleanup_error("terminate", exc))
+        try:
+            alive = game.poll() is None
+        except Exception as exc:  # noqa: BLE001
+            alive = None
+            errors.append(_cleanup_error("terminate: poll", exc))
+        termination["alive"] = alive
+        record["termination"] = termination
+        record["process_alive"] = alive
+        if alive is True:
+            errors.append(
+                f"terminate: owned process {termination.get('pid')} is still alive")
+        elif alive is None:
+            errors.append(
+                "terminate: owned process exit could not be confirmed")
+
+    for stream, name in ((stdout, "stdout"), (stderr, "stderr")):
+        if stream is None:
+            continue
+        try:
+            stream.close()
+        except Exception as exc:  # noqa: BLE001
+            record["streams"][name] = f"failed: {type(exc).__name__}: {exc}"
+            errors.append(_cleanup_error(f"close {name}", exc))
+        else:
+            record["streams"][name] = "closed"
+
+    if display_session is not None:
+        display: dict = {"session": None, "restore": None}
+        try:
+            display["session"] = display_session.as_dict()
+        except Exception as exc:  # noqa: BLE001 - diagnostics only
+            display["session_error"] = f"{type(exc).__name__}: {exc}"
+        restore_failed = False
+        try:
+            restore = display_session.restore()
+        except Exception as exc:  # noqa: BLE001
+            restore = {"restored": False,
+                       "error": f"{type(exc).__name__}: {exc}"}
+            errors.append(_cleanup_error("display restore", exc))
+            restore_failed = True
+        display["restore"] = restore
+        record["display"] = display
+        if not restore_failed:
+            restored = isinstance(restore, dict) and (
+                restore.get("restored") is True
+                or restore.get("reason") == "unchanged")
+            if not restored:
+                detail = ""
+                if isinstance(restore, dict):
+                    detail = str(
+                        restore.get("error") or restore.get("reason") or "")
+                errors.append(
+                    "display restore: settings were not restored"
+                    + (f": {detail}" if detail else ""))
+
+    if lease is not None:
+        lease_record: dict = {"released": False}
+        try:
+            lease.release()
+        except Exception as exc:  # noqa: BLE001
+            lease_record["error"] = f"{type(exc).__name__}: {exc}"
+            errors.append(_cleanup_error("lease release", exc))
+        else:
+            lease_record["released"] = True
+        release_error = getattr(lease, "release_error", None)
+        if release_error is not None:
+            lease_record["released"] = False
+            lease_record["error"] = str(release_error)
+            errors.append(f"lease release: {release_error}")
+        record["lease"] = lease_record
+
+    record["ok"] = not errors
+    return record
+
+
 def run_ops(
     *,
     targets: list[str],
@@ -621,7 +742,6 @@ def run_ops(
     stderr = (run_dir / "game.stderr").open("wb")
     lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
     display_session = None
-    display_record = None
     try:
         if background_plan is not None:
             from automation import gfx_display
@@ -656,12 +776,14 @@ def run_ops(
             stdin=subprocess.DEVNULL,
             pass_fds=lease.child_fds(),
         )
-    except BaseException:
-        if display_session is not None:
-            display_session.restore()
-        lease.release()
-        stdout.close()
-        stderr.close()
+    except BaseException as exc:
+        # Setup failed before an owned game existed; still attempt every
+        # independent restoration step and keep the original exception.
+        cleanup = _cleanup_owned_launch(
+            None, stdout=stdout, stderr=stderr,
+            display_session=display_session, lease=lease)
+        if not cleanup["ok"]:
+            setattr(exc, "cleanup_errors", cleanup["errors"])
         raise
     status_path = run_dir / "startup.status"
     status = None
@@ -684,35 +806,11 @@ def run_ops(
             wait_reason = _wait_pair(
                 run_dir, game, deadline, terminal=terminal_result)
     finally:
-        # Cleanup steps are independent: one failure must not skip process
-        # termination, stream closure, display restoration or lease release.
-        cleanup_errors: list[str] = []
-        termination = {"pid": game.pid, "terminated": False, "killed": False}
-        try:
-            termination = _terminate_owned_process(game)
-        except Exception as exc:  # noqa: BLE001 - reported, not hidden
-            cleanup_errors.append(f"terminate: {type(exc).__name__}: {exc}")
-        for stream, name in ((stdout, "stdout"), (stderr, "stderr")):
-            try:
-                stream.close()
-            except Exception as exc:  # noqa: BLE001
-                cleanup_errors.append(f"close {name}: {type(exc).__name__}: {exc}")
-        if display_session is not None:
-            display_record = {"session": display_session.as_dict()}
-            try:
-                display_record["restore"] = display_session.restore()
-            except Exception as exc:  # noqa: BLE001
-                display_record["restore"] = {
-                    "status": "failed",
-                    "error": f"{type(exc).__name__}: {exc}"}
-                cleanup_errors.append(
-                    f"display restore: {type(exc).__name__}: {exc}")
-        try:
-            lease.release()
-        except Exception as exc:  # noqa: BLE001
-            cleanup_errors.append(f"lease release: {type(exc).__name__}: {exc}")
-        if cleanup_errors:
-            termination["cleanup_errors"] = cleanup_errors
+        # Each step is attempted even when an earlier one fails.  The
+        # aggregate record is the only authority for cleanup success.
+        cleanup = _cleanup_owned_launch(
+            game, stdout=stdout, stderr=stderr,
+            display_session=display_session, lease=lease)
     summary = {}
     if (run_dir / "summary.json").is_file():
         try:
@@ -725,28 +823,41 @@ def run_ops(
             operations = json.loads((run_dir / "operations-summary.json").read_text())
         except json.JSONDecodeError:
             operations = {"error": "invalid operations summary"}
-    accepted = bool(
+    accepted_operations = bool(
         summary.get("complete")
         and operations.get("integrity_ok")
         and operations.get("records_copied")
         and operations.get("events", 0) >= 1
     )
+    cleanup_ok = bool(cleanup.get("ok"))
+    accepted = bool(accepted_operations and cleanup_ok)
+    failure = None
+    if not cleanup_ok:
+        failure = "cleanup failed: " + "; ".join(cleanup.get("errors") or [])
+    elif not accepted_operations:
+        failure = "operations were not accepted"
     report = {
         "schema": "live-gfx-capture-report/v0",
         "run_dir": str(run_dir),
         "session": session,
         "pid": game.pid,
         "wait_reason": locals().get("wait_reason", "not_installed"),
-        "cleanup_errors": termination.get("cleanup_errors") or [],
+        "cleanup": cleanup,
+        "cleanup_ok": cleanup_ok,
+        "cleanup_errors": cleanup.get("errors") or [],
+        "process_alive": cleanup.get("process_alive"),
         "terminal_shadow": locals().get("wait_reason", "").startswith(
             "terminal"),
         "evidence": evidence,
         "status": status,
         "summary": summary,
         "operations": operations,
-        "termination": termination,
-        "display": display_record,
+        "termination": cleanup.get("termination"),
+        "display": cleanup.get("display"),
+        "lease": cleanup.get("lease"),
         "accepted": accepted,
+        "outcome": "ok" if accepted else "failed",
+        "failure": failure,
     }
     (run_dir / "launcher-report.json").write_text(json.dumps(report, indent=2) + "\n")
     return report

@@ -7,11 +7,14 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "benchmark"))
 
 import eu4_gfx_startup_trace as startup  # noqa: E402
+from automation import live_gfx, m6_frame  # noqa: E402
 
 
 @unittest.skipUnless(sys.platform == "darwin", "startup trace host is macOS x86_64")
@@ -203,17 +206,22 @@ class GfxStartupTraceTests(unittest.TestCase):
         class FakeProcess:
             pid = 4242
 
+            def __init__(self):
+                self.alive = True
+
             def poll(self):
-                return None
+                return None if self.alive else 0
 
             def terminate(self):
                 observed["terminated"] = True
+                self.alive = False
 
             def wait(self, timeout=None):
                 return 0
 
             def kill(self):
                 observed["killed"] = True
+                self.alive = False
 
         class FakeLease:
             def child_fds(self):
@@ -318,31 +326,583 @@ class TerminalWaitTests(unittest.TestCase):
 
 
 class ShadowTerminalRecordTests(unittest.TestCase):
-    def terminal(self, document):
-        from automation import m6_frame
-        with tempfile.TemporaryDirectory() as tmp:
-            shadow = Path(tmp)
-            if document is not None:
-                (shadow / "coordinator.json").write_text(
-                    document if isinstance(document, str)
-                    else json.dumps(document))
-            return m6_frame._shadow_terminal(shadow)
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.run = Path(self.temporary.name) / "run"
+        self.shadow = self.run / "shadow"
+        self.shadow.mkdir(parents=True)
+        self.capture_id = "capture-a"
+        self.other_id = "capture-b"
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def terminal(self, document, *, capture_id=None, run=None,
+                 continuous=False, max_frames=1):
+        path = self.shadow / "coordinator.json"
+        if document is None:
+            if path.exists():
+                path.unlink()
+        else:
+            path.write_text(
+                document if isinstance(document, str) else json.dumps(document))
+        return m6_frame._shadow_terminal(
+            self.shadow,
+            capture_id=(capture_id or self.capture_id),
+            run=(run or self.run),
+            continuous=continuous,
+            max_frames=max_frames)
+
+    def single(self, **overrides):
+        record = {
+            "schema": "m7-shadow-coordinator/v1",
+            "run": str(self.run.resolve()),
+            "capture_id": self.capture_id,
+            "status": "ok",
+            "seal": {"capture_frame_id": 7},
+            "pixel_verdict": "divergent",
+        }
+        record.update(overrides)
+        return record
+
+    def continuous(self, frames, *, status="ok", max_frames=2, **overrides):
+        record = {
+            "schema": "m7-shadow-coordinator/v1",
+            "mode": "continuous",
+            "run": str(self.run.resolve()),
+            "capture_id": self.capture_id,
+            "max_frames": max_frames,
+            "status": status,
+            "frames": [{"sequence": value} for value in frames],
+            "stop_reason": "frame_limit",
+        }
+        record.update(overrides)
+        return record
 
     def test_partial_or_running_records_are_not_terminal(self):
         self.assertFalse(self.terminal(None))
         self.assertFalse(self.terminal("{partial"))
+        self.assertFalse(self.terminal('{"schema": '))
         self.assertFalse(self.terminal({
-            "schema": "m7-shadow-coordinator/v1", "status": "running"}))
+            "schema": "m7-shadow-coordinator/v1", "status": "running",
+            "run": str(self.run.resolve()),
+            "capture_id": self.capture_id}))
         self.assertFalse(self.terminal({
-            "schema": "other", "status": "ok"}))
+            "schema": "other", "status": "ok",
+            "run": str(self.run.resolve()),
+            "capture_id": self.capture_id}))
+
+    def test_stale_record_from_another_capture_is_rejected(self):
+        self.assertFalse(self.terminal(self.single(capture_id=self.other_id)))
+        self.assertFalse(self.terminal(self.single(capture_id="")))
+        self.assertFalse(self.terminal(
+            self.single(run=str((self.run / "other").resolve()))))
+        # A stale failure record is rejected for exactly the same binding.
+        self.assertFalse(self.terminal({
+            "schema": "m7-shadow-coordinator/v1",
+            "run": str(self.run.resolve()),
+            "capture_id": self.other_id,
+            "status": "failed",
+            "error": "gpu"}))
 
     def test_bound_completed_record_is_terminal(self):
+        self.assertTrue(self.terminal(self.single()))
+        self.assertTrue(self.terminal(self.single(pixel_verdict=None,
+                                                  classification="match")))
         self.assertTrue(self.terminal({
-            "schema": "m7-shadow-coordinator/v1", "status": "ok",
-            "seal": {"capture_frame_id": 1},
-            "pixel_verdict": "divergent"}))
-        self.assertTrue(self.terminal({
-            "schema": "m7-shadow-coordinator/v1", "status": "failed",
+            "schema": "m7-shadow-coordinator/v1",
+            "run": str(self.run.resolve()),
+            "capture_id": self.capture_id,
+            "status": "failed",
             "error": "gpu"}))
-        self.assertFalse(self.terminal({
-            "schema": "m7-shadow-coordinator/v1", "status": "ok"}))
+        self.assertFalse(self.terminal(
+            self.single(seal={}, pixel_verdict=None, classification=None)))
+
+    def test_bound_continuous_record_requires_a_contiguous_prefix(self):
+        self.assertTrue(self.terminal(
+            self.continuous([1, 2]), continuous=True, max_frames=2))
+        self.assertTrue(self.terminal(
+            self.continuous([1], max_frames=3), continuous=True,
+            max_frames=3))
+        self.assertFalse(self.terminal(
+            self.continuous([2]), continuous=True, max_frames=2))
+        self.assertFalse(self.terminal(
+            self.continuous([2, 3]), continuous=True, max_frames=3))
+
+    def test_a_later_frame_does_not_settle_an_earlier_capture(self):
+        # The capture requested one frame; a record produced for frame 2, or a
+        # sequence that runs past the requested boundary, is not its result.
+        self.assertFalse(self.terminal(
+            self.continuous([2]), continuous=True, max_frames=1))
+        self.assertFalse(self.terminal(
+            self.continuous([1, 2]), continuous=True, max_frames=1))
+        self.assertFalse(self.terminal(
+            self.continuous([1], max_frames=2), continuous=True,
+            max_frames=1))
+        self.assertTrue(self.terminal(
+            self.continuous([1], max_frames=1), continuous=True,
+            max_frames=1))
+
+    def test_coordinator_failure_record_carries_the_capture_identity(self):
+        args = m6_frame._parser().parse_args([
+            "shadow-coordinator", "--run", str(self.run),
+            "--capture-id", self.capture_id, "--timeout", "0"])
+        status = m6_frame.shadow_coordinator(args)
+        record = json.loads(
+            (self.shadow / "coordinator.json").read_text())
+        self.assertEqual(status, 1)
+        self.assertEqual(record["status"], "failed")
+        self.assertEqual(record["capture_id"], self.capture_id)
+        self.assertEqual(record["run"], str(self.run.resolve()))
+        self.assertTrue(m6_frame._shadow_terminal(
+            self.shadow, capture_id=self.capture_id, run=self.run,
+            continuous=False, max_frames=None))
+        self.assertFalse(m6_frame._shadow_terminal(
+            self.shadow, capture_id=self.other_id, run=self.run,
+            continuous=False, max_frames=None))
+
+    def test_mode_mismatch_is_rejected(self):
+        self.assertFalse(self.terminal(
+            self.continuous([1, 2]), continuous=False, max_frames=2))
+        self.assertFalse(self.terminal(
+            self.single(mode="continuous"), continuous=False))
+
+
+class _FakeGame:
+    def __init__(self, pid=424242, *, exits_on_terminate=True,
+                 exits_on_kill=True, terminate_error=None):
+        self.pid = pid
+        self.alive = True
+        self.returncode = None
+        self.terminate_calls = 0
+        self.wait_calls = 0
+        self.kill_calls = 0
+        self.exits_on_terminate = exits_on_terminate
+        self.exits_on_kill = exits_on_kill
+        self.terminate_error = terminate_error
+
+    def poll(self):
+        return None if self.alive else self.returncode
+
+    def terminate(self):
+        self.terminate_calls += 1
+        if self.terminate_error is not None:
+            raise self.terminate_error
+        if self.exits_on_terminate:
+            self.alive = False
+            self.returncode = 0
+
+    def wait(self, timeout=None):
+        self.wait_calls += 1
+        if self.alive:
+            raise subprocess.TimeoutExpired("eu4", timeout)
+        return self.returncode
+
+    def kill(self):
+        self.kill_calls += 1
+        if self.exits_on_kill:
+            self.alive = False
+            self.returncode = -9
+
+
+class _FakeLease:
+    def __init__(self, error=None, release_error=None):
+        self.error = error
+        self.release_error = release_error
+        self.release_calls = 0
+        self.released = False
+
+    def child_fds(self):
+        return ()
+
+    def release(self):
+        self.release_calls += 1
+        if self.error is not None:
+            raise self.error
+        self.released = True
+
+
+class _FakeDisplay:
+    def __init__(self, restore=None, error=None):
+        self.restore_result = restore if restore is not None else {
+            "restored": True}
+        self.error = error
+        self.restore_calls = 0
+
+    env = {}
+    placement_library = "fake-placement.dylib"
+    isolation_library = None
+
+    def as_dict(self):
+        return {"session": "fake-display"}
+
+    def restore(self):
+        self.restore_calls += 1
+        if self.error is not None:
+            raise self.error
+        return self.restore_result
+
+
+class RunOpsCleanupTests(unittest.TestCase):
+    """Cleanup is independent, reported, and part of the operation outcome."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.run_index = 0
+        self.output = self.root / "run"
+        self.launcher = self.root / "launcher.json"
+        self.launcher.write_text(json.dumps({"exeArgs": []}))
+        self.evidence = {
+            "executable_sha256": "a" * 64,
+            "library_sha256": "b" * 64,
+            "ops": [],
+        }
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def run_ops(self, *, game=None, lease=None, display=None, complete=False,
+                terminal=None):
+        self.run_index += 1
+        self.output = self.root / f"run-{self.run_index}"
+        game = game or _FakeGame()
+        lease = lease or _FakeLease()
+
+        def popen(*_args, **_kwargs):
+            self.output.mkdir(parents=True, exist_ok=True)
+            (self.output / "startup.status").write_text(
+                f"state=installed\npid={game.pid}\n")
+            if complete:
+                (self.output / "summary.json").write_text(
+                    json.dumps({"complete": True}))
+                (self.output / "operations-summary.json").write_text(
+                    json.dumps({"integrity_ok": True,
+                                "records_copied": True, "events": 1}))
+            return game
+
+        patches = [
+            mock.patch.object(startup, "preflight_ops",
+                              return_value=self.evidence),
+            mock.patch("automation.test_profiles.ensure_live_launch",
+                       return_value=None),
+            mock.patch.object(startup.base, "GOG_LAUNCHER", self.launcher),
+            mock.patch.object(startup.launch_lease, "acquire",
+                              return_value=lease),
+            mock.patch.object(startup.subprocess, "Popen", side_effect=popen),
+        ]
+        if display is not None:
+            patches.append(mock.patch(
+                "automation.gfx_display.activate_background",
+                return_value=display))
+        for patcher in patches:
+            patcher.start()
+        try:
+            return startup.run_ops(
+                targets=[], max_events=1, duration_s=0.1, timeout_s=1,
+                output=self.output, authorize_live=True,
+                evidence=self.evidence,
+                background_plan=(object() if display is not None else None),
+                terminal_result=(terminal if terminal is not None
+                                 else (lambda: True)))
+        finally:
+            for patcher in reversed(patches):
+                patcher.stop()
+
+    def test_normal_completion_terminates_and_releases(self):
+        game = _FakeGame()
+        lease = _FakeLease()
+        display = _FakeDisplay({"restored": True})
+        report = self.run_ops(game=game, lease=lease, display=display,
+                              complete=True, terminal=lambda: False)
+        self.assertTrue(report["cleanup_ok"])
+        self.assertEqual(report["cleanup_errors"], [])
+        self.assertFalse(report["process_alive"])
+        self.assertTrue(report["accepted"])
+        self.assertEqual(report["outcome"], "ok")
+        self.assertTrue(lease.released)
+        self.assertEqual(display.restore_calls, 1)
+        self.assertFalse(game.alive)
+        self.assertEqual(game.wait_calls, 1)
+
+    def test_terminal_shadow_path_cleans_up(self):
+        game = _FakeGame()
+        lease = _FakeLease()
+        report = self.run_ops(game=game, lease=lease, terminal=lambda: True)
+        self.assertEqual(report["wait_reason"], "terminal")
+        self.assertTrue(report["terminal_shadow"])
+        self.assertTrue(report["cleanup_ok"])
+        self.assertFalse(report["process_alive"])
+        self.assertTrue(lease.released)
+        self.assertFalse(game.alive)
+
+    def test_game_exit_path_cleans_up(self):
+        game = _FakeGame()
+        game.alive = False
+        game.returncode = 0
+        lease = _FakeLease()
+        report = self.run_ops(game=game, lease=lease, terminal=lambda: False)
+        self.assertEqual(report["wait_reason"], "game_exit")
+        self.assertTrue(report["cleanup_ok"])
+        self.assertFalse(report["process_alive"])
+        self.assertTrue(lease.released)
+
+    def test_failed_termination_is_not_success(self):
+        game = _FakeGame(exits_on_terminate=False, exits_on_kill=False)
+        lease = _FakeLease()
+        report = self.run_ops(game=game, lease=lease, complete=True,
+                              terminal=lambda: False)
+        self.assertFalse(report["cleanup_ok"])
+        self.assertFalse(report["accepted"])
+        self.assertEqual(report["outcome"], "failed")
+        self.assertTrue(report["process_alive"])
+        self.assertTrue(any("still alive" in item
+                            for item in report["cleanup_errors"]))
+        # The lease was still attempted and released despite the live process.
+        self.assertTrue(lease.released)
+        self.assertTrue(game.alive)
+        self.assertGreaterEqual(game.terminate_calls, 1)
+
+    def test_failed_display_restoration_is_not_success(self):
+        for display in (
+            _FakeDisplay({"restored": False, "error": "backup corrupt"}),
+            _FakeDisplay(error=RuntimeError("restore exploded")),
+        ):
+            with self.subTest(display=display):
+                lease = _FakeLease()
+                report = self.run_ops(
+                    game=_FakeGame(), lease=lease, display=display,
+                    complete=True, terminal=lambda: False)
+                self.assertFalse(report["cleanup_ok"])
+                self.assertFalse(report["accepted"])
+                self.assertEqual(report["outcome"], "failed")
+                self.assertTrue(any("display restore" in item
+                                    for item in report["cleanup_errors"]))
+                self.assertEqual(display.restore_calls, 1)
+                self.assertTrue(lease.released)
+                self.assertFalse(report["process_alive"])
+
+    def test_failed_lease_release_is_not_success(self):
+        lease = _FakeLease(error=RuntimeError("close failed"))
+        display = _FakeDisplay({"restored": True})
+        report = self.run_ops(game=_FakeGame(), lease=lease, display=display,
+                              complete=True, terminal=lambda: False)
+        self.assertFalse(report["cleanup_ok"])
+        self.assertFalse(report["accepted"])
+        self.assertEqual(report["outcome"], "failed")
+        self.assertTrue(any("lease release" in item
+                            for item in report["cleanup_errors"]))
+        self.assertFalse(lease.released)
+        self.assertEqual(lease.release_calls, 1)
+        self.assertEqual(display.restore_calls, 1)
+        self.assertFalse(report["process_alive"])
+
+    def test_all_cleanup_failures_are_attempted_independently(self):
+        game = _FakeGame(terminate_error=RuntimeError("terminate failed"))
+        display = _FakeDisplay(error=RuntimeError("restore failed"))
+        lease = _FakeLease(error=RuntimeError("release failed"))
+        report = self.run_ops(game=game, lease=lease, display=display,
+                              terminal=lambda: True)
+        joined = " | ".join(report["cleanup_errors"])
+        self.assertIn("terminate", joined)
+        self.assertIn("display restore", joined)
+        self.assertIn("lease release", joined)
+        self.assertEqual(game.terminate_calls, 1)
+        self.assertEqual(display.restore_calls, 1)
+        self.assertEqual(lease.release_calls, 1)
+        self.assertFalse(report["cleanup_ok"])
+        self.assertFalse(report["accepted"])
+        self.assertEqual(report["outcome"], "failed")
+
+
+class CaptureCleanupOutcomeTests(unittest.TestCase):
+    """The capture report and exit status inherit cleanup/terminal failures."""
+
+    def capture(self, output, report, *, shadow_record=None):
+        def fake_run_ops(**kwargs):
+            Path(kwargs["output"]).mkdir(parents=True, exist_ok=True)
+            if shadow_record is not None:
+                shadow = Path(kwargs["output"]) / "shadow"
+                shadow.mkdir(parents=True, exist_ok=True)
+                (shadow / "coordinator.json").write_text(
+                    json.dumps(shadow_record))
+            return dict(report)
+
+        class Coordinator:
+            def communicate(self, timeout=None):
+                return "", ""
+
+            def poll(self):
+                return 0
+
+        args = m6_frame._parser().parse_args(
+            ["capture", "--output", str(output)]
+            + (["--shadow"] if shadow_record is not None else []))
+        patches = [
+            mock.patch.object(startup, "preflight_ops", return_value={}),
+            mock.patch.object(startup, "run_ops", side_effect=fake_run_ops),
+            mock.patch.object(m6_frame, "load_trace", return_value={}),
+            mock.patch.object(m6_frame, "coverage_report",
+                              return_value={"ok": True}),
+            mock.patch.object(m6_frame, "load_seal", return_value={
+                "capture_frame_id": 1, "session_id": "s", "pid": 4242}),
+            mock.patch.object(m6_frame.subprocess, "Popen",
+                              return_value=Coordinator()),
+        ]
+        for patcher in patches:
+            patcher.start()
+        try:
+            return m6_frame.capture(args)
+        finally:
+            for patcher in reversed(patches):
+                patcher.stop()
+
+    def report(self, **overrides):
+        value = {
+            "session": "session",
+            "pid": 4242,
+            "display": None,
+            "cleanup_ok": True,
+            "cleanup_errors": [],
+            "process_alive": False,
+            "termination": {"pid": 4242, "terminated": True, "alive": False},
+            "lease": {"released": True},
+        }
+        value.update(overrides)
+        return value
+
+    def test_live_capture_status_rejects_cleanup_failure(self):
+        status = live_gfx._capture_status({
+            "cleanup_ok": False,
+            "cleanup_errors": ["lease release: close failed"],
+            "status": {"state": "installed"},
+        })
+        self.assertEqual(status[0], "unavailable")
+        self.assertIn("cleanup_failed", status[1])
+        self.assertIn("close failed", status[1])
+
+    def test_cleanup_failure_makes_the_capture_fail(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "run"
+            status = self.capture(output, self.report(
+                cleanup_ok=False,
+                cleanup_errors=["terminate: owned process 4242 is still alive"],
+                process_alive=True))
+            written = json.loads(
+                (output / "capture-report.json").read_text())
+        self.assertEqual(status, 8)
+        self.assertEqual(written["outcome"], "failed")
+        self.assertFalse(written["cleanup"]["ok"])
+        self.assertIn("still alive", written["cleanup_failure"])
+
+    def test_cleanup_failure_does_not_mask_a_primary_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "run"
+
+            def fake_run_ops(**kwargs):
+                Path(kwargs["output"]).mkdir(parents=True, exist_ok=True)
+                return self.report(
+                    cleanup_ok=False,
+                    cleanup_errors=["lease release: close failed"])
+
+            patches = [
+                mock.patch.object(startup, "preflight_ops", return_value={}),
+                mock.patch.object(startup, "run_ops",
+                                  side_effect=fake_run_ops),
+                mock.patch.object(m6_frame, "load_trace", return_value={}),
+                mock.patch.object(m6_frame, "coverage_report",
+                                  return_value={"ok": False}),
+            ]
+            for patcher in patches:
+                patcher.start()
+            try:
+                args = m6_frame._parser().parse_args(
+                    ["capture", "--output", str(output)])
+                status = m6_frame.capture(args)
+            finally:
+                for patcher in reversed(patches):
+                    patcher.stop()
+            written = json.loads(
+                (output / "capture-report.json").read_text())
+        self.assertEqual(status, 5)
+        self.assertEqual(written["outcome"], "failed")
+        self.assertIn("cleanup failed", written["cleanup_failure"])
+
+    def test_stale_coordinator_record_is_not_consumed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "run"
+            stale = {
+                "schema": "m7-shadow-coordinator/v1",
+                "run": str(output.resolve()),
+                "capture_id": "another-capture",
+                "status": "ok",
+                "seal": {"capture_frame_id": 1},
+                "pixel_verdict": "divergent",
+            }
+            status = self.capture(output, self.report(),
+                                  shadow_record=stale)
+            written = json.loads(
+                (output / "capture-report.json").read_text())
+        self.assertEqual(status, 7)
+        self.assertEqual(written["outcome"], "failed")
+        self.assertIn("no bound terminal report", written["shadow_error"])
+        self.assertNotIn("shadow", written)
+
+    def test_failed_coordinator_record_is_terminal_but_not_success(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "run"
+            seen = {}
+
+            class Coordinator:
+                def communicate(self, timeout=None):
+                    return "", ""
+
+                def poll(self):
+                    return 0
+
+            def fake_run_ops(**kwargs):
+                Path(kwargs["output"]).mkdir(parents=True, exist_ok=True)
+                return self.report()
+
+            def fake_popen(command, *_args, **_kwargs):
+                capture_id = command[command.index("--capture-id") + 1]
+                seen["capture_id"] = capture_id
+                shadow = Path(command[command.index("--shadow-dir") + 1])
+                shadow.mkdir(parents=True, exist_ok=True)
+                (shadow / "coordinator.json").write_text(json.dumps({
+                    "schema": "m7-shadow-coordinator/v1",
+                    "run": str(output.resolve()),
+                    "capture_id": capture_id,
+                    "status": "failed",
+                    "error": "gpu_execution_failure",
+                }))
+                return Coordinator()
+
+            patches = [
+                mock.patch.object(startup, "preflight_ops", return_value={}),
+                mock.patch.object(startup, "run_ops",
+                                  side_effect=fake_run_ops),
+                mock.patch.object(m6_frame, "load_trace", return_value={}),
+                mock.patch.object(m6_frame, "coverage_report",
+                                  return_value={"ok": True}),
+                mock.patch.object(m6_frame, "load_seal", return_value={
+                    "capture_frame_id": 1, "session_id": "s", "pid": 4242}),
+                mock.patch.object(m6_frame.subprocess, "Popen",
+                                  side_effect=fake_popen),
+            ]
+            for patcher in patches:
+                patcher.start()
+            try:
+                args = m6_frame._parser().parse_args(
+                    ["capture", "--output", str(output), "--shadow"])
+                status = m6_frame.capture(args)
+            finally:
+                for patcher in reversed(patches):
+                    patcher.stop()
+            written = json.loads(
+                (output / "capture-report.json").read_text())
+        self.assertEqual(status, 7)
+        self.assertEqual(written["outcome"], "failed")
+        self.assertTrue(seen["capture_id"])
+        self.assertIn("gpu_execution_failure", written["shadow_error"])
+        self.assertEqual(written["shadow"]["status"], "failed")

@@ -280,6 +280,9 @@ def _finish_launch(
 
 
 def _capture_status(report: dict, *, until_target_draw: bool = False) -> tuple[str, str]:
+    if report.get("cleanup_ok") is False:
+        detail = "; ".join(report.get("cleanup_errors") or [])
+        return "unavailable", "cleanup_failed" + (f": {detail}" if detail else "")
     status = report.get("status")
     if not isinstance(status, dict) or status.get("state") != "installed":
         return "unavailable", "startup attestation was not installed"
@@ -634,6 +637,7 @@ def capture(args: argparse.Namespace) -> int:
             gl_reference=bool(args.gl_reference),
         )
     except (startup.StartupError, OSError, RuntimeError) as exc:
+        cleanup_errors = list(getattr(exc, "cleanup_errors", None) or [])
         if token is not None:
             _finish_launch(
                 Path(args.campaign_run_root),
@@ -641,6 +645,9 @@ def capture(args: argparse.Namespace) -> int:
                 pid=None,
                 status=f"failed: {exc}",
             )
+        if cleanup_errors:
+            print("capture cleanup failed: " + "; ".join(cleanup_errors),
+                  file=sys.stderr)
         print(f"capture failed: {exc}", file=sys.stderr)
         return EXIT_UNAVAILABLE
 

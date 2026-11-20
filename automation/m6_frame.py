@@ -638,34 +638,91 @@ def _reap_coordinator(coordinator) -> None:
             pass
 
 
-def _shadow_terminal(shadow_dir: Path) -> bool:
-    """True only for a complete, bound coordinator terminal record.
-
-    A partial JSON write, a running continuous sequence, a missing seal and a
-    record for another run all return False, so the original wait remains in
-    force.  A terminal failure is also terminal: the game must not stay alive
-    waiting for an ops summary that this mode never requests.
-    """
+def _coordinator_record(shadow_dir: Path) -> dict | None:
+    """Read a complete coordinator JSON object, or None while it is partial."""
     path = Path(shadow_dir) / "coordinator.json"
     try:
         report = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError, UnicodeError):
-        return False
-    if not isinstance(report, dict):
-        return False
+        return None
+    return report if isinstance(report, dict) else None
+
+
+def _shadow_terminal_record(
+    shadow_dir: Path,
+    *,
+    capture_id: str,
+    run: Path | str,
+    continuous: bool,
+    max_frames: int | None,
+) -> dict | None:
+    """Return the coordinator record only when it is bound to this capture.
+
+    Binding covers the per-capture identity, the resolved run root, the capture
+    mode and, for a bounded sequence, the requested frame count and a
+    contiguous frame prefix starting at frame 1.  A stale record from an earlier
+    capture, a record for a later frame boundary and an unbound failure record
+    are all rejected rather than consumed.  ``None`` means the original wait
+    stays in force and the post-wait consumer must not apply the record.
+    """
+    if not capture_id:
+        return None
+    report = _coordinator_record(shadow_dir)
+    if report is None:
+        return None
     if report.get("schema") != "m7-shadow-coordinator/v1":
-        return False
+        return None
+    if report.get("capture_id") != capture_id:
+        return None
+    if report.get("run") != str(Path(run).expanduser().resolve()):
+        return None
     status = report.get("status")
+    record_mode = report.get("mode")
+    if continuous:
+        if record_mode != "continuous":
+            return None
+        if not isinstance(max_frames, int) or isinstance(max_frames, bool):
+            return None
+        if report.get("max_frames") != max_frames:
+            return None
+    elif record_mode == "continuous":
+        return None
     if status == "failed":
-        return True
+        # A bound failure is terminal: waiting for a later summary cannot make
+        # this capture succeed.  The binding checks above still apply.
+        return report
     if status != "ok":
-        return False
-    if report.get("mode") == "continuous":
-        return isinstance(report.get("frames"), list) and bool(
-            report.get("frames")) and report.get("stop_reason") is not None
-    return bool(report.get("seal")) and (
-        report.get("pixel_verdict") is not None
-        or report.get("classification") is not None)
+        return None
+    if continuous:
+        frames = report.get("frames")
+        if not isinstance(frames, list) or not frames:
+            return None
+        if len(frames) > max_frames:
+            return None
+        sequences = []
+        for item in frames:
+            if not isinstance(item, dict):
+                return None
+            sequence = item.get("sequence")
+            if (not isinstance(sequence, int) or isinstance(sequence, bool)
+                    or sequence < 1):
+                return None
+            sequences.append(sequence)
+        if sequences != list(range(1, len(sequences) + 1)):
+            return None
+        return report if report.get("stop_reason") is not None else None
+    seal = report.get("seal")
+    if not isinstance(seal, dict) or seal.get("capture_frame_id") is None:
+        return None
+    if (report.get("pixel_verdict") is None
+            and report.get("classification") is None):
+        return None
+    return report
+
+
+def _shadow_terminal(shadow_dir: Path, **identity) -> bool:
+    """True only for the complete terminal record bound to this capture."""
+    return _shadow_terminal_record(shadow_dir, **identity) is not None
 
 
 def capture(args: argparse.Namespace) -> int:
@@ -676,6 +733,9 @@ def capture(args: argparse.Namespace) -> int:
     if output.exists():
         print(f"capture output already exists: {output}", file=sys.stderr)
         return 2
+    # The coordinator record is bound to this capture before any process is
+    # started, so a stale record can never settle this launch.
+    capture_id = str(uuid.uuid4())
     frame_dir = output / "frame"
     max_events = 1024
     evidence = startup.preflight_ops(
@@ -878,6 +938,8 @@ def capture(args: argparse.Namespace) -> int:
                 str(output),
                 "--shadow-dir",
                 str(shadow_dir),
+                "--capture-id",
+                capture_id,
                 "--timeout",
                 str(
                     max(
@@ -926,11 +988,17 @@ def capture(args: argparse.Namespace) -> int:
             game_args=list(getattr(args, "game_arg", []) or []) or None,
             campaign_reservation=reservation,
             terminal_result=(
-                (lambda: _shadow_terminal(shadow_dir))
+                (lambda: _shadow_terminal(
+                    shadow_dir,
+                    capture_id=capture_id,
+                    run=output,
+                    continuous=continuous,
+                    max_frames=(args.max_frames if continuous else None)))
                 if shadow_enabled else None),
         )
     except (startup.StartupError, OSError, RuntimeError) as exc:
         _reap_coordinator(coordinator)
+        cleanup_errors = list(getattr(exc, "cleanup_errors", None) or [])
         if token is not None:
             live_gfx._finish_launch(
                 Path(args.campaign_run_root), token, pid=None,
@@ -942,10 +1010,14 @@ def capture(args: argparse.Namespace) -> int:
                 detail=f"{type(exc).__name__}: {exc}",
                 failure_action="eu4_launches",
                 evidence={"output": str(output)})
+        if cleanup_errors:
+            print("capture cleanup failed: " + "; ".join(cleanup_errors),
+                  file=sys.stderr)
         print(f"capture failed: {exc}", file=sys.stderr)
         return 4
     result: dict = {
         "schema": "m6-frame-capture/v1",
+        "capture_id": capture_id,
         "session": report.get("session"),
         "pid": report.get("pid"),
         "display": report.get("display"),
@@ -1024,10 +1096,20 @@ def capture(args: argparse.Namespace) -> int:
                     coordinator.communicate(timeout=30)
                 except subprocess.TimeoutExpired:
                     _reap_coordinator(coordinator)
-            coordinator_path = shadow_dir / "coordinator.json"
-            if not coordinator_path.is_file():
-                raise FrameError("in-process shadow coordinator produced no report")
-            shadow_report = _read_json(coordinator_path)
+                if coordinator.poll() is None:
+                    raise FrameError(
+                        "in-process shadow coordinator did not exit after "
+                        "publication")
+            shadow_report = _shadow_terminal_record(
+                shadow_dir,
+                capture_id=capture_id,
+                run=output,
+                continuous=continuous,
+                max_frames=(args.max_frames if continuous else None))
+            if shadow_report is None:
+                raise FrameError(
+                    "in-process shadow coordinator produced no bound "
+                    "terminal report")
             native_failure = apply_shadow_report(result, shadow_report)
             if native_failure is not None:
                 raise FrameError(
@@ -1127,6 +1209,30 @@ def capture(args: argparse.Namespace) -> int:
                 for item in campaign_frames
             ],
         }
+    cleanup_ok = report.get("cleanup_ok") is not False
+    cleanup_errors = list(report.get("cleanup_errors") or [])
+    display_record = report.get("display")
+    result["cleanup"] = {
+        "ok": cleanup_ok,
+        "errors": cleanup_errors,
+        "process_alive": report.get("process_alive"),
+        "termination": report.get("termination"),
+        "lease": report.get("lease"),
+        "display_restore": (
+            display_record.get("restore")
+            if isinstance(display_record, dict) else None),
+    }
+    if not cleanup_ok:
+        cleanup_detail = "cleanup failed: " + (
+            "; ".join(cleanup_errors) or "unspecified cleanup failure")
+        result["cleanup_failure"] = cleanup_detail
+        # A cleanup failure can never turn a failed capture into a success.
+        # When the trace/seal/shadow checks already failed, keep their status
+        # and error as the primary reason and report cleanup separately.
+        if status == 0:
+            status = 8
+            result["error"] = cleanup_detail
+    result["outcome"] = "ok" if status == 0 else "failed"
     if capture_guard is not None and reservation is not None:
         seal_value = result.get("seal") or {}
         sealed_frames = (seal_value.get("frames")
@@ -1141,26 +1247,38 @@ def capture(args: argparse.Namespace) -> int:
             consumed["shadow_executions"] = (
                 len(sealed_frames) if continuous else
                 (1 if status == 0 or result.get("shadow") else 0))
-        failure_action = ("shadow_executions"
-                          if shadow_enabled and status != 0
-                          else "eu4_launches")
+        if status == 8:
+            # Cleanup failure is a launch/restore failure, not a shadow
+            # execution failure.
+            failure_action = "eu4_launches"
+        elif shadow_enabled and status != 0:
+            failure_action = "shadow_executions"
+        else:
+            failure_action = "eu4_launches"
+        detail = str(result.get("error") or result.get("seal_error")
+                     or result.get("shadow_error") or "")
+        if not cleanup_ok and detail != result.get("cleanup_failure"):
+            detail = "; ".join(filter(
+                None, [detail, str(result.get("cleanup_failure") or "")]))
         capture_guard.complete(
             reservation,
             outcome="ok" if status == 0 else "failed",
-            detail=str(result.get("error") or result.get("seal_error")
-                       or result.get("shadow_error") or ""),
+            detail=detail,
             consumed=consumed if status == 0 else None,
             failure_action=failure_action,
             evidence={"output": str(output), "status": status,
                       "pid": report.get("pid"),
-                      "frames": len(sealed_frames)})
+                      "frames": len(sealed_frames),
+                      "cleanup_ok": cleanup_ok})
     (output / "capture-report.json").write_text(json.dumps(result, indent=2) + "\n")
     if token is not None:
         live_gfx._finish_launch(
             Path(args.campaign_run_root),
             token,
             pid=report.get("pid"),
-            status="completed" if status == 0 else "failed: frame-trace",
+            status=("completed" if status == 0 else
+                    "failed: cleanup" if status == 8 else
+                    "failed: frame-trace"),
         )
     print(json.dumps(result, indent=2))
     return status
@@ -2127,8 +2245,10 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
         shadow.mkdir(parents=True, exist_ok=True)
         (shadow / "coordinator.json").write_text(
             json.dumps(
-                {"schema": "m7-shadow-coordinator/v1", "status": "failed",
-                 "error": "invalid phase budget"},
+                {"schema": "m7-shadow-coordinator/v1",
+                 "run": str(run), "shadow_dir": str(shadow),
+                 "capture_id": getattr(args, "capture_id", "") or "",
+                 "status": "failed", "error": "invalid phase budget"},
                 indent=2,
             )
             + "\n"
@@ -2141,6 +2261,7 @@ def shadow_coordinator(args: argparse.Namespace) -> int:
         "schema": "m7-shadow-coordinator/v1",
         "run": str(run),
         "shadow_dir": str(shadow),
+        "capture_id": getattr(args, "capture_id", "") or "",
         "status": "incomplete",
     }
     overall_deadline = time.monotonic() + args.timeout
@@ -2774,6 +2895,7 @@ def shadow_coordinator_continuous(args: argparse.Namespace) -> int:
         "mode": "continuous",
         "run": str(run),
         "shadow_dir": str(shadow),
+        "capture_id": getattr(args, "capture_id", "") or "",
         "max_frames": args.max_frames,
         "status": "running",
         "frames": [],
@@ -3026,6 +3148,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     coord.add_argument("--run", required=True)
     coord.add_argument("--shadow-dir", default="")
+    coord.add_argument("--capture-id", default="",
+                       help="per-capture identity written into every "
+                            "coordinator record")
     coord.add_argument("--timeout", type=float, default=900.0)
     coord.add_argument("--seal-timeout", type=float, default=300.0)
     coord.add_argument("--translation-timeout", type=float, default=180.0)
