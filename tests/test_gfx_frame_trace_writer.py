@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import gfx_frame_graph  # noqa: E402
+from automation import gfx_frame_graph, native_build  # noqa: E402
 BENCH = ROOT / "benchmark"
 
 
@@ -28,7 +28,9 @@ class FrameTraceWriterTests(unittest.TestCase):
     def setUpClass(cls):
         cls.temporary = tempfile.TemporaryDirectory()
         cls.binary = Path(cls.temporary.name) / "gfx_frame_trace_scenarios"
-        built = subprocess.run(
+        sources = [ROOT / "tests" / "gfx_frame_trace_scenarios.c",
+                   BENCH / "eu4_gfx_frame_trace.c"]
+        native_build.require_build(
             [
                 "clang",
                 "-O1",
@@ -38,17 +40,12 @@ class FrameTraceWriterTests(unittest.TestCase):
                 str(BENCH),
                 "-o",
                 str(cls.binary),
-                str(ROOT / "tests" / "gfx_frame_trace_scenarios.c"),
-                str(BENCH / "eu4_gfx_frame_trace.c"),
+                *map(str, sources),
                 "-framework",
                 "OpenGL",
             ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if built.returncode:
-            raise unittest.SkipTest(built.stderr.strip() or "trace host build failed")
+            label="frame-trace-scenarios", sources=sources,
+            frameworks=("OpenGL",), require_arm64=False)
 
     @classmethod
     def tearDownClass(cls):

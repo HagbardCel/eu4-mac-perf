@@ -700,7 +700,8 @@ def eu4_re_query(args: argparse.Namespace) -> dict:
 
 
 def discover_evidence(*, roots, query=None, classification=None, since=None,
-                      limit=20, offset=0) -> dict:
+                      limit=20, offset=0, locator_limit=None,
+                      locator_offset=0) -> dict:
     return evidence_index.discover(
         configured_roots=roots,
         query=query,
@@ -708,6 +709,8 @@ def discover_evidence(*, roots, query=None, classification=None, since=None,
         since=since,
         limit=limit,
         offset=offset,
+        locator_limit=locator_limit,
+        locator_offset=locator_offset,
     )
 
 
@@ -743,6 +746,9 @@ def eu4_session(args: argparse.Namespace) -> dict:
             since=args.since,
             limit=int(getattr(args, "limit", 20) or 20),
             offset=int(getattr(args, "offset", 0) or 0),
+            locator_limit=getattr(args, "locator_limit", None),
+            locator_offset=int(
+                getattr(args, "locator_offset", 0) or 0),
         )
         return _envelope("eu4_session", "ok", discovery)
     run = Path(args.run).expanduser().resolve()
@@ -986,7 +992,26 @@ def eu4_capture(args: argparse.Namespace) -> dict:
                 json.dumps(graph, indent=2) + "\n", encoding="utf-8")
         status = {"complete": "ok", "partial": "partial"}.get(
             graph["status"], "invalid")
-        return _envelope("eu4_capture", status, graph,
+        if bool(getattr(args, "full", False)):
+            return _envelope("eu4_capture", status, graph,
+                             reason="; ".join(graph.get("reasons") or []))
+        request = gfx_frame_graph.checkpoint_request(graph)
+        rows = gfx_frame_graph.provenance_matrix(
+            graph, request.get("checkpoints") or [])
+        value = {
+            "schema": graph.get("schema"),
+            "status": graph.get("status"),
+            "reasons": (graph.get("reasons") or [])[:12],
+            "counts": graph.get("counts") or {},
+            "boundary": graph.get("boundary") or {},
+            "checkpoint_count": len(rows),
+            "checkpoints": rows[:32],
+            "truncated": len(rows) > 32,
+            "authority": "graph-derived observation/writer rows; writer "
+                         "history is empty only when the graph records no "
+                         "prior same-resource writer",
+        }
+        return _envelope("eu4_capture", status, value,
                          reason="; ".join(graph.get("reasons") or []))
     run = Path(args.run).expanduser().resolve() if args.run else None
     if args.capture_op == "health":
@@ -2368,37 +2393,24 @@ def _case_diagnosis_view(case_path: Path, manifest: dict) -> dict:
 def _diagnosis_outcome(report: dict, *, verification_ok: bool = True,
                        reproduction_complete: bool = True
                        ) -> tuple[str, str, str | None, str | None, bool]:
-    """Map a PR3 diagnosis to envelope outcome without promoting evidence.
+    """Map a canonical diagnosis to the envelope outcome without promotion.
 
-    Incomplete or invalid evidence never becomes a qualified result, and a
-    confirmed difference is a completed diagnostic rather than a tool failure.
+    This delegates to the single shared projection in
+    :mod:`automation.gfx_independent_replay`.  Incomplete or invalid evidence
+    never becomes a qualified result, and a completed difference is a completed
+    diagnostic rather than a tool failure.
     """
     if not verification_ok:
         return "invalid", "invalid", None, "invalid", False
     if not reproduction_complete:
         return "incomplete", "incomplete", None, "unverified", False
-    classification = str(report.get("classification")
-                         or report.get("status") or "")
-    qualification = report.get("qualification") or {}
-    qualified = bool(qualification.get("qualified"))
-    if classification == "qualified_match":
-        return "ok", "complete", "equal", "valid", qualified
-    if classification == "qualified_difference":
-        return "ok", "complete", "different", "valid", False
-    if classification == "difference_with_partial_state_coverage":
-        return "ok", "partial", "different", "valid", False
-    if classification == "fault_experiment":
-        axes = qualification.get("axes") or {}
-        verdict = "different" if axes.get("pixel_comparison") == "divergent" \
-            else "unverified"
-        return "ok", "partial", verdict, "valid", False
-    if classification == "unsupported_state":
-        return "ok", "partial", "unverified", "valid", False
-    if classification == "invalid_provenance":
-        return "invalid", "invalid", None, "invalid", False
-    if classification == "gpu_execution_failure":
-        return "failed", "failed", None, "invalid", False
-    return "incomplete", "incomplete", None, "unverified", False
+    canonical = gfx_independent_replay.classification_outcome(report)
+    execution = canonical["execution"]
+    status = "ok" if execution == "ok" else execution
+    if status not in ("ok", "invalid", "failed", "incomplete"):
+        status = "incomplete"
+    return (status, canonical["diagnostic"], canonical["verdict"],
+            canonical["evidence"], canonical["qualified"])
 
 
 _CAMPAIGN_TERMINAL_CLASSIFICATIONS = {
@@ -2693,6 +2705,332 @@ def _campaign_outcome(report: dict) -> tuple[str, str, str | None, str | None,
     return "incomplete", "incomplete", None, "unverified", False, details
 
 
+def _replay_compact_view(report: dict, report_path: str | None = None) -> dict:
+    """Compact replay projection for the default agent-facing path.
+
+    ``replay()`` reports carry the full diagnosis under ``diagnosis`` and the
+    comparison under top-level ``final``.  This adapts that shape to the shared
+    compact projection without synthesizing evidence, then appends the
+    on-disk report locator so detail remains reachable.
+    """
+    diagnosis = report.get("diagnosis") if isinstance(
+        report.get("diagnosis"), dict) else report
+    projection = dict(diagnosis)
+    pixels = report.get("pixels") or diagnosis.get("pixels")
+    if not isinstance(pixels, dict):
+        pixels = {
+            "status": (report.get("final") or {}).get("status"),
+            "final": report.get("final"),
+        }
+    projection["pixels"] = pixels
+    for key in ("checkpoints", "checkpoint_validation", "qualification",
+                "first_divergence", "execution", "frame"):
+        if key not in projection and report.get(key) is not None:
+            projection[key] = report.get(key)
+    compact = gfx_independent_replay.compact_diagnosis(projection)
+    if report.get("policy") is not None:
+        compact["policy"] = report.get("policy")
+    if report_path:
+        compact["report"] = report_path
+    return compact
+
+
+def _truncate_utf8(value, max_bytes: int) -> str:
+    """Truncate text to at most ``max_bytes`` UTF-8 bytes without splitting."""
+    text = "" if value is None else str(value)
+    if max_bytes <= 0:
+        return ""
+    raw = text.encode("utf-8")
+    if len(raw) <= max_bytes:
+        return text
+    cut = raw[:max_bytes]
+    while cut:
+        try:
+            return cut.decode("utf-8")
+        except UnicodeDecodeError:
+            cut = cut[:-1]
+    return ""
+
+
+def _bound_replay_compact(envelope: dict, cap: int = COMPACT_OUTPUT_CAP) -> dict:
+    """Hard-bound the complete serialized replay envelope to ``cap`` bytes.
+
+    Identity/qualification, the first divergent event, the report locator and
+    a bounded unresolved interval/checkpoint survive every reduction; free-text
+    core strings are truncated only when the cap would otherwise be exceeded.
+    The bound covers the *whole* envelope, including repeated evaluation
+    reasons, ``failure.detail``, truncation metadata and Unicode strings, not
+    just ``result``.  The single exit re-measures the exact serialization and
+    keeps reducing until it fits.
+    """
+    original = _utf8_len(envelope)
+    envelope = json.loads(json.dumps(envelope))
+    result = envelope.get("result")
+    if not isinstance(result, dict):
+        result = {}
+        envelope["result"] = result
+    result["output_bytes"] = 0
+    removed: list[str] = []
+
+    def body() -> dict:
+        value = envelope.get("result")
+        return value if isinstance(value, dict) else {}
+
+    def first_divergence() -> dict:
+        value = body().get("first_divergence")
+        return value if isinstance(value, dict) else {}
+
+    def fits() -> bool:
+        return _utf8_len(envelope) <= cap
+
+    def finalize() -> None:
+        for _attempt in range(10):
+            size = _utf8_len(envelope)
+            if body().get("output_bytes") == size:
+                break
+            body()["output_bytes"] = size
+
+    def seal() -> dict:
+        nonlocal envelope
+        envelope["truncated"] = True
+        envelope.setdefault("truncated_fields", removed)
+        envelope["output_cap_bytes"] = cap
+        envelope["output_bytes_before_cap"] = original
+        body()["truncated"] = True
+        finalize()
+
+        def drop(name: str) -> bool:
+            if name in body():
+                body().pop(name, None)
+                removed.append(name)
+                return True
+            return False
+
+        def drop_first(name: str) -> bool:
+            first = first_divergence()
+            if name in first:
+                first.pop(name, None)
+                removed.append(f"first_divergence.{name}")
+                return True
+            return False
+
+        def truncate_reason() -> bool:
+            value = str(envelope.get("reason") or "")
+            if not value:
+                return False
+            envelope["reason"] = _truncate_utf8(value, len(value.encode()) // 2)
+            if not envelope["reason"]:
+                envelope["reason"] = ""
+            removed.append("reason")
+            return True
+
+        def truncate_detail() -> bool:
+            failure = envelope.get("failure")
+            if not isinstance(failure, dict):
+                return False
+            value = str(failure.get("detail") or "")
+            if not value:
+                return False
+            failure["detail"] = _truncate_utf8(
+                value, max(0, len(value.encode()) // 2))
+            removed.append("failure.detail")
+            return True
+
+        def truncate_first_strings(limit: int) -> bool:
+            first = first_divergence()
+            if not first:
+                return False
+
+            def cut(value):
+                if isinstance(value, str):
+                    return _truncate_utf8(value, limit)
+                if isinstance(value, list):
+                    return [cut(item) for item in value[:4]]
+                if isinstance(value, dict):
+                    return {key: cut(item) for key, item in value.items()}
+                return value
+
+            changed = False
+            for key in list(first):
+                before = first[key]
+                after = cut(before)
+                if after != before:
+                    first[key] = after
+                    changed = True
+            if changed:
+                removed.append("first_divergence.strings")
+            return changed
+
+        def simplify_interval() -> bool:
+            first = first_divergence()
+            interval = first.get("unresolved_interval")
+            if not isinstance(interval, dict):
+                return False
+            first["unresolved_interval"] = {
+                key: interval.get(key) for key in
+                ("start_event", "end_event", "lower_bound", "search_start_event")
+                if interval.get(key) is not None}
+            removed.append("first_divergence.unresolved_interval")
+            return True
+
+        steps = (
+            lambda: drop("final"),
+            lambda: drop("inputs"),
+            lambda: drop("checkpoints"),
+            lambda: drop("axes"),
+            lambda: drop("checkpoint_selection"),
+            lambda: drop("execution"),
+            lambda: drop("next_action"),
+            lambda: drop_first("limitations"),
+            lambda: drop_first("recommended_checkpoint"),
+            lambda: truncate_reason(),
+            lambda: truncate_detail(),
+            lambda: drop_first("root_cause"),
+            lambda: drop_first("reason"),
+            lambda: simplify_interval(),
+            lambda: truncate_first_strings(512),
+            lambda: truncate_first_strings(128),
+            lambda: truncate_first_strings(0),
+            lambda: drop("frame"),
+            lambda: drop("checkpoint_validation"),
+        )
+        for _attempt in range(len(steps) + 2):
+            if fits():
+                break
+            progressed = False
+            for step in steps:
+                if fits():
+                    break
+                before = _utf8_len(envelope)
+                if step() and _utf8_len(envelope) <= before:
+                    progressed = True
+                finalize()
+            if not progressed:
+                break
+        if not fits():
+            first = first_divergence()
+            envelope = {
+                "schema": envelope.get("schema"),
+                "tool": envelope.get("tool") or "eu4_replay",
+                "ok": envelope.get("ok"),
+                "status": envelope.get("status"),
+                "reason": "",
+                "result": {
+                    "classification": body().get("classification"),
+                    "qualified": body().get("qualified"),
+                    "first_divergence": {
+                        key: first.get(key) for key in
+                        ("kind", "event", "target", "resource", "operation",
+                         "producer_event", "confidence")
+                        if first.get(key) is not None} | (
+                        {"next_checkpoint": _truncate_utf8(
+                            str(first.get("next_checkpoint")), 128)}
+                        if first.get("next_checkpoint") is not None else {}),
+                    "report": body().get("report"),
+                    "truncated": True,
+                    "output_cap_bytes": cap,
+                },
+                "outcome": envelope.get("outcome"),
+                "failure": {
+                    key: (envelope.get("failure") or {}).get(key)
+                    for key in ("kind", "class")},
+                "truncated": True,
+                "output_cap_bytes": cap,
+            }
+            finalize()
+        # A pathological cap or locator is the only remaining source of
+        # overflow; reduce metadata to zero before giving up the locator.
+        for _attempt in range(8):
+            if fits():
+                break
+            envelope["reason"] = ""
+            failure = envelope.get("failure")
+            if isinstance(failure, dict):
+                failure["detail"] = ""
+            body().pop("final", None)
+            body().pop("frame", None)
+            body().pop("next_action", None)
+            finalize()
+        return envelope
+
+    if _utf8_len(envelope) <= max(1, cap - 256):
+        finalize()
+        return envelope
+
+    def shrink_result() -> None:
+        for name, keep in (("checkpoints", 8), ("inputs", 4)):
+            value = body().get(name)
+            if isinstance(value, list) and len(value) > keep:
+                body()[name] = value[:keep]
+                removed.append(name)
+        selection = body().get("checkpoint_selection")
+        if isinstance(selection, dict):
+            body()["checkpoint_selection"] = {
+                key: selection.get(key)
+                for key in ("total", "selected", "bounded")}
+            removed.append("checkpoint_selection.detail")
+        axes = body().get("axes")
+        if isinstance(axes, dict) and len(axes) > 8:
+            body()["axes"] = {
+                key: value for key, value in axes.items()
+                if key in ("capture_validity", "frame_shader_identity",
+                           "gpu_execution", "resource_provenance",
+                           "operation_coverage", "rendering_state_coverage",
+                           "pixel_comparison", "first_divergence_confidence")}
+            removed.append("axes.extra")
+        first = first_divergence()
+        limitations = first.get("limitations")
+        if isinstance(limitations, list) and len(limitations) > 2:
+            first["limitations"] = [
+                _truncate_utf8(item, 160) for item in limitations[:2]]
+            removed.append("first_divergence.limitations")
+        inputs = first.get("inputs")
+        if isinstance(inputs, list) and len(inputs) > 4:
+            first["inputs"] = inputs[:4]
+            removed.append("first_divergence.inputs")
+
+    shrink_result()
+    for max_bytes in (1200, 400, 120, 0):
+        envelope["reason"] = _truncate_utf8(envelope.get("reason"), max_bytes)
+        failure = envelope.get("failure")
+        if isinstance(failure, dict):
+            failure["detail"] = _truncate_utf8(
+                failure.get("detail"), min(max_bytes, 600))
+        if _utf8_len(envelope) <= max(1, cap - 256):
+            break
+    if _utf8_len(envelope) <= max(1, cap - 256):
+        return seal()
+
+    # Core fallback: the smallest result that still points at the evidence.
+    first = first_divergence()
+    core_first = {
+        key: first.get(key) for key in
+        ("kind", "event", "target", "resource", "operation", "program",
+         "producer_event", "confidence", "root_cause", "unresolved_interval",
+         "next_checkpoint", "recommended_checkpoint")
+        if first.get(key) is not None
+    }
+    checkpoint_validation = body().get("checkpoint_validation")
+    core_validation = {
+        key: (checkpoint_validation or {}).get(key)
+        for key in ("status", "requested", "returned", "matched",
+                    "diagnostic", "divergent", "invalid")
+    } if isinstance(checkpoint_validation, dict) else {
+        "status": checkpoint_validation}
+    envelope["result"] = {
+        "schema": body().get("schema"),
+        "classification": body().get("classification"),
+        "qualified": body().get("qualified"),
+        "frame": body().get("frame"),
+        "first_divergence": core_first,
+        "checkpoint_validation": core_validation,
+        "final": body().get("final"),
+        "next_action": body().get("next_action"),
+        "report": body().get("report"),
+    }
+    return seal()
+
+
 def _replay_report_view(report: dict) -> dict:
     """Bounded, JSON-safe view of a v1 or v2 replay diagnosis."""
     diagnosis = report.get("diagnosis") if isinstance(
@@ -2821,34 +3159,23 @@ def eu4_replay(args: argparse.Namespace) -> dict:
             faults["sampler_shift_min"] = args.sampler_shift_min
         report = gfx_independent_replay.replay(
             Path(args.frame), Path(args.replay_out), shaders=args.shaders, faults=faults)
-        outcome = report.get("outcome") or {}
-        status = report.get("status") or "invalid"
-        envelope = _envelope("eu4_replay", status, {
-            "status": report.get("status"),
-            "outcome": outcome,
-            "qualified": outcome.get("qualified"),
-            "evaluation": report.get("evaluation"),
-            "checkpoints": report.get("checkpoints"),
-            "checkpoint_validation": report.get("checkpoint_validation"),
-            "state_coverage": report.get("state_coverage"),
-            "binding_audit": report.get("binding_audit"),
-            "final": report.get("final"),
-            "first_divergence": report.get("first_divergence"),
-            "graph": {
-                "status": (report.get("graph") or {}).get("status"),
-                "counts": (report.get("graph") or {}).get("counts"),
-                "reasons": (report.get("graph") or {}).get("reasons"),
-                "boundary": (report.get("graph") or {}).get("boundary"),
-            },
-            "report": str(Path(args.replay_out) / "replay-report.json"),
-        }, reason="; ".join((report.get("evaluation") or {}).get("reasons") or []),
-            diagnostic="complete" if status not in ("invalid", "unavailable") else status,
-            verdict=(outcome.get("pixels") if isinstance(outcome.get("pixels"), str)
-                     else None),
-            evidence=("valid" if report.get("checkpoint_validation", {}).get("status")
-                      == "valid" and outcome.get("execution") == "ok" else "unverified"),
-            qualified=bool(outcome.get("qualified")))
-        envelope["ok"] = bool(outcome.get("qualified"))
+        status, diagnostic, verdict, evidence, qualified = (
+            _diagnosis_outcome(report))
+        if bool(getattr(args, "full", False)):
+            result = _replay_report_view(report)
+            result["report"] = str(
+                Path(args.replay_out) / "replay-report.json")
+        else:
+            result = _replay_compact_view(
+                report, str(Path(args.replay_out) / "replay-report.json"))
+        envelope = _envelope(
+            "eu4_replay", status, result,
+            reason="; ".join((report.get("evaluation") or {}).get("reasons")
+                             or []),
+            diagnostic=diagnostic, verdict=verdict, evidence=evidence,
+            qualified=qualified)
+        if not bool(getattr(args, "full", False)):
+            envelope = _bound_replay_compact(envelope)
         return envelope
     if args.replay_op == "verify":
         if not args.case:
@@ -2894,12 +3221,22 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                 reason=f"M7 diagnosis did not complete: {exc}")
         status, diagnostic, verdict, evidence, qualified = _diagnosis_outcome(
             report)
-        return _envelope(
-            "eu4_replay", status, _replay_report_view(report),
+        if bool(getattr(args, "full", False)):
+            result = _replay_report_view(report)
+            result["report"] = str(
+                Path(args.replay_out) / "diagnostic-report.json")
+        else:
+            result = _replay_compact_view(
+                report, str(Path(args.replay_out) / "diagnostic-report.json"))
+        envelope = _envelope(
+            "eu4_replay", status, result,
             diagnostic=diagnostic, verdict=verdict, evidence=evidence,
             qualified=qualified,
             reason="; ".join((report.get("evaluation") or {}).get("reasons")
                              or []))
+        if not bool(getattr(args, "full", False)):
+            envelope = _bound_replay_compact(envelope)
+        return envelope
     if args.replay_op == "sequence":
         from automation import m7_continuous
 
@@ -2938,24 +3275,47 @@ def eu4_replay(args: argparse.Namespace) -> dict:
                          getattr(args, "sampler_shift_min", 7))}
             if getattr(args, "fault_event", None) is not None:
                 fault["event"] = int(args.fault_event)
+        from automation import campaign_guard
+
         try:
-            report = m7_continuous.run_campaign(
-                frame_dirs, Path(args.replay_out), shaders=shaders,
-                policy=getattr(args, "policy", None),
-                max_frames=max_frames,
-                max_bytes=int(getattr(args, "max_bytes", 0) or 0),
-                max_seconds=float(getattr(args, "max_seconds", 0.0) or 0.0),
-                stop_on_difference=not bool(
-                    getattr(args, "continue_on_difference", False)),
-                package_dir=getattr(args, "package_dir", None),
-                timeout=float(getattr(args, "timeout", 3600.0) or 3600.0),
-                frame_timeout=float(getattr(args, "frame_timeout", 180.0)
-                                    or 180.0),
-                case_max_bytes=int(getattr(args, "case_max_bytes", 0) or 0),
-                require_engine_identity=bool(
-                    getattr(args, "require_engine_identity", False)),
-                fault=fault,
-            )
+            with campaign_guard.attempt(
+                    "replays", count=max(1, len(frame_dirs)),
+                    evidence={"frames": [str(item) for item in frame_dirs],
+                              "supplied_frames": len(frame_dirs),
+                              "max_frames": max_frames}) as attempt_handle:
+                report = m7_continuous.run_campaign(
+                    frame_dirs, Path(args.replay_out), shaders=shaders,
+                    policy=getattr(args, "policy", None),
+                    max_frames=max_frames,
+                    max_bytes=int(getattr(args, "max_bytes", 0) or 0),
+                    max_seconds=float(getattr(args, "max_seconds", 0.0)
+                                      or 0.0),
+                    stop_on_difference=not bool(
+                        getattr(args, "continue_on_difference", False)),
+                    package_dir=getattr(args, "package_dir", None),
+                    timeout=float(getattr(args, "timeout", 3600.0) or 3600.0),
+                    frame_timeout=float(getattr(args, "frame_timeout", 180.0)
+                                        or 180.0),
+                    case_max_bytes=int(getattr(args, "case_max_bytes", 0)
+                                       or 0),
+                    require_engine_identity=bool(
+                        getattr(args, "require_engine_identity", False)),
+                    fault=fault,
+                )
+                if (attempt_handle is not None
+                        and str(report.get("status") or "") in ("failed",
+                                                                "incomplete")):
+                    attempt_handle.fail(
+                        "sequence campaign did not complete: "
+                        + str(report.get("error")
+                              or report.get("stop_reason") or "unknown"),
+                        evidence={
+                            "status": report.get("status"),
+                            "stop_reason": report.get("stop_reason"),
+                            "error": report.get("error"),
+                            "supplied_frames": len(frame_dirs),
+                            "completed_frames": len(report.get("frames") or []),
+                        })
         except m7_continuous.ContinuousError as exc:
             policy_failure = exc.kind in ("policy_unavailable", "policy_invalid")
             return _envelope(
@@ -3230,6 +3590,10 @@ def _parser() -> argparse.ArgumentParser:
         "active", "closed", "stale", "all"), default=None)
     session.add_argument("--limit", type=int, default=20)
     session.add_argument("--offset", type=int, default=0)
+    session.add_argument("--locator-limit", type=int, default=None,
+                         help="locator page size (defaults to --limit)")
+    session.add_argument("--locator-offset", type=int, default=0,
+                         help="locator page offset")
     session.add_argument("--evidence-root", default=None,
                          help="pathsep-separated evidence roots (default EU4_EVIDENCE_ROOT)")
     session.add_argument("--query", default=None)
@@ -3326,6 +3690,9 @@ def _parser() -> argparse.ArgumentParser:
     replay.add_argument("--package-dir", type=Path, default=None,
                         help="explicit reproduction case destination")
     replay.add_argument("--only-event", type=int, default=None)
+    replay.add_argument("--full", action="store_true",
+                        help="return the complete replay report instead of the "
+                             "bounded agent projection")
     replay.add_argument("--disable-render-target-vflip", action="store_true")
     replay.add_argument("--sampler-shift", type=int, default=None)
     replay.add_argument("--sampler-shift-min", type=int, default=7)

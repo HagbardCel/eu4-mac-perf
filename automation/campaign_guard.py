@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import contextvars
 import fcntl
 import hashlib
 import json
@@ -654,24 +655,218 @@ def claim_launch_reservation(reservation: str | None = None,
     return guard.claim_launch(_launch_token(reservation), evidence=evidence)
 
 
+_ACTIVE_ATTEMPT = contextvars.ContextVar("eu4_active_attempt", default=None)
+_ATTEMPT_ENV = "EU4_CAMPAIGN_ATTEMPT"
+_ATTEMPT_SCHEMA = "eu4-campaign-attempt/v1"
+
+
+class _AttemptHandle:
+    """One active reservation and its exactly-once settlement.
+
+    The outermost ``attempt`` owns the reservation.  Nested calls in the same
+    process share that reservation through a context variable; a child process
+    inherits a scoped token through the environment.  Neither may reserve the
+    action again.  A descendant failure settles the shared reservation exactly
+    once so the failure is durable even when the parent ignores the child's
+    exit status; the owner then observes that closed reservation instead of
+    recording a second completion.
+    """
+
+    def __init__(self, guard: "Guard", reservation: str, action: str,
+                 count: int, *, evidence=None, consumed=None,
+                 parent: "_AttemptHandle | None" = None,
+                 inherited: bool = False):
+        self.guard = guard
+        self.reservation = reservation
+        self.action = action
+        self.count = int(count)
+        self.parent = parent
+        self.inherited = inherited
+        self.evidence = dict(evidence or {})
+        self.consumed = consumed
+        self.outcome = "ok"
+        self.detail = ""
+        self.settled = False
+
+    def __getattr__(self, name):
+        # Keep older call sites that used ``with attempt(...) as guard`` working.
+        return getattr(self.guard, name)
+
+    @property
+    def owner(self) -> bool:
+        return self.parent is None and not self.inherited
+
+    def merge_evidence(self, evidence=None) -> None:
+        if isinstance(evidence, dict):
+            self.evidence.update(evidence)
+
+    def fail(self, detail: str = "", evidence=None) -> None:
+        """Mark the shared action failed; descendant failures settle once."""
+        self.outcome = "failed"
+        self.detail = detail or self.detail
+        self.merge_evidence(evidence)
+        if self.parent is not None:
+            # Same-process nesting: the owner records the single failure.
+            self.parent.fail(detail, evidence)
+            return
+        if self.inherited:
+            # A separate process has no live reference to the owner.  Persist
+            # the failure now; the owner treats the closed reservation as
+            # already settled.
+            self._settle()
+
+    def succeed(self, *, consumed: dict | None = None, evidence=None) -> None:
+        if self.outcome != "failed":
+            self.outcome = "ok"
+        if consumed is not None:
+            self.consumed = consumed
+        self.merge_evidence(evidence)
+
+    def _settle(self) -> None:
+        if self.settled:
+            return
+        self.settled = True
+        try:
+            self.guard.complete(
+                self.reservation,
+                outcome=self.outcome,
+                detail=self.detail,
+                consumed=self.consumed if self.outcome == "ok" else None,
+                evidence=self.evidence)
+        except CampaignRefusal as exc:
+            if exc.kind != "reservation_closed":
+                raise
+            # A descendant already settled the shared reservation.  Exactly
+            # one completion row exists; do not append a second one.
+
+    def _fail_from_exception(self, exc: BaseException) -> None:
+        self.fail(f"{type(exc).__name__}: {exc}")
+
+
+def _attempt_token(guard: "Guard", reservation: str, action: str,
+                   count: int) -> str:
+    return json.dumps({
+        "schema": _ATTEMPT_SCHEMA,
+        "state": str(guard.path),
+        "reservation": reservation,
+        "action": action,
+        "count": int(count),
+        "pid": os.getpid(),
+    }, sort_keys=True)
+
+
+def _inherited_attempt(guard: "Guard", action: str,
+                       count: int) -> str | None:
+    """Return the open ancestor reservation inherited by this process."""
+    raw = os.environ.get(_ATTEMPT_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        token = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(token, dict) or token.get("schema") != _ATTEMPT_SCHEMA:
+        return None
+    if token.get("state") != str(guard.path) or token.get("action") != action:
+        return None
+    # Only a descendant process joins.  A concurrent thread in the owner
+    # process must contend through the ordinary state lock instead of sharing
+    # a reservation it did not create.
+    try:
+        token_pid = int(token.get("pid") or 0)
+    except (TypeError, ValueError):
+        return None
+    if token_pid == os.getpid():
+        return None
+    reservation_id = str(token.get("reservation") or "")
+    if not reservation_id:
+        return None
+    try:
+        state = guard.state()
+    except CampaignRefusal:
+        return None
+    reservation = (state.get("reservations") or {}).get(reservation_id)
+    if not isinstance(reservation, dict) or reservation.get("state") != "reserved":
+        return None
+    reserved = int((reservation.get("actions") or {}).get(action, 0))
+    if reserved < count:
+        raise CampaignRefusal(
+            "attempt_count",
+            f"nested {action}={count} exceeds the ancestor reservation "
+            f"of {reserved}")
+    return reservation_id
+
+
 @contextlib.contextmanager
-def attempt(action: str, *, evidence=None):
-    """Reserve and then record one resource-consuming action."""
+def attempt(action: str, *, count: int = 1, evidence=None,
+            consumed: dict | None = None):
+    """Reserve and then record one resource-consuming action exactly once.
+
+    The outermost caller reserves the total ``count``; nested same-process
+    calls and descendant processes join that reservation instead of charging it
+    again.  A process that dies mid-action leaves the persisted reservation
+    open, which is the durable record of interrupted work.
+    """
     guard = from_env()
     if guard is None:
         yield None
         return
-    reservation = guard.reserve({action: 1}, evidence=evidence)
+    if count < 1:
+        raise CampaignRefusal("attempt_count", "attempt count must be >= 1")
+    active = _ACTIVE_ATTEMPT.get()
+    if (active is not None
+            and str(active.guard.path) == str(guard.path)
+            and active.action == action):
+        if int(count) > active.count:
+            raise CampaignRefusal(
+                "attempt_count",
+                f"nested {action}={count} exceeds the active reservation "
+                f"of {active.count}")
+        inner = _AttemptHandle(
+            guard, active.reservation, action, count, evidence=evidence,
+            consumed=consumed, parent=active)
+        token = _ACTIVE_ATTEMPT.set(inner)
+        try:
+            yield inner
+        except BaseException as exc:  # noqa: BLE001 - record then propagate
+            inner._fail_from_exception(exc)
+            raise
+        finally:
+            _ACTIVE_ATTEMPT.reset(token)
+        return
+    inherited_reservation = _inherited_attempt(guard, action, count)
+    if inherited_reservation is not None:
+        joined = _AttemptHandle(
+            guard, inherited_reservation, action, count, evidence=evidence,
+            consumed=consumed, inherited=True)
+        token = _ACTIVE_ATTEMPT.set(joined)
+        try:
+            yield joined
+        except BaseException as exc:  # noqa: BLE001 - record then propagate
+            joined._fail_from_exception(exc)
+            raise
+        finally:
+            _ACTIVE_ATTEMPT.reset(token)
+        return
+    reservation = guard.reserve({action: int(count)}, evidence=evidence)
+    handle = _AttemptHandle(
+        guard, reservation, action, count, evidence=evidence, consumed=consumed)
+    token = _ACTIVE_ATTEMPT.set(handle)
+    previous = os.environ.get(_ATTEMPT_ENV)
+    os.environ[_ATTEMPT_ENV] = _attempt_token(guard, reservation, action, count)
     try:
-        yield guard
-    except BaseException as exc:  # noqa: BLE001 - record then propagate
-        guard.complete(reservation, outcome="failed",
-                       detail=f"{type(exc).__name__}: {exc}",
-                       evidence=evidence)
-        raise
-    else:
-        guard.complete(reservation, outcome="ok", evidence=evidence)
-
+        try:
+            yield handle
+        except BaseException as exc:  # noqa: BLE001 - record then propagate
+            handle._fail_from_exception(exc)
+            raise
+    finally:
+        _ACTIVE_ATTEMPT.reset(token)
+        if previous is None:
+            os.environ.pop(_ATTEMPT_ENV, None)
+        else:
+            os.environ[_ATTEMPT_ENV] = previous
+        handle._settle()
 
 def _budget_pairs(values) -> dict:
     budgets = {}

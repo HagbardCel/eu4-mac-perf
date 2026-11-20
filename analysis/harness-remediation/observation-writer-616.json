@@ -1,0 +1,1173 @@
+{
+  "schema": "gfx-observation-writer-matrix/v1",
+  "present_index": 616,
+  "frame_dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture/frames/frame-000001",
+  "capture": {
+    "session_id": "2da0a8fc-d442-475d-aeb3-8b902ce0caa0",
+    "capture_frame_id": 1,
+    "present_index": 616,
+    "event_stream_sha256": "ea7116be3e917e939ced608cfd74347c728c37ddb26a547f73c0b1845909d7c6",
+    "reference_sha256": "8dbd7c93c62a57d4dcd9833eec24675f3019b2fd45b89ef161b603dbed84063f",
+    "manifest_sha256": "2f983a670d3925be466ff006534a97af32f7277166bd817127af29d8fdd12a49",
+    "pid": 25295,
+    "source": "seal"
+  },
+  "graph_status": "complete",
+  "counts": {
+    "events": 325,
+    "draws": 315,
+    "clears": 9,
+    "resolves": 1,
+    "resources": 68,
+    "external_inputs": 60,
+    "renderer_generated": 8,
+    "renderer_generated_sampled": 6,
+    "unproven": 0
+  },
+  "generator": "analysis/harness-remediation/generate_observation_matrices.py",
+  "rows": [
+    {
+      "observation": {
+        "event": 11,
+        "target": "431",
+        "resource": "tex:431",
+        "phase": "pre_event",
+        "authority": "requested",
+        "status": null
+      },
+      "writers": [
+        {
+          "event": 9,
+          "kind": "clear",
+          "operation": null,
+          "entry": null,
+          "caller_rva": null,
+          "program": null
+        }
+      ],
+      "writer_events": [
+        9
+      ],
+      "writer_authority": "graph",
+      "producer_event": 9,
+      "generation": {
+        "required": 1,
+        "producers_before": 1,
+        "captured_writes": 3
+      },
+      "upcoming_event": {
+        "event": 11,
+        "kind": "draw",
+        "operation": null,
+        "entry": "_GfxDraw",
+        "program": 367,
+        "note": "the operation at the observation event; it has not written the observed pre-event content"
+      },
+      "frame": {
+        "session_id": "2da0a8fc-d442-475d-aeb3-8b902ce0caa0",
+        "capture_frame_id": 1,
+        "present_index": 616,
+        "event_stream_sha256": "ea7116be3e917e939ced608cfd74347c728c37ddb26a547f73c0b1845909d7c6",
+        "reference_sha256": "8dbd7c93c62a57d4dcd9833eec24675f3019b2fd45b89ef161b603dbed84063f",
+        "manifest_sha256": "2f983a670d3925be466ff006534a97af32f7277166bd817127af29d8fdd12a49",
+        "pid": 25295,
+        "source": "seal"
+      },
+      "statistics": null,
+      "reference": {
+        "file": null,
+        "reference_file": "tex-577573f003fb348355d0ae287b17b2fdaac29e208dae1048e15ad94556153191.bin",
+        "reference_sha256": "577573f003fb348355d0ae287b17b2fdaac29e208dae1048e15ad94556153191",
+        "reference_width": 1728,
+        "reference_height": 1117
+      },
+      "declared_writer_events": [
+        9
+      ],
+      "declared_writer_authority": "graph"
+    },
+    {
+      "observation": {
+        "event": 13,
+        "target": "432",
+        "resource": "tex:432",
+        "phase": "pre_event",
+        "authority": "requested",
+        "status": null
+      },
+      "writers": [
+        {
+          "event": 10,
+          "kind": "clear",
+          "operation": null,
+          "entry": null,
+          "caller_rva": null,
+          "program": null
+        },
+        {
+          "event": 11,
+          "kind": "draw",
+          "operation": null,
+          "entry": "_GfxDraw",
+          "caller_rva": "0x150d8bb",
+          "program": 367
+        }
+      ],
+      "writer_events": [
+        10,
+        11
+      ],
+      "writer_authority": "graph",
+      "producer_event": 11,
+      "generation": {
+        "required": 2,
+        "producers_before": 2,
+        "captured_writes": 2
+      },
+      "upcoming_event": {
+        "event": 13,
+        "kind": "draw",
+        "operation": null,
+        "entry": "_GfxDraw",
+        "program": 370,
+        "note": "the operation at the observation event; it has not written the observed pre-event content"
+      },
+      "frame": {
+        "session_id": "2da0a8fc-d442-475d-aeb3-8b902ce0caa0",
+        "capture_frame_id": 1,
+        "present_index": 616,
+        "event_stream_sha256": "ea7116be3e917e939ced608cfd74347c728c37ddb26a547f73c0b1845909d7c6",
+        "reference_sha256": "8dbd7c93c62a57d4dcd9833eec24675f3019b2fd45b89ef161b603dbed84063f",
+        "manifest_sha256": "2f983a670d3925be466ff006534a97af32f7277166bd817127af29d8fdd12a49",
+        "pid": 25295,
+        "source": "seal"
+      },
+      "statistics": null,
+      "reference": {
+        "file": null,
+        "reference_file": "tex-577573f003fb348355d0ae287b17b2fdaac29e208dae1048e15ad94556153191.bin",
+        "reference_sha256": "577573f003fb348355d0ae287b17b2fdaac29e208dae1048e15ad94556153191",
+        "reference_width": 1728,
+        "reference_height": 1117
+      },
+      "declared_writer_events": [
+        10,
+        11
+      ],
+      "declared_writer_authority": "graph"
+    },
+    {
+      "observation": {
+        "event": 14,
+        "target": "0",
+        "resource": "fb:0",
+        "phase": "pre_event",
+        "authority": "requested",
+        "status": null
+      },
+      "writers": [
+        {
+          "event": 7,
+          "kind": "clear",
+          "operation": null,
+          "entry": null,
+          "caller_rva": null,
+          "program": null
+        }
+      ],
+      "writer_events": [
+        7
+      ],
+      "writer_authority": "graph",
+      "producer_event": 7,
+      "generation": {
+        "required": null,
+        "producers_before": 1,
+        "captured_writes": 307
+      },
+      "upcoming_event": {
+        "event": 14,
+        "kind": "draw",
+        "operation": null,
+        "entry": "_GfxDrawIndexed",
+        "program": 301,
+        "note": "the operation at the observation event; it has not written the observed pre-event content"
+      },
+      "frame": {
+        "session_id": "2da0a8fc-d442-475d-aeb3-8b902ce0caa0",
+        "capture_frame_id": 1,
+        "present_index": 616,
+        "event_stream_sha256": "ea7116be3e917e939ced608cfd74347c728c37ddb26a547f73c0b1845909d7c6",
+        "reference_sha256": "8dbd7c93c62a57d4dcd9833eec24675f3019b2fd45b89ef161b603dbed84063f",
+        "manifest_sha256": "2f983a670d3925be466ff006534a97af32f7277166bd817127af29d8fdd12a49",
+        "pid": 25295,
+        "source": "seal"
+      },
+      "statistics": null,
+      "reference": {
+        "file": null,
+        "reference_file": "seed-137637b6a69b02841cdd04a748ab6cdcb739299bd10b934b2e1bf4ea571524ba.bin",
+        "reference_sha256": "137637b6a69b02841cdd04a748ab6cdcb739299bd10b934b2e1bf4ea571524ba",
+        "reference_width": 1728,
+        "reference_height": 1117
+      },
+      "declared_writer_events": [
+        7
+      ],
+      "declared_writer_authority": "graph"
+    },
+    {
+      "observation": {
+        "event": 15,
+        "target": "0",
+        "resource": "fb:0",
+        "phase": "pre_event",
+        "authority": "requested",
+        "status": null
+      },
+      "writers": [
+        {
+          "event": 7,
+          "kind": "clear",
+          "operation": null,
+          "entry": null,
+          "caller_rva": null,
+          "program": null
+        },
+        {
+          "event": 14,
+          "kind": "draw",
+          "operation": null,
+          "entry": "_GfxDrawIndexed",
+          "caller_rva": "0x10d4e50",
+          "program": 301
+        }
+      ],
+      "writer_events": [
+        7,
+        14
+      ],
+      "writer_authority": "graph",
+      "producer_event": 14,
+      "generation": {
+        "required": null,
+        "producers_before": 2,
+        "captured_writes": 307
+      },
+      "upcoming_event": {
+        "event": 15,
+        "kind": "draw",
+        "operation": null,
+        "entry": "_GfxDrawIndexed",
+        "program": 301,
+        "note": "the operation at the observation event; it has not written the observed pre-event content"
+      },
+      "frame": {
+        "session_id": "2da0a8fc-d442-475d-aeb3-8b902ce0caa0",
+        "capture_frame_id": 1,
+        "present_index": 616,
+        "event_stream_sha256": "ea7116be3e917e939ced608cfd74347c728c37ddb26a547f73c0b1845909d7c6",
+        "reference_sha256": "8dbd7c93c62a57d4dcd9833eec24675f3019b2fd45b89ef161b603dbed84063f",
+        "manifest_sha256": "2f983a670d3925be466ff006534a97af32f7277166bd817127af29d8fdd12a49",
+        "pid": 25295,
+        "source": "seal"
+      },
+      "statistics": null,
+      "reference": {
+        "file": null,
+        "reference_file": "default-checkpoint-6c6d112a83fc470d2f77eb2aca9f978f1eb4de87bbda37d7e3bc04cf723ae56a.bin",
+        "reference_sha256": "6c6d112a83fc470d2f77eb2aca9f978f1eb4de87bbda37d7e3bc04cf723ae56a",
+        "reference_width": 1728,
+        "reference_height": 1117
+      },
+      "declared_writer_events": [
+        7,
+        14
+      ],
+      "declared_writer_authority": "graph"
+    },
+    {
+      "observation": {
+        "event": 16,
+        "target": "0",
+        "resource": "fb:0",
+        "phase": "pre_event",
+        "authority": "requested",
+        "status": null
+      },
+      "writers": [
+        {
+          "event": 7,
+          "kind": "clear",
+          "operation": null,
+          "entry": null,
+          "caller_rva": null,
+          "program": null
+        },
+        {
+          "event": 14,
+          "kind": "draw",
+          "operation": null,
+          "entry": "_GfxDrawIndexed",
+          "caller_rva": "0x10d4e50",
+          "program": 301
+        },
+        {
+          "event": 15,
+          "kind": "draw",
+          "operation": null,
+          "entry": "_GfxDrawIndexed",
+          "caller_rva": "0x10d4e50",
+          "program": 301
+        }
+      ],
+      "writer_events": [
+        7,
+        14,
+        15
+      ],
+      "writer_authority": "graph",
+      "producer_event": 15,
+      "generation": {
+        "required": null,
+        "producers_before": 3,
+        "captured_writes": 307
+      },
+      "upcoming_event": {
+        "event": 16,
+        "kind": "draw",
+        "operation": null,
+        "entry": "_GfxDrawIndexed",
+        "program": 301,
+        "note": "the operation at the observation event; it has not written the observed pre-event content"
+      },
+      "frame": {
+        "session_id": "2da0a8fc-d442-475d-aeb3-8b902ce0caa0",
+        "capture_frame_id": 1,
+        "present_index": 616,
+        "event_stream_sha256": "ea7116be3e917e939ced608cfd74347c728c37ddb26a547f73c0b1845909d7c6",
+        "reference_sha256": "8dbd7c93c62a57d4dcd9833eec24675f3019b2fd45b89ef161b603dbed84063f",
+        "manifest_sha256": "2f983a670d3925be466ff006534a97af32f7277166bd817127af29d8fdd12a49",
+        "pid": 25295,
+        "source": "seal"
+      },
+      "statistics": null,
+      "reference": {
+        "file": null,
+        "reference_file": "default-checkpoint-76c0c724e6fd1956379c2245142c13733b8bf0434021741bfa6581e9b1787e41.bin",
+        "reference_sha256": "76c0c724e6fd1956379c2245142c13733b8bf0434021741bfa6581e9b1787e41",
+        "reference_width": 1728,
+        "reference_height": 1117
+      },
+      "declared_writer_events": [
+        7,
+        14,
+        15
+      ],
+      "declared_writer_authority": "graph"
+    },
+    {
+      "observation": {
+        "event": 17,
+        "target": "0",
+        "resource": "fb:0",
+        "phase": "pre_event",
+        "authority": "requested",
+        "status": null
+      },
+      "writers": [
+        {
+          "event": 7,
+          "kind": "clear",
+          "operation": null,
+          "entry": null,
+          "caller_rva": null,
+          "program": null
+        },
+        {
+          "event": 14,
+          "kind": "draw",
+          "operation": null,
+          "entry": "_GfxDrawIndexed",
+          "caller_rva": "0x10d4e50",
+          "program": 301
+        },
+        {
+          "event": 15,
+          "kind": "draw",
+          "operation": null,
+          "entry": "_GfxDrawIndexed",
+          "caller_rva": "0x10d4e50",
+          "program": 301
+        },
+        {
+          "event": 16,
+          "kind": "draw",
+          "operation": null,
+          "entry": "_GfxDrawIndexed",
+          "caller_rva": "0x10d4e50",
+          "program": 301
+        }
+      ],
+      "writer_events": [
+        7,
+        14,
+        15,
+        16
+      ],
+      "writer_authority": "graph",
+      "producer_event": 16,
+      "generation": {
+        "required": null,
+        "producers_before": 4,
+        "captured_writes": 307
+      },
+      "upcoming_event": {
+        "event": 17,
+        "kind": "draw",
+        "operation": null,
+        "entry": "_GfxDrawIndexed",
+        "program": 301,
+        "note": "the operation at the observation event; it has not written the observed pre-event content"
+      },
+      "frame": {
+        "session_id": "2da0a8fc-d442-475d-aeb3-8b902ce0caa0",
+        "capture_frame_id": 1,
+        "present_index": 616,
+        "event_stream_sha256": "ea7116be3e917e939ced608cfd74347c728c37ddb26a547f73c0b1845909d7c6",
+        "reference_sha256": "8dbd7c93c62a57d4dcd9833eec24675f3019b2fd45b89ef161b603dbed84063f",
+        "manifest_sha256": "2f983a670d3925be466ff006534a97af32f7277166bd817127af29d8fdd12a49",
+        "pid": 25295,
+        "source": "seal"
+      },
+      "statistics": null,
+      "reference": {
+        "file": null,
+        "reference_file": "default-checkpoint-2e9796898716a1f44a8ad0926091c5ceac5e1b7e5710a6631bdc39d301d5226f.bin",
+        "reference_sha256": "2e9796898716a1f44a8ad0926091c5ceac5e1b7e5710a6631bdc39d301d5226f",
+        "reference_width": 1728,
+        "reference_height": 1117
+      },
+      "declared_writer_events": [
+        7,
+        14,
+        15,
+        16
+      ],
+      "declared_writer_authority": "graph"
+    },
+    {
+      "observation": {
+        "event": 270,
+        "target": "433",
+        "resource": "tex:433",
+        "phase": "pre_event",
+        "authority": "requested",
+        "status": null
+      },
+      "writers": [
+        {
+          "event": 0,
+          "kind": "clear",
+          "operation": null,
+          "entry": null,
+          "caller_rva": null,
+          "program": null
+        },
+        {
+          "event": 1,
+          "kind": "draw",
+          "operation": null,
+          "entry": "_GfxDrawIndexed",
+          "caller_rva": "0x10d4e50",
+          "program": 310
+        },
+        {
+          "event": 2,
+          "kind": "draw",
+          "operation": null,
+          "entry": "_GfxDrawIndexed",
+          "caller_rva": "0x10d4e50",
+          "program": 310
+        },
+        {
+          "event": 3,
+          "kind": "draw",
+          "operation": null,
+          "entry": "_GfxDrawIndexed",
+          "caller_rva": "0x10d4e50",
+          "program": 310
+        },
+        {
+          "event": 4,
+          "kind": "draw",
+          "operation": null,
+          "entry": "_GfxDrawIndexed",
+          "caller_rva": "0x10d4e50",
+          "program": 310
+        },
+        {
+          "event": 5,
+          "kind": "draw",
+          "operation": null,
+          "entry": "_GfxDrawIndexed",
+          "caller_rva": "0x10d4e50",
+          "program": 310
+        },
+        {
+          "event": 6,
+          "kind": "draw",
+          "operation": null,
+          "entry": "_GfxDrawIndexed",
+          "caller_rva": "0x10d4e50",
+          "program": 310
+        }
+      ],
+      "writer_events": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "writer_authority": "graph",
+      "producer_event": 6,
+      "generation": {
+        "required": 7,
+        "producers_before": 7,
+        "captured_writes": 7
+      },
+      "upcoming_event": {
+        "event": 270,
+        "kind": "draw",
+        "operation": null,
+        "entry": "_GfxDraw",
+        "program": 316,
+        "note": "the operation at the observation event; it has not written the observed pre-event content"
+      },
+      "frame": {
+        "session_id": "2da0a8fc-d442-475d-aeb3-8b902ce0caa0",
+        "capture_frame_id": 1,
+        "present_index": 616,
+        "event_stream_sha256": "ea7116be3e917e939ced608cfd74347c728c37ddb26a547f73c0b1845909d7c6",
+        "reference_sha256": "8dbd7c93c62a57d4dcd9833eec24675f3019b2fd45b89ef161b603dbed84063f",
+        "manifest_sha256": "2f983a670d3925be466ff006534a97af32f7277166bd817127af29d8fdd12a49",
+        "pid": 25295,
+        "source": "seal"
+      },
+      "statistics": null,
+      "reference": {
+        "file": null,
+        "reference_file": "tex-c83ed089671f662ab203eaaebe6f20d514fd8cbc94fcb42870f9e122d0feac59.bin",
+        "reference_sha256": "c83ed089671f662ab203eaaebe6f20d514fd8cbc94fcb42870f9e122d0feac59",
+        "reference_width": 1728,
+        "reference_height": 1117
+      },
+      "declared_writer_events": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "declared_writer_authority": "graph"
+    },
+    {
+      "observation": {
+        "event": 284,
+        "target": "0",
+        "resource": "fb:0",
+        "phase": "pre_event",
+        "authority": "requested",
+        "status": null
+      },
+      "writers": [
+        {
+          "event": 276,
+          "kind": "draw",
+          "operation": null,
+          "entry": "_GfxDrawIndexed",
+          "caller_rva": "0x10d2993",
+          "program": 340
+        },
+        {
+          "event": 277,
+          "kind": "draw",
+          "operation": null,
+          "entry": "_GfxDrawIndexed",
+          "caller_rva": "0x14c8409",
+          "program": 262
+        },
+        {
+          "event": 278,
+          "kind": "draw",
+          "operation": null,
+          "entry": "_GfxDrawIndexed",
+          "caller_rva": "0x14c8409",
+          "program": 262
+        },
+        {
+          "event": 279,
+          "kind": "draw",
+          "operation": null,
+          "entry": "_GfxDrawIndexed",
+          "caller_rva": "0x14c8409",
+          "program": 262
+        },
+        {
+          "event": 280,
+          "kind": "draw",
+          "operation": null,
+          "entry": "_GfxDrawIndexed",
+          "caller_rva": "0x14c8409",
+          "program": 262
+        },
+        {
+          "event": 281,
+          "kind": "draw",
+          "operation": null,
+          "entry": "_GfxDrawIndexed",
+          "caller_rva": "0x14c8409",
+          "program": 262
+        },
+        {
+          "event": 282,
+          "kind": "draw",
+          "operation": null,
+          "entry": "_GfxDrawIndexed",
+          "caller_rva": "0x14c8409",
+          "program": 262
+        },
+        {
+          "event": 283,
+          "kind": "draw",
+          "operation": null,
+          "entry": "_GfxDraw",
+          "caller_rva": "0x10d25c3",
+          "program": 346
+        }
+      ],
+      "writer_events": [
+        276,
+        277,
+        278,
+        279,
+        280,
+        281,
+        282,
+        283
+      ],
+      "writer_authority": "graph",
+      "producer_event": 283,
+      "generation": {
+        "required": 271,
+        "producers_before": 271,
+        "captured_writes": 307
+      },
+      "upcoming_event": {
+        "event": 284,
+        "kind": "resolve",
+        "operation": "glCopyTexSubImage2D",
+        "entry": null,
+        "program": null,
+        "note": "the operation at the observation event; it has not written the observed pre-event content"
+      },
+      "frame": {
+        "session_id": "2da0a8fc-d442-475d-aeb3-8b902ce0caa0",
+        "capture_frame_id": 1,
+        "present_index": 616,
+        "event_stream_sha256": "ea7116be3e917e939ced608cfd74347c728c37ddb26a547f73c0b1845909d7c6",
+        "reference_sha256": "8dbd7c93c62a57d4dcd9833eec24675f3019b2fd45b89ef161b603dbed84063f",
+        "manifest_sha256": "2f983a670d3925be466ff006534a97af32f7277166bd817127af29d8fdd12a49",
+        "pid": 25295,
+        "source": "seal"
+      },
+      "statistics": null,
+      "reference": {
+        "file": null,
+        "reference_file": "copy-source-547.bgra",
+        "reference_sha256": "69612c03cbf4d40fe82590f1776c76587f0a9a49fef9e915594fbdaa5cf6391d",
+        "reference_width": 1728,
+        "reference_height": 1117
+      },
+      "declared_writer_events": [
+        7,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        52,
+        53,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64,
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72,
+        73,
+        74,
+        75,
+        76,
+        77,
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91,
+        92,
+        93,
+        94,
+        95,
+        96,
+        97,
+        98,
+        99,
+        100,
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108,
+        109,
+        110,
+        111,
+        112,
+        113,
+        114,
+        115,
+        116,
+        117,
+        118,
+        119,
+        120,
+        121,
+        122,
+        123,
+        124,
+        125,
+        126,
+        127,
+        128,
+        129,
+        130,
+        131,
+        132,
+        133,
+        134,
+        135,
+        136,
+        137,
+        138,
+        139,
+        140,
+        141,
+        142,
+        143,
+        144,
+        145,
+        146,
+        147,
+        148,
+        149,
+        150,
+        151,
+        152,
+        153,
+        154,
+        155,
+        156,
+        157,
+        158,
+        159,
+        160,
+        161,
+        162,
+        163,
+        164,
+        165,
+        166,
+        167,
+        168,
+        169,
+        170,
+        171,
+        172,
+        173,
+        174,
+        175,
+        176,
+        177,
+        178,
+        179,
+        180,
+        181,
+        182,
+        183,
+        184,
+        185,
+        186,
+        187,
+        188,
+        189,
+        190,
+        191,
+        192,
+        193,
+        194,
+        195,
+        196,
+        197,
+        198,
+        199,
+        200,
+        201,
+        202,
+        203,
+        204,
+        205,
+        206,
+        207,
+        208,
+        209,
+        210,
+        211,
+        212,
+        213,
+        214,
+        215,
+        216,
+        217,
+        218,
+        219,
+        220,
+        221,
+        222,
+        223,
+        224,
+        225,
+        226,
+        227,
+        228,
+        229,
+        230,
+        231,
+        232,
+        233,
+        234,
+        235,
+        236,
+        237,
+        238,
+        239,
+        240,
+        241,
+        242,
+        243,
+        244,
+        245,
+        246,
+        247,
+        248,
+        249,
+        250,
+        251,
+        252,
+        253,
+        254,
+        255,
+        256,
+        257,
+        258,
+        259,
+        260,
+        261,
+        262,
+        263,
+        264,
+        265,
+        266,
+        267,
+        268,
+        269,
+        270,
+        271,
+        272,
+        273,
+        274,
+        275,
+        276,
+        277,
+        278,
+        279,
+        280,
+        281,
+        282,
+        283
+      ],
+      "declared_writer_authority": "graph"
+    },
+    {
+      "observation": {
+        "event": 286,
+        "target": "442",
+        "resource": "tex:442",
+        "phase": "pre_event",
+        "authority": "requested",
+        "status": null
+      },
+      "writers": [
+        {
+          "event": 284,
+          "kind": "resolve",
+          "operation": "glCopyTexSubImage2D",
+          "entry": null,
+          "caller_rva": null,
+          "program": null
+        }
+      ],
+      "writer_events": [
+        284
+      ],
+      "writer_authority": "graph",
+      "producer_event": 284,
+      "generation": {
+        "required": 1,
+        "producers_before": 1,
+        "captured_writes": 1
+      },
+      "upcoming_event": {
+        "event": 286,
+        "kind": "draw",
+        "operation": null,
+        "entry": "_GfxDraw",
+        "program": 352,
+        "note": "the operation at the observation event; it has not written the observed pre-event content"
+      },
+      "frame": {
+        "session_id": "2da0a8fc-d442-475d-aeb3-8b902ce0caa0",
+        "capture_frame_id": 1,
+        "present_index": 616,
+        "event_stream_sha256": "ea7116be3e917e939ced608cfd74347c728c37ddb26a547f73c0b1845909d7c6",
+        "reference_sha256": "8dbd7c93c62a57d4dcd9833eec24675f3019b2fd45b89ef161b603dbed84063f",
+        "manifest_sha256": "2f983a670d3925be466ff006534a97af32f7277166bd817127af29d8fdd12a49",
+        "pid": 25295,
+        "source": "seal"
+      },
+      "statistics": null,
+      "reference": {
+        "file": null,
+        "reference_file": "tex-38cb55afdcaf5c835dad53fbb654165586361d1e8f37785e129e3e55be023a4a.bin",
+        "reference_sha256": "38cb55afdcaf5c835dad53fbb654165586361d1e8f37785e129e3e55be023a4a",
+        "reference_width": 1728,
+        "reference_height": 1117
+      },
+      "declared_writer_events": [
+        284
+      ],
+      "declared_writer_authority": "graph"
+    },
+    {
+      "observation": {
+        "event": 288,
+        "target": "447",
+        "resource": "tex:447",
+        "phase": "pre_event",
+        "authority": "requested",
+        "status": null
+      },
+      "writers": [
+        {
+          "event": 285,
+          "kind": "clear",
+          "operation": null,
+          "entry": null,
+          "caller_rva": null,
+          "program": null
+        },
+        {
+          "event": 286,
+          "kind": "draw",
+          "operation": null,
+          "entry": "_GfxDraw",
+          "caller_rva": "0xed7ba9",
+          "program": 352
+        }
+      ],
+      "writer_events": [
+        285,
+        286
+      ],
+      "writer_authority": "graph",
+      "producer_event": 286,
+      "generation": {
+        "required": 2,
+        "producers_before": 2,
+        "captured_writes": 2
+      },
+      "upcoming_event": {
+        "event": 288,
+        "kind": "draw",
+        "operation": null,
+        "entry": "_GfxDraw",
+        "program": 349,
+        "note": "the operation at the observation event; it has not written the observed pre-event content"
+      },
+      "frame": {
+        "session_id": "2da0a8fc-d442-475d-aeb3-8b902ce0caa0",
+        "capture_frame_id": 1,
+        "present_index": 616,
+        "event_stream_sha256": "ea7116be3e917e939ced608cfd74347c728c37ddb26a547f73c0b1845909d7c6",
+        "reference_sha256": "8dbd7c93c62a57d4dcd9833eec24675f3019b2fd45b89ef161b603dbed84063f",
+        "manifest_sha256": "2f983a670d3925be466ff006534a97af32f7277166bd817127af29d8fdd12a49",
+        "pid": 25295,
+        "source": "seal"
+      },
+      "statistics": null,
+      "reference": {
+        "file": null,
+        "reference_file": "tex-71bfd340b0a0bc61f7c7619373ea73dd7f36bee34507026b07721c862e9f1d5d.bin",
+        "reference_sha256": "71bfd340b0a0bc61f7c7619373ea73dd7f36bee34507026b07721c862e9f1d5d",
+        "reference_width": 864,
+        "reference_height": 558
+      },
+      "declared_writer_events": [
+        285,
+        286
+      ],
+      "declared_writer_authority": "graph"
+    },
+    {
+      "observation": {
+        "event": 290,
+        "target": "443",
+        "resource": "tex:443",
+        "phase": "pre_event",
+        "authority": "requested",
+        "status": null
+      },
+      "writers": [
+        {
+          "event": 287,
+          "kind": "clear",
+          "operation": null,
+          "entry": null,
+          "caller_rva": null,
+          "program": null
+        },
+        {
+          "event": 288,
+          "kind": "draw",
+          "operation": null,
+          "entry": "_GfxDraw",
+          "caller_rva": "0xed7c76",
+          "program": 349
+        }
+      ],
+      "writer_events": [
+        287,
+        288
+      ],
+      "writer_authority": "graph",
+      "producer_event": 288,
+      "generation": {
+        "required": 2,
+        "producers_before": 2,
+        "captured_writes": 2
+      },
+      "upcoming_event": {
+        "event": 290,
+        "kind": "draw",
+        "operation": null,
+        "entry": "_GfxDraw",
+        "program": 358,
+        "note": "the operation at the observation event; it has not written the observed pre-event content"
+      },
+      "frame": {
+        "session_id": "2da0a8fc-d442-475d-aeb3-8b902ce0caa0",
+        "capture_frame_id": 1,
+        "present_index": 616,
+        "event_stream_sha256": "ea7116be3e917e939ced608cfd74347c728c37ddb26a547f73c0b1845909d7c6",
+        "reference_sha256": "8dbd7c93c62a57d4dcd9833eec24675f3019b2fd45b89ef161b603dbed84063f",
+        "manifest_sha256": "2f983a670d3925be466ff006534a97af32f7277166bd817127af29d8fdd12a49",
+        "pid": 25295,
+        "source": "seal"
+      },
+      "statistics": null,
+      "reference": {
+        "file": null,
+        "reference_file": "tex-4719abf5f5a3b532543fdbbafc4a05056f9be59965cfd51de10cb76a8089b82d.bin",
+        "reference_sha256": "4719abf5f5a3b532543fdbbafc4a05056f9be59965cfd51de10cb76a8089b82d",
+        "reference_width": 864,
+        "reference_height": 558
+      },
+      "declared_writer_events": [
+        287,
+        288
+      ],
+      "declared_writer_authority": "graph"
+    }
+  ]
+}

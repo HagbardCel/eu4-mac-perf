@@ -23,7 +23,7 @@ BENCH = ROOT / "benchmark"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import m6_compare, m6_frame  # noqa: E402
+from automation import m6_compare, m6_frame, native_build  # noqa: E402
 
 CORE = BENCH / "eu4_gfx_frame_replay.mm"
 CLI = BENCH / "eu4_gfx_frame_replay_cli.mm"
@@ -85,21 +85,18 @@ class MetalReplayLibraryTests(unittest.TestCase):
             "-I",
             str(BENCH),
         ]
+        native_build.require_prerequisites(
+            sources=[CORE, CLI, ABI_HOST, SHADOW_BRIDGE, SHADOW_REPORT_HOST],
+            frameworks=("Foundation", "Metal"), require_arm64=True)
         for output, sources in (
             (cls.cli, [CORE, CLI]),
             (cls.abi, [CORE, ABI_HOST]),
             (cls.shadow_report,
              [CORE, SHADOW_BRIDGE, SHADOW_REPORT_HOST]),
         ):
-            built = subprocess.run(
+            native_build.build(
                 [*common, "-o", str(output), *map(str, sources)],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=240,
-            )
-            if built.returncode:
-                raise unittest.SkipTest(built.stderr.strip() or "core build failed")
+                label=f"metal-replay:{output.name}", timeout=240)
 
     @classmethod
     def tearDownClass(cls):
@@ -292,6 +289,129 @@ class MetalReplayLibraryTests(unittest.TestCase):
                 {"ff2f4e2b9d2cfeef8509dc6777213c859a7ef6af7bc6ad37c4ca564ce57deb15"},
             )
             self.assertTrue(all(item["ok"] for item in reports))
+
+    @staticmethod
+    def _synthetic_stage(name: str, stage: str, entry: str) -> dict:
+        return {
+            "stage": stage,
+            "msl_file": name,
+            "msl_entry": entry,
+            "msl_uniform_buffer": None,
+            "msl_samplers": [],
+            "attributes": [],
+            "attribute_locations": {},
+            "uniforms": [],
+            "varyings": [],
+        }
+
+    def _synthetic_frame(self, base: Path, *, color: tuple,
+                         sequence_index: int | None = None,
+                         previous: dict | None = None) -> Path:
+        """One drawable frame whose shader filenames are fixed but bytes vary."""
+        frame = base / "frame"
+        shaders = frame / "shaders"
+        (frame / "blobs").mkdir(parents=True)
+        shaders.mkdir(parents=True)
+        vertex = (
+            "#include <metal_stdlib>\n"
+            "using namespace metal;\n"
+            "struct VOut { float4 position [[position]]; };\n"
+            "vertex VOut v_main(uint vid [[vertex_id]]) {\n"
+            "    float2 p[3] = { float2(-1.0, -1.0), float2(3.0, -1.0),\n"
+            "                    float2(-1.0, 3.0) };\n"
+            "    VOut out;\n"
+            "    out.position = float4(p[vid], 0.0, 1.0);\n"
+            "    return out;\n"
+            "}\n"
+        )
+        fragment = (
+            "#include <metal_stdlib>\n"
+            "using namespace metal;\n"
+            "fragment float4 f_main() {\n"
+            f"    return float4({color[0]:.1f}, {color[1]:.1f}, "
+            f"{color[2]:.1f}, 1.0);\n"
+            "}\n"
+        )
+        (shaders / "v.metal").write_text(vertex)
+        (shaders / "f.metal").write_text(fragment)
+        (shaders / "shaders.json").write_text(json.dumps({
+            "schema": "gfx-shader-translation/v1",
+            "programs": [{
+                "program": 1,
+                "status": "ok",
+                "stages": {
+                    "vertex": self._synthetic_stage(
+                        "v.metal", "vertex", "v_main"),
+                    "pixel": self._synthetic_stage(
+                        "f.metal", "pixel", "f_main"),
+                },
+            }],
+        }))
+        event = self._draw_event(
+            program={"name": 1, "uniforms": []},
+            target={"framebuffer": 0, "width": 4, "height": 4})
+        (frame / "frame-events.jsonl").write_text(json.dumps(event) + "\n")
+        manifest = self._manifest(events=1)
+        manifest["frame"]["width"] = 4
+        manifest["frame"]["height"] = 4
+        manifest["frame"]["row_stride"] = 16
+        (frame / "frame-trace.json").write_text(json.dumps(manifest))
+        if sequence_index is not None:
+            manifest_sha = hashlib.sha256(
+                (frame / "frame-trace.json").read_bytes()).hexdigest()
+            events_sha = hashlib.sha256(
+                (frame / "frame-events.jsonl").read_bytes()).hexdigest()
+            (frame / "frame-sequence.json").write_text(json.dumps({
+                "schema": "gfx-frame-sequence/v1",
+                "sequence_index": sequence_index,
+                "previous": previous,
+                "capture_frame_id": sequence_index,
+                "manifest_sha256": manifest_sha,
+                "event_stream_sha256": events_sha,
+                "carried_renderer_outputs": [],
+                "lifecycle": [],
+            }))
+        return frame
+
+    def test_sequence_session_does_not_reuse_a_shader_by_filename(self):
+        # Same program, same MSL filenames and same source length in two
+        # consecutive frames, but different bytes.  A function or pipeline
+        # keyed only by filename would return the first frame's red object in
+        # the second frame.
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            red = self._synthetic_frame(base / "red", color=(1.0, 0.0, 0.0),
+                                        sequence_index=1)
+            red_sequence = json.loads(
+                (red / "frame-sequence.json").read_text())
+            green = self._synthetic_frame(
+                base / "green", color=(0.0, 1.0, 0.0), sequence_index=2,
+                previous={
+                    "capture_frame_id": red_sequence["capture_frame_id"],
+                    "manifest_sha256": red_sequence["manifest_sha256"],
+                    "event_stream_sha256": red_sequence["event_stream_sha256"],
+                })
+            fallback = base / "fallback"
+            fallback.mkdir()
+            (fallback / "shaders.json").write_text(json.dumps({
+                "schema": "gfx-shader-translation/v1", "programs": []}))
+            out = base / "out"
+            result = subprocess.run(
+                [str(self.cli), "--sequence", f"{red},{green}",
+                 "--shaders", str(fallback), "--out", str(out)],
+                capture_output=True, text=True, check=False, timeout=300)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            first = (out / "out-001" / "metal-frame.bgra").read_bytes()
+            second = (out / "out-002" / "metal-frame.bgra").read_bytes()
+            self.assertEqual(len(first), 64)
+            self.assertEqual(len(second), 64)
+            offset = (2 * 4 + 2) * 4
+            first_pixel = first[offset:offset + 4]
+            second_pixel = second[offset:offset + 4]
+            self.assertNotEqual(first_pixel, second_pixel)
+            # BGRA: red has a larger red component, green a larger green one.
+            self.assertGreater(first_pixel[2], first_pixel[1])
+            self.assertGreater(second_pixel[1], second_pixel[2])
 
     def test_invalid_trace_and_invalid_config_are_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:

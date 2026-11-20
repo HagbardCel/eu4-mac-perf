@@ -227,6 +227,7 @@ class ProcessLease:
         self.path = path
         self._fd: int | None = fd
         self._closed = False
+        self._release_error: OSError | None = None
 
     @property
     def fd(self) -> int:
@@ -240,6 +241,16 @@ class ProcessLease:
 
     def holder(self) -> dict | None:
         return _read_holder(self.path)
+
+    @property
+    def release_error(self) -> OSError | None:
+        """The ``os.close`` error from :meth:`release`, if one occurred.
+
+        The release itself stays non-raising because it runs in ``finally``
+        paths.  Callers that must report a cleanup failure can inspect this
+        after attempting the release instead of assuming it succeeded.
+        """
+        return self._release_error
 
     def check_manual_game(self) -> None:
         pids = manual_game_pids(self.executable)
@@ -262,8 +273,8 @@ class ProcessLease:
         # the last (game) descriptor is closed by process exit.
         try:
             os.close(fd)
-        except OSError:
-            pass
+        except OSError as exc:
+            self._release_error = exc
 
     def __enter__(self) -> "ProcessLease":
         return self

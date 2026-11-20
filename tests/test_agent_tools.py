@@ -230,6 +230,225 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(value["result"]["checkpoint_validation"]["status"],
                          "invalid")
 
+    def independent_replay_report(self, classification, **overrides):
+        frame = {
+            "capture_frame_id": 1, "present_index": 616, "scene_index": 1,
+            "events": 325, "sealed": True,
+        }
+        report = {
+            "schema": "gfx-independent-replay/v1",
+            "out_dir": str(self.root / "out"),
+            "classification": classification,
+            "qualification": {
+                "schema": "m7-qualification-contract/v1",
+                "axes": {
+                    "capture_validity": "valid",
+                    "frame_shader_identity": "verified",
+                    "gpu_execution": "ok",
+                    "resource_provenance": "verified",
+                    "operation_coverage": "complete",
+                    "rendering_state_coverage": "complete",
+                    "pixel_comparison": (
+                        "match" if classification == "qualified_match"
+                        else "divergent"),
+                    "first_divergence_confidence": (
+                        "none" if classification == "qualified_match"
+                        else "confirmed"),
+                },
+                "classification": classification,
+                "qualified": classification == "qualified_match",
+                "renderer_equivalence": classification == "qualified_match",
+            },
+            "evaluation": {"status": "complete", "reasons": []},
+            "checkpoints": [{
+                "event": 14, "target": "0", "resource": "fb:0",
+                "status": "match", "authoritative": True,
+                "statistics": {"mismatched_pixels": 0,
+                               "max_channel_error": 0},
+            }, {
+                "event": 15, "target": "0", "resource": "fb:0",
+                "status": "divergent", "authoritative": True,
+                "statistics": {"mismatched_pixels": 607,
+                               "max_channel_error": 2},
+            }],
+            "checkpoint_validation": {
+                "status": "ok", "requested": 2, "returned": 2,
+                "matched": 1, "diagnostic": 0, "divergent": 1, "invalid": 0,
+                "problems": [],
+            },
+            "state_coverage": {"status": "complete"},
+            "provenance": {"status": "verified"},
+            "operation_coverage": {"status": "complete"},
+            "binding_audit": {"ok": True},
+            "final": {
+                "status": ("match" if classification == "qualified_match"
+                           else "divergent"),
+                "exact": classification == "qualified_match",
+                "statistics": {"pixels": 1930176,
+                               "mismatched_pixels": 0
+                               if classification == "qualified_match" else 607,
+                               "max_channel_error": 0
+                               if classification == "qualified_match" else 2,
+                               "alpha_different_pixels": 0},
+            },
+            "first_divergence": ({"kind": "none", "confidence": "none"}
+                                 if classification == "qualified_match"
+                                 else {
+                                     "kind": "intermediate",
+                                     "event": 15, "target": "0",
+                                     "resource": "fb:0", "operation": "draw",
+                                     "program": "301", "producer_event": 14,
+                                     "confidence": "confirmed",
+                                     "root_cause": "not_established",
+                                     "reason": "checkpoint 15 differs",
+                                 }),
+            "frame": frame,
+            "artifacts": {
+                "replay_json": "replay.json",
+                "producer_receipt": "producer-receipt.json",
+            },
+        }
+        report.update(overrides)
+        return report
+
+    def test_completed_divergent_replay_is_not_a_tool_failure(self):
+        from types import SimpleNamespace
+        from automation import gfx_independent_replay
+
+        args = SimpleNamespace(
+            replay_op="independent", frame="frame",
+            replay_out=str(self.root / "out"), shaders=None,
+            disable_render_target_vflip=False, sampler_shift=None,
+            sampler_shift_min=7,
+        )
+        with mock.patch.object(
+                gfx_independent_replay, "replay",
+                return_value=self.independent_replay_report(
+                    "qualified_difference")):
+            value = agent_tools.eu4_replay(args)
+        self.assertTrue(value["ok"])
+        self.assertEqual(value["status"], "ok")
+        self.assertEqual(value["outcome"]["diagnostic"], "complete")
+        self.assertTrue(value["outcome"]["diagnostic_complete"])
+        self.assertEqual(value["outcome"]["verdict"], "different")
+        self.assertEqual(value["outcome"]["evidence"], "valid")
+        self.assertIsNone(value["failure"]["kind"])
+        self.assertEqual(value["failure"]["class"], "comparison")
+        self.assertEqual(value["result"]["first_divergence"]["event"], 15)
+        self.assertLessEqual(value["result"]["output_bytes"], 8192)
+        self.assertEqual(value["result"]["report"],
+                         str(self.root / "out" / "replay-report.json"))
+
+    def test_unverified_identity_replay_is_incomplete_not_qualified(self):
+        from types import SimpleNamespace
+        from automation import gfx_independent_replay
+
+        report = self.independent_replay_report("qualified_match")
+        report["qualification"] = dict(
+            report["qualification"],
+            axes=dict(report["qualification"]["axes"],
+                      frame_shader_identity="unverified_session"),
+            qualified=False, renderer_equivalence=False)
+        report["classification"] = "incomplete_diagnostics"
+        report["qualification"]["classification"] = "incomplete_diagnostics"
+        args = SimpleNamespace(
+            replay_op="independent", frame="frame",
+            replay_out=str(self.root / "out"), shaders=None,
+            disable_render_target_vflip=False, sampler_shift=None,
+            sampler_shift_min=7,
+        )
+        with mock.patch.object(gfx_independent_replay, "replay",
+                               return_value=report):
+            value = agent_tools.eu4_replay(args)
+        self.assertFalse(value["ok"])
+        self.assertEqual(value["status"], "incomplete")
+        self.assertEqual(value["outcome"]["diagnostic"], "incomplete")
+        self.assertEqual(value["outcome"]["evidence"], "unverified")
+        self.assertFalse(value["outcome"]["qualified"])
+
+    def test_adversarial_replay_envelope_stays_within_the_cap(self):
+        """Hundreds of Unicode reasons and metadata cannot exceed the cap."""
+        from types import SimpleNamespace
+        from automation import gfx_independent_replay
+
+        reasons = [
+            f"evaluación {index}: motivo repetido Δειγμα-😀 "
+            + "x" * 60
+            for index in range(400)
+        ]
+        report = self.independent_replay_report("qualified_difference")
+        report["evaluation"] = {"status": "complete", "reasons": reasons}
+        report["first_divergence"]["limitations"] = list(reasons)
+        report["first_divergence"]["reason"] = "y" * 5000
+        report["first_divergence"]["root_cause"] = "z" * 20000
+        report["first_divergence"]["next_checkpoint"] = {
+            "event": 1, "reason": "z" * 30000}
+        args = SimpleNamespace(
+            replay_op="independent", frame="frame",
+            replay_out=str(self.root / "out"), shaders=None,
+            disable_render_target_vflip=False, sampler_shift=None,
+            sampler_shift_min=7,
+        )
+        for count in (0, 10, 37, 60, 200):
+            report["artifacts"] = {
+                f"artifact-{index}": f"path/{index}/" + "z" * 80
+                for index in range(count)
+            }
+            with mock.patch.object(gfx_independent_replay, "replay",
+                                   return_value=report):
+                value = agent_tools.eu4_replay(args)
+            size = agent_tools._utf8_len(value)
+            self.assertLessEqual(size, agent_tools.COMPACT_OUTPUT_CAP, count)
+            self.assertEqual(value["result"]["output_bytes"], size, count)
+            self.assertEqual(value["result"]["report"],
+                             str(self.root / "out" / "replay-report.json"))
+            self.assertEqual(value["result"]["first_divergence"]["event"], 15)
+            self.assertEqual(value["result"]["classification"],
+                             "qualified_difference")
+            self.assertTrue(value["truncated"])
+            self.assertLessEqual(len(value["reason"].encode("utf-8")), 8192)
+            if isinstance(value.get("failure"), dict):
+                self.assertLessEqual(
+                    len(str(value["failure"].get("detail") or "").encode(
+                        "utf-8")), 8192)
+
+    def test_invalid_envelope_with_huge_failure_detail_stays_bounded(self):
+        from types import SimpleNamespace
+        from automation import gfx_independent_replay
+
+        reasons = ["Δειγμα 😀 " * 200
+                   for _ in range(300)]
+        report = self.independent_replay_report("invalid_provenance")
+        report["evaluation"] = {"status": "invalid", "reasons": reasons}
+        args = SimpleNamespace(
+            replay_op="independent", frame="frame",
+            replay_out=str(self.root / "out"), shaders=None,
+            disable_render_target_vflip=False, sampler_shift=None,
+            sampler_shift_min=7,
+        )
+        with mock.patch.object(gfx_independent_replay, "replay",
+                               return_value=report):
+            value = agent_tools.eu4_replay(args)
+        size = agent_tools._utf8_len(value)
+        self.assertLessEqual(size, agent_tools.COMPACT_OUTPUT_CAP)
+        self.assertEqual(value["result"]["output_bytes"], size)
+        self.assertEqual(value["result"]["report"],
+                         str(self.root / "out" / "replay-report.json"))
+        self.assertLessEqual(
+            len(str(value["failure"].get("detail") or "").encode("utf-8")),
+            agent_tools.COMPACT_OUTPUT_CAP)
+
+    def test_compact_replay_view_is_bounded(self):
+        from automation import agent_tools as tools
+        report = self.independent_replay_report("qualified_difference")
+        view = tools._replay_compact_view(
+            report, str(self.root / "out" / "replay-report.json"))
+        envelope = tools._envelope(
+            "eu4_replay", "ok", view, diagnostic="complete",
+            verdict="different", evidence="valid", qualified=False)
+        bounded = tools._bound_replay_compact(envelope)
+        self.assertLessEqual(tools._utf8_len(bounded), tools.COMPACT_OUTPUT_CAP)
+
     def test_diff_run_without_ledger_is_an_error_envelope(self):
         scenario = self.root / "scenario.json"
         scenario.write_text(json.dumps({

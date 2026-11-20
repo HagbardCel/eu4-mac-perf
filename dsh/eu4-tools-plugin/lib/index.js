@@ -181,6 +181,7 @@ export function definitions(run) {
         continue_on_difference: boolean('keep executing after a nonqualified M7 frame'),
         package_dir: string('explicit reproduction case destination'),
         only_event: integer('selected event index'),
+        full: boolean('return the complete report instead of the bounded agent projection'),
         disable_render_target_vflip: boolean('controlled divergence experiment: disable render-target V flip'),
         sampler_shift: integer('controlled sampler-unit shift for the historical defect'),
         sampler_shift_min: integer('first texN unit affected by the shift'),

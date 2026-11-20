@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from automation.agents import ContractError
-from automation.runner import Runner, skill_trust
+from automation.runner import Runner, candidate_digest, skill_trust
 from automation.state import file_sha256, load_campaign, load_state, save_state
 from automation_fake import FakeAgent
 
@@ -308,7 +314,7 @@ class RunnerTests(unittest.TestCase):
         cases = {
             "inconclusive": (
                 "import json\nprint(json.dumps({'verdict':'inconclusive','diagnostics':'not sure'}))\n",
-                "round_limit",
+                "no_progress",
                 2,
             ),
             "crash": ("import sys\nsys.exit(2)\n", "validation_unavailable", 4),
@@ -330,6 +336,246 @@ class RunnerTests(unittest.TestCase):
                     state = runner.execute(resume_only=False)
                     self.assertNotEqual(state["status"], "complete")
                     self.assertEqual(state["pause_reason"], reason)
+
+    def test_identical_deterministic_failure_pauses_after_one_repeat(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            checker = root / "accept.py"
+            checker.write_text(
+                "import json\nprint(json.dumps({'verdict':'fail',"
+                "'diagnostics':'research note missing'}))\n",
+                encoding="utf-8")
+            agent = FakeAgent()  # never changes the candidate
+            runner, _clock = self._runner(
+                root, agent, max_rounds=6, checker=checker)
+            state = runner.execute(resume_only=False)
+        self.assertEqual(state["pause_reason"], "no_progress")
+        self.assertNotEqual(state["status"], "complete")
+        self.assertEqual(state["rounds"], 2)
+        self.assertEqual(state["no_progress"]["repeats"], 2)
+
+    def test_changed_candidate_is_meaningful_continuation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            checker = root / "accept.py"
+            checker.write_text(
+                "import json,pathlib,sys\n"
+                "marker=(pathlib.Path(sys.argv[1])/'marker.txt').read_text().strip()\n"
+                "print(json.dumps({'verdict':'pass' if marker=='ready' "
+                "else 'fail','diagnostics':'research note missing'}))\n",
+                encoding="utf-8")
+            agent = FakeAgent()
+            submits = {"count": 0}
+
+            def change_candidate(workspace):
+                submits["count"] += 1
+                (workspace / "marker.txt").write_text(
+                    "ready\n" if submits["count"] >= 2 else "attempt-1\n")
+
+            agent.on_submit = change_candidate
+            runner, _clock = self._runner(
+                root, agent, max_rounds=4, checker=checker)
+            state = runner.execute(resume_only=False)
+        self.assertEqual(state["status"], "complete")
+        self.assertEqual(state["rounds"], 2)
+        self.assertNotIn("no_progress", state)
+
+    def test_candidate_fingerprint_hashes_untracked_non_git_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary) / "workspace"
+            workspace.mkdir()
+            (workspace / "source.txt").write_text("a\n", encoding="utf-8")
+            first = candidate_digest(workspace)
+            (workspace / "source.txt").write_text("b\n", encoding="utf-8")
+            second = candidate_digest(workspace)
+            self.assertNotEqual(first, second)
+            (workspace / "notes.txt").write_text("one\n", encoding="utf-8")
+            third = candidate_digest(workspace)
+            self.assertNotEqual(second, third)
+            (workspace / "notes.txt").write_text("two\n", encoding="utf-8")
+            fourth = candidate_digest(workspace)
+            self.assertNotEqual(third, fourth)
+            # Two distinct content changes cannot share a digest.
+            (workspace / "source.txt").write_text("c\n", encoding="utf-8")
+            fifth = candidate_digest(workspace)
+            (workspace / "notes.txt").write_text("three\n", encoding="utf-8")
+            self.assertNotEqual(fifth, candidate_digest(workspace))
+
+    def test_candidate_fingerprint_excludes_evidence_and_output_trees(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary) / "workspace"
+            workspace.mkdir()
+            (workspace / "source.txt").write_text("a\n", encoding="utf-8")
+            before = candidate_digest(workspace)
+            for relative in ("evidence/report.json", "output/frame.png",
+                             ".local/state.json", "results/run.json",
+                             "artifacts/blob.bin"):
+                path = workspace / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("noise\n", encoding="utf-8")
+            self.assertEqual(before, candidate_digest(workspace))
+            (workspace / "evidence" / "report.json").write_text(
+                "changed noise\n", encoding="utf-8")
+            self.assertEqual(before, candidate_digest(workspace))
+
+    def test_candidate_fingerprint_hashes_a_git_untracked_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = Path(temporary) / "repo"
+            repo.mkdir()
+            _git(repo, "init")
+            (repo / "source.txt").write_text("tracked\n", encoding="utf-8")
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-m", "base")
+            before = candidate_digest(repo)
+            (repo / "untracked.txt").write_text("one\n", encoding="utf-8")
+            first = candidate_digest(repo)
+            self.assertNotEqual(before, first)
+            (repo / "untracked.txt").write_text("two\n", encoding="utf-8")
+            second = candidate_digest(repo)
+            self.assertNotEqual(first, second)
+            (repo / "evidence").mkdir()
+            (repo / "evidence" / "report.json").write_text(
+                "noise\n", encoding="utf-8")
+            self.assertEqual(second, candidate_digest(repo))
+
+    def test_no_progress_reconnect_does_not_repeat_an_unchanged_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            checker = root / "accept.py"
+            checker.write_text(
+                "import json\nprint(json.dumps({'verdict':'fail',"
+                "'diagnostics':'research note missing'}))\n",
+                encoding="utf-8")
+            agent = FakeAgent()
+            runner, _clock = self._runner(
+                root, agent, max_rounds=6, checker=checker)
+            first = runner.execute(resume_only=False)
+            self.assertEqual(first["pause_reason"], "no_progress")
+            submits = len(agent.submits)
+            resumed = Runner(
+                runner.campaign, agent, root / "run",
+                clock=runner.clock, sleep=runner.sleep)
+            state = resumed.execute(resume_only=True)
+            self.assertEqual(state["pause_reason"], "no_progress")
+            self.assertEqual(state["rounds"], first["rounds"])
+            self.assertEqual(len(agent.submits), submits)
+
+    def test_evidence_or_output_churn_does_not_permit_a_new_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            checker = root / "accept.py"
+            checker.write_text(
+                "import json\nprint(json.dumps({'verdict':'fail',"
+                "'diagnostics':'research note missing'}))\n",
+                encoding="utf-8")
+            agent = FakeAgent()
+            runner, _clock = self._runner(
+                root, agent, max_rounds=6, checker=checker)
+            first = runner.execute(resume_only=False)
+            self.assertEqual(first["pause_reason"], "no_progress")
+            submits = len(agent.submits)
+            workspace = root / "run" / "workspace"
+            for relative in ("evidence/result.json", "output/frame.txt"):
+                path = workspace / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("generated\n", encoding="utf-8")
+            state = runner.execute(resume_only=True)
+            self.assertEqual(state["pause_reason"], "no_progress")
+            self.assertEqual(len(agent.submits), submits)
+
+    def test_substantive_untracked_change_permits_a_new_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            checker = root / "accept.py"
+            checker.write_text(
+                "import json,pathlib,sys\n"
+                "workspace=pathlib.Path(sys.argv[1])\n"
+                "note=workspace/'notes.txt'\n"
+                "text=note.read_text().strip() if note.exists() else ''\n"
+                "print(json.dumps({'verdict':'pass' if text=='ready' "
+                "else 'fail','diagnostics':'research note missing'}))\n",
+                encoding="utf-8")
+            agent = FakeAgent()
+            runner, _clock = self._runner(
+                root, agent, max_rounds=6, checker=checker)
+            first = runner.execute(resume_only=False)
+            self.assertEqual(first["pause_reason"], "no_progress")
+            submits = len(agent.submits)
+            (root / "run" / "workspace" / "notes.txt").write_text(
+                "ready\n", encoding="utf-8")
+            state = runner.execute(resume_only=True)
+            self.assertEqual(state["status"], "complete")
+            self.assertGreater(len(agent.submits), submits)
+            self.assertNotIn("no_progress", state)
+
+    def test_interruption_reconnects_to_the_same_no_progress_pause(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            checker = root / "accept.py"
+            checker.write_text(
+                "import json\nprint(json.dumps({'verdict':'fail',"
+                "'diagnostics':'research note missing'}))\n",
+                encoding="utf-8")
+            agent = FakeAgent()
+
+            def interrupt_second_submit(_workspace: Path) -> None:
+                agent.interrupt = True
+
+            agent.on_submit = interrupt_second_submit
+            runner, _clock = self._runner(
+                root, agent, max_rounds=6, checker=checker)
+            with self.assertRaises(KeyboardInterrupt):
+                runner.execute(resume_only=False)
+            interrupted = load_state(runner.state_path)
+            self.assertEqual(interrupted["pause_reason"], "interrupted")
+            self.assertIn("no_progress", interrupted)
+            agent.on_submit = None
+            attempts = len(agent.submits)
+            state = runner.execute(resume_only=True)
+            self.assertEqual(state["pause_reason"], "no_progress")
+            self.assertEqual(len(agent.submits), attempts)
+
+    def test_two_concurrent_sessions_cannot_both_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            checker = root / "accept.py"
+            checker.write_text(
+                "import json\nprint(json.dumps({'verdict':'fail',"
+                "'diagnostics':'no'}))\n",
+                encoding="utf-8")
+            agent = FakeAgent()
+            runner, _clock = self._runner(
+                root, agent, max_rounds=1, checker=checker)
+            release = threading.Event()
+            original = runner._loop
+
+            def hold(state):
+                release.wait(5)
+                original(state)
+
+            runner._loop = hold
+            outcomes: list[str] = []
+
+            def first():
+                try:
+                    runner.execute(resume_only=False)
+                    outcomes.append("ran")
+                except RuntimeError as exc:
+                    outcomes.append(str(exc))
+
+            thread = threading.Thread(target=first)
+            thread.start()
+            deadline = time.monotonic() + 5
+            while not runner.state_path.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            time.sleep(0.1)
+            second = Runner(
+                runner.campaign, FakeAgent(), root / "run")
+            with self.assertRaises(RuntimeError):
+                second.execute(resume_only=True)
+            release.set()
+            thread.join(timeout=10)
+            self.assertEqual(outcomes, ["ran"])
 
     def test_restart_compares_against_the_original_checker_digest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

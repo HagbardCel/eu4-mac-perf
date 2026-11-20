@@ -410,6 +410,14 @@ def _inject_varying_locations(
     return source
 
 
+def _file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def _run(command: list[str], *, timeout: int = 120) -> subprocess.CompletedProcess:
     return subprocess.run(
         command, capture_output=True, text=True, check=False, timeout=timeout
@@ -455,9 +463,14 @@ def translate_stage(
             text, varying_locations, "out" if stage == "vertex" else "in"
         )
     suffix = _stage_kind(stage)
-    glsl_path = out_dir / f"{sha}.{suffix}.glsl"
-    spv_path = out_dir / f"{sha}.{suffix}.spv"
-    msl_path = out_dir / f"{sha}.{suffix}.metal"
+    # The effective compiler input is the normalized source *after* explicit
+    # attribute/varying locations are injected.  Keying output paths by the raw
+    # source SHA let two programs that share source but differ in linkage
+    # overwrite one another even on a cold build.
+    compiler_key = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    glsl_path = out_dir / f"{compiler_key}.{suffix}.glsl"
+    spv_path = out_dir / f"{compiler_key}.{suffix}.spv"
+    msl_path = out_dir / f"{compiler_key}.{suffix}.metal"
     glsl_path.write_text(text)
     compiled = _run(
         [glslang, "-V", "--aml", "-S", suffix, str(glsl_path), "-o", str(spv_path)]
@@ -485,13 +498,14 @@ def translate_stage(
     return {
         "stage": stage,
         "source_sha256": sha,
-        "compiler_sha256": hashlib.sha256(
-            compiler_input(source_text).encode()
-        ).hexdigest(),
+        "compiler_sha256": compiler_key,
         "attribute_locations": complete_locations if stage == "vertex" else {},
         "glsl_file": glsl_path.name,
+        "glsl_sha256": _file_digest(glsl_path),
         "spv_file": spv_path.name,
+        "spv_sha256": _file_digest(spv_path),
         "msl_file": msl_path.name,
+        "msl_sha256": _file_digest(msl_path),
         "msl_entry": _msl_entry(msl, stage),
         "msl_uniform_buffer": _msl_uniform_buffer(msl),
         "msl_samplers": _msl_samplers(msl),

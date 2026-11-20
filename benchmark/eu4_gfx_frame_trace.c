@@ -206,6 +206,18 @@ static struct {
     char gl_vendor[256];
     char gl_renderer[256];
     char gl_version[256];
+    int gl_drawable_valid;
+    int gl_drawable_binding;
+    int gl_samples;
+    int gl_sample_buffers;
+    int gl_depth_bits;
+    int gl_stencil_bits;
+    int gl_red_bits;
+    int gl_green_bits;
+    int gl_blue_bits;
+    int gl_alpha_bits;
+    int gl_double_buffer;
+    int gl_stereo;
     char pre_image_json[2048];
     int pre_image_valid;
     char seed_json[2048];
@@ -1718,7 +1730,7 @@ static const char *format_name(GLenum format) {
         case GL_RGB: return "RGB";
         case GL_RGB8: return "RGB8";
         case GL_COMPRESSED_DXT1: return "DXT1";
-        case GL_COMPRESSED_DXT1_ALPHA: return "DXT1";
+        case GL_COMPRESSED_DXT1_ALPHA: return "DXT1_ALPHA";
         case GL_COMPRESSED_DXT3: return "DXT3";
         case GL_COMPRESSED_DXT5: return "DXT5";
         case GL_DEPTH_COMPONENT: return "DEPTH";
@@ -1896,6 +1908,11 @@ static int read_texture(GLenum target, GLuint name, json_out *out) {
                     bytes, blob_name, blob_sha);
             int cblock = compressed_block_bytes((GLenum)internal);
             if (cblock > 0) {
+                /* Declare that this level was expected to carry original
+                 * blocks before attempting the read.  A capture that loses
+                 * every block record must not look like a legacy decoded
+                 * texture. */
+                jprintf(out, ",\"compressed_expected\":true");
                 size_t cw = ((size_t)width + 3u) / 4u;
                 size_t ch = ((size_t)height + 3u) / 4u;
                 size_t cbytes = cw * ch * (size_t)cblock;
@@ -1912,9 +1929,11 @@ static int read_texture(GLenum target, GLuint name, json_out *out) {
                                      compressed_name, compressed_sha) == 0) {
                             jprintf(out,
                                     ",\"compressed\":{\"format\":\"%s\","
+                                    "\"internal_format\":%u,"
                                     "\"bytes\":%zu,\"row_stride\":%zu,"
                                     "\"file\":\"%s\",\"sha256\":\"%s\"}",
-                                    format_name((GLenum)internal), cbytes,
+                                    format_name((GLenum)internal),
+                                    (unsigned)internal, cbytes,
                                     cw * (size_t)cblock, compressed_name,
                                     compressed_sha);
                         }
@@ -3112,7 +3131,21 @@ static int write_frame_manifest(int complete, const char *reason) {
     fputs("\"gl\":{", file);
     fprintf(file, "\"vendor\":\"%s\",", vendor != NULL ? vendor : "");
     fprintf(file, "\"renderer\":\"%s\",", renderer != NULL ? renderer : "");
-    fprintf(file, "\"version\":\"%s\"},", version != NULL ? version : "");
+    fprintf(file, "\"version\":\"%s\",", version != NULL ? version : "");
+    if (g.gl_drawable_valid) {
+        fprintf(file,
+                "\"drawable\":{\"samples\":%d,\"sample_buffers\":%d,"
+                "\"depth_bits\":%d,\"stencil_bits\":%d,"
+                "\"red_bits\":%d,\"green_bits\":%d,\"blue_bits\":%d,"
+                "\"alpha_bits\":%d,\"double_buffer\":%s,\"stereo\":%s,"
+                "\"drawn_framebuffer_binding\":%d},",
+                g.gl_samples, g.gl_sample_buffers, g.gl_depth_bits,
+                g.gl_stencil_bits, g.gl_red_bits, g.gl_green_bits,
+                g.gl_blue_bits, g.gl_alpha_bits,
+                bool_text(g.gl_double_buffer), bool_text(g.gl_stereo),
+                g.gl_drawable_binding);
+    }
+    fprintf(file, "\"drawable_observed\":%s},", bool_text(g.gl_drawable_valid));
     fputs("\"frame\":{", file);
     fprintf(file, "\"width\":%u,", g.reference_width);
     fprintf(file, "\"height\":%u,", g.reference_height);
@@ -4904,6 +4937,38 @@ static void draw_entry_common(eu4_gfx_capture_frame *frame,
         snprintf(g.gl_renderer, sizeof(g.gl_renderer), "%s",
                  renderer ? renderer : "");
         snprintf(g.gl_version, sizeof(g.gl_version), "%s", version ? version : "");
+    }
+    if (!g.gl_drawable_valid) {
+        /* GL_DRAW_FRAMEBUFFER_BINDING is part of the default drawable state.
+         * A draw bound to an offscreen FBO describes that FBO, not the
+         * window drawable; retry on later draws until the default is bound. */
+        GLint binding = 0;
+        glGetIntegerv(0x8CA6 /* GL_DRAW_FRAMEBUFFER_BINDING */, &binding);
+        g.gl_drawable_binding = (int)binding;
+        if (binding == 0) {
+            GLint value = 0;
+            glGetIntegerv(GL_SAMPLES, &value);
+            g.gl_samples = (int)value;
+            glGetIntegerv(GL_SAMPLE_BUFFERS, &value);
+            g.gl_sample_buffers = (int)value;
+            glGetIntegerv(GL_DEPTH_BITS, &value);
+            g.gl_depth_bits = (int)value;
+            glGetIntegerv(GL_STENCIL_BITS, &value);
+            g.gl_stencil_bits = (int)value;
+            glGetIntegerv(GL_RED_BITS, &value);
+            g.gl_red_bits = (int)value;
+            glGetIntegerv(GL_GREEN_BITS, &value);
+            g.gl_green_bits = (int)value;
+            glGetIntegerv(GL_BLUE_BITS, &value);
+            g.gl_blue_bits = (int)value;
+            glGetIntegerv(GL_ALPHA_BITS, &value);
+            g.gl_alpha_bits = (int)value;
+            glGetIntegerv(GL_DOUBLEBUFFER, &value);
+            g.gl_double_buffer = (int)value;
+            glGetIntegerv(GL_STEREO, &value);
+            g.gl_stereo = (int)value;
+            g.gl_drawable_valid = 1;
+        }
     }
     caller_add(call->caller_rva);
     g.frame_draws++;

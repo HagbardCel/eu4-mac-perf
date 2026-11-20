@@ -222,6 +222,8 @@ def discover(
     since: str | None = None,
     limit: int = 20,
     offset: int = 0,
+    locator_limit: int | None = None,
+    locator_offset: int = 0,
     environ: dict | None = None,
 ) -> dict:
     """Bounded, filtered, read-only campaign discovery across evidence roots."""
@@ -229,6 +231,12 @@ def discover(
         raise ValueError("limit must be >= 1")
     if offset < 0:
         raise ValueError("offset must be >= 0")
+    if locator_offset < 0:
+        raise ValueError("locator_offset must be >= 0")
+    if locator_limit is None:
+        locator_limit = limit
+    if locator_limit < 1:
+        raise ValueError("locator_limit must be >= 1")
     root_list = roots(configured_roots, environ)
     rows: list[dict] = []
     skipped_roots: list[str] = []
@@ -295,6 +303,13 @@ def discover(
         reverse=True,
     )
     page = rows[offset:offset + limit]
+    locator_filtered = len(locator_rows)
+    locator_page = locator_rows[
+        locator_offset:locator_offset + locator_limit]
+    locator_available = sum(1 for row in locator_page
+                            if row.get("state") == "available")
+    locator_missing = sum(1 for row in locator_page
+                          if row.get("state") == "missing_payload")
     counts = {name: sum(1 for row in rows if row["classification"] == name)
               for name in CLASSIFICATIONS}
     counts["other"] = sum(1 for row in rows if row["classification"] not in CLASSIFICATIONS)
@@ -315,17 +330,28 @@ def discover(
         "limit": limit,
         "truncated": offset + len(page) < len(rows),
         "next_offset": (offset + len(page)) if offset + len(page) < len(rows) else None,
-        "case_locators": locator_rows[:limit],
+        "case_locators": locator_page,
         "locator_counts": {
             "total": locator_total,
-            "returned": min(len(locator_rows), limit),
-            "available": sum(1 for row in locator_rows
-                             if row.get("state") == "available"),
-            "missing_payload": sum(1 for row in locator_rows
-                                   if row.get("state") == "missing_payload"),
+            "scanned": locator_total,
+            "filtered": locator_filtered,
+            "returned": len(locator_page),
+            "offset": locator_offset,
+            "limit": locator_limit,
+            "available": locator_available,
+            "missing_payload": locator_missing,
+            "filter_truncated": (locator_offset + len(locator_page)
+                                  < locator_filtered),
             "scan_truncated": locator_truncated,
             "scan_limit": case_locator.MAX_LOCATORS,
             "invalid_locators": locator_invalid,
+            # Discovery never hashes payload bytes.  These fields are explicit
+            # so a caller cannot mistake a page of locator metadata for
+            # verified, reusable evidence.
+            "verification_scope": "metadata_only",
+            "verified_matches": 0,
+            "verified_all": False,
+            "scope": "returned_page",
         },
         "read_only": True,
         "query": {

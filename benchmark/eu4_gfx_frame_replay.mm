@@ -599,6 +599,153 @@ static double double_number(id value, double fallback) {
     return fallback;
 }
 
+static int64_t signed_number(id value, int64_t fallback) {
+    if ([value isKindOfClass:[NSNumber class]]) {
+        return (int64_t)[(NSNumber *)value longLongValue];
+    }
+    return fallback;
+}
+
+static NSUInteger enum_value(id value, NSUInteger fallback);
+
+/* Full value identity of the sampler properties Metal consumes.
+ *
+ * R address, compare mode/function and both LOD clamps are part of the
+ * descriptor, so they must be part of the cache key.  The ambient override
+ * flags are included because they change the effective min/mag filters; a
+ * diagnostic override must never reuse a default descriptor. */
+static NSString *sampler_key_for_state(NSDictionary *state) {
+    NSMutableString *key = [NSMutableString string];
+    for (NSString *field in @[@"min", @"mag", @"wrap_s", @"wrap_t",
+                              @"wrap_r", @"compare_mode"]) {
+        NSUInteger default_value = [field isEqualToString:@"compare_mode"]
+            ? 0u : 0x2601u;
+        if ([field hasPrefix:@"wrap_"]) default_value = 0x812Fu;
+        [key appendFormat:@"%@=%lu|", field,
+         (unsigned long)enum_value(state[field], default_value)];
+    }
+    /* compare_function is inert unless compare-to-texture is enabled. */
+    NSUInteger compare_mode = enum_value(state[@"compare_mode"], 0);
+    if (compare_mode == 0x884Eu) { /* GL_COMPARE_REF_TO_TEXTURE */
+        [key appendFormat:@"compare_func=%lu|",
+         (unsigned long)enum_value(state[@"compare_func"], 0x0203u)];
+    }
+    [key appendFormat:@"min_lod=%.17g|",
+     double_number(state[@"min_lod"], 0)];
+    [key appendFormat:@"max_lod=%.17g|",
+     double_number(state[@"max_lod"], 1000)];
+    [key appendFormat:@"lod_bias=%.17g|",
+     double_number(state[@"lod_bias"], 0)];
+    const char *linear_min = getenv("EU4_FRAME_REPLAY_LINEAR_MIN");
+    const char *linear_all = getenv("EU4_FRAME_REPLAY_LINEAR_ALL");
+    const char *nearest_all = getenv("EU4_FRAME_REPLAY_NEAREST_ALL");
+    [key appendFormat:@"env=%d%d%d",
+     linear_min != NULL && linear_min[0] == '1',
+     linear_all != NULL && linear_all[0] == '1',
+     nearest_all != NULL && nearest_all[0] == '1'];
+    return key;
+}
+
+/* Map captured GL cull state to Metal.
+ *
+ * GL_FRONT_AND_BACK has no Metal equivalent.  It is represented as an empty
+ * scissor (no fragments, no depth writes) while culling stays disabled, which
+ * is the exact observable outcome for every primitive.  An unknown mode fails
+ * closed instead of silently culling the wrong face.
+ */
+static BOOL cull_mode_for(NSDictionary *cull, MTLCullMode *mode,
+                          BOOL *empty) {
+    NSUInteger raw = enum_value(cull[@"mode"], 0x0405);
+    if (empty != NULL) *empty = NO;
+    switch (raw) {
+        case 0x0404: /* GL_FRONT */
+            if (mode) *mode = MTLCullModeFront;
+            return YES;
+        case 0x0405: /* GL_BACK */
+            if (mode) *mode = MTLCullModeBack;
+            return YES;
+        case 0x0408: /* GL_FRONT_AND_BACK */
+            if (mode) *mode = MTLCullModeNone;
+            if (empty != NULL) *empty = YES;
+            return YES;
+        default:
+            return NO;
+    }
+}
+
+/* Convert a signed GL scissor box to a Metal rect.
+ *
+ * The intersection is computed once from signed near/far endpoints in GL
+ * window coordinates and then converted to Metal's top-left origin.  Clipping
+ * only the origin (while keeping the raw width) enlarged an off-screen box
+ * into visible pixels.  Returns NO for an empty intersection.
+ */
+static BOOL scissor_rect_for(NSArray *box, NSUInteger target_width,
+                             NSUInteger target_height,
+                             MTLScissorRect *rect) {
+    if (![box isKindOfClass:[NSArray class]] || box.count != 4) {
+        return NO;
+    }
+    int64_t x = signed_number(box[0], 0);
+    int64_t y = signed_number(box[1], 0);
+    int64_t w = signed_number(box[2], (int64_t)target_width);
+    int64_t h = signed_number(box[3], (int64_t)target_height);
+    int64_t x0 = MAX((int64_t)0, x);
+    int64_t x1 = MIN((int64_t)target_width, x + w);
+    int64_t y0 = MAX((int64_t)0, y);
+    int64_t y1 = MIN((int64_t)target_height, y + h);
+    if (x1 <= x0 || y1 <= y0) {
+        return NO;
+    }
+    rect->x = (NSUInteger)x0;
+    rect->y = (NSUInteger)((int64_t)target_height - y1);
+    rect->width = (NSUInteger)(x1 - x0);
+    rect->height = (NSUInteger)(y1 - y0);
+    return YES;
+}
+
+static BOOL topology_supports_culling(NSUInteger mode) {
+    return mode >= 0x0004u && mode <= 0x0006u;
+}
+
+/* Effective polygon culling after enabled state, topology and the diagnostic
+ * NO_CULL override.  GL_FRONT_AND_BACK is only emulated when culling would
+ * actually be active; a disabled cull state or a non-polygon topology must
+ * render normally. */
+static BOOL effective_cull(NSDictionary *cull, NSUInteger primitive_mode,
+                           BOOL no_cull, MTLCullMode *mode, BOOL *empty) {
+    if (mode) *mode = MTLCullModeNone;
+    if (empty) *empty = NO;
+    if (no_cull || number(cull[@"enabled"], 0) == 0
+        || !topology_supports_culling(primitive_mode)) {
+        return YES;
+    }
+    return cull_mode_for(cull, mode, empty);
+}
+
+static MTLViewport viewport_for(NSArray *viewport, NSUInteger target_width,
+                                NSUInteger target_height) {
+    MTLViewport value;
+    if ([viewport isKindOfClass:[NSArray class]] && viewport.count == 4) {
+        double x = double_number(viewport[0], 0);
+        double y = double_number(viewport[1], 0);
+        double w = double_number(viewport[2], (double)target_width);
+        double h = double_number(viewport[3], (double)target_height);
+        value.originX = x;
+        value.originY = (double)target_height - y - h;
+        value.width = w;
+        value.height = h;
+    } else {
+        value.originX = 0;
+        value.originY = 0;
+        value.width = (double)target_width;
+        value.height = (double)target_height;
+    }
+    value.znear = 0.0;
+    value.zfar = 1.0;
+    return value;
+}
+
 /* GL enums are recorded as JSON strings ("0x2600") while counts and flags are
    numbers. Both forms must resolve; a string silently falling back to a default
    would select the wrong sampler or depth state. */
@@ -1271,8 +1418,141 @@ static MTLPixelFormat pixel_format_for(NSString *name) {
 
 /* Creates and uploads one captured texture dictionary. All captured rows are
  * GL lower-left origin, so rows are flipped for Metal's top-left origin. */
+typedef NS_ENUM(NSInteger, EU4CompressedChain) {
+    EU4CompressedChainDecoded = 0,   /* no block records: legacy decoded path */
+    EU4CompressedChainComplete = 1,  /* every level has matching blocks */
+    EU4CompressedChainPartial = 2,   /* some levels lack blocks */
+    EU4CompressedChainMixed = 3,     /* levels disagree on format/enum */
+    EU4CompressedChainUnsupported = 4, /* all blocks, no Metal equivalent */
+    EU4CompressedChainInvalid = 5,   /* bad geometry/size/stride */
+};
+
+static uint32_t compressed_block_bytes_for_enum(unsigned internal) {
+    switch (internal) {
+        case 0x83F0u: /* GL_COMPRESSED_RGB_S3TC_DXT1_EXT */
+        case 0x83F1u: /* GL_COMPRESSED_RGBA_S3TC_DXT1_EXT */
+            return 8;
+        case 0x83F2u:
+        case 0x83F3u:
+            return 16;
+        default:
+            return 0;
+    }
+}
+
+/* Classify the captured compressed chain without uploading anything.
+ *
+ * The distinction matters: an all-decoded legacy texture is a supported
+ * fallback, while a partially compressed chain is a capture defect and must be
+ * rejected rather than silently decoded.  The original GL enum is preserved so
+ * DXT1 RGB and DXT1 one-bit-alpha are not conflated. */
+static EU4CompressedChain compressed_chain_status(
+    NSArray *levels, NSString **format_out, unsigned *internal_out,
+    NSUInteger *block_out, NSUInteger *bad_level_out) {
+    NSUInteger compressed_count = 0;
+    NSUInteger expected_count = 0;
+    NSUInteger count = levels.count;
+    NSString *format = nil;
+    unsigned internal = 0;
+    NSUInteger block = 0;
+    for (NSUInteger index = 0; index < count; index++) {
+        NSDictionary *level = levels[index];
+        if (number(level[@"compressed_expected"], 0) != 0) {
+            expected_count++;
+        }
+        NSDictionary *compressed = level[@"compressed"];
+        if (![compressed isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
+        compressed_count++;
+        unsigned raw = (unsigned)number(compressed[@"internal_format"], 0);
+        NSString *value = string_value(compressed[@"format"]);
+        if (raw == 0) {
+            /* Pre-enum captures name the format only; preserve the meaning
+             * they were captured with without inventing a raw enum. */
+            if ([value isEqualToString:@"DXT1"]
+                || [value isEqualToString:@"DXT1_ALPHA"]) {
+                raw = 0x83F1u;
+            } else if ([value isEqualToString:@"DXT3"]) {
+                raw = 0x83F2u;
+            } else if ([value isEqualToString:@"DXT5"]) {
+                raw = 0x83F3u;
+            }
+        }
+        if (raw == 0 || value.length == 0) {
+            if (bad_level_out) *bad_level_out = index;
+            return EU4CompressedChainUnsupported;
+        }
+        if (format == nil) {
+            format = value;
+            internal = raw;
+            block = compressed_block_bytes_for_enum(raw);
+            if (block == 0) {
+                if (bad_level_out) *bad_level_out = index;
+                return EU4CompressedChainUnsupported;
+            }
+        } else if (![format isEqualToString:value] || internal != raw) {
+            if (bad_level_out) *bad_level_out = index;
+            return EU4CompressedChainMixed;
+        }
+        NSUInteger width = number(level[@"width"], 0);
+        NSUInteger height = number(level[@"height"], 0);
+        NSUInteger bytes = number(compressed[@"bytes"], 0);
+        NSUInteger stride = number(compressed[@"row_stride"], 0);
+        if (width == 0 || height == 0) {
+            if (bad_level_out) *bad_level_out = index;
+            return EU4CompressedChainInvalid;
+        }
+        NSUInteger blocks_wide = (width + 3u) / 4u;
+        NSUInteger blocks_high = (height + 3u) / 4u;
+        NSUInteger expected = blocks_wide * blocks_high * block;
+        if (bytes != expected || stride != blocks_wide * block) {
+            if (bad_level_out) *bad_level_out = index;
+            return EU4CompressedChainInvalid;
+        }
+        if (number(level[@"level"], index) != index) {
+            if (bad_level_out) *bad_level_out = index;
+            return EU4CompressedChainInvalid;
+        }
+    }
+    if (compressed_count == 0 && expected_count > 0) {
+        if (bad_level_out) {
+            for (NSUInteger index = 0; index < count; index++) {
+                if (number(levels[index][@"compressed_expected"], 0) != 0) {
+                    *bad_level_out = index;
+                    break;
+                }
+            }
+        }
+        return EU4CompressedChainInvalid;
+    }
+    if (compressed_count == 0) {
+        return EU4CompressedChainDecoded;
+    }
+    if (compressed_count != count) {
+        for (NSUInteger index = 0; index < count; index++) {
+            if (![levels[index][@"compressed"] isKindOfClass:[NSDictionary class]]) {
+                if (bad_level_out) *bad_level_out = index;
+                break;
+            }
+        }
+        return EU4CompressedChainPartial;
+    }
+    if (format_out) *format_out = format;
+    if (internal_out) *internal_out = internal;
+    if (block_out) *block_out = block;
+    /* Metal has no BC1 RGB format.  Decoding a GL DXT1 RGB level preserves its
+     * guaranteed opaque alpha; using BC1_RGBA would expose the block's
+     * one-bit transparent index and change sampled alpha. */
+    if (internal == 0x83F0u) {
+        return EU4CompressedChainDecoded;
+    }
+    return EU4CompressedChainComplete;
+}
+
 static MTLPixelFormat compressed_pixel_format(NSString *format) {
-    if ([format isEqualToString:@"DXT1"]) {
+    if ([format isEqualToString:@"DXT1"]
+        || [format isEqualToString:@"DXT1_ALPHA"]) {
         return MTLPixelFormatBC1_RGBA;
     }
     if ([format isEqualToString:@"DXT3"]) {
@@ -1282,32 +1562,6 @@ static MTLPixelFormat compressed_pixel_format(NSString *format) {
         return MTLPixelFormatBC3_RGBA;
     }
     return MTLPixelFormatInvalid;
-}
-
-/* Returns YES only when every level carries the original compressed blocks in
- * the same S3TC format.  A partially compressed texture is rejected: mixing a
- * compressed and a decoded upload would silently change the decode path. */
-static BOOL compressed_levels(NSArray *levels, NSString **format_out) {
-    NSString *format = nil;
-    for (NSDictionary *level in levels) {
-        NSDictionary *compressed = level[@"compressed"];
-        if (![compressed isKindOfClass:[NSDictionary class]]) {
-            return NO;
-        }
-        NSString *value = string_value(compressed[@"format"]);
-        if (value.length == 0) {
-            return NO;
-        }
-        if (format == nil) {
-            format = value;
-        } else if (![format isEqualToString:value]) {
-            return NO;
-        }
-    }
-    if (format_out != NULL) {
-        *format_out = format;
-    }
-    return YES;
 }
 
 static id<MTLTexture> build_texture(NSDictionary *texture, NSString *frameDir,
@@ -1328,7 +1582,48 @@ static id<MTLTexture> build_texture(NSDictionary *texture, NSString *frameDir,
     MTLPixelFormat pixel_format = pixel_format_for(format);
     BOOL cube = [string_value(texture[@"target"]) isEqualToString:@"cube"];
     NSString *compressed_format = nil;
-    BOOL compressed = !cube && compressed_levels(levels, &compressed_format);
+    unsigned compressed_internal = 0;
+    NSUInteger compressed_block = 0;
+    NSUInteger bad_level = 0;
+    EU4CompressedChain chain = cube ? EU4CompressedChainDecoded
+        : compressed_chain_status(levels, &compressed_format,
+                                  &compressed_internal, &compressed_block,
+                                  &bad_level);
+    if (chain == EU4CompressedChainPartial
+        || chain == EU4CompressedChainMixed
+        || chain == EU4CompressedChainUnsupported
+        || chain == EU4CompressedChainInvalid) {
+        NSString *reason = nil;
+        switch (chain) {
+            case EU4CompressedChainPartial:
+                reason = [NSString stringWithFormat:
+                          @"compressed texture chain is partial at level %lu",
+                          (unsigned long)bad_level];
+                break;
+            case EU4CompressedChainMixed:
+                reason = [NSString stringWithFormat:
+                          @"compressed texture chain mixes formats at level %lu",
+                          (unsigned long)bad_level];
+                break;
+            case EU4CompressedChainUnsupported:
+                reason = [NSString stringWithFormat:
+                          @"unsupported compressed texture format %@ at level %lu",
+                          compressed_format ?: @"<missing>",
+                          (unsigned long)bad_level];
+                break;
+            default:
+                reason = [NSString stringWithFormat:
+                          @"compressed texture level %lu has invalid geometry, "
+                          @"size or stride", (unsigned long)bad_level];
+                break;
+        }
+        if (error != NULL) {
+            *error = [NSError errorWithDomain:kErrorDomain code:25
+                                     userInfo:@{NSLocalizedDescriptionKey: reason}];
+        }
+        return nil;
+    }
+    BOOL compressed = chain == EU4CompressedChainComplete;
     MTLPixelFormat compressed_pixel = compressed
         ? compressed_pixel_format(compressed_format) : MTLPixelFormatInvalid;
     if (compressed && compressed_pixel == MTLPixelFormatInvalid) {
@@ -1341,6 +1636,24 @@ static id<MTLTexture> build_texture(NSDictionary *texture, NSString *frameDir,
         return nil;
     }
     if (compressed) {
+        BOOL bc_supported = YES;
+        if (@available(macOS 11.0, *)) {
+            bc_supported = g_device.supportsBCTextureCompression;
+        }
+        /* Host-test only: exercise the unsupported-device refusal on a device
+         * that does support BC.  Never used by a normal replay. */
+        const char *force_no_bc = getenv("EU4_FRAME_REPLAY_FORCE_NO_BC");
+        if (force_no_bc != NULL && strcmp(force_no_bc, "1") == 0) {
+            bc_supported = NO;
+        }
+        if (!bc_supported) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:27
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        @"the active Metal device does not support BC texture compression"}];
+            }
+            return nil;
+        }
         pixel_format = compressed_pixel;
     }
     if (pixel_format == MTLPixelFormatInvalid || width == 0 || height == 0) {
@@ -1382,17 +1695,35 @@ static id<MTLTexture> build_texture(NSDictionary *texture, NSString *frameDir,
             NSData *blob = read_blob(frameDir, string_value(block[@"file"]));
             NSUInteger expected = number(block[@"bytes"], 0);
             NSUInteger row_bytes = number(block[@"row_stride"], 0);
-            if (blob == nil || expected == 0 || blob.length != expected ||
-                row_bytes == 0 || cube) {
+            NSUInteger expected_width = width >> level_index;
+            NSUInteger expected_height = height >> level_index;
+            if (expected_width == 0) expected_width = 1;
+            if (expected_height == 0) expected_height = 1;
+            NSUInteger blocks_wide = (level_width + 3u) / 4u;
+            NSUInteger blocks_high = (level_height + 3u) / 4u;
+            NSUInteger expected_bytes =
+                blocks_wide * blocks_high * compressed_block;
+            NSUInteger expected_stride = blocks_wide * compressed_block;
+            if (blob == nil || compressed_block == 0
+                || level_width != expected_width
+                || level_height != expected_height
+                || expected == 0 || blob.length != expected
+                || expected != expected_bytes
+                || row_bytes != expected_stride) {
                 if (error != NULL) {
                     *error = [NSError errorWithDomain:kErrorDomain code:26
                                              userInfo:@{NSLocalizedDescriptionKey:
                                                             [NSString stringWithFormat:
-                                                                 @"compressed texture level %lu is incomplete",
+                                                                 @"compressed texture level %lu is incomplete or has invalid geometry",
                                                                  (unsigned long)level_index]}];
                 }
                 return nil;
             }
+            /* The uncompressed path deliberately uploads rows unchanged:
+             * captured UVs address the first uploaded row as coordinate 0 in
+             * both APIs.  Compressed blocks must follow the same convention;
+             * flipping only block rows would mirror BC textures relative to
+             * the decoded path and would not flip intra-block texels. */
             MTLRegion region = MTLRegionMake2D(0, 0, level_width, level_height);
             [texture_handle replaceRegion:region
                              mipmapLevel:level_index
@@ -1759,10 +2090,61 @@ static NSData *pack_uniforms(NSDictionary *stage, NSDictionary *program,
 /* Shader libraries                                                           */
 /* ------------------------------------------------------------------------- */
 
+/* The effective input of one native shader object is the MSL bytes that are
+   actually compiled, the entry point, the stage kind and the compile options.
+   A filename alone is not an identity: a diagnostic override can leave the
+   name unchanged while changing the bytes, and a persistent sequence session
+   can replay a later frame whose shader directory has a different file under
+   the same name. */
+static NSString *shader_compile_options_key(void) {
+    const char *precise_env = getenv("EU4_FRAME_REPLAY_PRECISE_MATH");
+    return (precise_env != NULL && strcmp(precise_env, "1") == 0)
+        ? @"fastmath-off" : @"fastmath-on";
+}
+
+static NSString *shader_source_identity(NSString *path, NSString **source_out,
+                                        NSError **error) {
+    NSError *read_error = nil;
+    NSData *data = [NSData dataWithContentsOfFile:path
+                                          options:0
+                                            error:&read_error];
+    if (data == nil) {
+        if (error != NULL) {
+            *error = read_error ?: [NSError errorWithDomain:kErrorDomain
+                                                       code:51
+                                                   userInfo:@{NSLocalizedDescriptionKey:
+                                                                  @"MSL source unreadable"}];
+        }
+        return nil;
+    }
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(data.bytes, (CC_LONG)data.length, digest);
+    NSMutableString *hex =
+        [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH * 2];
+    for (NSUInteger index = 0; index < CC_SHA256_DIGEST_LENGTH; index++) {
+        [hex appendFormat:@"%02x", digest[index]];
+    }
+    if (source_out != NULL) {
+        NSString *source = [[NSString alloc] initWithData:data
+                                                 encoding:NSUTF8StringEncoding];
+        if (source == nil) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:51
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        @"MSL source is not UTF-8"}];
+            }
+            return nil;
+        }
+        *source_out = source;
+    }
+    return hex;
+}
+
 static id<MTLFunction> function_for(NSString *shaderDir, NSDictionary *stage,
-                                    NSError **error) {
+                                    NSString **identity_out, NSError **error) {
     NSString *file = string_value(stage[@"msl_file"]);
     NSString *entry = string_value(stage[@"msl_entry"]);
+    NSString *kind = string_value(stage[@"stage"]) ?: @"";
     if (file.length == 0 || entry.length == 0) {
         if (error != NULL) {
             *error = [NSError errorWithDomain:kErrorDomain code:50
@@ -1771,23 +2153,21 @@ static id<MTLFunction> function_for(NSString *shaderDir, NSDictionary *stage,
         }
         return nil;
     }
-    NSString *key = [file stringByAppendingFormat:@"#%@", entry];
+    NSString *path = [shaderDir stringByAppendingPathComponent:file];
+    NSString *source = nil;
+    NSString *digest = shader_source_identity(path, &source, error);
+    if (digest == nil) {
+        return nil;
+    }
+    NSString *options_key = shader_compile_options_key();
+    NSString *key = [NSString stringWithFormat:@"%@#%@#%@#%@", digest, entry,
+                                               kind, options_key];
+    if (identity_out != NULL) {
+        *identity_out = key;
+    }
     id<MTLFunction> cached = g_functions[key];
     if (cached != nil) {
         return cached;
-    }
-    NSString *path = [shaderDir stringByAppendingPathComponent:file];
-    NSError *read_error = nil;
-    NSString *source = [NSString stringWithContentsOfFile:path
-                                                encoding:NSUTF8StringEncoding
-                                                   error:&read_error];
-    if (source == nil) {
-        if (error != NULL) {
-            *error = read_error ?: [NSError errorWithDomain:kErrorDomain code:51
-                                                    userInfo:@{NSLocalizedDescriptionKey:
-                                                                   @"MSL source unreadable"}];
-        }
-        return nil;
     }
     MTLCompileOptions *options = [MTLCompileOptions new];
     options.languageVersion = MTLLanguageVersion2_1;
@@ -1798,6 +2178,7 @@ static id<MTLFunction> function_for(NSString *shaderDir, NSDictionary *stage,
     if (precise_env != NULL && strcmp(precise_env, "1") == 0) {
         options.fastMathEnabled = NO;
     }
+    NSError *read_error = nil;
     id<MTLLibrary> library = [g_device newLibraryWithSource:source
                                                     options:options
                                                       error:&read_error];
@@ -1867,8 +2248,13 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             }
             return NO;
         }
-        id<MTLFunction> vertex_function = function_for(shaderDir, vs, error);
-        id<MTLFunction> fragment_function = function_for(shaderDir, fs, error);
+        NSString *vertex_identity = nil;
+        NSString *fragment_identity = nil;
+        id<MTLFunction> vertex_function =
+            function_for(shaderDir, vs, &vertex_identity, error);
+        id<MTLFunction> fragment_function =
+            function_for(shaderDir, fs, &fragment_identity, error);
+        NSString *debug_options = shader_compile_options_key();
         const char *debug_attr_vertex_env = getenv("EU4_FRAME_REPLAY_DEBUG_ATTR_VERTEX");
         if (debug_attr_vertex_env != NULL && debug_attr_vertex_env[0] == '1') {
             if (g_debug_attr_vertex == nil) {
@@ -1880,6 +2266,8 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             }
             if (g_debug_attr_vertex != nil) {
                 vertex_function = g_debug_attr_vertex;
+                vertex_identity = [@"builtin:debug_attr_vertex#"
+                    stringByAppendingString:debug_options];
             }
         }
         const char *debug_vertex_env = getenv("EU4_FRAME_REPLAY_DEBUG_VERTEX");
@@ -1893,6 +2281,8 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             }
             if (g_debug_vertex != nil) {
                 vertex_function = g_debug_vertex;
+                vertex_identity = [@"builtin:debug_vertex#"
+                    stringByAppendingString:debug_options];
             }
         }
         const char *debug_fragment_env = getenv("EU4_FRAME_REPLAY_DEBUG_FRAGMENT");
@@ -1906,6 +2296,8 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             }
             if (g_debug_texture_fragment != nil) {
                 fragment_function = g_debug_texture_fragment;
+                fragment_identity = [@"builtin:debug_texture_fragment#"
+                    stringByAppendingString:debug_options];
             }
         } else if (debug_fragment_env != NULL && strcmp(debug_fragment_env, "uv") == 0) {
             if (g_debug_uv_fragment == nil) {
@@ -1917,6 +2309,8 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             }
             if (g_debug_uv_fragment != nil) {
                 fragment_function = g_debug_uv_fragment;
+                fragment_identity = [@"builtin:debug_uv_fragment#"
+                    stringByAppendingString:debug_options];
             }
         } else if (debug_fragment_env != NULL && debug_fragment_env[0] == '1') {
             if (g_debug_fragment == nil) {
@@ -1928,6 +2322,8 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
             }
             if (g_debug_fragment != nil) {
                 fragment_function = g_debug_fragment;
+                fragment_identity = [@"builtin:debug_fragment#"
+                    stringByAppendingString:debug_options];
             }
         }
         if (vertex_function == nil || fragment_function == nil) {
@@ -1970,7 +2366,6 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
         BOOL blend_enabled = number(blend[@"enabled"], 0) != 0;
         BOOL depth_test = number(depth_state[@"test"], 0) != 0;
         BOOL depth_write = number(depth_state[@"write"], 0) != 0;
-        BOOL cull_enabled = number(cull[@"enabled"], 0) != 0;
         NSMutableDictionary *target_info = target_for(event[@"target"] ?: @{}, error);
         if (target_info == nil) {
             return NO;
@@ -2210,7 +2605,7 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
         }
         NSString *key = [state_key(event, target_info, attribute_plan)
             stringByAppendingFormat:@"|p%@|v%@|f%@",
-            program[@"name"], vs[@"msl_file"], fs[@"msl_file"]];
+            program[@"name"], vertex_identity ?: @"", fragment_identity ?: @""];
         if (getenv("EU4_FRAME_REPLAY_DEBUG_DESCRIPTOR") != NULL) {
             fprintf(stderr, "debug descriptor program %s:\n",
                     safe_utf8([program[@"name"] description], ""));
@@ -2330,54 +2725,55 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
         [encoder setRenderPipelineState:pipeline];
         NSUInteger target_width = number(target_info[@"width"], g_default_target.width);
         NSUInteger target_height = number(target_info[@"height"], g_default_target.height);
-        NSArray *vp = state[@"viewport"];
-        MTLViewport metal_viewport;
-        if ([vp isKindOfClass:[NSArray class]] && vp.count == 4) {
-            NSUInteger x = number(vp[0], 0);
-            NSUInteger y = number(vp[1], 0);
-            NSUInteger w = number(vp[2], target_width);
-            NSUInteger h = number(vp[3], target_height);
-            metal_viewport.originX = (double)x;
-            metal_viewport.originY = (double)((NSInteger)target_height - (NSInteger)y - (NSInteger)h);
-            metal_viewport.width = (double)w;
-            metal_viewport.height = (double)h;
-        } else {
-            metal_viewport.originX = 0;
-            metal_viewport.originY = 0;
-            metal_viewport.width = (double)target_width;
-            metal_viewport.height = (double)target_height;
-        }
-        metal_viewport.znear = 0.0;
-        metal_viewport.zfar = 1.0;
+        MTLViewport metal_viewport = viewport_for(
+            state[@"viewport"], target_width, target_height);
         [encoder setViewport:metal_viewport];
         NSDictionary *scissor = state[@"scissor"] ?: @{};
+        NSDictionary *draw_event = event[@"draw"] ?: @{};
+        NSUInteger primitive_mode = number(draw_event[@"mode"], 0x0004);
+        const char *no_cull_env = getenv("EU4_FRAME_REPLAY_NO_CULL");
+        BOOL no_cull = no_cull_env != NULL && no_cull_env[0] == '1';
+        BOOL cull_empty = NO;
+        MTLCullMode cull_mode = MTLCullModeNone;
+        BOOL cull_known = effective_cull(
+            cull, primitive_mode, no_cull, &cull_mode, &cull_empty);
+        if (!cull_known) {
+            if (error != NULL) {
+                *error = [NSError errorWithDomain:kErrorDomain code:67
+                                         userInfo:@{NSLocalizedDescriptionKey:
+                                                        [NSString stringWithFormat:
+                                                             @"unsupported cull mode %@",
+                                                             cull[@"mode"] ?: @"<missing>"]}];
+            }
+            [encoder endEncoding];
+            return NO;
+        }
+        BOOL scissor_empty = NO;
         if (number(scissor[@"enabled"], 0) != 0) {
-            NSArray *box = scissor[@"box"];
-            if ([box isKindOfClass:[NSArray class]] && box.count == 4) {
-                NSInteger x = (NSInteger)number(box[0], 0);
-                NSInteger y = (NSInteger)number(box[1], 0);
-                NSInteger w = (NSInteger)number(box[2], target_width);
-                NSInteger h = (NSInteger)number(box[3], target_height);
-                NSInteger top = (NSInteger)target_height - y - h;
-                MTLScissorRect rect;
-                rect.x = (NSUInteger)MAX((NSInteger)0, x);
-                rect.y = (NSUInteger)MAX((NSInteger)0, top);
-                rect.width = (NSUInteger)MAX((NSInteger)0, MIN((NSInteger)target_width - x, w));
-                rect.height = (NSUInteger)MAX((NSInteger)0, MIN((NSInteger)target_height - top, h));
+            MTLScissorRect rect;
+            if (!scissor_rect_for(scissor[@"box"], target_width,
+                                  target_height, &rect)) {
+                scissor_empty = YES;
+            } else {
                 [encoder setScissorRect:rect];
             }
         } else {
             MTLScissorRect rect = {0, 0, target_width, target_height};
             [encoder setScissorRect:rect];
         }
-        const char *no_cull = getenv("EU4_FRAME_REPLAY_NO_CULL");
-        if (cull_enabled && !(no_cull != NULL && no_cull[0] == '1')) {
-            [encoder setCullMode:MTLCullModeBack];
+        if (cull_empty || scissor_empty) {
+            MTLScissorRect empty = {0, 0, 0, 0};
+            [encoder setScissorRect:empty];
+        }
+        if (cull_known && !cull_empty && !no_cull
+            && number(cull[@"enabled"], 0) != 0
+            && topology_supports_culling(primitive_mode)) {
+            [encoder setCullMode:cull_mode];
             /* The captured GL front-face winding maps directly to Metal's
                winding: with the flipped viewport origin, a primitive the engine
                treats as front-facing is front-facing for Metal as well. This is
-               validated by the per-draw differential (a complemented mapping
-               culls the menu's sprite quads). */
+               validated by the rendered two-winding fixture in
+               test_gfx_render_state. */
             NSUInteger gl_front = (NSUInteger)strtoul(
                 [string_value(cull[@"front"]) ?: @"0x901" UTF8String], NULL, 0);
             const char *flip = getenv("EU4_FRAME_REPLAY_FLIP_WINDING");
@@ -2696,12 +3092,8 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                                         atIndex:texture_index];
                 }
                 NSDictionary *sampler_state = texture[@"sampler"] ?: @{};
-                NSString *sampler_key = [NSString stringWithFormat:@"%@-%@-%@-%@-%@",
-                                          sampler_state[@"min"] ?: @0,
-                                          sampler_state[@"mag"] ?: @0,
-                                          sampler_state[@"wrap_s"] ?: @0,
-                                          sampler_state[@"wrap_t"] ?: @0,
-                                          sampler_state[@"lod_bias"] ?: @0];
+                NSString *sampler_key =
+                    sampler_key_for_state(sampler_state);
                 id<MTLSamplerState> sampler = g_samplers[sampler_key];
                 if (sampler == nil) {
                     MTLSamplerDescriptor *descriptor = [MTLSamplerDescriptor new];
@@ -2730,7 +3122,7 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                     descriptor.lodMinClamp = (float)double_number(sampler_state[@"min_lod"], 0);
                     descriptor.lodMaxClamp = (float)double_number(sampler_state[@"max_lod"], 1000);
                     descriptor.lodBias = (float)double_number(sampler_state[@"lod_bias"], 0);
-                    if (enum_value(sampler_state[@"compare_mode"], 0) == 0x884C) {
+                    if (enum_value(sampler_state[@"compare_mode"], 0) == 0x884E) {
                         descriptor.compareFunction = compare_function(
                             enum_value(sampler_state[@"compare_func"], 0x0203));
                     }
@@ -2762,7 +3154,7 @@ static BOOL encode_draw(NSDictionary *event, NSDictionary *program_entry,
                              atIndex:kVertexBufferBase + [location unsignedIntegerValue]];
         }
         NSDictionary *draw = event[@"draw"] ?: @{};
-        NSUInteger mode = number(draw[@"mode"], 4);
+        NSUInteger mode = primitive_mode;
         NSUInteger count = number(draw[@"count"], 0);
         NSInteger base_vertex = [draw[@"base_vertex"] isKindOfClass:[NSNumber class]]
             ? [draw[@"base_vertex"] integerValue] : 0;
@@ -5310,4 +5702,350 @@ extern "C" int eu4_gfx_frame_replay_test_blob_references(const char *frame_dir) 
         return -1;
     }
     return 0;
+}
+
+/* Host-test only: exercise the production compressed-texture selection and
+ * upload path against a synthetic texture dictionary.  Returns 0 on success
+ * and -1 with an error message when the chain is rejected. */
+extern "C" int eu4_gfx_frame_replay_test_compressed_texture(
+    const char *frame_dir, const char *json_path, int *out_format,
+    int *out_levels, char *out_error, size_t error_capacity) {
+    if (frame_dir == NULL || json_path == NULL) {
+        return -1;
+    }
+    @autoreleasepool {
+        NSError *read_error = nil;
+        NSData *data = [NSData dataWithContentsOfFile:@(json_path)
+                                              options:0
+                                                error:&read_error];
+        if (data == nil) {
+            if (out_error && error_capacity) {
+                snprintf(out_error, error_capacity, "%s",
+                         safe_utf8(failure_text(read_error, @"unreadable JSON"),
+                                   "unreadable JSON"));
+            }
+            return -1;
+        }
+        id value = [NSJSONSerialization JSONObjectWithData:data
+                                                   options:0
+                                                     error:&read_error];
+        if (![value isKindOfClass:[NSDictionary class]]) {
+            if (out_error && error_capacity) {
+                snprintf(out_error, error_capacity, "%s",
+                         safe_utf8(failure_text(read_error, @"invalid JSON"),
+                                   "invalid JSON"));
+            }
+            return -1;
+        }
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        if (device == nil) {
+            if (out_error && error_capacity) {
+                snprintf(out_error, error_capacity, "%s",
+                         "no Metal device");
+            }
+            return -1;
+        }
+        EU4MetalReplayState *state = [EU4MetalReplayState new];
+        state.device = device;
+        EU4MetalReplayState *previous = g_state;
+        g_state = state;
+        NSError *build_error = nil;
+        id<MTLTexture> texture =
+            build_texture((NSDictionary *)value, @(frame_dir), &build_error);
+        g_state = previous;
+        if (texture == nil) {
+            if (out_error && error_capacity) {
+                snprintf(out_error, error_capacity, "%s",
+                         safe_utf8(failure_text(build_error,
+                                                @"texture build failed"),
+                                   "texture build failed"));
+            }
+            return -1;
+        }
+        if (out_format) {
+            *out_format = (int)texture.pixelFormat;
+        }
+        if (out_levels) {
+            *out_levels = (int)texture.mipmapLevelCount;
+        }
+        return 0;
+    }
+}
+
+extern "C" int eu4_gfx_frame_replay_test_sample_texture(
+    const char *frame_dir, const char *json_path, unsigned char *out_pixels,
+    int width, int height, char *out_error, size_t error_capacity) {
+    if (frame_dir == NULL || json_path == NULL || out_pixels == NULL
+        || width <= 0 || height <= 0) {
+        return -1;
+    }
+    @autoreleasepool {
+        NSError *read_error = nil;
+        NSData *data = [NSData dataWithContentsOfFile:@(json_path)
+                                              options:0
+                                                error:&read_error];
+        id value = data == nil ? nil
+            : [NSJSONSerialization JSONObjectWithData:data options:0
+                                                error:&read_error];
+        if (![value isKindOfClass:[NSDictionary class]]) {
+            if (out_error && error_capacity) {
+                snprintf(out_error, error_capacity, "%s",
+                         safe_utf8(failure_text(read_error, @"invalid JSON"),
+                                   "invalid JSON"));
+            }
+            return -1;
+        }
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        if (device == nil) {
+            if (out_error && error_capacity) {
+                snprintf(out_error, error_capacity, "%s", "no Metal device");
+            }
+            return -1;
+        }
+        EU4MetalReplayState *state = [EU4MetalReplayState new];
+        state.device = device;
+        EU4MetalReplayState *previous = g_state;
+        g_state = state;
+        NSError *build_error = nil;
+        id<MTLTexture> texture =
+            build_texture((NSDictionary *)value, @(frame_dir), &build_error);
+        g_state = previous;
+        if (texture == nil) {
+            if (out_error && error_capacity) {
+                snprintf(out_error, error_capacity, "%s",
+                         safe_utf8(failure_text(build_error,
+                                                @"texture build failed"),
+                                   "texture build failed"));
+            }
+            return -1;
+        }
+        NSString *source = @
+            "#include <metal_stdlib>\n"
+            "using namespace metal;\n"
+            "kernel void sample_tex(texture2d<float, access::sample> tex\n"
+            "                       [[texture(0)]],\n"
+            "                       device float4 *out [[buffer(0)]],\n"
+            "                       uint2 gid [[thread_position_in_grid]]) {\n"
+            "  constexpr sampler s(coord::normalized, filter::nearest,\n"
+            "                      address::clamp_to_edge);\n"
+            "  float2 uv = (float2(gid) + 0.5) / float2(8.0, 8.0);\n"
+            "  out[gid.y * 8u + gid.x] = tex.sample(s, uv);\n"
+            "}\n";
+        NSError *library_error = nil;
+        id<MTLLibrary> library =
+            [device newLibraryWithSource:source options:nil
+                                   error:&library_error];
+        id<MTLFunction> function = library == nil ? nil
+            : [library newFunctionWithName:@"sample_tex"];
+        id<MTLComputePipelineState> pipeline = function == nil ? nil
+            : [device newComputePipelineStateWithFunction:function
+                                                    error:&library_error];
+        if (pipeline == nil) {
+            if (out_error && error_capacity) {
+                snprintf(out_error, error_capacity, "%s",
+                         safe_utf8(failure_text(library_error,
+                                                @"sampling pipeline failed"),
+                                   "sampling pipeline failed"));
+            }
+            return -1;
+        }
+        id<MTLBuffer> buffer =
+            [device newBufferWithLength:(NSUInteger)(width * height * 4 * sizeof(float))
+                                options:MTLResourceStorageModeShared];
+        id<MTLCommandQueue> queue = [device newCommandQueue];
+        id<MTLCommandBuffer> command = [queue commandBuffer];
+        id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+        [encoder setComputePipelineState:pipeline];
+        [encoder setTexture:texture atIndex:0];
+        [encoder setBuffer:buffer offset:0 atIndex:0];
+        [encoder dispatchThreads:MTLSizeMake((NSUInteger)width,
+                                             (NSUInteger)height, 1)
+            threadsPerThreadgroup:MTLSizeMake(8, 8, 1)];
+        [encoder endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+        if (command.error != nil) {
+            if (out_error && error_capacity) {
+                snprintf(out_error, error_capacity, "%s",
+                         safe_utf8(failure_text(command.error,
+                                                @"sampling failed"),
+                                   "sampling failed"));
+            }
+            return -1;
+        }
+        const float *pixels = (const float *)buffer.contents;
+        for (int index = 0; index < width * height; index++) {
+            for (int channel = 0; channel < 4; channel++) {
+                float clamped = fminf(fmaxf(pixels[index * 4 + channel], 0.0f),
+                                      1.0f);
+                out_pixels[index * 4 + channel] =
+                    (unsigned char)lroundf(clamped * 255.0f);
+            }
+        }
+        return 0;
+    }
+}
+
+extern "C" int eu4_gfx_frame_replay_test_render_state(
+    const char *json_path, char *key_out, size_t key_capacity,
+    int *cull_mode, int *cull_empty, int *scissor_empty,
+    int *scissor_x, int *scissor_y, int *scissor_w, int *scissor_h,
+    double *viewport_x, double *viewport_y, double *viewport_w,
+    double *viewport_h) {
+    if (json_path == NULL) {
+        return -1;
+    }
+    @autoreleasepool {
+        NSData *data = [NSData dataWithContentsOfFile:@(json_path)];
+        id value = data == nil ? nil : [NSJSONSerialization
+            JSONObjectWithData:data options:0 error:NULL];
+        if (![value isKindOfClass:[NSDictionary class]]) {
+            return -1;
+        }
+        NSDictionary *document = (NSDictionary *)value;
+        NSDictionary *sampler = document[@"sampler"];
+        if ([sampler isKindOfClass:[NSDictionary class]]) {
+            NSString *key = sampler_key_for_state(sampler);
+            if (key_out != NULL && key_capacity > 0) {
+                snprintf(key_out, key_capacity, "%s", key.UTF8String);
+            }
+        }
+        NSDictionary *cull = document[@"cull"] ?: @{};
+        BOOL empty = NO;
+        MTLCullMode mode = MTLCullModeNone;
+        BOOL known = cull_mode_for(cull, &mode, &empty);
+        if (!known) {
+            return -1;
+        }
+        if (cull_mode) *cull_mode = (int)mode;
+        if (cull_empty) *cull_empty = empty ? 1 : 0;
+        NSUInteger width = number(document[@"width"], 0);
+        NSUInteger height = number(document[@"height"], 0);
+        NSDictionary *scissor = document[@"scissor"];
+        BOOL has_box = NO;
+        MTLScissorRect rect = {0, 0, 0, 0};
+        if ([scissor isKindOfClass:[NSDictionary class]]
+            && number(scissor[@"enabled"], 0) != 0) {
+            has_box = scissor_rect_for(scissor[@"box"], width, height, &rect);
+        }
+        if (scissor_empty) *scissor_empty = has_box ? 0 : 1;
+        if (scissor_x) *scissor_x = (int)rect.x;
+        if (scissor_y) *scissor_y = (int)rect.y;
+        if (scissor_w) *scissor_w = (int)rect.width;
+        if (scissor_h) *scissor_h = (int)rect.height;
+        MTLViewport vp = viewport_for(document[@"viewport"], width, height);
+        if (viewport_x) *viewport_x = vp.originX;
+        if (viewport_y) *viewport_y = vp.originY;
+        if (viewport_w) *viewport_w = vp.width;
+        if (viewport_h) *viewport_h = vp.height;
+        return 0;
+    }
+}
+
+/* Host-test only: render two oppositely wound triangles through the shared
+ * effective-cull projection and read back which half survived. */
+extern "C" int eu4_gfx_frame_replay_test_cull_render(
+    int gl_cull_mode, int cull_enabled, int primitive_mode, int no_cull,
+    int *left_pixels, int *right_pixels) {
+    @autoreleasepool {
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        if (device == nil) {
+            return -1;
+        }
+        const NSUInteger size = 16;
+        MTLTextureDescriptor *descriptor = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                         width:size height:size mipmapped:NO];
+        descriptor.usage = MTLTextureUsageRenderTarget;
+        descriptor.storageMode = MTLStorageModeManaged;
+        id<MTLTexture> target = [device newTextureWithDescriptor:descriptor];
+        NSString *source = @
+            "#include <metal_stdlib>\n"
+            "using namespace metal;\n"
+            "vertex float4 vertex_main(uint vid [[vertex_id]]) {\n"
+            "  const float2 p[6] = { float2(-1.0,-1.0), float2(-1.0,1.0),\n"
+            "                        float2(0.0,0.0),\n"
+            "                        float2(1.0,-1.0), float2(1.0,1.0),\n"
+            "                        float2(0.0,0.0) };\n"
+            "  return float4(p[vid], 0.0, 1.0);\n"
+            "}\n"
+            "fragment float4 fragment_main() {\n"
+            "  return float4(1.0, 0.0, 0.0, 1.0);\n"
+            "}\n";
+        NSError *error = nil;
+        id<MTLLibrary> library =
+            [device newLibraryWithSource:source options:nil error:&error];
+        if (library == nil) {
+            return -1;
+        }
+        MTLRenderPipelineDescriptor *pipeline_descriptor =
+            [MTLRenderPipelineDescriptor new];
+        pipeline_descriptor.vertexFunction =
+            [library newFunctionWithName:@"vertex_main"];
+        pipeline_descriptor.fragmentFunction =
+            [library newFunctionWithName:@"fragment_main"];
+        pipeline_descriptor.colorAttachments[0].pixelFormat =
+            MTLPixelFormatRGBA8Unorm;
+        id<MTLRenderPipelineState> pipeline =
+            [device newRenderPipelineStateWithDescriptor:pipeline_descriptor
+                                                   error:&error];
+        if (pipeline == nil) {
+            return -1;
+        }
+        NSDictionary *cull = @{
+            @"enabled": @(cull_enabled),
+            @"mode": [NSString stringWithFormat:@"0x%x", gl_cull_mode],
+            @"front": @"0x901",
+        };
+        MTLCullMode mode = MTLCullModeNone;
+        BOOL empty = NO;
+        BOOL known = effective_cull(cull, (NSUInteger)primitive_mode,
+                                    no_cull != 0, &mode, &empty);
+        if (!known) {
+            return -1;
+        }
+        MTLRenderPassDescriptor *pass =
+            [MTLRenderPassDescriptor renderPassDescriptor];
+        pass.colorAttachments[0].texture = target;
+        pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+        pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
+        id<MTLCommandQueue> queue = [device newCommandQueue];
+        id<MTLCommandBuffer> command = [queue commandBuffer];
+        id<MTLRenderCommandEncoder> encoder =
+            [command renderCommandEncoderWithDescriptor:pass];
+        [encoder setRenderPipelineState:pipeline];
+        [encoder setFrontFacingWinding:MTLWindingCounterClockwise];
+        [encoder setCullMode:empty ? MTLCullModeNone : mode];
+        if (empty) {
+            MTLScissorRect zero = {0, 0, 0, 0};
+            [encoder setScissorRect:zero];
+        }
+        [encoder drawPrimitives:MTLPrimitiveTypeTriangle
+                    vertexStart:0 vertexCount:6];
+        [encoder endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+        if (command.error != nil) {
+            return -1;
+        }
+        uint8_t pixels[size * size * 4];
+        MTLRegion region = MTLRegionMake2D(0, 0, size, size);
+        [target getBytes:pixels bytesPerRow:size * 4
+           fromRegion:region mipmapLevel:0];
+        int left = 0;
+        int right = 0;
+        for (NSUInteger y = 0; y < size; y++) {
+            for (NSUInteger x = 0; x < size; x++) {
+                const uint8_t *pixel = pixels + (y * size + x) * 4;
+                if (pixel[0] > 128 && pixel[1] < 64) {
+                    if (x < size / 2) left++;
+                    else right++;
+                }
+            }
+        }
+        if (left_pixels) *left_pixels = left;
+        if (right_pixels) *right_pixels = right;
+        return 0;
+    }
 }

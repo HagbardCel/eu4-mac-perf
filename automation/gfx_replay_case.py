@@ -2717,8 +2717,14 @@ def replay_case(case_dir: Path | str, out_dir: Path | str,
         from automation import campaign_guard
 
         try:
+            sequence = _json(case_dir / "sequence.json")
+            supplied = len(sequence.get("frames") or [])
+            target = int(sequence.get("target_index") or supplied)
             with campaign_guard.attempt(
-                    "replays", evidence={"case": str(case_dir)}):
+                    "replays", count=max(1, supplied),
+                    evidence={"case": str(case_dir),
+                              "supplied_frames": supplied,
+                              "target_index": target}):
                 return _replay_sequence_case(
                     case_dir, Path(out_dir).expanduser().resolve(),
                     faults=faults)

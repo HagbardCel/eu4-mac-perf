@@ -1,0 +1,11 @@
+observation_event,resource,phase,writer_events,writer_authority,producer_event,upcoming_entry,upcoming_program,required_generation,present_index,session_id,capture_frame_id
+11,tex:431,pre_event,9,graph,9,_GfxDraw,367,1,904,afd444f2-6478-459f-8db6-e565c49dbd63,1
+13,tex:432,pre_event,10 11,graph,11,_GfxDraw,370,2,904,afd444f2-6478-459f-8db6-e565c49dbd63,1
+14,fb:0,pre_event,7,graph,7,_GfxDrawIndexed,301,,904,afd444f2-6478-459f-8db6-e565c49dbd63,1
+15,fb:0,pre_event,7 14,graph,14,_GfxDrawIndexed,301,,904,afd444f2-6478-459f-8db6-e565c49dbd63,1
+16,fb:0,pre_event,7 14 15,graph,15,_GfxDrawIndexed,301,,904,afd444f2-6478-459f-8db6-e565c49dbd63,1
+17,fb:0,pre_event,7 14 15 16,graph,16,_GfxDrawIndexed,301,,904,afd444f2-6478-459f-8db6-e565c49dbd63,1
+272,tex:433,pre_event,0 1 2 3 4 5 6,graph,6,_GfxDraw,316,7,904,afd444f2-6478-459f-8db6-e565c49dbd63,1
+288,tex:442,pre_event,286,graph,286,_GfxDraw,352,1,904,afd444f2-6478-459f-8db6-e565c49dbd63,1
+290,tex:447,pre_event,287 288,graph,288,_GfxDraw,349,2,904,afd444f2-6478-459f-8db6-e565c49dbd63,1
+292,tex:443,pre_event,289 290,graph,290,_GfxDraw,358,2,904,afd444f2-6478-459f-8db6-e565c49dbd63,1
