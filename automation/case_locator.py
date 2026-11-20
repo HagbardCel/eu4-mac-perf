@@ -95,6 +95,22 @@ def _tree_stats(root: Path) -> tuple[int, int]:
     return total, count
 
 
+def _symlink_problem(root: Path) -> str | None:
+    """Reject symlinks so counting and copying have identical semantics."""
+    root = Path(root)
+    for directory, subdirs, names in os.walk(root):
+        for name in list(subdirs) + list(names):
+            path = Path(directory) / name
+            if path.is_symlink():
+                try:
+                    relative = path.relative_to(root).as_posix()
+                except ValueError:
+                    relative = str(path)
+                return (f"case contains a symlink at {relative}; publish a "
+                        "self-contained copy instead")
+    return None
+
+
 def _existing_ancestor(path: Path) -> Path:
     current = Path(path)
     while not current.exists() and current != current.parent:
@@ -305,6 +321,9 @@ def publish(case_dir: Path | str, evidence_root: Path | str, *,
     if reused:
         verification_now = _adopt_existing(target, identity, key)
     else:
+        symlink = _symlink_problem(case_dir)
+        if symlink is not None:
+            raise CaseLocatorError("symlink_source", symlink)
         source_bytes, source_files = _tree_stats(case_dir)
         _preflight_space(root, source_bytes,
                          size_budget=size_budget, min_free=min_free_bytes)
@@ -344,6 +363,11 @@ def publish(case_dir: Path | str, evidence_root: Path | str, *,
             verification_now = _adopt_existing(target, identity, key)
         finally:
             shutil.rmtree(staging_parent, ignore_errors=True)
+    source_bytes, source_files = _tree_stats(target)
+    previous = _json(root / LOCATOR_DIR / f"{key}.json")
+    if originating_run is None:
+        originating_run = previous.get("originating_run")
+    first_published = previous.get("first_published_utc") or _now()
     locator = {
         "schema": SCHEMA,
         "key": key,
@@ -353,6 +377,7 @@ def publish(case_dir: Path | str, evidence_root: Path | str, *,
         "verification": _verification_summary(verification_now),
         "limitations": _limitations(identity, verification_now),
         "originating_run": originating_run,
+        "first_published_utc": first_published,
         "published_utc": _now(),
         "reused": reused,
         "size_bytes": source_bytes,
@@ -363,21 +388,29 @@ def publish(case_dir: Path | str, evidence_root: Path | str, *,
     return locator
 
 
-def _locator_scan(root: Path) -> tuple[list[dict], bool]:
-    """Read locator documents, reporting explicit scan-limit exhaustion."""
+def _locator_scan(root: Path) -> tuple[list[dict], bool, list[dict]]:
+    """Read locator documents, reporting scan exhaustion and broken files."""
     directory = root / LOCATOR_DIR
     if not directory.is_dir():
-        return [], False
+        return [], False, []
     paths = sorted(directory.glob("*.json"))
     truncated = len(paths) > MAX_LOCATORS
     found: list[dict] = []
+    invalid: list[dict] = []
     for path in paths[:MAX_LOCATORS]:
-        value = _json(path)
-        if value.get("schema") != SCHEMA:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            invalid.append({"locator_path": str(path),
+                            "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        if not isinstance(value, dict) or value.get("schema") != SCHEMA:
+            invalid.append({"locator_path": str(path),
+                            "error": "locator schema is invalid"})
             continue
         value["locator_path"] = str(path)
         found.append(value)
-    return found, truncated
+    return found, truncated, invalid
 
 
 def _target_path(root: Path, locator: dict) -> tuple[Path | None, str | None]:
@@ -407,11 +440,15 @@ def _locator_metadata(root: Path, locator: dict) -> dict:
     target, problem = _target_path(root, locator)
     if problem is not None or target is None:
         row = dict(locator, state="invalid_path", detail=problem,
-                   resolved_path=None, verified=False)
+                   resolved_path=None, verified=False,
+                   verification_ok=False)
     else:
         state = "available" if target.is_dir() else "missing_payload"
         row = dict(locator, state=state, resolved_path=str(target),
                    verified=False,
+                   verification_ok=bool(
+                       (locator.get("verification") or {}).get("ok"))
+                   and state == "available",
                    verification=locator.get("verification"))
     return _identity_view(locator, row)
 
@@ -422,18 +459,18 @@ def _resolve_match(root: Path, locator: dict) -> dict:
     if problem is not None or target is None:
         return _identity_view(locator, dict(
             locator, state="invalid_path", detail=problem,
-            resolved_path=None, verified=False))
+            resolved_path=None, verified=False, verification_ok=False))
     if not target.is_dir():
         return _identity_view(locator, dict(
             locator, state="missing_payload", resolved_path=str(target),
-            verified=False))
+            verified=False, verification_ok=False))
     verification = _verify(target)
     identity = case_identity(target)
     expected = locator.get("identity") or {}
     if verification.get("ok") is not True:
         return _identity_view(locator, dict(
             locator, state="digest_mismatch", resolved_path=str(target),
-            verified=True,
+            verified=False, verification_ok=False,
             verification=_verification_summary(verification),
             detail="; ".join(str(item) for item in
                              (verification.get("problems") or [])[:4])))
@@ -441,12 +478,12 @@ def _resolve_match(root: Path, locator: dict) -> dict:
     if conflict is not None:
         return _identity_view(locator, dict(
             locator, state="digest_mismatch", resolved_path=str(target),
-            verified=True,
+            verified=False, verification_ok=False,
             verification=_verification_summary(verification),
             detail=conflict))
     return _identity_view(locator, dict(
         locator, state="available", resolved_path=str(target),
-        verified=True,
+        verified=True, verification_ok=True,
         verification=_verification_summary(verification)))
 
 
@@ -472,13 +509,15 @@ def _matches(locator: dict, *, session_id: str | None,
 def locate(evidence_root: Path | str, *, session_id: str | None = None,
            capture_frame_id: int | None = None, seal_sha256: str | None = None,
            case_id: str | None = None, key: str | None = None,
-           limit: int = DEFAULT_LIMIT, verify: bool = True) -> dict:
+           limit: int | None = None, verify: bool = True) -> dict:
     """Resolve a bounded, selected set of published cases.
 
     At least one identity filter is required so a lookup cannot walk and
-    re-verify an entire large archive.  States are ``available``,
-    ``missing_payload`` (locator but no bytes), ``digest_mismatch`` (bytes or
-    identity changed), ``root_unavailable``, ``refused_unbounded`` and
+    re-verify an entire large archive.  Full verification is bounded to one
+    match by default; pass a larger ``limit`` or ``verify=False`` explicitly.
+    States are ``available``, ``missing_payload`` (locator but no bytes),
+    ``digest_mismatch`` (bytes or identity changed), ``invalid_path``,
+    ``root_unavailable``, ``refused_unbounded`` and
     ``unknown``/``unknown_truncated`` (no matching locator; never equated with
     deletion).
     """
@@ -496,31 +535,38 @@ def locate(evidence_root: Path | str, *, session_id: str | None = None,
                 "detail": "provide at least one identity filter "
                           "(session/frame/seal/case/key)",
                 "read_only": True}
+    if limit is None:
+        limit = 1 if verify else DEFAULT_LIMIT
     if limit < 1:
         raise CaseLocatorError("limit", "limit must be >= 1")
     if not root.is_dir():
         return {"schema": SCHEMA, "root": str(root), "state": "root_unavailable",
                 "query": query, "matches": [], "read_only": True}
-    locators, scan_truncated = _locator_scan(root)
+    locators, scan_truncated, invalid_locators = _locator_scan(root)
     matches: list[dict] = []
+    matched_total = 0
     for locator in locators:
         if not _matches(locator, session_id=session_id,
                         capture_frame_id=capture_frame_id,
                         seal_sha256=seal_sha256, case_id=case_id, key=key):
             continue
+        matched_total += 1
+        if len(matches) >= limit:
+            continue
         matches.append(_resolve_match(root, locator) if verify
                        else _locator_metadata(root, locator))
-        if len(matches) >= limit:
-            break
     state = "unknown"
     if matches:
-        for candidate in ("available", "missing_payload", "digest_mismatch",
-                          "invalid_path"):
+        for candidate in ("invalid_path", "digest_mismatch", "missing_payload",
+                          "available"):
             if any(item["state"] == candidate for item in matches):
                 state = candidate
                 break
+    elif invalid_locators:
+        state = "invalid_locator"
     elif scan_truncated:
         state = "unknown_truncated"
+    truncated = scan_truncated or matched_total > len(matches)
     return {
         "schema": SCHEMA,
         "root": str(root),
@@ -528,9 +574,11 @@ def locate(evidence_root: Path | str, *, session_id: str | None = None,
         "query": query,
         "matches": matches,
         "returned": len(matches),
+        "matched": matched_total,
         "limit": limit,
         "scan_truncated": scan_truncated,
-        "truncated": scan_truncated or len(matches) >= limit,
+        "truncated": truncated,
+        "invalid_locators": invalid_locators[:20],
         "read_only": True,
     }
 
@@ -540,7 +588,7 @@ def summaries(evidence_root: Path | str) -> list[dict]:
     root = Path(evidence_root).expanduser().resolve()
     if not root.is_dir():
         return []
-    locators, _truncated = _locator_scan(root)
+    locators, _truncated, _invalid = _locator_scan(root)
     return [_locator_metadata(root, locator) for locator in locators]
 
 
@@ -556,19 +604,28 @@ def inventory(evidence_root: Path | str, *, verify: bool = False) -> dict:
         return {"schema": SCHEMA, "root": str(root),
                 "state": "root_unavailable", "locators": [],
                 "counts": {}, "truncated": False, "read_only": True}
-    locators, truncated = _locator_scan(root)
+    locators, truncated, invalid_locators = _locator_scan(root)
     rows = [(_resolve_match(root, locator) if verify
              else _locator_metadata(root, locator))
             for locator in locators]
     counts: dict[str, int] = {}
     for row in rows:
         counts[row["state"]] = counts.get(row["state"], 0) + 1
+    if invalid_locators:
+        state = "degraded"
+    elif not rows:
+        state = "empty"
+    elif counts.get("available") == len(rows):
+        state = "available"
+    else:
+        state = "degraded"
     return {
         "schema": SCHEMA,
         "root": str(root),
-        "state": "available" if rows else "empty",
+        "state": state,
         "counts": counts,
         "locators": rows,
+        "invalid_locators": invalid_locators[:20],
         "verified": verify,
         "truncated": truncated,
         "scan_limit": MAX_LOCATORS,

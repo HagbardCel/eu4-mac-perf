@@ -96,13 +96,22 @@ class CaseLocatorTests(unittest.TestCase):
         (target / "report.json").write_text(json.dumps({"status": "tampered"}))
         drift = case_locator.locate(self.evidence, session_id="session-1")
         self.assertEqual(drift["state"], "digest_mismatch", drift)
+        self.assertFalse(drift["matches"][0]["verified"])
+        self.assertFalse(drift["matches"][0]["verification_ok"])
 
     def test_duplicate_publish_reuses_one_verified_copy(self) -> None:
         case = make_case(self.root / "producer" / "case")
-        first = case_locator.publish(case, self.evidence)
+        first = case_locator.publish(case, self.evidence,
+                                     originating_run="run-1")
         second = case_locator.publish(case, self.evidence)
         self.assertTrue(second["reused"])
         self.assertEqual(first["key"], second["key"])
+        self.assertEqual(second["size_bytes"], first["size_bytes"])
+        self.assertGreater(second["size_bytes"], 0)
+        self.assertEqual(second["files"], first["files"])
+        self.assertEqual(second["originating_run"], "run-1")
+        self.assertEqual(second["first_published_utc"],
+                         first["first_published_utc"])
         case_dirs = [path for path in (self.evidence / "cases").iterdir()
                      if path.is_dir() and not path.name.startswith(".")]
         self.assertEqual(len(case_dirs), 1)
@@ -345,6 +354,89 @@ class CaseLocatorTests(unittest.TestCase):
                 case_locator.publish(case, self.evidence)
         self.assertEqual(raised.exception.kind, "insufficient_space")
         self.assertTrue((case / "case.json").is_file())
+
+    def test_symlink_in_source_is_refused_before_copying(self) -> None:
+        case = make_case(self.root / "producer" / "case")
+        outside = self.root / "outside.bin"
+        outside.write_bytes(b"outside bytes")
+        (case / "leak.bin").symlink_to(outside)
+        with self.assertRaises(case_locator.CaseLocatorError) as raised:
+            case_locator.publish(case, self.evidence)
+        self.assertEqual(raised.exception.kind, "symlink_source")
+        self.assertFalse((self.evidence / "cases").exists())
+        self.assertFalse((self.evidence / "locators").exists())
+
+    def test_broken_locator_is_reported_not_silently_absent(self) -> None:
+        case = make_case(self.root / "producer" / "case")
+        case_locator.publish(case, self.evidence)
+        broken = self.evidence / "locators" / "broken.json"
+        broken.write_text("{not json", encoding="utf-8")
+        inventory = case_locator.inventory(self.evidence)
+        self.assertEqual(inventory["state"], "degraded")
+        self.assertEqual(len(inventory["invalid_locators"]), 1)
+        located = case_locator.locate(self.evidence, session_id="absent")
+        self.assertEqual(located["state"], "invalid_locator", located)
+        self.assertEqual(len(located["invalid_locators"]), 1)
+
+    def test_locate_reports_the_worst_selected_state(self) -> None:
+        first = make_case(self.root / "one" / "case", capture_frame_id=1)
+        second = make_case(self.root / "two" / "case", capture_frame_id=2)
+        one = case_locator.publish(first, self.evidence)
+        case_locator.publish(second, self.evidence)
+        target = Path(one["locator_path"]).parents[1] / one["relative_path"]
+        (target / "report.json").write_text(json.dumps({"status": "corrupt"}))
+        located = case_locator.locate(self.evidence, session_id="session-1",
+                                      limit=10, verify=True)
+        self.assertEqual(located["state"], "digest_mismatch", located)
+        self.assertEqual(located["matched"], 2)
+        self.assertEqual({row["state"] for row in located["matches"]},
+                         {"available", "digest_mismatch"})
+
+    def test_verified_locate_is_bounded_by_default(self) -> None:
+        first = make_case(self.root / "one" / "case", capture_frame_id=1)
+        second = make_case(self.root / "two" / "case", capture_frame_id=2)
+        case_locator.publish(first, self.evidence)
+        case_locator.publish(second, self.evidence)
+        calls = {"n": 0}
+        original = case_locator._verify
+
+        def counted(path):
+            calls["n"] += 1
+            return original(path)
+
+        with mock.patch("automation.case_locator._verify", side_effect=counted):
+            located = case_locator.locate(self.evidence,
+                                          session_id="session-1")
+        self.assertEqual(located["returned"], 1)
+        self.assertEqual(located["matched"], 2)
+        self.assertTrue(located["truncated"])
+        self.assertEqual(calls["n"], 1)
+
+    def test_sequence_prefers_the_target_seal_over_a_capture_seal(self) -> None:
+        case = make_sequence_case(self.root / "producer" / "sequence")
+        (case / "capture").mkdir()
+        (case / "capture" / "frame-seal.json").write_text(json.dumps({
+            "schema": "gfx-frame-seal/v1", "sealed": True,
+            "session_id": "wrong-capture", "capture_frame_id": 99,
+        }))
+        files = []
+        for path in sorted(case.rglob("*")):
+            if not path.is_file() or path.name == "case.json":
+                continue
+            payload = path.read_bytes()
+            files.append({
+                "path": path.relative_to(case).as_posix(),
+                "bytes": len(payload),
+                "sha256": _sha(payload),
+            })
+        manifest = json.loads((case / "case.json").read_text())
+        manifest["files"] = files
+        (case / "case.json").write_text(json.dumps(manifest))
+        identity = case_locator.case_identity(case)
+        self.assertEqual(identity["session_id"], "sequence-session")
+        self.assertEqual(identity["capture_frame_id"], 2)
+        self.assertEqual(identity["seal_file"],
+                         "frames/000002/frame-seal.json")
 
     def test_legacy_case_without_a_seal_uses_the_manifest_key(self) -> None:
         case = make_case(self.root / "producer" / "case")

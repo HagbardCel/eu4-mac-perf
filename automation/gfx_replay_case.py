@@ -2475,21 +2475,7 @@ def _sequence_inventory(sequence: dict, case_dir: Path) -> list[str]:
 PRODUCER_RECEIPT_SCHEMA = "gfx-replay-producer-receipt/v1"
 
 
-def case_capture_seal_path(case_dir: Path | str,
-                           manifest: dict) -> Path | None:
-    """Path of the authoritative seal for a v1 or v2 case.
-
-    A sequence package stores its seals under ``frames/<index>/`` and selects
-    the diagnosed target through ``sequence.json``.  Consumers that need the
-    seal bytes or digest must resolve the same target rather than assuming the
-    single-frame ``capture/frame-seal.json`` layout.
-    """
-    case_dir = Path(case_dir)
-    direct = case_dir / "capture" / "frame-seal.json"
-    if direct.is_file():
-        return direct
-    if manifest.get("schema") != SEQUENCE_SCHEMA:
-        return None
+def _sequence_target_seal_path(case_dir: Path) -> Path | None:
     try:
         sequence = _json(case_dir / "sequence.json")
         frames = sequence.get("frames") or []
@@ -2504,6 +2490,27 @@ def case_capture_seal_path(case_dir: Path | str,
         return seal if seal.is_file() else None
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return None
+
+
+def case_capture_seal_path(case_dir: Path | str,
+                           manifest: dict) -> Path | None:
+    """Path of the authoritative seal for a v1 or v2 case.
+
+    A sequence package stores its seals under ``frames/<index>/`` and selects
+    the diagnosed target through ``sequence.json``.  Consumers that need the
+    seal bytes or digest must resolve the same target rather than assuming the
+    single-frame ``capture/frame-seal.json`` layout.
+    """
+    case_dir = Path(case_dir)
+    if manifest.get("schema") == SEQUENCE_SCHEMA:
+        target = _sequence_target_seal_path(case_dir)
+        if target is not None:
+            return target
+        # Historical v2 packages may carry only a non-empty capture seal.
+        direct = case_dir / "capture" / "frame-seal.json"
+        return direct if direct.is_file() and _json(direct) else None
+    direct = case_dir / "capture" / "frame-seal.json"
+    return direct if direct.is_file() else None
 
 
 def _case_capture_seal(case_dir: Path, manifest: dict) -> dict:
