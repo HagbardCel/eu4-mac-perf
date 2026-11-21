@@ -1467,13 +1467,34 @@ class EvidenceDerivationTests(unittest.TestCase):
 
 
 class ShippedAuthorityRegistryTests(unittest.TestCase):
-    """The production registry stays fail-closed until a receipt is bound."""
+    """The production registry pins exactly the reviewed renderer."""
 
-    def test_the_shipped_registry_is_empty(self):
-        self.assertEqual(authorities.AUTHORITIES, {})
+    def test_the_shipped_registry_pins_the_reviewed_renderer(self):
         self.assertEqual(
             authorities.SCHEMA,
             "gfx-gl-control-renderer-authorities/v2")
+        self.assertEqual(len(authorities.AUTHORITIES), 1)
+        digest, entry = next(iter(authorities.AUTHORITIES.items()))
+        self.assertEqual(len(digest), 64)
+        self.assertEqual(_sha(Path(qualification.__file__).parents[1]
+                              / "automation"
+                              / "gfx_gl_control_renderer.py"), digest)
+        self.assertEqual(entry["name"], "m7-original-gl-control")
+        self.assertEqual(entry["api"], "opengl")
+        self.assertTrue(entry["qualified"])
+        self.assertIn("independent review", entry["qualified_by"])
+        self.assertEqual(len(entry["public_key"]), 64)
+        roles = {item["role"]: item["sha256"] for item in entry["components"]}
+        self.assertEqual(set(roles), {"native-gl-executor",
+                                      "replay-input-verifier",
+                                      "receipt-signer"})
+        root = Path(qualification.__file__).parents[1]
+        self.assertEqual(
+            roles["replay-input-verifier"],
+            _sha(root / "automation" / "gfx_gl_replay_input.py"))
+        self.assertEqual(
+            roles["receipt-signer"],
+            _sha(root / "automation" / "gfx_ed25519.py"))
 
     def test_an_arbitrary_renderer_digest_is_refused_without_a_registry_entry(self):
         authority = qualification._load_authority("f" * 64)

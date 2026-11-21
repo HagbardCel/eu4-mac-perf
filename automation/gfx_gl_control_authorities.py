@@ -42,7 +42,35 @@ SCHEMA = "gfx-gl-control-renderer-authorities/v2"
 
 # sha256 -> {"name", "api", "qualified", "qualified_by", "public_key",
 #            "components": [{"role", "sha256"}], "source"}
-# Intentionally empty: no original-API control renderer has been reviewed and
-# pinned at this head. The 904 control and any ad-hoc renderer therefore remain
-# unqualified for causal Metal attribution.
-AUTHORITIES: dict[str, dict] = {}
+#
+# The first entry pins the M7 original-OpenGL selected-draw control.  Its
+# driver is automation/gfx_gl_control_renderer.py; the native executor is built
+# from benchmark/eu4_gfx_draw_control.c with:
+#   clang -O2 -w -I benchmark -o .local/m7/authority/eu4_gfx_draw_control \
+#       benchmark/eu4_gfx_draw_control.c -framework OpenGL
+# The binary digest below is that reviewed build; the public key half lives in
+# .local/m7/authority/gl-control-ed25519.key (not checked in).  A re-review is
+# required before changing any digest or adding another renderer.
+AUTHORITIES: dict[str, dict] = {
+    "77d152c5d9e5822a852be746621ed930f04af02aa538ecaa9fd1fbcb2faf1af6": {
+        "name": "m7-original-gl-control",
+        "api": "opengl",
+        "qualified": True,
+        "qualified_by": (
+            "independent review review-pr3 (DSH subagent), exact PR3 head "
+            "93a7c9110c15be49cac922ac5f261753e2bed005"),
+        "public_key": (
+            "b129e1bcd834600e8a3986159b7d9a540d1951f09f30ce3bfd4881844247a727"),
+        "components": [
+            {"role": "native-gl-executor",
+             "sha256": "ac6e83db9846d8f2dc58f11e85887fd207d8c8a573f69f1467c500c9041cb0cb"},
+            {"role": "replay-input-verifier",
+             "sha256": "831050f051a3b8097431d71fafe96775878422b6c268483360a3eaa17d179526"},
+            {"role": "receipt-signer",
+             "sha256": "a72d7fccc5430be1192ea010bc5e432266341dafc82bc4c33941445ea54da8ce"},
+        ],
+        "source": (
+            "benchmark/eu4_gfx_draw_control.c + "
+            "automation/gfx_gl_control_renderer.py"),
+    },
+}
