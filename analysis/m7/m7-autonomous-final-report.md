@@ -42,9 +42,9 @@ headless agent was substituted and no EU4 launch was made.
 - Focused pre-operator suite (`tests.test_m7_event20_prefix`,
   `test_gfx_frame_graph`, `test_gfx_independent_replay`, `test_dsh_bridge`,
   `test_dsh_campaign`, `test_campaign_guard`, `test_dsh_profile`): **passed**.
-- Full offline gate `20261121T185012Z-7467133f` at code head `3a2ed8f8`:
-  **4,448 ran / 4,412 executed / 36 skipped / 0 failures / 0 errors**,
-  744.0 s. `test_profiles verify --profile offline` passed before the gate.
+- Full offline gate `20261121T192220Z-27061284` at code head `14c675cf`:
+  **4,449 ran / 4,413 executed / 36 skipped / 0 failures / 0 errors**,
+  1,046.8 s. `test_profiles verify --profile offline` passed before the gate.
 - Portable CI: **pass** at `c181d0fb`; the new final head must pass CI before
   merge.
 
