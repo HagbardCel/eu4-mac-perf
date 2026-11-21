@@ -62,7 +62,7 @@ unsupported.
 
 ## 3. Regression verification and base comparison
 
-Each fix was verified on its exact head; the closure PRs (#263–#268) also have
+Each fix was verified on its exact head; the closure PRs (#263–#268 and #273) also have
 an independent review comment at that exact head. The new tests were run
 against `25ee46db` in a separate worktree where the base module is unmodified.
 
@@ -75,7 +75,7 @@ against `25ee46db` in a separate worktree where the base module is unmodified.
 | #267 goal-plugin unload | `f5301f69` | `node --test` 50/50 | late-fiber tests fail on `origin/main`; the race test fails on `a57ba95b` |
 | #268 clean build dirs | `c3fbeb77` | 11/11 on a clean worktree | 8 errors on clean `25ee46db` (`20261120T231728Z-12176d5f`) |
 
-Independent reviews of the exact heads are recorded on #263–#268 as review
+Independent reviews of the exact heads are recorded on #263–#268 and #273 as review
 comments (the only available GitHub identity is the author, so GitHub records
 them as `COMMENTED`, not `APPROVE`). #251–#257 have **no** independent review
 comment on GitHub; their evidence is the audit verdict, author verification and
