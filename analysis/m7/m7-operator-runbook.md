@@ -14,7 +14,7 @@ agent session; the operator starts DSH and pastes the goal manually.
 | Item | Absolute path |
 | --- | --- |
 | Sidecar | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/campaigns/m7-autonomy-offline.json` |
-| Budget state / claim ledger | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/state.json` |
+| Budget state / claim ledger | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/state-operator.json` |
 | Candidate worktree / workspace | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-autonomy-offline/workspace` |
 | Trusted reference | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/trusted/offline-b` |
 | Checker outputs | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/run/operator-1` |
@@ -24,11 +24,20 @@ The candidate worktree is pinned to the seeded defective commit
 `977330aed582d47d09df0777f2e00a1560ff1809`. The trusted reference is the
 derived offline fixture (original events 10, 15, 17), exact scope 0..2.
 
+### Fresh budget at launch
+
+The prepared budget file is deliberately not pre-aged. Initialize the fresh
+operator state immediately before launch:
+
+```fish
+/opt/homebrew/opt/python@3.14/bin/python3.14 -m automation.campaign_guard init --state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/state-operator.json --budget eu4_launches=0 --budget sealed_frames=0 --budget shadow_executions=0 --budget replays=4 --budget corrections=1 --budget wall_clock_seconds=1800
+```
+
 ### Launch
 
 ```fish
 cd /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf
-env EU4_OFFLINE_ONLY=1 EU4_DSH_PYTHON=/opt/homebrew/opt/python@3.14/bin/python3.14 EU4_CAMPAIGN_STATE=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/state.json EU4_M7_AUTONOMY_RUN_DIR=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/run/operator-1 /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/scripts/run.sh --campaign /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/campaigns/m7-autonomy-offline.json --campaign-state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/state.json
+env EU4_OFFLINE_ONLY=1 EU4_DSH_PYTHON=/opt/homebrew/opt/python@3.14/bin/python3.14 EU4_CAMPAIGN_STATE=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/state-operator.json EU4_M7_AUTONOMY_RUN_DIR=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/run/operator-1 /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/scripts/run.sh --campaign /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/campaigns/m7-autonomy-offline.json --campaign-state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/state-operator.json
 ```
 
 Open the DSH Web session in the registered workspace:
@@ -54,7 +63,7 @@ You are validating the M7 autonomous OpenGL-to-Metal reconstruction workflow. Th
 ### Inspect
 
 ```fish
-python3.14 -m automation.campaign_guard status --state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/state.json
+python3.14 -m automation.campaign_guard status --state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/state-operator.json
 ls -la /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/run/operator-1
 cat /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/run/operator-1/metal/trusted-execution.json
 ls -lt /Users/fabian/.local/share/eu4-dsh/logs | head
@@ -71,7 +80,7 @@ Close the DSH session or press Ctrl-C in the launcher terminal. To record an
 explicit stop:
 
 ```fish
-python3.14 -m automation.campaign_guard stop --state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/state.json --reason blocked
+python3.14 -m automation.campaign_guard stop --state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/state-operator.json --reason blocked
 ```
 
 No EU4 launch is possible in this campaign (`EU4_OFFLINE_ONLY=1`, launch budget
@@ -99,7 +108,7 @@ INDEPENDENTLY APPROVED.**
 | Item | Absolute path |
 | --- | --- |
 | Sidecar | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/campaigns/m7-event20-live-20261121.json` |
-| Budget state / claim ledger | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state.json` |
+| Budget state / claim ledger | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state-operator.json` |
 | Launch counter | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-live-20261121/run/live-launch.json` |
 | Candidate worktree / workspace | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-live-20261121/workspace` |
 | Capture evidence | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/evidence` |
@@ -119,7 +128,7 @@ pgrep -fl 'eu4.app'
 shasum -a 256 "/Users/fabian/Documents/Paradox Interactive/Europa Universalis IV GOG/settings.txt"
 python3.14 -c "from automation import gfx_display; d=gfx_display.find_display('EU4 Test'); print(d); raise SystemExit(0 if d is not None else 1)"
 env EU4_DSH_PYTHON=/opt/homebrew/opt/python@3.14/bin/python3.14 /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/scripts/preflight.sh
-python3.14 -m automation.campaign_guard status --state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state.json
+python3.14 -m automation.campaign_guard status --state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state-operator.json
 ```
 
 Expected settings SHA-256 before capture:
@@ -127,11 +136,20 @@ Expected settings SHA-256 before capture:
 `pgrep` must print nothing. The BetterDisplay check must exit 0. The launch
 counter must show `used=0`, `limit=1`.
 
+### Fresh budget at launch
+
+Initialize the fresh live state immediately before capture. The launch counter
+already exists with `used=0, limit=1`.
+
+```fish
+/opt/homebrew/opt/python@3.14/bin/python3.14 -m automation.campaign_guard init --state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state-operator.json --budget eu4_launches=1 --budget sealed_frames=1 --budget shadow_executions=1 --budget replays=2 --budget corrections=1 --budget wall_clock_seconds=1800
+```
+
 ### Capture one sealed frame (consumes the launch)
 
 ```fish
 cd /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf
-env EU4_CAMPAIGN_STATE=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state.json EU4_DSH_PYTHON=/opt/homebrew/opt/python@3.14/bin/python3.14 /opt/homebrew/opt/python@3.14/bin/python3.14 -m automation.m6_frame capture --output /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/evidence --campaign-run-root /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-live-20261121/run --callers 0x10d52fc,0x1486ad9 --min-draws 8 --max-draws 512 --duration 120 --timeout 300 --prefix-end 20 --prefix-max-bytes 700000000 --prefix-max-ns 10000000000 --seal --shadow --background --shadow-timeout-ms 360000 --shadow-wait-ms 360000 --seal-timeout-ms 600000
+env EU4_CAMPAIGN_STATE=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state-operator.json EU4_DSH_PYTHON=/opt/homebrew/opt/python@3.14/bin/python3.14 /opt/homebrew/opt/python@3.14/bin/python3.14 -m automation.m6_frame capture --output /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/evidence --campaign-run-root /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-live-20261121/run --callers 0x10d52fc,0x1486ad9 --min-draws 8 --max-draws 512 --duration 120 --timeout 300 --prefix-end 20 --prefix-max-bytes 700000000 --prefix-max-ns 10000000000 --seal --shadow --background --shadow-timeout-ms 360000 --shadow-wait-ms 360000 --seal-timeout-ms 600000
 ```
 
 The harness must terminate the owned EU4 process and restore `settings.txt`
@@ -153,7 +171,7 @@ report its root SHA-256 and file count.
 
 ```fish
 cd /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf
-env EU4_DSH_PYTHON=/opt/homebrew/opt/python@3.14/bin/python3.14 EU4_CAMPAIGN_STATE=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state.json EU4_M7_CHECKER_RUN_DIR=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/checker-1 /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/scripts/run.sh --campaign /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/campaigns/m7-event20-live-20261121.json --campaign-state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state.json
+env EU4_DSH_PYTHON=/opt/homebrew/opt/python@3.14/bin/python3.14 EU4_CAMPAIGN_STATE=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state-operator.json EU4_M7_CHECKER_RUN_DIR=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/checker-1 /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/scripts/run.sh --campaign /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/campaigns/m7-event20-live-20261121.json --campaign-state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state-operator.json
 ```
 
 Workspace expected in DSH:
@@ -190,9 +208,9 @@ exactly. A green `M7_AUTONOMOUS_READY` gate does not imply this.
 ### Evidence and stop
 
 - Campaign status:
-  `python3.14 -m automation.campaign_guard status --state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state.json`
+  `python3.14 -m automation.campaign_guard status --state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state-operator.json`
 - Checker receipt: `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/checker-1/metal/trusted-execution.json`
 - DSH logs/sessions: `/Users/fabian/.local/share/eu4-dsh/logs`, `/Users/fabian/.local/share/eu4-dsh/sessions`
 - Explicit stop:
-  `python3.14 -m automation.campaign_guard stop --state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state.json --reason blocked`
+  `python3.14 -m automation.campaign_guard stop --state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state-operator.json --reason blocked`
 - Do not merge. Request independent review of the exact head.

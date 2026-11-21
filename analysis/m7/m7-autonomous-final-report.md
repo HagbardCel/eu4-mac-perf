@@ -67,7 +67,7 @@ headless agent was substituted and no EU4 launch was made.
 | --- | --- |
 | Campaign id | `m7-autonomy-offline-20261121` |
 | Sidecar | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/campaigns/m7-autonomy-offline.json` |
-| Budget state / claim ledger | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/state.json` |
+| Budget state / claim ledger | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/state-operator.json` |
 | Candidate workspace | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-autonomy-offline/workspace` |
 | Seeded defect revision | `977330aed582d47d09df0777f2e00a1560ff1809` |
 | Trusted reference | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/trusted/offline-b` |
@@ -94,7 +94,7 @@ operator's step.
 | --- | --- |
 | Campaign id | `m7-event20-live-20261121` |
 | Sidecar | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/campaigns/m7-event20-live-20261121.json` |
-| Budget state / claim ledger | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state.json` |
+| Budget state / claim ledger | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20-live-20261121/state-operator.json` |
 | Launch counter | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-live-20261121/run/live-launch.json` (used 0, limit 1) |
 | Candidate workspace | `/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-live-20261121/workspace` |
 | Code revision | `3a2ed8f828005706a91f55df9a33a202583c1fd0` |
@@ -127,7 +127,7 @@ The exact commands and goal texts are in
 
 ```fish
 cd /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf
-env EU4_OFFLINE_ONLY=1 EU4_DSH_PYTHON=/opt/homebrew/opt/python@3.14/bin/python3.14 EU4_CAMPAIGN_STATE=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/state.json EU4_M7_AUTONOMY_RUN_DIR=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/run/operator-1 /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/scripts/run.sh --campaign /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/campaigns/m7-autonomy-offline.json --campaign-state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/state.json
+env EU4_OFFLINE_ONLY=1 EU4_DSH_PYTHON=/opt/homebrew/opt/python@3.14/bin/python3.14 EU4_CAMPAIGN_STATE=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/state-operator.json EU4_M7_AUTONOMY_RUN_DIR=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/run/operator-1 /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/scripts/run.sh --campaign /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/dsh/campaigns/m7-autonomy-offline.json --campaign-state /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/autonomy-offline/state-operator.json
 ```
 
 Then open the DSH session in
