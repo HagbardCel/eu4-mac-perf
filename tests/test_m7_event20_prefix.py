@@ -407,7 +407,8 @@ class Event20PrefixTests(unittest.TestCase):
         frame, metal = self._fixture()
         self._mutate_first_byte(self._event_file(metal, 5))
         environment = dict(os.environ)
-        environment["EU4_M7_EVENT20_EVIDENCE"] = str(frame.parent)
+        environment["EU4_M7_EVENT20_TRUSTED_ROOT"] = str(
+            Path(tempfile.mkdtemp(dir=self.temporary.name)))
         completed = subprocess.run(
             [sys.executable, str(CHECKER), str(frame.parent)],
             capture_output=True, text=True, check=False, env=environment)
