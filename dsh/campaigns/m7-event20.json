@@ -1,8 +1,8 @@
 {
   "schema": "eu4-dsh-campaign/v1",
-  "campaign_id": "m7-event20-20261121",
+  "campaign_id": "m7-event20-canonical",
   "source_campaign": "campaigns/eu4-m7-event20/campaign.json",
-  "candidate_baseline_commit": "29fc2318c1023abcdedd31f71a46ce2559c2b40d",
+  "candidate_baseline_commit": "4add5e41d245f6f77b04d710fbdf1de156ee1eb3",
   "checker_retry": {
     "mode": "deterministic",
     "max_identical_retries": 0
@@ -10,7 +10,7 @@
   "candidate": {
     "mode": "worktree",
     "workspace_base": "infra",
-    "workspace": ".local/dsh/m7-event20-20261121/workspace",
+    "workspace": ".local/dsh/m7-event20-canonical/workspace",
     "policy": {
       "allowed_paths": [
         "benchmark/**",
@@ -31,7 +31,7 @@
       ]
     }
   },
-  "run_root": ".local/dsh/m7-event20-20261121/run",
+  "run_root": ".local/dsh/m7-event20-canonical/run",
   "goal": {
     "max_rounds": 12,
     "require_checker_pass": true,
@@ -43,5 +43,6 @@
     "wall_clock_seconds": 1800,
     "max_review_attempts": 2
   },
-  "replay_inputs": []
+  "replay_inputs": [],
+  "status": "canonical-active"
 }
