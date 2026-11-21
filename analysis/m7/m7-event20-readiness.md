@@ -175,16 +175,25 @@ until event 1 is resolved. No event-20 qualification is claimed.
 
 Focused suites executed during development:
 
-- `tests.test_m7_event20_prefix` (15 tests): exact prefix, one-channel/one-pixel
-  failure, event-18 difference that disappears by 20, missing post-event-20,
-  foreign seal, forged/stale receipt, pixel-format normalization, tampered
-  prefix file, offscreen coverage, excluded auxiliary clear, campaign stop.
+- `tests.test_m7_event20_prefix` (35 tests): exact prefix; one-channel and
+  alpha-only failures; event-18 difference that disappears by 20; missing
+  post-event-20; foreign seal; forged/stale receipt; request substitution;
+  reference-copied-into-Metal rejection; pixel-format normalization; tampered
+  prefix file; offscreen coverage; R32F plan; forged alpha; inconsistent
+  attachment identity; sequential-prefix classification; trusted-evidence
+  mutation; derived prefix case.
 - `tests.test_gfx_frame_trace_writer` and `tests.test_m7_drawable_observe`.
 - `tests.test_gfx_frame_graph`, `tests.test_gfx_independent_replay`,
   `tests.test_m7_checkpoint_provenance`, `tests.test_gfx_replay_checkpoints`,
   `tests.test_m6_frame`, `tests.test_correction_accept`,
   `tests.test_campaign_guard`, `tests.test_dsh_campaign`,
   `tests.test_dsh_bridge`, `tests.test_dsh_pilot`, `tests.test_m7_diagnosis`.
-- One final full offline gate was run on the final integration state:
-  `20261121T152010Z-3847774f`, 4,420 ran / 4,384 executed / 36 skipped / 0
-  failures / 0 errors, 831.9 s, at the pilot-record commit `ad967428`.
+- Required focused remediation command passed:
+  `tests.test_m7_event20_prefix`, `test_m7_drawable_observe`,
+  `test_gfx_frame_graph`, `test_gfx_independent_replay`,
+  `test_gfx_replay_checkpoints`, `test_m7_checkpoint_provenance`,
+  `test_campaign_guard`, `test_dsh_campaign`, `test_dsh_bridge`.
+- Final full offline gate on the remediation state
+  (`20261121T160914Z-11638740`): 4,440 ran / 4,404 executed / 36 skipped / 0
+  failures / 0 errors, 762.6 s, at `bb0ab5a8`. `test_profiles verify --profile
+  offline` passed before the gate.

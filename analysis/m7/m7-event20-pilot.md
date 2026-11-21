@@ -17,7 +17,7 @@ the outcome.
 | Stage-3 candidate worktree HEAD | `c06e3ea6c37336606b0e95d2d4545a2f19fb6d42` |
 | Trusted checker | `campaigns/eu4-m7-event20/accept.py` from the infrastructure checkout, importing `automation` from that checkout, never from the candidate |
 | Remediation code head | `385d44f6afaa3ba544f88b62f8c7eb1e713a0b68` |
-| Final integration head / full gate | pending the remediation gate |
+| Final integration head / full gate | `bb0ab5a8` / `20261121T160914Z-11638740` (4,440 ran, 4,404 executed, 36 skipped, 0 failures, 0 errors, 762.6 s) |
 
 The checker was invoked against the candidate workspace; the candidate could
 edit `benchmark/**`, `analysis/m7/**`, `tests/**`, `progress.md` and `.local/**`.
