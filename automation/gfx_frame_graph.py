@@ -95,6 +95,10 @@ def _resource(resources: dict, key: str, *, kind: str, width=None, height=None,
 
 
 DEFAULT_CHECKPOINT_SCHEMA = "gfx-default-framebuffer-checkpoint/v1"
+DEFAULT_CHECKPOINT_SCHEMAS = (
+    DEFAULT_CHECKPOINT_SCHEMA,
+    "gfx-default-framebuffer-checkpoint/v2",
+)
 
 
 def _is_sha256(value) -> bool:
@@ -117,7 +121,7 @@ def default_checkpoint_problems(value, index: int,
     if not isinstance(value, dict):
         return [f"default checkpoint at event {index} is not an object"]
     problems: list[str] = []
-    if value.get("schema") != DEFAULT_CHECKPOINT_SCHEMA:
+    if value.get("schema") not in DEFAULT_CHECKPOINT_SCHEMAS:
         problems.append(
             f"default checkpoint at event {index} has an unsupported schema")
     if value.get("status") != "captured":

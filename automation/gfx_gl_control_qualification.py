@@ -55,6 +55,7 @@ DEFAULT_RESOURCE = "fb:0"
 ORIGINAL_API = "opengl"
 DEFAULT_TIMEOUT = 300.0
 SIGNATURE_ALGORITHM = "ed25519"
+RECEIPT_CANONICALIZATION = "json-sorted-compact-utf8-excluding-signature"
 
 _DRAWABLE_FIELDS = ("samples", "sample_buffers", "depth_bits", "stencil_bits",
                     "red_bits", "green_bits", "blue_bits", "alpha_bits")
@@ -111,12 +112,20 @@ def _intervening_writer(events: list[dict], draw_position: int,
     emits some clears with a null index, and an unindexed clear still changes
     the framebuffer.
     """
-    for event in events[draw_position + 1:checkpoint_position]:
-        if event.get("kind") not in ("draw", "clear"):
-            continue
-        target = event.get("target") or {}
-        if target.get("framebuffer") == framebuffer:
-            return event
+    from automation import gfx_frame_graph
+    for position in range(draw_position + 1, checkpoint_position):
+        event = events[position]
+        kind = event.get("kind")
+        if kind in ("draw", "clear"):
+            target = event.get("target") or {}
+            recorded = target.get("framebuffer")
+            if not isinstance(recorded, int) or recorded == framebuffer:
+                # An unknown target cannot be excluded as a writer.
+                return event
+        elif kind in ("copy", "resolve"):
+            problems = gfx_frame_graph.copy_contract_problems(event, position)
+            if problems or str(event.get("destination")) == "0":
+                return event
     return None
 
 
@@ -287,7 +296,7 @@ def _authenticate(frame_dir: Path, live_path: Path, width: int, height: int,
     if trace is not None:
         try:
             seal = m6_frame.load_seal(
-                frame_dir, trace=trace, verify_counts=False, verify_blobs=True)
+                frame_dir, trace=trace, verify_counts=True, verify_blobs=True)
         except Exception as exc:  # noqa: BLE001 - explicit unqualified
             fail(f"frame seal is not authentic: {exc}")
         identity["blobs_verified"] = trace.get("_blob_count_verified")
@@ -322,6 +331,10 @@ def _authenticate(frame_dir: Path, live_path: Path, width: int, height: int,
                     f"checkpoint event {checkpoint_event} has no sealed "
                     "default_checkpoint record")
             else:
+                from automation import gfx_frame_graph
+                for problem in gfx_frame_graph.default_checkpoint_problems(
+                        record, checkpoint_event, frame_dir):
+                    fail(f"checkpoint record is invalid: {problem}")
                 if record.get("status") != "captured":
                     fail("checkpoint record is not a captured observation")
                 if record.get("event") != checkpoint_event:
@@ -497,7 +510,7 @@ def _sanitized_env(repo_root: Path) -> dict:
 def _run_renderer(*, renderer: Path, package: dict, identity: dict,
                   evidence: dict, width: int, height: int, draw_event: int,
                   checkpoint_event: int, resource: str, out_dir: Path,
-                  timeout: float) -> dict:
+                  live_path: Path, timeout: float) -> dict:
     """Execute the declared renderer against the restricted input package."""
     renderer = Path(renderer).expanduser().resolve()
     out_dir = Path(out_dir).expanduser().resolve()
@@ -509,6 +522,8 @@ def _run_renderer(*, renderer: Path, package: dict, identity: dict,
         "reasons": [],
         "nonce": None,
         "renderer_sha256": None,
+        "renderer_path": str(renderer),
+        "request_path": None,
         "request_sha256": None,
         "package": package,
         "execution": None,
@@ -542,6 +557,7 @@ def _run_renderer(*, renderer: Path, package: dict, identity: dict,
         request_path = run_dir / "request.json"
         request_path.write_text(json.dumps(request, indent=2) + "\n",
                                 encoding="utf-8")
+        result["request_path"] = str(request_path)
         result["request_sha256"] = _sha_or_none(request_path)
         before = replay_input.verify_package(package["path"])
         if before["package_sha256"] != package["package_sha256"]:
@@ -565,6 +581,32 @@ def _run_renderer(*, renderer: Path, package: dict, identity: dict,
                 + (f": {detail[-500:]}" if detail else ""))
         artifact = run_dir / "result.bgra"
         receipt_path = run_dir / "receipt.json"
+        import os as os_module
+        import stat as stat_module
+        for path, label in ((receipt_path, "receipt"), (artifact, "artifact")):
+            if path.is_symlink():
+                return fail(f"control {label} is a symlink, not a regular file")
+            if path.exists():
+                try:
+                    info = os_module.lstat(path)
+                except OSError:
+                    return fail(f"control {label} cannot be inspected")
+                if not stat_module.S_ISREG(info.st_mode):
+                    return fail(
+                        f"control {label} is not a regular file")
+                if path.resolve().parent != run_dir.resolve():
+                    return fail(
+                        f"control {label} escaped the renderer run directory")
+        if artifact.exists():
+            try:
+                if os_module.stat(artifact).st_ino == os_module.stat(
+                        live_path).st_ino and os_module.stat(
+                            artifact).st_dev == os_module.stat(
+                                live_path).st_dev:
+                    return fail(
+                        "control artifact is the sealed live image (hardlink)")
+            except OSError:
+                return fail("control artifact or live image cannot be inspected")
         if not receipt_path.is_file():
             return fail("control renderer did not produce receipt.json")
         receipt = _read_json(receipt_path, "control_receipt")
@@ -653,6 +695,22 @@ def _validate_receipt(receipt: dict, *, nonce: str, renderer_sha: str,
                 fail(
                     "control receipt component digests do not match the "
                     "registered renderer authority")
+            for item in receipt_components:
+                path = item.get("path")
+                if not isinstance(path, str) or not path:
+                    fail(
+                        "control receipt component path is not recorded; a "
+                        "component digest cannot be independently verified")
+                    continue
+                component = Path(path)
+                if component.is_symlink() or not component.is_file():
+                    fail(
+                        f"control receipt component is not a regular file: "
+                        f"{path}")
+                elif _sha_or_none(component) != item.get("sha256"):
+                    fail(
+                        f"control receipt component digest does not match the "
+                        f"file on disk: {path}")
     if str(receipt.get("api") or "").lower() != ORIGINAL_API:
         fail(
             "control was not rendered through the original OpenGL API "
@@ -698,6 +756,9 @@ def _validate_receipt(receipt: dict, *, nonce: str, renderer_sha: str,
             or signature.get("algorithm") != SIGNATURE_ALGORITHM \
             or not isinstance(signature.get("value"), str):
         fail("control receipt is not signed by a registered Ed25519 key")
+    elif signature.get("canonicalization") not in (
+            None, RECEIPT_CANONICALIZATION):
+        fail("control receipt names an unknown signing canonicalisation")
     else:
         public_key = authority.get("public_key")
         try:
@@ -810,7 +871,8 @@ def _assemble(comparison: dict | None, authentication: dict | None, *,
         comparison is not None and comparison["exact"] and authenticated
         and evidence_proven and authority.get("qualified") and receipt_verified
         and live_bound and not reasons and not missing and not unsupported)
-    if not qualified and not missing and not unsupported:
+    if not qualified and not missing and not unsupported \
+            and comparison is not None and not comparison["exact"]:
         missing.append(
             "reduce the residual by varying one captured input at a time")
     if unsupported:
@@ -863,8 +925,11 @@ def _assemble(comparison: dict | None, authentication: dict | None, *,
             "renderer": (run or {}).get("receipt", {}).get("renderer")
                         if run and run.get("receipt") else None,
             "renderer_sha256": (run or {}).get("renderer_sha256"),
+            "renderer_path": (run or {}).get("renderer_path"),
             "nonce": (run or {}).get("nonce"),
-            "request_sha256": (run or {}).get("request_sha256"),
+            "request": ({"path": str((run or {}).get("request_path")),
+                         "sha256": (run or {}).get("request_sha256")}
+                        if (run or {}).get("request_path") is not None else None),
             "input_package": (run or {}).get("package"),
             "renderer_authority": authority,
             "live_sha256": live_sha256,
@@ -921,6 +986,29 @@ def qualify_sealed(live_path: Path | str, width: int, height: int, *,
     live_path = Path(live_path)
     frame_dir = Path(frame_dir)
     out_dir = Path(out_dir)
+    frame_resolved = frame_dir.expanduser().resolve()
+    out_resolved = out_dir.expanduser().resolve()
+
+    def _within(child: Path, parent: Path) -> bool:
+        try:
+            child.relative_to(parent)
+            return True
+        except ValueError:
+            return False
+
+    # The renderer may walk its working directory and the package ancestors.
+    # Keeping the control output outside the sealed capture tree (and outside
+    # every ancestor of it) is what makes reference isolation structural rather
+    # than a promise about the request document.
+    capture_root = frame_resolved.parent
+    if _within(out_resolved, capture_root) or _within(
+            capture_root, out_resolved):
+        return _assemble(
+            None, None,
+            evidence=_refused_evidence(
+                "unsafe_output_directory",
+                f"control output {out_resolved} overlaps the sealed capture "
+                f"tree {capture_root}; choose a directory outside it"))
     authentication = _authenticate(
         frame_dir, live_path, width, height,
         checkpoint_event=checkpoint_event, draw_event=draw_event,
@@ -987,7 +1075,7 @@ def qualify_sealed(live_path: Path | str, width: int, height: int, *,
         renderer=Path(renderer), package=package, identity=identity,
         evidence=evidence, width=width, height=height, draw_event=draw_event,
         checkpoint_event=checkpoint_event, resource=resource,
-        out_dir=out_dir, timeout=timeout)
+        out_dir=out_dir, live_path=live_path, timeout=timeout)
     authority = _load_authority(run.get("renderer_sha256") or "")
     control_path = run.get("artifact")
     comparison = None
@@ -1034,6 +1122,26 @@ def _evidence_recheck(qualification: dict) -> bool:
     if embedded.get("name") != authority.get("name"):
         return False
     if embedded.get("public_key") != authority.get("public_key"):
+        return False
+    renderer_path = checked.get("renderer_path")
+    renderer_sha = checked.get("renderer_sha256")
+    if not isinstance(renderer_path, str) or not renderer_path:
+        return False
+    renderer_file = Path(renderer_path)
+    if renderer_file.is_symlink() or not renderer_file.is_file():
+        return False
+    if _sha_or_none(renderer_file) != renderer_sha:
+        return False
+    request_ref = checked.get("request") or {}
+    request_path = Path(str(request_ref.get("path") or ""))
+    if not request_path.is_file() or _sha_or_none(request_path) != \
+            request_ref.get("sha256"):
+        return False
+    try:
+        request_document = json.loads(request_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(request_document, dict):
         return False
     receipt_ref = checked.get("receipt") or {}
     control_ref = checked.get("control") or {}
@@ -1111,6 +1219,19 @@ def _evidence_recheck(qualification: dict) -> bool:
     except (OSError, replay_input.ReplayInputError):
         return False
     if package["package_sha256"] != package_ref.get("package_sha256"):
+        return False
+    expected = request_document.get("expected") or {}
+    if request_document.get("nonce") != checked.get("nonce") \
+            or request_document.get("input_package_sha256") != package[
+                "package_sha256"]:
+        return False
+    for field in ("session_id", "capture_frame_id", "present_index",
+                  "event_stream_sha256"):
+        if expected.get(field) != derived.get(field):
+            return False
+    if expected.get("checkpoint_event") != checkpoint_event \
+            or expected.get("draw_event") != draw_event \
+            or expected.get("checkpoint_resource") != resource:
         return False
     try:
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))

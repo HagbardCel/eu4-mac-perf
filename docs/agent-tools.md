@@ -221,7 +221,12 @@ content-addressed replay-input package (`replay-input/replay-input.json` plus
 uniforms, typed buffers, indices, captured texture blocks and sampler/render
 state. It never receives the frame directory, the live image path, the live
 digest or a copy of the target checkpoint. The comparison reference stays with
-the qualifier.
+the qualifier. `--control-out` must be outside the sealed capture tree and all
+of its ancestors; an output directory that overlaps that tree is refused as
+`unsafe_output_directory`, because a renderer can walk its working directory
+and the package ancestors. The package is a closed set: undeclared files,
+nested directories and symlinks are refused, and a symlinked receipt or
+artifact is not accepted as evidence.
 
 The renderer must write `result.bgra` plus a signed `receipt.json` under
 `--control-out/renderer-run`. The receipt binds the renderer digest, its
@@ -231,6 +236,11 @@ digest/dimensions/format/origin, the queried target drawable properties and a
 completed execution status, and it is signed with the Ed25519 key registered for
 that renderer in
 [`automation/gfx_gl_control_authorities.py`](https://github.com/HagbardCel/eu4-mac-perf/blob/main/automation/gfx_gl_control_authorities.py).
+The signed payload is canonical JSON (sorted keys, compact separators, UTF-8,
+no NaN) of the receipt object with `signature` removed; the `signature` object
+names that canonicalisation. Component entries carry the path of the file whose
+digest they claim, and the qualifier re-hashes every component file and the
+executed renderer during `attribution()`.
 Adding an entry is a reviewed code change, not a caller-supplied JSON file.
 The registry is currently empty, so no stored control is authorized. Without a
 registry entry the run is `self-attested` and `metal_blame_allowed` stays false,

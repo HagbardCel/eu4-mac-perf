@@ -150,6 +150,22 @@ def _clear_state(clear: dict) -> dict | None:
     return state if isinstance(state, dict) else None
 
 
+def _clear_state(clear: dict) -> dict | None:
+    state = clear.get("state")
+    return state if isinstance(state, dict) else None
+
+
+def _clear_scissor_proven(state: dict) -> tuple[bool, object, str]:
+    """The clear's own scissor record must be explicit and boolean."""
+    if "scissor" not in state:
+        return False, None, "clear scissor state was not recorded"
+    scissor = state.get("scissor")
+    if not isinstance(scissor, dict) or not isinstance(
+            scissor.get("enabled"), bool):
+        return False, None, "clear scissor state is malformed"
+    return True, scissor, ""
+
+
 def _clear_covers(clear: dict, bit: int, width: int, height: int,
                   mask_check) -> tuple[bool, str]:
     """Whether one clear fully initialises the selected buffer."""
@@ -163,11 +179,12 @@ def _clear_covers(clear: dict, bit: int, width: int, height: int,
     state = _clear_state(clear)
     if state is None:
         return False, "clear coverage/mask state was not recorded"
-    scissor = state.get("scissor") or {}
-    if scissor.get("enabled"):
-        if not _box_covers_full_framebuffer(
-                scissor.get("box"), width, height):
-            return False, "scissor-clipped clear does not cover the drawable"
+    proven, scissor, reason = _clear_scissor_proven(state)
+    if not proven:
+        return False, reason
+    if scissor["enabled"] and not _box_covers_full_framebuffer(
+            scissor.get("box"), width, height):
+        return False, "scissor-clipped clear does not cover the drawable"
     mask_ok, reason = mask_check(state)
     if not mask_ok:
         return False, reason
@@ -176,23 +193,123 @@ def _clear_covers(clear: dict, bit: int, width: int, height: int,
 
 def _colour_mask_ok(state: dict) -> tuple[bool, str]:
     mask = state.get("color_mask")
-    if mask is not None and list(mask) != [1, 1, 1, 1]:
+    if not isinstance(mask, (list, tuple)) or len(mask) != 4:
+        return False, "colour write mask was not recorded"
+    if list(mask) != [1, 1, 1, 1]:
         return False, "colour write mask is not fully enabled"
     return True, ""
 
 
 def _depth_mask_ok(state: dict) -> tuple[bool, str]:
     mask = state.get("depth_mask")
-    if mask is False:
+    if not isinstance(mask, bool):
+        return False, "depth write mask was not recorded"
+    if mask is not True:
         return False, "depth write mask is disabled"
     return True, ""
 
 
 def _stencil_mask_ok(state: dict) -> tuple[bool, str]:
+    if "stencil_mask" not in state:
+        return False, "stencil write mask was not recorded"
     mask = _int_or_none(state.get("stencil_mask"))
-    if mask is not None and mask != -1 and mask != 0xFFFFFFFF:
+    if mask not in (-1, 0xFFFFFFFF):
         return False, "stencil write mask is not fully enabled"
     return True, ""
+
+
+def _int_list(value, count: int) -> bool:
+    return (isinstance(value, (list, tuple)) and len(value) == count
+            and all(isinstance(item, int) and not isinstance(item, bool)
+                    for item in value))
+
+
+def _state_problems(draw_event: int, state) -> list[str]:
+    """Mandatory effective draw state, checked field by field.
+
+    An absent dictionary is not "state disabled": it is an unobserved input.
+    The selected draw cannot be reproduced from a state that was never
+    recorded, so each mandatory member is required explicitly.
+    """
+    if not isinstance(state, dict):
+        return [f"selected draw {draw_event} has no captured state"]
+    problems: list[str] = []
+
+    def need_bool(path: str, value):
+        if not isinstance(value, bool):
+            problems.append(f"{path} is not a recorded boolean")
+
+    for field in ("framebuffer_srgb", "dither", "multisample"):
+        need_bool(f"selected draw {field}", state.get(field))
+    for field in ("blend", "depth", "stencil", "cull", "polygon",
+                  "alpha_test", "scissor"):
+        if not isinstance(state.get(field), dict):
+            problems.append(f"selected draw {field} state was not recorded")
+    if not _int_list(state.get("color_mask"), 4):
+        problems.append("selected draw colour write mask was not recorded")
+    if not _int_list(state.get("viewport"), 4):
+        problems.append("selected draw viewport was not recorded")
+
+    blend = state.get("blend") if isinstance(state.get("blend"), dict) else {}
+    need_bool("blend.enabled", blend.get("enabled"))
+    if blend.get("enabled") is True:
+        for field in ("src_rgb", "dst_rgb", "src_alpha", "dst_alpha",
+                      "equation_rgb", "equation_alpha"):
+            if blend.get(field) is None:
+                problems.append(f"blend.{field} is not recorded")
+
+    depth = state.get("depth") if isinstance(state.get("depth"), dict) else {}
+    need_bool("depth.test", depth.get("test"))
+    need_bool("depth.write", depth.get("write"))
+    if depth.get("func") is None:
+        problems.append("depth.func is not recorded")
+    depth_range = depth.get("range")
+    if not (isinstance(depth_range, (list, tuple)) and len(depth_range) == 2
+            and all(isinstance(item, (int, float))
+                    and not isinstance(item, bool) for item in depth_range)):
+        problems.append("depth.range was not recorded")
+
+    stencil = state.get("stencil") \
+        if isinstance(state.get("stencil"), dict) else {}
+    need_bool("stencil.test", stencil.get("test"))
+    if stencil.get("test") is True:
+        for field in ("func", "ref", "value_mask", "fail", "zfail", "zpass",
+                      "write_mask"):
+            if stencil.get(field) is None:
+                problems.append(f"stencil.{field} is not recorded")
+
+    cull = state.get("cull") if isinstance(state.get("cull"), dict) else {}
+    need_bool("cull.enabled", cull.get("enabled"))
+    if cull.get("enabled") is True:
+        for field in ("mode", "front"):
+            if cull.get(field) is None:
+                problems.append(f"cull.{field} is not recorded")
+
+    polygon = state.get("polygon") \
+        if isinstance(state.get("polygon"), dict) else {}
+    modes = polygon.get("mode")
+    if not (isinstance(modes, (list, tuple)) and len(modes) == 2):
+        problems.append("polygon.mode was not recorded")
+    need_bool("polygon.offset_fill", polygon.get("offset_fill"))
+    for field in ("offset_factor", "offset_units"):
+        if not isinstance(polygon.get(field), (int, float)) \
+                or isinstance(polygon.get(field), bool):
+            problems.append(f"polygon.{field} was not recorded")
+
+    alpha_test = state.get("alpha_test") \
+        if isinstance(state.get("alpha_test"), dict) else {}
+    need_bool("alpha_test.enabled", alpha_test.get("enabled"))
+    if alpha_test.get("enabled") is True:
+        for field in ("func", "ref"):
+            if alpha_test.get(field) is None:
+                problems.append(f"alpha_test.{field} is not recorded")
+
+    scissor = state.get("scissor") \
+        if isinstance(state.get("scissor"), dict) else {}
+    need_bool("scissor.enabled", scissor.get("enabled"))
+    if not _int_list(scissor.get("box"), 4):
+        problems.append("scissor.box was not recorded")
+    return problems
 
 
 def _drawable_evidence(trace: dict, width: int, height: int) -> tuple[dict | None, list[str], list[str]]:
@@ -247,7 +364,7 @@ def _drawable_evidence(trace: dict, width: int, height: int) -> tuple[dict | Non
 
 
 def _checkpoint_seed(draw: dict, draw_event: int, resource: str,
-                     width: int, height: int,
+                     width: int, height: int, frame_dir: Path | None,
                      missing: list[str]) -> dict | None:
     """The pre-draw colour seed captured immediately before the draw."""
     record = draw.get("default_checkpoint")
@@ -255,25 +372,15 @@ def _checkpoint_seed(draw: dict, draw_event: int, resource: str,
         missing.append(
             f"pre-draw colour seed at draw event {draw_event} was not captured")
         return None
-    problems = []
-    if record.get("status") != "captured":
-        problems.append("checkpoint is not a captured observation")
-    if record.get("event") != draw_event:
-        problems.append("checkpoint event does not match the selected draw")
+    from automation import gfx_frame_graph
+    problems = gfx_frame_graph.default_checkpoint_problems(
+        record, draw_event, frame_dir)
     if record.get("timing") != "pre_event":
         problems.append("checkpoint is not the pre-event observation")
     if str(record.get("resource") or "") != resource:
         problems.append("checkpoint resource does not match the draw target")
-    if isinstance(record.get("session_id"), str) is False:
+    if not isinstance(record.get("session_id"), str):
         problems.append("checkpoint has no session identity")
-    if _int_or_none(record.get("width")) != width \
-            or _int_or_none(record.get("height")) != height:
-        problems.append("checkpoint extent differs from the drawable")
-    digest = record.get("sha256")
-    if not isinstance(digest, str) or len(digest) != 64:
-        problems.append("checkpoint has no valid content digest")
-    if not isinstance(record.get("file"), str) or not record.get("file"):
-        problems.append("checkpoint has no blob file")
     if problems:
         missing.extend(
             f"pre-draw colour seed is unproven: {problem}"
@@ -283,29 +390,47 @@ def _checkpoint_seed(draw: dict, draw_event: int, resource: str,
         "source": "checkpoint",
         "event": draw_event,
         "file": record["file"],
-        "sha256": digest,
+        "sha256": record["sha256"],
         "bytes": _int_or_none(record.get("bytes")),
         "width": width,
         "height": height,
-        "pixel_format": str(record.get("pixel_format") or "BGRA8"),
-        "origin": str(record.get("origin") or "lower_left"),
+        "pixel_format": record["pixel_format"],
+        "origin": record["origin"],
     }
 
 
 def _seed_record(record: dict, label: str, width: int, height: int,
+                 frame_dir: Path | None,
                  missing: list[str]) -> dict | None:
     """Validate a captured depth/stencil seed sub-record."""
-    problems = []
+    problems: list[str] = []
     if not isinstance(record, dict):
         return None
     digest = record.get("sha256")
+    expected_format = "f32" if label == "depth" else "u8"
+    element = 4 if label == "depth" else 1
+    expected_bytes = width * height * element
     if not isinstance(digest, str) or len(digest) != 64:
         problems.append("no valid content digest")
-    if not isinstance(record.get("file"), str) or not record.get("file"):
-        problems.append("no blob file")
+    if record.get("format") != expected_format:
+        problems.append(
+            f"format is {record.get('format')!r}, expected {expected_format!r}")
+    if _int_or_none(record.get("bytes")) != expected_bytes:
+        problems.append(
+            f"byte count is not {expected_bytes} for the drawable extent")
     if _int_or_none(record.get("width")) != width \
             or _int_or_none(record.get("height")) != height:
         problems.append("extent differs from the drawable")
+    name = record.get("file")
+    if not isinstance(name, str) or not name or Path(name).name != name \
+            or "/" in name:
+        problems.append("no valid blob file")
+    elif frame_dir is not None:
+        path = Path(frame_dir) / "blobs" / name
+        if not path.is_file():
+            problems.append("blob is absent")
+        elif path.stat().st_size != expected_bytes:
+            problems.append("blob size differs from its declaration")
     if problems:
         missing.extend(
             f"pre-draw {label} seed is unproven: {problem}"
@@ -313,10 +438,10 @@ def _seed_record(record: dict, label: str, width: int, height: int,
         return None
     return {
         "source": "checkpoint",
-        "file": record["file"],
+        "file": name,
         "sha256": digest,
-        "bytes": _int_or_none(record.get("bytes")),
-        "format": str(record.get("format") or ""),
+        "bytes": expected_bytes,
+        "format": expected_format,
         "width": width,
         "height": height,
     }
@@ -336,11 +461,12 @@ def _clear_history_value(clear: dict, label: str) -> dict:
 def _prestate_evidence(draw: dict, events: list[dict], position: int,
                        framebuffer: int, width: int, height: int,
                        *, draw_event: int, resource: str,
-                       drawable: dict | None) -> tuple[dict | None, list[str], list[str]]:
+                       drawable: dict | None,
+                       frame_dir: Path | None) -> tuple[dict | None, list[str], list[str]]:
     missing: list[str] = []
     unsupported: list[str] = []
     colour = _checkpoint_seed(
-        draw, draw_event, resource, width, height, missing)
+        draw, draw_event, resource, width, height, frame_dir, missing)
     state = draw.get("state") if isinstance(draw.get("state"), dict) else {}
     last = _last_writer(events, position, framebuffer)
     checkpoint = draw.get("default_checkpoint")
@@ -352,8 +478,6 @@ def _prestate_evidence(draw: dict, events: list[dict], position: int,
                     "index": (last or {}).get("index"),
                 }}
     if colour is None:
-        # A fully covering colour clear with no later writer is the only
-        # admissible non-seeded colour provenance.
         if isinstance(last, dict) and last.get("kind") == "clear":
             ok, reason = _clear_covers(
                 last, GL_COLOR_BUFFER_BIT, width, height, _colour_mask_ok)
@@ -365,20 +489,14 @@ def _prestate_evidence(draw: dict, events: list[dict], position: int,
                     "coverage": "full",
                 }
             else:
-                missing.append(
-                    f"pre-draw colour is unproven: {reason}")
+                missing.append(f"pre-draw colour is unproven: {reason}")
         else:
             missing.append(
                 "pre-draw colour seed and a complete colour clear history "
                 "were both unavailable")
-    elif not isinstance(last, dict) or last.get("kind") != "clear":
-        # The captured seed is authoritative; no history proof is needed for
-        # colour because the image itself is the complete pre-draw contents.
-        pass
 
-    depth_used = bool((state.get("depth") or {}).get("test")) \
-        or bool((state.get("depth") or {}).get("write"))
-    stencil_used = bool((state.get("stencil") or {}).get("test"))
+    depth_used = (state.get("depth") or {}).get("test") is True
+    stencil_used = (state.get("stencil") or {}).get("test") is True
 
     for label, used, bit, masks in (
             ("depth", depth_used, GL_DEPTH_BUFFER_BIT, _depth_mask_ok),
@@ -387,16 +505,31 @@ def _prestate_evidence(draw: dict, events: list[dict], position: int,
         if not used:
             prestate[label] = {"source": "not_required"}
             continue
-        seed = _seed_record(checkpoint.get(label), label, width, height, missing)
+        raw = checkpoint.get(label)
+        if isinstance(raw, dict) and raw.get("status") == "absent":
+            bits = _int_or_none((drawable or {}).get(f"{label}_bits"))
+            if bits == 0:
+                unsupported.append(
+                    f"the selected draw uses {label} but the captured default "
+                    f"drawable has no {label} buffer")
+            else:
+                missing.append(
+                    f"pre-draw {label} contents were not captured even though "
+                    f"the drawable reports {bits} {label} bits")
+            continue
+        if raw is not None and not isinstance(raw, dict):
+            missing.append(
+                f"pre-draw {label} seed record is malformed")
+            continue
+        seed = _seed_record(raw, label, width, height, frame_dir, missing)
         if seed is not None:
             prestate[label] = seed
             continue
-        if isinstance(checkpoint.get(label), (dict, list, str)):
-            # Present but malformed: the missing reason is already recorded.
+        if isinstance(raw, dict):
+            # Present but malformed: _seed_record already named the reason.
             continue
         if isinstance(last, dict) and last.get("kind") == "clear":
-            ok, reason = _clear_covers(
-                last, bit, width, height, masks)
+            ok, reason = _clear_covers(last, bit, width, height, masks)
             if ok:
                 prestate[label] = _clear_history_value(last, label)
             else:
@@ -405,20 +538,49 @@ def _prestate_evidence(draw: dict, events: list[dict], position: int,
         else:
             missing.append(
                 f"pre-draw {label} contents are unproven: the last "
-                f"same-target writer is a {((last or {}).get('kind') or 'none')}, "
-                "not a fully covering clear, and no captured seed exists")
+                f"same-target writer is a "
+                f"{((last or {}).get('kind') or 'none')}, not a fully covering "
+                "clear, and no captured seed exists")
 
-    # A resolved multisample seed cannot be used as per-sample depth/stencil
-    # state: it would silently average the samples the draw tests against.
-    samples = _int_or_none((drawable or {}).get("samples"))
-    for label in ("depth", "stencil"):
-        record = prestate.get(label) or {}
-        if samples and record.get("source") == "checkpoint":
+    samples = _int_or_none((drawable or {}).get("samples")) or 0
+    sample_buffers = _int_or_none((drawable or {}).get("sample_buffers")) or 0
+    if (samples > 0 or sample_buffers > 0):
+        if (prestate.get("color") or {}).get("source") == "checkpoint":
             unsupported.append(
-                f"a multisampled default drawable ({samples} samples) with a "
-                f"resolved {label} seed cannot be reproduced exactly; only a "
-                "uniform clear history is provable")
+                "a resolved colour seed on a multisampled default drawable "
+                "cannot restore per-sample contents")
+        for label in ("depth", "stencil"):
+            record = prestate.get(label) or {}
+            if record.get("source") == "checkpoint":
+                unsupported.append(
+                    f"a resolved {label} seed on a multisampled default "
+                    "drawable cannot restore per-sample contents")
     return prestate, missing, unsupported
+
+
+def _unknown_writers(events: list[dict], position: int,
+                     framebuffer: int) -> list[str]:
+    """Draw/clear events before the selected draw with no recorded target.
+
+    A writer whose target is missing cannot be ordered against the selected
+    draw, so an older full clear must not be assumed to be the last writer.
+    """
+    problems: list[str] = []
+    from automation import gfx_frame_graph
+    for index, event in enumerate(events[:position]):
+        kind = event.get("kind")
+        if kind in ("draw", "clear"):
+            target = event.get("target") or {}
+            if not isinstance(target.get("framebuffer"), int):
+                problems.append(
+                    f"{kind} event at position {index} has no recorded target "
+                    "framebuffer; the selected draw's prestate cannot be "
+                    "ordered")
+        elif kind in ("copy", "resolve"):
+            for detail in gfx_frame_graph.copy_contract_problems(event, index):
+                problems.append(
+                    f"{kind} event at position {index} is unsupported: {detail}")
+    return problems
 
 
 def derive_evidence(trace: dict, seal: dict, *, checkpoint_event: int,
@@ -430,6 +592,9 @@ def derive_evidence(trace: dict, seal: dict, *, checkpoint_event: int,
     frame trace (``m6_frame.load_trace``) and ``seal`` its verified seal.
     """
     events = trace.get("_events") or []
+    frame_dir = trace.get("_frame_dir")
+    frame_path = Path(frame_dir) if isinstance(frame_dir, str) and frame_dir \
+        else None
     draw = _event_by_index(events, draw_event)
     checkpoint = _event_by_index(events, checkpoint_event)
     if draw is None or draw.get("kind") != "draw":
@@ -471,18 +636,24 @@ def derive_evidence(trace: dict, seal: dict, *, checkpoint_event: int,
         unsupported.append(
             f"the selected draw targets GL draw buffer 0x{draw_buffer:x}, "
             "which is not the live back/front colour buffer")
+    read_buffer = _gl_enum(target.get("read_buffer"))
+    if read_buffer is None:
+        missing.append("the read buffer bound for the selected draw is not recorded")
+    elif drawable and drawable.get("double_buffer") and read_buffer != GL_BACK:
+        unsupported.append(
+            f"the selected draw observes GL read buffer 0x{read_buffer:x}, "
+            "which is not the live back colour buffer")
 
     state = draw.get("state") if isinstance(draw.get("state"), dict) else {}
-    for field, label in (
-            ("framebuffer_srgb", "GL_FRAMEBUFFER_SRGB enable state"),
-            ("dither", "GL_DITHER enable state"),
-            ("multisample", "GL_MULTISAMPLE enable state")):
-        if field not in state:
-            missing.append(f"{label} was not captured for the selected draw")
+    for problem in _state_problems(draw_event, state):
+        missing.append(problem)
+
+    missing.extend(_unknown_writers(events, position, expected_fb))
 
     prestate, prestate_missing, prestate_unsupported = _prestate_evidence(
         draw, events, position, expected_fb, width, height,
-        draw_event=draw_event, resource=resource, drawable=drawable)
+        draw_event=draw_event, resource=resource, drawable=drawable,
+        frame_dir=frame_path)
     missing.extend(prestate_missing)
     unsupported.extend(prestate_unsupported)
 
@@ -867,23 +1038,46 @@ def verify_package(package_dir: Path | str) -> dict:
         if not isinstance(record, dict):
             raise ReplayInputError("invalid_package", "file record is not an object")
         relative = str(record.get("path") or "")
-        path = (package_dir / relative).resolve()
+        path = package_dir / relative
+        if path.is_symlink():
+            raise ReplayInputError(
+                "symlinked_package_entry", relative)
+        resolved = path.resolve()
         try:
-            path.relative_to(package_dir)
+            resolved.relative_to(package_dir)
         except ValueError as exc:
             raise ReplayInputError(
                 "invalid_package", f"file escapes the package: {relative}") from exc
-        if not path.is_file():
-            raise ReplayInputError("missing_package_blob", relative)
-        measured = _sha256_file(path)
+        try:
+            info = resolved.stat()
+        except OSError as exc:
+            raise ReplayInputError("missing_package_blob", relative) from exc
+        import stat as stat_module
+        if not stat_module.S_ISREG(info.st_mode):
+            raise ReplayInputError("non_regular_package_entry", relative)
+        measured = _sha256_file(resolved)
         if measured != record.get("sha256"):
             raise ReplayInputError(
                 "package_blob_digest_mismatch", relative)
-        if path.stat().st_size != record.get("bytes"):
+        if info.st_size != record.get("bytes"):
             raise ReplayInputError("package_blob_size_mismatch", relative)
         if relative in seen:
             raise ReplayInputError("duplicate_package_record", relative)
         seen.add(relative)
+    # A package is a closed set: no undeclared regular file, directory or
+    # symlink may ride along.  The renderer must not be able to stash or find
+    # an extra image inside the package tree.
+    allowed_files = seen | {"replay-input.json"}
+    for entry in package_dir.rglob("*"):
+        relative = entry.relative_to(package_dir).as_posix()
+        if entry.is_symlink():
+            raise ReplayInputError("symlinked_package_entry", relative)
+        if entry.is_dir():
+            if relative != "blobs":
+                raise ReplayInputError("unexpected_package_directory", relative)
+            continue
+        if relative not in allowed_files:
+            raise ReplayInputError("unexpected_package_entry", relative)
     return {
         "schema": PACKAGE_SCHEMA,
         "path": str(package_dir),

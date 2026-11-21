@@ -72,11 +72,23 @@ package = verified["manifest_document"]
 expected = request["expected"]
 
 if mode == "copy_reference":
-    # The control must not have any path to the post-draw reference.
-    for key in ("live_image", "frame_dir", "reference", "reference_image"):
-        if key in request:
-            sys.exit("reference leaked into the request: " + key)
-    sys.exit("no reference image is available to copy")
+    # The control must not have any path to the post-draw reference.  Search
+    # every directory it can reach from its working directory and package,
+    # then try to copy a captured checkpoint if one is found.
+    roots = [Path.cwd(), *Path.cwd().parents, package_dir, package_dir.parent]
+    artifact_candidate = out / "result.bgra"
+    for root in roots:
+        for name in ("frame-seal.json", "frame-events.jsonl"):
+            candidate = root / name
+            if candidate.is_file():
+                artifact_candidate.write_bytes(candidate.read_bytes())
+                sys.exit(0)
+        blobs = root / "blobs"
+        if blobs.is_dir():
+            for candidate in sorted(blobs.glob("default-checkpoint-*.bin")):
+                artifact_candidate.write_bytes(candidate.read_bytes())
+                sys.exit(0)
+    sys.exit("no reference image is reachable")
 
 if mode == "does_not_run":
     sys.exit(9)
@@ -97,6 +109,9 @@ if mode == "single_channel":
     body[1] = (body[1] + 1) & 0xFF
 artifact = out / "result.bgra"
 artifact.write_bytes(bytes(body))
+if mode == "symlink_artifact":
+    artifact.unlink()
+    artifact.symlink_to(package_dir / color["path"])
 
 drawable = package["drawable"]
 if mode == "wrong_drawable":
@@ -152,6 +167,8 @@ if mode == "wrong_frame":
     receipt["frame"]["session_id"] = "other-session"
 if mode == "wrong_stream":
     receipt["frame"]["event_stream_sha256"] = "b" * 64
+if mode == "api_metal":
+    receipt["api"] = "metal"
 if mode == "wrong_checkpoint":
     receipt["checkpoint"]["event"] = 99
 if mode == "wrong_draw":
@@ -186,6 +203,9 @@ class ControlQualificationTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
+        self.output_temporary = tempfile.TemporaryDirectory()
+        self.output_root = Path(self.output_temporary.name)
+        self.addCleanup(self.output_temporary.cleanup)
         self.frame = self.root / "frame"
         (self.frame / "blobs").mkdir(parents=True)
         self.base = bytes([10, 20, 30, 255]) * (WIDTH * HEIGHT)
@@ -246,7 +266,8 @@ class ControlQualificationTests(unittest.TestCase):
                           "dst_alpha": "0x0", "equation_rgb": "0x8006",
                           "equation_alpha": "0x8006"},
                 "color_mask": [1, 1, 1, 1],
-                "depth": {"test": True, "func": "0x203", "write": True},
+                "depth": {"test": True, "func": "0x203", "write": True,
+                          "range": [0.0, 1.0]},
                 "stencil": {"test": False, "func": "0x207", "ref": 0,
                             "value_mask": -1, "fail": "0x1e00",
                             "zfail": "0x1e00", "zpass": "0x1e00",
@@ -263,7 +284,7 @@ class ControlQualificationTests(unittest.TestCase):
                 "viewport": [0, 0, WIDTH, HEIGHT],
             },
             "target": {"framebuffer": target_framebuffer,
-                       "draw_buffer": "0x405",
+                       "draw_buffer": "0x405", "read_buffer": "0x405",
                        "viewport": [0, 0, WIDTH, HEIGHT],
                        "width": WIDTH, "height": HEIGHT},
             "draw": {"entry": "_GfxDrawIndexed", "mode": 4, "first": 0,
@@ -452,6 +473,13 @@ class ControlQualificationTests(unittest.TestCase):
             "event_stream_file": "frame-events.jsonl",
             "event_stream_bytes": events_path.stat().st_size,
             "event_stream_sha256": _sha(events_path),
+            "operation_count": len(events),
+            "draw_count": sum(1 for event in events
+                              if event.get("kind") == "draw"),
+            "clear_count": sum(1 for event in events
+                               if event.get("kind") == "clear"),
+            "copy_count": sum(1 for event in events
+                              if event.get("kind") == "resolve"),
             "width": WIDTH,
             "height": HEIGHT,
             "pixel_format": "BGRA8",
@@ -470,7 +498,7 @@ class ControlQualificationTests(unittest.TestCase):
                  caller_drawable=None, caller_prestate=None):
         os.environ["GL_CONTROL_TEST_MODE"] = mode
         self._out_index += 1
-        target = out_dir or (self.root / f"out-{self._out_index}")
+        target = out_dir or (self.output_root / f"out-{self._out_index}")
         target.mkdir(parents=True, exist_ok=True)
         return qualification.qualify_sealed(
             live or (self.frame / "blobs" / "reference.bin"),
@@ -552,8 +580,121 @@ class ControlQualificationTests(unittest.TestCase):
     def test_a_renderer_that_tries_to_copy_the_reference_is_refused(self):
         value = self._qualify(mode="copy_reference")
         self.assertFalse(value["qualified"])
-        self.assertIn("failed with exit",
+        reasons = " ".join(value["qualification"]["reasons"])
+        self.assertIn("failed with exit", reasons)
+        # The renderer actively searched its cwd, ancestors and package and
+        # found no sealed frame or checkpoint blob.
+        self.assertIn("no reference image is reachable", reasons)
+
+    def test_an_output_directory_inside_the_capture_tree_is_refused(self):
+        value = self._qualify(out_dir=self.frame / "control-out")
+        self.assertEqual(value["status"], "unsupported_state")
+        self.assertFalse(value["qualified"])
+        self.assertTrue(any("overlaps the sealed capture tree" in item
+                            for item in value["unsupported_state"]))
+
+    def test_caller_supplied_evidence_is_refused_at_the_api(self):
+        value = self._qualify(caller_drawable={"observed": True},
+                              caller_prestate={"depth_clear": 1.0})
+        self.assertFalse(value["qualified"])
+        self.assertTrue(any("caller_supplied_evidence" in item
+                            for item in value["unsupported_state"]))
+
+    def test_an_intervening_same_target_draw_breaks_the_pair(self):
+        events = [
+            self._clear_event(7),
+            self._draw_event(14),
+            self._draw_event(15),
+            self._checkpoint_event(16),
+        ]
+        self._rewrite_events(events)
+        value = self._qualify(checkpoint_event=16)
+        self.assertFalse(value["qualified"])
+        self.assertIn("between the draw and the checkpoint",
                       " ".join(value["qualification"]["reasons"]))
+
+    def test_an_unindexed_same_target_clear_breaks_the_pair(self):
+        clear = self._clear_event(0)
+        clear["index"] = None
+        events = [
+            self._clear_event(7),
+            self._draw_event(14),
+            clear,
+            self._checkpoint_event(16),
+        ]
+        self._rewrite_events(events)
+        value = self._qualify(checkpoint_event=16)
+        self.assertFalse(value["qualified"])
+        self.assertIn("between the draw and the checkpoint",
+                      " ".join(value["qualification"]["reasons"]))
+
+    def test_a_metal_executed_image_is_not_an_original_api_control(self):
+        value = self._qualify(mode="api_metal")
+        self.assertFalse(value["qualified"])
+        self.assertIn("original OpenGL API",
+                      " ".join(value["qualification"]["reasons"]))
+
+    def test_an_unqualified_registry_entry_is_not_accepted(self):
+        authorities.AUTHORITIES[self.renderer_sha] = {
+            **self.authority, "qualified": False}
+        value = self._qualify()
+        self.assertFalse(value["qualified"])
+        self.assertIn("not qualified",
+                      " ".join(value["qualification"]["reasons"]))
+
+    def test_missing_seal_fails_closed_as_unqualified(self):
+        (self.frame / "frame-seal.json").unlink()
+        value = self._qualify()
+        self.assertFalse(value["qualified"])
+        self.assertIn("frame seal is not authentic",
+                      " ".join(value["qualification"]["reasons"]))
+
+    def test_a_symlinked_artifact_is_refused(self):
+        value = self._qualify(mode="symlink_artifact")
+        self.assertFalse(value["qualified"])
+        self.assertIn("symlink",
+                      " ".join(value["qualification"]["reasons"]))
+
+    def test_mutating_the_control_artifact_after_qualification_refuses_blame(self):
+        value = self._qualify()
+        self.assertTrue(qualification.attribution(value)["allowed"])
+        control = Path(value["qualification"]["control"]["path"])
+        body = bytearray(control.read_bytes())
+        body[-1] ^= 0xFF
+        control.write_bytes(bytes(body))
+        self.assertFalse(qualification.attribution(value)["allowed"])
+
+    def test_mutating_the_renderer_after_qualification_refuses_blame(self):
+        value = self._qualify()
+        self.assertTrue(qualification.attribution(value)["allowed"])
+        self.renderer.write_text(
+            self.renderer.read_text() + "\n# changed\n", encoding="utf-8")
+        self.assertFalse(qualification.attribution(value)["allowed"])
+
+    def test_a_multisampled_colour_seed_is_not_proven(self):
+        self._build_frame(drawable={
+            "samples": 4, "sample_buffers": 1, "depth_bits": 32,
+            "stencil_bits": 8, "red_bits": 8, "green_bits": 8,
+            "blue_bits": 8, "alpha_bits": 8, "double_buffer": True,
+            "stereo": False, "drawn_framebuffer_binding": 0,
+        })
+        value = self._qualify()
+        self.assertEqual(value["status"], "unsupported_state")
+        self.assertTrue(any("multisampled" in item
+                            for item in value["unsupported_state"]))
+
+    def test_unproven_colour_seed_metadata_is_refused(self):
+        for field, value in (("bytes", 4), ("pixel_format", "RGBA8"),
+                             ("origin", "upper_left")):
+            with self.subTest(field=field):
+                events = copy.deepcopy(self.events)
+                events[1]["default_checkpoint"][field] = value
+                self._build_frame(events=events)
+                result = self._qualify()
+                self.assertFalse(result["qualified"])
+                self.assertTrue(any("colour seed is unproven" in item
+                                    for item in
+                                    result["qualification"]["evidence"]["missing"]))
 
     def test_an_exact_image_with_missing_drawable_is_refused(self):
         self._build_frame(drawable=None)
@@ -594,7 +735,7 @@ class ControlQualificationTests(unittest.TestCase):
                     "--frame-dir", str(self.frame),
                     "--checkpoint-event", "15", "--draw-event", "14",
                     "--renderer", str(self.renderer),
-                    "--control-out", str(self.root / f"forged-{flag[2:]}"),
+                    "--control-out", str(self.output_root / f"forged-{flag[2:]}"),
                     flag, str(forged)])
                 self.assertEqual(code, 2)
 
@@ -842,7 +983,7 @@ class ControlQualificationTests(unittest.TestCase):
             "--width", str(WIDTH), "--height", str(HEIGHT),
             "--frame-dir", str(self.frame), "--checkpoint-event", "15",
             "--draw-event", "14", "--renderer", str(self.renderer),
-            "--control-out", str(self.root / "cli-out"),
+            "--control-out", str(self.output_root / "cli-out"),
             "--out", str(output)])
         self.assertEqual(code, 0, output.read_text() if output.exists() else "")
         self.assertTrue(json.loads(output.read_text())["qualified"])
@@ -862,7 +1003,7 @@ class ControlQualificationTests(unittest.TestCase):
                 "--frame-dir", str(self.frame),
                 "--checkpoint-event", "15", "--draw-event", "14",
                 "--renderer", str(self.renderer),
-                "--control-out", str(self.root / "agent-out")])
+                "--control-out", str(self.output_root / "agent-out")])
         value = json.loads(buffer.getvalue())
         self.assertEqual(code, 0, value)
         self.assertTrue(value["result"]["qualified"])
@@ -888,6 +1029,9 @@ class EvidenceDerivationTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
+        self.output_temporary = tempfile.TemporaryDirectory()
+        self.output_root = Path(self.output_temporary.name)
+        self.addCleanup(self.output_temporary.cleanup)
         self.frame = self.root / "frame"
         (self.frame / "blobs").mkdir(parents=True)
         (self.frame / "blobs" / "seed.bin").write_bytes(b"\x00" * 64)
@@ -898,20 +1042,39 @@ class EvidenceDerivationTests(unittest.TestCase):
             {"kind": "clear", "index": 7, "flags": 7, "color": [0, 0, 0, 1],
              "depth": 1, "stencil": 0,
              "target": {"framebuffer": 0, "draw_buffer": "0x405",
-                        "width": 4, "height": 4},
-             "state": {"scissor": {"enabled": False},
+                        "read_buffer": "0x405", "width": 4, "height": 4},
+             "state": {"scissor": {"enabled": False, "box": [0, 0, 4, 4]},
                        "color_mask": [1, 1, 1, 1], "depth_mask": True,
                        "stencil_mask": -1}},
             {"kind": "draw", "index": 14,
-             "state": {"depth": {"test": True, "write": True},
-                       "stencil": {"test": True},
-                       "framebuffer_srgb": False, "dither": True,
-                       "multisample": True},
+             "state": {
+                 "blend": {"enabled": False, "src_rgb": "0x1",
+                           "dst_rgb": "0x0", "src_alpha": "0x1",
+                           "dst_alpha": "0x0", "equation_rgb": "0x8006",
+                           "equation_alpha": "0x8006"},
+                 "color_mask": [1, 1, 1, 1],
+                 "depth": {"test": True, "write": True, "func": "0x203",
+                           "range": [0.0, 1.0]},
+                 "stencil": {"test": True, "func": "0x207", "ref": 0,
+                             "value_mask": -1, "fail": "0x1e00",
+                             "zfail": "0x1e00", "zpass": "0x1e00",
+                             "write_mask": -1},
+                 "cull": {"enabled": False, "mode": "0x405",
+                          "front": "0x901"},
+                 "polygon": {"mode": ["0x1b02", "0x1b02"],
+                             "offset_fill": False, "offset_factor": 0,
+                             "offset_units": 0},
+                 "alpha_test": {"enabled": False, "func": "0x206", "ref": 1},
+                 "scissor": {"enabled": False, "box": [0, 0, 4, 4]},
+                 "framebuffer_srgb": False, "dither": True,
+                 "multisample": True, "viewport": [0, 0, 4, 4]},
              "target": {"framebuffer": 0, "draw_buffer": "0x405",
-                        "width": 4, "height": 4},
+                        "read_buffer": "0x405", "width": 4, "height": 4},
              "draw": {"mode": 4, "count": 6, "indexed": True},
              "default_checkpoint": {
-                 "event": 14, "resource": "fb:0", "timing": "pre_event",
+                 "schema": "gfx-default-framebuffer-checkpoint/v1",
+                 "event": 14, "target": "0", "resource": "fb:0",
+                 "timing": "pre_event",
                  "status": "captured", "file": "seed.bin",
                  "sha256": self.seed_sha, "width": 4,
                  "height": 4, "session_id": "s", "bytes": 64,
@@ -920,7 +1083,9 @@ class EvidenceDerivationTests(unittest.TestCase):
              "target": {"framebuffer": 0, "width": 4, "height": 4},
              "draw": {"mode": 4, "count": 6, "indexed": True},
              "default_checkpoint": {
-                 "event": 15, "resource": "fb:0", "timing": "pre_event",
+                 "schema": "gfx-default-framebuffer-checkpoint/v1",
+                 "event": 15, "target": "0", "resource": "fb:0",
+                 "timing": "pre_event",
                  "status": "captured", "file": "reference.bin",
                  "sha256": self.reference_sha, "width": 4,
                  "height": 4, "session_id": "s", "bytes": 64,
@@ -1012,6 +1177,68 @@ class EvidenceDerivationTests(unittest.TestCase):
         self.assertEqual(evidence["status"], "unsupported_state")
         self.assertTrue(any("reference output" in item
                             for item in evidence["unsupported"]))
+
+
+    def _drawable(self, **overrides):
+        value = {
+            "samples": 0, "sample_buffers": 0, "depth_bits": 32,
+            "stencil_bits": 8, "red_bits": 8, "green_bits": 8,
+            "blue_bits": 8, "alpha_bits": 8, "double_buffer": True,
+            "stereo": False, "drawn_framebuffer_binding": 0,
+        }
+        value.update(overrides)
+        return value
+
+    def test_a_clear_without_a_scissor_record_is_not_proven(self):
+        events = copy.deepcopy(self.events)
+        events[0]["state"].pop("scissor")
+        evidence = self._derive(drawable=self._drawable(), events=events)
+        self.assertEqual(evidence["status"], "missing")
+        self.assertTrue(any("scissor" in item
+                            for item in evidence["missing"]))
+
+    def test_a_clear_with_depth_mask_zero_is_not_proven(self):
+        events = copy.deepcopy(self.events)
+        events[0]["state"]["depth_mask"] = 0
+        evidence = self._derive(drawable=self._drawable(), events=events)
+        self.assertEqual(evidence["status"], "missing")
+        self.assertTrue(any("depth" in item and "unproven" in item
+                            for item in evidence["missing"]))
+
+    def test_a_clear_with_a_partial_colour_mask_is_not_proven(self):
+        events = copy.deepcopy(self.events)
+        events[0]["state"]["color_mask"] = [1, 1, 0, 1]
+        events[1].pop("default_checkpoint")
+        evidence = self._derive(drawable=self._drawable(), events=events)
+        self.assertEqual(evidence["status"], "missing")
+        self.assertTrue(any("colour write mask" in item
+                            for item in evidence["missing"]))
+
+    def test_a_targetless_writer_is_not_ignored(self):
+        events = copy.deepcopy(self.events)
+        events.insert(1, {"kind": "draw", "index": 10,
+                          "draw": {"mode": 4, "count": 6, "indexed": True}})
+        evidence = self._derive(drawable=self._drawable(), events=events)
+        self.assertEqual(evidence["status"], "missing")
+        self.assertTrue(any("no recorded target" in item
+                            for item in evidence["missing"]))
+
+    def test_an_unsupported_copy_is_not_ignored(self):
+        events = copy.deepcopy(self.events)
+        events.insert(1, {"kind": "resolve",
+                          "operation": "glCopyTexSubImage2D",
+                          "source_framebuffer": 0})
+        evidence = self._derive(drawable=self._drawable(), events=events)
+        self.assertEqual(evidence["status"], "missing")
+        self.assertTrue(any("unsupported" in item
+                            for item in evidence["missing"]))
+
+    def test_a_v2_checkpoint_record_is_accepted(self):
+        events = copy.deepcopy(self.events)
+        events[1]["default_checkpoint"]["schema"] = \
+            "gfx-default-framebuffer-checkpoint/v2"
+        evidence = self._derive(drawable=self._drawable(), events=events)
+        self.assertEqual(evidence["status"], "proven", evidence)
 
 
 class ShippedAuthorityRegistryTests(unittest.TestCase):
