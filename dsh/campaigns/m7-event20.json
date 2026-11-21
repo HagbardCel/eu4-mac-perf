@@ -44,5 +44,6 @@
     "max_review_attempts": 2
   },
   "replay_inputs": [],
-  "status": "canonical-active"
+  "status": "canonical-active",
+  "trusted_reference_root": ".local/m7/event20/trusted-copy/47590918"
 }

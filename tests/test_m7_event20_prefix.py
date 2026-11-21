@@ -415,7 +415,7 @@ class Event20PrefixTests(unittest.TestCase):
         self.assertNotEqual(completed.returncode, 0)
         payload = json.loads(completed.stdout)
         self.assertEqual(payload["verdict"], "inconclusive")
-        self.assertIn("trusted evidence", payload["diagnostics"])
+        self.assertIn("trusted reference root", payload["diagnostics"])
 
 
 class FormatScopeTests(unittest.TestCase):
@@ -859,6 +859,29 @@ class TrustedExecutionTests(unittest.TestCase):
         with self.assertRaises(gfx_prefix_check.PrefixCheckError):
             gfx_prefix_check.verify_trusted_evidence(root, frame)
 
+
+class TrustedRootSelectionTests(unittest.TestCase):
+    def test_explicit_root_selects_the_assigned_seal_only(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        base = Path(temporary.name)
+        first = base / "seal-a"
+        second = base / "seal-b"
+        for path in (first, second):
+            path.mkdir()
+            (path / "trusted-evidence.json").write_text("{}\n")
+        selected = gfx_prefix_check.resolve_trusted_reference(
+            first, base / "candidate", root=base)
+        self.assertEqual(selected, first.resolve())
+        with self.assertRaises(gfx_prefix_check.PrefixCheckError):
+            gfx_prefix_check.resolve_trusted_reference(
+                base, base / "candidate", root=base)
+        with self.assertRaises(gfx_prefix_check.PrefixCheckError):
+            gfx_prefix_check.resolve_trusted_reference(
+                None, base / "candidate", root=base)
+        with self.assertRaises(gfx_prefix_check.PrefixCheckError):
+            gfx_prefix_check.resolve_trusted_reference(
+                first, first, root=base)
 
 class R32FComparisonTests(unittest.TestCase):
     def test_r32f_is_compared_as_exact_float_bits(self):

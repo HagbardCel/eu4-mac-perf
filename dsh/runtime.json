@@ -2,8 +2,8 @@
   "schema": "eu4-dsh-runtime/v1",
   "profile": "eu4-web",
   "dsh": {
-    "version": "0.2.2-rc.1",
-    "package_json_sha256": "3e14837ceb3bbc0ba419ed08e9b5ba164338369b1268b93c3c25d89f7b1c9953"
+    "version": "0.2.2-rc.5",
+    "package_json_sha256": "2a694f0180a778c1c083fdc0369500d3638fa72457aee882e0aeedf14581f2ff"
   },
   "node": {
     "version": "v26.13.1"
@@ -14,23 +14,23 @@
   "required_plugins": {
     "goal": {
       "name": "@deepseek-ai/dsh-goal",
-      "package_json_sha256": "7d3c20c27d07e563b08523682b22669bb837c630253856c014c0b94c4e6ca2a4"
+      "package_json_sha256": "6a97ffda78605a0fab6bae697a3e3ae27c2276a39a17fde0f989bcdc20d88be8"
     },
     "goal-round-driver": {
       "name": "@deepseek-ai/dsh-goal-round-driver",
-      "package_json_sha256": "d5c8a215c464041e2933a8f0c6d39b9afe75bf2e79bd711eeba22c113d3851d8"
+      "package_json_sha256": "d14c1484b8c662f004061ff7eab82342651d0c44ebbe4391ad4d5e8153121a51"
     },
     "tool-goal": {
       "name": "@deepseek-ai/dsh-tool-goal",
-      "package_json_sha256": "512cf8089d6bf680b28bb1a2c684d10ad3405aa3e883d4cec9454d02b246d8d2"
+      "package_json_sha256": "67d2325d543d7b441d37ef3db397d414cf62c69d1d7e427a7239d6abb406301f"
     },
     "command-goal": {
       "name": "@deepseek-ai/dsh-command-goal",
-      "package_json_sha256": "53f5bd4c61a878e414287b27bf6b958c5cc4c31b054f9582059fa90cfb246286"
+      "package_json_sha256": "474cffcc97f54fc45a5d6bfad744a6e47be71cf5e2cf6cdea30a843d9abebce7"
     },
     "skill-filesystem": {
       "name": "@deepseek-ai/dsh-skill-filesystem",
-      "package_json_sha256": "531e26bcb01b8e5d637580e3fd985e5814e24f2fdc451fafe06ac9949f04f98e"
+      "package_json_sha256": "c7657d34afd5994ac6a1a67f08e3b3ea1636c337d06f80406fcfc99c1ac11071"
     },
     "eu4-goal": {
       "name": "@eu4/dsh-goal",

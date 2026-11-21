@@ -17,5 +17,6 @@
   "live_observation": {
     "launch_limit": 1,
     "deadline_seconds": 1800
-  }
+  },
+  "trusted_reference_root": ".local/m7/event20/trusted-copy/47590918"
 }

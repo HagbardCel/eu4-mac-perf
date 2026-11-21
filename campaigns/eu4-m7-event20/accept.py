@@ -39,8 +39,15 @@ RELATIVE_BASE = Path(".local") / "m7" / "event20" / "live"
 def _trusted_root(workspace: Path) -> Path:
     declared = os.environ.get("EU4_M7_EVENT20_TRUSTED_ROOT", "").strip()
     if declared:
-        return Path(declared).expanduser().resolve()
-    return (ROOT / ".local" / "m7" / "event20" / "trusted-copy").resolve()
+        configured = declared
+    else:
+        sidecar_path = Path(os.environ.get(
+            "EU4_M7_CANDIDATE_SIDECAR",
+            str(ROOT / "dsh" / "campaigns" / "m7-event20.json")))
+        sidecar = json.loads(sidecar_path.read_text())
+        configured = sidecar.get("trusted_reference_root")
+    return gfx_prefix_check.resolve_trusted_reference(
+        configured, workspace, root=ROOT)
 
 
 def _emit(verdict: str, diagnostics: str, result: dict | None = None) -> int:
@@ -59,7 +66,13 @@ def main(argv: list[str]) -> int:
     if len(argv) < 2:
         return _emit("inconclusive", "usage: accept.py <workspace>")
     workspace = Path(argv[1]).expanduser().resolve()
-    trusted_root = _trusted_root(workspace)
+    try:
+        trusted_root = _trusted_root(workspace)
+    except (gfx_prefix_check.PrefixCheckError, OSError, ValueError,
+            json.JSONDecodeError) as exc:
+        return _emit(
+            "inconclusive",
+            f"trusted reference root is not usable: {exc}")
     try:
         trusted_root.relative_to(workspace)
     except ValueError:
@@ -70,11 +83,6 @@ def main(argv: list[str]) -> int:
             "trusted evidence root is inside the candidate workspace: "
             f"{trusted_root}")
     record_path = trusted_root / "trusted-evidence.json"
-    if not record_path.is_file():
-        candidates = sorted(trusted_root.glob("*/trusted-evidence.json"))
-        if len(candidates) == 1:
-            record_path = candidates[0]
-            trusted_root = record_path.parent
     try:
         record = json.loads(record_path.read_text())
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:

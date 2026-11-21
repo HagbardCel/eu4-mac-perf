@@ -158,6 +158,47 @@ def _root_digest(files: list[dict]) -> str:
     return digest.hexdigest()
 
 
+def resolve_trusted_reference(configured: str | Path | None,
+                              candidate_workspace: Path | str | None,
+                              *, root: Path | str = ROOT) -> Path:
+    """Resolve the one explicitly configured trusted reference root.
+
+    The value comes from trusted campaign configuration.  A missing value, a
+    directory without a trusted-evidence record, a directory containing more
+    than one seal, or a root inside the candidate workspace is refused.  The
+    newest directory is never selected implicitly.
+    """
+    if configured is None or str(configured).strip() == "":
+        raise PrefixCheckError("trusted_reference_root is not configured")
+    path = Path(str(configured)).expanduser()
+    if not path.is_absolute():
+        path = Path(root) / path
+    path = path.resolve()
+    if candidate_workspace is not None:
+        try:
+            path.relative_to(Path(candidate_workspace).expanduser().resolve())
+        except ValueError:
+            pass
+        else:
+            raise PrefixCheckError(
+                "trusted reference root is inside the candidate workspace")
+    if not path.is_dir():
+        raise PrefixCheckError(
+            f"trusted reference root does not exist: {path}")
+    direct = path / "trusted-evidence.json"
+    if direct.is_file():
+        return path
+    nested = sorted(path.glob("*/trusted-evidence.json"))
+    if len(nested) == 1:
+        return nested[0].parent.resolve()
+    if not nested:
+        raise PrefixCheckError(
+            f"trusted reference root has no trusted-evidence record: {path}")
+    raise PrefixCheckError(
+        "trusted reference root is ambiguous: more than one sealed evidence "
+        "record exists; configure the exact seal directory")
+
+
 def prepare_trusted_evidence(frame_dir: Path | str, destination: Path | str,
                              *, source_note: str = "",
                              read_only: bool = True, copy: bool = True) -> dict:
