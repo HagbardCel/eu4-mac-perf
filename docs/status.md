@@ -20,7 +20,7 @@ history and must be read with its original run/seal identity.
 
 ### Capability snapshot
 
-As of this snapshot #241–#269 are merged. The harness review is closed: every
+As of this snapshot #241–#269 are merged. The technical findings of the harness review are closed: every
 harness-integrity finding has a disposition, the two scientific remainders are
 transferred to M7, and this closure PR is the only remaining remediation PR. Exact head SHAs, review
 records and dependency order are in the
@@ -30,9 +30,8 @@ records and dependency order are in the
 and the [exact-head audit](../analysis/harness-remediation/audit-20261120.md).
 
 GitHub has no `APPROVE` review for #241–#269. The closure PRs #263–#268 have an
-independent exact-head review comment; #251–#257 have no independent review
-comment on GitHub (their evidence is the audit verdict, author verification and
-CI, which are not approvals); #241–#250 were reviewed by Codex/audit at earlier
+independent exact-head review comment; #251–#257 have no independent human exact-head review
+(Codex/audit verdict, author verification and CI, none of which are approvals); #241–#250 were reviewed by Codex/audit at earlier
 commits. Review comments are not `APPROVE` states because the only available
 GitHub identity is the author and GitHub refuses self-approval.
 

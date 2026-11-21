@@ -5,7 +5,7 @@ review and merge state for the harness remediation. It is not a claim that every
 scientific blocker is closed; the definitive disposition is
 [closure.md](closure.md).
 
-## Merged (independent review of the exact final head)
+## Merged (review scope below)
 
 | PR | Final head | Merge commit | Focused verification |
 |---|---|---|---|
@@ -40,8 +40,8 @@ scientific blocker is closed; the definitive disposition is
 | #269 closure integration | `d3a0ce6b` | `fecff675` | merge-only; reviewed exact tree |
 
 Portable CI passed on every merged head. #263–#268 have an independent review
-comment at their exact heads; #251–#257 have no independent review comment on
-GitHub (audit verdict/author verification/CI only); #241–#250 were reviewed by
+comment at their exact heads; #251–#257 have no independent human exact-head review on
+GitHub (Codex/audit/author verification/CI only); #241–#250 were reviewed by
 Codex/audit at earlier commits. #269 is the merge-only integration of the five
 remaining reviewed heads. GitHub records the comments as `COMMENTED`, not
 `APPROVE`, because the only available identity is the author.
