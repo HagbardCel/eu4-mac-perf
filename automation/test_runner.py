@@ -9,6 +9,10 @@ to start an identical suite that is already running.
 It also holds one kernel lock per worktree for the whole child execution, so a
 different selection cannot compile the same ``benchmark/.build`` output at the
 same time.  Separate worktrees use separate locks and still run in parallel.
+The lock descriptor is passed to the unittest child, so if the supervising
+runner is killed the surviving child keeps the worktree locked until it exits.
+Native compiler descendants that outlive the unittest child are outside that
+descriptor chain; the boundary is stated in :func:`_run_locked`.
 
 It is not a CI scheduler.  It does not discover work, retry, parallelise or
 schedule anything.
@@ -181,7 +185,7 @@ def _active_in_worktree(state: Path, workdir: Path) -> dict | None:
             continue
         if cwd != target:
             continue
-        if _alive(row.get("pid")):
+        if _record_alive(row):
             return row
     return None
 
@@ -240,6 +244,15 @@ def _alive(pid) -> bool:
     return True
 
 
+def _record_alive(row: dict) -> bool:
+    """Whether the supervisor or its surviving unittest child is alive.
+
+    After a supervisor SIGKILL the child keeps the worktree lock and continues
+    executing; the record is still live for duplicate/active-run decisions.
+    """
+    return _alive(row.get("pid")) or _alive(row.get("child_pid"))
+
+
 def _records(state: Path) -> list[dict]:
     rows = []
     directory = state / "runs"
@@ -260,7 +273,7 @@ def _running(state: Path, key: str) -> dict | None:
             continue
         if row.get("host") not in (None, os.uname().nodename):
             continue
-        if _alive(row.get("pid")):
+        if _record_alive(row):
             return row
     return None
 
@@ -374,14 +387,26 @@ def run_suite(
         return _run_locked(
             state=state, workdir=workdir, suite=suite, label=label,
             base_ref=base_ref, timeout=timeout, compare_to=compare_to,
-            profile=profile, min_tests=min_tests)
+            profile=profile, min_tests=min_tests,
+            worktree_handle=worktree_handle)
     finally:
         _release_lock(worktree_handle)
 
 
 def _run_locked(*, state: Path, workdir: Path, suite: dict, label, base_ref,
-                timeout, compare_to, profile, min_tests) -> dict:
-    """The pre-existing body, now held under the worktree execution lock."""
+                timeout, compare_to, profile, min_tests,
+                worktree_handle) -> dict:
+    """The pre-existing body, now held under the worktree execution lock.
+
+    The worktree lock descriptor is inherited by the unittest child.  If this
+    supervisor is SIGKILLed, the child keeps the lock until it exits; a second
+    invocation therefore cannot enter the worktree while the first child keeps
+    running.  Native compiler descendants spawned by the child do not inherit
+    that descriptor (the child's own ``subprocess`` calls use close-fds
+    defaults), so a compiler descendant that outlives the unittest child is
+    outside the lock.  Timeout kills the child's process group to bound that
+    window; a supervisor SIGKILL leaves the child itself as the lock holder.
+    """
     run_id = (dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
               + "-" + uuid.uuid4().hex[:8])
     record_path = _record_path(state, run_id)
@@ -454,24 +479,29 @@ def _run_locked(*, state: Path, workdir: Path, suite: dict, label, base_ref,
                 cwd=str(workdir), env=environment,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1,
+                pass_fds=(worktree_handle.fileno(),),
+                start_new_session=True,
             )
             record["child_pid"] = child.pid
             _write(record_path, record)
 
+            def signal_child_group(sig: int) -> None:
+                try:
+                    os.killpg(os.getpgid(child.pid), sig)
+                except OSError:
+                    try:
+                        child.send_signal(sig)
+                    except OSError:
+                        pass
+
             def stop() -> None:
                 nonlocal timed_out
                 timed_out = True
-                try:
-                    child.send_signal(signal.SIGTERM)
-                except OSError:
-                    pass
+                signal_child_group(signal.SIGTERM)
 
                 def hard_kill() -> None:
                     if child.poll() is None:
-                        try:
-                            child.kill()
-                        except OSError:
-                            pass
+                        signal_child_group(signal.SIGKILL)
 
                 killer = threading.Timer(10.0, hard_kill)
                 killer.daemon = True
@@ -587,7 +617,7 @@ def status(run_id: str | None = None, *,
             record = _read(candidate) if candidate.is_file() else {}
             if not record:
                 raise ValueError(f"unknown test run: {run_id}")
-        if record.get("status") == "running" and not _alive(record.get("pid")):
+        if record.get("status") == "running" and not _record_alive(record):
             record["status"] = "lost"
     record = dict(record)
     log = record.get("log")

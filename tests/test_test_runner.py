@@ -355,10 +355,14 @@ class WorktreeExecutionLockTests(unittest.TestCase):
     def _module(self, worktree: Path, name: str, body: str) -> None:
         (worktree / f"{name}.py").write_text(textwrap.dedent(body))
 
-    def _command(self, module: str, worktree: Path) -> list[str]:
-        return [sys.executable, "-m", "automation.test_runner", "run",
-                "--profile", "offline", "--module", module,
-                "--cwd", str(worktree), "--state-dir", str(self.state)]
+    def _command(self, module: str, worktree: Path,
+                 timeout: float | None = None) -> list[str]:
+        command = [sys.executable, "-m", "automation.test_runner", "run",
+                   "--profile", "offline", "--module", module,
+                   "--cwd", str(worktree), "--state-dir", str(self.state)]
+        if timeout is not None:
+            command += ["--timeout", str(timeout)]
+        return command
 
     def _environment(self, **extra) -> dict:
         environment = dict(os.environ)
@@ -366,9 +370,10 @@ class WorktreeExecutionLockTests(unittest.TestCase):
         environment.update({key: str(value) for key, value in extra.items()})
         return environment
 
-    def _spawn(self, module: str, worktree: Path, **env):
+    def _spawn(self, module: str, worktree: Path,
+               timeout: float | None = None, **env):
         return subprocess.Popen(
-            self._command(module, worktree), cwd=str(ROOT),
+            self._command(module, worktree, timeout), cwd=str(ROOT),
             env=self._environment(**env), stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True)
 
@@ -449,31 +454,100 @@ class WorktreeExecutionLockTests(unittest.TestCase):
         self.assertEqual(value_b.get("status"), "passed", value_b)
         self.assertNotEqual(value_a.get("cwd"), value_b.get("cwd"))
 
-    def test_abrupt_runner_termination_releases_the_worktree_lock(self):
+    def test_a_surviving_child_keeps_the_worktree_lock_after_the_runner_dies(self):
         ready = self.root / "abrupt.ready"
-        never = self.root / "abrupt.never"
+        release = self.root / "abrupt.release"
         self._module(self.worktree, "runner_gated", GATED_MODULE)
         self._module(self.worktree, "runner_pass", PASS)
         slow = self._spawn("runner_gated", self.worktree,
-                           GATED_READY=ready, GATED_RELEASE=never)
-        running = None
+                           GATED_READY=ready, GATED_RELEASE=release)
+        child_pid = None
         try:
             running = self._wait_for_running_record()
+            child_pid = running.get("child_pid")
+            self.assertIsInstance(child_pid, int, running)
+            deadline = time.monotonic() + 15
+            while not ready.exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(ready.exists(), "the first run never started")
             slow.kill()
             slow.wait(timeout=10)
+            # The supervisor is gone but its unittest child is still alive and
+            # still holds the inherited worktree lock descriptor.
+            self.assertTrue(test_runner._alive(child_pid))
+
+            second = self._spawn("runner_pass", self.worktree)
+            code, value, stderr = self._collect(second, timeout=30)
+            self.assertEqual(code, 2, (code, value, stderr))
+            self.assertFalse(value.get("ok"))
+            self.assertIn(value.get("status"), ("pending", "busy"))
+            self.assertTrue(value.get("pending"))
+            self.assertFalse(value.get("completed"))
+            self.assertEqual(value.get("blocked_by"), running.get("id"))
+            # The refused invocation created no second run record or log.
+            self.assertEqual(len(list((self.state / "runs").glob("*.json"))), 1)
+            self.assertEqual(len(list((self.state / "runs").glob("*.log"))), 1)
+
+            release.write_text("1")
+            deadline = time.monotonic() + 30
+            while test_runner._alive(child_pid) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertFalse(test_runner._alive(child_pid),
+                             "the gated child did not exit")
+
+            third = self._spawn("runner_pass", self.worktree)
+            code, value, stderr = self._collect(third, timeout=60)
+            self.assertEqual(code, 0, (code, value, stderr))
+            self.assertEqual(value.get("status"), "passed", value)
+            self.assertEqual(value.get("counts", {}).get("ran"), 2)
         finally:
-            if running and running.get("child_pid"):
+            release.write_text("1")
+            if child_pid and test_runner._alive(child_pid):
                 try:
-                    os.kill(int(running["child_pid"]), signal.SIGKILL)
+                    os.kill(int(child_pid), signal.SIGKILL)
                 except OSError:
                     pass
-        # The kernel released the flock with the killed process; a different
-        # selection in the same worktree can now run.
-        second = self._spawn("runner_pass", self.worktree)
-        code, value, stderr = self._collect(second, timeout=60)
-        self.assertEqual(code, 0, (code, value, stderr))
-        self.assertEqual(value.get("status"), "passed", value)
-        self.assertEqual(value.get("counts", {}).get("ran"), 2)
+            if slow.poll() is None:
+                slow.kill()
+                slow.wait(timeout=10)
+
+    def test_timeout_stops_the_child_process_group(self):
+        # The runner starts the unittest child in its own session and kills the
+        # group on timeout, so a compiler descendant cannot keep writing after
+        # the truncated run returns.
+        descendant = """
+import os
+import subprocess
+import sys
+import time
+import unittest
+from pathlib import Path
+class Descendant(unittest.TestCase):
+    def test_spawns_and_waits(self):
+        path = Path(os.environ["DESCENDANT_PID"])
+        child = subprocess.Popen([sys.executable, "-c",
+                                  "import time; time.sleep(60)"])
+        path.write_text(str(child.pid))
+        time.sleep(60)
+"""
+        marker = self.root / "descendant.pid"
+        self._module(self.worktree, "runner_descendant", descendant)
+        process = self._spawn("runner_descendant", self.worktree,
+                              timeout=1, DESCENDANT_PID=marker)
+        deadline = time.monotonic() + 15
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertTrue(marker.exists(), "the descendant never started")
+        # The runner timeout is 1s; the supervisor returns a timeout record.
+        code, value, stderr = self._collect(process, timeout=30)
+        self.assertNotEqual(code, 0, (code, value, stderr))
+        self.assertEqual(value.get("status"), "timeout", value)
+        descendant_pid = int(marker.read_text())
+        deadline = time.monotonic() + 15
+        while test_runner._alive(descendant_pid) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertFalse(test_runner._alive(descendant_pid),
+                         "the descendant survived the timeout")
 
     def test_a_held_lock_without_a_record_is_busy_not_passed(self):
         self._module(self.worktree, "runner_pass", PASS)
