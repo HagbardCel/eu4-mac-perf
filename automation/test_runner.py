@@ -508,6 +508,8 @@ def _run_locked(*, state: Path, workdir: Path, suite: dict, label, base_ref,
                     except OSError:
                         pass
 
+            killer_holder: list[threading.Timer] = []
+
             def stop() -> None:
                 nonlocal timed_out
                 timed_out = True
@@ -521,6 +523,7 @@ def _run_locked(*, state: Path, workdir: Path, suite: dict, label, base_ref,
 
                 killer = threading.Timer(10.0, hard_kill)
                 killer.daemon = True
+                killer_holder.append(killer)
                 killer.start()
 
             watchdog = threading.Timer(float(timeout), stop)
@@ -552,6 +555,8 @@ def _run_locked(*, state: Path, workdir: Path, suite: dict, label, base_ref,
                     raise
             finally:
                 watchdog.cancel()
+                for killer in killer_holder:
+                    killer.cancel()
                 try:
                     child.stdout.close()
                 except OSError:
