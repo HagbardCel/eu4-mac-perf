@@ -511,6 +511,59 @@ class WorktreeExecutionLockTests(unittest.TestCase):
                 slow.kill()
                 slow.wait(timeout=10)
 
+    def test_interrupt_stops_the_child_before_releasing_the_lock(self):
+        ready = self.root / "interrupt.ready"
+        never = self.root / "interrupt.never"
+        self._module(self.worktree, "runner_gated", GATED_MODULE)
+        self._module(self.worktree, "runner_pass", PASS)
+        slow = self._spawn("runner_gated", self.worktree,
+                           GATED_READY=ready, GATED_RELEASE=never)
+        child_pid = None
+        try:
+            running = self._wait_for_running_record()
+            child_pid = running.get("child_pid")
+            deadline = time.monotonic() + 15
+            while not ready.exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(ready.exists(), "the first run never started")
+            slow.send_signal(signal.SIGINT)
+            slow.wait(timeout=15)
+            deadline = time.monotonic() + 15
+            while test_runner._alive(child_pid) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertFalse(test_runner._alive(child_pid),
+                             "Ctrl-C released the lock with the child alive")
+            third = self._spawn("runner_pass", self.worktree)
+            code, value, stderr = self._collect(third, timeout=60)
+            self.assertEqual(code, 0, (code, value, stderr))
+            self.assertEqual(value.get("status"), "passed", value)
+        finally:
+            if child_pid and test_runner._alive(child_pid):
+                try:
+                    os.kill(int(child_pid), signal.SIGKILL)
+                except OSError:
+                    pass
+            if slow.poll() is None:
+                slow.kill()
+                slow.wait(timeout=10)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "procfs zombie state is Linux-specific")
+    def test_a_zombie_child_is_not_treated_as_alive(self):
+        pid = os.fork()
+        if pid == 0:
+            os._exit(0)
+        try:
+            deadline = time.monotonic() + 10
+            while test_runner._alive(pid) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertFalse(test_runner._alive(pid))
+        finally:
+            try:
+                os.waitpid(pid, 0)
+            except OSError:
+                pass
+
     def test_timeout_stops_the_child_process_group(self):
         # The runner starts the unittest child in its own session and kills the
         # group on timeout, so a compiler descendant cannot keep writing after

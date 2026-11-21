@@ -241,6 +241,19 @@ def _alive(pid) -> bool:
         os.kill(pid, 0)
     except OSError as exc:
         return exc.errno == errno.EPERM
+    # A zombie still accepts signal 0 but is not executing.  On Linux the
+    # procfs state is authoritative; on macOS an orphaned child is reaped by
+    # launchd promptly, so signal 0 is sufficient there.
+    if sys.platform.startswith("linux"):
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        except OSError:
+            return True
+        try:
+            state = stat.rsplit(")", 1)[1].split()[0]
+        except (IndexError, AttributeError):
+            return True
+        return state != "Z"
     return True
 
 
@@ -512,10 +525,23 @@ def _run_locked(*, state: Path, workdir: Path, suite: dict, label, base_ref,
             watchdog.start()
             assert child.stdout is not None
             try:
-                for line in child.stdout:
-                    log.write(line)
+                try:
+                    for line in child.stdout:
+                        log.write(line)
+                        log.flush()
+                    exit_code = child.wait()
+                except BaseException:
+                    # Ctrl-C/KeyboardInterrupt must not release the worktree
+                    # lock while the detached child is still running.
+                    log.write("\n[test_runner] interrupted; stopping child group\n")
                     log.flush()
-                exit_code = child.wait()
+                    signal_child_group(signal.SIGTERM)
+                    try:
+                        exit_code = child.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        signal_child_group(signal.SIGKILL)
+                        exit_code = child.wait()
+                    raise
             finally:
                 watchdog.cancel()
                 try:
