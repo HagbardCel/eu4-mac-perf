@@ -4129,6 +4129,7 @@ static void start_capture_at_frame(int next_frame) {
     g.checkpoint_total_bytes = 0;
     g.checkpoint_pending = -1;
     g.last_capture_target_fb = 0;
+    g.test_target_fb_override = -1;
     g.truncated = 0;
     g.capture_failed = 0;
     g.stream_validated = 0;
@@ -5383,6 +5384,18 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
         /* The offline writer host has no GL context; keep the ordered stream
            shape without querying the driver. */
         int checkpoint_slot = checkpoint_pending_slot_locked();
+        int target_fb = g.test_target_fb_override >= 0
+            ? g.test_target_fb_override : g.last_capture_target_fb;
+        const char *checkpoint_prefix = "";
+        const char *checkpoint_body = "";
+        if (checkpoint_slot >= 0) {
+            if (target_fb != 0) {
+                fail_capture_locked("default_checkpoint_not_default");
+            } else {
+                checkpoint_prefix = ",\"default_checkpoint\":";
+                checkpoint_body = g.checkpoint_json[checkpoint_slot];
+            }
+        }
         char body[2048];
         int length = snprintf(
             body, sizeof body,
@@ -5392,9 +5405,7 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
             "\"depth_mask\":true,\"stencil_mask\":-1},"
             "\"test\":true%s%s}",
             bool_text(g.event_count == 0), (int)frame->rsi,
-            checkpoint_slot >= 0 ? ",\"default_checkpoint\":" : "",
-            checkpoint_slot >= 0
-                ? g.checkpoint_json[checkpoint_slot] : "");
+            checkpoint_prefix, checkpoint_body);
         if (length > 0 && (size_t)length < sizeof body && emit_event(body)) {
             g.event_count++;
             g.clear_events++;
@@ -5688,13 +5699,6 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
         if (memory != NULL) {
             json_out out = {memory, 0};
             jprintf(&out, "{\"kind\":\"draw\",\"index\":%d", g.event_count);
-            if (checkpoint_slot >= 0 &&
-                g.last_capture_target_fb != 0) {
-                fail_capture_locked("default_checkpoint_not_default");
-            } else if (checkpoint_slot >= 0) {
-                jprintf(&out, ",\"default_checkpoint\":%s",
-                        g.checkpoint_json[checkpoint_slot]);
-            }
             if (!g.seed_emitted && g.seed_json[0] != 0) {
                 const char *seed = g.seed_json;
                 size_t length = strlen(seed);
@@ -5724,6 +5728,17 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
             jprintf(&out, ",");
             capture_draw_state(&out, indexed, mode, first, count,
                                instance_count, base_vertex, master, call);
+            /* capture_draw_state -> capture_target has now recorded the
+               event's authoritative target.  Decide admissibility from that
+               exact value, never from a value captured before the draw body. */
+            if (checkpoint_slot >= 0) {
+                if (g.last_capture_target_fb != 0) {
+                    fail_capture_locked("default_checkpoint_not_default");
+                } else {
+                    jprintf(&out, ",\"default_checkpoint\":%s",
+                            g.checkpoint_json[checkpoint_slot]);
+                }
+            }
             jprintf(&out, "}");
             fclose(memory);
             if (!out.failed && buffer != NULL) {
