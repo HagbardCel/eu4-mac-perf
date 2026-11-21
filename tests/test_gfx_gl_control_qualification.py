@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import shutil
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -232,6 +233,10 @@ class ControlQualificationTests(unittest.TestCase):
         self._write_blob("ib.bin", bytes(12))
         self._write_blob("tex.bin", bytes(64))
         self._write_blob("texc.bin", bytes(8))
+        self.depth_body = struct.pack("<64f", *([0.5] * 64))
+        self.stencil_body = bytes([0x5A]) * 64
+        self._write_blob("depth.bin", self.depth_body)
+        self._write_blob("stencil.bin", self.stencil_body)
         # The target checkpoint output.  It must never enter the package.
         self._write_blob("reference.bin", self.reference)
 
@@ -279,7 +284,7 @@ class ControlQualificationTests(unittest.TestCase):
                 "color_mask": [1, 1, 1, 1],
                 "depth": {"test": True, "func": "0x203", "write": True,
                           "range": [0.0, 1.0]},
-                "stencil": {"test": False, "func": "0x207", "ref": 0,
+                "stencil": {"test": True, "func": "0x207", "ref": 0,
                             "value_mask": -1, "fail": "0x1e00",
                             "zfail": "0x1e00", "zpass": "0x1e00",
                             "write_mask": -1},
@@ -292,6 +297,7 @@ class ControlQualificationTests(unittest.TestCase):
                 "multisample": True,
                 "dither": True,
                 "framebuffer_srgb": False,
+                "logic_op": {"enabled": False, "mode": "0x0"},
                 "viewport": [0, 0, WIDTH, HEIGHT],
             },
             "target": {"framebuffer": target_framebuffer,
@@ -374,6 +380,14 @@ class ControlQualificationTests(unittest.TestCase):
                 "status": "captured",
                 "session_id": self.session_id,
                 "capture_frame_id": 1,
+                "depth": {"file": "depth.bin",
+                          "sha256": _sha(self.frame / "blobs" / "depth.bin"),
+                          "bytes": len(self.depth_body), "format": "f32",
+                          "width": WIDTH, "height": HEIGHT},
+                "stencil": {"file": "stencil.bin",
+                            "sha256": _sha(self.frame / "blobs" / "stencil.bin"),
+                            "bytes": len(self.stencil_body), "format": "u8",
+                            "width": WIDTH, "height": HEIGHT},
             }
         return event
 
@@ -575,6 +589,13 @@ class ControlQualificationTests(unittest.TestCase):
         # The compressed block path is preferred over the decoded copy.
         levels = manifest["textures"][0]["levels"]
         self.assertTrue(levels[0]["compressed"])
+        # The captured depth/stencil seeds are authorised inputs too.
+        self.assertEqual(manifest["prestate"]["depth"]["format"], "f32")
+        self.assertEqual(manifest["prestate"]["depth"]["sha256"],
+                         _sha_bytes(self.depth_body))
+        self.assertEqual(manifest["prestate"]["stencil"]["format"], "u8")
+        self.assertEqual(manifest["prestate"]["stencil"]["sha256"],
+                         _sha_bytes(self.stencil_body))
 
     def test_a_no_op_draw_cannot_prove_reference_isolation(self):
         # If the draw changes nothing, the pre-draw seed equals the target
@@ -798,10 +819,13 @@ class ControlQualificationTests(unittest.TestCase):
     def test_an_exact_image_with_missing_prestate_is_refused(self):
         # Keep the colour seed but remove the depth/stencil clear history and
         # put a writer after the clear, so depth cannot be proven.
+        draw = self._draw_event(14, with_checkpoint=True)
+        draw["default_checkpoint"].pop("depth", None)
+        draw["default_checkpoint"].pop("stencil", None)
         events = [
             self._clear_event(7),
             self._draw_event(10),
-            self._draw_event(14, with_checkpoint=True),
+            draw,
             self._checkpoint_event(15),
         ]
         self._rewrite_events(events)
@@ -1155,7 +1179,9 @@ class EvidenceDerivationTests(unittest.TestCase):
                  "alpha_test": {"enabled": False, "func": "0x206", "ref": 1},
                  "scissor": {"enabled": False, "box": [0, 0, 4, 4]},
                  "framebuffer_srgb": False, "dither": True,
-                 "multisample": True, "viewport": [0, 0, 4, 4]},
+                 "multisample": True,
+                 "logic_op": {"enabled": False, "mode": "0x0"},
+                 "viewport": [0, 0, 4, 4]},
              "target": {"framebuffer": 0, "draw_buffer": "0x405",
                         "read_buffer": "0x405", "width": 4, "height": 4},
              "draw": {"mode": 4, "count": 6, "indexed": True},
@@ -1250,6 +1276,78 @@ class EvidenceDerivationTests(unittest.TestCase):
         }, events=events)
         self.assertEqual(evidence["status"], "missing")
         self.assertTrue(any("mask state was not recorded" in item
+                            for item in evidence["missing"]))
+
+    def _drawable(self, **overrides):
+        value = {
+            "samples": 0, "sample_buffers": 0, "depth_bits": 32,
+            "stencil_bits": 8, "red_bits": 8, "green_bits": 8,
+            "blue_bits": 8, "alpha_bits": 8, "double_buffer": True,
+            "stereo": False, "drawn_framebuffer_binding": 0,
+        }
+        value.update(overrides)
+        return value
+
+    def _captured_depth_stencil(self, events, *, width=4, height=4):
+        import struct
+        depth = struct.pack("<%df" % (width * height),
+                            *([0.5] * (width * height)))
+        stencil = bytes([0x5A]) * (width * height)
+        (self.frame / "blobs" / "depth.bin").write_bytes(depth)
+        (self.frame / "blobs" / "stencil.bin").write_bytes(stencil)
+        events[1]["default_checkpoint"]["depth"] = {
+            "file": "depth.bin", "sha256": _sha_bytes(depth),
+            "bytes": len(depth), "format": "f32", "width": width,
+            "height": height}
+        events[1]["default_checkpoint"]["stencil"] = {
+            "file": "stencil.bin", "sha256": _sha_bytes(stencil),
+            "bytes": len(stencil), "format": "u8", "width": width,
+            "height": height}
+        return events
+
+    def test_a_captured_depth_stencil_seed_is_proven(self):
+        events = self._captured_depth_stencil(copy.deepcopy(self.events))
+        evidence = self._derive(drawable=self._drawable(), events=events)
+        self.assertEqual(evidence["status"], "proven", evidence)
+        self.assertEqual(evidence["prestate"]["depth"]["source"],
+                         "checkpoint")
+        self.assertEqual(evidence["prestate"]["stencil"]["source"],
+                         "checkpoint")
+        self.assertEqual(evidence["prestate"]["depth"]["format"], "f32")
+        self.assertEqual(evidence["prestate"]["stencil"]["format"], "u8")
+
+    def test_a_resolved_multisample_depth_seed_is_unsupported(self):
+        events = self._captured_depth_stencil(copy.deepcopy(self.events))
+        evidence = self._derive(drawable=self._drawable(samples=4),
+                                events=events)
+        self.assertEqual(evidence["status"], "unsupported_state")
+        self.assertTrue(any("multisampled" in item
+                            for item in evidence["unsupported"]))
+
+    def test_a_non_back_read_buffer_is_unsupported(self):
+        events = copy.deepcopy(self.events)
+        events[1]["target"]["read_buffer"] = "0x404"
+        evidence = self._derive(drawable=self._drawable(), events=events)
+        self.assertEqual(evidence["status"], "unsupported_state")
+        self.assertTrue(any("read buffer" in item
+                            for item in evidence["unsupported"]))
+
+    def test_an_absent_depth_record_on_a_depth_using_draw_is_unsupported(self):
+        events = copy.deepcopy(self.events)
+        events[1]["default_checkpoint"]["depth"] = {
+            "status": "absent", "bits": 0}
+        evidence = self._derive(
+            drawable=self._drawable(depth_bits=0), events=events)
+        self.assertEqual(evidence["status"], "unsupported_state")
+        self.assertTrue(any("no depth buffer" in item
+                            for item in evidence["unsupported"]))
+
+    def test_a_captured_seed_of_the_wrong_extent_is_missing(self):
+        events = self._captured_depth_stencil(copy.deepcopy(self.events),
+                                             width=8, height=8)
+        evidence = self._derive(drawable=self._drawable(), events=events)
+        self.assertEqual(evidence["status"], "missing")
+        self.assertTrue(any("depth seed is unproven" in item
                             for item in evidence["missing"]))
 
     def test_the_target_checkpoint_cannot_be_a_prestate_seed(self):

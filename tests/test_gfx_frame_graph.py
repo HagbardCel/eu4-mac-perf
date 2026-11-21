@@ -175,6 +175,62 @@ class GraphTests(unittest.TestCase):
         self.assertTrue(graph["resources"]["tex:10"]["has_clear"])
         self.assertEqual(graph["counts"]["resolves"], 0)
 
+    def test_a_full_clear_records_proven_depth_and_stencil_coverage(self):
+        self.fixture.events[0]["state"] = {
+            "scissor": {"enabled": False, "box": [0, 0, WIDTH, HEIGHT]},
+            "color_mask": [1, 1, 1, 1],
+            "depth_mask": True,
+            "stencil_mask": -1,
+        }
+        self.fixture.write()
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        framebuffer = graph["resources"]["fb:0"]
+        self.assertTrue(framebuffer["has_clear"])
+        self.assertTrue(framebuffer["has_depth_clear"])
+        self.assertTrue(framebuffer["has_stencil_clear"])
+        coverage = framebuffer["producers"][0]["coverage"]
+        self.assertTrue(coverage["full_extent"])
+        self.assertTrue(coverage["depth_full"])
+        self.assertTrue(coverage["stencil_full"])
+
+    def test_a_scissored_clear_is_not_full_coverage(self):
+        self.fixture.events[0]["state"] = {
+            "scissor": {"enabled": True, "box": [0, 0, 2, 2]},
+            "color_mask": [1, 1, 1, 1],
+            "depth_mask": True,
+            "stencil_mask": -1,
+        }
+        self.fixture.write()
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        coverage = graph["resources"]["fb:0"]["producers"][0]["coverage"]
+        self.assertFalse(coverage["full_extent"])
+        self.assertFalse(coverage["color_full"])
+        self.assertFalse(coverage["depth_full"])
+        self.assertFalse(coverage["stencil_full"])
+        self.assertNotIn("has_depth_clear", graph["resources"]["fb:0"])
+
+    def test_a_clear_with_a_disabled_depth_mask_is_not_depth_coverage(self):
+        self.fixture.events[0]["state"] = {
+            "scissor": {"enabled": False, "box": [0, 0, WIDTH, HEIGHT]},
+            "color_mask": [1, 1, 1, 1],
+            "depth_mask": False,
+            "stencil_mask": -1,
+        }
+        self.fixture.write()
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        coverage = graph["resources"]["fb:0"]["producers"][0]["coverage"]
+        self.assertTrue(coverage["color_full"])
+        self.assertFalse(coverage["depth_full"])
+        self.assertFalse(graph["resources"]["fb:0"].get("has_depth_clear", False))
+
+    def test_a_clear_without_recorded_state_is_not_proven(self):
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        coverage = graph["resources"]["fb:0"]["producers"][0]["coverage"]
+        self.assertFalse(coverage["state_recorded"])
+        self.assertFalse(coverage["full_extent"])
+        self.assertFalse(coverage["depth_full"])
+        self.assertFalse(coverage["stencil_full"])
+
     def test_boundary_seed_is_superseded_by_in_frame_clear(self):
         graph = gfx_frame_graph.build(self.fixture.frame)
         self.assertTrue(graph["boundary"]["seed_superseded_by_in_frame_clear"])

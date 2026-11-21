@@ -89,7 +89,7 @@ static void load_sampler_queries(void) {
 #define FTRACE_MAX_CHECKPOINTS 8
 #define FTRACE_DEFAULT_MAX_CHECKPOINTS 4
 #define FTRACE_MAX_CHECKPOINT_BYTES (256u * 1024u * 1024u)
-#define FTRACE_DEFAULT_CHECKPOINT_TOTAL_BYTES (64ull * 1024ull * 1024ull)
+#define FTRACE_DEFAULT_CHECKPOINT_TOTAL_BYTES (128ull * 1024ull * 1024ull)
 #define FTRACE_CHECKPOINT_MAX_NS (10ull * 1000ull * 1000ull * 1000ull)
 #define FTRACE_NAME 96
 
@@ -98,6 +98,9 @@ static void load_sampler_queries(void) {
 #define GL_TEXTURE_BINDING_3D_VALUE 0x806A
 #define GL_VERTEX_ATTRIB_ARRAY_DIVISOR 0x88FE
 #define GL_COMPRESSED_DXT1 0x83F0
+#ifndef GL_FRAMEBUFFER_SRGB
+#define GL_FRAMEBUFFER_SRGB 0x8DB9
+#endif
 #define GL_COMPRESSED_DXT1_ALPHA 0x83F1
 #define GL_COMPRESSED_DXT3 0x83F2
 #define GL_COMPRESSED_DXT5 0x83F3
@@ -198,7 +201,11 @@ static struct {
     size_t checkpoint_bytes[FTRACE_MAX_CHECKPOINTS];
     uint64_t checkpoint_total_bytes;
     char checkpoint_file[FTRACE_MAX_CHECKPOINTS][FTRACE_NAME];
-    char checkpoint_json[FTRACE_MAX_CHECKPOINTS][1024];
+    char checkpoint_depth_file[FTRACE_MAX_CHECKPOINTS][FTRACE_NAME];
+    char checkpoint_stencil_file[FTRACE_MAX_CHECKPOINTS][FTRACE_NAME];
+    size_t checkpoint_depth_bytes[FTRACE_MAX_CHECKPOINTS];
+    size_t checkpoint_stencil_bytes[FTRACE_MAX_CHECKPOINTS];
+    char checkpoint_json[FTRACE_MAX_CHECKPOINTS][3072];
     /* Slot captured at the current event and not yet attached to its record.
        -1 means nothing is pending. */
     int checkpoint_pending;
@@ -218,6 +225,11 @@ static struct {
     int gl_alpha_bits;
     int gl_double_buffer;
     int gl_stereo;
+    int gl_framebuffer_srgb;
+    int gl_dither;
+    int gl_multisample;
+    int gl_draw_buffer;
+    int gl_read_buffer;
     char pre_image_json[2048];
     int pre_image_valid;
     char seed_json[2048];
@@ -637,6 +649,31 @@ static uint32_t g_seal_reentrant;
 static int g_seal_last_status;
 static int g_seal_last_written;
 static _Thread_local int tls_seal_dispatch;
+/* The default drawable's queried properties.  This is the only source of the
+   precision/sample claims the replay control is allowed to rely on: an
+   offscreen FBO's attachments are never substituted for the live window. */
+typedef struct {
+    int valid;
+    int binding;
+    int samples;
+    int sample_buffers;
+    int depth_bits;
+    int stencil_bits;
+    int red_bits;
+    int green_bits;
+    int blue_bits;
+    int alpha_bits;
+    int double_buffer;
+    int stereo;
+    int draw_buffer;
+    int read_buffer;
+    int framebuffer_srgb;
+    int framebuffer_srgb_known;
+    int dither;
+    int multisample;
+} ftrace_drawable_state;
+
+static int srgb_extension_supported(void);
 static int emit_event(const char *json);
 static uint64_t now_ms(void);
 static uint64_t now_ns(void);
@@ -646,7 +683,8 @@ static int write_reference_pixels(const uint8_t *pixels, uint32_t width,
                                   uint32_t height);
 static int capture_reference(void);
 static int read_drawable_bgra(uint32_t *out_width, uint32_t *out_height,
-                              uint8_t **out_pixels);
+                              uint8_t **out_pixels,
+                              ftrace_drawable_state *out_state);
 static void sha256_hex(const void *data, size_t size, char out[65]);
 static int write_atomic(const char *path, const void *data, size_t size);
 static int write_frame_manifest(int complete, const char *reason);
@@ -655,10 +693,13 @@ static int capture_timed_out_locked(void);
 static void continuous_write_campaign(const char *status,
                                       const char *reason);
 static int maybe_capture_default_checkpoint_locked(void);
-static int capture_default_checkpoint_pixels_locked(int slot,
-                                                    const uint8_t *pixels,
-                                                    uint32_t width,
-                                                    uint32_t height);
+static int capture_default_checkpoint_pixels_locked(
+    int slot, const uint8_t *pixels, size_t pixels_bytes,
+    const uint8_t *depth, size_t depth_bytes,
+    const uint8_t *stencil, size_t stencil_bytes,
+    uint32_t width, uint32_t height,
+    const ftrace_drawable_state *drawable,
+    int depth_used, int stencil_used);
 static int checkpoint_pending_slot_locked(void);
 static void checkpoint_clear_pending_locked(void);
 
@@ -780,12 +821,18 @@ int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event) {
         internal_format = queried_format;
     }
     char source_image[512] = "";
-    char checkpoint_image[1100] = "";
+    char checkpoint_image[sizeof(g.checkpoint_json[0]) + 64] = "";
     int checkpoint_slot = checkpoint_pending_slot_locked();
     if (checkpoint_slot >= 0) {
-        snprintf(checkpoint_image, sizeof(checkpoint_image),
-                 ",\"default_checkpoint\":%s",
-                 g.checkpoint_json[checkpoint_slot]);
+        int written = snprintf(checkpoint_image, sizeof(checkpoint_image),
+                               ",\"default_checkpoint\":%s",
+                               g.checkpoint_json[checkpoint_slot]);
+        if (written <= 0 || (size_t)written >= sizeof(checkpoint_image)) {
+            /* The checkpoint record must attach verbatim; a truncated object
+               would be sealed as an unparseable event stream. */
+            checkpoint_image[0] = 0;
+            fail_capture_locked("default_checkpoint_record");
+        }
     }
     if (g.armed && event->source_framebuffer == 0) {
         const char *capture_source = getenv(
@@ -794,7 +841,7 @@ int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event) {
             uint32_t source_width = 0, source_height = 0;
             uint8_t *source_pixels = NULL;
             if (read_drawable_bgra(&source_width, &source_height,
-                                   &source_pixels) != 0 ||
+                                   &source_pixels, NULL) != 0 ||
                 source_width != (uint32_t)event->source_width ||
                 source_height != (uint32_t)event->source_height ||
                 source_pixels == NULL) {
@@ -1625,6 +1672,28 @@ static int emit_event(const char *json) {
 /* Finalizes and validates the event stream before a manifest may claim
    completion.  Every record must be one complete JSON object and the number of
    records on disk must equal the number the capture reported. */
+static int json_line_balanced(const char *line, int start, int end) {
+    int curly = 0, square = 0, in_string = 0, escape = 0;
+    for (int index = start; index < end; index++) {
+        char character = line[index];
+        if (in_string) {
+            if (escape) escape = 0;
+            else if (character == '\\') escape = 1;
+            else if (character == '"') in_string = 0;
+            continue;
+        }
+        if (character == '"') in_string = 1;
+        else if (character == '{') curly++;
+        else if (character == '}') {
+            if (--curly < 0) return 0;
+        } else if (character == '[') square++;
+        else if (character == ']') {
+            if (--square < 0) return 0;
+        }
+    }
+    return !in_string && curly == 0 && square == 0;
+}
+
 static int finalize_event_stream(void) {
     int ok = 1;
     if (g.events != NULL) {
@@ -1671,7 +1740,7 @@ static int finalize_event_stream(void) {
             }
         }
         if (end <= start || line[start] != '{' || line[end - 1] != '}' ||
-            !has_kind) {
+            !has_kind || !json_line_balanced(line, start, end)) {
             malformed = 1;
         }
         records++;
@@ -2507,17 +2576,19 @@ static int capture_attributes(GLuint program, int indexed, int first, int count,
 static int capture_target(json_out *out, GLint *out_width, GLint *out_height) {
     GLint framebuffer = 0;
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &framebuffer);
-    GLint draw_buffer = 0;
-    glGetIntegerv(GL_DRAW_BUFFER0, &draw_buffer);
+    GLint draw_buffer = 0, read_buffer = 0;
+    glGetIntegerv(GL_DRAW_BUFFER, &draw_buffer);
+    glGetIntegerv(GL_READ_BUFFER, &read_buffer);
     GLint viewport[4] = {0, 0, 0, 0};
     glGetIntegerv(GL_VIEWPORT, viewport);
     GLint width = viewport[2];
     GLint height = viewport[3];
     jprintf(out,
             "\"target\":{\"framebuffer\":%d,\"draw_buffer\":\"0x%x\","
+            "\"read_buffer\":\"0x%x\","
             "\"viewport\":[%d,%d,%d,%d]",
-            framebuffer, draw_buffer, viewport[0], viewport[1], viewport[2],
-            viewport[3]);
+            framebuffer, draw_buffer, read_buffer, viewport[0], viewport[1],
+            viewport[2], viewport[3]);
     if (framebuffer != 0) {
         GLint object_type = 0, object_name = 0, texture_level = 0;
         glGetFramebufferAttachmentParameteriv(
@@ -2790,6 +2861,14 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
     GLint multisample = 0, dither = 0;
     glGetIntegerv(GL_MULTISAMPLE, &multisample);
     glGetIntegerv(GL_DITHER, &dither);
+    int framebuffer_srgb_known = srgb_extension_supported();
+    GLint framebuffer_srgb = framebuffer_srgb_known
+        ? (glIsEnabled(GL_FRAMEBUFFER_SRGB) ? 1 : 0) : -1;
+    GLfloat depth_range[2] = {0.0f, 1.0f};
+    glGetFloatv(GL_DEPTH_RANGE, depth_range);
+    GLint logic_op = 0, color_logic_op = 0;
+    glGetIntegerv(GL_LOGIC_OP_MODE, &logic_op);
+    glGetIntegerv(GL_COLOR_LOGIC_OP, &color_logic_op);
     GLint vp[4] = {0, 0, 0, 0};
     glGetIntegerv(GL_VIEWPORT, vp);
 
@@ -2798,7 +2877,8 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
             "\"dst_rgb\":\"0x%x\",\"src_alpha\":\"0x%x\",\"dst_alpha\":\"0x%x\","
             "\"equation_rgb\":\"0x%x\",\"equation_alpha\":\"0x%x\"},"
             "\"color_mask\":[%d,%d,%d,%d],"
-            "\"depth\":{\"test\":%s,\"func\":\"0x%x\",\"write\":%s},"
+            "\"depth\":{\"test\":%s,\"func\":\"0x%x\",\"write\":%s,"
+            "\"range\":[%.9g,%.9g]},"
             "\"stencil\":{\"test\":%s,\"func\":\"0x%x\",\"ref\":%d,"
             "\"value_mask\":%d,\"fail\":\"0x%x\",\"zfail\":\"0x%x\",\"zpass\":\"0x%x\","
             "\"write_mask\":%d},"
@@ -2807,11 +2887,16 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
             "\"offset_factor\":%.9g,\"offset_units\":%.9g},"
             "\"alpha_test\":{\"enabled\":%s,\"func\":\"0x%x\",\"ref\":%.9g},"
             "\"scissor\":{\"enabled\":%s,\"box\":[%d,%d,%d,%d]},"
-            "\"multisample\":%s,\"dither\":%s,\"viewport\":[%d,%d,%d,%d]}",
+            "\"multisample\":%s,\"dither\":%s,"
+            "\"framebuffer_srgb\":%s,"
+            "\"framebuffer_srgb_known\":%s,"
+            "\"logic_op\":{\"enabled\":%s,\"mode\":\"0x%x\"},"
+            "\"viewport\":[%d,%d,%d,%d]}",
             bool_text(blend != 0), blend_src_rgb, blend_dst_rgb, blend_src_a,
             blend_dst_a, blend_eq_rgb, blend_eq_a, color_mask[0] ? 1 : 0,
             color_mask[1] ? 1 : 0, color_mask[2] ? 1 : 0, color_mask[3] ? 1 : 0,
             bool_text(depth_test != 0), depth_func, bool_text(depth_mask != 0),
+            (double)depth_range[0], (double)depth_range[1],
             bool_text(stencil_test != 0), stencil_func, stencil_ref,
             stencil_value_mask, stencil_fail, stencil_zfail, stencil_zpass,
             stencil_write_mask, bool_text(cull != 0), cull_mode, front_face,
@@ -2820,8 +2905,12 @@ static void capture_draw_state(json_out *out, int indexed, GLint mode, int first
             (double)polygon_offset_units, bool_text(alpha_test != 0), alpha_func,
             (double)alpha_ref, bool_text(scissor_test != 0), scissor_box[0],
             scissor_box[1], scissor_box[2], scissor_box[3],
-            bool_text(multisample != 0), bool_text(dither != 0), vp[0], vp[1],
-            vp[2], vp[3]);
+            bool_text(multisample != 0), bool_text(dither != 0),
+            framebuffer_srgb < 0 ? "null"
+                                 : bool_text(framebuffer_srgb != 0),
+            bool_text(framebuffer_srgb_known != 0),
+            bool_text(color_logic_op != 0), logic_op, vp[0], vp[1], vp[2],
+            vp[3]);
 
     {
         GLint active_attributes = 0, active_uniforms = 0, program_link = 0;
@@ -3138,12 +3227,20 @@ static int write_frame_manifest(int complete, const char *reason) {
                 "\"depth_bits\":%d,\"stencil_bits\":%d,"
                 "\"red_bits\":%d,\"green_bits\":%d,\"blue_bits\":%d,"
                 "\"alpha_bits\":%d,\"double_buffer\":%s,\"stereo\":%s,"
-                "\"drawn_framebuffer_binding\":%d},",
+                "\"drawn_framebuffer_binding\":%d,"
+                "\"framebuffer_srgb\":%s,\"framebuffer_srgb_known\":%s,"
+                "\"dither\":%s,\"multisample\":%s,"
+                "\"draw_buffer\":\"0x%x\",\"read_buffer\":\"0x%x\"},",
                 g.gl_samples, g.gl_sample_buffers, g.gl_depth_bits,
                 g.gl_stencil_bits, g.gl_red_bits, g.gl_green_bits,
                 g.gl_blue_bits, g.gl_alpha_bits,
                 bool_text(g.gl_double_buffer), bool_text(g.gl_stereo),
-                g.gl_drawable_binding);
+                g.gl_drawable_binding,
+                g.gl_framebuffer_srgb < 0 ? "null"
+                    : bool_text(g.gl_framebuffer_srgb),
+                bool_text(g.gl_framebuffer_srgb >= 0),
+                bool_text(g.gl_dither), bool_text(g.gl_multisample),
+                g.gl_draw_buffer, g.gl_read_buffer);
     }
     fprintf(file, "\"drawable_observed\":%s},", bool_text(g.gl_drawable_valid));
     fputs("\"frame\":{", file);
@@ -4016,6 +4113,10 @@ static void start_capture_at_frame(int next_frame) {
         g.checkpoint_ns[index] = 0;
         g.checkpoint_bytes[index] = 0;
         g.checkpoint_file[index][0] = 0;
+        g.checkpoint_depth_file[index][0] = 0;
+        g.checkpoint_stencil_file[index][0] = 0;
+        g.checkpoint_depth_bytes[index] = 0;
+        g.checkpoint_stencil_bytes[index] = 0;
         g.checkpoint_json[index][0] = 0;
     }
     g.checkpoint_total_bytes = 0;
@@ -4069,14 +4170,147 @@ static uint64_t stream_caller_signature(void) {
     return signature;
 }
 
-/* Read the actual drawable (default framebuffer) into tightly packed BGRA8.
-   Every binding the readback changes is restored, including pack skip state and
-   a bound pixel-pack buffer.  Returns 0 on success. */
-static int read_drawable_bgra(uint32_t *out_width, uint32_t *out_height,
-                              uint8_t **out_pixels) {
+/* glIsEnabled with an unsupported enum plants a GL error in the engine's
+   queue, which this observer must never do.  The sRGB enable is therefore
+   queried only when the driver advertises the extension. */
+static int srgb_extension_supported(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *extensions = (const char *)glGetString(GL_EXTENSIONS);
+        cached = 0;
+        if (extensions != NULL &&
+            (strstr(extensions, "GL_EXT_framebuffer_sRGB") != NULL ||
+             strstr(extensions, "GL_ARB_framebuffer_sRGB") != NULL)) {
+            cached = 1;
+        }
+    }
+    return cached;
+}
+
+static void query_drawable_state(ftrace_drawable_state *out) {
+    memset(out, 0, sizeof(*out));
+    GLint value = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &value);
+    out->binding = (int)value;
+    glGetIntegerv(GL_SAMPLES, &value);
+    out->samples = (int)value;
+    glGetIntegerv(GL_SAMPLE_BUFFERS, &value);
+    out->sample_buffers = (int)value;
+    glGetIntegerv(GL_DEPTH_BITS, &value);
+    out->depth_bits = (int)value;
+    glGetIntegerv(GL_STENCIL_BITS, &value);
+    out->stencil_bits = (int)value;
+    glGetIntegerv(GL_RED_BITS, &value);
+    out->red_bits = (int)value;
+    glGetIntegerv(GL_GREEN_BITS, &value);
+    out->green_bits = (int)value;
+    glGetIntegerv(GL_BLUE_BITS, &value);
+    out->blue_bits = (int)value;
+    glGetIntegerv(GL_ALPHA_BITS, &value);
+    out->alpha_bits = (int)value;
+    glGetIntegerv(GL_DOUBLEBUFFER, &value);
+    out->double_buffer = (int)value;
+    glGetIntegerv(GL_STEREO, &value);
+    out->stereo = (int)value;
+    glGetIntegerv(GL_DRAW_BUFFER, &value);
+    out->draw_buffer = (int)value;
+    glGetIntegerv(GL_READ_BUFFER, &value);
+    out->read_buffer = (int)value;
+    out->framebuffer_srgb_known = srgb_extension_supported();
+    out->framebuffer_srgb = out->framebuffer_srgb_known
+        ? (glIsEnabled(GL_FRAMEBUFFER_SRGB) ? 1 : 0) : -1;
+    out->dither = glIsEnabled(GL_DITHER) ? 1 : 0;
+    out->multisample = glIsEnabled(GL_MULTISAMPLE) ? 1 : 0;
+    out->valid = out->binding == 0;
+}
+
+typedef struct {
+    GLint draw_framebuffer;
+    GLint read_framebuffer;
+    GLint read_buffer;
+    GLint pack_alignment;
+    GLint pack_row;
+    GLint pack_skip_rows;
+    GLint pack_skip_pixels;
+    GLint pack_buffer;
+    GLboolean pack_swap_bytes;
+    GLboolean pack_lsb_first;
+} drawable_readback_guard;
+
+static void end_drawable_readback(const drawable_readback_guard *guard) {
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)guard->draw_framebuffer);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)guard->read_framebuffer);
+    glReadBuffer((GLenum)guard->read_buffer);
+    glPixelStorei(GL_PACK_ALIGNMENT, guard->pack_alignment);
+    glPixelStorei(GL_PACK_ROW_LENGTH, guard->pack_row);
+    glPixelStorei(GL_PACK_SKIP_ROWS, guard->pack_skip_rows);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, guard->pack_skip_pixels);
+    glPixelStorei(GL_PACK_SWAP_BYTES, guard->pack_swap_bytes);
+    glPixelStorei(GL_PACK_LSB_FIRST, guard->pack_lsb_first);
+    if (guard->pack_buffer != 0) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)guard->pack_buffer);
+    }
+}
+
+/* Select the real default drawable and a tightly packed pack state.  Every
+   mutation is restored by end_drawable_readback.  The engine's GL error queue
+   is deliberately never queried: OpenGL has no non-destructive peek and the
+   observer must not consume a pending renderer error. */
+static int begin_drawable_readback(drawable_readback_guard *guard) {
+    memset(guard, 0, sizeof(*guard));
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &guard->draw_framebuffer);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &guard->read_framebuffer);
+    glGetIntegerv(GL_READ_BUFFER, &guard->read_buffer);
+    glGetIntegerv(GL_PACK_ALIGNMENT, &guard->pack_alignment);
+    glGetIntegerv(GL_PACK_ROW_LENGTH, &guard->pack_row);
+    glGetIntegerv(GL_PACK_SKIP_ROWS, &guard->pack_skip_rows);
+    glGetIntegerv(GL_PACK_SKIP_PIXELS, &guard->pack_skip_pixels);
+    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &guard->pack_buffer);
+    glGetBooleanv(GL_PACK_SWAP_BYTES, &guard->pack_swap_bytes);
+    glGetBooleanv(GL_PACK_LSB_FIRST, &guard->pack_lsb_first);
+    if (guard->draw_framebuffer != 0) {
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    }
+    if (guard->read_framebuffer != 0) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    }
+    glReadBuffer(GL_BACK);
+    GLint selected_read_framebuffer = -1, selected_draw_framebuffer = -1;
+    GLint selected_read_buffer = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &selected_read_framebuffer);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &selected_draw_framebuffer);
+    glGetIntegerv(GL_READ_BUFFER, &selected_read_buffer);
+    if (selected_read_framebuffer != 0 || selected_draw_framebuffer != 0 ||
+        selected_read_buffer != GL_BACK) {
+        end_drawable_readback(guard);
+        return -1;
+    }
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+    glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+    glPixelStorei(GL_PACK_SWAP_BYTES, GL_FALSE);
+    glPixelStorei(GL_PACK_LSB_FIRST, GL_FALSE);
+    if (guard->pack_buffer != 0) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    }
+    return 0;
+}
+
+/* Read one default-drawable buffer into tightly packed pixels.  The extent is
+   the actual drawable extent when the driver reports one, never an offscreen
+   attachment's size and never the viewport alone unless no extent exists. */
+static int read_drawable_pixels(GLenum format, GLenum type,
+                                size_t bytes_per_pixel,
+                                uint32_t *out_width, uint32_t *out_height,
+                                uint8_t **out_pixels,
+                                ftrace_drawable_state *out_state) {
     *out_width = 0;
     *out_height = 0;
     *out_pixels = NULL;
+    if (bytes_per_pixel == 0) {
+        return -1;
+    }
     uint32_t width = 0, height = 0;
     GLint viewport[4] = {0, 0, 0, 0};
     glGetIntegerv(GL_VIEWPORT, viewport);
@@ -4088,76 +4322,41 @@ static int read_drawable_bgra(uint32_t *out_width, uint32_t *out_height,
     if (width == 0 || height == 0 || width > 8192 || height > 8192) {
         return -1;
     }
-    size_t bytes = (size_t)width * height * 4;
-    uint8_t *pixels = malloc(bytes);
+    if ((uint64_t)width * (uint64_t)height >
+        (uint64_t)(SIZE_MAX / bytes_per_pixel)) {
+        return -1;
+    }
+    size_t bytes = (size_t)width * (size_t)height * bytes_per_pixel;
+    uint8_t *pixels = calloc(bytes ? bytes : 1, 1);
     if (pixels == NULL) {
         return -1;
     }
-    GLint draw_framebuffer = 0, read_framebuffer = 0, read_buffer = 0;
-    GLint pack_alignment = 0, pack_row = 0, pack_skip_rows = 0;
-    GLint pack_skip_pixels = 0, pack_buffer = 0;
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_framebuffer);
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_framebuffer);
-    glGetIntegerv(GL_READ_BUFFER, &read_buffer);
-    glGetIntegerv(GL_PACK_ALIGNMENT, &pack_alignment);
-    glGetIntegerv(GL_PACK_ROW_LENGTH, &pack_row);
-    glGetIntegerv(GL_PACK_SKIP_ROWS, &pack_skip_rows);
-    glGetIntegerv(GL_PACK_SKIP_PIXELS, &pack_skip_pixels);
-    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_buffer);
-    if (draw_framebuffer != 0) {
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-    }
-    if (read_framebuffer != 0) {
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-    }
-    glReadBuffer(GL_BACK);
-    /* Verify the intended default framebuffer/back buffer without touching the
-       engine's error queue.  A mis-selected read target is a readback failure,
-       never evidence. */
-    GLint selected_read_framebuffer = -1, selected_draw_framebuffer = -1;
-    GLint selected_read_buffer = 0;
-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &selected_read_framebuffer);
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &selected_draw_framebuffer);
-    glGetIntegerv(GL_READ_BUFFER, &selected_read_buffer);
-    if (selected_read_framebuffer != 0 || selected_draw_framebuffer != 0 ||
-        selected_read_buffer != GL_BACK) {
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)draw_framebuffer);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)read_framebuffer);
-        glReadBuffer((GLenum)read_buffer);
+    drawable_readback_guard guard;
+    if (begin_drawable_readback(&guard) != 0) {
         free(pixels);
         return -1;
     }
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
-    glPixelStorei(GL_PACK_SKIP_ROWS, 0);
-    glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
-    if (pack_buffer != 0) {
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    if (out_state != NULL) {
+        query_drawable_state(out_state);
     }
-    /* Deliberately do not drain the GL error queue here.  The engine owns that
-       state and reading it in the observer would consume a pending renderer
-       error.  OpenGL provides no non-destructive error peek; the consequence is
-       that a failure of this readback cannot be distinguished from a pending
-       engine error without consuming one.  The observer records the read as
-       attempted and leaves the queue untouched. */
     /* glReadPixels is synchronous; do not issue glFinish, which the Apple
        driver implements as an error-queue flush. */
-    glReadPixels(0, 0, (GLsizei)width, (GLsizei)height, GL_BGRA,
-                 GL_UNSIGNED_INT_8_8_8_8_REV, pixels);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)draw_framebuffer);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)read_framebuffer);
-    glReadBuffer((GLenum)read_buffer);
-    glPixelStorei(GL_PACK_ALIGNMENT, pack_alignment);
-    glPixelStorei(GL_PACK_ROW_LENGTH, pack_row);
-    glPixelStorei(GL_PACK_SKIP_ROWS, pack_skip_rows);
-    glPixelStorei(GL_PACK_SKIP_PIXELS, pack_skip_pixels);
-    if (pack_buffer != 0) {
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)pack_buffer);
-    }
+    glReadPixels(0, 0, (GLsizei)width, (GLsizei)height, format, type, pixels);
+    end_drawable_readback(&guard);
     *out_width = width;
     *out_height = height;
     *out_pixels = pixels;
     return 0;
+}
+
+/* Read the actual drawable (default framebuffer) into tightly packed BGRA8.
+   Every binding the readback changes is restored, including pack skip state and
+   a bound pixel-pack buffer.  Returns 0 on success. */
+static int read_drawable_bgra(uint32_t *out_width, uint32_t *out_height,
+                              uint8_t **out_pixels,
+                              ftrace_drawable_state *out_state) {
+    return read_drawable_pixels(GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, 4,
+                                out_width, out_height, out_pixels, out_state);
 }
 
 /* Validates and publishes the one final reference image.  Every dimension,
@@ -4206,7 +4405,7 @@ static int write_reference_pixels(const uint8_t *pixels, uint32_t width,
 static int capture_reference(void) {
     uint32_t width = 0, height = 0;
     uint8_t *pixels = NULL;
-    if (read_drawable_bgra(&width, &height, &pixels) != 0) {
+    if (read_drawable_bgra(&width, &height, &pixels, NULL) != 0) {
         free(pixels);
         return -1;
     }
@@ -4220,7 +4419,7 @@ static int capture_reference(void) {
 int eu4_gfx_frame_trace_readback_probe(void) {
     uint32_t width = 0, height = 0;
     uint8_t *pixels = NULL;
-    int result = read_drawable_bgra(&width, &height, &pixels);
+    int result = read_drawable_bgra(&width, &height, &pixels, NULL);
     free(pixels);
     return result;
 }
@@ -4238,14 +4437,21 @@ int eu4_gfx_frame_trace_test_reference(const char *directory) {
     return capture_reference();
 }
 
-/* Publish one already-read BGRA8 image as the additive default-framebuffer
-   checkpoint of the selected event in ``slot``.  The blob is content-addressed
-   and joins the ordinary blob registry, so normal trace verification and the
-   portable case inventory see it exactly like every other captured payload. */
-static int capture_default_checkpoint_pixels_locked(int slot,
-                                                    const uint8_t *pixels,
-                                                    uint32_t width,
-                                                    uint32_t height) {
+/* Publish one already-read pre-event observation as the additive default-
+   framebuffer checkpoint of the selected event in ``slot``.  The colour image,
+   the depth contents and the stencil contents are content-addressed blobs and
+   join the ordinary blob registry, so normal trace verification and the
+   portable case inventory see them exactly like every other captured payload.
+
+   The drawable record is queried from the live default framebuffer while it is
+   current; an offscreen FBO's attachment precision is never substituted. */
+static int capture_default_checkpoint_pixels_locked(
+    int slot, const uint8_t *pixels, size_t pixels_bytes,
+    const uint8_t *depth, size_t depth_bytes,
+    const uint8_t *stencil, size_t stencil_bytes,
+    uint32_t width, uint32_t height,
+    const ftrace_drawable_state *drawable,
+    int depth_used, int stencil_used) {
     if (slot < 0 || slot >= g.checkpoint_count) {
         fail_capture_locked("default_checkpoint_unattached");
         return -1;
@@ -4259,21 +4465,97 @@ static int capture_default_checkpoint_pixels_locked(int slot,
         fail_capture_locked("default_checkpoint_size");
         return -1;
     }
-    size_t bytes = (size_t)width * (size_t)height * 4u;
-    if (bytes == 0 || bytes / 4u / width != height ||
-        bytes > (size_t)FTRACE_MAX_CHECKPOINT_BYTES) {
+    size_t expected_colour = (size_t)width * (size_t)height * 4u;
+    if (pixels_bytes != expected_colour ||
+        expected_colour / 4u / width != height ||
+        expected_colour > (size_t)FTRACE_MAX_CHECKPOINT_BYTES) {
         fail_capture_locked("default_checkpoint_size");
         return -1;
     }
+    size_t expected_depth = (size_t)width * (size_t)height * sizeof(float);
+    size_t expected_stencil = (size_t)width * (size_t)height;
+    // A buffer is required only when the selected event actually tests it.
+    // The drawable almost always advertises depth/stencil bits, so requiring
+    // an unused buffer would make a normal 2D checkpoint impossible.
+    if (depth_used && depth == NULL) {
+        fail_capture_locked("default_checkpoint_depth_size");
+        return -1;
+    }
+    if (stencil_used && stencil == NULL) {
+        fail_capture_locked("default_checkpoint_stencil_size");
+        return -1;
+    }
+    if (depth != NULL && depth_bytes != expected_depth) {
+        fail_capture_locked("default_checkpoint_depth_size");
+        return -1;
+    }
+    if (stencil != NULL && stencil_bytes != expected_stencil) {
+        fail_capture_locked("default_checkpoint_stencil_size");
+        return -1;
+    }
+    if (expected_depth > (size_t)FTRACE_MAX_CHECKPOINT_BYTES ||
+        expected_stencil > (size_t)FTRACE_MAX_CHECKPOINT_BYTES) {
+        fail_capture_locked("default_checkpoint_size");
+        return -1;
+    }
+    /* Every byte this checkpoint will write counts against the aggregate
+       readback budget before the first blob is written. */
+    uint64_t projected = (uint64_t)expected_colour;
+    if (depth != NULL) {
+        projected += (uint64_t)depth_bytes;
+    }
+    if (stencil != NULL) {
+        projected += (uint64_t)stencil_bytes;
+    }
     if (g.checkpoint_total_bytes > g.checkpoint_max_bytes ||
-        (uint64_t)bytes > g.checkpoint_max_bytes - g.checkpoint_total_bytes) {
+        projected > g.checkpoint_max_bytes - g.checkpoint_total_bytes) {
         fail_capture_locked("default_checkpoint_budget");
         return -1;
     }
     char file[FTRACE_NAME];
     char sha[65];
-    if (put_blob(pixels, bytes, "default-checkpoint", file, sha) != 0) {
+    if (put_blob(pixels, pixels_bytes, "default-checkpoint", file, sha) != 0) {
         return -1;
+    }
+    char depth_file[FTRACE_NAME] = "";
+    char depth_sha[65] = "";
+    char stencil_file[FTRACE_NAME] = "";
+    char stencil_sha[65] = "";
+    if (depth != NULL && depth_bytes > 0) {
+        if (put_blob(depth, depth_bytes, "default-checkpoint-depth", depth_file,
+                     depth_sha) != 0) {
+            return -1;
+        }
+    }
+    if (stencil != NULL && stencil_bytes > 0) {
+        if (put_blob(stencil, stencil_bytes, "default-checkpoint-stencil",
+                     stencil_file, stencil_sha) != 0) {
+            return -1;
+        }
+    }
+    char depth_json[512];
+    if (depth_file[0] != 0) {
+        snprintf(depth_json, sizeof(depth_json),
+                 "\"depth\":{\"file\":\"%s\",\"sha256\":\"%s\","
+                 "\"bytes\":%zu,\"format\":\"f32\",\"width\":%u,"
+                 "\"height\":%u},",
+                 depth_file, depth_sha, depth_bytes, width, height);
+    } else {
+        snprintf(depth_json, sizeof(depth_json),
+                 "\"depth\":{\"status\":\"absent\",\"bits\":%d},",
+                 drawable != NULL ? drawable->depth_bits : 0);
+    }
+    char stencil_json[512];
+    if (stencil_file[0] != 0) {
+        snprintf(stencil_json, sizeof(stencil_json),
+                 "\"stencil\":{\"file\":\"%s\",\"sha256\":\"%s\","
+                 "\"bytes\":%zu,\"format\":\"u8\",\"width\":%u,"
+                 "\"height\":%u},",
+                 stencil_file, stencil_sha, stencil_bytes, width, height);
+    } else {
+        snprintf(stencil_json, sizeof(stencil_json),
+                 "\"stencil\":{\"status\":\"absent\",\"bits\":%d},",
+                 drawable != NULL ? drawable->stencil_bits : 0);
     }
     /* A standalone host call has no configured session; the identity fields
        are then omitted rather than published empty. */
@@ -4285,19 +4567,57 @@ static int capture_default_checkpoint_pixels_locked(int slot,
     }
     snprintf(g.checkpoint_file[slot], sizeof(g.checkpoint_file[slot]), "%s",
              file);
-    snprintf(
+    snprintf(g.checkpoint_depth_file[slot],
+             sizeof(g.checkpoint_depth_file[slot]), "%s", depth_file);
+    snprintf(g.checkpoint_stencil_file[slot],
+             sizeof(g.checkpoint_stencil_file[slot]), "%s", stencil_file);
+    g.checkpoint_depth_bytes[slot] = depth_bytes;
+    g.checkpoint_stencil_bytes[slot] = stencil_bytes;
+    int written = snprintf(
         g.checkpoint_json[slot], sizeof(g.checkpoint_json[slot]),
-        "{\"schema\":\"gfx-default-framebuffer-checkpoint/v1\","
+        "{\"schema\":\"gfx-default-framebuffer-checkpoint/v2\","
         "\"event\":%d,\"target\":\"0\",\"resource\":\"fb:0\","
         "\"width\":%u,\"height\":%u,\"bytes\":%zu,"
         "\"file\":\"%s\",\"sha256\":\"%s\","
         "\"pixel_format\":\"BGRA8\",\"origin\":\"lower_left\","
-        "\"timing\":\"pre_event\",\"status\":\"captured\"%s,"
-        "\"readback_ns\":%llu}",
-        g.checkpoint_events[slot], width, height, bytes, file, sha, identity,
-        (unsigned long long)g.checkpoint_ns[slot]);
-    g.checkpoint_bytes[slot] = bytes;
-    g.checkpoint_total_bytes += (uint64_t)bytes;
+        "\"timing\":\"pre_event\",\"status\":\"captured\","
+        "\"drawable\":{\"samples\":%d,\"sample_buffers\":%d,"
+        "\"depth_bits\":%d,\"stencil_bits\":%d,"
+        "\"red_bits\":%d,\"green_bits\":%d,\"blue_bits\":%d,"
+        "\"alpha_bits\":%d,\"double_buffer\":%s,\"stereo\":%s,"
+        "\"drawn_framebuffer_binding\":%d},"
+        "\"draw_buffer\":\"0x%x\",\"read_buffer\":\"0x%x\","
+        "\"framebuffer_srgb\":%s,\"framebuffer_srgb_known\":%s,"
+        "\"dither\":%s,\"multisample\":%s,"
+        "%s%s"
+        "\"readback_ns\":%llu%s}",
+        g.checkpoint_events[slot], width, height, pixels_bytes, file, sha,
+        drawable != NULL ? drawable->samples : 0,
+        drawable != NULL ? drawable->sample_buffers : 0,
+        drawable != NULL ? drawable->depth_bits : 0,
+        drawable != NULL ? drawable->stencil_bits : 0,
+        drawable != NULL ? drawable->red_bits : 0,
+        drawable != NULL ? drawable->green_bits : 0,
+        drawable != NULL ? drawable->blue_bits : 0,
+        drawable != NULL ? drawable->alpha_bits : 0,
+        bool_text(drawable != NULL && drawable->double_buffer),
+        bool_text(drawable != NULL && drawable->stereo),
+        drawable != NULL ? drawable->binding : -1,
+        drawable != NULL ? drawable->draw_buffer : 0,
+        drawable != NULL ? drawable->read_buffer : 0,
+        (drawable != NULL && drawable->framebuffer_srgb >= 0)
+            ? bool_text(drawable->framebuffer_srgb) : "null",
+        bool_text(drawable != NULL && drawable->framebuffer_srgb_known),
+        bool_text(drawable != NULL && drawable->dither),
+        bool_text(drawable != NULL && drawable->multisample),
+        depth_json, stencil_json,
+        (unsigned long long)g.checkpoint_ns[slot], identity);
+    if (written <= 0 || (size_t)written >= sizeof(g.checkpoint_json[slot])) {
+        fail_capture_locked("default_checkpoint_record");
+        return -1;
+    }
+    g.checkpoint_bytes[slot] = pixels_bytes;
+    g.checkpoint_total_bytes += projected;
     g.checkpoint_captured[slot] = 1;
     return 0;
 }
@@ -4338,20 +4658,58 @@ static int maybe_capture_default_checkpoint_locked(void) {
     }
     uint32_t width = 0;
     uint32_t height = 0;
+    ftrace_drawable_state drawable;
+    memset(&drawable, 0, sizeof(drawable));
     if (g.test_only) {
         /* The offline writer host has no GL context.  Its synthetic image is
            bounded exactly like the production readback below. */
         width = 4;
         height = 4;
+        drawable.valid = 1;
+        drawable.binding = 0;
+        drawable.samples = 0;
+        drawable.sample_buffers = 0;
+        drawable.depth_bits = 24;
+        drawable.stencil_bits = 8;
+        drawable.red_bits = 8;
+        drawable.green_bits = 8;
+        drawable.blue_bits = 8;
+        drawable.alpha_bits = 8;
+        drawable.double_buffer = 1;
+        drawable.draw_buffer = GL_BACK;
+        drawable.read_buffer = GL_BACK;
     } else {
+        /* A default-framebuffer checkpoint is only meaningful while the real
+           default drawable is current.  An event that targets an offscreen
+           FBO is a configuration error, not an invitation to read fb:0 and
+           label it as that event's prestate. */
+        GLint binding = 0;
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &binding);
+        if (binding != 0) {
+            fail_capture_locked("default_checkpoint_not_default");
+            return -1;
+        }
+        query_drawable_state(&drawable);
+        if (!drawable.valid) {
+            fail_capture_locked("default_checkpoint_not_default");
+            return -1;
+        }
         capture_dimensions_only(&width, &height);
     }
     if (width == 0 || height == 0) {
         fail_capture_locked("default_checkpoint_dimensions");
         return -1;
     }
-    /* Reject an over-budget readback before touching the driver. */
-    uint64_t projected = (uint64_t)width * (uint64_t)height * 4ull;
+    uint64_t colour_bytes = (uint64_t)width * (uint64_t)height * 4ull;
+    uint64_t depth_bytes = (uint64_t)width * (uint64_t)height * sizeof(float);
+    uint64_t stencil_bytes = (uint64_t)width * (uint64_t)height;
+    uint64_t projected = colour_bytes;
+    if (drawable.depth_bits > 0) {
+        projected += depth_bytes;
+    }
+    if (drawable.stencil_bits > 0) {
+        projected += stencil_bytes;
+    }
     if (projected == 0 ||
         g.checkpoint_total_bytes > g.checkpoint_max_bytes ||
         projected > g.checkpoint_max_bytes - g.checkpoint_total_bytes) {
@@ -4360,29 +4718,87 @@ static int maybe_capture_default_checkpoint_locked(void) {
     }
     uint64_t started = now_ns();
     uint8_t *pixels = NULL;
+    uint8_t *depth = NULL;
+    uint8_t *stencil = NULL;
+    int depth_used = 1;
+    int stencil_used = 1;
     if (g.test_only) {
         /* It still exercises the production blob/metadata/finalize path with a
            bounded synthetic image; the real readback below is shared with the
            final reference. */
-        pixels = malloc((size_t)width * height * 4u);
+        pixels = malloc((size_t)colour_bytes);
         if (pixels != NULL) {
-            for (size_t i = 0; i < (size_t)width * height * 4u; i++) {
+            for (size_t i = 0; i < (size_t)colour_bytes; i++) {
                 pixels[i] = (uint8_t)(i * 37u);
             }
         }
-    } else if (read_drawable_bgra(&width, &height, &pixels) != 0) {
-        free(pixels);
-        fail_capture_locked("default_checkpoint_read");
-        return -1;
+        if (drawable.depth_bits > 0) {
+            depth = malloc((size_t)depth_bytes);
+            if (depth != NULL) {
+                float *values = (float *)depth;
+                for (size_t i = 0; i < (size_t)(width * height); i++) {
+                    values[i] = 0.5f;
+                }
+            }
+        }
+        if (drawable.stencil_bits > 0) {
+            stencil = malloc((size_t)stencil_bytes);
+            if (stencil != NULL) {
+                memset(stencil, 0x5A, (size_t)stencil_bytes);
+            }
+        }
+    } else {
+        if (read_drawable_bgra(&width, &height, &pixels, &drawable) != 0) {
+            free(pixels);
+            fail_capture_locked("default_checkpoint_read");
+            return -1;
+        }
+        depth_used = glIsEnabled(GL_DEPTH_TEST) ? 1 : 0;
+        stencil_used = glIsEnabled(GL_STENCIL_TEST) ? 1 : 0;
+        if (drawable.depth_bits > 0 && depth_used) {
+            uint32_t got_width = 0, got_height = 0;
+            if (read_drawable_pixels(GL_DEPTH_COMPONENT, GL_FLOAT,
+                                     sizeof(float), &got_width, &got_height,
+                                     &depth, NULL) != 0 ||
+                got_width != width || got_height != height) {
+                free(pixels);
+                free(depth);
+                fail_capture_locked("default_checkpoint_depth_read");
+                return -1;
+            }
+        }
+        if (drawable.stencil_bits > 0 && stencil_used) {
+            uint32_t got_width = 0, got_height = 0;
+            if (read_drawable_pixels(GL_STENCIL_INDEX, GL_UNSIGNED_BYTE,
+                                     sizeof(uint8_t), &got_width, &got_height,
+                                     &stencil, NULL) != 0 ||
+                got_width != width || got_height != height) {
+                free(pixels);
+                free(depth);
+                free(stencil);
+                fail_capture_locked("default_checkpoint_stencil_read");
+                return -1;
+            }
+        }
     }
-    if (pixels == NULL) {
+    if (pixels == NULL ||
+        (depth_used && drawable.depth_bits > 0 && depth == NULL) ||
+        (stencil_used && drawable.stencil_bits > 0 && stencil == NULL)) {
+        free(pixels);
+        free(depth);
+        free(stencil);
         fail_capture_locked("default_checkpoint_read");
         return -1;
     }
     g.checkpoint_ns[slot] = now_ns() - started;
-    int result =
-        capture_default_checkpoint_pixels_locked(slot, pixels, width, height);
+    int result = capture_default_checkpoint_pixels_locked(
+        slot, pixels, (size_t)colour_bytes, depth,
+        depth != NULL ? (size_t)depth_bytes : 0,
+        stencil, stencil != NULL ? (size_t)stencil_bytes : 0,
+        width, height, &drawable, depth_used, stencil_used);
     free(pixels);
+    free(depth);
+    free(stencil);
     if (result != 0) {
         return -1;
     }
@@ -4424,24 +4840,131 @@ int eu4_gfx_frame_trace_test_checkpoint(const char *directory, int event,
     g.checkpoint_bytes[0] = 0;
     g.checkpoint_total_bytes = 0;
     g.checkpoint_file[0][0] = 0;
+    g.checkpoint_depth_file[0][0] = 0;
+    g.checkpoint_stencil_file[0][0] = 0;
+    g.checkpoint_depth_bytes[0] = 0;
+    g.checkpoint_stencil_bytes[0] = 0;
     g.checkpoint_json[0][0] = 0;
     uint64_t started = now_ns();
     uint32_t width = 0;
     uint32_t height = 0;
     uint8_t *pixels = NULL;
-    if (read_drawable_bgra(&width, &height, &pixels) != 0) {
+    ftrace_drawable_state drawable;
+    memset(&drawable, 0, sizeof(drawable));
+    if (read_drawable_bgra(&width, &height, &pixels, &drawable) != 0) {
         free(pixels);
         return -1;
     }
+    uint8_t *depth = NULL;
+    uint8_t *stencil = NULL;
+    size_t depth_bytes = 0;
+    size_t stencil_bytes = 0;
+    if (drawable.depth_bits > 0) {
+        uint32_t got_width = 0, got_height = 0;
+        if (read_drawable_pixels(GL_DEPTH_COMPONENT, GL_FLOAT, sizeof(float),
+                                 &got_width, &got_height, &depth,
+                                 NULL) != 0 ||
+            got_width != width || got_height != height) {
+            free(pixels);
+            free(depth);
+            return -1;
+        }
+        depth_bytes = (size_t)width * (size_t)height * sizeof(float);
+    }
+    if (drawable.stencil_bits > 0) {
+        uint32_t got_width = 0, got_height = 0;
+        if (read_drawable_pixels(GL_STENCIL_INDEX, GL_UNSIGNED_BYTE,
+                                 sizeof(uint8_t), &got_width, &got_height,
+                                 &stencil, NULL) != 0 ||
+            got_width != width || got_height != height) {
+            free(pixels);
+            free(depth);
+            free(stencil);
+            return -1;
+        }
+        stencil_bytes = (size_t)width * (size_t)height;
+    }
     g.checkpoint_ns[0] = now_ns() - started;
-    int result = capture_default_checkpoint_pixels_locked(0, pixels, width,
-                                                          height);
+    int result = capture_default_checkpoint_pixels_locked(
+        0, pixels, (size_t)width * (size_t)height * 4u, depth, depth_bytes,
+        stencil, stencil_bytes, width, height, &drawable, 1, 1);
     free(pixels);
+    free(depth);
+    free(stencil);
     if (result != 0) {
         return -1;
     }
     if (out_file != NULL && out_size > 0) {
         snprintf(out_file, out_size, "%s", g.checkpoint_file[0]);
+    }
+    return 0;
+}
+
+/* Host-test only: run the real production selected-event path
+   (maybe_capture_default_checkpoint_locked), including its default-framebuffer
+   guard and test-state gating, without a full frame stream.  This is the path
+   the live recorder uses; the shortcut above bypasses it. */
+int eu4_gfx_frame_trace_test_checkpoint_production(const char *directory,
+                                                   int event,
+                                                   char *out_file,
+                                                   size_t out_size) {
+    if (directory == NULL || directory[0] != '/' || event < 0) {
+        return -1;
+    }
+    snprintf(g.dir, sizeof(g.dir), "%s", directory);
+    if (mkdir_p(g.dir) != 0) {
+        return -1;
+    }
+    char blobs[FTRACE_PATH];
+    snprintf(blobs, sizeof(blobs), "%s/blobs", g.dir);
+    if (mkdir_p(blobs) != 0) {
+        return -1;
+    }
+    g.checkpoint_events[0] = event;
+    g.checkpoint_count = 1;
+    g.checkpoint_pending = -1;
+    g.checkpoint_captured[0] = 0;
+    g.checkpoint_bytes[0] = 0;
+    g.checkpoint_depth_bytes[0] = 0;
+    g.checkpoint_stencil_bytes[0] = 0;
+    g.checkpoint_total_bytes = 0;
+    g.checkpoint_file[0][0] = 0;
+    g.checkpoint_depth_file[0][0] = 0;
+    g.checkpoint_stencil_file[0][0] = 0;
+    g.checkpoint_json[0][0] = 0;
+    g.armed = 1;
+    g.events = (void *)1;
+    g.event_count = event;
+    g.max_draws = event + 1;
+    int result = maybe_capture_default_checkpoint_locked();
+    g.armed = 0;
+    g.events = NULL;
+    g.checkpoint_pending = -1;
+    if (result != 1) {
+        return -1;
+    }
+    if (out_file != NULL && out_size > 0) {
+        snprintf(out_file, out_size, "%s", g.checkpoint_file[0]);
+    }
+    return 0;
+}
+
+/* Host-test only: the last checkpoint's record and attachment blob names, so a
+   synthetic GL context can verify the captured provenance without parsing the
+   event stream. */
+int eu4_gfx_frame_trace_test_checkpoint_records(
+    char *json, size_t json_size, char *depth_file, size_t depth_size,
+    char *stencil_file, size_t stencil_size) {
+    if (json == NULL || json_size == 0) {
+        return -1;
+    }
+    snprintf(json, json_size, "%s", g.checkpoint_json[0]);
+    if (depth_file != NULL && depth_size > 0) {
+        snprintf(depth_file, depth_size, "%s", g.checkpoint_depth_file[0]);
+    }
+    if (stencil_file != NULL && stencil_size > 0) {
+        snprintf(stencil_file, stencil_size, "%s",
+                 g.checkpoint_stencil_file[0]);
     }
     return 0;
 }
@@ -4619,12 +5142,12 @@ void eu4_gfx_frame_trace_boundary_exit(eu4_gfx_capture_frame *frame,
             stream_ok = 1;
             if (wanted) {
                 stream_ok = read_drawable_bgra(&stream_width, &stream_height,
-                                               &stream_pixels) == 0;
+                                               &stream_pixels, NULL) == 0;
                 metadata_only = 0;
             }
         } else {
             stream_ok = read_drawable_bgra(&stream_width, &stream_height,
-                                           &stream_pixels) == 0;
+                                           &stream_pixels, NULL) == 0;
         }
     }
     frame_reset();
@@ -4772,6 +5295,33 @@ void eu4_gfx_frame_trace_resolve_entry(eu4_gfx_capture_frame *frame,
     }
 }
 
+static void capture_clear_state(json_out *out) {
+    GLint scissor_test = 0, scissor_box[4] = {0, 0, 0, 0};
+    GLboolean color_mask[4] = {GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE};
+    GLboolean depth_mask = GL_TRUE;
+    GLint stencil_mask = -1;
+    if (!g.test_only) {
+        glGetIntegerv(GL_SCISSOR_TEST, &scissor_test);
+        glGetIntegerv(GL_SCISSOR_BOX, scissor_box);
+        glGetBooleanv(GL_COLOR_WRITEMASK, color_mask);
+        glGetBooleanv(GL_DEPTH_WRITEMASK, &depth_mask);
+        glGetIntegerv(GL_STENCIL_WRITEMASK, &stencil_mask);
+    }
+    /* The write masks and the scissor are part of a clear's coverage.  A clear
+       with a disabled channel, a partial stencil mask or a clipped scissor
+       does not initialise the whole buffer, so the graph must not claim it
+       does. */
+    jprintf(out,
+            "\"state\":{\"scissor\":{\"enabled\":%s,"
+            "\"box\":[%d,%d,%d,%d]},"
+            "\"color_mask\":[%d,%d,%d,%d],\"depth_mask\":%s,"
+            "\"stencil_mask\":%d},",
+            bool_text(scissor_test != 0), scissor_box[0], scissor_box[1],
+            scissor_box[2], scissor_box[3], color_mask[0] ? 1 : 0,
+            color_mask[1] ? 1 : 0, color_mask[2] ? 1 : 0,
+            color_mask[3] ? 1 : 0, bool_text(depth_mask != 0), stencil_mask);
+}
+
 void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
                                      eu4_gfx_observe_call *call) {
     (void)frame;
@@ -4833,6 +5383,9 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
         int length = snprintf(
             body, sizeof body,
             "{\"kind\":\"clear\",\"before_first_draw\":%s,\"flags\":%d,"
+            "\"state\":{\"scissor\":{\"enabled\":false,"
+            "\"box\":[0,0,0,0]},\"color_mask\":[1,1,1,1],"
+            "\"depth_mask\":true,\"stencil_mask\":-1},"
             "\"test\":true%s%s}",
             bool_text(g.event_count == 0), (int)frame->rsi,
             checkpoint_slot >= 0 ? ",\"default_checkpoint\":" : "",
@@ -4851,6 +5404,11 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
         GLfloat color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
         GLfloat depth = 1.0f;
         GLint stencil = 0;
+        /* The clear values are live GL state set by the engine immediately
+           before glClear; observing them keeps the clear-history fallback
+           faithful to a non-default clear value. */
+        glGetFloatv(GL_DEPTH_CLEAR_VALUE, &depth);
+        glGetIntegerv(GL_STENCIL_CLEAR_VALUE, &stencil);
         if (frame->rdx != 0) {
             GLfloat captured[4] = {0.0f, 0.0f, 0.0f, 1.0f};
             if (eu4_gfx_observe_read_bytes((const void *)(uintptr_t)frame->rdx,
@@ -4871,6 +5429,7 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
                     bool_text(g.event_count == 0), (int)frame->rsi,
                     (double)color[0], (double)color[1], (double)color[2],
                     (double)color[3], (double)depth, stencil);
+            capture_clear_state(&out);
             capture_target(&out, NULL, NULL);
             if (checkpoint_slot >= 0) {
                 jprintf(&out, ",\"default_checkpoint\":%s",
@@ -4941,32 +5500,28 @@ static void draw_entry_common(eu4_gfx_capture_frame *frame,
     if (!g.gl_drawable_valid) {
         /* GL_DRAW_FRAMEBUFFER_BINDING is part of the default drawable state.
          * A draw bound to an offscreen FBO describes that FBO, not the
-         * window drawable; retry on later draws until the default is bound. */
-        GLint binding = 0;
-        glGetIntegerv(0x8CA6 /* GL_DRAW_FRAMEBUFFER_BINDING */, &binding);
-        g.gl_drawable_binding = (int)binding;
-        if (binding == 0) {
-            GLint value = 0;
-            glGetIntegerv(GL_SAMPLES, &value);
-            g.gl_samples = (int)value;
-            glGetIntegerv(GL_SAMPLE_BUFFERS, &value);
-            g.gl_sample_buffers = (int)value;
-            glGetIntegerv(GL_DEPTH_BITS, &value);
-            g.gl_depth_bits = (int)value;
-            glGetIntegerv(GL_STENCIL_BITS, &value);
-            g.gl_stencil_bits = (int)value;
-            glGetIntegerv(GL_RED_BITS, &value);
-            g.gl_red_bits = (int)value;
-            glGetIntegerv(GL_GREEN_BITS, &value);
-            g.gl_green_bits = (int)value;
-            glGetIntegerv(GL_BLUE_BITS, &value);
-            g.gl_blue_bits = (int)value;
-            glGetIntegerv(GL_ALPHA_BITS, &value);
-            g.gl_alpha_bits = (int)value;
-            glGetIntegerv(GL_DOUBLEBUFFER, &value);
-            g.gl_double_buffer = (int)value;
-            glGetIntegerv(GL_STEREO, &value);
-            g.gl_stereo = (int)value;
+         * window drawable; retry on later draws until the default is bound.
+         * The sample count and bit depths are queried from the driver while
+         * framebuffer zero is current; an FBO attachment is never a source. */
+        ftrace_drawable_state drawable;
+        query_drawable_state(&drawable);
+        g.gl_drawable_binding = drawable.binding;
+        if (drawable.valid) {
+            g.gl_samples = drawable.samples;
+            g.gl_sample_buffers = drawable.sample_buffers;
+            g.gl_depth_bits = drawable.depth_bits;
+            g.gl_stencil_bits = drawable.stencil_bits;
+            g.gl_red_bits = drawable.red_bits;
+            g.gl_green_bits = drawable.green_bits;
+            g.gl_blue_bits = drawable.blue_bits;
+            g.gl_alpha_bits = drawable.alpha_bits;
+            g.gl_double_buffer = drawable.double_buffer;
+            g.gl_stereo = drawable.stereo;
+            g.gl_framebuffer_srgb = drawable.framebuffer_srgb;
+            g.gl_dither = drawable.dither;
+            g.gl_multisample = drawable.multisample;
+            g.gl_draw_buffer = drawable.draw_buffer;
+            g.gl_read_buffer = drawable.read_buffer;
             g.gl_drawable_valid = 1;
         }
     }

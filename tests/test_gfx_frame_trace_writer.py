@@ -93,7 +93,7 @@ class FrameTraceWriterTests(unittest.TestCase):
         self.assertNotIn("default_checkpoint", events[0])
         checkpoint = events[1]["default_checkpoint"]
         self.assertEqual(checkpoint["schema"],
-                         "gfx-default-framebuffer-checkpoint/v1")
+                         "gfx-default-framebuffer-checkpoint/v2")
         self.assertEqual(checkpoint["event"], 1)
         self.assertEqual(checkpoint["target"], "0")
         self.assertEqual(checkpoint["resource"], "fb:0")
@@ -107,6 +107,24 @@ class FrameTraceWriterTests(unittest.TestCase):
         self.assertEqual(blob.stat().st_size, checkpoint["bytes"])
         self.assertEqual(hashlib.sha256(blob.read_bytes()).hexdigest(),
                          checkpoint["sha256"])
+        # The v2 record carries the queried drawable and the exact depth and
+        # stencil contents of the pre-event boundary.
+        drawable = checkpoint["drawable"]
+        for field in ("samples", "sample_buffers", "depth_bits",
+                      "stencil_bits", "red_bits", "green_bits", "blue_bits",
+                      "alpha_bits"):
+            self.assertIn(field, drawable)
+        self.assertEqual(checkpoint["depth"]["format"], "f32")
+        self.assertEqual(checkpoint["depth"]["bytes"], 4 * 4 * 4)
+        self.assertEqual(checkpoint["stencil"]["format"], "u8")
+        self.assertEqual(checkpoint["stencil"]["bytes"], 4 * 4)
+        for label, expected in (("depth", 4 * 4 * 4), ("stencil", 4 * 4)):
+            record = checkpoint[label]
+            attachment = directory / "blobs" / record["file"]
+            self.assertTrue(attachment.is_file())
+            self.assertEqual(attachment.stat().st_size, expected)
+            self.assertEqual(hashlib.sha256(attachment.read_bytes()).hexdigest(),
+                             record["sha256"])
         return manifest, checkpoint
 
     def test_selected_checkpoint_attaches_to_the_draw_event_before_it_runs(self):
@@ -185,7 +203,8 @@ class FrameTraceWriterTests(unittest.TestCase):
             self.assertNotIn("default_checkpoint", events[0])
             self.assertEqual(events[1]["default_checkpoint"]["event"], 1)
             blobs = list((directory / "blobs").iterdir())
-            self.assertEqual(len(blobs), 1)
+            # colour + depth + stencil
+            self.assertEqual(len(blobs), 3)
             seal = self._seal(directory)
             self.assertTrue(seal["sealed"], seal)
             self.assertEqual(seal["operation_count"], 2)

@@ -618,7 +618,7 @@ def checkpoint_options_error(args) -> str | None:
         if problem is not None:
             return problem
     checkpoint_budget = int(getattr(args, "checkpoint_max_bytes",
-                                    64 * 1024 * 1024))
+                                    128 * 1024 * 1024))
     if (checkpoint_event is not None or checkpoint_events is not None) and \
             checkpoint_budget <= 0:
         return "--checkpoint-max-bytes must be positive"
@@ -787,7 +787,7 @@ def capture(args: argparse.Namespace) -> int:
         print(f"capture refused: {checkpoint_problem}", file=sys.stderr)
         return 2
     checkpoint_budget = int(getattr(args, "checkpoint_max_bytes",
-                                    64 * 1024 * 1024))
+                                    128 * 1024 * 1024))
     env_extra = {
         "EU4_GFX_FRAME_TRACE_DIR": str(frame_dir),
         "EU4_GFX_FRAME_TRACE_CALLERS": args.callers or "",
@@ -3363,7 +3363,7 @@ def _parser() -> argparse.ArgumentParser:
         "--max-checkpoints", type=int, default=4,
         help="maximum accepted default checkpoint count (native hard bound 8)")
     cap.add_argument(
-        "--checkpoint-max-bytes", type=int, default=64 * 1024 * 1024,
+        "--checkpoint-max-bytes", type=int, default=128 * 1024 * 1024,
         help="aggregate readback-byte budget for the whole checkpoint set")
     cap.add_argument("--seal", action="store_true",
                      help="publish the authoritative frame-seal/v1 handoff")

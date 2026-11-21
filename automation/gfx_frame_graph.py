@@ -629,6 +629,54 @@ def _graph_capture_identity(frame_dir: Path, trace: dict,
     return identity
 
 
+def _clear_coverage(event: dict, writes: list[str], width,
+                    height) -> dict:
+    """Which buffers a clear provably initialises over the full target.
+
+    A clear only counts as initialisation when its own write mask enables the
+    buffer and its scissor does not clip the target.  Older captures without a
+    clear ``state`` record are explicitly unproven rather than assumed.
+    """
+    state = event.get("state") if isinstance(event.get("state"), dict) else None
+    scissor = (state or {}).get("scissor")
+    full_extent = False
+    if isinstance(scissor, dict) and isinstance(scissor.get("enabled"), bool):
+        if scissor["enabled"]:
+            box = scissor.get("box")
+            try:
+                x, y, w, h = (int(value) for value in box)
+                full_extent = x <= 0 and y <= 0 and w >= int(width or 0) \
+                    and h >= int(height or 0)
+            except (TypeError, ValueError):
+                full_extent = False
+        else:
+            full_extent = True
+    color_mask = (state or {}).get("color_mask")
+    depth_mask = (state or {}).get("depth_mask")
+    stencil_mask = (state or {}).get("stencil_mask")
+    color_full = bool(
+        "color" in writes and full_extent
+        and isinstance(color_mask, (list, tuple))
+        and list(color_mask) == [1, 1, 1, 1])
+    depth_full = bool(
+        "depth" in writes and full_extent and depth_mask is True)
+    stencil_full = bool(
+        "stencil" in writes and full_extent
+        and stencil_mask in (-1, 0xFFFFFFFF))
+    return {
+        "full_extent": full_extent,
+        "state_recorded": state is not None,
+        "scissor_recorded": isinstance(scissor, dict),
+        "scissor": scissor,
+        "color_mask": color_mask,
+        "depth_mask": depth_mask,
+        "stencil_mask": stencil_mask,
+        "color_full": color_full,
+        "depth_full": depth_full,
+        "stencil_full": stencil_full,
+    }
+
+
 def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
     """Derive the resource graph and coverage classification for one frame.
 
@@ -789,13 +837,23 @@ def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
                 writes.append("depth")
             if flags & 4:
                 writes.append("stencil")
-            if "color" in writes:
-                resource["has_clear"] = True
-                resource["producers"].append(
-                    {"event": index, "kind": "clear", "writes": writes,
-                     "cleared": True}
-                )
+            coverage = _clear_coverage(event, writes, width, height)
+            if writes:
+                producer = {"event": index, "kind": "clear", "writes": writes,
+                            "cleared": True, "coverage": coverage}
+                resource["producers"].append(producer)
                 row["writes"].extend(writes)
+                row["clear_coverage"] = coverage
+                # ``has_clear`` retains its historical meaning (a colour clear
+                # happened).  The strict, dimension-checked claim is
+                # ``coverage.color_full``; only fully covered depth/stencil
+                # clears are recorded as initialisation.
+                if "color" in writes:
+                    resource["has_clear"] = True
+                if coverage["depth_full"]:
+                    resource["has_depth_clear"] = True
+                if coverage["stencil_full"]:
+                    resource["has_stencil_clear"] = True
         elif kind == "draw":
             resource = _resource(resources, key, kind="framebuffer"
                                  if key.startswith("fb:") else "texture",

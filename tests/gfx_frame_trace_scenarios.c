@@ -593,7 +593,9 @@ static int scenario_checkpoint_multi_missed(const char *directory) {
 
 /* The aggregate readback budget is enforced before the second readback. */
 static int scenario_checkpoint_multi_budget(const char *directory) {
-    if (configure_checkpoint_multi(directory, "0,1", NULL, "100") <= 0) {
+    /* One checkpoint now costs colour + depth + stencil (144 bytes at 4x4);
+       allow exactly one so the second is refused before its readback. */
+    if (configure_checkpoint_multi(directory, "0,1", NULL, "200") <= 0) {
         return 2;
     }
     arm_via_present();

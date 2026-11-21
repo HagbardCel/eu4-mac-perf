@@ -248,7 +248,8 @@ collection per captured frame. `--default-checkpoint-events 14,20,71,142`
 single-event option and the single-checkpoint case format are unchanged. The
 native tracer rejects unordered, duplicate, empty or out-of-range selections,
 enforces a configurable maximum count (default 4, hard bound 8) and an
-aggregate readback-byte budget (default 64 MiB) before each readback, and
+aggregate readback-byte budget (default 128 MiB; colour + depth + stencil cost
+about 9 bytes per drawable pixel) before each readback, and
 records `session_id`/`capture_frame_id` on every checkpoint so a record cannot
 silently join another execution. Each checkpoint still attaches only to the
 event it was selected for; a missed, duplicated, unattached or over-budget
