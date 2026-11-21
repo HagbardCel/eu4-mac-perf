@@ -58,6 +58,120 @@ class Event20PrefixTests(unittest.TestCase):
             capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
+    def _make_r32f_event20_fixture(self, frame: Path) -> None:
+        """Rewrite event 11 as an authenticated R32F clear with its reference."""
+        manifest = json.loads((frame / "frame-trace.json").read_text())
+        seal = json.loads((frame / "frame-seal.json").read_text())
+        events = [json.loads(line) for line in
+                  (frame / "frame-events.jsonl").read_text().splitlines()
+                  if line.strip()]
+        observations = list(manifest["prefix"]["observations"])
+        width = int(manifest["frame"]["width"])
+        height = int(manifest["frame"]["height"])
+        event = events[11]
+        event.clear()
+        event.update({
+            "kind": "clear",
+            "flags": 1,
+            "color": [1, 1, 1, 1],
+            "target": {
+                "framebuffer": 1,
+                "draw_buffer": "0x8ce0",
+                "read_buffer": "0x8ce0",
+                "viewport": [0, 0, width, height],
+                "color_attachment": {
+                    "type": "texture", "name": 430, "level": 0,
+                    "internal_format": "other", "width": width,
+                    "height": height},
+                "width": width, "height": height,
+            },
+            "state": {
+                "scissor": {"enabled": False, "box": [0, 0, width, height]},
+                "color_mask": [1, 1, 1, 1],
+                "depth_mask": False,
+                "stencil_mask": 0,
+            },
+        })
+        payload = struct.pack("<f", 1.0) * (width * height)
+        digest = hashlib.sha256(payload).hexdigest()
+        blob = f"prefix-r32f-{digest}.bin"
+        (frame / "blobs" / blob).write_bytes(payload)
+        r32f = {
+            "schema": "gfx-prefix-observation/v1",
+            "event": 11,
+            "timing": "post_event",
+            "kind": "clear",
+            "target": event["target"],
+            "resource": "tex:430",
+            "target_name": "430",
+            "pixel_format": "R32F",
+            "alpha_applicable": False,
+            "origin": "lower_left",
+            "width": width,
+            "height": height,
+            "row_stride": width * 4,
+            "target_identity": {
+                "internal_format": 0x822E,
+                "component_type": 0x1406,
+                "red_bits": 32,
+                "green_bits": 0,
+                "blue_bits": 0,
+                "alpha_bits": 0,
+                "depth_present": True,
+                "stencil_present": False,
+            },
+            "color": {"file": blob, "sha256": digest,
+                      "bytes": len(payload), "pixel_format": "R32F"},
+            "depth": {"status": "not_used"},
+            "stencil": {"status": "not_used"},
+            "readback_ns": 0,
+            "pid": seal.get("pid"),
+            "session_id": seal.get("session_id"),
+            "capture_frame_id": seal.get("capture_frame_id"),
+            "budget": {},
+        }
+        post_index = next(
+            index for index, item in enumerate(observations)
+            if item.get("timing") == "post_event" and item.get("event") == 11)
+        observations[post_index] = r32f
+        (frame / "prefix-observations.jsonl").write_text(
+            "".join(json.dumps(item, sort_keys=True) + "\n"
+                    for item in observations))
+        prefix = dict(manifest["prefix"])
+        prefix.update({
+            "end": 20,
+            "status": "complete",
+            "count": 21,
+            "post_event_count": 21,
+            "initial": True,
+            "observation_file": "prefix-observations.jsonl",
+            "observation_sha256": _sha(frame / "prefix-observations.jsonl"),
+            "observation_bytes": (frame / "prefix-observations.jsonl").stat().st_size,
+            "observations": observations,
+        })
+        manifest["prefix"] = prefix
+        manifest["events"] = len(events)
+        manifest["complete"] = True
+        (frame / "frame-events.jsonl").write_text(
+            "".join(json.dumps(item, sort_keys=True) + "\n"
+                    for item in events))
+        (frame / "frame-trace.json").write_text(
+            json.dumps(manifest, indent=2) + "\n")
+        seal.update({
+            "event_stream_bytes": (frame / "frame-events.jsonl").stat().st_size,
+            "event_stream_sha256": _sha(frame / "frame-events.jsonl"),
+            "event_stream_verified": True,
+            "manifest_sha256": _sha(frame / "frame-trace.json"),
+            "operation_count": len(events),
+            "draw_count": sum(1 for item in events if item["kind"] == "draw"),
+            "clear_count": sum(1 for item in events if item["kind"] == "clear"),
+            "copy_count": sum(1 for item in events
+                             if item["kind"] in ("resolve", "copy")),
+            "capture_dir": str(frame.resolve()),
+        })
+        (frame / "frame-seal.json").write_text(
+            json.dumps(seal, indent=2) + "\n")
+
     def _metal_fixture(self, frame: Path, metal: Path) -> dict:
         seal = json.loads((frame / "frame-seal.json").read_text())
         graph = gfx_frame_graph.build(frame)
@@ -97,8 +211,11 @@ class Event20PrefixTests(unittest.TestCase):
                 "ok": True,
                 "width": checkpoint["reference_width"],
                 "height": checkpoint["reference_height"],
-                "format": "BGRA8",
-                "pixel_format": "BGRA8",
+                "format": checkpoint.get("reference_pixel_format") or "BGRA8",
+                "pixel_format": checkpoint.get("reference_pixel_format")
+                or "BGRA8",
+                "alpha_applicable": checkpoint.get("alpha_applicable", True),
+                "compared_channels": checkpoint.get("compared_channels"),
                 "generation": checkpoint["event"] + 1,
             })
         replay = {
@@ -138,6 +255,43 @@ class Event20PrefixTests(unittest.TestCase):
         data = bytearray(path.read_bytes())
         data[0] = (data[0] + 1) & 0xFF
         path.write_bytes(bytes(data))
+
+    def _r32f_fixture(self):
+        frame, _metal = self._fixture()
+        self._make_r32f_event20_fixture(frame)
+        metal = frame.parent / "shadow-r32f"
+        metal.mkdir(exist_ok=True)
+        self._metal_fixture(frame, metal)
+        return frame, metal
+
+    def test_complete_event20_r32f_fixture_qualifies(self):
+        frame, metal = self._r32f_fixture()
+        result = self._evaluate(frame, metal)
+        self.assertEqual(result["verdict"], "EVENT20_EXACT",
+                         result["problems"])
+        self.assertEqual(result["verified_prefix"], {"start": 0, "end": 20})
+        event11 = result["events"][11]
+        self.assertEqual(event11["status"], "match")
+        self.assertEqual(event11["reference_pixel_format"], "R32F")
+        self.assertEqual(event11["compared_channels"], "R32F")
+        self.assertIs(event11["alpha_applicable"], False)
+        self.assertEqual(event11["independent"]["format_scope"], "R32F")
+        self.assertTrue(event11["independent"]["exact_bitwise"])
+
+    def test_r32f_one_bit_mismatch_is_divergent(self):
+        frame, metal = self._r32f_fixture()
+        path = sorted(metal.glob("prefix-event11-430.bgra"))[0]
+        data = bytearray(path.read_bytes())
+        data[0] ^= 1
+        path.write_bytes(bytes(data))
+        result = self._evaluate(frame, metal)
+        self.assertEqual(result["verdict"], "FIRST_DIVERGENCE")
+        self.assertEqual(result["first_divergence"], 11)
+        event11 = result["events"][11]
+        self.assertEqual(event11["status"], "divergent")
+        self.assertEqual(event11["independent"]["mismatched_pixels"], 1)
+        self.assertGreater(event11["independent"]["max_ulp_error"], 0)
+        self.assertEqual(event11["independent"]["max_channel_error"], 0)
 
     def test_native_r32f_observation_is_format_aware(self):
         directory = Path(tempfile.mkdtemp(dir=self.temporary.name))

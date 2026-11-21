@@ -115,9 +115,13 @@ def classify_prefix(events_out: list[dict], *, problems: list[str],
         status = "divergent"
         verified_prefix = ({"start": 0, "end": first_divergence - 1}
                            if first_divergence > 0 else None)
-    elif verified_end == end and end >= require_end:
+    elif verified_end == end and end >= require_end and require_end >= 20:
         verdict = "EVENT20_EXACT"
         status = "qualified"
+        verified_prefix = {"start": 0, "end": require_end}
+    elif verified_end == end and end >= require_end:
+        verdict = "EXACT_PREFIX"
+        status = "qualified_prefix"
         verified_prefix = {"start": 0, "end": require_end}
     elif verified_end == end:
         verdict = "partial_prefix"
@@ -803,12 +807,42 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
                 "sealed observation")
             row["status"] = "invalid"
             row["problem"] = "resource identity mismatch"
-        if entry.get("reference_pixel_format") not in (None, "BGRA8", "RGBA8"):
+        reference_format = entry.get("reference_pixel_format")
+        if reference_format not in (None, "BGRA8", "RGBA8", "R32F"):
             problems.append(
                 f"prefix event {event} has an unsupported reference pixel "
                 "format")
             row["status"] = "invalid"
             row["problem"] = "unsupported pixel format"
+        if reference_format == "R32F":
+            identity = observation.get("target_identity") or {}
+            try:
+                internal = int(identity.get("internal_format") or 0)
+            except (TypeError, ValueError):
+                internal = 0
+            if internal != 0x822E:
+                problems.append(
+                    f"prefix event {event} claims R32F but the sealed "
+                    "attachment identity is not GL_R32F")
+                row["status"] = "invalid"
+                row["problem"] = "R32F format identity mismatch"
+            if entry.get("compared_channels") != "R32F":
+                problems.append(
+                    f"prefix event {event} does not use the R32F comparison "
+                    "scope")
+                row["status"] = "invalid"
+                row["problem"] = "R32F comparison scope mismatch"
+            if entry.get("alpha_applicable", True) is not False:
+                problems.append(
+                    f"prefix event {event} declares alpha for an R32F target")
+                row["status"] = "invalid"
+                row["problem"] = "R32F alpha applicability mismatch"
+            if entry.get("candidate_pixel_format") not in (None, "R32F"):
+                problems.append(
+                    f"prefix event {event} substitutes the R32F candidate "
+                    "pixel format")
+                row["status"] = "invalid"
+                row["problem"] = "R32F candidate format substitution"
         # Recompute exact four-channel equality from the original bytes.  The
         # reconciled statistics are not trusted for the verdict.
         try:
@@ -838,6 +872,9 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
                 "max_channel_error": exact["max_channel_error"],
                 "alpha_different_pixels": exact["alpha_different_pixels"],
                 "pixels": exact["pixels"],
+                "format_scope": exact.get("format_scope", channels),
+                "max_ulp_error": exact.get("max_ulp_error", 0),
+                "exact_bitwise": exact.get("exact_bitwise", True),
             }
             if (exact["mismatched_pixels"] != 0
                     or exact["max_channel_error"] != 0
