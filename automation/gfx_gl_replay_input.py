@@ -176,8 +176,12 @@ def _clear_covers(clear: dict, bit: int, width: int, height: int,
         return False, "clear does not include this buffer"
     if bit == GL_DEPTH_BUFFER_BIT:
         value = clear.get("depth")
+        try:
+            finite = math.isfinite(value)
+        except (OverflowError, TypeError, ValueError):
+            finite = False
         if not isinstance(value, (int, float)) or isinstance(value, bool) \
-                or not math.isfinite(value):
+                or not finite:
             return False, "clear depth value was not recorded"
     elif bit == GL_STENCIL_BUFFER_BIT:
         value = clear.get("stencil")

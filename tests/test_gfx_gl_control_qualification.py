@@ -1320,6 +1320,15 @@ class EvidenceDerivationTests(unittest.TestCase):
         self.assertTrue(any("unsupported" in item
                             for item in evidence["missing"]))
 
+    def test_a_non_finite_clear_depth_value_is_refused_without_raising(self):
+        events = copy.deepcopy(self.events)
+        events[0]["depth"] = 10 ** 1000
+        events[1]["default_checkpoint"].pop("depth", None)
+        evidence = self._derive(drawable=self._drawable(), events=events)
+        self.assertEqual(evidence["status"], "missing")
+        self.assertTrue(any("clear depth value" in item
+                            for item in evidence["missing"]))
+
     def test_a_clear_without_a_depth_value_is_not_proven(self):
         events = copy.deepcopy(self.events)
         events[0].pop("depth")
