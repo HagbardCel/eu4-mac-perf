@@ -315,6 +315,14 @@ def _state_problems(draw_event: int, state) -> list[str]:
     need_bool("scissor.enabled", scissor.get("enabled"))
     if not _int_list(scissor.get("box"), 4):
         problems.append("scissor.box was not recorded")
+
+    logic = state.get("logic_op")
+    if not isinstance(logic, dict):
+        problems.append("selected draw logic_op state was not recorded")
+    else:
+        need_bool("logic_op.enabled", logic.get("enabled"))
+        if logic.get("enabled") is True and logic.get("mode") is None:
+            problems.append("logic_op.mode is not recorded")
     return problems
 
 

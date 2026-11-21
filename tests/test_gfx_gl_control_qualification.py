@@ -1375,6 +1375,14 @@ class EvidenceDerivationTests(unittest.TestCase):
         value.update(overrides)
         return value
 
+    def test_a_draw_without_logic_op_state_is_refused(self):
+        events = copy.deepcopy(self.events)
+        events[1]["state"].pop("logic_op", None)
+        evidence = self._derive(drawable=self._drawable(), events=events)
+        self.assertEqual(evidence["status"], "missing")
+        self.assertTrue(any("logic_op" in item
+                            for item in evidence["missing"]))
+
     def test_a_clear_without_a_scissor_record_is_not_proven(self):
         events = copy.deepcopy(self.events)
         events[0]["state"].pop("scissor")
