@@ -64,7 +64,7 @@ AUTHORITIES: dict[str, dict] = {
             "b129e1bcd834600e8a3986159b7d9a540d1951f09f30ce3bfd4881844247a727"),
         "components": [
             {"role": "native-gl-executor",
-             "sha256": "ac6e83db9846d8f2dc58f11e85887fd207d8c8a573f69f1467c500c9041cb0cb"},
+             "sha256": "d03228553f3f31f30e92a5cde588f879220a71b912826a1a12c8a9292d74164b"},
             {"role": "replay-input-verifier",
              "sha256": "831050f051a3b8097431d71fafe96775878422b6c268483360a3eaa17d179526"},
             {"role": "receipt-signer",

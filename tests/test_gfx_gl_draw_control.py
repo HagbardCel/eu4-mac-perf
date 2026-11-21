@@ -74,6 +74,9 @@ class Package:
 
     def blob(self, role: str, extension: str, body: bytes) -> dict:
         digest = _sha(body)
+        for record in self.files:
+            if record["sha256"] == digest:
+                return record
         path = self.root / "blobs" / f"{role}-{digest}.{extension}"
         path.write_bytes(body)
         record = {"role": role, "path": f"blobs/{path.name}",
@@ -760,6 +763,42 @@ class DrawControlTests(unittest.TestCase):
                 stencil_after = (self.root / "out" / "native"
                                  / "stencil-after.u8")
                 self.assertEqual(set(stencil_after.read_bytes()), {expected})
+
+    def test_a_draw_with_sixteen_samplers_and_twelve_mip_levels(self):
+        declarations = "\n".join(
+            f"uniform sampler2D tex{i};" for i in range(16))
+        samples = " + ".join(
+            f"texture2D(tex{i}, uv)" for i in range(16))
+        vertex = (b"#version 120\nattribute vec2 in_POSITION;\n"
+                  b"void main(){ gl_Position = vec4(in_POSITION, 0.0, 1.0); }\n")
+        pixel = ("#version 120\n" + declarations +
+                 "\nvoid main(){ vec2 uv = gl_FragCoord.xy / vec2(4.0, 4.0);"
+                 " gl_FragColor = " + samples + "; }\n").encode()
+        package = self._package()
+        block = _dxt1_block(0xF800, 0x001F, 0x00000000)
+        textures = []
+        for unit in range(16):
+            levels = [{"level": level, "width": 4, "height": 4,
+                       "internal_format": "DXT1", "compressed": True,
+                       "data": block, "row_stride": 8}
+                      for level in range(12)]
+            textures.append({"unit": unit, "sampler_name": f"tex{unit}",
+                             "levels": levels})
+        prestate = {
+            "color": self._color_seed(package, BLUE * 16),
+            "depth": {"source": "clear_history", "event": 7, "value": 1.0,
+                      "coverage": "full"},
+            "stencil": {"source": "clear_history", "event": 7, "value": 0,
+                        "coverage": "full"},
+        }
+        manifest = package.build(
+            shaders=(vertex, pixel),
+            attributes=[{"name": "in_POSITION", "data": _quad()}],
+            textures=textures, state=_state(), prestate=prestate)
+        receipt, artifact, code = self._run(manifest)
+        self.assertEqual(code, 0, receipt)
+        self.assertEqual(receipt["execution"], "completed", receipt)
+        self.assertEqual(artifact.read_bytes(), RED * 16)
 
     def test_the_receipt_is_signed_and_bound_to_the_execution(self):
         manifest = self._solid()
