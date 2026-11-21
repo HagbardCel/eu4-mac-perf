@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import signal
+import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from pathlib import Path
 
@@ -300,3 +303,185 @@ class RunnerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+SLOW_MODULE = """
+import os
+import time
+import unittest
+class Slow(unittest.TestCase):
+    def test_sleeps(self):
+        time.sleep(float(os.environ.get("TEST_RUNNER_SLEEP", "30")))
+"""
+
+BARRIER_MODULE = """
+import os
+import time
+import unittest
+from pathlib import Path
+class Barrier(unittest.TestCase):
+    def test_the_other_worktree_starts_while_this_one_runs(self):
+        directory = Path(os.environ["BARRIER_DIR"])
+        (directory / (os.environ["BARRIER_NAME"] + ".started")).write_text("1")
+        wait_for = directory / os.environ["BARRIER_WAIT"]
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if wait_for.exists():
+                return
+            time.sleep(0.02)
+        self.fail("the other worktree did not start while this one was running")
+"""
+
+
+class WorktreeExecutionLockTests(unittest.TestCase):
+    """Different selections may not execute concurrently in one worktree."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.state = self.root / "state"
+        self.worktree = self.root / "worktree"
+        self.worktree.mkdir()
+
+    def _module(self, worktree: Path, name: str, body: str) -> None:
+        (worktree / f"{name}.py").write_text(textwrap.dedent(body))
+
+    def _command(self, module: str, worktree: Path) -> list[str]:
+        return [sys.executable, "-m", "automation.test_runner", "run",
+                "--profile", "offline", "--module", module,
+                "--cwd", str(worktree), "--state-dir", str(self.state)]
+
+    def _environment(self, **extra) -> dict:
+        environment = dict(os.environ)
+        environment["PYTHONPATH"] = str(ROOT)
+        environment.update({key: str(value) for key, value in extra.items()})
+        return environment
+
+    def _spawn(self, module: str, worktree: Path, **env):
+        return subprocess.Popen(
+            self._command(module, worktree), cwd=str(ROOT),
+            env=self._environment(**env), stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True)
+
+    def _wait_for_running_record(self, timeout: float = 15.0) -> dict:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            directory = self.state / "runs"
+            if directory.is_dir():
+                for path in sorted(directory.glob("*.json")):
+                    try:
+                        value = json.loads(path.read_text())
+                    except (OSError, json.JSONDecodeError):
+                        continue
+                    if value.get("status") == "running":
+                        return value
+            time.sleep(0.02)
+        self.fail("no running record appeared")
+
+    def _collect(self, process, timeout: float = 60.0):
+        stdout, stderr = process.communicate(timeout=timeout)
+        try:
+            value = json.loads(stdout)
+        except json.JSONDecodeError:
+            value = {}
+        return process.returncode, value, stderr
+
+    def test_two_different_selections_in_one_worktree_do_not_overlap(self):
+        self._module(self.worktree, "runner_slowish", SLOW_MODULE)
+        self._module(self.worktree, "runner_pass", PASS)
+        slow = self._spawn("runner_slowish", self.worktree,
+                           TEST_RUNNER_SLEEP="3")
+        try:
+            running = self._wait_for_running_record()
+            second = self._spawn("runner_pass", self.worktree)
+            code, value, stderr = self._collect(second, timeout=30)
+        finally:
+            code_slow, slow_value, slow_stderr = self._collect(slow, timeout=60)
+        self.assertEqual(code_slow, 0, slow_stderr)
+        self.assertEqual(slow_value.get("status"), "passed", slow_value)
+        self.assertEqual(code, 2, (code, value, stderr))
+        self.assertFalse(value.get("ok"))
+        self.assertIn(value.get("status"), ("pending", "busy"))
+        self.assertTrue(value.get("pending"))
+        self.assertFalse(value.get("completed"))
+        self.assertEqual(value.get("blocked_by"), running.get("id"))
+        self.assertEqual(value.get("log"), running.get("log"))
+        # The refused invocation created no second run record or log.
+        self.assertEqual(len(list((self.state / "runs").glob("*.json"))), 1)
+        self.assertEqual(len(list((self.state / "runs").glob("*.log"))), 1)
+
+    def test_different_worktrees_proceed_concurrently(self):
+        other = self.root / "other-worktree"
+        other.mkdir()
+        barrier = self.root / "barrier"
+        barrier.mkdir()
+        for worktree, name, wait_for in (
+                (self.worktree, "a", "b.started"),
+                (other, "b", "a.started")):
+            self._module(worktree, "runner_barrier", BARRIER_MODULE)
+        first = self._spawn("runner_barrier", self.worktree,
+                            BARRIER_DIR=barrier, BARRIER_NAME="a",
+                            BARRIER_WAIT="b.started")
+        second = self._spawn("runner_barrier", other,
+                             BARRIER_DIR=barrier, BARRIER_NAME="b",
+                             BARRIER_WAIT="a.started")
+        code_a, value_a, err_a = self._collect(first)
+        code_b, value_b, err_b = self._collect(second)
+        self.assertEqual(code_a, 0, err_a)
+        self.assertEqual(code_b, 0, err_b)
+        self.assertEqual(value_a.get("status"), "passed", value_a)
+        self.assertEqual(value_b.get("status"), "passed", value_b)
+        self.assertNotEqual(value_a.get("cwd"), value_b.get("cwd"))
+
+    def test_abrupt_runner_termination_releases_the_worktree_lock(self):
+        self._module(self.worktree, "runner_very_slow", SLOW_MODULE)
+        self._module(self.worktree, "runner_pass", PASS)
+        slow = self._spawn("runner_very_slow", self.worktree,
+                           TEST_RUNNER_SLEEP="30")
+        running = None
+        try:
+            running = self._wait_for_running_record()
+            slow.kill()
+            slow.wait(timeout=10)
+        finally:
+            if running and running.get("child_pid"):
+                try:
+                    os.kill(int(running["child_pid"]), signal.SIGKILL)
+                except OSError:
+                    pass
+        # The kernel released the flock with the killed process; a different
+        # selection in the same worktree can now run.
+        second = self._spawn("runner_pass", self.worktree)
+        code, value, stderr = self._collect(second, timeout=60)
+        self.assertEqual(code, 0, (code, value, stderr))
+        self.assertEqual(value.get("status"), "passed", value)
+        self.assertEqual(value.get("counts", {}).get("ran"), 2)
+
+    def test_a_held_lock_without_a_record_is_busy_not_passed(self):
+        self._module(self.worktree, "runner_pass", PASS)
+        handle = test_runner._try_lock(
+            test_runner._worktree_lock_path(self.worktree))
+        self.assertIsNotNone(handle)
+        try:
+            value = test_runner.run_suite(
+                modules=["runner_pass"], cwd=self.worktree,
+                state_dir=self.state)
+        finally:
+            test_runner._release_lock(handle)
+        self.assertEqual(value["status"], "busy")
+        self.assertFalse(value["ok"])
+        self.assertFalse(value["pending"])
+        self.assertFalse(value["completed"])
+        self.assertIsNone(value["blocked_by"])
+        self.assertFalse(list((self.state / "runs").glob("*.json")))
+
+    def test_a_normal_run_releases_the_worktree_lock(self):
+        self._module(self.worktree, "runner_pass", PASS)
+        process = self._spawn("runner_pass", self.worktree)
+        code, value, stderr = self._collect(process)
+        self.assertEqual(code, 0, (code, value, stderr))
+        handle = test_runner._try_lock(
+            test_runner._worktree_lock_path(self.worktree))
+        self.assertIsNotNone(handle)
+        test_runner._release_lock(handle)

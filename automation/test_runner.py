@@ -6,6 +6,10 @@ modules (or the full suite once), preserves the child exit code, writes the
 complete log to a known location, returns a compact JSON summary, and refuses
 to start an identical suite that is already running.
 
+It also holds one kernel lock per worktree for the whole child execution, so a
+different selection cannot compile the same ``benchmark/.build`` output at the
+same time.  Separate worktrees use separate locks and still run in parallel.
+
 It is not a CI scheduler.  It does not discover work, retry, parallelise or
 schedule anything.
 
@@ -108,6 +112,94 @@ def _pending_envelope(duplicate: dict | None, message: str) -> dict:
         "log": (duplicate or {}).get("log"),
         "message": message,
         "reason": message,
+        "truncated": False,
+    }
+
+
+WORKTREE_LOCK_NAME = "worktree.lock"
+
+
+def _worktree_lock_path(workdir: Path) -> Path:
+    """One OS lock per worktree, independent of the run-record state dir.
+
+    It lives inside the worktree (``.local`` is the repository's ignored local
+    root) so two runners that point at the same worktree but use different
+    ``EU4_TEST_RUN_ROOT`` state dirs still serialize.  Separate worktrees get
+    separate files and never block each other.
+    """
+    return Path(workdir) / ".local" / "test-runs" / WORKTREE_LOCK_NAME
+
+
+def _try_lock(path: Path):
+    """Take a non-blocking exclusive ``flock``, or return ``None``.
+
+    The handle must stay open for the lock to be held.  The kernel releases it
+    when the process exits, including SIGKILL, so no manual stale-lock cleanup
+    is possible or required.
+    """
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = path.open("a+")
+    except OSError as exc:
+        # An unusable lock path is an error, not contention: reporting it as
+        # busy would blame another run that does not exist.
+        raise OSError(
+            f"worktree execution lock is unusable: {path}: {exc}") from exc
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
+def _release_lock(handle) -> None:
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass
+    handle.close()
+
+
+def _active_in_worktree(state: Path, workdir: Path) -> dict | None:
+    """The live run record for this worktree, newest first, if any."""
+    target = Path(workdir).resolve()
+    for row in _records(state):
+        if row.get("status") != "running":
+            continue
+        if row.get("host") not in (None, os.uname().nodename):
+            continue
+        try:
+            cwd = Path(str(row.get("cwd") or "")).resolve()
+        except OSError:
+            continue
+        if cwd != target:
+            continue
+        if _alive(row.get("pid")):
+            return row
+    return None
+
+
+def _busy_envelope(active: dict | None, lock_path: Path, message: str) -> dict:
+    """A refused concurrent invocation is busy/pending, never passed.
+
+    When another run in this worktree is live its record (id, log, record path)
+    is returned as the locator; a stale or unreadable lock with no live record
+    is reported as ``busy`` without inventing a run.
+    """
+    return {
+        "schema": SCHEMA,
+        "ok": False,
+        "status": "pending" if active is not None else "busy",
+        "pending": active is not None,
+        "completed": False,
+        "duplicate_of": None,
+        "blocked_by": (active or {}).get("id"),
+        "record": active,
+        "log": (active or {}).get("log"),
+        "message": message,
+        "reason": message,
+        "lock": str(lock_path),
         "truncated": False,
     }
 
@@ -262,6 +354,28 @@ def run_suite(
             duplicate,
             "an identical suite is already running; its current status is "
             "returned instead of starting another copy")
+    worktree_lock = _worktree_lock_path(workdir)
+    worktree_handle = _try_lock(worktree_lock)
+    if worktree_handle is None:
+        active = _active_in_worktree(state, workdir)
+        return _busy_envelope(
+            active, worktree_lock,
+            ("another test selection is already running in this worktree; its "
+             "current status is returned instead of starting a concurrent copy"
+             if active is not None else
+             "a test execution lock is already held for this worktree"))
+    try:
+        return _run_locked(
+            state=state, workdir=workdir, suite=suite, label=label,
+            base_ref=base_ref, timeout=timeout, compare_to=compare_to,
+            profile=profile, min_tests=min_tests)
+    finally:
+        _release_lock(worktree_handle)
+
+
+def _run_locked(*, state: Path, workdir: Path, suite: dict, label, base_ref,
+                timeout, compare_to, profile, min_tests) -> dict:
+    """The pre-existing body, now held under the worktree execution lock."""
     run_id = (dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
               + "-" + uuid.uuid4().hex[:8])
     record_path = _record_path(state, run_id)
@@ -314,6 +428,7 @@ def run_suite(
                 "truncated": False,
             }
         record["lock"] = str(lock_path)
+        record["worktree_lock"] = str(_worktree_lock_path(workdir))
         _write(record_path, record)
         started = time.monotonic()
         environment = dict(os.environ)
