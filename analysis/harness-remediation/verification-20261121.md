@@ -51,13 +51,14 @@ full-suite order" and the profile was split around it. Reproduced controlled:
   hardened head; no flood failure in either full profile. The audit's single
   flood failure was a transient `ps` timeout, hardened in #265.
 
-**Gate policy adopted.** One suite per worktree at a time (identical suites are
-deduplicated by the runner; different selections are not, and they race on
-`.build`); allow at least 30 minutes for a cold profile and use
-`test_runner status` rather than log growth; never exclude a module from the
-profile. The worktree-wide build serialization is tracked as a follow-up; it is
-not silently waived. The "hangs only in full-suite order" statement is
-withdrawn as unsupported.
+**Gate policy enforced.** #273 now holds one kernel `flock` per `--cwd`
+worktree for the whole child execution: a different selection in the same
+worktree is refused with a truthful pending/busy envelope and the running
+locator, while separate worktrees still run in parallel. Identical-suite
+deduplication is unchanged. Allow at least 30 minutes for a cold profile and
+use `test_runner status` rather than log growth; never exclude a module from
+the profile. The "hangs only in full-suite order" statement is withdrawn as
+unsupported.
 
 ## 3. Regression verification and base comparison
 
@@ -135,7 +136,7 @@ No wall-time improvement is claimed (0.05 s difference, inside the spread).
 The measured interface difference is 798× less JSON for the same correct
 classification. Full report: [`efficiency-20261121.md`](efficiency-20261121.md).
 
-## 5. Final integrated gate
+## 5. Intermediate integrated gate (post-#268)
 
 Run on the merged closure tree (`d3a0ce6b`, merged to `main` as `fecff675`) in
 a **fresh worktree with no `benchmark/.build`**, one full
@@ -151,7 +152,36 @@ a **fresh worktree with no `benchmark/.build`**, one full
 
 The count decomposes exactly: 4,166 (audit split, runner `20261120T215930Z-f5b80bdf`) + 55 (`test_reconstruction_differential`) + 26 closure tests = 4,247; executed 4,103 + 53 + 26 = 4,182; skipped 63 + 2 = 65. The module that was previously excluded is included and fully executed (53) with its two declared Ghidra-dependent skips. The six clean-tree errors seen in both earlier full-profile runs are gone after #268.
 
-## 6. Limits
+## 6. Final integrated gate (post-#271, issue closure)
+
+Run after #273 merged (`758e2f56`) in a fresh clean worktree with no other
+suite using it, one full `unittest discover -s tests` profile, no module
+exclusion:
+
+| Field | Value |
+|---|---|
+| Runner | `20261121T080139Z-89089cf0` |
+| Commit | `758e2f56` |
+| Ran / executed / skipped | **4,254 / 4,189 / 65** |
+| Failures / errors | **0 / 0** |
+| Status | `passed` (exit 0, not timed out) |
+| Wall | 627.7 s |
+
+The seven-test difference from the intermediate gate is exactly the new
+worktree-lock regressions (4,247 + 7 = 4,254; 4,182 + 7 = 4,189; skips
+unchanged). `tests.test_reconstruction_differential` remains included and
+executed (55 ran / 53 executed / 2 declared Ghidra-dependent skips).
+
+Focused concurrency verification on merged main before the gate:
+`tests.test_test_runner`, `tests.test_test_profiles`, `tests.test_dsh_efficiency`
+and `tests.test_automation_runner` — 136 ran / 134 executed / 2 skipped / 0
+failures (`20261121T080121Z-8c1390b9`). `tests.test_test_runner` alone is 22/22.
+
+Issue #240 verification: `tests.test_gfx_compressed_textures` +
+`tests.test_replay_blob_verifier` — 18 ran / 18 executed / 0 skipped / 0
+failures (`20261121T074931Z-25ec3ffc`).
+
+## 7. Limits
 
 - No EU4 launch, no new capture and no renderer correction was performed.
 - The historical 904 control remains unqualified: 5 different pixels at
