@@ -20,11 +20,15 @@ Governing references: [assessment](../../plans/closed/harness-review-20261120/as
 | Closure fix integration | #269 `d3a0ce6b`, merged `fecff675` (five reviewed heads, one merge commit each) |
 | Closure documentation | #272 `30e8d7e2`, merged `9ecc1131` |
 | Worktree execution lock | #273 `8415ab86`, merged `758e2f56` |
-| Final `main` | `758e2f56` |
+| Final tested code merge | `758e2f56` (#273) |
+| Closure documentation merge | `cd0a6d82` (#274) |
+| Archive merge | `484bcbe5` (#275) |
+| Post-archive reliability correction | #276 `ce6f8b2f`, merged `0e9447f8` |
+| Current `main` | `0e9447f8` |
 | Reviewed heads | #263 `5ae0ccff`, #264 `3cb4d39d`, #265 `fbe23d51`, #266 `dc219a6d`, #267 `f5301f69`, #268 `c3fbeb77`, #273 `8415ab86` |
 | Per-PR merge commits | #263 `3fe7c602`, #264 `7cd4a072`, #265 `118c070c`, #266 `52cc1e89`, #267 `d3a0ce6b`; integration merge `fecff675`; #273 `758e2f56` |
 | Review records | independent exact-head review comments on #263–#268 and #273; #251–#257 have no independent human exact-head review (Codex/audit/author/CI only); #241–#250 were reviewed at earlier commits. GitHub records comments as `COMMENTED`, not `APPROVE` (the only available identity is the author) |
-| Verification | [verification-20261121.md](verification-20261121.md); final gate `20261121T080139Z-89089cf0` (4,254 ran / 4,189 executed / 65 skipped / 0 failures / 0 errors at `758e2f56`) |
+| Verification | [verification-20261121.md](verification-20261121.md); pre-archive gate `20261121T080139Z-89089cf0` (4,254 ran / 4,189 executed / 65 skipped / 0 failures / 0 errors at `758e2f56`); post-#276 gate recorded below once executed |
 
 The six closure PRs (#263–#268) and #273 were reviewed at their exact final
 commits by reviewers independent of the author. The #264 final P2 delta review was performed before merge (its
@@ -108,7 +112,7 @@ not, and is not presented as one.
 | Item | Owner | Next observation / action |
 |---|---|---|
 | Live-GL control equivalence (B2/B3) | **M7** (follow-up issue) | Newly sealed capture with drawable samples/bit depth + prior-frame contents; new bound original-API renderer; exact comparison at the first divergent checkpoint. Until then the 904 control stays unqualified. |
-| Worktree-scoped native build serialization | **Resolved in #273** | One kernel `flock` per `--cwd` worktree, held across the child; concurrent selections return pending/busy with the running locator. Documented boundaries: an orphaned child can briefly outlive a killed runner; a refusal cannot return a locator when the running record lives in another state dir; the lock scope is the `--cwd` path. |
+| Worktree-scoped native build serialization | **Resolved in #273; crash-recovery corrected in #276** | One kernel `flock` per `--cwd` worktree, held across the child; the lock descriptor is inherited by the unittest child, so a surviving child keeps exclusivity after a supervisor SIGKILL and the worktree becomes available when it exits. Concurrent selections return pending/busy with the running locator. Documented boundaries: a descendant that escapes the child's process group and inherits stdout is outside the timeout group kill; a refusal cannot return a locator when the running record lives in another state dir; the lock scope is the `--cwd` path. |
 | Decoded texture path sampling equivalence | Renderer / M7 | The decoded fallback is strictly worse on 904; if the decoded path must be supported, compare BC filtering against the decode path on a controlled fixture. No parity claim. |
 | Claim-ledger staged window | Harness (documented) | A stale head after an interrupted head write leaves one uncommitted tail; deleting/rewriting the head remains the documented local-witness boundary. |
 | Coordinated control+receipt rewrite | Harness (documented) | Only reachable if a renderer is pinned in `AUTHORITIES`; receipt-to-renderer binding is required before the first registry entry. |
