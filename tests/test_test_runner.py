@@ -387,7 +387,8 @@ class WorktreeExecutionLockTests(unittest.TestCase):
                         value = json.loads(path.read_text())
                     except (OSError, json.JSONDecodeError):
                         continue
-                    if value.get("status") == "running":
+                    if value.get("status") == "running" \
+                            and isinstance(value.get("child_pid"), int):
                         return value
             time.sleep(0.02)
         self.fail("no running record appeared")
@@ -579,7 +580,9 @@ class Descendant(unittest.TestCase):
     def test_spawns_and_waits(self):
         path = Path(os.environ["DESCENDANT_PID"])
         child = subprocess.Popen([sys.executable, "-c",
-                                  "import time; time.sleep(60)"])
+                                  "import signal, time; "
+                                  "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                                  "time.sleep(60)"])
         path.write_text(str(child.pid))
         time.sleep(60)
 """

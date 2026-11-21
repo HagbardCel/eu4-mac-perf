@@ -497,10 +497,11 @@ def _run_locked(*, state: Path, workdir: Path, suite: dict, label, base_ref,
             )
             record["child_pid"] = child.pid
             _write(record_path, record)
+            child_pgid = child.pid  # start_new_session makes the child leader
 
             def signal_child_group(sig: int) -> None:
                 try:
-                    os.killpg(os.getpgid(child.pid), sig)
+                    os.killpg(child_pgid, sig)
                 except OSError:
                     try:
                         child.send_signal(sig)
@@ -513,8 +514,10 @@ def _run_locked(*, state: Path, workdir: Path, suite: dict, label, base_ref,
                 signal_child_group(signal.SIGTERM)
 
                 def hard_kill() -> None:
-                    if child.poll() is None:
-                        signal_child_group(signal.SIGKILL)
+                    # The direct child may already have exited while a
+                    # descendant still holds the stdout pipe.  Kill the group
+                    # unconditionally; killpg reports ESRCH when it is gone.
+                    signal_child_group(signal.SIGKILL)
 
                 killer = threading.Timer(10.0, hard_kill)
                 killer.daemon = True
@@ -532,14 +535,19 @@ def _run_locked(*, state: Path, workdir: Path, suite: dict, label, base_ref,
                     exit_code = child.wait()
                 except BaseException:
                     # Ctrl-C/KeyboardInterrupt must not release the worktree
-                    # lock while the detached child is still running.
+                    # lock while the detached child or its descendants are
+                    # still running.
                     log.write("\n[test_runner] interrupted; stopping child group\n")
                     log.flush()
                     signal_child_group(signal.SIGTERM)
                     try:
                         exit_code = child.wait(timeout=10)
                     except subprocess.TimeoutExpired:
-                        signal_child_group(signal.SIGKILL)
+                        pass
+                    # Kill any descendant that outlived the unittest child,
+                    # including one that inherited the stdout pipe.
+                    signal_child_group(signal.SIGKILL)
+                    if exit_code is None:
                         exit_code = child.wait()
                     raise
             finally:
