@@ -116,6 +116,10 @@ static void load_sampler_queries(void) {
 #define GL_COMPRESSED_DXT5 0x83F3
 #define GL_RGBA32F_VALUE 0x8814
 #define GL_RGB32F_VALUE 0x8815
+#define GL_R32F_VALUE 0x822E
+#ifndef GL_RED
+#define GL_RED 0x1903
+#endif
 #define GL_RGBA16F_VALUE 0x881A
 #define GL_RGB16F_VALUE 0x881B
 #define GL_RGBA16_VALUE 0x805B
@@ -237,6 +241,7 @@ static struct {
     char gl_version[256];
     int last_capture_target_fb;
     int test_target_fb_override;
+    int test_target_internal_override;
     int gl_drawable_valid;
     int gl_drawable_binding;
     int gl_samples;
@@ -1915,6 +1920,7 @@ static const char *format_name(GLenum format) {
         case GL_RGBA32F_VALUE: return "RGBA32F";
         case GL_RGBA16F_VALUE: return "RGBA16F";
         case GL_RGB32F_VALUE: return "RGB32F";
+        case GL_R32F_VALUE: return "R32F";
         case GL_RGB16F_VALUE: return "RGB16F";
         case GL_RGBA16_VALUE: return "RGBA16";
         case GL_SRGB8_ALPHA8_VALUE: return "SRGB8_ALPHA8";
@@ -2931,6 +2937,8 @@ typedef struct {
     int color_alpha_bits;
     int unsupported_format;
     int alpha_applicable;
+    GLenum read_type;
+    int colour_bpp;
     int direct_texture;
     GLenum read_format;
     const char *pixel_format;
@@ -2958,6 +2966,8 @@ static void prefix_reset_locked(void) {
 static int prefix_target_locked(prefix_target_state *out, int direct_texture) {
     memset(out, 0, sizeof(*out));
     out->read_format = GL_BGRA;
+    out->read_type = GL_UNSIGNED_BYTE;
+    out->colour_bpp = 4;
     out->pixel_format = "BGRA8";
     if (direct_texture >= 0) {
         out->direct_texture = 1;
@@ -3003,7 +3013,12 @@ static int prefix_target_locked(prefix_target_state *out, int direct_texture) {
             out->color_blue_bits = (int)blue;
             out->color_alpha_bits = (int)alpha;
         }
-        if (out->internal_format == GL_RGBA8) {
+        if (out->internal_format == GL_R32F_VALUE) {
+            out->read_format = GL_RED;
+            out->read_type = GL_FLOAT;
+            out->pixel_format = "R32F";
+            out->alpha_applicable = 0;
+        } else if (out->internal_format == GL_RGBA8) {
             out->read_format = GL_RGBA;
             out->pixel_format = "RGBA8";
             out->alpha_applicable = 1;
@@ -3037,11 +3052,23 @@ static int prefix_target_locked(prefix_target_state *out, int direct_texture) {
         out->color_type = out->framebuffer == 0 ? 0 : GL_TEXTURE;
         out->color_name = out->framebuffer;
         out->color_level = 0;
-        out->internal_format = out->framebuffer == 0 ? 0 : GL_RGBA8;
+        out->internal_format = g.test_target_internal_override >= 0
+                                   ? g.test_target_internal_override
+                                   : (out->framebuffer == 0 ? 0 : GL_RGBA8);
         out->depth_present = 1;
         out->stencil_present = 1;
         out->depth_bits = 24;
         out->stencil_bits = 8;
+        if (out->internal_format == GL_R32F_VALUE) {
+            out->read_format = GL_RED;
+            out->read_type = GL_FLOAT;
+            out->pixel_format = "R32F";
+            out->alpha_applicable = 0;
+            out->color_component_type = GL_FLOAT;
+            out->color_red_bits = 32;
+        } else {
+            out->alpha_applicable = 1;
+        }
         return 0;
     }
     GLint framebuffer = 0;
@@ -3165,7 +3192,15 @@ static int prefix_target_locked(prefix_target_state *out, int direct_texture) {
         out->color_green_bits = (int)green;
         out->color_blue_bits = (int)blue;
         out->color_alpha_bits = (int)alpha;
-        if (internal == GL_RGBA8) {
+        if (internal == GL_R32F_VALUE) {
+            /* The Metal replay allocates R32F targets as R32Float.  The
+               reference and candidate are compared as the exact four-byte
+               float payload; there is no alpha channel. */
+            out->read_format = GL_RED;
+            out->read_type = GL_FLOAT;
+            out->pixel_format = "R32F";
+            out->alpha_applicable = 0;
+        } else if (internal == GL_RGBA8) {
             /* The Metal replay allocates RGBA8 targets as RGBA8Unorm. */
             out->read_format = GL_RGBA;
             out->pixel_format = "RGBA8";
@@ -3202,7 +3237,8 @@ static int prefix_read_colour_locked(const prefix_target_state *target,
                                      size_t *out_bytes) {
     *out_pixels = NULL;
     *out_bytes = 0;
-    size_t bytes = (size_t)target->width * (size_t)target->height * 4u;
+    size_t bytes = (size_t)target->width * (size_t)target->height *
+                   (size_t)target->colour_bpp;
     uint8_t *pixels = (uint8_t *)malloc(bytes);
     if (pixels == NULL) {
         fail_capture_locked("prefix_read");
@@ -3235,8 +3271,8 @@ static int prefix_read_colour_locked(const prefix_target_state *target,
         }
         while (glGetError() != GL_NO_ERROR) {
         }
-        glGetTexImage(GL_TEXTURE_2D, 0, target->read_format, GL_UNSIGNED_BYTE,
-                      pixels);
+        glGetTexImage(GL_TEXTURE_2D, 0, target->read_format,
+                      target->read_type, pixels);
         GLenum texture_error = glGetError();
         glBindTexture(GL_TEXTURE_2D, (GLuint)previous_texture);
         glPixelStorei(GL_PACK_ALIGNMENT, pack_alignment);
@@ -3277,7 +3313,7 @@ static int prefix_read_colour_locked(const prefix_target_state *target,
     while (glGetError() != GL_NO_ERROR) {
     }
     glReadPixels(0, 0, target->width, target->height, target->read_format,
-                 GL_UNSIGNED_BYTE, pixels);
+                 target->read_type, pixels);
     GLenum gl_error = glGetError();
     glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)previous_read_framebuffer);
     glReadBuffer((GLenum)previous_read_buffer);
@@ -3680,7 +3716,7 @@ static int prefix_emit_target_locked(int event, const char *timing,
         pixel_format_json,
         unsupported_colour ? "false"
                            : (target.alpha_applicable ? "true" : "false"),
-        target.width, target.height, target.width * 4,
+        target.width, target.height, target.width * target.colour_bpp,
         target.internal_format, target.color_component_type,
         target.color_red_bits, target.color_green_bits,
         target.color_blue_bits, target.color_alpha_bits,
@@ -5303,6 +5339,7 @@ static void start_capture_at_frame(int next_frame) {
     g.checkpoint_pending = -1;
     g.last_capture_target_fb = 0;
     g.test_target_fb_override = -1;
+    g.test_target_internal_override = -1;
     g.truncated = 0;
     g.capture_failed = 0;
     g.stream_validated = 0;
@@ -6142,6 +6179,12 @@ int eu4_gfx_frame_trace_test_checkpoint_production(const char *directory,
    has no GL context.  Value -1 restores the live query. */
 void eu4_gfx_frame_trace_test_set_target(int framebuffer) {
     g.test_target_fb_override = framebuffer;
+}
+
+/* Host-test only: force the recorded colour attachment's internal format for a
+   synthetic target so the format-aware observation path can be exercised. */
+void eu4_gfx_frame_trace_test_set_target_format(int internal_format) {
+    g.test_target_internal_override = internal_format;
 }
 
 /* Host-test only: the last checkpoint's record and attachment blob names, so a

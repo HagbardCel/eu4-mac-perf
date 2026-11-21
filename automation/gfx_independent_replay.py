@@ -217,6 +217,7 @@ def _normalize_format(value) -> str:
         return {
             0x8058: "RGBA8", 0x8051: "RGB8", 0x8814: "RGBA32F",
             0x8815: "RGB32F", 0x881A: "RGBA16F", 0x881B: "RGB16F",
+            0x822E: "R32F",
             0x805B: "RGBA16", 0x8C43: "SRGB8_ALPHA8",
         }.get(value, str(value))
     return str(value).upper()
@@ -602,16 +603,23 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
             channel_swap = False
             internal = reported_format
         candidate = _swap_red_blue(metal) if channel_swap else metal
+        channels = wanted.get("compared_channels")
+        if channels is None:
+            if reference_format == "R32F":
+                channels = "R32F"
+            elif reference_format and captured_format == "RGB8":
+                channels = "RGB"
+            else:
+                channels = "RGBA"
         alpha_declared = wanted.get("alpha_applicable")
         if alpha_declared is None:
-            # Older prefix requests did not carry the applicability flag.
-            # An RGB8 original attachment has no alpha channel; its BGRA8
-            # materialization cannot be compared on alpha.
-            alpha_applicable = not (
-                reference_format and captured_format == "RGB8")
+            alpha_applicable = channels != "RGB" and channels != "R32F"
         else:
             alpha_applicable = alpha_declared is not False
-        if not alpha_applicable:
+        if alpha_applicable != (channels == "RGBA"):
+            fail("alpha applicability contradicts the compared channel scope")
+            continue
+        if not alpha_applicable and channels != "R32F":
             reference = _opaque_alpha(reference)
             candidate = _opaque_alpha(candidate)
         statistics = m6_compare.compare_images(
@@ -646,6 +654,7 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
             "reference_sha256": reference_sha,
             "timing": timing,
             "alpha_applicable": alpha_applicable,
+            "compared_channels": channels,
             "reference_pixel_format": reference_format or None,
             "candidate_pixel_format": _normalize_format(item.get("pixel_format"))
             or None,

@@ -137,6 +137,27 @@ class Event20PrefixTests(unittest.TestCase):
         data[0] = (data[0] + 1) & 0xFF
         path.write_bytes(bytes(data))
 
+    def test_native_r32f_observation_is_format_aware(self):
+        directory = Path(tempfile.mkdtemp(dir=self.temporary.name))
+        result = subprocess.run(
+            [str(self.binary), "prefix-r32f", str(directory)],
+            capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        manifest = json.loads((directory / "frame-trace.json").read_text())
+        post = [record for record in manifest["prefix"]["observations"]
+                if record["timing"] == "post_event"]
+        self.assertEqual(len(post), 1)
+        observation = post[0]
+        self.assertEqual(observation["pixel_format"], "R32F")
+        self.assertIs(observation["alpha_applicable"], False)
+        self.assertEqual(observation["target_identity"]["internal_format"],
+                         0x822E)
+        self.assertEqual(observation["target_identity"]["component_type"],
+                         0x1406)
+        self.assertEqual(observation["color"]["bytes"], 4 * 4 * 4)
+        self.assertEqual(observation["row_stride"], 4 * 4)
+        self.assertEqual(observation["color"]["pixel_format"], "R32F")
+
     def test_exact_prefix_qualifies_through_event_20(self):
         frame, metal = self._fixture()
         result = self._evaluate(frame, metal)
@@ -180,6 +201,71 @@ class Event20PrefixTests(unittest.TestCase):
         self.assertEqual(divergent["status"], "divergent")
         self.assertEqual(divergent["independent"]["mismatched_pixels"], 1)
         self.assertEqual(divergent["independent"]["max_channel_error"], 1)
+
+    def test_alpha_only_mismatch_on_default_framebuffer_fails(self):
+        frame, metal = self._fixture()
+        path = self._event_file(metal, 5)
+        data = bytearray(path.read_bytes())
+        data[3] = (data[3] + 1) & 0xFF
+        path.write_bytes(bytes(data))
+        result = self._evaluate(frame, metal)
+        self.assertEqual(result["verdict"], "FIRST_DIVERGENCE")
+        self.assertEqual(result["first_divergence"], 5)
+        entry = result["events"][5]
+        self.assertEqual(entry["status"], "divergent")
+        self.assertEqual(entry["independent"]["mismatched_pixels"], 1)
+        self.assertEqual(entry["independent"]["alpha_different_pixels"], 1)
+        self.assertEqual(entry["independent"]["max_channel_error"], 1)
+
+    def test_request_substitution_with_consistent_receipt_is_rejected(self):
+        frame, metal = self._fixture()
+        request_path = metal / "checkpoint-request.json"
+        request = json.loads(request_path.read_text())
+        baseline = request["checkpoints"][0]
+        first_reference = next(
+            entry for entry in request["checkpoints"]
+            if entry.get("timing") == "post_event")
+        for entry in request["checkpoints"]:
+            if entry.get("timing") != "post_event":
+                continue
+            entry["reference_file"] = first_reference["reference_file"]
+            entry["reference_sha256"] = first_reference["reference_sha256"]
+        request_path.write_text(json.dumps(request, indent=2) + "\n")
+        request_sha = _sha(request_path)
+        receipt_path = metal / "shader-receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["checkpoint_request_sha256"] = request_sha
+        receipt["checkpoint_count"] = len(request["checkpoints"])
+        receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+        replay_path = metal / "replay.json"
+        replay = json.loads(replay_path.read_text())
+        replay["checkpoint_request_sha256"] = request_sha
+        replay["checkpoints"] = []
+        for entry in request["checkpoints"]:
+            if entry.get("timing") != "post_event":
+                continue
+            source = frame / "blobs" / entry["reference_file"]
+            shutil.copyfile(source, metal / entry["file"])
+            replay["checkpoints"].append({
+                "event": entry["event"],
+                "target": entry["target"],
+                "resource": entry["resource"],
+                "timing": "post_event",
+                "file": entry["file"],
+                "reference_file": entry["reference_file"],
+                "reference_sha256": entry["reference_sha256"],
+                "ok": True,
+                "width": entry["reference_width"],
+                "height": entry["reference_height"],
+                "format": "BGRA8",
+                "pixel_format": "BGRA8",
+            })
+        replay_path.write_text(json.dumps(replay, indent=2) + "\n")
+        result = self._evaluate(frame, metal)
+        self.assertNotEqual(result["verdict"], "EVENT20_EXACT")
+        self.assertEqual(result["verdict"], "requires_additional_evidence")
+        self.assertFalse(result["request"]["agrees_with_derivation"])
+        _ = baseline
 
     def test_event_18_difference_that_disappears_by_20_still_fails(self):
         frame, metal = self._fixture()
@@ -252,7 +338,7 @@ class Event20PrefixTests(unittest.TestCase):
         with self.assertRaises(m6_frame.FrameError):
             m6_frame.load_trace(frame, verify_blobs=True)
 
-    def test_campaign_checker_stops_at_earliest_divergence(self):
+    def test_campaign_checker_does_not_accept_candidate_metal_output(self):
         frame, metal = self._fixture()
         self._mutate_first_byte(self._event_file(metal, 5))
         environment = dict(os.environ)
@@ -262,11 +348,248 @@ class Event20PrefixTests(unittest.TestCase):
             capture_output=True, text=True, check=False, env=environment)
         self.assertNotEqual(completed.returncode, 0)
         payload = json.loads(completed.stdout)
-        self.assertEqual(payload["verdict"], "fail")
-        self.assertIn("event 5", payload["diagnostics"])
-        self.assertEqual(payload["result"]["first_divergence"], 5)
-        self.assertEqual(payload["result"]["verified_prefix"],
-                         {"start": 0, "end": 4})
+        self.assertEqual(payload["verdict"], "inconclusive")
+        self.assertIn("trusted evidence", payload["diagnostics"])
+
+
+class FormatScopeTests(unittest.TestCase):
+    def test_default_framebuffer_alpha_is_applicable(self):
+        scope = gfx_frame_graph.format_scope({
+            "pixel_format": "BGRA8",
+            "target_identity": {"internal_format": 0, "alpha_bits": 0},
+        })
+        self.assertIs(scope["alpha_applicable"], True)
+        self.assertEqual(scope["compared_channels"], "RGBA")
+        self.assertEqual(scope["problems"], [])
+
+    def test_rgba8_alpha_is_applicable(self):
+        scope = gfx_frame_graph.format_scope({
+            "pixel_format": "RGBA8",
+            "target_identity": {"internal_format": 0x8058, "alpha_bits": 8},
+        })
+        self.assertIs(scope["alpha_applicable"], True)
+        self.assertEqual(scope["compared_channels"], "RGBA")
+        self.assertEqual(scope["problems"], [])
+
+    def test_rgb8_alpha_is_not_stored(self):
+        scope = gfx_frame_graph.format_scope({
+            "pixel_format": "BGRA8",
+            "alpha_applicable": False,
+            "target_identity": {"internal_format": 0x8051, "alpha_bits": 0},
+        })
+        self.assertIs(scope["alpha_applicable"], False)
+        self.assertEqual(scope["compared_channels"], "RGB")
+        self.assertEqual(scope["problems"], [])
+
+    def test_r32f_compares_the_float_payload(self):
+        scope = gfx_frame_graph.format_scope({
+            "pixel_format": "R32F",
+            "alpha_applicable": False,
+            "target_identity": {"internal_format": 0x822E,
+                                "component_type": 0x1406,
+                                "red_bits": 32, "alpha_bits": 0},
+        })
+        self.assertIs(scope["alpha_applicable"], False)
+        self.assertEqual(scope["compared_channels"], "R32F")
+        self.assertEqual(scope["problems"], [])
+
+    def test_forged_false_alpha_on_default_and_rgba8_is_refused(self):
+        for internal, pixel_format in ((0, "BGRA8"), (0x8058, "RGBA8")):
+            scope = gfx_frame_graph.format_scope({
+                "pixel_format": pixel_format,
+                "alpha_applicable": False,
+                "target_identity": {"internal_format": internal,
+                                    "alpha_bits": 8 if internal else 0},
+            })
+            self.assertTrue(scope["problems"], (internal, scope))
+
+    def test_inconsistent_attachment_identity_is_refused(self):
+        cases = [
+            {"pixel_format": "BGRA8", "target_identity": {
+                "internal_format": 0x8051, "alpha_bits": 8}},
+            {"pixel_format": "RGBA8", "target_identity": {
+                "internal_format": 0x8058, "alpha_bits": 0}},
+            {"pixel_format": "R32F", "target_identity": {
+                "internal_format": 0x822E, "alpha_bits": 8}},
+        ]
+        for observation in cases:
+            self.assertTrue(
+                gfx_frame_graph.format_scope(observation)["problems"],
+                observation)
+
+    def test_forged_false_alpha_on_default_is_rejected_by_coverage(self):
+        events = [{"kind": "draw", "target": {"framebuffer": 0},
+                   "state": {"depth": {"test": False, "write": False},
+                             "stencil": {"test": False}}}]
+        resources = {
+            "fb:0": {"producers": [{"event": 0}], "consumers": [],
+                     "origin": "renderer_generated"},
+        }
+        trace = {"_prefix": {
+            "end": 0,
+            "initial": {"event": 0, "timing": "pre_event",
+                        "resource": "fb:0"},
+            "post_events": [{
+                "event": 0, "timing": "post_event", "kind": "draw",
+                "resource": "fb:0", "target_name": "0",
+                "pixel_format": "BGRA8", "alpha_applicable": False,
+                "target_identity": {"internal_format": 0, "alpha_bits": 0},
+                "color": {"status": "captured", "file": "x.bin",
+                          "sha256": "0" * 64, "bytes": 64,
+                          "pixel_format": "BGRA8"},
+            }],
+        }}
+        coverage = gfx_frame_graph.prefix_coverage(trace, events, resources)
+        self.assertEqual(coverage["status"], "invalid")
+        self.assertTrue(any("alpha applicability" in problem
+                            for problem in coverage["problems"]),
+                        coverage["problems"])
+
+    def test_draw_before_full_clear_has_no_initial_state_proof(self):
+        events = [{"kind": "draw", "target": {"framebuffer": 0},
+                   "state": {"depth": {"test": False, "write": False},
+                             "stencil": {"test": False}}}]
+        resources = {
+            "fb:0": {"producers": [{"event": 0}], "consumers": [{"event": 0}],
+                     "origin": "renderer_generated"},
+        }
+        trace = {"_prefix": {
+            "end": 0,
+            "initial": {"event": 0, "timing": "pre_event",
+                        "resource": "fb:0"},
+            "post_events": [{
+                "event": 0, "timing": "post_event", "kind": "draw",
+                "resource": "fb:0", "target_name": "0",
+                "pixel_format": "BGRA8", "alpha_applicable": True,
+                "target_identity": {"internal_format": 0, "alpha_bits": 0},
+                "color": {"status": "captured", "file": "x.bin",
+                          "sha256": "0" * 64, "bytes": 64,
+                          "pixel_format": "BGRA8"},
+            }],
+        }}
+        coverage = gfx_frame_graph.prefix_coverage(trace, events, resources)
+        self.assertEqual(coverage["status"], "invalid")
+        self.assertTrue(any("before a full colour clear" in problem
+                            for problem in coverage["problems"]),
+                        coverage["problems"])
+
+    def test_r32f_auxiliary_clear_is_planned_and_compared(self):
+        events = [{
+            "kind": "clear",
+            "target": {"framebuffer": 1, "color_attachment": {
+                "type": "texture", "name": 430, "level": 0,
+                "internal_format": "other", "width": 2048, "height": 2048}},
+            "flags": 1,
+            "state": {"scissor": {"enabled": False, "box": [0, 0, 2048, 2048]},
+                      "color_mask": [1, 1, 1, 1]},
+        }]
+        resources = {
+            "tex:430": {"producers": [{"event": 0, "cleared": True,
+                                       "coverage": {"color_full": True}}],
+                        "consumers": [], "origin": "renderer_generated"},
+        }
+        trace = {
+            "_prefix": {
+                "end": 0,
+                "initial": {"event": 0, "timing": "pre_event",
+                            "resource": "fb:0"},
+                "post_events": [{
+                    "event": 0, "timing": "post_event", "kind": "clear",
+                    "resource": "tex:430", "target_name": "430",
+                    "pixel_format": "R32F", "alpha_applicable": False,
+                    "target_identity": {"internal_format": 0x822E,
+                                        "component_type": 0x1406,
+                                        "red_bits": 32, "alpha_bits": 0},
+                    "color": {"status": "captured", "file": "r32f.bin",
+                              "sha256": "0" * 64, "bytes": 2048 * 2048 * 4,
+                              "pixel_format": "R32F"},
+                }],
+            },
+        }
+        coverage = gfx_frame_graph.prefix_coverage(trace, events, resources)
+        self.assertEqual(coverage["status"], "complete", coverage["problems"])
+        self.assertEqual(coverage["excluded_events"], [])
+        graph = {
+            "resources": resources,
+            "prefix": coverage,
+            "renderer_generated_sampled": [],
+        }
+        plan = gfx_frame_graph.prefix_checkpoint_plan(graph)
+        self.assertEqual(len(plan), 1)
+        self.assertEqual(plan[0]["reference_pixel_format"], "R32F")
+        self.assertEqual(plan[0]["compared_channels"], "R32F")
+        self.assertIs(plan[0]["alpha_applicable"], False)
+
+    def test_full_clear_proves_initial_state_irrelevant(self):
+        events = [
+            {"kind": "clear", "target": {"framebuffer": 0}, "flags": 1,
+             "state": {"scissor": {"enabled": False, "box": [0, 0, 4, 4]},
+                       "color_mask": [1, 1, 1, 1]}},
+            {"kind": "draw", "target": {"framebuffer": 0},
+             "state": {"depth": {"test": False, "write": False},
+                       "stencil": {"test": False}}},
+        ]
+        resources = {
+            "fb:0": {"producers": [
+                         {"event": 0, "cleared": True,
+                          "coverage": {"color_full": True}},
+                         {"event": 1}],
+                     "consumers": [{"event": 1}],
+                     "origin": "renderer_generated"},
+        }
+        trace = {"_prefix": {
+            "end": 1,
+            "initial": {"event": 0, "timing": "pre_event",
+                        "resource": "fb:0"},
+            "post_events": [
+                {"event": 0, "timing": "post_event", "kind": "clear",
+                 "resource": "fb:0", "target_name": "0",
+                 "pixel_format": "BGRA8", "alpha_applicable": True,
+                 "target_identity": {"internal_format": 0, "alpha_bits": 0},
+                 "color": {"status": "captured", "file": "x.bin",
+                           "sha256": "0" * 64, "bytes": 64,
+                           "pixel_format": "BGRA8"}},
+                {"event": 1, "timing": "post_event", "kind": "draw",
+                 "resource": "fb:0", "target_name": "0",
+                 "pixel_format": "BGRA8", "alpha_applicable": True,
+                 "target_identity": {"internal_format": 0, "alpha_bits": 0},
+                 "color": {"status": "captured", "file": "x.bin",
+                           "sha256": "0" * 64, "bytes": 64,
+                           "pixel_format": "BGRA8"}},
+            ],
+        }}
+        coverage = gfx_frame_graph.prefix_coverage(trace, events, resources)
+        self.assertEqual(coverage["status"], "complete", coverage["problems"])
+        row = next(item for item in coverage["initial_state"]
+                   if item["resource"] == "fb:0")
+        self.assertEqual(row["status"], "overwritten_by_producer")
+
+    def test_missing_event_before_later_divergence_is_not_first_divergence(self):
+        rows = [{"event": event, "status": "match"} for event in range(6)]
+        rows[0] = {"event": 0, "status": "missing"}
+        rows[5] = {"event": 5, "status": "divergent"}
+        result = gfx_prefix_check.classify_prefix(
+            rows, problems=[], end=20, require_end=20)
+        self.assertEqual(result["verdict"], "requires_additional_evidence")
+        self.assertIsNone(result["first_divergence"])
+        self.assertEqual(result["unverified_event"], 0)
+
+    def test_invalid_event_before_divergence_is_not_first_divergence(self):
+        rows = [{"event": event, "status": "match"} for event in range(6)]
+        rows[3] = {"event": 3, "status": "invalid"}
+        rows[5] = {"event": 5, "status": "divergent"}
+        result = gfx_prefix_check.classify_prefix(
+            rows, problems=[], end=20, require_end=20)
+        self.assertEqual(result["verdict"], "requires_additional_evidence")
+        self.assertIsNone(result["first_divergence"])
+
+    def test_problem_invalidates_first_divergence(self):
+        rows = [{"event": event, "status": "match"} for event in range(6)]
+        rows[1] = {"event": 1, "status": "divergent"}
+        result = gfx_prefix_check.classify_prefix(
+            rows, problems=["foreign receipt"], end=20, require_end=20)
+        self.assertEqual(result["verdict"], "requires_additional_evidence")
+        self.assertIsNone(result["first_divergence"])
 
 
 class ExcludedAuxiliaryTests(unittest.TestCase):
@@ -276,11 +599,11 @@ class ExcludedAuxiliaryTests(unittest.TestCase):
         result = gfx_prefix_check.classify_prefix(
             rows, problems=[], end=20, require_end=20)
         self.assertEqual(result["verdict"],
-                         "EVENT20_BGRA_EXACT_WITH_EXCLUDED_AUX")
-        self.assertEqual(result["status"], "qualified_with_exclusions")
+                         "requires_additional_evidence")
+        self.assertEqual(result["status"], "incomplete")
         self.assertEqual(result["excluded_events"], [11])
         self.assertNotIn(11, result["verified_color_events"])
-        self.assertEqual(result["verified_prefix"]["excluded_events"], [11])
+        self.assertEqual(result["unverified_event"], 11)
 
     def test_isolated_aux_clear_coverage_is_complete_but_excluded(self):
         events = [
@@ -289,25 +612,41 @@ class ExcludedAuxiliaryTests(unittest.TestCase):
                  "type": "texture", "name": 433, "level": 0,
                  "internal_format": "other", "width": 2048, "height": 2048}},
              "flags": 1},
+            {"kind": "clear",
+             "target": {"framebuffer": 0},
+             "flags": 1,
+             "state": {"scissor": {"enabled": False, "box": [0, 0, 4, 4]},
+                       "color_mask": [1, 1, 1, 1]}},
             {"kind": "draw",
-             "target": {"framebuffer": 0}},
+             "target": {"framebuffer": 0},
+             "state": {"depth": {"test": False, "write": False},
+                       "stencil": {"test": False}}},
         ]
         resources = {
             "tex:433": {"producers": [{"event": 0, "cleared": True,
                                        "coverage": {"color_full": True}}],
                         "consumers": [], "origin": "renderer_generated"},
-            "fb:0": {"producers": [{"event": 1}], "consumers": [],
+            "fb:0": {"producers": [
+                         {"event": 1, "cleared": True,
+                          "coverage": {"color_full": True}},
+                         {"event": 2}],
+                     "consumers": [{"event": 2}],
                      "origin": "renderer_generated"},
         }
         trace = {"_prefix": {
-            "end": 1,
+            "end": 2,
             "initial": {"event": 0, "timing": "pre_event",
                         "resource": "fb:0"},
             "post_events": [
                 {"event": 0, "timing": "post_event", "kind": "clear",
                  "resource": "tex:433", "target_name": "433",
                  "color": {"status": "unsupported_format"}},
-                {"event": 1, "timing": "post_event", "kind": "draw",
+                {"event": 1, "timing": "post_event", "kind": "clear",
+                 "resource": "fb:0", "target_name": "0",
+                 "color": {"status": "captured", "file": "x.bin",
+                           "sha256": "0" * 64, "bytes": 64,
+                           "pixel_format": "BGRA8"}},
+                {"event": 2, "timing": "post_event", "kind": "draw",
                  "resource": "fb:0", "target_name": "0",
                  "color": {"status": "captured", "file": "x.bin",
                            "sha256": "0" * 64, "bytes": 64,
@@ -325,26 +664,42 @@ class ExcludedAuxiliaryTests(unittest.TestCase):
                  "type": "texture", "name": 433, "level": 0,
                  "internal_format": "other", "width": 2048, "height": 2048}},
              "flags": 1},
+            {"kind": "clear",
+             "target": {"framebuffer": 0},
+             "flags": 1,
+             "state": {"scissor": {"enabled": False, "box": [0, 0, 4, 4]},
+                       "color_mask": [1, 1, 1, 1]}},
             {"kind": "draw",
-             "target": {"framebuffer": 0}},
+             "target": {"framebuffer": 0},
+             "state": {"depth": {"test": False, "write": False},
+                       "stencil": {"test": False}}},
         ]
         resources = {
             "tex:433": {"producers": [{"event": 0, "cleared": True,
                                        "coverage": {"color_full": True}}],
-                        "consumers": [{"event": 1}],
+                        "consumers": [{"event": 2}],
                         "origin": "renderer_generated"},
-            "fb:0": {"producers": [{"event": 1}], "consumers": [],
+            "fb:0": {"producers": [
+                         {"event": 1, "cleared": True,
+                          "coverage": {"color_full": True}},
+                         {"event": 2}],
+                     "consumers": [{"event": 2}],
                      "origin": "renderer_generated"},
         }
         trace = {"_prefix": {
-            "end": 1,
+            "end": 2,
             "initial": {"event": 0, "timing": "pre_event",
                         "resource": "fb:0"},
             "post_events": [
                 {"event": 0, "timing": "post_event", "kind": "clear",
                  "resource": "tex:433", "target_name": "433",
                  "color": {"status": "unsupported_format"}},
-                {"event": 1, "timing": "post_event", "kind": "draw",
+                {"event": 1, "timing": "post_event", "kind": "clear",
+                 "resource": "fb:0", "target_name": "0",
+                 "color": {"status": "captured", "file": "x.bin",
+                           "sha256": "0" * 64, "bytes": 64,
+                           "pixel_format": "BGRA8"}},
+                {"event": 2, "timing": "post_event", "kind": "draw",
                  "resource": "fb:0", "target_name": "0",
                  "color": {"status": "captured", "file": "x.bin",
                            "sha256": "0" * 64, "bytes": 64,
@@ -356,6 +711,85 @@ class ExcludedAuxiliaryTests(unittest.TestCase):
         self.assertTrue(any("consumed" in problem
                             for problem in coverage["problems"]),
                         coverage["problems"])
+
+
+class TrustedExecutionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temporary = tempfile.TemporaryDirectory()
+        cls.binary = Path(cls.temporary.name) / "gfx_frame_trace_scenarios"
+        sources = [ROOT / "tests" / "gfx_frame_trace_scenarios.c",
+                   BENCH / "eu4_gfx_frame_trace.c"]
+        native_build.require_build(
+            ["clang", "-O1", "-Wall", "-Wextra", "-I", str(BENCH), "-o",
+             str(cls.binary), *map(str, sources), "-framework", "OpenGL"],
+            label="event20-trusted-scenarios", sources=sources,
+            frameworks=("OpenGL",), require_arm64=False)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temporary.cleanup()
+
+    def _frame(self, directory: Path) -> None:
+        result = subprocess.run(
+            [str(self.binary), "prefix-seal", str(directory)],
+            capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_reference_copied_into_candidate_metal_output_does_not_qualify(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        base = Path(temporary.name)
+        frame = base / "frame"
+        frame.mkdir()
+        self._frame(frame)
+        metal = base / "shadow"
+        metal.mkdir()
+        graph = gfx_frame_graph.build(frame)
+        observations = {record["event"]: record
+                        for record in graph["prefix"]["post_events"]}
+        for event, observation in observations.items():
+            shutil.copyfile(frame / "blobs" / observation["color"]["file"],
+                            metal / f"prefix-event{event}-433.bgra")
+        result = gfx_prefix_check.evaluate(
+            frame, metal, require_end=20, trusted_execution=True)
+        self.assertNotEqual(result["verdict"], "EVENT20_EXACT")
+        self.assertEqual(result["verdict"],
+                         "requires_additional_evidence")
+        self.assertEqual(result.get("execution", {}).get("status"),
+                         "failed")
+
+    def test_trusted_evidence_detects_a_modified_frame(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        base = Path(temporary.name)
+        frame = base / "frame"
+        frame.mkdir()
+        self._frame(frame)
+        root = base / "trusted"
+        gfx_prefix_check.prepare_trusted_evidence(
+            frame, root, read_only=False)
+        copied = root / "frame"
+        gfx_prefix_check.verify_trusted_evidence(root, copied)
+        path = copied / "frame-events.jsonl"
+        data = bytearray(path.read_bytes())
+        data[-2] = (data[-2] + 1) & 0xFF
+        path.write_bytes(bytes(data))
+        with self.assertRaises(gfx_prefix_check.PrefixCheckError):
+            gfx_prefix_check.verify_trusted_evidence(root, copied)
+
+    def test_trusted_evidence_rejects_the_untrusted_original_frame(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        base = Path(temporary.name)
+        frame = base / "frame"
+        frame.mkdir()
+        self._frame(frame)
+        root = base / "trusted"
+        gfx_prefix_check.prepare_trusted_evidence(
+            frame, root, read_only=False)
+        with self.assertRaises(gfx_prefix_check.PrefixCheckError):
+            gfx_prefix_check.verify_trusted_evidence(root, frame)
 
 
 class OffscreenCoverageTests(unittest.TestCase):

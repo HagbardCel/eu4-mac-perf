@@ -132,7 +132,7 @@ def _prefix_record_problems(record, index: int) -> list[str]:
         problems.append(f"prefix observation {index} is not lower-left origin")
     pixel_format = record.get("pixel_format")
     colour_block = record.get("color") if isinstance(record.get("color"), dict) else {}
-    if (pixel_format not in ("BGRA8", "RGBA8")
+    if (pixel_format not in ("BGRA8", "RGBA8", "R32F")
             and colour_block.get("status") != "unsupported_format"):
         problems.append(f"prefix observation {index} has an unsupported "
                         "pixel format")
@@ -175,6 +175,19 @@ def _prefix_record_problems(record, index: int) -> list[str]:
         if colour.get("pixel_format") not in (None, pixel_format):
             problems.append(f"prefix observation {index} colour pixel format "
                             "disagrees with the observation")
+        if pixel_format == "R32F":
+            identity = record.get("target_identity") or {}
+            try:
+                internal = int(identity.get("internal_format") or 0)
+            except (TypeError, ValueError):
+                internal = 0
+            if internal != 0x822E:
+                problems.append(
+                    f"prefix observation {index} declares R32F for a "
+                    "different internal format")
+            if record.get("alpha_applicable") not in (None, False):
+                problems.append(
+                    f"prefix observation {index} declares alpha for R32F")
         if not _is_sha256(colour.get("sha256")):
             problems.append(f"prefix observation {index} has an invalid "
                             "colour digest")

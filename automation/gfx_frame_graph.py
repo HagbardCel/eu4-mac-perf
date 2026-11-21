@@ -1297,6 +1297,10 @@ def prefix_coverage(trace: dict, events: list[dict],
             problems.append(
                 f"prefix event {event_index} kind disagrees with the stream")
         colour = record.get("color") or {}
+        if colour.get("status") != "unsupported_format":
+            problems.extend(
+                f"prefix event {event_index}: {problem}"
+                for problem in format_scope(record)["problems"])
         if colour.get("status") == "unsupported_format":
             if event.get("kind") != "clear":
                 problems.append(
@@ -1368,12 +1372,184 @@ def prefix_coverage(trace: dict, events: list[dict],
             problems.append(
                 f"{key} is consumed inside the prefix with no in-prefix "
                 "producer and no initial observation")
+    initial_state: list[dict] = []
+    state_coverage: list[dict] = []
+
+    def full_clear_before(resource_key: str, event_index: int,
+                          component: str) -> bool:
+        resource = resources.get(resource_key) or {}
+        for producer in resource.get("producers") or []:
+            producer_event = producer.get("event")
+            if (producer_event is None
+                    or int(producer_event) >= event_index):
+                continue
+            if not producer.get("cleared"):
+                continue
+            coverage = producer.get("coverage") or {}
+            if coverage.get(f"{component}_full") is True:
+                return True
+        return False
+
+    for event_index, event in enumerate(events[:end + 1]):
+        kind = event.get("kind")
+        if kind not in ("draw", "resolve", "copy"):
+            continue
+        target = event.get("target") or {}
+        target_key = _event_output_resource(event)
+        if kind in ("resolve", "copy"):
+            source = _name(event.get("source") or event.get("source_texture"))
+            source_key = ("fb:0" if source in ("", "0")
+                          else f"tex:{source}")
+            if not full_clear_before(source_key, event_index, "color"):
+                problems.append(
+                    f"prefix event {event_index} reads {source_key} before a "
+                    "full colour clear")
+            continue
+        if target_key is None:
+            problems.append(
+                f"prefix event {event_index} has no identified output target")
+            continue
+        state = event.get("state") or {}
+        depth = state.get("depth") or {}
+        stencil = state.get("stencil") or {}
+        depth_used = bool(depth.get("test") or depth.get("write"))
+        stencil_used = bool(stencil.get("test") or stencil.get("write"))
+        depth_present = target_key == "fb:0" or bool(
+            target.get("depth_attachment"))
+        stencil_present = target_key == "fb:0" or bool(
+            target.get("depth_attachment"))
+        if not full_clear_before(target_key, event_index, "color"):
+            if target_key == "fb:0" and prefix.get("initial"):
+                # The initial default-framebuffer observation is captured, but
+                # it is only a verified input when a later full clear does not
+                # overwrite it before consumption.
+                problems.append(
+                    f"prefix event {event_index} reads {target_key} before a "
+                    "full colour clear")
+            else:
+                problems.append(
+                    f"prefix event {event_index} reads {target_key} before a "
+                    "full colour clear")
+        if depth_used and depth_present and not full_clear_before(
+                target_key, event_index, "depth"):
+            problems.append(
+                f"prefix event {event_index} uses depth on {target_key} "
+                "before a full depth clear")
+        if stencil_used and stencil_present and not full_clear_before(
+                target_key, event_index, "stencil"):
+            problems.append(
+                f"prefix event {event_index} uses stencil on {target_key} "
+                "before a full stencil clear")
+        state_coverage.append({
+            "event": event_index,
+            "resource": target_key,
+            "color_initialized": full_clear_before(
+                target_key, event_index, "color"),
+            "depth_used": depth_used,
+            "depth_present": depth_present,
+            "depth_initialized": (full_clear_before(
+                target_key, event_index, "depth") if depth_present else None),
+            "stencil_used": stencil_used,
+            "stencil_present": stencil_present,
+            "stencil_initialized": (full_clear_before(
+                target_key, event_index, "stencil") if stencil_present else None),
+        })
+    for key, resource in resources.items():
+        consumers = [
+            int(item["event"]) for item in resource.get("consumers") or []
+            if item.get("event") is not None and int(item["event"]) <= end]
+        if not consumers:
+            continue
+        producers = [
+            item for item in resource.get("producers") or []
+            if item.get("event") is not None
+            and int(item["event"]) < min(consumers)]
+        first = min(consumers)
+        if producers:
+            producer = min(producers, key=lambda item: int(item["event"]))
+            full_clear = any(
+                item.get("cleared")
+                and (item.get("coverage") or {}).get("color_full") is True
+                for item in producers)
+            initial_state.append({
+                "resource": key,
+                "first_consumer": first,
+                "first_producer": int(producer["event"]),
+                "status": "overwritten_by_producer",
+                "proof": ("the first in-prefix writer is an observed full clear"
+                          if (producer.get("cleared")
+                              and (producer.get("coverage") or {}).get(
+                                  "color_full") is True)
+                          else ("an observed full clear precedes the first "
+                                "consumer" if full_clear
+                                else "the first in-prefix writer is observed")),
+            })
+        elif key == "fb:0" and prefix.get("initial"):
+            initial_state.append({
+                "resource": key,
+                "first_consumer": first,
+                "first_producer": None,
+                "status": "initial_observation",
+                "proof": "the initial pre-event-0 default-framebuffer state is "
+                         "captured; no unverified pre-frame input is assumed",
+            })
+        elif resource.get("origin") in (EXTERNAL, BOUNDARY):
+            initial_state.append({
+                "resource": key,
+                "first_consumer": first,
+                "first_producer": None,
+                "status": "declared_external_input",
+                "proof": "the resource is an explicit external/boundary input, "
+                         "not renderer output",
+            })
+        else:
+            problems.append(
+                f"{key} is consumed inside the prefix with no observed producer "
+                "and no initial-state proof")
+    if prefix.get("initial") and not any(
+            row["resource"] == "fb:0" for row in initial_state):
+        fb0 = resources.get("fb:0") or {}
+        consumers = [
+            int(item["event"]) for item in fb0.get("consumers") or []
+            if item.get("event") is not None]
+        first_consumer = min(consumers) if consumers else None
+        producers = [
+            item for item in fb0.get("producers") or []
+            if item.get("event") is not None
+            and (first_consumer is None or int(item["event"]) < first_consumer)]
+        overwritten = any(
+            item.get("cleared")
+            and (item.get("coverage") or {}).get("color_full") is True
+            for item in producers)
+        if first_consumer is None or first_consumer > end:
+            status = "not_consumed_inside_prefix"
+            proof = ("the initial default-framebuffer state is captured and no "
+                     "default-framebuffer consumer exists inside the prefix")
+        elif overwritten:
+            status = "overwritten_before_consumption"
+            proof = ("an observed full default-framebuffer clear precedes the "
+                     "first default-framebuffer consumer")
+        else:
+            status = "unverified_initial_consumption"
+            proof = ("the initial default-framebuffer state is captured but no "
+                     "full clear proves that it is irrelevant")
+            problems.append(proof)
+        initial_state.append({
+            "resource": "fb:0",
+            "first_consumer": first_consumer,
+            "first_producer": (int(min(producers, key=lambda item: int(
+                item["event"]))["event"]) if producers else None),
+            "status": status,
+            "proof": proof,
+        })
     return {
         "status": "complete" if not problems else "invalid",
         "end": end,
         "initial": prefix.get("initial"),
         "post_events": post,
         "excluded_events": excluded_events,
+        "initial_state": initial_state,
+        "state_coverage": state_coverage,
         "problems": problems,
     }
 
@@ -1490,25 +1666,68 @@ def checkpoint_plan(graph: dict) -> list[dict]:
     return plan
 
 
-def _alpha_applicable(observation: dict) -> bool:
-    declared = observation.get("alpha_applicable")
-    if declared is not None:
-        return declared is not False
+def format_scope(observation: dict) -> dict:
+    """Derive the applicable comparison channels from sealed attachment identity.
+
+    The declared ``alpha_applicable`` field is evidence to be checked, never an
+    authority: a false value on an attachment with a stored/known alpha channel
+    is a provenance contradiction.
+    """
     identity = observation.get("target_identity") or {}
     try:
         internal = int(identity.get("internal_format") or 0)
     except (TypeError, ValueError):
         internal = 0
+    pixel_format = observation.get("pixel_format")
     alpha_bits = identity.get("alpha_bits")
-    if internal == 0:
-        # Default framebuffer: its attachment query is unavailable, but the
-        # drawable has an alpha channel (8 bits).
-        return True
-    if internal == 0x8051:  # GL_RGB8
-        return False
-    if isinstance(alpha_bits, int) and not isinstance(alpha_bits, bool):
-        return alpha_bits != 0
-    return True
+    problems: list[str] = []
+    if pixel_format == "R32F" or internal == 0x822E:
+        derived = False
+        channels = "R32F"
+        if pixel_format not in (None, "R32F"):
+            problems.append(
+                "R32F attachment declares a different pixel format")
+        if isinstance(alpha_bits, int) and not isinstance(alpha_bits, bool) \
+                and alpha_bits != 0:
+            problems.append(
+                "R32F attachment claims a stored alpha channel")
+    elif internal == 0:
+        # Default framebuffer: attachment component queries are unavailable,
+        # but the drawable has an 8-bit alpha channel.
+        derived = True
+        channels = "RGBA"
+    elif internal == 0x8051:
+        derived = False
+        channels = "RGB"
+        if isinstance(alpha_bits, int) and not isinstance(alpha_bits, bool) \
+                and alpha_bits != 0:
+            problems.append(
+                "RGB8 attachment claims a stored alpha channel")
+    else:
+        if isinstance(alpha_bits, int) and not isinstance(alpha_bits, bool):
+            derived = alpha_bits != 0
+        elif internal == 0x8058:
+            derived = True
+        else:
+            derived = True
+        if internal in (0x8058,) and isinstance(alpha_bits, int) \
+                and not isinstance(alpha_bits, bool) and alpha_bits == 0:
+            problems.append(
+                "RGBA8 attachment reports no alpha channel")
+        channels = "RGBA" if derived else "RGB"
+    declared = observation.get("alpha_applicable")
+    if declared is not None and (declared is not False) != derived:
+        problems.append(
+            "alpha applicability contradicts the sealed attachment identity")
+    return {
+        "alpha_applicable": derived,
+        "compared_channels": channels,
+        "problems": problems,
+    }
+
+
+def _alpha_applicable(observation: dict) -> bool:
+    return format_scope(observation)["alpha_applicable"]
 
 
 def prefix_checkpoint_plan(graph: dict) -> list[dict]:
@@ -1527,6 +1746,7 @@ def prefix_checkpoint_plan(graph: dict) -> list[dict]:
         if ((observation.get("color") or {}).get("status")
                 == "unsupported_format"):
             continue
+        scope = format_scope(observation)
         event = int(observation["event"])
         resource = str(observation["resource"])
         target = str(observation["target_name"])
@@ -1543,7 +1763,8 @@ def prefix_checkpoint_plan(graph: dict) -> list[dict]:
             "reference_height": observation.get("height"),
             "reference_pixel_format": colour.get("pixel_format")
             or observation.get("pixel_format"),
-            "alpha_applicable": _alpha_applicable(observation),
+            "alpha_applicable": scope["alpha_applicable"],
+            "compared_channels": scope["compared_channels"],
             "producer_events": [event],
             "writer_authority": "prefix_observation",
             "session_id": _observation_identity(observation, "session_id"),
@@ -1602,6 +1823,7 @@ def checkpoint_request(graph: dict) -> dict:
             "reference_height": item["reference_height"],
             "reference_pixel_format": item.get("reference_pixel_format"),
             "alpha_applicable": item.get("alpha_applicable", True),
+            "compared_channels": item.get("compared_channels"),
             "producer_events": item["producer_events"],
             "writer_authority": item["writer_authority"],
         }

@@ -36,6 +36,13 @@ from automation import gfx_prefix_check  # noqa: E402
 RELATIVE_BASE = Path(".local") / "m7" / "event20" / "live"
 
 
+def _trusted_root(workspace: Path) -> Path:
+    declared = os.environ.get("EU4_M7_EVENT20_TRUSTED_ROOT", "").strip()
+    if declared:
+        return Path(declared).expanduser().resolve()
+    return (ROOT / ".local" / "m7" / "event20" / "trusted").resolve()
+
+
 def _emit(verdict: str, diagnostics: str, result: dict | None = None) -> int:
     payload = {
         "schema": "m7-event20-acceptance/v1",
@@ -52,19 +59,34 @@ def main(argv: list[str]) -> int:
     if len(argv) < 2:
         return _emit("inconclusive", "usage: accept.py <workspace>")
     workspace = Path(argv[1]).expanduser().resolve()
-    base = Path(os.environ.get("EU4_M7_EVENT20_EVIDENCE", "")
-                or (workspace / RELATIVE_BASE)).expanduser().resolve()
-    frame_dir = base / "frame"
-    metal_dir = base / "shadow"
+    trusted_root = _trusted_root(workspace)
+    try:
+        trusted_root.relative_to(workspace)
+    except ValueError:
+        pass
+    else:
+        return _emit(
+            "inconclusive",
+            "trusted evidence root is inside the candidate workspace: "
+            f"{trusted_root}")
+    record_path = trusted_root / "trusted-evidence.json"
+    try:
+        record = json.loads(record_path.read_text())
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return _emit(
+            "inconclusive",
+            f"digest-bound trusted evidence record is unreadable: {exc}")
+    frame_dir = Path(str(record.get("frame_path") or
+                           (trusted_root / "frame"))).expanduser().resolve()
     if not frame_dir.is_dir():
-        return _emit("inconclusive",
-                     f"sealed frame directory is absent: {frame_dir}")
-    if not metal_dir.is_dir():
-        return _emit("inconclusive",
-                     f"Metal replay directory is absent: {metal_dir}")
+        return _emit(
+            "inconclusive",
+            "digest-bound trusted evidence root has no sealed frame: "
+            f"{frame_dir}")
     try:
         result = gfx_prefix_check.evaluate(
-            frame_dir, metal_dir, require_end=20)
+            frame_dir, None, require_end=20, trusted_execution=True,
+            trusted_root=trusted_root)
     except (gfx_prefix_check.PrefixCheckError, OSError, ValueError) as exc:
         return _emit("inconclusive", f"prefix checker could not evaluate: {exc}")
     verdict = result.get("verdict")

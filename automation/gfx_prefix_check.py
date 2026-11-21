@@ -19,9 +19,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
 from pathlib import Path
 
 from automation import gfx_frame_graph, gfx_independent_replay, m6_compare, m6_frame
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class PrefixCheckError(RuntimeError):
@@ -60,48 +68,65 @@ def _opaque_alpha(payload: bytes) -> bytes:
 
 def classify_prefix(events_out: list[dict], *, problems: list[str],
                     end: int, require_end: int) -> dict:
-    """Classify reconciled/excluded observations without trusting a report."""
-    divergent = sorted(
-        int(item["event"]) for item in events_out
-        if item.get("status") == "divergent")
+    """Walk the prefix sequentially and classify only authenticated evidence.
+
+    A missing, invalid or excluded event stops the walk.  A later mismatch may
+    not be promoted to ``FIRST_DIVERGENCE`` when an earlier event could not be
+    verified, and no exact verdict is possible with an excluded operation.
+    """
+    rows = {int(item["event"]): item for item in events_out
+            if isinstance(item.get("event"), int)}
+    verified_end = -1
+    first_divergence = None
+    unverified_event = None
+    for event in range(end + 1):
+        row = rows.get(event)
+        if row is None:
+            unverified_event = event
+            break
+        status = row.get("status")
+        if status == "match":
+            verified_end = event
+            continue
+        if status == "divergent":
+            first_divergence = event
+            break
+        unverified_event = event
+        break
     invalid_events = sorted(
-        int(item["event"]) for item in events_out
-        if item.get("status") not in ("match", "divergent",
-                                      "unsupported_auxiliary"))
+        event for event, row in rows.items()
+        if row.get("status") not in ("match", "divergent"))
     excluded_events = sorted(
-        int(item["event"]) for item in events_out
-        if item.get("status") == "unsupported_auxiliary")
-    first_divergence = divergent[0] if divergent else None
-    verified_color_events = [int(item["event"]) for item in events_out
-                             if item.get("status") == "match"]
-    if first_divergence is not None:
-        verified_prefix = ({"start": 0, "end": first_divergence - 1}
-                           if first_divergence > 0 else None)
+        event for event, row in rows.items()
+        if row.get("status") == "unsupported_auxiliary")
+    verified_color_events = sorted(
+        event for event, row in rows.items() if row.get("status") == "match")
+    if problems or unverified_event is not None:
+        verdict = "requires_additional_evidence"
+        status = "incomplete"
+        verified_prefix = ({"start": 0, "end": verified_end}
+                           if verified_end >= 0 else None)
+        first_divergence = None
+    elif first_divergence is not None:
         verdict = "FIRST_DIVERGENCE"
         status = "divergent"
-    elif end >= require_end and not problems and not excluded_events:
-        verified_prefix = {"start": 0, "end": require_end}
+        verified_prefix = ({"start": 0, "end": first_divergence - 1}
+                           if first_divergence > 0 else None)
+    elif verified_end == end and end >= require_end:
         verdict = "EVENT20_EXACT"
         status = "qualified"
-    elif end >= require_end and not problems and excluded_events:
-        verified_prefix = {"start": 0, "end": require_end,
-                           "excluded_events": excluded_events}
-        verdict = "EVENT20_BGRA_EXACT_WITH_EXCLUDED_AUX"
-        status = "qualified_with_exclusions"
-    elif invalid_events:
-        verified_prefix = None
-        verdict = "requires_additional_evidence"
-        status = "incomplete"
-    elif not problems:
-        verified_prefix = {"start": 0, "end": end}
+        verified_prefix = {"start": 0, "end": require_end}
+    elif verified_end == end:
         verdict = "partial_prefix"
         status = "partial"
+        verified_prefix = {"start": 0, "end": end}
     else:
-        verified_prefix = None
         verdict = "requires_additional_evidence"
         status = "incomplete"
+        verified_prefix = None
     return {
         "first_divergence": first_divergence,
+        "unverified_event": unverified_event,
         "invalid_events": invalid_events,
         "excluded_events": excluded_events,
         "verified_color_events": verified_color_events,
@@ -111,9 +136,200 @@ def classify_prefix(events_out: list[dict], *, problems: list[str],
     }
 
 
-def evaluate(frame_dir: Path | str, metal_dir: Path | str,
+def _tree_manifest(root: Path) -> list[dict]:
+    files = []
+    for path in sorted(Path(root).rglob("*")):
+        if path.is_file():
+            files.append({
+                "path": path.relative_to(root).as_posix(),
+                "bytes": path.stat().st_size,
+                "sha256": _sha256(path),
+            })
+    return files
+
+
+def _root_digest(files: list[dict]) -> str:
+    digest = hashlib.sha256()
+    for item in files:
+        digest.update(f"{item['path']}\0{item['bytes']}\0{item['sha256']}\n".encode())
+    return digest.hexdigest()
+
+
+def prepare_trusted_evidence(frame_dir: Path | str, destination: Path | str,
+                             *, source_note: str = "",
+                             read_only: bool = True, copy: bool = True) -> dict:
+    """Copy a sealed frame outside the candidate workspace and bind its bytes.
+
+    The destination is a read-only, digest-bound qualification root.  The
+    trusted checker loads only this copy, so candidate rewrites of the original
+    worktree cannot change the reference after publication.
+    """
+    frame_dir = Path(frame_dir).expanduser().resolve()
+    destination = Path(destination).expanduser().resolve()
+    if destination.exists():
+        shutil.rmtree(destination)
+    destination.mkdir(parents=True)
+    if copy:
+        target = destination / "frame"
+        shutil.copytree(frame_dir, target)
+        frame_relative = "frame"
+        recorded_frame = None
+    else:
+        target = frame_dir
+        frame_relative = None
+        recorded_frame = str(frame_dir)
+    files = _tree_manifest(target)
+    record = {
+        "schema": "m7-trusted-evidence/v1",
+        "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "source_note": source_note,
+        "frame_relative": frame_relative,
+        "frame_path": recorded_frame,
+        "files": files,
+        "root_sha256": _root_digest(files),
+    }
+    (destination / "trusted-evidence.json").write_text(
+        json.dumps(record, indent=2) + "\n")
+    if read_only:
+        try:
+            destination.chmod(0o555)
+        except OSError:
+            pass
+    return record
+
+
+def verify_trusted_evidence(trusted_root: Path | str,
+                            frame_dir: Path | str) -> dict:
+    """Verify a digest-bound trusted root and return its record."""
+    trusted_root = Path(trusted_root).expanduser().resolve()
+    record_path = trusted_root / "trusted-evidence.json"
+    record = _read_json(record_path)
+    if record.get("schema") != "m7-trusted-evidence/v1":
+        raise PrefixCheckError("unexpected trusted-evidence schema")
+    if record.get("frame_path"):
+        expected_frame = Path(str(record["frame_path"])).expanduser().resolve()
+    else:
+        expected_frame = (trusted_root /
+                          str(record.get("frame_relative") or "")).resolve()
+    if Path(frame_dir).expanduser().resolve() != expected_frame:
+        raise PrefixCheckError(
+            "frame directory is not the trusted-evidence frame")
+    files = _tree_manifest(expected_frame)
+    if files != record.get("files"):
+        raise PrefixCheckError("trusted-evidence file manifest changed")
+    if _root_digest(files) != record.get("root_sha256"):
+        raise PrefixCheckError("trusted-evidence root digest changed")
+    return record
+
+
+def _run_trusted_replay(frame_dir: Path, request: dict,
+                        run_dir: Path | str | None = None) -> dict:
+    """Execute the production Metal replay from the infrastructure checkout.
+
+    The checker does not trust a candidate-authored replay.json, receipt or
+    output files.  It derives the request, translates the captured shaders with
+    the trusted infrastructure, runs the trusted replay host and compares the
+    files that host just wrote.
+    """
+    if run_dir is None:
+        run = Path(tempfile.mkdtemp(prefix="m7-prefix-check-"))
+    else:
+        run = Path(run_dir).expanduser().resolve()
+        run.mkdir(parents=True, exist_ok=True)
+    request_path = run / "checkpoint-request.json"
+    request_path.write_text(json.dumps(request, indent=2) + "\n")
+    shaders = run / "shaders"
+    command = [
+        sys.executable, "-m", "automation.m6_frame", "translate",
+        "--frame", str(frame_dir), "--out", str(shaders), "--force",
+    ]
+    translated = subprocess.run(
+        command, cwd=str(ROOT), capture_output=True, text=True,
+        timeout=300, check=False)
+    if translated.returncode != 0:
+        raise PrefixCheckError(
+            "trusted shader translation failed: "
+            + (translated.stderr.strip() or translated.stdout.strip())[-400:])
+    try:
+        host = m6_frame.build_replay_host()
+    except (m6_frame.FrameError, OSError, RuntimeError) as exc:
+        raise PrefixCheckError(f"trusted replay host build failed: {exc}") from exc
+    replay_dir = run / "metal"
+    replay_dir.mkdir()
+    replay_command = [
+        str(host), "--frame", str(frame_dir), "--shaders", str(shaders),
+        "--out", str(replay_dir), "--checkpoints", str(request_path),
+    ]
+    started = time.time()
+    completed = subprocess.run(
+        replay_command, cwd=str(ROOT), capture_output=True, text=True,
+        timeout=600, check=False)
+    if completed.returncode != 0:
+        raise PrefixCheckError(
+            "trusted Metal replay failed: "
+            + (completed.stderr.strip() or completed.stdout.strip())[-400:])
+    replay_path = replay_dir / "replay.json"
+    replay = _read_json(replay_path)
+    if replay.get("status") != "ok" or replay.get("failed") != 0:
+        raise PrefixCheckError("trusted Metal replay did not complete cleanly")
+    receipt = {
+        "schema": "m7-shadow-shader-receipt/v1",
+        "capture_frame_id": None,
+        "pid": None,
+        "session_id": None,
+        "trace_manifest_sha256": None,
+        "event_stream_sha256": None,
+        "checkpoint_request_file": request_path.name,
+        "checkpoint_request_sha256": _sha256(request_path),
+        "checkpoint_count": len(request.get("checkpoints") or []),
+    }
+    seal_path = frame_dir / "frame-seal.json"
+    if seal_path.is_file():
+        seal = _read_json(seal_path)
+        receipt.update({
+            "capture_frame_id": seal.get("capture_frame_id"),
+            "pid": seal.get("pid"),
+            "session_id": seal.get("session_id"),
+            "trace_manifest_sha256": seal.get("manifest_sha256"),
+            "event_stream_sha256": seal.get("event_stream_sha256"),
+        })
+    (replay_dir / "checkpoint-request.json").write_text(
+        json.dumps(request, indent=2) + "\n")
+    (replay_dir / "shader-receipt.json").write_text(
+        json.dumps(receipt, indent=2) + "\n")
+    execution = {
+        "schema": "m7-trusted-execution/v1",
+        "mode": "checker-native-replay",
+        "started_epoch": started,
+        "finished_epoch": time.time(),
+        "frame_dir": str(frame_dir),
+        "request_sha256": _sha256(replay_dir / "checkpoint-request.json"),
+        "replay_host": str(host),
+        "replay_host_sha256": _sha256(host),
+        "shaders_json_sha256": _sha256(shaders / "shaders.json")
+        if (shaders / "shaders.json").is_file() else None,
+        "replay_json_sha256": _sha256(replay_path),
+        "status": replay.get("status"),
+        "events": replay.get("events"),
+        "encoded": replay.get("encoded"),
+        "failed": replay.get("failed"),
+        "command": replay_command,
+    }
+    (replay_dir / "trusted-execution.json").write_text(
+        json.dumps(execution, indent=2) + "\n")
+    return {
+        "metal_dir": replay_dir,
+        "request_path": replay_dir / "checkpoint-request.json",
+        "execution": execution,
+    }
+
+
+def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
              *, request_path: Path | str | None = None,
-             require_end: int = 20) -> dict:
+             require_end: int = 20,
+             trusted_execution: bool = False,
+             trusted_root: Path | str | None = None,
+             trusted_run_dir: Path | str | None = None) -> dict:
     """Verify one sealed frame's exact prefix against its Metal replay.
 
     ``frame_dir`` contains frame-seal.json, frame-trace.json,
@@ -122,7 +338,8 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str,
     checker must run this function outside the candidate workspace.
     """
     frame_dir = Path(frame_dir).expanduser().resolve()
-    metal_dir = Path(metal_dir).expanduser().resolve()
+    metal_dir = (Path(metal_dir).expanduser().resolve()
+                 if metal_dir is not None else None)
     problems: list[str] = []
     result: dict = {
         "schema": "m7-event20-prefix-check/v1",
@@ -131,6 +348,19 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str,
         "required_through": require_end,
         "problems": problems,
     }
+    if trusted_root is not None:
+        try:
+            record = verify_trusted_evidence(trusted_root, frame_dir)
+            result["trusted_evidence"] = {
+                "root": str(Path(trusted_root).expanduser().resolve()),
+                "root_sha256": record.get("root_sha256"),
+                "file_count": len(record.get("files") or []),
+            }
+        except (PrefixCheckError, OSError) as exc:
+            problems.append(f"trusted evidence is not usable: {exc}")
+            return dict(result, verdict="requires_additional_evidence",
+                        status="invalid", first_divergence=None,
+                        verified_prefix=None, events=[])
     try:
         seal = m6_frame.load_seal(frame_dir)
         trace = m6_frame.load_trace(frame_dir, verify_blobs=True)
@@ -155,12 +385,48 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str,
                     status="incomplete", first_divergence=None,
                     verified_prefix=None, events=[])
     end = int(prefix["end"])
+    result["initial_state"] = prefix.get("initial_state") or []
+    result["state_coverage"] = prefix.get("state_coverage") or []
+    result["prefix_coverage"] = {
+        "status": prefix.get("status"),
+        "end": end,
+        "post_events": len(prefix.get("post_events") or []),
+        "excluded_events": prefix.get("excluded_events") or [],
+    }
     if end < require_end:
         problems.append(
             f"capture prefix ends at event {end}, not {require_end}")
-    request_file = (Path(request_path).expanduser().resolve()
-                    if request_path is not None
-                    else metal_dir / "checkpoint-request.json")
+    expected_request = gfx_frame_graph.checkpoint_request(graph)
+    expected_canonical = json.dumps(
+        expected_request, sort_keys=True, separators=(",", ":"))
+    result["expected_request_sha256"] = hashlib.sha256(
+        expected_canonical.encode()).hexdigest()
+    if trusted_execution:
+        try:
+            trusted = _run_trusted_replay(
+                frame_dir, expected_request, trusted_run_dir)
+        except (PrefixCheckError, OSError, subprocess.TimeoutExpired) as exc:
+            problems.append(f"trusted Metal execution failed: {exc}")
+            return dict(result, verdict="requires_additional_evidence",
+                        status="invalid", first_divergence=None,
+                        verified_prefix=None, events=[], execution={
+                            "mode": "checker-native-replay",
+                            "status": "failed",
+                            "error": str(exc),
+                        })
+        result["execution"] = trusted["execution"]
+        metal_dir = trusted["metal_dir"]
+        request_file = trusted["request_path"]
+    else:
+        if metal_dir is None:
+            problems.append("Metal result directory is required without "
+                            "trusted execution")
+            return dict(result, verdict="requires_additional_evidence",
+                        status="invalid", first_divergence=None,
+                        verified_prefix=None, events=[])
+        request_file = (Path(request_path).expanduser().resolve()
+                        if request_path is not None
+                        else metal_dir / "checkpoint-request.json")
     try:
         request = _read_json(request_file)
     except PrefixCheckError as exc:
@@ -171,6 +437,15 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str,
     request_sha = _sha256(request_file)
     result["request"] = {"path": str(request_file),
                          "sha256": request_sha}
+    published_canonical = json.dumps(
+        request, sort_keys=True, separators=(",", ":"))
+    if published_canonical != expected_canonical:
+        problems.append(
+            "published checkpoint request does not agree with the independent "
+            "derivation from the sealed frame")
+        result["request"]["agrees_with_derivation"] = False
+    else:
+        result["request"]["agrees_with_derivation"] = True
     receipt_path = metal_dir / "shader-receipt.json"
     try:
         receipt = _read_json(receipt_path)
@@ -274,6 +549,7 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str,
             "reference_pixel_format": entry.get("reference_pixel_format"),
             "candidate_pixel_format": entry.get("candidate_pixel_format"),
             "alpha_applicable": entry.get("alpha_applicable", True) is not False,
+            "compared_channels": entry.get("compared_channels"),
         }
         statistics = entry.get("statistics") or {}
         row["statistics"] = statistics
@@ -317,7 +593,9 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str,
                     or len(candidate) != width * height * 4):
                 raise PrefixCheckError("pixel payload size mismatch")
             alpha_applicable = entry.get("alpha_applicable", True) is not False
-            if not alpha_applicable:
+            channels = entry.get("compared_channels") or (
+                "RGBA" if alpha_applicable else "RGB")
+            if not alpha_applicable and channels != "R32F":
                 reference = _opaque_alpha(reference)
                 candidate = _opaque_alpha(candidate)
             exact = m6_compare.compare_images(

@@ -414,6 +414,21 @@ static int scenario_prefix_incomplete(const char *directory) {
 
 /* Copies are observed after the real transfer, matching the post-event
    boundary the Metal replay checkpoints. */
+/* The test-only target override simulates an R32F colour attachment so the
+   format-aware observation path is exercised without a GL context. */
+static int scenario_prefix_r32f(const char *directory) {
+    if (configure_prefix(directory, "0") <= 0) {
+        return 2;
+    }
+    arm_via_present();
+    eu4_gfx_frame_trace_test_set_target(6);
+    eu4_gfx_frame_trace_test_set_target_format(0x822E);
+    draw(true, 0x1000);
+    draw(false, 0x1000);
+    finish_via_present();
+    return 0;
+}
+
 static int scenario_prefix_copy(const char *directory) {
     if (configure_prefix(directory, "1") <= 0) {
         return 2;
@@ -1058,7 +1073,10 @@ static int scenario_prefix_seal(const char *directory) {
         return 2;
     }
     arm_via_present();
-    for (int index = 0; index <= 20; index++) {
+    /* Event 0 is a full default-framebuffer clear so the initial pre-frame
+       state is provably overwritten before any draw consumes it. */
+    clear_one();
+    for (int index = 1; index <= 20; index++) {
         draw(true, 0x1000);
         draw(false, 0x1000);
     }
@@ -1228,6 +1246,9 @@ int main(int argc, char **argv) {
     }
     if (strcmp(scenario, "prefix-seal") == 0) {
         return scenario_prefix_seal(directory);
+    }
+    if (strcmp(scenario, "prefix-r32f") == 0) {
+        return scenario_prefix_r32f(directory);
     }
     if (strcmp(scenario, "checkpoint-offscreen") == 0) {
         return scenario_checkpoint_offscreen(directory);

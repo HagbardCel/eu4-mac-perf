@@ -107,6 +107,7 @@ int eu4_gfx_frame_trace_test_checkpoint(const char *directory, int event,
                                         char *out_file, size_t out_size);
 /* Host-test only: force the recorded target framebuffer (no GL context). */
 void eu4_gfx_frame_trace_test_set_target(int framebuffer);
+void eu4_gfx_frame_trace_test_set_target_format(int internal_format);
 /* Host-test only: run the production selected-event checkpoint path with the
    current default framebuffer and GL test state. */
 int eu4_gfx_frame_trace_test_checkpoint_production(const char *directory,

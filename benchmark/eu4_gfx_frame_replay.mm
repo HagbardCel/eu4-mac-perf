@@ -359,6 +359,7 @@ static NSString *target_format_name(int internal_format) {
         case 0x8815: return @"RGB32F";
         case 0x881A: return @"RGBA16F";
         case 0x881B: return @"RGB16F";
+        case 0x822E: return @"R32F";
         default: return @"other";
     }
 }
@@ -1822,6 +1823,9 @@ static MTLPixelFormat pixel_format_for_name(NSString *format_name) {
         if ([format_name isEqualToString:@"RGB8"] ||
             [format_name isEqualToString:@"SRGB8_ALPHA8"]) {
             return MTLPixelFormatBGRA8Unorm;
+        }
+        if ([format_name isEqualToString:@"R32F"]) {
+            return MTLPixelFormatR32Float;
         }
     }
     return MTLPixelFormatBGRA8Unorm;
@@ -4500,6 +4504,9 @@ static void run_checkpoint_readbacks(NSArray *items, NSUInteger index,
                     break;
                 case MTLPixelFormatRGBA32Float:
                     checkpoint[@"pixel_format"] = @"RGBA32F";
+                    break;
+                case MTLPixelFormatR32Float:
+                    checkpoint[@"pixel_format"] = @"R32F";
                     break;
                 default:
                     checkpoint[@"pixel_format"] = @"other";
