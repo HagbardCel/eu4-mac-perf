@@ -10,6 +10,7 @@ Operations: ``prepare``, ``status``, ``validate``, ``goal-prompt``.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -869,7 +870,14 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit, session) -> int:
     identities = _identity(sidecar, infra_commit)
     authority = _authority_snapshot(sidecar, identities)
     existing = _read_anchor(stored.identity)
-    if existing is None and not getattr(args, "create_anchor", False):
+    previous_anchor_digest = None
+    if existing is not None and getattr(args, "reanchor", False):
+        previous_anchor_digest = hashlib.sha256(
+            stored.identity.read_bytes()).hexdigest()
+        existing = None
+    if existing is None and not (
+            getattr(args, "create_anchor", False)
+            or getattr(args, "reanchor", False)):
         # The plugin calls prepare before every check. If that call could create
         # the anchor, a session started in the wrong directory could anchor
         # whatever it had already edited. Only the launcher creates it.
@@ -882,7 +890,7 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit, session) -> int:
     if existing is not None:
         _check_authority(existing, authority)
     else:
-        receipts.write_identity(sidecar.run_root, {
+        anchor_value = {
             "schema": "eu4-dsh-identity/v1",
             "campaign_id": sidecar.campaign_id,
             "prepared_at": _now(),
@@ -891,7 +899,11 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit, session) -> int:
             "workspace": str(sidecar.workspace),
             "run_root": str(sidecar.run_root),
             "authority": {"schema": AUTHORITY_SCHEMA, **authority},
-        })
+        }
+        if previous_anchor_digest is not None:
+            anchor_value["reanchored_at"] = _now()
+            anchor_value["previous_anchor_sha256"] = previous_anchor_digest
+        receipts.write_identity(sidecar.run_root, anchor_value)
 
     identity_digest = receipts.identity_digest(identities)
     verification = _qualification_state(
@@ -2528,6 +2540,10 @@ def build_parser() -> argparse.ArgumentParser:
             child.add_argument("--session-id", default=None)
         if name == "prepare":
             child.add_argument("--create-anchor", action="store_true")
+            child.add_argument(
+                "--reanchor", action="store_true",
+                help="explicitly replace the existing identity anchor after a "
+                     "reviewed code revision change")
         if name == "review-verify":
             child.add_argument("--allow-scripted", action="store_true")
         if name == "review-run":

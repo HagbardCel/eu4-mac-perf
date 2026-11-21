@@ -1209,3 +1209,32 @@ except campaign_guard.CampaignRefusal as exc:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EnsureStateTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.path = Path(self.temporary.name) / "state.json"
+
+    def _ensure(self):
+        return campaign_guard.main([
+            "ensure", "--state", str(self.path),
+            "--budget", "replays=2", "--budget", "wall_clock_seconds=600",
+        ])
+
+    def test_ensure_creates_once_then_refuses_consumed_state(self):
+        import contextlib
+        import io
+        first = io.StringIO()
+        with contextlib.redirect_stdout(first):
+            self.assertEqual(self._ensure(), 0)
+        second = io.StringIO()
+        with contextlib.redirect_stdout(second):
+            self.assertEqual(self._ensure(), 0)
+        guard = campaign_guard.Guard(self.path)
+        guard.reserve({"replays": 1})
+        third = io.StringIO()
+        with contextlib.redirect_stdout(third):
+            self.assertEqual(self._ensure(), 2)
+        self.assertIn("consumed budget", third.getvalue())

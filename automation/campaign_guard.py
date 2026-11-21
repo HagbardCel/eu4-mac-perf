@@ -906,6 +906,13 @@ def _parser() -> argparse.ArgumentParser:
     command = sub.add_parser("check")
     command.add_argument("--state", required=True, type=Path)
     command.add_argument("--action", required=True)
+    command = sub.add_parser("ensure")
+    command.add_argument("--state", required=True, type=Path)
+    command.add_argument("--campaign-id", default="")
+    command.add_argument("--budget", action="append", default=[])
+    command.add_argument("--deadline-seconds", type=float, default=None)
+    command.add_argument("--worktree", default=None)
+    command.add_argument("--objective-digest", default=None)
     command = sub.add_parser("status")
     command.add_argument("--state", required=True, type=Path)
     command = sub.add_parser("stop")
@@ -926,7 +933,46 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     guard = Guard(args.state)
     try:
-        if args.operation == "init":
+        if args.operation == "ensure":
+            budgets = _budget_pairs(args.budget)
+            if not guard.path.is_file():
+                value = guard.init(
+                    campaign_id=args.campaign_id,
+                    budgets=budgets,
+                    deadline_seconds=args.deadline_seconds,
+                    worktree=args.worktree,
+                    objective_digest=args.objective_digest,
+                    admin_token=os.environ.get("EU4_CAMPAIGN_ADMIN_TOKEN") or None)
+                value = {"ok": True, "created": True, "status": value}
+            else:
+                state = guard.state()
+                current = {
+                    key: state.get("budgets", {}).get(key)
+                    for key in budgets
+                }
+                problems = []
+                if current != budgets:
+                    problems.append(
+                        f"existing budgets {current} != requested {budgets}")
+                if any(int(state.get("counts", {}).get(key, 0) or 0) != 0
+                       for key in state.get("counts", {})):
+                    problems.append("existing state has consumed budget")
+                if state.get("reservations"):
+                    problems.append("existing state has reservations")
+                if state.get("stop"):
+                    problems.append("existing state is stopped")
+                if problems:
+                    raise CampaignRefusal("state_in_use", "; ".join(problems))
+                # The state is unused: refresh the wall-clock window so a
+                # prepared handoff does not expire while waiting for launch.
+                seconds = budgets.get(
+                    "wall_clock_seconds",
+                    args.deadline_seconds if args.deadline_seconds is not None
+                    else PILOT_BUDGETS["wall_clock_seconds"])
+                state["deadline_epoch"] = time.time() + float(seconds)
+                guard._write(state)
+                value = {"ok": True, "created": False, "status": state}
+        elif args.operation == "init":
             value = guard.init(
                 campaign_id=args.campaign_id,
                 budgets=_budget_pairs(args.budget),
