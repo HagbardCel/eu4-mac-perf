@@ -1,0 +1,45 @@
+{
+  "schema": "m7-event20-portable-case-record/v1",
+  "case_id": "m7-prefix-1-47590918-d63a-4798-9737-df00285ad51b",
+  "seal_session": "47590918-d63a-4798-9737-df00285ad51b",
+  "capture_frame_id": 1,
+  "divergence_event": 1,
+  "case_path": ".local/m7/event20/case-prefix",
+  "case_manifest": ".local/m7/event20/case.json",
+  "scope": "derived prefix (events 0..1); not the original full seal",
+  "derived_from": {
+    "original_session_id": "47590918-d63a-4798-9737-df00285ad51b",
+    "original_capture_frame_id": 1,
+    "original_operation_count": 283,
+    "original_manifest_sha256": "e4696cd34eca08a3b6ce364e2c7a8bf2135efe11d8c5dab8bf1cc4a83abe51da",
+    "original_event_stream_sha256": "a867808bf357469f211b1c6c1790358b7d297d88229df5bcb36b1ff007c2ec9f",
+    "original_reference_sha256": "b38d3804bce3d3575f848fbe800859e7675337e039d2606a984327f997bab362",
+    "original_prefix_end": 20,
+    "selected_events": [
+      0,
+      1
+    ],
+    "scope": "derived prefix reproduction; not the original full seal"
+  },
+  "bytes": 75456851,
+  "file_count": 56,
+  "root_sha256": "d87b9241295333b7233afa11386c6ae176f18ee4d967ebb0b8d415d52d4da80d",
+  "checker": {
+    "verdict": "FIRST_DIVERGENCE",
+    "first_divergence": 1,
+    "verified_prefix": {
+      "start": 0,
+      "end": 0
+    },
+    "problems_count": 0
+  },
+  "reproduction": {
+    "command": [
+      "python3.14",
+      "-c",
+      "from automation import gfx_prefix_check; gfx_prefix_check.evaluate('/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/case-prefix', None, require_end=1, trusted_execution=True)"
+    ],
+    "note": "derived prefix; not the original full seal"
+  },
+  "superseded": "the earlier 860,327,938-byte full-frame case attempt remains recorded as incomplete: artifact_budget"
+}

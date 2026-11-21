@@ -409,6 +409,7 @@ static void eu4_gfx_interposed_copy_tex_sub_image(GLenum target, GLint level,
     }
     (void)eu4_gfx_frame_trace_copy_event(&event);
     g_real(target, level, xoffset, yoffset, x, y, width, height);
+    eu4_gfx_frame_trace_copy_exit();
 }
 
 #ifdef EU4_GFX_INTERPOSE_TEST

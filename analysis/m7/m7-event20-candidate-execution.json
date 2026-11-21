@@ -1,0 +1,232 @@
+{
+  "schema": "m7-event20-candidate-execution/v1",
+  "candidate": {
+    "workspace": ".local/dsh/m7-event20-final/workspace",
+    "baseline_commit": "385d44f6afaa3ba544f88b62f8c7eb1e713a0b68",
+    "revision": "385d44f6afaa3ba544f88b62f8c7eb1e713a0b68",
+    "sidecar": "dsh/campaigns/m7-event20.json",
+    "trusted_reference_root": ".local/m7/event20/trusted-copy/47590918",
+    "trusted_reference_root_sha256": "b3e3d7b5d1e4cefe814f460c99a19c32011242d100a8b0c5bdd97aa9e485756c",
+    "trusted_reference_files": 1192
+  },
+  "runs": {
+    "baseline": {
+      "mode": "candidate-build-and-replay",
+      "status": "ok",
+      "candidate_revision": "385d44f6afaa3ba544f88b62f8c7eb1e713a0b68",
+      "changed_paths": [],
+      "source_digest": "255a5b7e971abf616400921e9a9165553d6e711c1852b451e540e184e255d988",
+      "source_digests": {
+        "benchmark/eu4_gfx_draw_semantics.h": "d4509ca33d1b283ebf2b225994caa4f18265aef32da708729acf106b00acccb8",
+        "benchmark/eu4_gfx_frame_replay.mm": "2ac899483cca72fed2dedf33b1afa6d87773a79d4c37120d515c8a9c8c837367",
+        "benchmark/eu4_gfx_frame_replay_cli.mm": "dca2eaae35f16baab642cb95ef78824e5415bcb91377d20ff0d90f4dd7f586ee",
+        "benchmark/eu4_gfx_metal_replay.h": "ab6d65d2b401014bd6726f8d635891f673059be3857200f04503c6e702f80334",
+        "benchmark/eu4_gfx_replay_semantics.h": "76ee0e0b817fe968228527d2d060f080608e3b698975d1248afa51881c7322e9"
+      },
+      "host_sha256": "190fde924697ad9085329ae3d882aa286502be4c9793c81af982143de8d69adb",
+      "build_command": [
+        "/usr/bin/clang",
+        "-arch",
+        "arm64",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-fobjc-arc",
+        "-lc++",
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-o",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/candidate-run/baseline/candidate-gfx-frame-replay",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/candidate-run/baseline/candidate-snapshot/benchmark/eu4_gfx_frame_replay.mm",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/candidate-run/baseline/candidate-snapshot/benchmark/eu4_gfx_frame_replay_cli.mm"
+      ],
+      "compiler": {
+        "path": "/usr/bin/clang",
+        "version": "Apple clang version 21.0.0 (clang-2100.4.1.1)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+      },
+      "events": 283,
+      "encoded": 283,
+      "failed": 0,
+      "output_count": 28,
+      "execution_record": ".local/m7/event20/candidate-run/baseline/metal/trusted-execution.json"
+    },
+    "defect": {
+      "mode": "candidate-build-and-replay",
+      "status": "ok",
+      "candidate_revision": "385d44f6afaa3ba544f88b62f8c7eb1e713a0b68",
+      "changed_paths": [
+        "benchmark/eu4_gfx_frame_replay.mm"
+      ],
+      "source_digest": "492e66544fdf86dd77e79d966e9278f46a46fcaa4f98abde7e4e2012f4dc6cac",
+      "source_digests": {
+        "benchmark/eu4_gfx_draw_semantics.h": "d4509ca33d1b283ebf2b225994caa4f18265aef32da708729acf106b00acccb8",
+        "benchmark/eu4_gfx_frame_replay.mm": "2a0da8b37cb7f8b52858bc7aae7ad2ca8dce56b034575c908e1dd4c4e9a23035",
+        "benchmark/eu4_gfx_frame_replay_cli.mm": "dca2eaae35f16baab642cb95ef78824e5415bcb91377d20ff0d90f4dd7f586ee",
+        "benchmark/eu4_gfx_metal_replay.h": "ab6d65d2b401014bd6726f8d635891f673059be3857200f04503c6e702f80334",
+        "benchmark/eu4_gfx_replay_semantics.h": "76ee0e0b817fe968228527d2d060f080608e3b698975d1248afa51881c7322e9"
+      },
+      "host_sha256": "533f79c63fb292afb628e0db8e64c33517c30d0c00e6b50e98a2c95a5372264a",
+      "build_command": [
+        "/usr/bin/clang",
+        "-arch",
+        "arm64",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-fobjc-arc",
+        "-lc++",
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-o",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/candidate-run/defect/candidate-gfx-frame-replay",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/candidate-run/defect/candidate-snapshot/benchmark/eu4_gfx_frame_replay.mm",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/candidate-run/defect/candidate-snapshot/benchmark/eu4_gfx_frame_replay_cli.mm"
+      ],
+      "compiler": {
+        "path": "/usr/bin/clang",
+        "version": "Apple clang version 21.0.0 (clang-2100.4.1.1)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+      },
+      "events": 283,
+      "encoded": 283,
+      "failed": 0,
+      "output_count": 28,
+      "execution_record": ".local/m7/event20/candidate-run/defect/metal/trusted-execution.json"
+    },
+    "corrected": {
+      "mode": "candidate-build-and-replay",
+      "status": "ok",
+      "candidate_revision": "385d44f6afaa3ba544f88b62f8c7eb1e713a0b68",
+      "changed_paths": [],
+      "source_digest": "255a5b7e971abf616400921e9a9165553d6e711c1852b451e540e184e255d988",
+      "source_digests": {
+        "benchmark/eu4_gfx_draw_semantics.h": "d4509ca33d1b283ebf2b225994caa4f18265aef32da708729acf106b00acccb8",
+        "benchmark/eu4_gfx_frame_replay.mm": "2ac899483cca72fed2dedf33b1afa6d87773a79d4c37120d515c8a9c8c837367",
+        "benchmark/eu4_gfx_frame_replay_cli.mm": "dca2eaae35f16baab642cb95ef78824e5415bcb91377d20ff0d90f4dd7f586ee",
+        "benchmark/eu4_gfx_metal_replay.h": "ab6d65d2b401014bd6726f8d635891f673059be3857200f04503c6e702f80334",
+        "benchmark/eu4_gfx_replay_semantics.h": "76ee0e0b817fe968228527d2d060f080608e3b698975d1248afa51881c7322e9"
+      },
+      "host_sha256": "190fde924697ad9085329ae3d882aa286502be4c9793c81af982143de8d69adb",
+      "build_command": [
+        "/usr/bin/clang",
+        "-arch",
+        "arm64",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-fobjc-arc",
+        "-lc++",
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-o",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/candidate-run/corrected/candidate-gfx-frame-replay",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/candidate-run/corrected/candidate-snapshot/benchmark/eu4_gfx_frame_replay.mm",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/candidate-run/corrected/candidate-snapshot/benchmark/eu4_gfx_frame_replay_cli.mm"
+      ],
+      "compiler": {
+        "path": "/usr/bin/clang",
+        "version": "Apple clang version 21.0.0 (clang-2100.4.1.1)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+      },
+      "events": 283,
+      "encoded": 283,
+      "failed": 0,
+      "output_count": 28,
+      "execution_record": ".local/m7/event20/candidate-run/corrected/metal/trusted-execution.json"
+    },
+    "copied": {
+      "mode": "candidate-build-and-replay",
+      "status": "ok",
+      "candidate_revision": "385d44f6afaa3ba544f88b62f8c7eb1e713a0b68",
+      "changed_paths": [],
+      "source_digest": "255a5b7e971abf616400921e9a9165553d6e711c1852b451e540e184e255d988",
+      "source_digests": {
+        "benchmark/eu4_gfx_draw_semantics.h": "d4509ca33d1b283ebf2b225994caa4f18265aef32da708729acf106b00acccb8",
+        "benchmark/eu4_gfx_frame_replay.mm": "2ac899483cca72fed2dedf33b1afa6d87773a79d4c37120d515c8a9c8c837367",
+        "benchmark/eu4_gfx_frame_replay_cli.mm": "dca2eaae35f16baab642cb95ef78824e5415bcb91377d20ff0d90f4dd7f586ee",
+        "benchmark/eu4_gfx_metal_replay.h": "ab6d65d2b401014bd6726f8d635891f673059be3857200f04503c6e702f80334",
+        "benchmark/eu4_gfx_replay_semantics.h": "76ee0e0b817fe968228527d2d060f080608e3b698975d1248afa51881c7322e9"
+      },
+      "host_sha256": "190fde924697ad9085329ae3d882aa286502be4c9793c81af982143de8d69adb",
+      "build_command": [
+        "/usr/bin/clang",
+        "-arch",
+        "arm64",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-fobjc-arc",
+        "-lc++",
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-o",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/candidate-run/copied/candidate-gfx-frame-replay",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/candidate-run/copied/candidate-snapshot/benchmark/eu4_gfx_frame_replay.mm",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/candidate-run/copied/candidate-snapshot/benchmark/eu4_gfx_frame_replay_cli.mm"
+      ],
+      "compiler": {
+        "path": "/usr/bin/clang",
+        "version": "Apple clang version 21.0.0 (clang-2100.4.1.1)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+      },
+      "events": 283,
+      "encoded": 283,
+      "failed": 0,
+      "output_count": 28,
+      "execution_record": ".local/m7/event20/candidate-run/copied/metal/trusted-execution.json"
+    }
+  },
+  "ab_experiment": {
+    "defect": {
+      "file": "benchmark/eu4_gfx_frame_replay.mm",
+      "change": "add 0.01 to the red clear component",
+      "source_digest": "492e66544fdf86dd77e79d966e9278f46a46fcaa4f98abde7e4e2012f4dc6cac",
+      "host_sha256": "533f79c63fb292afb628e0db8e64c33517c30d0c00e6b50e98a2c95a5372264a",
+      "verdict": "FIRST_DIVERGENCE",
+      "first_divergence": 0,
+      "event0_mismatched_pixels": 1930176,
+      "event0_max_channel_error": 3
+    },
+    "corrected": {
+      "source_digest": "255a5b7e971abf616400921e9a9165553d6e711c1852b451e540e184e255d988",
+      "host_sha256": "190fde924697ad9085329ae3d882aa286502be4c9793c81af982143de8d69adb",
+      "verdict": "FIRST_DIVERGENCE",
+      "first_divergence": 1,
+      "event1_mismatched_pixels": 23,
+      "event1_max_channel_error": 1
+    },
+    "unchanged_candidate_matches_baseline": true
+  },
+  "trust_boundary_checks": {
+    "candidate_build_from_snapshot": true,
+    "candidate_policy_verified": true,
+    "source_digest_bound_to_build": true,
+    "outputs_rehashed_after_execution": true,
+    "receipt_rehashed_after_execution": true,
+    "executable_rehashed_after_execution": true,
+    "candidate_source_rehashed_after_build": true,
+    "candidate_outputs_not_authority": true,
+    "reference_copied_into_metal_negative_test": "tests.test_m7_event20_prefix.TrustedExecutionTests.test_reference_copied_into_candidate_metal_output_does_not_qualify",
+    "replaced_output_receipt_replay_test": "tests.test_m7_event20_prefix.ExecutionReceiptTests.test_replaced_output_receipt_or_replay_is_detected"
+  },
+  "replay_budget": {
+    "charged_once_per_trusted_execution": true,
+    "exhaustion_refused_before_build": true,
+    "nested_attempt_joins_reservation": true,
+    "tests": [
+      "tests.test_m7_event20_prefix.Event20PrefixTests.test_trusted_execution_charges_one_replay_and_refuses_exhaustion",
+      "tests.test_m7_event20_prefix.Event20PrefixTests.test_nested_trusted_execution_joins_one_budget_reservation"
+    ]
+  },
+  "live_launches": 0,
+  "notes": [
+    "The candidate host is built from a copied dependency snapshot of the candidate worktree.",
+    "Shader translation and the checkpoint request are produced by trusted infrastructure, not the candidate.",
+    "The copied reference snapshot is verified before execution and qualification."
+  ]
+}

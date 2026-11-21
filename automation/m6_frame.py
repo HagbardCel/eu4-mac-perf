@@ -60,6 +60,11 @@ class FrameError(RuntimeError):
     pass
 
 
+def _is_sha256(value) -> bool:
+    return (isinstance(value, str) and len(value) == 64
+            and all(character in "0123456789abcdef" for character in value))
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -105,6 +110,196 @@ def _read_json(path: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 
+
+PREFIX_SCHEMA = "gfx-prefix-observations/v1"
+PREFIX_OBSERVATION_SCHEMA = "gfx-prefix-observation/v1"
+
+
+def _prefix_record_problems(record, index: int) -> list[str]:
+    """Validate one exact-prefix observation's self-description."""
+    if not isinstance(record, dict):
+        return [f"prefix observation {index} is not an object"]
+    problems: list[str] = []
+    if record.get("schema") != PREFIX_OBSERVATION_SCHEMA:
+        problems.append(f"prefix observation {index} has an unsupported schema")
+    if record.get("event") != index:
+        problems.append(
+            f"prefix observation {index} names event {record.get('event')!r}")
+    timing = record.get("timing")
+    if timing not in ("pre_event", "post_event"):
+        problems.append(f"prefix observation {index} has an invalid timing")
+    if record.get("origin") != "lower_left":
+        problems.append(f"prefix observation {index} is not lower-left origin")
+    pixel_format = record.get("pixel_format")
+    colour_block = record.get("color") if isinstance(record.get("color"), dict) else {}
+    if (pixel_format not in ("BGRA8", "RGBA8", "R32F")
+            and colour_block.get("status") != "unsupported_format"):
+        problems.append(f"prefix observation {index} has an unsupported "
+                        "pixel format")
+    width = record.get("width")
+    height = record.get("height")
+    if (not isinstance(width, int) or isinstance(width, bool)
+            or not 0 < width <= 8192):
+        problems.append(f"prefix observation {index} has an invalid width")
+        width = None
+    if (not isinstance(height, int) or isinstance(height, bool)
+            or not 0 < height <= 8192):
+        problems.append(f"prefix observation {index} has an invalid height")
+        height = None
+    stride = record.get("row_stride")
+    if width is not None and stride != width * 4:
+        problems.append(f"prefix observation {index} row stride does not "
+                        "match its width")
+    colour = record.get("color")
+    if not isinstance(colour, dict):
+        problems.append(f"prefix observation {index} has no colour image")
+    elif colour.get("status") == "unsupported_format":
+        if record.get("kind") != "clear":
+            problems.append(
+                f"prefix observation {index} has an unsupported colour "
+                "format for a non-clear operation")
+        if pixel_format is not None:
+            problems.append(
+                f"prefix observation {index} declares a pixel format for an "
+                "unsupported colour target")
+    else:
+        name = colour.get("file")
+        if (not isinstance(name, str) or not name
+                or Path(name).name != name):
+            problems.append(f"prefix observation {index} has an invalid "
+                            "colour blob name")
+        if width is not None and height is not None and colour.get(
+                "bytes") != width * height * 4:
+            problems.append(f"prefix observation {index} colour byte count "
+                            "does not match its dimensions")
+        if colour.get("pixel_format") not in (None, pixel_format):
+            problems.append(f"prefix observation {index} colour pixel format "
+                            "disagrees with the observation")
+        if pixel_format == "R32F":
+            identity = record.get("target_identity") or {}
+            try:
+                internal = int(identity.get("internal_format") or 0)
+            except (TypeError, ValueError):
+                internal = 0
+            if internal != 0x822E:
+                problems.append(
+                    f"prefix observation {index} declares R32F for a "
+                    "different internal format")
+            if record.get("alpha_applicable") not in (None, False):
+                problems.append(
+                    f"prefix observation {index} declares alpha for R32F")
+        if not _is_sha256(colour.get("sha256")):
+            problems.append(f"prefix observation {index} has an invalid "
+                            "colour digest")
+    for member in ("depth", "stencil"):
+        value = record.get(member)
+        if not isinstance(value, dict):
+            problems.append(f"prefix observation {index} has no {member} "
+                            "status")
+            continue
+        status = value.get("status")
+        if status not in ("captured", "absent", "not_used", "not_present"):
+            problems.append(f"prefix observation {index} has an invalid "
+                            f"{member} status")
+        elif status == "captured":
+            name = value.get("file")
+            if (not isinstance(name, str) or not name
+                    or Path(name).name != name):
+                problems.append(f"prefix observation {index} has an invalid "
+                                f"{member} blob name")
+            if not _is_sha256(value.get("sha256")):
+                problems.append(f"prefix observation {index} has an invalid "
+                                f"{member} digest")
+            if width is not None and height is not None:
+                expected = (width * height * 4 if member == "depth"
+                            else width * height)
+                if value.get("bytes") != expected:
+                    problems.append(
+                        f"prefix observation {index} {member} byte count does "
+                        "not match its dimensions")
+    return problems
+
+
+def load_prefix_observations(manifest: dict, frame_dir: Path) -> dict | None:
+    """Loads and verifies the opt-in exact-prefix observation file.
+
+    The prefix block is an additive manifest member.  An absent block means
+    the capture did not request exact-prefix coverage; a present block is
+    verified end to end and fails closed on any gap, stale digest or
+    disagreement with the manifest-embedded records.
+    """
+    block = manifest.get("prefix")
+    if block is None:
+        return None
+    frame_dir = Path(frame_dir)
+    if not isinstance(block, dict):
+        raise FrameError("frame prefix block is not an object")
+    if block.get("schema") != PREFIX_SCHEMA:
+        raise FrameError("unexpected frame prefix schema")
+    if block.get("status") != "complete":
+        raise FrameError(
+            "frame prefix coverage is incomplete: "
+            + str(block.get("status") or "unknown"))
+    end = block.get("end")
+    if (not isinstance(end, int) or isinstance(end, bool)
+            or not 0 <= end < 64):
+        raise FrameError("frame prefix end event is invalid")
+    count = block.get("count")
+    if (not isinstance(count, int) or isinstance(count, bool)
+            or count != end + 1):
+        raise FrameError("frame prefix post-event count does not match its end")
+    if block.get("post_event_count") != count:
+        raise FrameError("frame prefix post-event count is inconsistent")
+    if block.get("initial") is not True:
+        raise FrameError("frame prefix has no initial state observation")
+    name = block.get("observation_file")
+    if (not isinstance(name, str) or not name or Path(name).name != name):
+        raise FrameError("frame prefix observation file name is invalid")
+    path = frame_dir / name
+    if not path.is_file():
+        raise FrameError("frame prefix observation file is absent")
+    declared_bytes = block.get("observation_bytes")
+    if path.stat().st_size != declared_bytes:
+        raise FrameError("frame prefix observation byte count does not match")
+    digest = _sha256(path)
+    if block.get("observation_sha256") != digest:
+        raise FrameError("frame prefix observation digest does not match")
+    try:
+        records = [json.loads(line) for line in path.read_text().splitlines()
+                   if line.strip()]
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise FrameError(f"unreadable frame prefix observations: {exc}") from exc
+    embedded = block.get("observations")
+    if not isinstance(embedded, list) or embedded != records:
+        raise FrameError("frame prefix observations disagree with the manifest")
+    post = [record for record in records
+            if isinstance(record, dict) and record.get("timing") == "post_event"]
+    initial = [record for record in records
+               if isinstance(record, dict) and record.get("timing") == "pre_event"]
+    if len(post) != end + 1 or len(initial) != 1:
+        raise FrameError("frame prefix observation coverage is incomplete")
+    if initial[0].get("event") != 0:
+        raise FrameError("frame prefix initial observation is not event 0")
+    for index, record in enumerate(post):
+        problems = _prefix_record_problems(record, index)
+        if problems:
+            raise FrameError(problems[0])
+        if record.get("event") != index:
+            raise FrameError("frame prefix events are not contiguous")
+    if _prefix_record_problems(initial[0], 0):
+        raise FrameError(_prefix_record_problems(initial[0], 0)[0])
+    return {
+        "schema": PREFIX_SCHEMA,
+        "end": end,
+        "initial": initial[0],
+        "post_events": post,
+        "records": records,
+        "observation_file": name,
+        "observation_sha256": digest,
+        "observation_bytes": declared_bytes,
+        "budget": block.get("budget"),
+    }
+
 def load_trace(frame_dir: Path, *, verify_blobs: bool = True) -> dict:
     """Loads and validates one frame trace. Fails closed on any gap."""
     frame_dir = Path(frame_dir)
@@ -142,6 +337,16 @@ def load_trace(frame_dir: Path, *, verify_blobs: bool = True) -> dict:
         raise FrameError("frame reference size does not match its declaration")
     if _sha256(reference) != frame.get("reference_sha256"):
         raise FrameError("frame reference sha256 does not match its declaration")
+    prefix = load_prefix_observations(manifest, frame_dir)
+    if prefix is not None:
+        if prefix["end"] >= len(events):
+            raise FrameError("frame prefix extends beyond the event stream")
+        for index, record in enumerate(prefix["post_events"]):
+            event = events[index]
+            if record.get("kind") != event.get("kind"):
+                raise FrameError(
+                    f"frame prefix observation {index} kind disagrees with "
+                    "the event stream")
     if verify_blobs:
         blobs: dict[str, str] = {}
         for event in events:
@@ -168,7 +373,23 @@ def load_trace(frame_dir: Path, *, verify_blobs: bool = True) -> dict:
                 if member.get("sha256") and member["sha256"] != digest:
                     raise FrameError(f"blob digest mismatch: {name}")
                 blobs[name] = digest
+        if prefix is not None:
+            for record in prefix["records"]:
+                for member in _iter_blob_members(record):
+                    blob_name = member.get("file")
+                    if not blob_name or blob_name in blobs:
+                        continue
+                    path = frame_dir / "blobs" / str(blob_name)
+                    if not path.is_file():
+                        raise FrameError(f"missing prefix blob: {blob_name}")
+                    blob_digest = _verified_blob_sha256(path)
+                    if (member.get("sha256")
+                            and member["sha256"] != blob_digest):
+                        raise FrameError(
+                            f"prefix blob digest mismatch: {blob_name}")
+                    blobs[blob_name] = blob_digest
         manifest["_blob_count_verified"] = len(blobs)
+    manifest["_prefix"] = prefix
     manifest["_events"] = events
     manifest["_draws"] = draws
     manifest["_frame_dir"] = str(frame_dir)
@@ -185,6 +406,7 @@ def load_seal(
     trace: dict | None = None,
     verify_counts: bool = True,
     verify_blobs: bool = True,
+    trusted_evidence: dict | None = None,
 ) -> dict:
     """Loads and validates the authoritative same-process frame seal.
 
@@ -261,7 +483,22 @@ def load_seal(
     if not portable_capture and (
             not declared_dir.is_absolute()
             or declared_dir.resolve() != frame_dir.resolve()):
-        raise FrameError("frame seal capture directory does not match")
+        if trusted_evidence is None:
+            raise FrameError("frame seal capture directory does not match")
+        # A verified copied snapshot keeps the original seal unchanged but
+        # lives at a different absolute path.  The trusted-evidence record
+        # binds the original capture directory and the copied byte manifest.
+        original = str(trusted_evidence.get("original_capture_dir") or "")
+        if (not original
+                or Path(original).resolve() != declared_dir.resolve()):
+            raise FrameError(
+                "trusted evidence does not name the sealed capture directory")
+        relative = trusted_evidence.get("frame_relative")
+        if relative is not None:
+            expected = Path(str(trusted_evidence.get("_root") or "")).resolve() / str(relative)
+            if frame_dir.resolve() != expected:
+                raise FrameError(
+                    "trusted evidence frame is not the verified snapshot")
 
     def member(name: object, label: str) -> Path:
         text = str(name or "")
@@ -622,6 +859,18 @@ def checkpoint_options_error(args) -> str | None:
     if (checkpoint_event is not None or checkpoint_events is not None) and \
             checkpoint_budget <= 0:
         return "--checkpoint-max-bytes must be positive"
+    prefix_end = getattr(args, "prefix_end", None)
+    if prefix_end is not None:
+        if prefix_end < 0:
+            return "--prefix-end must be non-negative"
+        if prefix_end >= 32:
+            return "--prefix-end must be below the native hard bound 32"
+        if prefix_end >= int(getattr(args, "max_draws", 0) or 0):
+            return "--prefix-end must be below --max-draws"
+        if int(getattr(args, "prefix_max_bytes", 0) or 0) <= 0:
+            return "--prefix-max-bytes must be positive"
+        if int(getattr(args, "prefix_max_ns", 0) or 0) <= 0:
+            return "--prefix-max-ns must be positive"
     return None
 
 
@@ -829,6 +1078,13 @@ def capture(args: argparse.Namespace) -> int:
         # The aggregate readback budget applies to the single-event form too.
         env_extra["EU4_GFX_FRAME_TRACE_CHECKPOINT_MAX_BYTES"] = str(
             checkpoint_budget)
+    prefix_end = getattr(args, "prefix_end", None)
+    if prefix_end is not None:
+        env_extra["EU4_GFX_FRAME_TRACE_PREFIX_END"] = str(prefix_end)
+        env_extra["EU4_GFX_FRAME_TRACE_PREFIX_MAX_BYTES"] = str(
+            int(getattr(args, "prefix_max_bytes", 384 * 1024 * 1024)))
+        env_extra["EU4_GFX_FRAME_TRACE_PREFIX_MAX_NS"] = str(
+            int(getattr(args, "prefix_max_ns", 10_000_000_000)))
     shadow_enabled = bool(getattr(args, "shadow", False))
     continuous = bool(getattr(args, "continuous", False))
     asynchronous = bool(getattr(args, "async", False))
@@ -1045,6 +1301,9 @@ def capture(args: argparse.Namespace) -> int:
             "max_checkpoints": getattr(args, "max_checkpoints", None),
             "checkpoint_max_bytes": getattr(
                 args, "checkpoint_max_bytes", None),
+            "prefix_end": getattr(args, "prefix_end", None),
+            "prefix_max_bytes": getattr(args, "prefix_max_bytes", None),
+            "prefix_max_ns": getattr(args, "prefix_max_ns", None),
         },
     }
     status = 0
@@ -3365,6 +3624,16 @@ def _parser() -> argparse.ArgumentParser:
     cap.add_argument(
         "--checkpoint-max-bytes", type=int, default=128 * 1024 * 1024,
         help="aggregate readback-byte budget for the whole checkpoint set")
+    cap.add_argument(
+        "--prefix-end", type=int, default=None, metavar="EVENT",
+        help="opt-in exact-prefix mode: observe the post-event state of every "
+             "operation from event 0 through EVENT (native hard bound 31)")
+    cap.add_argument(
+        "--prefix-max-bytes", type=int, default=384 * 1024 * 1024,
+        help="aggregate readback-byte budget for exact-prefix observations")
+    cap.add_argument(
+        "--prefix-max-ns", type=int, default=10_000_000_000,
+        help="aggregate readback-time budget for exact-prefix observations")
     cap.add_argument("--seal", action="store_true",
                      help="publish the authoritative frame-seal/v1 handoff")
     cap.add_argument("--shadow", action="store_true",
