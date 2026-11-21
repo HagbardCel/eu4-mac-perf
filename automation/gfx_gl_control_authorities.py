@@ -46,10 +46,14 @@ SCHEMA = "gfx-gl-control-renderer-authorities/v2"
 #
 # The first entry pins the M7 original-OpenGL selected-draw control.  Its
 # driver is automation/gfx_gl_control_renderer.py; the native executor is built
-# from benchmark/eu4_gfx_draw_control.c with:
-#   clang -O2 -w -I benchmark -o .local/m7/authority/eu4_gfx_draw_control \
-#       benchmark/eu4_gfx_draw_control.c -framework OpenGL
-# The binary digest below is that reviewed build; the public key half lives in
+# from benchmark/eu4_gfx_draw_control.c with the deterministic recipe:
+#   clang -O2 -g0 -w -Wl,-no_uuid -I benchmark \
+#       -o <dir>/eu4_gfx_draw_control benchmark/eu4_gfx_draw_control.c \
+#       -framework OpenGL
+# The output basename must be eu4_gfx_draw_control; clang embeds it, so a
+# different -o basename changes the digest even with identical source.  With
+# this recipe the digest is independent of the build directory.  The binary
+# digest below is that reviewed build; the public key half lives in
 # .local/m7/authority/gl-control-ed25519.key (not checked in).  A re-review is
 # required before changing any digest or adding another renderer.
 AUTHORITIES: dict[str, dict] = {
@@ -65,9 +69,9 @@ AUTHORITIES: dict[str, dict] = {
             "b129e1bcd834600e8a3986159b7d9a540d1951f09f30ce3bfd4881844247a727"),
         "components": [
             {"role": "native-gl-executor",
-             "sha256": "6b8d8aa94e71200c8caee6277f89003a12755881d1c40535c305862b32bc3ba6"},
+             "sha256": "254618ef8ab232fd1b3c42e6186d642702e714e70d79c92f6d2d908cfa3abc7a"},
             {"role": "replay-input-verifier",
-             "sha256": "c8563b3f201facd585735be21b0dff33b3951eb630875803dee057fb2337c6cf"},
+             "sha256": "6c93974f4df9612c45c0645ad27a0d6cd5b3a7885ea2b6829be43b5401c02166"},
             {"role": "receipt-signer",
              "sha256": "52e03dd0c0b80c10c4e8acf2f72d4307a07c2c0321a06bd1107e0903f3ffa3b4"},
         ],

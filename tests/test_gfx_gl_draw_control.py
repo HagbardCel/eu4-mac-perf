@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -701,6 +702,28 @@ class DrawControlTests(unittest.TestCase):
         self.assertIn("state polygon_mode_back 0x1b02", filled_ctl)
         self.assertIn("state polygon_mode_front 0x1b02", outlined_ctl)
         self.assertIn("state polygon_mode_back 0x1b01", outlined_ctl)
+
+    def test_the_documented_native_build_is_path_independent(self):
+        compiler = shutil.which("clang")
+        if compiler is None:
+            self.skipTest("clang is unavailable")
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            hashes = []
+            for name, cwd, source in (
+                    ("one", ROOT, "benchmark/eu4_gfx_draw_control.c"),
+                    ("two", base, str(ROOT / "benchmark"
+                                       / "eu4_gfx_draw_control.c"))):
+                output = base / name / "eu4_gfx_draw_control"
+                output.parent.mkdir(parents=True)
+                build = subprocess.run(
+                    [compiler, "-O2", "-g0", "-w", "-Wl,-no_uuid",
+                     "-I", str(ROOT / "benchmark"), "-o", str(output),
+                     source, "-framework", "OpenGL"],
+                    cwd=str(cwd), capture_output=True, text=True, check=False)
+                self.assertEqual(build.returncode, 0, build.stderr)
+                hashes.append(hashlib.sha256(output.read_bytes()).hexdigest())
+            self.assertEqual(hashes[0], hashes[1])
 
     def test_a_captured_drawable_extent_mismatch_is_refused(self):
         drawable = {"samples": 0, "sample_buffers": 0, "depth_bits": 32,

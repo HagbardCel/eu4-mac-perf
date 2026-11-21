@@ -712,8 +712,11 @@ def _derive_evidence(trace: dict, seal: dict, *, checkpoint_event: int,
     unsupported.extend(drawable_unsupported)
 
     target = draw.get("target") if isinstance(draw.get("target"), dict) else {}
-    if _int_or_none(target.get("width")) not in (None, width) \
-            or _int_or_none(target.get("height")) not in (None, height):
+    target_width = target.get("width")
+    target_height = target.get("height")
+    if (target_width is not None and _int_or_none(target_width) != width) \
+            or (target_height is not None
+                and _int_or_none(target_height) != height):
         missing.append(
             "recorded draw target extent differs from the checkpoint extent")
     draw_buffer = _gl_enum(target.get("draw_buffer"))

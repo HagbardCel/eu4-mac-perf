@@ -188,6 +188,10 @@ if mode == "wrong_draw":
 if mode == "wrong_components":
     receipt["renderer"]["components"] = [
         {"role": "native-gl-executor", "sha256": "0" * 64}]
+if mode == "bad_component_types":
+    receipt["renderer"]["components"] = [
+        {"role": "a", "sha256": "0" * 64},
+        {"role": None, "sha256": "0" * 64}]
 body = dict(receipt)
 body.pop("signature", None)
 canonical = json.dumps(
@@ -1006,6 +1010,13 @@ class ControlQualificationTests(unittest.TestCase):
                 self.assertFalse(value["qualified"])
                 self.assertIn(needle,
                               " ".join(value["qualification"]["reasons"]))
+
+    def test_a_receipt_with_mixed_component_types_is_refused(self):
+        value = self._qualify(mode="bad_component_types")
+        self.assertFalse(value["qualified"])
+        self.assertTrue(any("component types are malformed" in item
+                            for item in value["qualification"]["reasons"]),
+                        value["qualification"]["reasons"])
 
     def test_a_receipt_with_extra_components_is_refused(self):
         value = self._qualify(mode="wrong_components")

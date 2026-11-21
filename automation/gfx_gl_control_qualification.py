@@ -643,7 +643,8 @@ def _run_renderer(*, renderer: Path, package: dict, identity: dict,
         return result
     except subprocess.TimeoutExpired:
         return fail(f"control renderer timed out after {timeout}s")
-    except (OSError, ValueError, QualificationError,
+    except (OSError, ValueError, TypeError, AttributeError, KeyError,
+            IndexError, QualificationError,
             replay_input.ReplayInputError) as exc:
         return fail(f"control renderer could not be authenticated: {exc}")
 
@@ -712,6 +713,10 @@ def _validate_receipt(receipt: dict, *, nonce: str, renderer_sha: str,
         if not isinstance(receipt_components, list) or not all(
                 isinstance(item, dict) for item in receipt_components):
             fail("control receipt renderer components are malformed")
+        elif not all(isinstance(item.get("role"), str)
+                     and isinstance(item.get("sha256"), str)
+                     for item in receipt_components):
+            fail("control receipt renderer component types are malformed")
         else:
             actual = sorted(
                 (item.get("role"), item.get("sha256"))
@@ -1195,6 +1200,8 @@ def _evidence_recheck(qualification: dict) -> bool:
     if authority.get("qualified") is not True:
         return False
     embedded = checked.get("renderer_authority") or {}
+    if not isinstance(embedded, dict):
+        return False
     if embedded.get("renderer_sha256") != checked.get("renderer_sha256"):
         return False
     if embedded.get("name") != authority.get("name"):
@@ -1211,6 +1218,11 @@ def _evidence_recheck(qualification: dict) -> bool:
     if _sha_or_none(renderer_file) != renderer_sha:
         return False
     request_ref = checked.get("request") or {}
+    receipt_ref = checked.get("receipt") or {}
+    control_ref = checked.get("control") or {}
+    if not all(isinstance(ref, dict)
+               for ref in (request_ref, receipt_ref, control_ref)):
+        return False
     request_path = Path(str(request_ref.get("path") or ""))
     if not request_path.is_file() or _sha_or_none(request_path) != \
             request_ref.get("sha256"):
@@ -1221,11 +1233,14 @@ def _evidence_recheck(qualification: dict) -> bool:
         return False
     if not isinstance(request_document, dict):
         return False
-    receipt_ref = checked.get("receipt") or {}
-    control_ref = checked.get("control") or {}
     receipt_path = Path(str(receipt_ref.get("path") or ""))
     control_path = Path(str(control_ref.get("path") or ""))
-    live_path = Path(str((comparison.get("live") or {}).get("path") or ""))
+    live_ref = comparison.get("live") or {}
+    control_comparison = comparison.get("control") or {}
+    if not isinstance(live_ref, dict) or not isinstance(
+            control_comparison, dict):
+        return False
+    live_path = Path(str(live_ref.get("path") or ""))
     frame_dir = checked.get("frame_dir")
     if not receipt_path.is_file() or not control_path.is_file() \
             or not live_path.is_file() or not isinstance(frame_dir, str) \
@@ -1236,7 +1251,7 @@ def _evidence_recheck(qualification: dict) -> bool:
     control_sha = _sha_or_none(control_path)
     if control_sha != control_ref.get("sha256"):
         return False
-    if control_sha != (comparison.get("control") or {}).get("sha256"):
+    if control_sha != control_comparison.get("sha256"):
         return False
     width = _int_or_none(comparison.get("width"))
     height = _int_or_none(comparison.get("height"))
@@ -1300,6 +1315,8 @@ def _evidence_recheck(qualification: dict) -> bool:
     if derived_digest != embedded_digest:
         return False
     package_ref = checked.get("input_package") or {}
+    if not isinstance(package_ref, dict):
+        return False
     package_path = Path(str(package_ref.get("path") or ""))
     if not package_path.is_dir():
         return False

@@ -255,10 +255,11 @@ names that canonicalisation. Component entries carry the path of the file whose
 digest they claim, and the qualifier re-hashes every component file and the
 executed renderer during `attribution()`.
 Adding an entry is a reviewed code change, not a caller-supplied JSON file.
-The registry currently pins one reviewed original-OpenGL renderer. Without a
-registry entry the run is `self-attested` and `metal_blame_allowed` stays false,
-however exact the pixels are; a pinned entry does not replace the separate
-drawable-equivalence and exact-comparison requirements.
+The registry currently pins one original-OpenGL renderer candidate; its entry
+stays `qualified=false` until the post-fix independent review is recorded.
+Without a registry entry the run is `self-attested` and `metal_blame_allowed`
+stays false, however exact the pixels are; a pinned entry does not replace the
+separate drawable-equivalence and exact-comparison requirements.
 
 The qualifier re-verifies the package before and after execution, hashes the
 sealed live blob and reads it once, and uses the authenticated bytes for the

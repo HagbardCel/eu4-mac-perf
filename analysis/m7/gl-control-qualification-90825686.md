@@ -135,7 +135,9 @@ the current execution path, and a signature alone is not proof that a renderer
 made OpenGL calls; that property follows from the reviewed implementation and
 the digest-pinned path. Under the corrected gate this capture stops earlier,
 at `drawable_equivalence=unproven`, so no new authorization is derived from the
-old receipt.
+old receipt. The post-fix authority entry is deliberately `qualified=false`
+pending independent review of the post-fix head; it is flipped only after that
+review records an APPROVE verdict.
 
 ## 4. Exact four-channel comparison
 
