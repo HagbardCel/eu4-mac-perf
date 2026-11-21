@@ -93,7 +93,7 @@ class FrameTraceWriterTests(unittest.TestCase):
         self.assertNotIn("default_checkpoint", events[0])
         checkpoint = events[1]["default_checkpoint"]
         self.assertEqual(checkpoint["schema"],
-                         "gfx-default-framebuffer-checkpoint/v1")
+                         "gfx-default-framebuffer-checkpoint/v2")
         self.assertEqual(checkpoint["event"], 1)
         self.assertEqual(checkpoint["target"], "0")
         self.assertEqual(checkpoint["resource"], "fb:0")
@@ -107,6 +107,24 @@ class FrameTraceWriterTests(unittest.TestCase):
         self.assertEqual(blob.stat().st_size, checkpoint["bytes"])
         self.assertEqual(hashlib.sha256(blob.read_bytes()).hexdigest(),
                          checkpoint["sha256"])
+        # The v2 record carries the queried drawable and the exact depth and
+        # stencil contents of the pre-event boundary.
+        drawable = checkpoint["drawable"]
+        for field in ("samples", "sample_buffers", "depth_bits",
+                      "stencil_bits", "red_bits", "green_bits", "blue_bits",
+                      "alpha_bits"):
+            self.assertIn(field, drawable)
+        self.assertEqual(checkpoint["depth"]["format"], "f32")
+        self.assertEqual(checkpoint["depth"]["bytes"], 4 * 4 * 4)
+        self.assertEqual(checkpoint["stencil"]["format"], "u8")
+        self.assertEqual(checkpoint["stencil"]["bytes"], 4 * 4)
+        for label, expected in (("depth", 4 * 4 * 4), ("stencil", 4 * 4)):
+            record = checkpoint[label]
+            attachment = directory / "blobs" / record["file"]
+            self.assertTrue(attachment.is_file())
+            self.assertEqual(attachment.stat().st_size, expected)
+            self.assertEqual(hashlib.sha256(attachment.read_bytes()).hexdigest(),
+                             record["sha256"])
         return manifest, checkpoint
 
     def test_selected_checkpoint_attaches_to_the_draw_event_before_it_runs(self):
@@ -129,6 +147,15 @@ class FrameTraceWriterTests(unittest.TestCase):
             self.assertEqual([event["kind"] for event in events],
                              ["draw", "clear"])
             self.assertEqual(checkpoint["event"], 1)
+
+    def test_a_checkpoint_at_an_offscreen_target_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            self._run("checkpoint-offscreen", directory)
+            manifest = self._manifest(directory)
+            self.assertFalse(manifest["complete"], manifest)
+            self.assertEqual(manifest["reason"],
+                             "default_checkpoint_not_default")
 
     def test_selected_checkpoint_attaches_to_the_copy_event(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -185,7 +212,8 @@ class FrameTraceWriterTests(unittest.TestCase):
             self.assertNotIn("default_checkpoint", events[0])
             self.assertEqual(events[1]["default_checkpoint"]["event"], 1)
             blobs = list((directory / "blobs").iterdir())
-            self.assertEqual(len(blobs), 1)
+            # colour + depth + stencil
+            self.assertEqual(len(blobs), 3)
             seal = self._seal(directory)
             self.assertTrue(seal["sealed"], seal)
             self.assertEqual(seal["operation_count"], 2)

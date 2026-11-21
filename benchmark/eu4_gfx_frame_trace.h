@@ -38,12 +38,21 @@
  *                                  ordered, comma-separated form of the above
  *                                  for a bounded set of checkpoints in one
  *                                  frame.  Selecting both forms is refused.
+ *                                  Each checkpoint carries the queried default
+ *                                  drawable properties (samples, bit depths,
+ *                                  draw/read buffer, sRGB/dither/multisample)
+ *                                  plus the exact colour, depth and stencil
+ *                                  contents at that pre-event boundary.  A
+ *                                  checkpoint selected at an event that does
+ *                                  not target framebuffer zero fails closed.
  *   EU4_GFX_FRAME_TRACE_MAX_CHECKPOINTS
  *                                  maximum accepted checkpoint count
  *                                  (default 4, hard bound 8)
  *   EU4_GFX_FRAME_TRACE_CHECKPOINT_MAX_BYTES
  *                                  aggregate readback-byte budget for the
- *                                  whole checkpoint set (default 64 MiB)
+ *                                  whole checkpoint set (default 128 MiB;
+ *                                  colour + depth + stencil cost about
+ *                                  9 bytes per drawable pixel)
  *   EU4_GFX_FRAME_TRACE_TIMEOUT_MS bounded time from arming to finish; an
  *                                  expired frame is published as an explicit
  *                                  incomplete result
@@ -93,9 +102,22 @@ void eu4_gfx_frame_trace_test_reset_seal(void);
 int eu4_gfx_frame_trace_test_reference(const char *directory);
 /* Host-test only: run the production default-framebuffer checkpoint readback
    and writer without an event stream.  ``out_file`` receives the content-
-   addressed blob name. */
+   addressed colour blob name. */
 int eu4_gfx_frame_trace_test_checkpoint(const char *directory, int event,
                                         char *out_file, size_t out_size);
+/* Host-test only: force the recorded target framebuffer (no GL context). */
+void eu4_gfx_frame_trace_test_set_target(int framebuffer);
+/* Host-test only: run the production selected-event checkpoint path with the
+   current default framebuffer and GL test state. */
+int eu4_gfx_frame_trace_test_checkpoint_production(const char *directory,
+                                                   int event,
+                                                   char *out_file,
+                                                   size_t out_size);
+/* Host-test only: the last checkpoint's JSON record and depth/stencil blob
+   names, so a synthetic GL context can verify provenance and precision. */
+int eu4_gfx_frame_trace_test_checkpoint_records(
+    char *json, size_t json_size, char *depth_file, size_t depth_size,
+    char *stencil_file, size_t stencil_size);
 /* Host-test only: invoke the selected-event hook directly (duplicate guard). */
 int eu4_gfx_frame_trace_test_checkpoint_hook(void);
 /* Host-test only: 1 when at least one requested slot has been captured. */

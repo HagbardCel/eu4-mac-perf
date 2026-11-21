@@ -950,6 +950,13 @@ class TraceStateHostTests(unittest.TestCase):
         self.assertEqual(ran.returncode, 0, ran.stderr)
         self.assertIn("trace_state=1", ran.stdout)
         self.assertIn("reference=1", ran.stdout)
+        # The selected-event checkpoint now carries the default drawable's
+        # queried properties and the exact pre-draw depth/stencil contents.
+        self.assertIn("checkpoint=1", ran.stdout)
+        self.assertIn("depth=1", ran.stdout)
+        self.assertIn("stencil=1", ran.stdout)
+        self.assertIn("records=1", ran.stdout)
+        self.assertIn("production=111", ran.stdout)
 
 
 @unittest.skipUnless(sys.platform == "darwin", "the trace host needs Apple OpenGL")
@@ -1577,7 +1584,7 @@ class CaptureBudgetTests(unittest.TestCase):
         self.assertEqual(args.default_checkpoint_events, [14, 20, 71, 142])
         self.assertIsNone(args.default_checkpoint_event)
         self.assertEqual(args.max_checkpoints, 4)
-        self.assertEqual(args.checkpoint_max_bytes, 64 * 1024 * 1024)
+        self.assertEqual(args.checkpoint_max_bytes, 128 * 1024 * 1024)
         self.assertIsNone(m6_frame.checkpoint_options_error(args))
 
     def test_multiple_default_checkpoint_malformed_list_is_rejected(self):

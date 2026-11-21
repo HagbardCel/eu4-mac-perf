@@ -175,6 +175,62 @@ class GraphTests(unittest.TestCase):
         self.assertTrue(graph["resources"]["tex:10"]["has_clear"])
         self.assertEqual(graph["counts"]["resolves"], 0)
 
+    def test_a_full_clear_records_proven_depth_and_stencil_coverage(self):
+        self.fixture.events[0]["state"] = {
+            "scissor": {"enabled": False, "box": [0, 0, WIDTH, HEIGHT]},
+            "color_mask": [1, 1, 1, 1],
+            "depth_mask": True,
+            "stencil_mask": -1,
+        }
+        self.fixture.write()
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        framebuffer = graph["resources"]["fb:0"]
+        self.assertTrue(framebuffer["has_clear"])
+        self.assertTrue(framebuffer["has_depth_clear"])
+        self.assertTrue(framebuffer["has_stencil_clear"])
+        coverage = framebuffer["producers"][0]["coverage"]
+        self.assertTrue(coverage["full_extent"])
+        self.assertTrue(coverage["depth_full"])
+        self.assertTrue(coverage["stencil_full"])
+
+    def test_a_scissored_clear_is_not_full_coverage(self):
+        self.fixture.events[0]["state"] = {
+            "scissor": {"enabled": True, "box": [0, 0, 2, 2]},
+            "color_mask": [1, 1, 1, 1],
+            "depth_mask": True,
+            "stencil_mask": -1,
+        }
+        self.fixture.write()
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        coverage = graph["resources"]["fb:0"]["producers"][0]["coverage"]
+        self.assertFalse(coverage["full_extent"])
+        self.assertFalse(coverage["color_full"])
+        self.assertFalse(coverage["depth_full"])
+        self.assertFalse(coverage["stencil_full"])
+        self.assertNotIn("has_depth_clear", graph["resources"]["fb:0"])
+
+    def test_a_clear_with_a_disabled_depth_mask_is_not_depth_coverage(self):
+        self.fixture.events[0]["state"] = {
+            "scissor": {"enabled": False, "box": [0, 0, WIDTH, HEIGHT]},
+            "color_mask": [1, 1, 1, 1],
+            "depth_mask": False,
+            "stencil_mask": -1,
+        }
+        self.fixture.write()
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        coverage = graph["resources"]["fb:0"]["producers"][0]["coverage"]
+        self.assertTrue(coverage["color_full"])
+        self.assertFalse(coverage["depth_full"])
+        self.assertFalse(graph["resources"]["fb:0"].get("has_depth_clear", False))
+
+    def test_a_clear_without_recorded_state_is_not_proven(self):
+        graph = gfx_frame_graph.build(self.fixture.frame)
+        coverage = graph["resources"]["fb:0"]["producers"][0]["coverage"]
+        self.assertFalse(coverage["state_recorded"])
+        self.assertFalse(coverage["full_extent"])
+        self.assertFalse(coverage["depth_full"])
+        self.assertFalse(coverage["stencil_full"])
+
     def test_boundary_seed_is_superseded_by_in_frame_clear(self):
         graph = gfx_frame_graph.build(self.fixture.frame)
         self.assertTrue(graph["boundary"]["seed_superseded_by_in_frame_clear"])
@@ -1280,3 +1336,64 @@ class AttachmentNamespaceTests(unittest.TestCase):
         self.assertEqual(tex_attachment["name"], 7)
         self.assertEqual(rb_key, "fb:9")
         self.assertEqual(rb_attachment, {})
+
+
+class ClearCoverageEndpointTests(unittest.TestCase):
+    """A scissored clear covers the target only when its endpoints do."""
+
+    def _coverage(self, scissor, width=8, height=8):
+        event = {
+            "kind": "clear",
+            "flags": 7,
+            "color": [0, 0, 0, 1],
+            "depth": 1,
+            "stencil": 0,
+            "state": {
+                "scissor": scissor,
+                "color_mask": [1, 1, 1, 1],
+                "depth_mask": True,
+                "stencil_mask": -1,
+            },
+        }
+        return gfx_frame_graph._clear_coverage(
+            event, ["color", "depth", "stencil"], width, height)
+
+    def test_a_negative_origin_that_shortens_the_far_edge_is_partial(self):
+        # Width equals the target, but x+w == 6 of 8 columns.
+        coverage = self._coverage({"enabled": True, "box": [-2, 0, 8, 8]})
+        self.assertFalse(coverage["full_extent"])
+        self.assertFalse(coverage["color_full"])
+        self.assertFalse(coverage["depth_full"])
+        self.assertFalse(coverage["stencil_full"])
+
+    def test_a_negative_origin_that_still_reaches_the_far_edge_covers(self):
+        coverage = self._coverage({"enabled": True, "box": [-2, -2, 10, 10]})
+        self.assertTrue(coverage["full_extent"])
+        self.assertTrue(coverage["color_full"])
+        self.assertTrue(coverage["depth_full"])
+        self.assertTrue(coverage["stencil_full"])
+
+    def test_a_positive_offset_is_partial(self):
+        coverage = self._coverage({"enabled": True, "box": [1, 0, 8, 8]})
+        self.assertFalse(coverage["full_extent"])
+
+    def test_a_width_that_stops_short_is_partial(self):
+        coverage = self._coverage({"enabled": True, "box": [0, 0, 7, 8]})
+        self.assertFalse(coverage["full_extent"])
+
+    def test_exact_endpoint_coverage_is_full(self):
+        coverage = self._coverage({"enabled": True, "box": [0, 0, 8, 8]})
+        self.assertTrue(coverage["full_extent"])
+        self.assertTrue(coverage["color_full"])
+
+    def test_an_unscissored_clear_is_full(self):
+        coverage = self._coverage({"enabled": False, "box": [0, 0, 1, 1]})
+        self.assertTrue(coverage["full_extent"])
+        self.assertTrue(coverage["color_full"])
+
+    def test_non_integer_boxes_are_not_full_coverage(self):
+        for box in (["0", "0", "8", "8"], [0.0, 0.0, 8, 8],
+                    [0, 0, 8.0, 8]):
+            with self.subTest(box=box):
+                coverage = self._coverage({"enabled": True, "box": box})
+                self.assertFalse(coverage["full_extent"])

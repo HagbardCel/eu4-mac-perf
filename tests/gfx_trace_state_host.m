@@ -65,6 +65,8 @@ int main(int argc, char **argv) {
         NSOpenGLPFAAccelerated,
         NSOpenGLPFAColorSize, 24,
         NSOpenGLPFAAlphaSize, 8,
+        NSOpenGLPFADepthSize, 24,
+        NSOpenGLPFAStencilSize, 8,
         NSOpenGLPFADoubleBuffer,
         0,
     };
@@ -172,8 +174,26 @@ int main(int argc, char **argv) {
     glReadBuffer(GL_BACK);
     glViewport(0, 0, 4, 4);
     glClearColor(0.25f, 0.5f, 0.75f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
+    glClearDepth(0.25);
+    glClearStencil(0x5A);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
+            GL_STENCIL_BUFFER_BIT);
     glFinish();
+
+    /* The default drawable's properties must be queried while framebuffer
+       zero is current; later the host deliberately leaves an FBO selected. */
+    GLint live_samples = 0, live_sample_buffers = 0, live_depth_bits = 0;
+    GLint live_stencil_bits = 0, live_red_bits = 0, live_green_bits = 0;
+    GLint live_blue_bits = 0, live_alpha_bits = 0, live_read_buffer = 0;
+    glGetIntegerv(GL_SAMPLES, &live_samples);
+    glGetIntegerv(GL_SAMPLE_BUFFERS, &live_sample_buffers);
+    glGetIntegerv(GL_DEPTH_BITS, &live_depth_bits);
+    glGetIntegerv(GL_STENCIL_BITS, &live_stencil_bits);
+    glGetIntegerv(GL_RED_BITS, &live_red_bits);
+    glGetIntegerv(GL_GREEN_BITS, &live_green_bits);
+    glGetIntegerv(GL_BLUE_BITS, &live_blue_bits);
+    glGetIntegerv(GL_ALPHA_BITS, &live_alpha_bits);
+    glGetIntegerv(GL_READ_BUFFER, &live_read_buffer);
 
     GLuint fbo = 0;
     glGenFramebuffers(1, &fbo);
@@ -206,8 +226,17 @@ int main(int argc, char **argv) {
             argv[1], 142, checkpoint_file, sizeof(checkpoint_file)) != 0) {
         ok = 0;
     }
-    int after = glGetError();
-    if (after != pending) {
+    /* The observer must leave exactly the sentinel error in the engine's
+       queue: draining it or planting an additional error both fail. */
+    int after = 0;
+    int error_count = 0;
+    for (;;) {
+        GLenum error = glGetError();
+        if (error == GL_NO_ERROR) break;
+        if (error_count == 0) after = (int)error;
+        error_count++;
+    }
+    if (error_count != 1 || after != pending) {
         ok = 0;
     }
     GLint draw_after = 0, read_after = 0, read_buffer_after = 0;
@@ -274,8 +303,135 @@ int main(int argc, char **argv) {
     if (!checkpoint_ok) {
         ok = 0;
     }
+
+    /* The checkpoint now carries the default drawable's queried properties and
+       the exact pre-draw depth/stencil contents.  Verify both against the live
+       driver, never against a hard-coded offscreen expectation. */
+    char records[4096] = "";
+    char expected[512] = "";
+    char depth_blob[256] = "";
+    char stencil_blob[256] = "";
+    int records_ok = 0;
+    if (eu4_gfx_frame_trace_test_checkpoint_records(
+            records, sizeof(records), depth_blob, sizeof(depth_blob),
+            stencil_blob, sizeof(stencil_blob)) == 0) {
+        snprintf(expected, sizeof(expected),
+                 "\"drawable\":{\"samples\":%d,\"sample_buffers\":%d,"
+                 "\"depth_bits\":%d,\"stencil_bits\":%d,"
+                 "\"red_bits\":%d,\"green_bits\":%d,\"blue_bits\":%d,"
+                 "\"alpha_bits\":%d",
+                 live_samples, live_sample_buffers, live_depth_bits,
+                 live_stencil_bits, live_red_bits, live_green_bits,
+                 live_blue_bits, live_alpha_bits);
+        records_ok = strstr(records, "\"schema\":\"gfx-default-framebuffer-checkpoint/v2\"") != NULL &&
+                     strstr(records, expected) != NULL &&
+                     strstr(records, "\"depth\":{\"file\":\"") != NULL &&
+                     strstr(records, "\"format\":\"f32\"") != NULL &&
+                     strstr(records, "\"stencil\":{\"file\":\"") != NULL &&
+                     strstr(records, "\"format\":\"u8\"") != NULL &&
+                     strstr(records, "\"framebuffer_srgb\":") != NULL &&
+                     strstr(records, "\"dither\":") != NULL &&
+                     strstr(records, "\"read_buffer\":") != NULL &&
+                     depth_blob[0] != 0 && stencil_blob[0] != 0;
+    }
+    if (!records_ok) {
+        ok = 0;
+    }
+    char depth_path[1024];
+    snprintf(depth_path, sizeof(depth_path), "%s/blobs/%s", argv[1],
+             depth_blob);
+    FILE *depth = depth_blob[0] != 0 ? fopen(depth_path, "rb") : NULL;
+    int depth_ok = 0;
+    if (depth != NULL) {
+        float values[4 * 4];
+        size_t got = fread(values, sizeof(float), 16, depth);
+        int extra = fgetc(depth);
+        fclose(depth);
+        depth_ok = got == 16 && extra == EOF;
+        for (int i = 0; depth_ok && i < 16; i++) {
+            if (values[i] < 0.2499f || values[i] > 0.2501f) {
+                depth_ok = 0;
+            }
+        }
+    }
+    if (!depth_ok) {
+        ok = 0;
+    }
+    char stencil_path[1024];
+    snprintf(stencil_path, sizeof(stencil_path), "%s/blobs/%s", argv[1],
+             stencil_blob);
+    FILE *stencil_file = stencil_blob[0] != 0 ? fopen(stencil_path, "rb")
+                                              : NULL;
+    int stencil_ok = 0;
+    if (stencil_file != NULL) {
+        uint8_t values[4 * 4];
+        size_t got = fread(values, 1, 16, stencil_file);
+        int extra = fgetc(stencil_file);
+        fclose(stencil_file);
+        stencil_ok = got == 16 && extra == EOF;
+        for (int i = 0; stencil_ok && i < 16; i++) {
+            if (values[i] != 0x5A) {
+                stencil_ok = 0;
+            }
+        }
+    }
+    if (!stencil_ok) {
+        ok = 0;
+    }
+
+    /* The production selected-event path gates depth/stencil readback on the
+       live test state.  Exercise both/one/neither enabled and assert the
+       unused buffer is recorded as absent rather than aborting the capture. */
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDrawBuffer(GL_BACK);
+    glReadBuffer(GL_BACK);
+    glViewport(0, 0, 4, 4);
+    glClearColor(0.25f, 0.5f, 0.75f, 1.0f);
+    glClearDepth(0.25);
+    glClearStencil(0x5A);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
+            GL_STENCIL_BUFFER_BIT);
+    int production_none = 0, production_depth = 0, production_both = 0;
+    for (int mode = 0; mode < 3; mode++) {
+        int depth_enabled = mode >= 1;
+        int stencil_enabled = mode >= 2;
+        if (depth_enabled) glEnable(GL_DEPTH_TEST);
+        else glDisable(GL_DEPTH_TEST);
+        if (stencil_enabled) glEnable(GL_STENCIL_TEST);
+        else glDisable(GL_STENCIL_TEST);
+        char record[4096] = "";
+        char dfile[256] = "";
+        char sfile[256] = "";
+        char colour_file[256] = "";
+        if (eu4_gfx_frame_trace_test_checkpoint_production(
+                argv[1], 200 + mode, colour_file, sizeof(colour_file)) != 0 ||
+            eu4_gfx_frame_trace_test_checkpoint_records(
+                record, sizeof(record), dfile, sizeof(dfile), sfile,
+                sizeof(sfile)) != 0 ||
+            colour_file[0] == 0) {
+            continue;
+        }
+        int depth_absent = strstr(
+            record, "\"depth\":{\"status\":\"absent\"") != NULL;
+        int stencil_absent = strstr(
+            record, "\"stencil\":{\"status\":\"absent\"") != NULL;
+        int depth_present = dfile[0] != 0 && !depth_absent;
+        int stencil_present = sfile[0] != 0 && !stencil_absent;
+        if (mode == 0 && depth_absent && stencil_absent) {
+            production_none = 1;
+        } else if (mode == 1 && depth_present && stencil_absent) {
+            production_depth = 1;
+        } else if (mode == 2 && depth_present && stencil_present) {
+            production_both = 1;
+        }
+    }
+    if (!production_none || !production_depth || !production_both) {
+        ok = 0;
+    }
     printf("trace_state=%d pending=0x%x after=0x%x reference=%d "
-           "checkpoint=%d\n",
-           ok, pending, after, reference_ok, checkpoint_ok);
+           "checkpoint=%d depth=%d stencil=%d records=%d production=%d%d%d\n",
+           ok, pending, after, reference_ok, checkpoint_ok, depth_ok,
+           stencil_ok, records_ok, production_none, production_depth,
+           production_both);
     return ok ? 0 : 1;
 }

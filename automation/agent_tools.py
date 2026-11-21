@@ -1021,10 +1021,6 @@ def eu4_capture(args: argparse.Namespace) -> dict:
                        "--control-out, --checkpoint-event and --draw-event; "
                        "pixel equality alone is not a control")
         try:
-            drawable = (json.loads(args.drawable.read_text(encoding="utf-8"))
-                        if args.drawable else None)
-            prestate = (json.loads(args.prestate.read_text(encoding="utf-8"))
-                        if args.prestate else None)
             value = control_qualification.qualify_sealed(
                 args.live_image, args.width, args.height,
                 frame_dir=args.frame_dir,
@@ -1034,7 +1030,10 @@ def eu4_capture(args: argparse.Namespace) -> dict:
                 out_dir=args.control_out,
                 resource=args.resource,
                 timeout=args.timeout if args.timeout is not None else 300.0,
-                drawable=drawable, prestate=prestate)
+                caller_drawable=({"path": str(args.drawable)}
+                                 if args.drawable else None),
+                caller_prestate=({"path": str(args.prestate)}
+                                 if args.prestate else None))
         except control_qualification.QualificationError as exc:
             return _envelope(
                 "eu4_capture", "invalid",
