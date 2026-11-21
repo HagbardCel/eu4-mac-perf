@@ -891,6 +891,28 @@ class ControlQualificationTests(unittest.TestCase):
         self.assertTrue(any("malformed_evidence" in item
                             for item in value["unsupported_state"]))
 
+    def test_a_texture_without_levels_is_a_structured_refusal(self):
+        events = copy.deepcopy(self.events)
+        events[1]["textures"][0]["levels"] = []
+        self._rewrite_events(events)
+        value = self._qualify()
+        self.assertFalse(value["qualified"])
+        self.assertTrue(any("package could not be built" in item
+                            for item in value["qualification"]["reasons"]),
+                        value["qualification"]["reasons"])
+
+    def test_a_missing_expected_compressed_block_is_a_structured_refusal(self):
+        events = copy.deepcopy(self.events)
+        level = events[1]["textures"][0]["levels"][0]
+        level["compressed_expected"] = True
+        level.pop("compressed", None)
+        self._rewrite_events(events)
+        value = self._qualify()
+        self.assertFalse(value["qualified"])
+        self.assertTrue(any("package could not be built" in item
+                            for item in value["qualification"]["reasons"]),
+                        value["qualification"]["reasons"])
+
     def test_a_malformed_draw_record_is_a_structured_refusal(self):
         events = [
             self._clear_event(7),
@@ -1682,8 +1704,8 @@ class ShippedAuthorityRegistryTests(unittest.TestCase):
                               / "gfx_gl_control_renderer.py"), digest)
         self.assertEqual(entry["name"], "m7-original-gl-control")
         self.assertEqual(entry["api"], "opengl")
-        self.assertFalse(entry["qualified"])
-        self.assertIn("pending independent review", entry["qualified_by"])
+        self.assertTrue(entry["qualified"])
+        self.assertIn("independent review of exact head", entry["qualified_by"])
         self.assertEqual(len(entry["public_key"]), 64)
         roles = {item["role"]: item["sha256"] for item in entry["components"]}
         self.assertEqual(set(roles), {"native-gl-executor",

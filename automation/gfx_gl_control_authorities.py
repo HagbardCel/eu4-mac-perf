@@ -60,11 +60,11 @@ AUTHORITIES: dict[str, dict] = {
     "19f819b444738888b84ddbbb68e413af0e908ba35c738db5811d689257b8b70b": {
         "name": "m7-original-gl-control",
         "api": "opengl",
-        "qualified": False,
+        "qualified": True,
         "qualified_by": (
-            "pending independent review of the post-fix #279 head; this entry "
-            "does not authorize Metal blame until that review records an "
-            "APPROVE verdict for these digests"),
+            "independent review of exact head 283c3e12: review-fixes and "
+            "review-integrated (DSH subagents), both APPROVE; see "
+            "analysis/m7/final-review-279.md"),
         "public_key": (
             "b129e1bcd834600e8a3986159b7d9a540d1951f09f30ce3bfd4881844247a727"),
         "components": [
