@@ -406,6 +406,7 @@ def load_seal(
     trace: dict | None = None,
     verify_counts: bool = True,
     verify_blobs: bool = True,
+    trusted_evidence: dict | None = None,
 ) -> dict:
     """Loads and validates the authoritative same-process frame seal.
 
@@ -482,7 +483,22 @@ def load_seal(
     if not portable_capture and (
             not declared_dir.is_absolute()
             or declared_dir.resolve() != frame_dir.resolve()):
-        raise FrameError("frame seal capture directory does not match")
+        if trusted_evidence is None:
+            raise FrameError("frame seal capture directory does not match")
+        # A verified copied snapshot keeps the original seal unchanged but
+        # lives at a different absolute path.  The trusted-evidence record
+        # binds the original capture directory and the copied byte manifest.
+        original = str(trusted_evidence.get("original_capture_dir") or "")
+        if (not original
+                or Path(original).resolve() != declared_dir.resolve()):
+            raise FrameError(
+                "trusted evidence does not name the sealed capture directory")
+        relative = trusted_evidence.get("frame_relative")
+        if relative is not None:
+            expected = Path(str(trusted_evidence.get("_root") or "")).resolve() / str(relative)
+            if frame_dir.resolve() != expected:
+                raise FrameError(
+                    "trusted evidence frame is not the verified snapshot")
 
     def member(name: object, label: str) -> Path:
         text = str(name or "")

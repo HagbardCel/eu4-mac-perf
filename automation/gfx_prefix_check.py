@@ -27,7 +27,10 @@ import tempfile
 import time
 from pathlib import Path
 
-from automation import gfx_frame_graph, gfx_independent_replay, m6_compare, m6_frame
+from automation import (
+    campaign_guard, dsh_campaign, gfx_frame_graph, gfx_independent_replay,
+    m6_compare, m6_frame, replay_host_dependencies, state,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -179,10 +182,18 @@ def prepare_trusted_evidence(frame_dir: Path | str, destination: Path | str,
         frame_relative = None
         recorded_frame = str(frame_dir)
     files = _tree_manifest(target)
+    seal_path = frame_dir / "frame-seal.json"
+    original_capture_dir = None
+    if seal_path.is_file():
+        try:
+            original_capture_dir = _read_json(seal_path).get("capture_dir")
+        except PrefixCheckError:
+            original_capture_dir = None
     record = {
         "schema": "m7-trusted-evidence/v1",
         "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "source_note": source_note,
+        "original_capture_dir": original_capture_dir,
         "frame_relative": frame_relative,
         "frame_path": recorded_frame,
         "files": files,
@@ -219,11 +230,98 @@ def verify_trusted_evidence(trusted_root: Path | str,
         raise PrefixCheckError("trusted-evidence file manifest changed")
     if _root_digest(files) != record.get("root_sha256"):
         raise PrefixCheckError("trusted-evidence root digest changed")
+    record = dict(record)
+    record["_root"] = str(trusted_root)
     return record
 
 
+def _git(workspace: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", "-C", str(workspace), *args], capture_output=True, text=True,
+        check=False, timeout=60)
+    if completed.returncode != 0:
+        raise PrefixCheckError(
+            f"git {' '.join(args)} failed: "
+            f"{completed.stderr.strip() or completed.stdout.strip()}")
+    return completed.stdout
+
+
+def verify_execution_outputs(execution: dict, metal_dir: Path) -> list[str]:
+    """Return provenance problems for a trusted execution's outputs."""
+    problems: list[str] = []
+    metal_dir = Path(metal_dir)
+    for item in execution.get("outputs") or []:
+        path = metal_dir / str(item.get("file"))
+        if (not path.is_file()
+                or path.stat().st_size != item.get("bytes")
+                or _sha256(path) != item.get("sha256")):
+            problems.append(
+                "trusted checkpoint output changed after execution: "
+                f"{item.get('file')}")
+    replay_path = metal_dir / "replay.json"
+    if (not replay_path.is_file()
+            or _sha256(replay_path) != execution.get("replay_json_sha256")):
+        problems.append("trusted replay result changed after execution")
+    receipt_path = metal_dir / "shader-receipt.json"
+    if (not receipt_path.is_file()
+            or _sha256(receipt_path) != execution.get("receipt_sha256")):
+        problems.append("trusted execution receipt changed after execution")
+    return problems
+
+
+def verify_candidate(workspace: Path | str,
+                     sidecar_path: Path | str) -> dict:
+    """Verify the candidate worktree, revision and allowed-path policy."""
+    workspace = Path(workspace).expanduser().resolve()
+    sidecar = dsh_campaign.load_sidecar(Path(sidecar_path))
+    if sidecar.workspace.resolve() != workspace:
+        raise PrefixCheckError(
+            "candidate workspace is not the campaign sidecar workspace")
+    try:
+        state.require_worktree(
+            workspace, ROOT, sidecar.candidate_baseline_commit or "")
+    except RuntimeError as exc:
+        raise PrefixCheckError(f"candidate worktree is not authorized: {exc}") from exc
+    revision = _git(workspace, "rev-parse", "HEAD").strip()
+    changed: set[str] = set()
+    status = _git(workspace, "status", "--porcelain=v1", "-z")
+    for entry in status.split("\0"):
+        if len(entry) < 4:
+            continue
+        path = entry[3:]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        changed.add(path)
+    committed = _git(
+        workspace, "diff", "--name-only",
+        sidecar.candidate_baseline_commit or "HEAD").splitlines()
+    changed.update(path for path in committed if path)
+    for path in sorted(changed):
+        if not dsh_campaign.path_allowed(path, sidecar.allowed_paths):
+            raise PrefixCheckError(
+                f"candidate change is outside the allowed paths: {path}")
+        if dsh_campaign.path_allowed(path, sidecar.forbidden_paths):
+            raise PrefixCheckError(
+                f"candidate change is in a forbidden path: {path}")
+    return {
+        "workspace": str(workspace),
+        "sidecar": str(Path(sidecar_path).resolve()),
+        "baseline_commit": sidecar.candidate_baseline_commit,
+        "revision": revision,
+        "changed_paths": sorted(changed),
+        "policy_digest": sidecar.policy_digest,
+    }
+
+
+def _candidate_source_digests(workspace: Path) -> dict[str, str]:
+    return replay_host_dependencies.relative_dependencies(
+        workspace, replay_host_dependencies.REPLAY_SOURCES)
+
+
 def _run_trusted_replay(frame_dir: Path, request: dict,
-                        run_dir: Path | str | None = None) -> dict:
+                        run_dir: Path | str | None = None, *,
+                        candidate_workspace: Path | str | None = None,
+                        candidate_sidecar: Path | str | None = None) -> dict:
     """Execute the production Metal replay from the infrastructure checkout.
 
     The checker does not trust a candidate-authored replay.json, receipt or
@@ -250,10 +348,40 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
         raise PrefixCheckError(
             "trusted shader translation failed: "
             + (translated.stderr.strip() or translated.stdout.strip())[-400:])
-    try:
-        host = m6_frame.build_replay_host()
-    except (m6_frame.FrameError, OSError, RuntimeError) as exc:
-        raise PrefixCheckError(f"trusted replay host build failed: {exc}") from exc
+    candidate = None
+    if candidate_workspace is not None:
+        candidate = verify_candidate(
+            candidate_workspace,
+            candidate_sidecar or (ROOT / "dsh" / "campaigns" / "m7-event20.json"))
+        before = _candidate_source_digests(Path(candidate["workspace"]))
+        snapshot_root = run / "candidate-snapshot"
+        snapshot = replay_host_dependencies.snapshot_sources(
+            candidate["workspace"], snapshot_root)
+        host = run / "candidate-gfx-frame-replay"
+        try:
+            candidate_build = replay_host_dependencies.build_snapshot_host(
+                snapshot_root, host)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise PrefixCheckError(
+                f"candidate replay host build failed: {exc}") from exc
+        after = _candidate_source_digests(Path(candidate["workspace"]))
+        if before != after:
+            raise PrefixCheckError(
+                "candidate renderer source changed between snapshot and build")
+        if candidate_build.get("source_digests") != after:
+            raise PrefixCheckError(
+                "candidate source digest does not match the built snapshot")
+        candidate["source_digests"] = after
+        candidate["source_digest"] = hashlib.sha256(json.dumps(
+            after, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        candidate["snapshot_files"] = snapshot["files"]
+        candidate["build"] = candidate_build
+    else:
+        try:
+            host = m6_frame.build_replay_host()
+        except (m6_frame.FrameError, OSError, RuntimeError) as exc:
+            raise PrefixCheckError(
+                f"trusted replay host build failed: {exc}") from exc
     replay_dir = run / "metal"
     replay_dir.mkdir()
     replay_command = [
@@ -268,6 +396,14 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
         raise PrefixCheckError(
             "trusted Metal replay failed: "
             + (completed.stderr.strip() or completed.stdout.strip())[-400:])
+    if candidate is not None:
+        if _sha256(host) != candidate["build"]["host_sha256"]:
+            raise PrefixCheckError(
+                "candidate replay host changed after execution")
+        if _candidate_source_digests(Path(candidate["workspace"])) != \
+                candidate["source_digests"]:
+            raise PrefixCheckError(
+                "candidate renderer source changed after the trusted build")
     replay_path = replay_dir / "replay.json"
     replay = _read_json(replay_path)
     if replay.get("status") != "ok" or replay.get("failed") != 0:
@@ -297,9 +433,19 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
         json.dumps(request, indent=2) + "\n")
     (replay_dir / "shader-receipt.json").write_text(
         json.dumps(receipt, indent=2) + "\n")
+    outputs = []
+    for path in sorted(replay_dir.iterdir()):
+        if path.is_file() and path.name not in (
+                "replay.json", "shader-receipt.json",
+                "checkpoint-request.json", "trusted-execution.json"):
+            outputs.append({"file": path.name, "bytes": path.stat().st_size,
+                            "sha256": _sha256(path)})
     execution = {
         "schema": "m7-trusted-execution/v1",
-        "mode": "checker-native-replay",
+        "mode": ("candidate-build-and-replay" if candidate is not None
+                 else "checker-native-replay"),
+        "candidate": candidate,
+        "outputs": outputs,
         "started_epoch": started,
         "finished_epoch": time.time(),
         "frame_dir": str(frame_dir),
@@ -309,6 +455,8 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
         "shaders_json_sha256": _sha256(shaders / "shaders.json")
         if (shaders / "shaders.json").is_file() else None,
         "replay_json_sha256": _sha256(replay_path),
+        "receipt_sha256": _sha256(replay_dir / "shader-receipt.json"),
+        "request_sha256": _sha256(replay_dir / "checkpoint-request.json"),
         "status": replay.get("status"),
         "events": replay.get("events"),
         "encoded": replay.get("encoded"),
@@ -329,7 +477,9 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
              require_end: int = 20,
              trusted_execution: bool = False,
              trusted_root: Path | str | None = None,
-             trusted_run_dir: Path | str | None = None) -> dict:
+             trusted_run_dir: Path | str | None = None,
+             candidate_workspace: Path | str | None = None,
+             candidate_sidecar: Path | str | None = None) -> dict:
     """Verify one sealed frame's exact prefix against its Metal replay.
 
     ``frame_dir`` contains frame-seal.json, frame-trace.json,
@@ -361,8 +511,16 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
             return dict(result, verdict="requires_additional_evidence",
                         status="invalid", first_divergence=None,
                         verified_prefix=None, events=[])
+    trusted_record = None
+    if trusted_root is not None:
+        try:
+            trusted_record = verify_trusted_evidence(trusted_root, frame_dir)
+        except (PrefixCheckError, OSError):
+            trusted_record = None
     try:
-        seal = m6_frame.load_seal(frame_dir)
+        seal = m6_frame.load_seal(
+            frame_dir,
+            trusted_evidence=trusted_record if trusted_root is not None else None)
         trace = m6_frame.load_trace(frame_dir, verify_blobs=True)
     except (m6_frame.FrameError, OSError, ValueError) as exc:
         problems.append(f"sealed frame is not usable: {exc}")
@@ -402,21 +560,51 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
     result["expected_request_sha256"] = hashlib.sha256(
         expected_canonical.encode()).hexdigest()
     if trusted_execution:
+        evidence = {
+            "entry_point": "automation.gfx_prefix_check.evaluate",
+            "frame_dir": str(frame_dir),
+            "candidate_workspace": (str(Path(candidate_workspace).expanduser()
+                                       .resolve())
+                                    if candidate_workspace is not None else None),
+            "candidate_sidecar": (str(Path(candidate_sidecar).expanduser()
+                                      .resolve())
+                                  if candidate_sidecar is not None else None),
+        }
         try:
-            trusted = _run_trusted_replay(
-                frame_dir, expected_request, trusted_run_dir)
+            with campaign_guard.attempt("replays", evidence=evidence) as attempt:
+                try:
+                    trusted = _run_trusted_replay(
+                        frame_dir, expected_request, trusted_run_dir,
+                        candidate_workspace=candidate_workspace,
+                        candidate_sidecar=candidate_sidecar)
+                except (PrefixCheckError, OSError,
+                        subprocess.TimeoutExpired) as exc:
+                    if attempt is not None:
+                        attempt.fail(str(exc), evidence=evidence)
+                    raise
+        except campaign_guard.CampaignRefusal as exc:
+            problems.append(f"trusted replay budget refused: {exc}")
+            return dict(result, verdict="requires_additional_evidence",
+                        status="invalid", first_divergence=None,
+                        verified_prefix=None, events=[], execution={
+                            "mode": "candidate-build-and-replay",
+                            "status": "refused",
+                            "error": str(exc),
+                        })
         except (PrefixCheckError, OSError, subprocess.TimeoutExpired) as exc:
             problems.append(f"trusted Metal execution failed: {exc}")
             return dict(result, verdict="requires_additional_evidence",
                         status="invalid", first_divergence=None,
                         verified_prefix=None, events=[], execution={
-                            "mode": "checker-native-replay",
+                            "mode": "candidate-build-and-replay",
                             "status": "failed",
                             "error": str(exc),
                         })
         result["execution"] = trusted["execution"]
         metal_dir = trusted["metal_dir"]
         request_file = trusted["request_path"]
+        execution = trusted["execution"]
+        problems.extend(verify_execution_outputs(execution, metal_dir))
     else:
         if metal_dir is None:
             problems.append("Metal result directory is required without "
@@ -595,11 +783,15 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
             alpha_applicable = entry.get("alpha_applicable", True) is not False
             channels = entry.get("compared_channels") or (
                 "RGBA" if alpha_applicable else "RGB")
-            if not alpha_applicable and channels != "R32F":
-                reference = _opaque_alpha(reference)
-                candidate = _opaque_alpha(candidate)
-            exact = m6_compare.compare_images(
-                reference, candidate, width, height)
+            if channels == "R32F":
+                exact = gfx_independent_replay.compare_r32f(
+                    reference, candidate, width, height)
+            else:
+                if not alpha_applicable:
+                    reference = _opaque_alpha(reference)
+                    candidate = _opaque_alpha(candidate)
+                exact = m6_compare.compare_images(
+                    reference, candidate, width, height)
             row["independent"] = {
                 "mismatched_pixels": exact["mismatched_pixels"],
                 "max_channel_error": exact["max_channel_error"],

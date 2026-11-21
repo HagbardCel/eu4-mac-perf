@@ -10,12 +10,13 @@ drawable-format prerequisite for issue #278 is recorded from the original EU4
 process.
 
 Remediation status for PR #280: requests are independently derived from the
-sealed graph, the checker executes the Metal replay from the trusted
-infrastructure instead of accepting candidate-authored outputs, original
-evidence is digest-bound outside the candidate workspace, alpha/format scope is
-derived from attachment identity, and prefix classification walks events
-sequentially. The scientific result was re-derived from the same immutable
-artifacts without another EU4 launch.
+sealed graph, the checker builds and executes the **candidate** renderer from a
+verified source snapshot, original evidence is an immutable copied snapshot
+outside the candidate workspace, alpha/format scope is derived from attachment
+identity, and prefix classification walks events sequentially. The scientific
+result was re-derived from the same immutable artifacts without another EU4
+launch. A controlled candidate defect changed the independently executed
+result; reverting it restored the baseline result.
 
 This report distinguishes *observed pixel equality* from engine-semantic
 equivalence. Only the original EU4 OpenGL process is the oracle. The
@@ -34,7 +35,9 @@ reconstructed OpenGL control was not run and is not the reference.
 | Metal post-event checkpoints | `benchmark/eu4_gfx_frame_replay.mm` | implemented; `timing=post_event` |
 | Graph coverage and unsupported-aux policy | `automation/gfx_frame_graph.py` | implemented; isolated unconsumed unsupported clears are explicit exclusions |
 | Independent exact checker | `automation/gfx_prefix_check.py`, `campaigns/eu4-m7-event20/accept.py` | implemented; derives the request from the graph, executes the trusted Metal replay, recomputes every comparison from original bytes |
-| Trusted execution and evidence | `gfx_prefix_check._run_trusted_replay`, `prepare_trusted_evidence` | implemented; candidate `replay.json`/receipt/pixels are not authority; digest-bound evidence record verified |
+| Trusted candidate execution | `gfx_prefix_check.verify_candidate`, `replay_host_dependencies.snapshot_sources/build_snapshot_host` | implemented; candidate worktree/revision/policy verified, dependency snapshot copied, host built and executed from candidate source, receipt binds source/build/host/outputs |
+| Trusted execution and evidence | `gfx_prefix_check._run_trusted_replay`, `prepare_trusted_evidence` | implemented; candidate `replay.json`/receipt/pixels are not authority; immutable copied reference snapshot verified before use |
+| Replay accounting | `campaign_guard.attempt("replays")` in the checker | implemented; one actual replay consumed, failures charged, nested calls join, exhaustion refused before build |
 | Portable bounded reproduction | `automation/gfx_prefix_case.py` | implemented; 75,456,851-byte derived event-0..1 case, 56 files, independently reproduces event 1 |
 | Canonical campaign revision | `dsh/campaigns/m7-event20.json` | one active pin; stage sidecars archived as non-executable |
 | Issue #278 synthetic observer | `tests/gfx_drawable_observe_host.m` | implemented and tested |
@@ -56,6 +59,38 @@ as **RGB-scope** exact comparisons; their BGRA8 materialization's alpha byte is
 excluded explicitly, not silently. R32F targets are compared as the exact
 four-byte float payload (**R32F-scope**). A declared `alpha_applicable` that
 contradicts the attachment identity invalidates the frame.
+
+## Candidate execution proof (A/B)
+
+A fresh canonical candidate worktree was used; no EU4 launch was made.
+
+| Run | Candidate source digest | Replay-host SHA-256 | Result |
+| --- | --- | --- | --- |
+| Baseline | `255a5b7e…` | `190fde92…` | first divergence event 1, 23 px / max 1 |
+| Controlled defect (red clear +0.01) | `492e6654…` | `533f79c6…` | first divergence event 0, 1,930,176 px / max 3 |
+| Defect reverted | `255a5b7e…` | `190fde92…` | first divergence event 1, 23 px / max 1 |
+| Same candidate on immutable copy | `255a5b7e…` | `190fde92…` | first divergence event 1, 23 px / max 1 |
+
+The checker builds from a snapshot of the candidate dependency closure, binds
+the source digest, compiler/toolchain identity, source file hashes and compiled
+host SHA-256, executes against the verified copied reference, rehashes the host,
+source and every output after execution, and recomputes all comparisons from
+those outputs. Candidate-authored `replay.json`, receipts and pixels are never
+authority. A source change after the build, a replaced output, receipt, replay
+result or executable is detected. Full record:
+[`m7-event20-candidate-execution.json`](m7-event20-candidate-execution.json).
+
+Replay accounting: the trusted execution reserves one `replays` allowance
+before translation/build/GPU execution. A failed or interrupted run remains
+charged; nested checker/replay calls join one reservation; exhaustion refuses
+before the build starts. Tests cover repeated calls, failure and nesting.
+
+## R32F comparison semantics
+
+R32F is one 32-bit IEEE-754 payload per pixel. It is compared bitwise
+(`exact_bitwise`, `mismatched_pixels`, `max_ulp_error`), never as four RGBA
+channel intensities. `max_channel_error` is reported as zero for an R32F
+comparison and the result declares `format_scope=R32F`.
 
 ## Issue #278 drawable identity
 
@@ -169,7 +204,9 @@ until event 1 is resolved. No event-20 qualification is claimed.
   pattern is not periodic and is not attributed to dithering by this pilot.
 - The corrected checker has not been exercised in a new native multi-round DSH
   run. Previous controlled multi-round evidence predates these changes, so
-  `M7_AUTONOMOUS_READY` is not claimed.
+  `M7_AUTONOMOUS_READY` is **not** claimed.
+- A fresh live capture has **not** been launched. Task 8 requires Tasks 1–7 to
+  pass first; native multi-round integration remains open.
 
 ## Tests and gates
 

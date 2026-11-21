@@ -40,7 +40,7 @@ def _trusted_root(workspace: Path) -> Path:
     declared = os.environ.get("EU4_M7_EVENT20_TRUSTED_ROOT", "").strip()
     if declared:
         return Path(declared).expanduser().resolve()
-    return (ROOT / ".local" / "m7" / "event20" / "trusted").resolve()
+    return (ROOT / ".local" / "m7" / "event20" / "trusted-copy").resolve()
 
 
 def _emit(verdict: str, diagnostics: str, result: dict | None = None) -> int:
@@ -83,10 +83,14 @@ def main(argv: list[str]) -> int:
             "inconclusive",
             "digest-bound trusted evidence root has no sealed frame: "
             f"{frame_dir}")
+    sidecar = Path(os.environ.get(
+        "EU4_M7_CANDIDATE_SIDECAR",
+        str(ROOT / "dsh" / "campaigns" / "m7-event20.json"))).expanduser().resolve()
     try:
         result = gfx_prefix_check.evaluate(
             frame_dir, None, require_end=20, trusted_execution=True,
-            trusted_root=trusted_root)
+            trusted_root=trusted_root, candidate_workspace=workspace,
+            candidate_sidecar=sidecar)
     except (gfx_prefix_check.PrefixCheckError, OSError, ValueError) as exc:
         return _emit("inconclusive", f"prefix checker could not evaluate: {exc}")
     verdict = result.get("verdict")

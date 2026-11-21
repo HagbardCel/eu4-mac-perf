@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import struct
 import shutil
 import subprocess
 import sys
@@ -23,8 +24,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from automation import (  # noqa: E402
-    gfx_frame_graph, gfx_prefix_case, gfx_prefix_check, m6_frame,
-    native_build)
+    campaign_guard, gfx_frame_graph, gfx_independent_replay, gfx_prefix_case,
+    gfx_prefix_check, m6_frame, native_build)
 BENCH = ROOT / "benchmark"
 CHECKER = ROOT / "campaigns" / "eu4-m7-event20" / "accept.py"
 
@@ -170,6 +171,46 @@ class Event20PrefixTests(unittest.TestCase):
             self.assertEqual(entry["independent"]["mismatched_pixels"], 0)
             self.assertEqual(entry["independent"]["max_channel_error"], 0)
             self.assertEqual(entry["independent"]["alpha_different_pixels"], 0)
+
+    def test_trusted_execution_charges_one_replay_and_refuses_exhaustion(self):
+        frame, _metal = self._fixture()
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        state_path = Path(temporary.name) / "state.json"
+        guard = campaign_guard.Guard(state_path)
+        guard.init(budgets={"replays": 1})
+        previous = os.environ.get("EU4_CAMPAIGN_STATE")
+        os.environ["EU4_CAMPAIGN_STATE"] = str(state_path)
+        self.addCleanup(lambda: os.environ.pop("EU4_CAMPAIGN_STATE", None)
+                        if previous is None else
+                        os.environ.__setitem__("EU4_CAMPAIGN_STATE", previous))
+        first = gfx_prefix_check.evaluate(
+            frame, None, require_end=20, trusted_execution=True)
+        self.assertEqual(first["verdict"], "requires_additional_evidence")
+        self.assertEqual(guard.state()["counts"]["replays"], 1)
+        second = gfx_prefix_check.evaluate(
+            frame, None, require_end=20, trusted_execution=True)
+        self.assertEqual(second["verdict"], "requires_additional_evidence")
+        self.assertEqual((second.get("execution") or {}).get("status"),
+                         "refused")
+        self.assertEqual(guard.state()["counts"]["replays"], 1)
+
+    def test_nested_trusted_execution_joins_one_budget_reservation(self):
+        frame, _metal = self._fixture()
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        state_path = Path(temporary.name) / "state.json"
+        guard = campaign_guard.Guard(state_path)
+        guard.init(budgets={"replays": 1})
+        previous = os.environ.get("EU4_CAMPAIGN_STATE")
+        os.environ["EU4_CAMPAIGN_STATE"] = str(state_path)
+        self.addCleanup(lambda: os.environ.pop("EU4_CAMPAIGN_STATE", None)
+                        if previous is None else
+                        os.environ.__setitem__("EU4_CAMPAIGN_STATE", previous))
+        with campaign_guard.attempt("replays"):
+            gfx_prefix_check.evaluate(
+                frame, None, require_end=20, trusted_execution=True)
+        self.assertEqual(guard.state()["counts"]["replays"], 1)
 
     def test_derived_prefix_frame_is_clearly_labelled(self):
         frame, _metal = self._fixture()
@@ -794,7 +835,9 @@ class TrustedExecutionTests(unittest.TestCase):
         gfx_prefix_check.prepare_trusted_evidence(
             frame, root, read_only=False)
         copied = root / "frame"
-        gfx_prefix_check.verify_trusted_evidence(root, copied)
+        record = gfx_prefix_check.verify_trusted_evidence(root, copied)
+        seal = m6_frame.load_seal(copied, trusted_evidence=record)
+        self.assertTrue(seal["sealed"])
         path = copied / "frame-events.jsonl"
         data = bytearray(path.read_bytes())
         data[-2] = (data[-2] + 1) & 0xFF
@@ -815,6 +858,74 @@ class TrustedExecutionTests(unittest.TestCase):
         with self.assertRaises(gfx_prefix_check.PrefixCheckError):
             gfx_prefix_check.verify_trusted_evidence(root, frame)
 
+
+class R32FComparisonTests(unittest.TestCase):
+    def test_r32f_is_compared_as_exact_float_bits(self):
+        reference = struct.pack("<f", 1.0) * 4
+        identical = gfx_independent_replay.compare_r32f(
+            reference, reference, 2, 2)
+        self.assertEqual(identical["format_scope"], "R32F")
+        self.assertEqual(identical["mismatched_pixels"], 0)
+        self.assertTrue(identical["exact_bitwise"])
+        self.assertEqual(identical["max_channel_error"], 0)
+        changed = bytearray(reference)
+        changed[0] ^= 1
+        different = gfx_independent_replay.compare_r32f(
+            reference, bytes(changed), 2, 2)
+        self.assertEqual(different["mismatched_pixels"], 1)
+        self.assertFalse(different["exact_bitwise"])
+        self.assertGreater(different["max_ulp_error"], 0)
+        self.assertEqual(different["max_channel_error"], 0)
+        self.assertEqual(different["alpha_different_pixels"], 0)
+
+class ExecutionReceiptTests(unittest.TestCase):
+    def _fixture(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        base = Path(temporary.name)
+        (base / "out.bgra").write_bytes(b"abcd")
+        (base / "replay.json").write_text('{"status":"ok"}\n')
+        (base / "shader-receipt.json").write_text('{"schema":"x"}\n')
+        execution = {
+            "outputs": [{"file": "out.bgra", "bytes": 4,
+                         "sha256": _sha(base / "out.bgra")}],
+            "replay_json_sha256": _sha(base / "replay.json"),
+            "receipt_sha256": _sha(base / "shader-receipt.json"),
+        }
+        return base, execution
+
+    def _sha(path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def test_replaced_output_receipt_or_replay_is_detected(self):
+        base, execution = self._fixture()
+        self.assertEqual(
+            gfx_prefix_check.verify_execution_outputs(execution, base), [])
+        (base / "out.bgra").write_bytes(b"wxyz")
+        self.assertTrue(gfx_prefix_check.verify_execution_outputs(
+            execution, base))
+        (base / "out.bgra").write_bytes(b"abcd")
+        (base / "shader-receipt.json").write_text('{"schema":"y"}\n')
+        self.assertTrue(gfx_prefix_check.verify_execution_outputs(
+            execution, base))
+        (base / "shader-receipt.json").write_text('{"schema":"x"}\n')
+        (base / "replay.json").write_text('{"status":"changed"}\n')
+        self.assertTrue(gfx_prefix_check.verify_execution_outputs(
+            execution, base))
+
+    def test_candidate_source_digest_changes_with_content(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        source = root / "benchmark" / "eu4_gfx_frame_replay.mm"
+        source.parent.mkdir(parents=True)
+        source.write_text("// baseline\n")
+        for header in ("eu4_gfx_frame_replay_cli.mm",):
+            (root / "benchmark" / header).write_text("// cli\n")
+        before = gfx_prefix_check._candidate_source_digests(root)
+        source.write_text("// changed\n")
+        after = gfx_prefix_check._candidate_source_digests(root)
+        self.assertNotEqual(before, after)
 
 class OffscreenCoverageTests(unittest.TestCase):
     def test_missing_offscreen_post_event_observation_is_invalid(self):

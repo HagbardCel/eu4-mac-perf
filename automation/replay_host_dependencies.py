@@ -155,3 +155,72 @@ def build_identity(root: Path | str = ROOT, sources=REPLAY_SOURCES,
         value, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
     return value
+
+
+def snapshot_sources(root: Path | str, destination: Path | str,
+                     sources=REPLAY_SOURCES) -> dict:
+    """Copy the authoritative dependency closure into an isolated snapshot.
+
+    Only the two replay translation units and the local headers they include
+    are copied.  The returned identity is computed from the snapshot bytes, so
+    a later change to the candidate worktree cannot change what was built.
+    """
+    root = Path(root).resolve()
+    destination = Path(destination).resolve()
+    if destination.exists():
+        shutil.rmtree(destination)
+    dependencies = dependency_paths(root, sources)
+    if not dependencies:
+        raise OSError("candidate renderer dependency closure is empty")
+    for relative, path in dependencies.items():
+        target = destination / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target)
+    return {
+        "root": str(destination),
+        "files": sorted(dependencies),
+        "digests": {relative: _sha256(destination / relative)
+                    for relative in sorted(dependencies)},
+    }
+
+
+def build_snapshot_host(snapshot_root: Path | str, output: Path | str,
+                        *, compiler: str | None = None,
+                        timeout: float = 180.0,
+                        environment: dict | None = None) -> dict:
+    """Build the replay host from an isolated candidate source snapshot."""
+    snapshot_root = Path(snapshot_root).resolve()
+    output = Path(output).resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    sources = [snapshot_root / relative for relative in REPLAY_SOURCES]
+    if any(not source.is_file() for source in sources):
+        raise OSError("snapshot is missing a replay translation unit")
+    compiler_info = compiler_identity(compiler)
+    compiler_path = compiler_info["path"] or compiler or "clang"
+    command = [compiler_path, *BUILD_FLAGS, "-o", str(output),
+               *map(str, sources)]
+    completed = subprocess.run(
+        command, capture_output=True, text=True, check=False,
+        timeout=timeout, env=environment)
+    if completed.returncode != 0:
+        raise OSError(
+            (completed.stderr or completed.stdout or
+             "replay host build failed").strip()[-4000:])
+    identity = build_identity(snapshot_root, sources=REPLAY_SOURCES,
+                              compiler=compiler)
+    return {
+        "schema": "gfx-replay-host-candidate-build/v1",
+        "command": command,
+        "compiler": compiler_info,
+        "flags": list(BUILD_FLAGS),
+        "environment": {key: os.environ.get(key)
+                        for key in BUILD_ENV_KEYS
+                        if os.environ.get(key) is not None},
+        "source_root": str(snapshot_root),
+        "source_files": sorted(identity["dependencies"]),
+        "source_digests": identity["dependencies"],
+        "build_fingerprint": identity["fingerprint"],
+        "host_path": str(output),
+        "host_sha256": _sha256(output),
+        "stderr": (completed.stderr or "").strip()[-4000:],
+    }

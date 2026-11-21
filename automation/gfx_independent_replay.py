@@ -17,6 +17,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import struct
 import os
 import re
 import shutil
@@ -208,6 +209,64 @@ def _load_pixels(path: Path, width: int, height: int) -> bytes:
             f"{path} is {len(payload)} bytes, expected {width * height * 4}",
         )
     return payload
+
+
+def compare_r32f(reference: bytes, candidate: bytes, width: int,
+                 height: int) -> dict:
+    """Exact bitwise comparison of two R32F payloads.
+
+    R32F is one 32-bit IEEE-754 value per pixel, not four colour channels.
+    Equality is exact bit identity; the reported error is the maximum ULP
+    distance so the result is not described as an RGBA channel error.
+    """
+    total = width * height
+    expected = total * 4
+    if len(reference) != expected or len(candidate) != expected:
+        raise ReplayError(
+            "r32f_payload",
+            f"R32F payload size {len(reference)}/{len(candidate)} != {expected}")
+    mismatched = 0
+    max_ulp = 0
+    first = None
+    for pixel in range(total):
+        offset = pixel * 4
+        left = struct.unpack_from("<I", reference, offset)[0]
+        right = struct.unpack_from("<I", candidate, offset)[0]
+        if left == right:
+            continue
+        mismatched += 1
+        distance = abs(left - right)
+        if distance > max_ulp:
+            max_ulp = distance
+        if first is None:
+            first = {"x": pixel % width, "y": pixel // width,
+                     "offset": pixel}
+    return {
+        "format_scope": "R32F",
+        "pixels": total,
+        "mismatched_pixels": mismatched,
+        "mismatched_fraction": mismatched / total if total else 0.0,
+        "alpha_different_pixels": 0,
+        "max_channel_error": 0,
+        "max_ulp_error": max_ulp,
+        "mean_abs_error": [0, 0, 0, 0],
+        "mean_max_channel_error": 0.0,
+        "first_differing_pixel": first,
+        "differing_bounds": _bounds_for_points(
+            [first] if first else [], width, height),
+        "regions": [],
+        "exact_bitwise": mismatched == 0,
+    }
+
+
+def _bounds_for_points(points, width: int, height: int):
+    if not points:
+        return None
+    xs = [point["x"] for point in points]
+    ys = [point["y"] for point in points]
+    return {"x": min(xs), "y": min(ys),
+            "width": max(xs) - min(xs) + 1,
+            "height": max(ys) - min(ys) + 1}
 
 
 def _normalize_format(value) -> str:
@@ -619,11 +678,14 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
         if alpha_applicable != (channels == "RGBA"):
             fail("alpha applicability contradicts the compared channel scope")
             continue
-        if not alpha_applicable and channels != "R32F":
-            reference = _opaque_alpha(reference)
-            candidate = _opaque_alpha(candidate)
-        statistics = m6_compare.compare_images(
-            reference, candidate, width, height)
+        if channels == "R32F":
+            statistics = compare_r32f(reference, candidate, width, height)
+        else:
+            if not alpha_applicable:
+                reference = _opaque_alpha(reference)
+                candidate = _opaque_alpha(candidate)
+            statistics = m6_compare.compare_images(
+                reference, candidate, width, height)
         entry = {
             "event": event,
             "target": target,
@@ -655,6 +717,7 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
             "timing": timing,
             "alpha_applicable": alpha_applicable,
             "compared_channels": channels,
+            "format_scope": channels,
             "reference_pixel_format": reference_format or None,
             "candidate_pixel_format": _normalize_format(item.get("pixel_format"))
             or None,

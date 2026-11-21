@@ -149,6 +149,38 @@ The corrected comparison is `analysis/m7/m7-event20-comparison.json`; the
 pre-remediation measurement is preserved as
 `analysis/m7/m7-event20-comparison-untrusted-20261121.json`.
 
+## Trusted candidate execution (remediation)
+
+The checker now builds and executes the candidate renderer, not the
+infrastructure checkout's renderer:
+
+- Candidate worktree, HEAD and allowed-path policy are verified against the
+  canonical sidecar.
+- The replay-host dependency closure is copied into an isolated snapshot and
+  built with the trusted toolchain/flags.
+- The receipt binds candidate revision, changed paths, source digest, per-file
+  source hashes, compiler identity, build fingerprint, host SHA-256, request
+  and shader translation digests, event counts, and every GPU output digest.
+- Host, source and outputs are rehashed after execution; a later replacement is
+  detected.
+- The reference is an immutable copied snapshot (`trusted-copy/47590918`, 1,192
+  files, root `b3e3d7b5…`) verified before execution.
+
+A/B result (no EU4 launch):
+
+| Candidate | Source digest | Host SHA-256 | Checker result |
+| --- | --- | --- | --- |
+| Baseline | `255a5b7e…` | `190fde92…` | event 1, 23 px / max 1 |
+| Defect (red clear +0.01) | `492e6654…` | `533f79c6…` | event 0, 1,930,176 px / max 3 |
+| Defect reverted | `255a5b7e…` | `190fde92…` | event 1, 23 px / max 1 |
+| On immutable copy | `255a5b7e…` | `190fde92…` | event 1, 23 px / max 1 |
+
+The unchanged candidate produced the same result as its baseline; the
+controlled source change changed the independently executed GPU output. Replay
+budget tests cover one-charge-per-execution, failure charging, nested joins and
+exhaustion refusal before build. Record:
+`analysis/m7/m7-event20-candidate-execution.json`.
+
 ## Offline discriminator
 
 One offline replay was used to test the texture-representation hypothesis. The
@@ -207,4 +239,7 @@ certify its own output.
 
 The campaign ends with `FIRST_DIVERGENCE` at event 1 and
 `requires_additional_evidence` for the root cause. Exact event-20 parity is not
-claimed.
+claimed. The final remediation added **0** EU4 launches; total event-20 launches
+remain 3. A fresh live capture is prepared but not authorized/executed until
+native multi-round integration and independent review pass
+([live plan](m7-event20-live-plan.md)).
