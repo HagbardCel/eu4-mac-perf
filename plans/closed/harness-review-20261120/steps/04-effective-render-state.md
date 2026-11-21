@@ -2,7 +2,7 @@
 
 **Objective.** Correct demonstrated descriptor aliasing and raster-state mappings with GL/Metal controls small enough to run without EU4. Acceptance for these cases is distinct from acceptance of any terrain change.
 
-**Evidence.** Present 616 exercises six different max LODs on one native sampler cache key. In the reviewed encoder any enabled face culling selects `MTLCullModeBack`. A negative viewport origin passes through an unsigned integer, and clipping a scissor origin without its far endpoint enlarges its coverage. Full-viewport terrain is a poor detector of these errors. Existing state-coverage labels are also too coarse to distinguish an implemented enum from another unsupported value. [Encoder and descriptor construction](../../../benchmark/eu4_gfx_frame_replay.mm) · [coverage](../../../automation/gfx_independent_replay.py) · [fixture suite](../../../tests/test_m7_metal_replay.py)
+**Evidence.** Present 616 exercises six different max LODs on one native sampler cache key. In the reviewed encoder any enabled face culling selects `MTLCullModeBack`. A negative viewport origin passes through an unsigned integer, and clipping a scissor origin without its far endpoint enlarges its coverage. Full-viewport terrain is a poor detector of these errors. Existing state-coverage labels are also too coarse to distinguish an implemented enum from another unsupported value. [Encoder and descriptor construction](../../../../benchmark/eu4_gfx_frame_replay.mm) · [coverage](../../../../automation/gfx_independent_replay.py) · [fixture suite](../../../../tests/test_m7_metal_replay.py)
 
 **Implementation order**
 

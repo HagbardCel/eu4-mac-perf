@@ -26,7 +26,7 @@ The graph builder orders events and derives same-resource producers/consumers,
 including copies. Writer attribution must come from that graph; adjacency alone
 is not evidence. See
 [graph builder](../automation/gfx_frame_graph.py) and
-[step 02](../plans/harness-review/steps/02-reference-control.md).
+[step 02](../plans/closed/harness-review-20261120/steps/02-reference-control.md).
 
 ## Resources and state
 
@@ -65,4 +65,4 @@ is not evidence. See
 - [RE queries](../reverse_engineering/re_query.py)
 - [Engine contracts](../automation/gfx_contracts)
 - [Current status](status.md)
-- [Review assessment](../plans/harness-review/assessment.md)
+- [Review assessment](../plans/closed/harness-review-20261120/assessment.md)

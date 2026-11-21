@@ -2,7 +2,7 @@
 
 **Objective.** Preserve each distinct verification gate while reducing time to the first actionable result. Measure a component of the workflow only where its time and outcome can be attributed.
 
-**Evidence.** B ran the focused test runner twice; transcript classification counted zero tests. A had three launch claims and three owned process records; a CLI heuristic estimated eight process starts. The portable CI offline gate occupied 253 of 285 s in the measured job. The local historical full gate took 902.6 s. Several native suites can skip an eligible build failure. Linux and macOS profiles provide different coverage. [Profile and mandatory tests](../../../automation/test_profiles.py) · [deduplicating runner](../../../automation/test_runner.py) · [session analyzer](../../../automation/dsh_efficiency.py) · [CI](../../../.github/workflows/profiler.yml)
+**Evidence.** B ran the focused test runner twice; transcript classification counted zero tests. A had three launch claims and three owned process records; a CLI heuristic estimated eight process starts. The portable CI offline gate occupied 253 of 285 s in the measured job. The local historical full gate took 902.6 s. Several native suites can skip an eligible build failure. Linux and macOS profiles provide different coverage. [Profile and mandatory tests](../../../../automation/test_profiles.py) · [deduplicating runner](../../../../automation/test_runner.py) · [session analyzer](../../../../automation/dsh_efficiency.py) · [CI](../../../../.github/workflows/profiler.yml)
 
 **Implementation order**
 

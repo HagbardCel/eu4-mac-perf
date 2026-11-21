@@ -3,7 +3,7 @@
 The shortest supported path from a checkout to a verified result, plus the
 recovery path when evidence or a launch is missing. Current capability state is
 in [status](status.md); the review remediation matrix is
-[implementation](../plans/harness-review/implementation.md).
+[implementation](../plans/closed/harness-review-20261120/implementation.md).
 
 ## Ownership
 

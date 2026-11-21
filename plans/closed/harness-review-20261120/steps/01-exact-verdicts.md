@@ -21,7 +21,7 @@ with tempfile.TemporaryDirectory() as tmp:
     print(report["classification"], report["pixels"]["final"]["statistics"]["mismatched_pixels"])
 ```
 
-On the review head this prints `qualified_difference` then `qualified_match 1`. Case 616's independent report passed through the adapter also produces `diagnostic_complete=true/failure_kind=tool_failure` for an actually completed divergent replay with unverified identity. The separate window control in assessment exhibits a real 1,445,806-pixel alpha discrepancy hidden by the pilot snippets. [Diagnosis](../../../automation/gfx_independent_replay.py) · [adapter](../../../automation/agent_tools.py) · [checker](../../../automation/correction_accept.py)
+On the review head this prints `qualified_difference` then `qualified_match 1`. Case 616's independent report passed through the adapter also produces `diagnostic_complete=true/failure_kind=tool_failure` for an actually completed divergent replay with unverified identity. The separate window control in assessment exhibits a real 1,445,806-pixel alpha discrepancy hidden by the pilot snippets. [Diagnosis](../../../../automation/gfx_independent_replay.py) · [adapter](../../../../automation/agent_tools.py) · [checker](../../../../automation/correction_accept.py)
 
 **Implementation order**
 

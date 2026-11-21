@@ -2,7 +2,7 @@
 
 **Objective.** Reuse work across identical inputs and prevent a warm cache, overwritten stage or ambient experiment from changing the meaning of a replay.
 
-**Evidence.** On 616, swapping attribute locations changes the translator's input and leaves `_shader_source_identity` unchanged. In `translate_stage`, two linked shaders can write the same output name. `translate_command` accepts `shaders.json` existence and stages a shared `<key>.partial`. Native `function_for` looks up file name plus entry before reading MSL. The pilot changed shader products and compiler settings across repeated invocations. None of these facts establishes that a cache hit caused the terrain defect. [Translator](../../../automation/gfx_shader_translate.py) · [cache](../../../automation/m6_frame.py) · [native reader](../../../benchmark/eu4_gfx_frame_replay.mm) · [receipts](../../../automation/gfx_independent_replay.py)
+**Evidence.** On 616, swapping attribute locations changes the translator's input and leaves `_shader_source_identity` unchanged. In `translate_stage`, two linked shaders can write the same output name. `translate_command` accepts `shaders.json` existence and stages a shared `<key>.partial`. Native `function_for` looks up file name plus entry before reading MSL. The pilot changed shader products and compiler settings across repeated invocations. None of these facts establishes that a cache hit caused the terrain defect. [Translator](../../../../automation/gfx_shader_translate.py) · [cache](../../../../automation/m6_frame.py) · [native reader](../../../../benchmark/eu4_gfx_frame_replay.mm) · [receipts](../../../../automation/gfx_independent_replay.py)
 
 **Implementation order**
 

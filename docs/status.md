@@ -15,7 +15,7 @@ history and must be read with its original run/seal identity.
 | What is planned for the optimized backend? | [Metal optimized](metal_optimized.md) |
 | How is evidence retained and restored? | [Evidence retention](evidence-retention.md) |
 | Which command should I run, and how do I recover? | [Harness operations](harness.md) |
-| What is the review remediation status? | [Coverage matrix](../plans/harness-review/implementation.md) · [closure](../analysis/harness-remediation/closure.md) · [verification](../analysis/harness-remediation/verification-20261121.md) |
+| What is the review remediation status? | [Coverage matrix (archived)](../plans/closed/harness-review-20261120/implementation.md) · [closure](../analysis/harness-remediation/closure.md) · [verification](../analysis/harness-remediation/verification-20261121.md) |
 | What is the reconstruction charter and safety contract? | [Charter](renderer-reconstruction-and-differential-validation.md) · [AGENTS.md](../AGENTS.md) |
 
 ### Capability snapshot
@@ -24,7 +24,7 @@ As of this snapshot #241–#273 are merged. The technical findings of the harnes
 harness-integrity finding has a disposition, the two scientific remainders are
 transferred to M7. The archive PR is the only remaining remediation step; the only remaining engineering item is the M7 scientific follow-up #270. Exact head SHAs, review
 records and dependency order are in the
-[coverage matrix](../plans/harness-review/implementation.md), the
+[coverage matrix](../plans/closed/harness-review-20261120/implementation.md), the
 [closure](../analysis/harness-remediation/closure.md), the
 [verification report](../analysis/harness-remediation/verification-20261121.md)
 and the [exact-head audit](../analysis/harness-remediation/audit-20261120.md).
