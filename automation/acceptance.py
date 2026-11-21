@@ -55,9 +55,21 @@ class CheckerBinding(Protocol):
     accept_timeout: float
 
 
-def run_accept(campaign: CheckerBinding, workspace: Path) -> dict:
-    """Run one checker against *workspace* and classify what it printed."""
+def run_accept(campaign: CheckerBinding, workspace: Path, *,
+               env_extra: dict | None = None,
+               scrub_env: Sequence[str] = ()) -> dict:
+    """Run one checker against *workspace* and classify what it printed.
+
+    ``env_extra`` lets the caller bind an explicit campaign identity (for
+    example the selected DSH sidecar) at this boundary; ``scrub_env`` removes
+    ambient overrides so a caller cannot be silently redirected.  The
+    campaign object may carry ``accept_env`` / ``accept_env_scrub`` defaults.
+    """
     env = checker_environment()
+    for key in (*getattr(campaign, "accept_env_scrub", ()), *scrub_env):
+        env.pop(key, None)
+    env.update(getattr(campaign, "accept_env", {}) or {})
+    env.update(env_extra or {})
     try:
         completed = subprocess.run(
             [*campaign.accept, str(workspace)],

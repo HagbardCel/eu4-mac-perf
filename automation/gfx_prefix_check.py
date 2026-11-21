@@ -30,7 +30,7 @@ from pathlib import Path
 
 from automation import (
     campaign_guard, dsh_campaign, gfx_frame_graph, gfx_independent_replay,
-    gfx_observation, m6_frame, replay_host_dependencies, state,
+    gfx_observation, launch_lease, m6_frame, replay_host_dependencies, state,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -670,12 +670,19 @@ def _run_trusted_replay(frame_dir: Path, request: dict,
             Path(host), host_argv, execution_dir, protected_paths)
     else:
         replay_command = [str(host), *host_argv]
-    started = time.time()
-    completed = subprocess.run(
-        replay_command, cwd=str(execution_dir),
-        env=_execution_environment(execution_dir),
-        capture_output=True, text=True, timeout=600, check=False)
-    finished = time.time()
+    # Serialize the trusted GPU execution host-wide.  A stop or an expired
+    # operator deadline that happened while this execution waited for the lock
+    # must prevent the replay host from starting.
+    with launch_lease.gpu_execution():
+        # Propagate CampaignRefusal so the caller reports a stop/deadline as a
+        # refusal rather than a generic execution failure.
+        campaign_guard.require_active_from_env()
+        started = time.time()
+        completed = subprocess.run(
+            replay_command, cwd=str(execution_dir),
+            env=_execution_environment(execution_dir),
+            capture_output=True, text=True, timeout=600, check=False)
+        finished = time.time()
     if completed.returncode != 0:
         raise PrefixCheckError(
             "trusted Metal replay failed: "

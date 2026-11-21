@@ -108,6 +108,17 @@ class _AcceptShim:
         self.root = sidecar.campaign_root
         self.accept = list(sidecar.accept)
         self.accept_timeout = sidecar.validation_timeout_seconds
+        # Bind the checked campaign explicitly at the checker boundary.  The
+        # event-20 checker used to fall back to its historical sidecar and to
+        # accept an ambient trusted-root override; neither may redirect the
+        # selected DSH campaign.
+        self.accept_env = {
+            "EU4_M7_CANDIDATE_SIDECAR": str(sidecar.sidecar_path),
+        }
+        self.accept_env_scrub = (
+            "EU4_M7_CANDIDATE_SIDECAR",
+            "EU4_M7_EVENT20_TRUSTED_ROOT",
+        )
 
 
 def _roots(sidecar: Sidecar) -> dict:

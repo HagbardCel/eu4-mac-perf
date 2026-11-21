@@ -59,6 +59,11 @@ scientific merit and the decision to repeat are the agent's.
 Read-only verification, diagnosis of existing output, focused tests and trusted
 checker validation need no rationale.
 
+The trusted checker is invoked with the campaign's selected sidecar bound
+explicitly; ambient `EU4_M7_CANDIDATE_SIDECAR` / `EU4_M7_EVENT20_TRUSTED_ROOT`
+values are scrubbed at that boundary, so a live campaign cannot fall back to the
+historical sidecar's reference.
+
 ## Progress and stopping
 
 A repeated failure is evidence to reassess, not a terminal stop. The campaign

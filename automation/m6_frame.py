@@ -2553,6 +2553,15 @@ def _replay_command_body(args: argparse.Namespace,
     from automation import launch_lease
 
     with launch_lease.gpu_execution():
+        # A stop or deadline expiry while this replay waited for the GPU lock
+        # must not start the replay host.
+        try:
+            campaign_guard.require_active_from_env()
+        except campaign_guard.CampaignRefusal as exc:
+            _replay_mark(evidence, status="refused", reason=str(exc))
+            print(f"replay refused: {exc.kind}: {exc.detail}",
+                  file=sys.stderr)
+            return 3
         ran = subprocess.run(command, capture_output=True, text=True,
                              check=False, timeout=1200)
     result_path = out / "replay.json"

@@ -8,9 +8,11 @@ enforced.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -143,6 +145,94 @@ class LauncherPolicyTests(unittest.TestCase):
             timeout=60)
         self.assertEqual(ran.returncode, 2, ran.stderr)
         self.assertIn("EU4_CAMPAIGN_STATE", ran.stderr)
+
+
+class CheckerBindingTests(unittest.TestCase):
+    """The selected campaign sidecar owns the checker reference."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+
+    def _accept_module(self):
+        path = ROOT / "campaigns" / "eu4-m7-event20" / "accept.py"
+        spec = importlib.util.spec_from_file_location("event20_accept", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_the_selected_sidecar_reference_cannot_be_overridden(self):
+        module = self._accept_module()
+        selected = self.root / "selected.json"
+        selected.write_text(json.dumps({
+            "trusted_reference_root": str(self.root / "selected-reference")}))
+        with mock.patch.dict(os.environ, {
+                "EU4_M7_CANDIDATE_SIDECAR": str(selected),
+                "EU4_M7_EVENT20_TRUSTED_ROOT": str(self.root / "wrong")}):
+            with mock.patch.object(
+                    module.gfx_prefix_check, "resolve_trusted_reference",
+                    side_effect=lambda configured, workspace, root:
+                    Path(configured)) as resolve:
+                value = module._trusted_root(self.root)
+        self.assertEqual(value, self.root / "selected-reference")
+        self.assertEqual(resolve.call_count, 1)
+
+    def test_standalone_trusted_root_is_still_honoured_without_a_sidecar(self):
+        module = self._accept_module()
+        with mock.patch.dict(os.environ, {
+                "EU4_M7_EVENT20_TRUSTED_ROOT": str(self.root / "standalone")}):
+            os.environ.pop("EU4_M7_CANDIDATE_SIDECAR", None)
+            with mock.patch.object(
+                    module.gfx_prefix_check, "resolve_trusted_reference",
+                    side_effect=lambda configured, workspace, root:
+                    Path(configured)):
+                value = module._trusted_root(self.root)
+        self.assertEqual(value, self.root / "standalone")
+
+    def test_historical_and_live_sidecars_keep_distinct_references(self):
+        module = self._accept_module()
+        sidecars = [
+            ROOT / "dsh" / "campaigns" / "m7-event20.json",
+            ROOT / "dsh" / "campaigns" / "m7-autonomy-offline.json",
+        ]
+        for sidecar in sidecars:
+            configured = json.loads(sidecar.read_text())["trusted_reference_root"]
+            with mock.patch.dict(
+                    os.environ, {"EU4_M7_CANDIDATE_SIDECAR": str(sidecar)}):
+                with mock.patch.object(
+                        module.gfx_prefix_check, "resolve_trusted_reference",
+                        side_effect=lambda value, workspace, root:
+                        Path(value)):
+                    value = module._trusted_root(self.root)
+            self.assertEqual(str(value), configured, sidecar.name)
+
+    def test_the_dsh_runner_binds_the_selected_sidecar_and_scrubs_ambient_env(self):
+        from automation import acceptance
+
+        checker = self.root / "checker.py"
+        checker.write_text(
+            "import json, os, sys\n"
+            "print(json.dumps({'verdict': 'inconclusive', 'diagnostics': "
+            "json.dumps({'sidecar': os.environ.get("
+            "'EU4_M7_CANDIDATE_SIDECAR', ''), 'trusted': os.environ.get("
+            "'EU4_M7_EVENT20_TRUSTED_ROOT', '')})}))\n")
+        campaign = type("Campaign", (), {
+            "accept": [sys.executable, str(checker)],
+            "root": self.root,
+            "accept_timeout": 30.0,
+            "accept_env": {"EU4_M7_CANDIDATE_SIDECAR": "/selected/sidecar.json"},
+            "accept_env_scrub": ("EU4_M7_CANDIDATE_SIDECAR",
+                                 "EU4_M7_EVENT20_TRUSTED_ROOT"),
+        })()
+        with mock.patch.dict(os.environ, {
+                "EU4_M7_CANDIDATE_SIDECAR": "/ambient/sidecar.json",
+                "EU4_M7_EVENT20_TRUSTED_ROOT": "/wrong/root"}):
+            result = acceptance.run_accept(campaign, self.root)
+        self.assertTrue(result["ok"], result)
+        details = json.loads(result["diagnostics"])
+        self.assertEqual(details["sidecar"], "/selected/sidecar.json")
+        self.assertEqual(details["trusted"], "")
 
 
 class DeadlineEntrypointTests(unittest.TestCase):

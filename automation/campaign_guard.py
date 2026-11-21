@@ -367,6 +367,10 @@ class Guard:
         with self._locked():
             state = self.state()
             self._require_active(state)
+            if state.get("mode") != MODE_CONTROLLED:
+                raise CampaignRefusal(
+                    "live_capture_disabled",
+                    "live launch authorization requires controlled_capture mode")
             expected = state.get("admin_token_sha256")
             if not expected or not operator_token \
                     or _sha256_text(operator_token) != expected:
@@ -408,6 +412,10 @@ class Guard:
         with self._locked():
             state = self.state()
             self._require_active(state)
+            if state.get("mode") != MODE_CONTROLLED:
+                raise CampaignRefusal(
+                    "live_capture_disabled",
+                    "a live launch is only possible in controlled_capture mode")
             if not authorization_id:
                 raise CampaignRefusal(
                     "launch_authorization",
@@ -694,6 +702,11 @@ def require_launch_authorization(authorization: str | None = None,
     # Refuse a stopped/expired/conflicting campaign before any caller spends
     # preflight or build work, not only at the final atomic claim.
     guard.require()
+    state = guard.state()
+    if state.get("mode") != MODE_CONTROLLED:
+        raise CampaignRefusal(
+            "live_capture_disabled",
+            "a live launch is only possible in controlled_capture mode")
     if not guard.validate_authorization(_launch_token(authorization)):
         raise CampaignRefusal(
             "launch_authorization",

@@ -4222,14 +4222,24 @@ def _replay_locked(
     policy: Path | str | None = None,
     timeout: float = 1800.0,
 ) -> dict:
-    """Execute one captured workload through the production Metal replay host."""
-    from automation import launch_lease
+    """Execute one captured workload through the production Metal replay host.
+
+    The early caller check rejects obviously invalid work without waiting.  The
+    check is repeated after the host-wide GPU lock is acquired: a stop or an
+    expired deadline while this execution waited must not start a replay.
+    """
+    from automation import campaign_guard, launch_lease
 
     frame_dir = Path(frame_dir).expanduser().resolve()
     out_dir = Path(out_dir).expanduser().resolve()
     shader_dir = _shader_dir(frame_dir, shaders)
     out_dir = prepare_replay_output(out_dir, [frame_dir, shader_dir])
     with launch_lease.gpu_execution():
+        try:
+            campaign_guard.require_active_from_env()
+        except campaign_guard.CampaignRefusal as exc:
+            raise ReplayError("campaign_refused",
+                              f"{exc.kind}: {exc.detail}") from exc
         return _replay_locked_serialized(
             frame_dir, out_dir, shader_dir, faults=faults, policy=policy,
             timeout=timeout)

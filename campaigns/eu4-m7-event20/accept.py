@@ -38,16 +38,27 @@ from automation import gfx_prefix_check  # noqa: E402
 RELATIVE_BASE = Path(".local") / "m7" / "event20" / "live"
 
 
+def _selected_sidecar() -> Path | None:
+    """The campaign sidecar explicitly bound by the trusted caller, if any."""
+    raw = os.environ.get("EU4_M7_CANDIDATE_SIDECAR", "").strip()
+    return Path(raw).expanduser().resolve() if raw else None
+
+
 def _trusted_root(workspace: Path) -> Path:
-    declared = os.environ.get("EU4_M7_EVENT20_TRUSTED_ROOT", "").strip()
-    if declared:
-        configured = declared
-    else:
-        sidecar_path = Path(os.environ.get(
-            "EU4_M7_CANDIDATE_SIDECAR",
-            str(ROOT / "dsh" / "campaigns" / "m7-event20.json")))
-        sidecar = json.loads(sidecar_path.read_text())
+    selected = _selected_sidecar()
+    if selected is not None:
+        # An explicitly selected campaign owns its reference.  An ambient
+        # trusted-root override must not redirect it.
+        sidecar = json.loads(selected.read_text())
         configured = sidecar.get("trusted_reference_root")
+    else:
+        declared = os.environ.get("EU4_M7_EVENT20_TRUSTED_ROOT", "").strip()
+        if declared:
+            configured = declared
+        else:
+            sidecar_path = ROOT / "dsh" / "campaigns" / "m7-event20.json"
+            sidecar = json.loads(sidecar_path.read_text())
+            configured = sidecar.get("trusted_reference_root")
     return gfx_prefix_check.resolve_trusted_reference(
         configured, workspace, root=ROOT)
 
@@ -98,9 +109,8 @@ def main(argv: list[str]) -> int:
             "inconclusive",
             "digest-bound trusted evidence root has no sealed frame: "
             f"{frame_dir}")
-    sidecar = Path(os.environ.get(
-        "EU4_M7_CANDIDATE_SIDECAR",
-        str(ROOT / "dsh" / "campaigns" / "m7-event20.json"))).expanduser().resolve()
+    sidecar = _selected_sidecar() or (
+        ROOT / "dsh" / "campaigns" / "m7-event20.json").resolve()
     run_dir = os.environ.get("EU4_M7_CHECKER_RUN_DIR", "").strip() or None
     try:
         result = gfx_prefix_check.evaluate(

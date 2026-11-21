@@ -505,6 +505,44 @@ class Event20PrefixTests(unittest.TestCase):
         self.assertEqual((stopped.get("execution") or {}).get("status"),
                          "refused")
 
+    def test_trusted_execution_rechecks_the_campaign_after_the_gpu_lock(self):
+        from contextlib import contextmanager
+
+        frame, _metal = self._fixture()
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        state_path = Path(temporary.name) / "state.json"
+        markers = Path(temporary.name) / "markers"
+        marker = mock.patch.object(
+            campaign_guard, "_marker_path",
+            return_value=markers / campaign_guard.MARKER_NAME)
+        marker.start()
+        self.addCleanup(marker.stop)
+        guard = campaign_guard.Guard(state_path)
+        guard.init(mode=campaign_guard.MODE_AUTONOMOUS)
+        previous = os.environ.get("EU4_CAMPAIGN_STATE")
+        os.environ["EU4_CAMPAIGN_STATE"] = str(state_path)
+        self.addCleanup(
+            lambda: os.environ.pop("EU4_CAMPAIGN_STATE", None)
+            if previous is None
+            else os.environ.__setitem__("EU4_CAMPAIGN_STATE", previous))
+
+        @contextmanager
+        def lock_with_stop():
+            # The operator stops the campaign while this execution waits.
+            guard.stop("operator_stop", "stopped while waiting for the GPU")
+            yield
+
+        with mock.patch.object(
+                gfx_prefix_check.launch_lease, "gpu_execution",
+                lock_with_stop):
+            result = gfx_prefix_check.evaluate(
+                frame, None, require_end=20, trusted_execution=True)
+        self.assertEqual((result.get("execution") or {}).get("status"),
+                         "refused")
+        self.assertTrue(any("operator_stop" in problem
+                            for problem in result["problems"]))
+
     def test_selected_late_events_do_not_claim_a_prefix(self):
         directory = Path(tempfile.mkdtemp(dir=self.temporary.name))
         result = subprocess.run(

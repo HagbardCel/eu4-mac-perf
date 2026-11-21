@@ -9,6 +9,7 @@ clearing environment variables does not disable the host-wide guard.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
@@ -24,7 +25,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from automation import campaign_guard, gfx_independent_replay, m6_frame  # noqa: E402
+from automation import (campaign_guard, gfx_independent_replay,  # noqa: E402
+                        launch_lease, m6_frame)
 
 AUTONOMOUS = campaign_guard.MODE_AUTONOMOUS
 CONTROLLED = campaign_guard.MODE_CONTROLLED
@@ -227,8 +229,7 @@ class ModeTests(GuardTestCase):
         self.init(mode=AUTONOMOUS)
         with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
             self.guard.authorize_launch()
-        self.assertEqual(raised.exception.kind,
-                         "operator_authorization_required")
+        self.assertEqual(raised.exception.kind, "live_capture_disabled")
 
     def test_controlled_mode_also_requires_an_operator_authorization(self):
         self.init(mode=CONTROLLED)
@@ -237,20 +238,30 @@ class ModeTests(GuardTestCase):
         self.assertEqual(raised.exception.kind,
                          "operator_authorization_required")
 
-    def test_the_operator_token_authorizes_a_single_launch_in_either_mode(self):
-        for mode in (AUTONOMOUS, CONTROLLED):
-            with self.subTest(mode=mode):
-                guard = campaign_guard.Guard(self.root / f"{mode}.json")
-                guard.init(mode=mode, admin_token=TOKEN)
-                try:
-                    with self.assertRaises(campaign_guard.CampaignRefusal):
-                        guard.authorize_launch(operator_token="wrong")
-                    authorization = guard.authorize_launch(
-                        operator_token=TOKEN)
-                    self.assertTrue(
-                        guard.validate_authorization(authorization))
-                finally:
-                    guard.deactivate()
+    def test_autonomous_mode_refuses_live_authorization_even_with_the_token(self):
+        self.init(mode=AUTONOMOUS)
+        with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
+            self.guard.authorize_launch(operator_token=TOKEN)
+        self.assertEqual(raised.exception.kind, "live_capture_disabled")
+
+    def test_controlled_mode_requires_the_token_then_authorizes(self):
+        self.init(mode=CONTROLLED)
+        with self.assertRaises(campaign_guard.CampaignRefusal):
+            self.guard.authorize_launch(operator_token="wrong")
+        authorization = self.authorize()
+        self.assertTrue(self.guard.validate_authorization(authorization))
+
+    def test_autonomous_mode_refuses_a_forged_authorization_claim(self):
+        self.init(mode=AUTONOMOUS)
+        state = self.guard.state()
+        state["launch_authorizations"]["forged"] = {
+            "state": "authorized", "created_at": 1.0,
+            "campaign_id": state["campaign_id"], "launch_claim": None,
+        }
+        self.guard._write(state)
+        with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
+            self.guard.claim_launch("forged")
+        self.assertEqual(raised.exception.kind, "live_capture_disabled")
 
 
 class LaunchAuthorizationTests(GuardTestCase):
@@ -543,6 +554,92 @@ class ActionSiteTests(GuardTestCase):
                 self.assertEqual(result, report)
         self.assertEqual(locked.call_count, 12)
 
+    def _replay_lock_case(self, action):
+        self.init(mode=AUTONOMOUS)
+        frame = self.root / "frame"
+        (frame / "shaders").mkdir(parents=True)
+        (frame / "shaders" / "shaders.json").write_text("{}")
+        out = self.root / "out"
+        outcomes = []
+
+        def run():
+            try:
+                gfx_independent_replay._replay_locked(frame, out)
+            except BaseException as exc:  # noqa: BLE001 - recorded below
+                outcomes.append(exc)
+
+        with mock.patch.dict(os.environ,
+                             {"EU4_CAMPAIGN_STATE": str(self.path)}), \
+             mock.patch.object(
+                 gfx_independent_replay, "_replay_locked_serialized",
+                 side_effect=AssertionError("the replay must not start")):
+            with launch_lease.gpu_execution():
+                thread = threading.Thread(target=run)
+                thread.start()
+                time.sleep(0.1)  # the thread is blocked on the GPU lock
+                action()
+            thread.join(timeout=10)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(outcomes), 1)
+        self.assertIsInstance(outcomes[0], gfx_independent_replay.ReplayError)
+        self.assertIn("campaign_refused", str(outcomes[0]))
+
+    def test_an_operator_stop_while_waiting_for_the_gpu_lock_prevents_the_replay(self):
+        self._replay_lock_case(
+            lambda: self.guard.stop("operator_stop", "operator cancelled"))
+
+    def test_a_deadline_expiry_while_waiting_for_the_gpu_lock_prevents_the_replay(self):
+        self.init(mode=AUTONOMOUS, deadline_seconds=0.1)
+        frame = self.root / "frame2"
+        (frame / "shaders").mkdir(parents=True)
+        (frame / "shaders" / "shaders.json").write_text("{}")
+        out = self.root / "out2"
+        outcomes = []
+
+        def run():
+            try:
+                gfx_independent_replay._replay_locked(frame, out)
+            except BaseException as exc:  # noqa: BLE001
+                outcomes.append(exc)
+
+        with mock.patch.dict(os.environ,
+                             {"EU4_CAMPAIGN_STATE": str(self.path)}), \
+             mock.patch.object(
+                 gfx_independent_replay, "_replay_locked_serialized",
+                 side_effect=AssertionError("the replay must not start")):
+            with launch_lease.gpu_execution():
+                thread = threading.Thread(target=run)
+                thread.start()
+                time.sleep(0.2)  # expires while waiting
+            thread.join(timeout=10)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(outcomes), 1)
+        self.assertIn("campaign_refused", str(outcomes[0]))
+
+    def test_a_stop_after_the_direct_replay_acquires_its_lock_prevents_execution(self):
+        self.init(mode=AUTONOMOUS)
+        frame = self.root / "frame"
+        frame.mkdir()
+        out = self.root / "out"
+        args = m6_frame._parser().parse_args([
+            "replay", "--frame", str(frame), "--out", str(out)])
+        guard = self.guard
+
+        @contextlib.contextmanager
+        def lock():
+            # Simulate an operator stop while the replay waited for the lock.
+            guard.stop("operator_stop", "operator cancelled")
+            yield
+
+        with mock.patch.dict(os.environ,
+                             {"EU4_CAMPAIGN_STATE": str(self.path)}), \
+             mock.patch.object(m6_frame, "build_replay_host",
+                               return_value=self.root / "host"), \
+             mock.patch.object(launch_lease, "gpu_execution", lock), \
+             mock.patch.object(m6_frame.subprocess, "run",
+                               side_effect=AssertionError("must not execute")):
+            self.assertEqual(m6_frame._replay_command_body(args), 3)
+
     def test_a_stopped_campaign_refuses_a_replay(self):
         self.init(mode=AUTONOMOUS)
         self.guard.stop("environment_unsafe", "no Metal device")
@@ -706,6 +803,21 @@ class ActionSiteTests(GuardTestCase):
                 lease=_FakeLease(), session=_FakeSession(),
                 campaign_reservation=authorization)
 
+    def test_autonomous_mode_refuses_the_shared_launch_preflight(self):
+        self.init(mode=AUTONOMOUS)
+        state = self.guard.state()
+        state["launch_authorizations"]["injected"] = {
+            "state": "authorized", "created_at": 1.0,
+            "campaign_id": state["campaign_id"], "launch_claim": None,
+        }
+        self.guard._write(state)
+        with mock.patch.dict(os.environ, {
+                "EU4_CAMPAIGN_STATE": str(self.path),
+                "EU4_CAMPAIGN_AUTHORIZATION": "injected"}):
+            with self.assertRaises(campaign_guard.CampaignRefusal) as raised:
+                campaign_guard.require_launch_authorization()
+        self.assertEqual(raised.exception.kind, "live_capture_disabled")
+
     def test_a_direct_unreserved_launch_is_prohibited(self):
         self.init(mode=CONTROLLED)
         with mock.patch.dict(os.environ, {
@@ -750,6 +862,27 @@ class ActionSiteTests(GuardTestCase):
             self.spawn("shared-second", popen, authorization=authorization)
         self.assertIn("already", str(raised.exception))
         self.assertEqual(len(calls), 1)
+
+    def test_autonomous_mode_refuses_a_direct_spawn_with_a_forged_authorization(self):
+        self.init(mode=AUTONOMOUS)
+        state = self.guard.state()
+        state["launch_authorizations"]["injected"] = {
+            "state": "authorized", "created_at": 1.0,
+            "campaign_id": state["campaign_id"], "launch_claim": None,
+        }
+        self.guard._write(state)
+        calls = []
+
+        def popen(*args, **kwargs):
+            calls.append(args)
+            return types.SimpleNamespace(pid=4242)
+
+        from automation import gfx_launch
+
+        with self.assertRaises(gfx_launch.LaunchError) as raised:
+            self.spawn("autonomous-direct", popen, authorization="injected")
+        self.assertIn("live_capture_disabled", str(raised.exception))
+        self.assertEqual(calls, [])
 
     def test_a_stopped_campaign_is_refused_immediately_before_popen(self):
         self.init(mode=CONTROLLED)
