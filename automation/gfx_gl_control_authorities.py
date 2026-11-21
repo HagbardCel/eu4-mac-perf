@@ -59,7 +59,8 @@ AUTHORITIES: dict[str, dict] = {
         "qualified": True,
         "qualified_by": (
             "independent review review-pr3 (DSH subagent), exact PR3 head "
-            "93a7c9110c15be49cac922ac5f261753e2bed005"),
+            "93a7c9110c15be49cac922ac5f261753e2bed005; capacity fix and "
+            "native pin re-reviewed at 92f84b4137f15fb8ded80f2b763d28b064dea010"),
         "public_key": (
             "b129e1bcd834600e8a3986159b7d9a540d1951f09f30ce3bfd4881844247a727"),
         "components": [
