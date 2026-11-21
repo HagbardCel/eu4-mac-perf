@@ -8,9 +8,9 @@ headless agent was substituted and no EU4 launch was made.
 
 - PR: https://github.com/HagbardCel/eu4-mac-perf/pull/280
 - Last inspected head: `c181d0fb91aab365a86f975363d6b93aff510676`.
-- This work adds the R32F acceptance fix, the offline campaign and the operator
-  runbook; the final head is the configuration/docs commit after the code head
-  `3a2ed8f828005706a91f55df9a33a202583c1fd0`.
+- Final head for operator handoff: `77eba58fe4ad651a8e586192d20b6d80894efd6b`.
+- Code head: `3a2ed8f828005706a91f55df9a33a202583c1fd0`; the final commit adds
+  the offline/live campaign configuration, runbook and this report.
 - Independent review of the exact final head: **not obtained**.
 - Merge: **NO** until independent review completes.
 
