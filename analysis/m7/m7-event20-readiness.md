@@ -161,5 +161,6 @@ Focused suites executed during development:
   `tests.test_m6_frame`, `tests.test_correction_accept`,
   `tests.test_campaign_guard`, `tests.test_dsh_campaign`,
   `tests.test_dsh_bridge`, `tests.test_dsh_pilot`, `tests.test_m7_diagnosis`.
-- One final full offline gate was run on the final integration state; its record
-  is in the pilot report.
+- One final full offline gate was run on the final integration state:
+  `20261121T152010Z-3847774f`, 4,420 ran / 4,384 executed / 36 skipped / 0
+  failures / 0 errors, 831.9 s, at the pilot-record commit `ad967428`.

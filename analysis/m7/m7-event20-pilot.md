@@ -16,10 +16,17 @@ the outcome.
 | Prefix blob-budget fix | `c06e3ea6c37336606b0e95d2d4545a2f19fb6d42` |
 | Stage-3 candidate worktree HEAD | `c06e3ea6c37336606b0e95d2d4545a2f19fb6d42` |
 | Trusted checker | `campaigns/eu4-m7-event20/accept.py` from the infrastructure checkout, importing `automation` from that checkout, never from the candidate |
+| Final integration head / full gate | `ad967428` / `20261121T152010Z-3847774f` (4,420 ran, 4,384 executed, 36 skipped, 0 failures, 0 errors, 831.9 s) |
 
 The checker was invoked against the candidate workspace; the candidate could
 edit `benchmark/**`, `analysis/m7/**`, `tests/**`, `progress.md` and `.local/**`.
 It could not edit the campaign, checker or trusted `automation` modules.
+
+The stage-3 candidate worktree is pinned at `c06e3ea6`. Two checker-only
+changes made after the launch (inferring alpha applicability for the original
+RGB8 attachment from the sealed target identity, and carrying the declared flag
+in new requests) are on the delivery head; they change no pixel or capture
+artifact. A replayed campaign should re-pin the candidate to the delivery head.
 
 ## Environment
 
