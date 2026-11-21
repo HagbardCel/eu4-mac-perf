@@ -419,6 +419,12 @@ def _run_locked(*, state: Path, workdir: Path, suite: dict, label, base_ref,
     defaults), so a compiler descendant that outlives the unittest child is
     outside the lock.  Timeout kills the child's process group to bound that
     window; a supervisor SIGKILL leaves the child itself as the lock holder.
+
+    Supported boundary: the timeout group kill covers the child and descendants
+    that remain in its process group.  A descendant that both escapes the group
+    (``start_new_session=True``) and inherits the child's stdout is outside the
+    group kill and can keep the supervisor's stdout drain open; such a tool must
+    redirect its stdio or be supervised separately.
     """
     run_id = (dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
               + "-" + uuid.uuid4().hex[:8])
