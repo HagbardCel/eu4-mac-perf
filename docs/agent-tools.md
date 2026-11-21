@@ -217,16 +217,16 @@ substitute for it.
 an explicit `unqualified` or `unsupported_state`, even when the two images are
 byte-identical.
 
-Reference isolation is structural. The renderer receives a separate,
+Provided-input isolation is structural. The renderer receives a separate,
 content-addressed replay-input package (`replay-input/replay-input.json` plus
 `blobs/<sha256>.*`) containing only authorised pre-draw state, shaders,
 uniforms, typed buffers, indices, captured texture blocks and sampler/render
 state. It never receives the frame directory, the live image path, the live
 digest or a copy of the target checkpoint. The comparison reference stays with
-the qualifier. `--control-out` must be outside the sealed capture tree and all
-of its ancestors; an output directory that overlaps that tree is refused as
-`unsafe_output_directory`, because a renderer can walk its working directory
-and the package ancestors. The package is a closed set: undeclared files,
+the qualifier. `--control-out` must not be inside the sealed capture root (the frame
+directory's parent) and must not be an ancestor of it; an output directory that
+overlaps that tree in either direction is refused as `unsafe_output_directory`,
+because a renderer can walk its working directory and the package ancestors. The package is a closed set: undeclared files,
 nested directories and symlinks are refused, and a symlinked receipt or
 artifact is not accepted as evidence. Pre-created `replay-input`/`renderer-run`
 symlinks and any that resolve inside the capture tree are refused, and the

@@ -71,6 +71,12 @@ if verified["package_sha256"] != request["input_package_sha256"]:
 package = verified["manifest_document"]
 expected = request["expected"]
 
+if mode == "env_probe":
+    if ("PWD" in os.environ or "OLDPWD" in os.environ
+            or os.environ.get("HOME") != str(Path.cwd())
+            or os.environ.get("TMPDIR") != str(Path.cwd())):
+        sys.exit(14)
+
 if mode == "copy_reference":
     # The control must not have any path to the post-draw reference.  Search
     # every directory it can reach from its working directory and package,
@@ -169,6 +175,7 @@ if mode == "wrong_stream":
     receipt["frame"]["event_stream_sha256"] = "b" * 64
 if mode == "api_metal":
     receipt["api"] = "metal"
+
 if mode == "wrong_checkpoint":
     receipt["checkpoint"]["event"] = 99
 if mode == "wrong_draw":
@@ -191,7 +198,11 @@ else:
         "algorithm": "ed25519",
         "value": gfx_ed25519.sign(signing_seed, canonical).hex(),
     }
+if mode == "bad_canonicalization":
+    receipt["signature"]["canonicalization"] = "unknown-canonicalisation"
 (out / "receipt.json").write_text(json.dumps(receipt, indent=2))
+if mode == "extra_package_file":
+    (package_dir / "extra.bin").write_bytes(b"unexpected")
 if mode == "no_artifact":
     artifact.unlink()
 if mode == "truncated":
@@ -648,6 +659,31 @@ class ControlQualificationTests(unittest.TestCase):
         self.assertFalse(value["qualified"])
         self.assertIn("frame seal is not authentic",
                       " ".join(value["qualification"]["reasons"]))
+
+    def test_the_renderer_environment_is_scrubbed(self):
+        value = self._qualify(mode="env_probe")
+        self.assertTrue(value["qualified"], value)
+
+    def test_an_unknown_receipt_canonicalisation_is_refused(self):
+        value = self._qualify(mode="bad_canonicalization")
+        self.assertFalse(value["qualified"])
+        self.assertIn("canonicalisation",
+                      " ".join(value["qualification"]["reasons"]))
+
+    def test_a_renderer_that_adds_a_package_file_is_refused(self):
+        value = self._qualify(mode="extra_package_file")
+        self.assertFalse(value["qualified"])
+        self.assertIn("package",
+                      " ".join(value["qualification"]["reasons"]))
+
+    def test_mutating_the_request_after_qualification_refuses_blame(self):
+        value = self._qualify()
+        self.assertTrue(qualification.attribution(value)["allowed"])
+        request = Path(value["qualification"]["request"]["path"])
+        document = json.loads(request.read_text())
+        document["nonce"] = "0" * 32
+        request.write_text(json.dumps(document))
+        self.assertFalse(qualification.attribution(value)["allowed"])
 
     def test_a_symlinked_artifact_is_refused(self):
         value = self._qualify(mode="symlink_artifact")

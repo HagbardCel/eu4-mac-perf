@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 
 EVIDENCE_SCHEMA = "gfx-gl-control-input-evidence/v1"
@@ -173,15 +174,10 @@ def _clear_covers(clear: dict, bit: int, width: int, height: int,
     flags = _int_or_none(clear.get("flags"))
     if flags is None or not (flags & bit):
         return False, "clear does not include this buffer"
-    if bit == GL_COLOR_BUFFER_BIT:
-        value = clear.get("color")
-        if not (isinstance(value, (list, tuple)) and len(value) == 4
-                and all(isinstance(item, (int, float))
-                        and not isinstance(item, bool) for item in value)):
-            return False, "clear colour value was not recorded"
-    elif bit == GL_DEPTH_BUFFER_BIT:
+    if bit == GL_DEPTH_BUFFER_BIT:
         value = clear.get("depth")
-        if not isinstance(value, (int, float)) or isinstance(value, bool):
+        if not isinstance(value, (int, float)) or isinstance(value, bool) \
+                or not math.isfinite(value):
             return False, "clear depth value was not recorded"
     elif bit == GL_STENCIL_BUFFER_BIT:
         value = clear.get("stencil")
@@ -203,15 +199,6 @@ def _clear_covers(clear: dict, bit: int, width: int, height: int,
     mask_ok, reason = mask_check(state)
     if not mask_ok:
         return False, reason
-    return True, ""
-
-
-def _colour_mask_ok(state: dict) -> tuple[bool, str]:
-    mask = state.get("color_mask")
-    if not isinstance(mask, (list, tuple)) or len(mask) != 4:
-        return False, "colour write mask was not recorded"
-    if list(mask) != [1, 1, 1, 1]:
-        return False, "colour write mask is not fully enabled"
     return True, ""
 
 
@@ -849,10 +836,10 @@ def build_package(*, frame_dir: Path, trace: dict, seal: dict, evidence: dict,
             resolved_prestate[label] = dict(record)
     manifest["prestate"] = resolved_prestate
 
-    # The colour seed is mandatory for a full-frame comparison; the evidence
-    # derivation refuses it only for a provably complete colour clear.
-    if (resolved_prestate.get("color") or {}).get("source") == "checkpoint" \
-            and (resolved_prestate["color"].get("path") or "") == "":
+    # The colour seed is mandatory for a full-frame comparison; a clear is not
+    # a substitute for the captured pre-draw image.
+    if (resolved_prestate.get("color") or {}).get("source") != "checkpoint" \
+            or (resolved_prestate["color"].get("path") or "") == "":
         raise ReplayInputError("missing_input_blob", "colour seed was not copied")
 
     draw_record = {
