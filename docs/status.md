@@ -20,16 +20,16 @@ history and must be read with its original run/seal identity.
 
 ### Capability snapshot
 
-As of this snapshot #241–#269 are merged. The technical findings of the harness review are closed: every
+As of this snapshot #241–#273 are merged. The technical findings of the harness review are closed: every
 harness-integrity finding has a disposition, the two scientific remainders are
-transferred to M7, and this closure PR is the only remaining remediation PR. Exact head SHAs, review
+transferred to M7. The archive PR is the only remaining remediation step; the only remaining engineering item is the M7 scientific follow-up #270. Exact head SHAs, review
 records and dependency order are in the
 [coverage matrix](../plans/harness-review/implementation.md), the
 [closure](../analysis/harness-remediation/closure.md), the
 [verification report](../analysis/harness-remediation/verification-20261121.md)
 and the [exact-head audit](../analysis/harness-remediation/audit-20261120.md).
 
-GitHub has no `APPROVE` review for #241–#269. The closure PRs #263–#268 have an
+GitHub has no `APPROVE` review for #241–#273. The closure PRs #263–#268 and #273 have an
 independent exact-head review comment; #251–#257 have no independent human exact-head review
 (Codex/audit verdict, author verification and CI, none of which are approvals); #241–#250 were reviewed by Codex/audit at earlier
 commits. Review comments are not `APPROVE` states because the only available
@@ -49,7 +49,7 @@ GitHub identity is the author and GitHub refuses self-approval.
 | Campaign lifecycle | **Merged; audit-reviewed** | #246 `8c17f779`, #249 `555447fb`, #250 `401d6863` and #256 `c403f06e`; per-session write roots, exactly-once reservations, terminal cleanup | Live wall-time measurement through restoration |
 | Metrics/documentation | **Merged; trials complete** | PR #251 `050f9272`; service unions/GPU unknown. Three paired A/B trials on sealed 904: 6/6 correct, 0 confirmed EU4 launches, 1 replay per arm, GPU `unknown`; median 7.525 s (full report) vs 7.575 s (compact), payload 6,195,746 vs 7,768 B. No wall-time improvement claimed | Interface payload is measured; model-reasoning time is outside the trial |
 | Authentic renderer parity | **Not established** | Latest authentic pilot localized [14, 15]; no accepted terrain correction. The 904 compressed/decoded comparison narrows the input question but does not assign the 4 pixels | Exact control equality at the first differing writer (M7) |
-| Harness integrity | **Closed** | #263 attribution recomputation, #264 ledger witness, #265 flood retry, #266 anchor/session-root hardening, #267 plugin unload, #268 clean-tree builds; full profile completes on baseline and candidate and is not split around any module | Worktree-scoped build serialization is an owned follow-up; one suite per worktree is the current gate policy |
+| Harness integrity | **Closed** | #263 attribution recomputation, #264 ledger witness, #265 flood retry, #266 anchor/session-root hardening, #267 plugin unload, #268 clean-tree builds, #273 worktree execution lock; #240 verified/closed. Final gate: 4,254 ran / 4,189 executed / 65 skipped / 0 failures / 0 errors at `758e2f56` | Only M7 scientific ownership (#270) remains; worktree lock boundaries are documented (orphan child after SIGKILL, cross-state-dir locator, `--cwd` scope) |
 
 ### Current authentic observations
 

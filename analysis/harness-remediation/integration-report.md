@@ -39,8 +39,8 @@ scientific blocker is closed; the definitive disposition is
 | #268 clean build dirs | `c3fbeb77` | `6ba77c05` | 11/11 clean tree |
 | #269 closure integration | `d3a0ce6b` | `fecff675` | merge-only; reviewed exact tree |
 
-Portable CI passed on every merged head. #263–#268 have an independent review
-comment at their exact heads; #251–#257 have no independent human exact-head review on
+Portable CI passed on every merged head. #263–#268 and #273 have an independent
+review comment at their exact heads; #251–#257 have no independent human exact-head review on
 GitHub (Codex/audit/author verification/CI only); #241–#250 were reviewed by
 Codex/audit at earlier commits. #269 is the merge-only integration of the five
 remaining reviewed heads. GitHub records the comments as `COMMENTED`, not
