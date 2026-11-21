@@ -18,6 +18,7 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from automation import gfx_ed25519
 from automation import gfx_gl_control_authorities as authorities
@@ -124,6 +125,9 @@ drawable = package["drawable"]
 if mode == "wrong_drawable":
     drawable = dict(drawable)
     drawable["samples"] = 4
+if mode == "missing_target_identity":
+    drawable = {key: value for key, value in drawable.items()
+                if key != "format_identity"}
 
 receipt = {
     "schema": "gfx-gl-control-receipt/v2",
@@ -456,6 +460,15 @@ class ControlQualificationTests(unittest.TestCase):
                 "stencil_bits": 8, "red_bits": 8, "green_bits": 8,
                 "blue_bits": 8, "alpha_bits": 8, "double_buffer": True,
                 "stereo": False, "drawn_framebuffer_binding": 0,
+                "format_identity": {
+                    "source": "test-cgl-pixel-format-query",
+                    "color_format": "RGBA8",
+                    "depth_format": "DEPTH_COMPONENT32",
+                    "stencil_format": "STENCIL_INDEX8",
+                    "render_target_path": "default-double-buffered-back",
+                    "samples": 0,
+                    "sample_buffers": 0,
+                },
             }
         trace_path = self.frame / "frame-trace.json"
         trace_path.write_text(json.dumps({
@@ -816,6 +829,30 @@ class ControlQualificationTests(unittest.TestCase):
         self.assertTrue(any("drawable" in item
                             for item in value["missing_observation"]))
 
+    def test_an_exact_image_without_drawable_format_identity_is_unqualified(self):
+        drawable = {
+            "samples": 0, "sample_buffers": 0, "depth_bits": 32,
+            "stencil_bits": 8, "red_bits": 8, "green_bits": 8,
+            "blue_bits": 8, "alpha_bits": 8, "double_buffer": True,
+            "stereo": False, "drawn_framebuffer_binding": 0,
+        }
+        self._build_frame(drawable=drawable)
+        value = self._qualify()
+        self.assertFalse(value["qualified"])
+        self.assertFalse(value["metal_blame_allowed"])
+        self.assertEqual(value["status"], "unqualified")
+        self.assertEqual(value["qualification"]["drawable_equivalence"],
+                         "unproven")
+        self.assertTrue(any("internal pixel/depth/stencil" in item
+                            for item in value["missing_observation"]))
+
+    def test_a_control_target_without_the_captured_identity_is_refused(self):
+        value = self._qualify(mode="missing_target_identity")
+        self.assertFalse(value["qualified"])
+        self.assertFalse(value["metal_blame_allowed"])
+        self.assertTrue(any("internal-format identity" in item
+                            for item in value["qualification"]["reasons"]))
+
     def test_an_exact_image_with_missing_prestate_is_refused(self):
         # Keep the colour seed but remove the depth/stencil clear history and
         # put a writer after the clear, so depth cannot be proven.
@@ -1065,6 +1102,33 @@ class ControlQualificationTests(unittest.TestCase):
         value["qualification"]["identity"] = "not-a-dict"
         self.assertFalse(qualification.attribution(value)["allowed"])
 
+    def test_attribution_refuses_a_non_object_qualification(self):
+        for malformed in (None, "qualified", 1, []):
+            with self.subTest(value=repr(malformed)):
+                result = qualification.attribution(malformed)
+                self.assertFalse(result["allowed"])
+                self.assertIn("malformed", result["reason"])
+
+    def test_attribution_refuses_a_replay_input_error_without_raising(self):
+        value = self._qualify()
+        self.assertTrue(qualification.attribution(value)["allowed"])
+        with mock.patch.object(
+                qualification, "derive_evidence",
+                side_effect=replay_input.ReplayInputError(
+                    "unclassified_event", "event at position 3")):
+            result = qualification.attribution(value)
+        self.assertFalse(result["allowed"])
+
+    def test_attribution_refuses_an_authentication_error_without_raising(self):
+        value = self._qualify()
+        self.assertTrue(qualification.attribution(value)["allowed"])
+        with mock.patch.object(
+                qualification, "_authenticate",
+                side_effect=replay_input.ReplayInputError(
+                    "invalid_extent", "4x4")):
+            result = qualification.attribution(value)
+        self.assertFalse(result["allowed"])
+
     # -- CLI and adapter ------------------------------------------------
 
     def test_cli_comparison_only_reports_exact_without_qualification(self):
@@ -1222,12 +1286,7 @@ class EvidenceDerivationTests(unittest.TestCase):
             resource="fb:0", width=4, height=4)
 
     def test_a_complete_clear_history_proves_depth_and_stencil(self):
-        evidence = self._derive(drawable={
-            "samples": 0, "sample_buffers": 0, "depth_bits": 32,
-            "stencil_bits": 8, "red_bits": 8, "green_bits": 8,
-            "blue_bits": 8, "alpha_bits": 8, "double_buffer": True,
-            "stereo": False, "drawn_framebuffer_binding": 0,
-        })
+        evidence = self._derive(drawable=self._drawable())
         self.assertEqual(evidence["status"], "proven", evidence)
         self.assertEqual(evidence["prestate"]["depth"]["source"],
                          "clear_history")
@@ -1241,12 +1300,7 @@ class EvidenceDerivationTests(unittest.TestCase):
             "target": {"framebuffer": 0, "width": 4, "height": 4},
             "draw": {"mode": 4, "count": 6, "indexed": True},
         })
-        evidence = self._derive(drawable={
-            "samples": 0, "sample_buffers": 0, "depth_bits": 32,
-            "stencil_bits": 8, "red_bits": 8, "green_bits": 8,
-            "blue_bits": 8, "alpha_bits": 8, "double_buffer": True,
-            "stereo": False, "drawn_framebuffer_binding": 0,
-        }, events=events)
+        evidence = self._derive(drawable=self._drawable(), events=events)
         self.assertEqual(evidence["status"], "missing")
         self.assertTrue(any("depth" in item
                             for item in evidence["missing"]))
@@ -1255,38 +1309,66 @@ class EvidenceDerivationTests(unittest.TestCase):
         events = copy.deepcopy(self.events)
         events[0]["state"]["scissor"] = {"enabled": True,
                                          "box": [0, 0, 2, 2]}
-        evidence = self._derive(drawable={
-            "samples": 0, "sample_buffers": 0, "depth_bits": 32,
-            "stencil_bits": 8, "red_bits": 8, "green_bits": 8,
-            "blue_bits": 8, "alpha_bits": 8, "double_buffer": True,
-            "stereo": False, "drawn_framebuffer_binding": 0,
-        }, events=events)
+        evidence = self._derive(drawable=self._drawable(), events=events)
         self.assertEqual(evidence["status"], "missing")
         self.assertTrue(any("scissor" in item
                             for item in evidence["missing"]))
 
+    def test_a_negative_scissor_origin_that_shortens_the_far_edge_is_partial(self):
+        # Width equals the target extent, but the right edge stops at 2 of 4.
+        events = copy.deepcopy(self.events)
+        events[0]["state"]["scissor"] = {"enabled": True,
+                                         "box": [-2, 0, 4, 4]}
+        evidence = self._derive(drawable=self._drawable(), events=events)
+        self.assertEqual(evidence["status"], "missing", evidence)
+        self.assertIsNone(evidence["prestate"]["depth"])
+        self.assertIsNone(evidence["prestate"]["stencil"])
+        self.assertTrue(any("scissor" in item
+                            for item in evidence["missing"]))
+
+    def test_a_negative_scissor_origin_that_reaches_the_far_edge_covers(self):
+        events = copy.deepcopy(self.events)
+        events[0]["state"]["scissor"] = {"enabled": True,
+                                         "box": [-2, -2, 6, 6]}
+        evidence = self._derive(drawable=self._drawable(), events=events)
+        self.assertEqual(evidence["status"], "proven", evidence)
+
+    def test_a_positive_scissor_offset_is_partial(self):
+        events = copy.deepcopy(self.events)
+        events[0]["state"]["scissor"] = {"enabled": True,
+                                         "box": [1, 0, 4, 4]}
+        evidence = self._derive(drawable=self._drawable(), events=events)
+        self.assertEqual(evidence["status"], "missing", evidence)
+
+    def test_a_partial_depth_stencil_clear_cannot_authorize_uniform_state(self):
+        events = copy.deepcopy(self.events)
+        events[0]["flags"] = 0x100 | 0x400  # GL_DEPTH_BUFFER_BIT | STENCIL
+        events[0]["state"]["scissor"] = {"enabled": True,
+                                         "box": [0, 0, 2, 2]}
+        evidence = self._derive(drawable=self._drawable(), events=events)
+        self.assertEqual(evidence["status"], "missing", evidence)
+        self.assertIsNone(evidence["prestate"]["depth"])
+        self.assertIsNone(evidence["prestate"]["stencil"])
+        self.assertFalse(any((record or {}).get("source") == "clear_history"
+                             for record in (evidence["prestate"]["depth"],
+                                            evidence["prestate"]["stencil"])))
+
+    def test_an_unscissored_full_clear_covers(self):
+        events = copy.deepcopy(self.events)
+        events[0]["state"]["scissor"] = {"enabled": False,
+                                         "box": [0, 0, 1, 1]}
+        evidence = self._derive(drawable=self._drawable(), events=events)
+        self.assertEqual(evidence["status"], "proven", evidence)
+        self.assertEqual(evidence["prestate"]["depth"]["source"],
+                         "clear_history")
+
     def test_an_unrecorded_clear_mask_is_not_assumed(self):
         events = copy.deepcopy(self.events)
         events[0].pop("state")
-        evidence = self._derive(drawable={
-            "samples": 0, "sample_buffers": 0, "depth_bits": 32,
-            "stencil_bits": 8, "red_bits": 8, "green_bits": 8,
-            "blue_bits": 8, "alpha_bits": 8, "double_buffer": True,
-            "stereo": False, "drawn_framebuffer_binding": 0,
-        }, events=events)
+        evidence = self._derive(drawable=self._drawable(), events=events)
         self.assertEqual(evidence["status"], "missing")
         self.assertTrue(any("mask state was not recorded" in item
                             for item in evidence["missing"]))
-
-    def _drawable(self, **overrides):
-        value = {
-            "samples": 0, "sample_buffers": 0, "depth_bits": 32,
-            "stencil_bits": 8, "red_bits": 8, "green_bits": 8,
-            "blue_bits": 8, "alpha_bits": 8, "double_buffer": True,
-            "stereo": False, "drawn_framebuffer_binding": 0,
-        }
-        value.update(overrides)
-        return value
 
     def _captured_depth_stencil(self, events, *, width=4, height=4):
         import struct
@@ -1354,12 +1436,7 @@ class EvidenceDerivationTests(unittest.TestCase):
         events = copy.deepcopy(self.events)
         events[1]["default_checkpoint"]["file"] = "reference.bin"
         events[1]["default_checkpoint"]["sha256"] = self.reference_sha
-        evidence = self._derive(drawable={
-            "samples": 0, "sample_buffers": 0, "depth_bits": 32,
-            "stencil_bits": 8, "red_bits": 8, "green_bits": 8,
-            "blue_bits": 8, "alpha_bits": 8, "double_buffer": True,
-            "stereo": False, "drawn_framebuffer_binding": 0,
-        }, events=events)
+        evidence = self._derive(drawable=self._drawable(), events=events)
         self.assertEqual(evidence["status"], "unsupported_state")
         self.assertTrue(any("reference output" in item
                             for item in evidence["unsupported"]))
@@ -1371,9 +1448,27 @@ class EvidenceDerivationTests(unittest.TestCase):
             "stencil_bits": 8, "red_bits": 8, "green_bits": 8,
             "blue_bits": 8, "alpha_bits": 8, "double_buffer": True,
             "stereo": False, "drawn_framebuffer_binding": 0,
+            "format_identity": {
+                "source": "test-cgl-pixel-format-query",
+                "color_format": "RGBA8",
+                "depth_format": "DEPTH_COMPONENT32",
+                "stencil_format": "STENCIL_INDEX8",
+                "render_target_path": "default-double-buffered-back",
+                "samples": 0,
+                "sample_buffers": 0,
+            },
         }
         value.update(overrides)
         return value
+
+    def test_a_captured_drawable_without_a_format_identity_is_unproven(self):
+        drawable = self._drawable()
+        drawable.pop("format_identity")
+        evidence = self._derive(drawable=drawable)
+        self.assertEqual(evidence["status"], "missing", evidence)
+        self.assertEqual(evidence["drawable_equivalence"], "unproven")
+        self.assertTrue(any("internal pixel/depth/stencil" in item
+                            for item in evidence["missing"]))
 
     def test_a_draw_without_logic_op_state_is_refused(self):
         events = copy.deepcopy(self.events)

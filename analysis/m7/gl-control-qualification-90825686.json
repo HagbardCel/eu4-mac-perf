@@ -935,5 +935,63 @@
         "mean_max_channel_error": 0.0
       }
     ]
+  },
+  "corrections": {
+    "date": "2026-11-21",
+    "reason": "The report initially mislabelled the pre-draw seed and treated the live draw effect as a renderer differential, and it described the intermediate commits as merged to main. These are corrected here; the pixel measurements are unchanged.",
+    "pre_draw_seed": {
+      "checkpoint_event": 18,
+      "sha256": "137637b6a69b02841cdd04a748ab6cdcb739299bd10b934b2e1bf4ea571524ba",
+      "file": "seed-137637b6a69b02841cdd04a748ab6cdcb739299bd10b934b2e1bf4ea571524ba.bin",
+      "note": "Checkpoint 17 carries the same bytes; draw 17 left the framebuffer unchanged. This is the selected draw's pre-draw seed."
+    },
+    "post_draw_reference": {
+      "checkpoint_event": 19,
+      "sha256": "ab379ee45973b64ad7d2cd8ce3094b76f086ce71389823fccdcbe842afaf494c",
+      "file": "default-checkpoint-ab379ee45973b64ad7d2cd8ce3094b76f086ce71389823fccdcbe842afaf494c.bin",
+      "note": "This is the live post-draw reference used by the GL-control comparison, not the seal's final frame-reference digest (c89481747f63af40face7aa4a3cb8f7b2b970d375de8a6af7c73d1948353a0d5)."
+    },
+    "draw_effect_18_to_19": {
+      "mismatched_pixels": 29144,
+      "max_channel_error": 184,
+      "alpha_different_pixels": 0,
+      "first_differing_pixel": {
+        "x": 326,
+        "y": 0
+      },
+      "note": "The live draw's own effect, not a renderer differential and not the GL-control residual."
+    },
+    "gl_control_residual": {
+      "mismatched_pixels": 347,
+      "max_channel_error": 10,
+      "alpha_different_pixels": 0,
+      "note": "Unchanged. Produced by the pre-fix reviewed driver identified in qualification.renderer_sha256."
+    },
+    "merge_claims": {
+      "main_baseline": "1ebaddd640f5f2cec6d137de1b130b9e3ba59f66",
+      "pr": 279,
+      "branch": "m7/final-integration",
+      "note": "PR1/PR2/PR3 commits are integrated on #279, not merged to main. c15438bc is a commit on that branch, not the merged main."
+    },
+    "current_gate_assessment": {
+      "evidence_status": "missing",
+      "proven": false,
+      "drawable_equivalence": "unproven",
+      "missing": [
+        "the live default drawable's internal pixel/depth/stencil component formats and render-target path were not captured; the control target's equivalence is unproven",
+        "reduce the residual by varying one captured input at a time"
+      ],
+      "note": "The capture proves captured-state completeness (samples, bit depths, extent, pre-draw colour and depth seeds) but not that the offscreen control target is identical to the live drawable. The corrected gate therefore stops before executing the renderer for this capture. The historical 347-pixel comparison remains a valid offline diagnostic; it is not an authorized control under the corrected gate, and metal_blame_allowed stays false."
+    },
+    "metal_replay": {
+      "status": "incomplete",
+      "directory": ".local/m7/pr4/shadow",
+      "artifact_count": 91,
+      "shader_receipt": "shadow/shader-receipt.json",
+      "result_image": null,
+      "statistics": null,
+      "note": "Only translated shader artifacts, a shader receipt and a checkpoint request exist. No Metal result image for draw 18 / checkpoint 19 was produced, so no same-seal Metal statistic is available or claimed."
+    },
+    "eu4_launch_count": 3
   }
 }

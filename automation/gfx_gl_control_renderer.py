@@ -53,6 +53,7 @@ _INTERNAL_FORMATS = {
     "DXT5": 0x83F3,
 }
 _TARGETS = {"2D": 0x0DE1}
+_POLYGON_MODES = {0x1B00, 0x1B01, 0x1B02}  # POINT, LINE, FILL
 
 
 class RendererError(RuntimeError):
@@ -193,8 +194,18 @@ def _ctl_lines(manifest: dict, package_dir: Path) -> list[str]:
     lines.append(f"state cull_mode 0x{_enum(cull.get('mode')):x}")
     lines.append(f"state front_face 0x{_enum(cull.get('front')):x}")
     polygon = state.get("polygon") or {}
-    modes = polygon.get("mode") or ["0x1b02", "0x1b02"]
-    lines.append(f"state polygon_mode 0x{_enum(modes[0]):x}")
+    modes = polygon.get("mode")
+    if not (isinstance(modes, (list, tuple)) and len(modes) == 2):
+        raise RendererError(
+            "the captured polygon mode is not a front/back pair")
+    front_mode = _enum(modes[0])
+    back_mode = _enum(modes[1])
+    for label, mode in (("front", front_mode), ("back", back_mode)):
+        if mode not in _POLYGON_MODES:
+            raise RendererError(
+                f"unsupported captured {label} polygon mode 0x{mode:x}")
+    lines.append(f"state polygon_mode_front 0x{front_mode:x}")
+    lines.append(f"state polygon_mode_back 0x{back_mode:x}")
     lines.append(
         f"state polygon_offset_fill {1 if polygon.get('offset_fill') else 0}")
     lines.append(
@@ -291,8 +302,18 @@ def _ctl_lines(manifest: dict, package_dir: Path) -> list[str]:
         raise RendererError(
             "indexed draws whose captured vertices do not start at zero are "
             "not supported")
+    samplers: list[tuple[str, int]] = []
     for uniform in program["uniforms"]:
         if uniform.get("type") == "sampler":
+            name = uniform.get("name")
+            unit = uniform.get("unit")
+            if not isinstance(name, str) or not name:
+                raise RendererError(
+                    "a captured sampler uniform has no name")
+            if isinstance(unit, bool) or not isinstance(unit, int) or unit < 0:
+                raise RendererError(
+                    f"sampler {name} has no captured texture unit")
+            samplers.append((name, unit))
             continue
         lines.append(
             "uniform %s %s %d %d %s"
@@ -300,6 +321,15 @@ def _ctl_lines(manifest: dict, package_dir: Path) -> list[str]:
                int(uniform.get("components") or 4),
                int(uniform.get("elements") or 1),
                _package_path(manifest, package_dir, uniform["path"])))
+    texture_units = {int(texture["unit"]) for texture in manifest["textures"]}
+    for name, unit in samplers:
+        if unit not in texture_units:
+            raise RendererError(
+                f"sampler {name} names texture unit {unit}, which has no "
+                "captured texture")
+        # One line per active sampler uniform: texture uploads are
+        # deduplicated by unit, but uniform bindings are not.
+        lines.append(f"sampler {name} {unit}")
     for texture in manifest["textures"]:
         unit = int(texture["unit"])
         target = _TARGETS.get(str(texture.get("target")))

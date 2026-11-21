@@ -84,6 +84,53 @@ class Ed25519Tests(unittest.TestCase):
                 self.assertFalse(gfx_ed25519.verify(
                     bad_public, b"payload", bad_signature))
 
+    def test_off_curve_and_non_canonical_points_are_refused(self):
+        seed = bytes.fromhex(_VECTORS[0][0])
+        public = bytes.fromhex(_VECTORS[0][1])
+        signature = gfx_ed25519.sign(seed, b"payload")
+        # y=2 has no square root of x^2; y=p is not a canonical field element.
+        off_curve = (2).to_bytes(32, "little")
+        non_canonical = (gfx_ed25519.Q).to_bytes(32, "little")
+        self.assertFalse(gfx_ed25519.verify(off_curve, b"payload", signature))
+        self.assertFalse(gfx_ed25519.verify(
+            non_canonical, b"payload", signature))
+        # A non-canonical R (y=p) must also fail even with a valid key.
+        non_canonical_r = non_canonical + signature[32:]
+        self.assertFalse(gfx_ed25519.verify(public, b"payload",
+                                            non_canonical_r))
+
+    def test_small_order_points_cannot_forge_a_receipt(self):
+        # The classic identity-key forgery: A = identity, R = identity, S = 0
+        # satisfies the cofactorless equation for *every* message unless the
+        # verifier rejects small-order points.
+        identity = bytes.fromhex(
+            "0100000000000000000000000000000000000000000000000000000000000000")
+        order_two = bytes.fromhex(
+            "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f")
+        order_four = bytes(32)
+        forgery = identity + bytes(32)
+        for point in (identity, order_two, order_four):
+            with self.subTest(point=point.hex()[:8]):
+                self.assertFalse(gfx_ed25519.verify(
+                    point, b"arbitrary receipt", forgery))
+        # A valid key and signature with a small-order R is refused too.
+        seed = bytes.fromhex(_VECTORS[0][0])
+        public = bytes.fromhex(_VECTORS[0][1])
+        signature = gfx_ed25519.sign(seed, b"payload")
+        self.assertFalse(gfx_ed25519.verify(
+            public, b"payload", order_two + signature[32:]))
+
+    def test_invalid_scalar_encodings_are_refused(self):
+        seed = bytes.fromhex(_VECTORS[0][0])
+        public = bytes.fromhex(_VECTORS[0][1])
+        signature = gfx_ed25519.sign(seed, b"payload")
+        encoded_r = signature[:32]
+        for scalar in (gfx_ed25519.L, gfx_ed25519.L + 1, (1 << 256) - 1):
+            with self.subTest(scalar=scalar):
+                forged = encoded_r + scalar.to_bytes(32, "little")
+                self.assertFalse(gfx_ed25519.verify(public, b"payload",
+                                                    forged))
+
     def test_a_receipt_like_body_round_trips(self):
         seed = bytes(range(32))
         public = gfx_ed25519.derive_public_key(seed)

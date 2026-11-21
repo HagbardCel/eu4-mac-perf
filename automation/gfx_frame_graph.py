@@ -645,8 +645,13 @@ def _clear_coverage(event: dict, writes: list[str], width,
             box = scissor.get("box")
             try:
                 x, y, w, h = (int(value) for value in box)
-                full_extent = x <= 0 and y <= 0 and w >= int(width or 0) \
-                    and h >= int(height or 0)
+                # Endpoint coverage: a negative origin moves the far edge
+                # left/up, so the box's width alone cannot prove full extent.
+                full_extent = (
+                    int(width or 0) > 0 and int(height or 0) > 0
+                    and x <= 0 and y <= 0
+                    and x + w >= int(width or 0)
+                    and y + h >= int(height or 0))
             except (TypeError, ValueError):
                 full_extent = False
         else:

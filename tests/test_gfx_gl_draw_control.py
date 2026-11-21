@@ -115,6 +115,12 @@ class Package:
             })
         uniform_records = []
         for uniform in uniforms:
+            if uniform.get("type") == "sampler":
+                uniform_records.append({
+                    "name": uniform["name"], "type": "sampler",
+                    "unit": uniform["unit"],
+                })
+                continue
             record = self.blob("uniform", "bin", uniform["data"])
             uniform_records.append({
                 "name": uniform["name"], "type": "float",
@@ -599,6 +605,102 @@ class DrawControlTests(unittest.TestCase):
         receipt, artifact, code = self._run(manifest)
         self.assertEqual(code, 0, receipt)
         self.assertEqual(artifact.read_bytes(), GREEN * 16)
+
+    def test_two_sampler_uniforms_on_one_unit_are_both_bound(self):
+        red_rgba8 = bytes([255, 0, 0, 255]) * 16
+        blue_rgba8 = bytes([0, 0, 255, 255]) * 16
+        vertex = (b"#version 120\nattribute vec2 in_POSITION;\n"
+                  b"void main(){ gl_Position = vec4(in_POSITION, 0.0, 1.0); }\n")
+        pixel = (b"#version 120\nuniform sampler2D texA;\n"
+                 b"uniform sampler2D texB;\n"
+                 b"void main(){ gl_FragColor = "
+                 b"texture2D(texA, gl_FragCoord.xy / vec2(4.0, 4.0)) + "
+                 b"texture2D(texB, gl_FragCoord.xy / vec2(4.0, 4.0)); }\n")
+        package = self._package()
+        prestate = {
+            "color": self._color_seed(package, BLUE * 16),
+            "depth": {"source": "clear_history", "event": 7, "value": 1.0,
+                      "coverage": "full"},
+            "stencil": {"source": "clear_history", "event": 7, "value": 0,
+                        "coverage": "full"},
+        }
+        manifest = package.build(
+            shaders=(vertex, pixel),
+            attributes=[{"name": "in_POSITION", "data": _quad()}],
+            uniforms=[
+                {"name": "texA", "type": "sampler", "unit": 1},
+                {"name": "texB", "type": "sampler", "unit": 1},
+            ],
+            textures=[
+                {"unit": 0, "sampler_name": "unused0", "levels": [{
+                    "width": 4, "height": 4, "internal_format": "RGBA8",
+                    "compressed": False, "data": blue_rgba8,
+                    "row_stride": 16}]},
+                {"unit": 1, "sampler_name": "texA", "levels": [{
+                    "width": 4, "height": 4, "internal_format": "RGBA8",
+                    "compressed": False, "data": red_rgba8,
+                    "row_stride": 16}]},
+            ],
+            state=_state(), prestate=prestate)
+        receipt, artifact, code = self._run(manifest)
+        self.assertEqual(code, 0, receipt)
+        self.assertEqual(receipt["execution"], "completed", receipt)
+        # Both uniforms must sample unit 1 (red).  If one is left at its
+        # linked default of unit 0 it samples blue, producing magenta.
+        self.assertEqual(artifact.read_bytes(), RED * 16)
+        control = (self.root / "out" / "control.ctl").read_text()
+        self.assertIn("sampler texA 1", control)
+        self.assertIn("sampler texB 1", control)
+
+    def test_front_and_back_polygon_modes_are_applied_independently(self):
+        vertex = (b"#version 120\nattribute vec2 in_POSITION;\n"
+                  b"void main(){ gl_Position = vec4(in_POSITION, 0.0, 1.0); }\n")
+        pixel = (b"#version 120\nvoid main(){ gl_FragColor = "
+                 b"vec4(1.0, 0.0, 0.0, 1.0); }\n")
+        # Clockwise in window coordinates, so the triangle is back-facing
+        # under the default GL_CCW front face; it contains the centre pixel.
+        positions = struct.pack("<6f", -1.0, -1.0, 1.0, 2.0, 2.0, -1.0)
+
+        def render(front, back, out_name):
+            package_root = self.root / "package"
+            if package_root.exists():
+                import shutil
+                shutil.rmtree(package_root)
+            package = Package(package_root)
+            state = _state()
+            state["cull"] = {"enabled": False, "mode": "0x405",
+                             "front": "0x901"}
+            state["polygon"] = {"mode": [front, back], "offset_fill": False,
+                                "offset_factor": 0, "offset_units": 0}
+            prestate = {
+                "color": self._color_seed(package, BLUE * 16),
+                "depth": {"source": "clear_history", "event": 7,
+                          "value": 1.0, "coverage": "full"},
+                "stencil": {"source": "clear_history", "event": 7, "value": 0,
+                            "coverage": "full"},
+            }
+            manifest = package.build(
+                shaders=(vertex, pixel),
+                attributes=[{"name": "in_POSITION", "data": positions}],
+                state=state, prestate=prestate)
+            receipt, artifact, code = self._run(
+                manifest, out=self.root / out_name / "out")
+            self.assertEqual(code, 0, receipt)
+            self.assertEqual(receipt["execution"], "completed", receipt)
+            return artifact.read_bytes(), (
+                self.root / out_name / "out" / "control.ctl").read_text()
+
+        filled, filled_ctl = render("0x1b02", "0x1b02", "fill")
+        outlined, outlined_ctl = render("0x1b02", "0x1b01", "outline")
+        centre = (2 * 4 + 2) * 4
+        self.assertEqual(filled[centre:centre + 4], RED)
+        # Back mode LINE must leave the interior at the pre-draw seed.
+        self.assertEqual(outlined[centre:centre + 4], BLUE)
+        self.assertNotEqual(outlined, filled)
+        self.assertIn("state polygon_mode_front 0x1b02", filled_ctl)
+        self.assertIn("state polygon_mode_back 0x1b02", filled_ctl)
+        self.assertIn("state polygon_mode_front 0x1b02", outlined_ctl)
+        self.assertIn("state polygon_mode_back 0x1b01", outlined_ctl)
 
     def test_a_captured_drawable_extent_mismatch_is_refused(self):
         drawable = {"samples": 0, "sample_buffers": 0, "depth_bits": 32,

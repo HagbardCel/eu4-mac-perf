@@ -115,6 +115,11 @@ typedef struct {
 } texture_unit;
 
 typedef struct {
+    char name[CTL_NAME];
+    int unit;
+} sampler_binding;
+
+typedef struct {
     char reference[CTL_PATH];
     unsigned target;
     int width;
@@ -168,6 +173,8 @@ typedef struct {
     int attribute_count;
     uniform_record uniforms[MAX_UNIFORMS];
     int uniform_count;
+    sampler_binding samplers[MAX_UNIFORMS];
+    int sampler_count;
     texture_unit textures[MAX_TEXTURES];
     int texture_count;
     texture_level levels[MAX_LEVELS];
@@ -383,7 +390,12 @@ static void parse_ctl(const char *path) {
             else if (strcmp(field, "cull") == 0) g.cull_enabled = parsed;
             else if (strcmp(field, "cull_mode") == 0) g.cull_mode = parse_unsigned(value);
             else if (strcmp(field, "front_face") == 0) g.front_face = parse_unsigned(value);
-            else if (strcmp(field, "polygon_mode") == 0) g.polygon_mode[0] = g.polygon_mode[1] = parsed;
+            else if (strcmp(field, "polygon_mode") == 0) {
+                g.polygon_mode[0] = parsed;
+                g.polygon_mode[1] = parsed;
+            }
+            else if (strcmp(field, "polygon_mode_front") == 0) g.polygon_mode[0] = parsed;
+            else if (strcmp(field, "polygon_mode_back") == 0) g.polygon_mode[1] = parsed;
             else if (strcmp(field, "polygon_offset_fill") == 0) g.polygon_offset_fill = parsed;
             else if (strcmp(field, "polygon_offset_factor") == 0) g.polygon_offset_factor = (float)atof(value);
             else if (strcmp(field, "polygon_offset_units") == 0) g.polygon_offset_units = (float)atof(value);
@@ -466,6 +478,14 @@ static void parse_ctl(const char *path) {
             item->components = atoi(strtok_r(NULL, " \t\r\n", &save));
             item->elements = atoi(strtok_r(NULL, " \t\r\n", &save));
             copy_path(item->path, sizeof(item->path), strtok_r(NULL, "\r\n", &save));
+        } else if (strcmp(key, "sampler") == 0) {
+            if (g.sampler_count >= MAX_UNIFORMS) die("too many sampler bindings", NULL);
+            sampler_binding *item = &g.samplers[g.sampler_count++];
+            char *name = strtok_r(NULL, " \t\r\n", &save);
+            char *unit = strtok_r(NULL, " \t\r\n", &save);
+            if (name == NULL || unit == NULL) die("malformed sampler record", NULL);
+            copy_path(item->name, sizeof(item->name), name);
+            item->unit = atoi(unit);
         } else if (strcmp(key, "texture") == 0) {
             if (g.texture_count >= MAX_TEXTURES) die("too many textures", NULL);
             texture_unit *item = &g.textures[g.texture_count++];
@@ -973,13 +993,36 @@ int main(int argc, char **argv) {
         }
         free(data);
     }
-    for (int i = 0; i < g.texture_count; i++) {
-        GLint location = glGetUniformLocation(program, g.textures[i].sampler);
-        if (location < 0) {
-            add_missing("a captured sampler uniform is not active");
-            continue;
+    if (g.sampler_count > 0) {
+        for (int i = 0; i < g.sampler_count; i++) {
+            sampler_binding *item = &g.samplers[i];
+            int unit_captured = 0;
+            for (int j = 0; j < g.texture_count; j++) {
+                if (g.textures[j].unit == item->unit) unit_captured = 1;
+            }
+            if (!unit_captured) {
+                add_missing("a captured sampler uniform names an untracked texture unit");
+                continue;
+            }
+            GLint location = glGetUniformLocation(program, item->name);
+            if (location < 0) {
+                add_missing("a captured sampler uniform is not active");
+                continue;
+            }
+            glUniform1i(location, item->unit);
         }
-        glUniform1i(location, g.textures[i].unit);
+    } else {
+        /* Legacy control files carry the sampler name on the texture record.
+           New packages always emit one explicit sampler line per active
+           uniform, so deduplicated texture uploads cannot drop a binding. */
+        for (int i = 0; i < g.texture_count; i++) {
+            GLint location = glGetUniformLocation(program, g.textures[i].sampler);
+            if (location < 0) {
+                add_missing("a captured sampler uniform is not active");
+                continue;
+            }
+            glUniform1i(location, g.textures[i].unit);
+        }
     }
     if (g.unsupported) {
         write_unsupported(out_dir);
@@ -1031,7 +1074,16 @@ int main(int argc, char **argv) {
     } else {
         glDisable(GL_CULL_FACE);
     }
-    glPolygonMode(GL_FRONT_AND_BACK, (GLenum)g.polygon_mode[0]);
+    if (g.polygon_mode[0] < GL_POINT || g.polygon_mode[0] > GL_FILL ||
+        g.polygon_mode[1] < GL_POINT || g.polygon_mode[1] > GL_FILL) {
+        add_missing("an unsupported front/back polygon mode was captured");
+    } else {
+        /* The captured front and back modes are distinct state.  Applying one
+           value to GL_FRONT_AND_BACK would silently fill back-facing wireframe
+           geometry. */
+        glPolygonMode(GL_FRONT, (GLenum)g.polygon_mode[0]);
+        glPolygonMode(GL_BACK, (GLenum)g.polygon_mode[1]);
+    }
     if (g.polygon_offset_fill) {
         glEnable(GL_POLYGON_OFFSET_FILL);
         glPolygonOffset(g.polygon_offset_factor, g.polygon_offset_units);
@@ -1063,6 +1115,11 @@ int main(int argc, char **argv) {
     }
     if (g.state_srgb) glEnable(GL_FRAMEBUFFER_SRGB);
     else glDisable(GL_FRAMEBUFFER_SRGB);
+
+    if (g.unsupported) {
+        write_unsupported(out_dir);
+        return 0;
+    }
 
     GLuint attribute_buffers[MAX_ATTRIBUTES];
     memset(attribute_buffers, 0, sizeof(attribute_buffers));

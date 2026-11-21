@@ -138,18 +138,21 @@ def _last_writer(events: list[dict], position: int,
 
 
 def _box_covers_full_framebuffer(box, width: int, height: int) -> bool:
+    """Whether a scissor box includes the whole target rectangle.
+
+    Coverage is decided by the clipped endpoints, not by the box's width: a
+    negative origin shifts the right/bottom edge left/up, so ``w >= width``
+    alone would accept a box that misses the far columns or rows.
+    """
+    if width <= 0 or height <= 0:
+        return False
     if not isinstance(box, (list, tuple)) or len(box) != 4:
         return False
     try:
         x, y, w, h = (int(item) for item in box)
     except (TypeError, ValueError):
         return False
-    return x <= 0 and y <= 0 and w >= width and h >= height
-
-
-def _clear_state(clear: dict) -> dict | None:
-    state = clear.get("state")
-    return state if isinstance(state, dict) else None
+    return x <= 0 and y <= 0 and x + w >= width and y + h >= height
 
 
 def _clear_state(clear: dict) -> dict | None:
@@ -326,6 +329,39 @@ def _state_problems(draw_event: int, state) -> list[str]:
     return problems
 
 
+_DRAWABLE_FORMAT_IDENTITY_FIELDS = (
+    "source", "color_format", "depth_format", "stencil_format",
+    "render_target_path")
+
+
+def _format_identity(record: dict) -> dict | None:
+    """The live drawable's internal-format identity, if it was captured.
+
+    Bit depths alone do not prove that an offscreen control target is the same
+    drawable: the window system's internal colour/depth formats and the
+    render-target path also decide filtering and depth-comparison rounding.
+    Only an explicit, complete identity record is accepted as proven.
+    """
+    identity = record.get("format_identity")
+    if not isinstance(identity, dict):
+        return None
+    normalized = {}
+    for field in _DRAWABLE_FORMAT_IDENTITY_FIELDS:
+        value = identity.get(field)
+        if not isinstance(value, str) or not value.strip():
+            return None
+        normalized[field] = value.strip()
+    for field in ("samples", "sample_buffers"):
+        value = identity.get(field)
+        if value is not None and (
+                not isinstance(value, int) or isinstance(value, bool)
+                or value < 0):
+            return None
+        if value is not None:
+            normalized[field] = value
+    return normalized
+
+
 def _drawable_evidence(trace: dict, width: int, height: int) -> tuple[dict | None, list[str], list[str]]:
     """Derive the default drawable contract from the seal's own record."""
     missing: list[str] = []
@@ -374,6 +410,30 @@ def _drawable_evidence(trace: dict, width: int, height: int) -> tuple[dict | Non
             "the default drawable colour precision is not RGBA8 "
             f"({drawable['red_bits']}/{drawable['green_bits']}/"
             f"{drawable['blue_bits']}/{drawable['alpha_bits']} bits)")
+    identity = _format_identity(record)
+    if identity is None:
+        # Captured-state completeness is not live-drawable equivalence.  The
+        # control target is an FBO whose internal formats are not known to be
+        # the window's, so an exact pixel match cannot yet authorize blame.
+        drawable["format_identity"] = None
+        drawable["equivalence"] = "unproven"
+        missing.append(
+            "the live default drawable's internal pixel/depth/stencil "
+            "component formats and render-target path were not captured; "
+            "the control target's equivalence is unproven")
+    else:
+        for field in ("samples", "sample_buffers"):
+            if field in identity and identity[field] != drawable[field]:
+                drawable["format_identity"] = None
+                drawable["equivalence"] = "unproven"
+                missing.append(
+                    f"the captured drawable format identity {field} "
+                    f"({identity[field]}) differs from the observed drawable "
+                    f"({drawable[field]})")
+                break
+        else:
+            drawable["format_identity"] = identity
+            drawable["equivalence"] = "proven"
     return drawable, missing, unsupported
 
 
@@ -700,6 +760,8 @@ def derive_evidence(trace: dict, seal: dict, *, checkpoint_event: int,
         "status": status,
         "proven": status == "proven",
         "drawable": drawable,
+        "drawable_equivalence": (
+            (drawable or {}).get("equivalence") or "unproven"),
         "prestate": prestate,
         "missing": missing,
         "unsupported": unsupported,
@@ -1004,6 +1066,39 @@ def build_package(*, frame_dir: Path, trace: dict, seal: dict, evidence: dict,
             "levels": levels,
         })
     manifest["textures"] = textures
+
+    # Texture uploads are deduplicated by unit, but sampler *uniform bindings*
+    # are not: two active uniforms may name the same unit, and every one of
+    # them must still be bound.  Each sampler must therefore resolve to a
+    # captured texture unit, and contradictory captures are refused rather
+    # than silently leaving a uniform at its linked default of zero.
+    texture_units = {_int_or_none(texture.get("unit")) for texture in textures}
+    sampler_units: dict[str, int] = {}
+    for uniform in uniforms:
+        if uniform.get("type") != "sampler":
+            continue
+        name = uniform.get("name")
+        unit = _int_or_none(uniform.get("unit"))
+        if not isinstance(name, str) or not name:
+            raise ReplayInputError(
+                "invalid_sampler_binding",
+                "a captured sampler uniform has no name")
+        if unit is None or unit < 0:
+            raise ReplayInputError(
+                "invalid_sampler_binding",
+                f"sampler {name} has no captured texture unit")
+        if unit not in texture_units:
+            raise ReplayInputError(
+                "missing_sampler_binding",
+                f"sampler {name} names texture unit {unit}, which has no "
+                "captured texture")
+        previous = sampler_units.get(name)
+        if previous is not None and previous != unit:
+            raise ReplayInputError(
+                "contradictory_sampler_binding",
+                f"sampler {name} is captured at both unit {previous} and "
+                f"unit {unit}")
+        sampler_units[name] = unit
 
     # No file may be the target checkpoint's output blob under another name.
     for record in writer.files:

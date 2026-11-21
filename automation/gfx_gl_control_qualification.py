@@ -662,6 +662,17 @@ def _same_drawable(recorded: dict | None, reported: dict | None) -> list[str]:
             reasons.append(
                 f"renderer drawable {field} {reported.get(field)!r} does not "
                 f"match the captured drawable {recorded.get(field)!r}")
+    recorded_identity = recorded.get("format_identity")
+    reported_identity = reported.get("format_identity")
+    if not isinstance(recorded_identity, dict):
+        reasons.append(
+            "the captured drawable has no proven internal-format identity; "
+            "matching bit depths is not live-drawable equivalence")
+    elif reported_identity != recorded_identity:
+        reasons.append(
+            "renderer drawable internal-format identity does not match the "
+            f"captured identity ({reported_identity!r} != "
+            f"{recorded_identity!r})")
     return reasons
 
 
@@ -884,9 +895,19 @@ def _assemble(comparison: dict | None, authentication: dict | None, *,
         and not (run.get("reasons") or []))
     evidence_proven = evidence.get("proven") is True \
         and evidence.get("status") == "proven"
+    drawable_equivalence = (
+        evidence.get("drawable_equivalence")
+        or (evidence.get("drawable") or {}).get("equivalence")
+        or "unproven")
+    if drawable_equivalence != "proven" and not missing and not unsupported:
+        missing.append(
+            "the live default drawable's internal pixel/depth/stencil formats "
+            "and render-target path are not proven identical to the control "
+            "target")
     qualified = bool(
         comparison is not None and comparison["exact"] and authenticated
-        and evidence_proven and authority.get("qualified") and receipt_verified
+        and evidence_proven and drawable_equivalence == "proven"
+        and authority.get("qualified") and receipt_verified
         and live_bound and not reasons and not missing and not unsupported)
     if not qualified and not missing and not unsupported \
             and comparison is not None and not comparison["exact"]:
@@ -918,6 +939,7 @@ def _assemble(comparison: dict | None, authentication: dict | None, *,
             "qualified": qualified,
             "authenticated": authenticated,
             "evidence_proven": evidence_proven,
+            "drawable_equivalence": drawable_equivalence,
             "receipt_verified": receipt_verified,
             "reasons": reasons,
             "identity": identity,
@@ -928,6 +950,8 @@ def _assemble(comparison: dict | None, authentication: dict | None, *,
                 _canonical({
                     "status": evidence.get("status"),
                     "drawable": evidence.get("drawable"),
+                    "drawable_equivalence": evidence.get(
+                        "drawable_equivalence"),
                     "prestate": evidence.get("prestate"),
                     "missing": evidence.get("missing"),
                     "unsupported": evidence.get("unsupported"),
@@ -1041,10 +1065,16 @@ def qualify_sealed(live_path: Path | str, width: int, height: int, *,
                     "unsafe_output_directory",
                     f"control subdirectory {candidate} resolves inside the "
                     "sealed capture tree"))
-    authentication = _authenticate(
-        frame_dir, live_path, width, height,
-        checkpoint_event=checkpoint_event, draw_event=draw_event,
-        resource=resource)
+    try:
+        authentication = _authenticate(
+            frame_dir, live_path, width, height,
+            checkpoint_event=checkpoint_event, draw_event=draw_event,
+            resource=resource)
+    except Exception as exc:  # noqa: BLE001 - public boundary must refuse
+        return _assemble(
+            None, None,
+            evidence=_refused_evidence(
+                "malformed_seal", f"the sealed observation could not be read: {exc}"))
     if not authentication["authenticated"]:
         return _assemble(
             None, _public_authentication(authentication),
@@ -1059,10 +1089,13 @@ def qualify_sealed(live_path: Path | str, width: int, height: int, *,
             authentication, checkpoint_event=checkpoint_event,
             draw_event=draw_event, width=width, height=height,
             resource=resource)
-    except replay_input.ReplayInputError as exc:
+    except (replay_input.ReplayInputError, KeyError, IndexError, TypeError,
+            ValueError) as exc:
+        kind = getattr(exc, "kind", "malformed_evidence")
+        detail = getattr(exc, "detail", str(exc))
         return _assemble(
             None, _public_authentication(authentication),
-            evidence=_refused_evidence(exc.kind, exc.detail))
+            evidence=_refused_evidence(kind, detail))
     public_authentication = _public_authentication(authentication)
     if evidence.get("status") != "proven":
         return _assemble(
@@ -1220,17 +1253,27 @@ def _evidence_recheck(qualification: dict) -> bool:
                   "draw_event", "seal_sha256"):
         if derived.get(field) != identity.get(field):
             return False
-    evidence = derive_evidence(
-        authentication, checkpoint_event=checkpoint_event,
-        draw_event=draw_event, width=width, height=height, resource=resource)
+    try:
+        evidence = derive_evidence(
+            authentication, checkpoint_event=checkpoint_event,
+            draw_event=draw_event, width=width, height=height,
+            resource=resource)
+    except (replay_input.ReplayInputError, QualificationError):
+        return False
     if evidence.get("status") != "proven":
+        return False
+    if evidence.get("drawable_equivalence") != "proven":
         return False
     embedded_evidence = checked.get("evidence")
     if not isinstance(embedded_evidence, dict):
         return False
+    if embedded_evidence.get("drawable_equivalence") != "proven":
+        return False
     embedded_digest = replay_input.sha256_bytes(_canonical({
         "status": embedded_evidence.get("status"),
         "drawable": embedded_evidence.get("drawable"),
+        "drawable_equivalence": embedded_evidence.get(
+            "drawable_equivalence"),
         "prestate": embedded_evidence.get("prestate"),
         "missing": embedded_evidence.get("missing"),
         "unsupported": embedded_evidence.get("unsupported"),
@@ -1241,6 +1284,7 @@ def _evidence_recheck(qualification: dict) -> bool:
     derived_digest = replay_input.sha256_bytes(_canonical({
         "status": evidence.get("status"),
         "drawable": evidence.get("drawable"),
+        "drawable_equivalence": evidence.get("drawable_equivalence"),
         "prestate": evidence.get("prestate"),
         "missing": evidence.get("missing"),
         "unsupported": evidence.get("unsupported"),
@@ -1314,16 +1358,29 @@ def _evidence_recheck(qualification: dict) -> bool:
 
 
 def attribution(qualification: dict) -> dict:
-    """Project qualification into the only permitted blame decision."""
+    """Project qualification into the only permitted blame decision.
+
+    This is a decision boundary.  Malformed input, an unsupported state or an
+    unreadable artifact must produce a structured refusal; it must never raise
+    into a caller or fall through to an authorized verdict.
+    """
     if not isinstance(qualification, dict):
-        raise QualificationError("invalid_qualification")
+        return {
+            "schema": "gfx-metal-blame/v1",
+            "allowed": False,
+            "reason": (
+                "the qualification document is malformed; an absent or "
+                "non-object projection cannot authorize Metal attribution"),
+            "qualification": None,
+        }
     comparison = qualification.get("comparison")
     checked = qualification.get("qualification")
     try:
         evidence_ok = _evidence_recheck(qualification)
-    except (AttributeError, TypeError, ValueError, OSError):
-        # A malformed projection is not evidence. Attribution is a decision
-        # boundary, so it refuses instead of raising into its caller.
+    except Exception:  # noqa: BLE001 - decision boundary must refuse
+        # A malformed projection is not evidence. Attribution refuses instead
+        # of raising a ReplayInputError, KeyError or AttributeError into its
+        # caller.
         evidence_ok = False
     allowed = bool(
         qualification.get("status") == "qualified"
@@ -1334,6 +1391,7 @@ def attribution(qualification: dict) -> dict:
         and isinstance(checked, dict)
         and checked.get("authenticated") is True
         and checked.get("evidence_proven") is True
+        and checked.get("drawable_equivalence") == "proven"
         and evidence_ok)
     return {
         "schema": "gfx-metal-blame/v1",

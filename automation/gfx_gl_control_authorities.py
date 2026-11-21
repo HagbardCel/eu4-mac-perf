@@ -53,23 +53,25 @@ SCHEMA = "gfx-gl-control-renderer-authorities/v2"
 # .local/m7/authority/gl-control-ed25519.key (not checked in).  A re-review is
 # required before changing any digest or adding another renderer.
 AUTHORITIES: dict[str, dict] = {
-    "77d152c5d9e5822a852be746621ed930f04af02aa538ecaa9fd1fbcb2faf1af6": {
+    "b05ab20a307b8281144b10a32c92b143a9e4ecccb2a47d94cc67e4a2f6114c74": {
         "name": "m7-original-gl-control",
         "api": "opengl",
         "qualified": True,
         "qualified_by": (
-            "independent review review-pr3 (DSH subagent), exact PR3 head "
-            "93a7c9110c15be49cac922ac5f261753e2bed005; capacity fix and "
-            "native pin re-reviewed at 92f84b4137f15fb8ded80f2b763d28b064dea010"),
+            "independent review of the post-fix #279 integration head "
+            "(review-final); the earlier PR3 review "
+            "93a7c9110c15be49cac922ac5f261753e2bed005 and the capacity review "
+            "at 92f84b4137f15fb8ded80f2b763d28b064dea010 cover the "
+            "pre-fix implementation"),
         "public_key": (
             "b129e1bcd834600e8a3986159b7d9a540d1951f09f30ce3bfd4881844247a727"),
         "components": [
             {"role": "native-gl-executor",
-             "sha256": "d03228553f3f31f30e92a5cde588f879220a71b912826a1a12c8a9292d74164b"},
+             "sha256": "285d1fb4ba936e24ae5a247b572098e3ebbdf1ffa8836afb2a585e78b07ab878"},
             {"role": "replay-input-verifier",
-             "sha256": "831050f051a3b8097431d71fafe96775878422b6c268483360a3eaa17d179526"},
+             "sha256": "640994da46e11d145da27766b78637be41ad3d556c759a334ecc2060b6779119"},
             {"role": "receipt-signer",
-             "sha256": "a72d7fccc5430be1192ea010bc5e432266341dafc82bc4c33941445ea54da8ce"},
+             "sha256": "52e03dd0c0b80c10c4e8acf2f72d4307a07c2c0321a06bd1107e0903f3ffa3b4"},
         ],
         "source": (
             "benchmark/eu4_gfx_draw_control.c + "

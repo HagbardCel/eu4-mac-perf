@@ -11,6 +11,13 @@ public key.  It is deliberately small and dependency-free so an offline,
 checked-out tree can verify a receipt without installing a crypto package, and
 so the renderer and the verifier share one canonical implementation.
 
+:func:`verify` is stricter than bare RFC 8032 decoding at the decision
+boundary: it rejects non-canonical encodings, points that are not on the curve,
+non-canonical scalars and small-order public keys or R values.  The last check
+closes the trivial identity-key forgery.  The scalar multiplication is not
+constant time; it protects a local execution receipt, not a remote signing
+oracle, and the private key is used only by the reviewed renderer.
+
 The signature authenticates *execution identity*: the holder of the registered
 private key ran under the reviewed renderer digest.  It is not, by itself,
 evidence that the renderer made OpenGL calls.  That property follows from the
@@ -36,6 +43,8 @@ def _x_recover(y: int) -> int:
     x = pow(xx, (Q + 3) // 8, Q)
     if (x * x - xx) % Q != 0:
         x = (x * I) % Q
+    if (x * x - xx) % Q != 0:
+        raise ValueError("ed25519 point is not on the curve")
     if x % 2 != 0:
         x = Q - x
     return x
@@ -82,6 +91,20 @@ def _encode(point) -> bytes:
     encoded = bytearray(y.to_bytes(32, "little"))
     encoded[31] |= (x & 1) << 7
     return bytes(encoded)
+
+
+_ENCODED_IDENTITY = _encode(_POINT_IDENTITY)
+
+
+def _has_small_order(point) -> bool:
+    """True when ``[8]P`` is the identity, i.e. P has order dividing eight.
+
+    RFC 8032 decoding alone accepts these points (the identity, and the
+    order-2/4/8 points).  Verifying against a small-order public key admits a
+    trivial forgery (identity key, identity R, S=0 verifies every message), so
+    a decision-boundary verifier refuses them, as libsodium does.
+    """
+    return _encode(_scalar_mult(point, 8)) == _ENCODED_IDENTITY
 
 
 def _decode(encoded: bytes):
@@ -153,6 +176,10 @@ def verify(public_key: bytes, message: bytes, signature: bytes) -> bool:
         point_r = _decode(encoded_r)
         scalar_s = int.from_bytes(signature[32:], "little")
         if scalar_s >= L:
+            return False
+        # A small-order public key or R admits trivial forgeries; a registered
+        # authority key is generated normally, so refusing is safe and narrow.
+        if _has_small_order(point_a) or _has_small_order(point_r):
             return False
         challenge = int.from_bytes(
             hashlib.sha512(encoded_r + public_key + message).digest(),
