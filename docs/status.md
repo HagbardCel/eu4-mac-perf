@@ -3,7 +3,7 @@
 Authoritative summary of what is established, qualified, and in flight.
 Operational commands live in [profiler and benchmark operations](reference/profiler-and-benchmark-operations.md).
 
-## Current navigation — 20 November 2026
+## Current navigation — 21 November 2026
 
 This section is the starting point. Everything below it is retained as dated
 history and must be read with its original run/seal identity.
@@ -15,38 +15,41 @@ history and must be read with its original run/seal identity.
 | What is planned for the optimized backend? | [Metal optimized](metal_optimized.md) |
 | How is evidence retained and restored? | [Evidence retention](evidence-retention.md) |
 | Which command should I run, and how do I recover? | [Harness operations](harness.md) |
-| What is the review remediation status? | [Coverage matrix](../plans/harness-review/implementation.md) · [exact-head audit](../analysis/harness-remediation/audit-20261120.md) |
+| What is the review remediation status? | [Coverage matrix](../plans/harness-review/implementation.md) · [closure](../analysis/harness-remediation/closure.md) · [verification](../analysis/harness-remediation/verification-20261121.md) |
 | What is the reconstruction charter and safety contract? | [Charter](renderer-reconstruction-and-differential-validation.md) · [AGENTS.md](../AGENTS.md) |
 
 ### Capability snapshot
 
-As of this snapshot #241–#261 are merged. This final documentation follow-up is
-the only open remediation PR. Exact head SHAs, review records and dependency
-order are in the [coverage matrix](../plans/harness-review/implementation.md),
-the [exact-head audit](../analysis/harness-remediation/audit-20261120.md) and
-the [scientific continuation](../analysis/harness-remediation/scientific-continuation-20261120.md).
+As of this snapshot #241–#269 are merged. The technical findings of the harness review are closed: every
+harness-integrity finding has a disposition, the two scientific remainders are
+transferred to M7, and this closure PR is the only remaining remediation PR. Exact head SHAs, review
+records and dependency order are in the
+[coverage matrix](../plans/harness-review/implementation.md), the
+[closure](../analysis/harness-remediation/closure.md), the
+[verification report](../analysis/harness-remediation/verification-20261121.md)
+and the [exact-head audit](../analysis/harness-remediation/audit-20261120.md).
 
-GitHub has no `APPROVE` review for #241–#261. Each follow-up's independent
-exact-head review is recorded on its PR as a review comment, not an `APPROVE`
-state, because the only available GitHub identity is the author and GitHub
-refuses self-approval. The historical audit verdicts are technical review
-evidence, not formal approvals; green CI, green tests and an audit session's
-self-report are not approvals.
+GitHub has no `APPROVE` review for #241–#269. The closure PRs #263–#268 have an
+independent exact-head review comment; #251–#257 have no independent human exact-head review
+(Codex/audit verdict, author verification and CI, none of which are approvals); #241–#250 were reviewed by Codex/audit at earlier
+commits. Review comments are not `APPROVE` states because the only available
+GitHub identity is the author and GitHub refuses self-approval.
 
 | Area | State | Evidence / scope | Smallest missing discriminator |
 |---|---|---|---|
 | Sealed same-frame differential | **Established** | Capture, seal, shadow, offline replay and exact four-channel comparator; all channels are compared | — |
 | Exact verdict semantics | **Merged and audit-reviewed** | PR #241 final `3be433f7`; raw exactness separated from policy; envelope hard cap. #258 `8a5d4bc2` fixes the residual report-locator cap and malformed-evidence tracebacks; merged `d29f45f0` after independent exact-head review. | No missing discriminator for the envelope contract; non-blocking residuals are named in the audit |
 | Event/writer attribution | **Merged; audit-reviewed** | PR #242 final `7bcaaa1c`; capture identity from validated graph/checkpoint records; 616/904 matrices generated | Regenerate present 904/616 rows from the sealed graph |
-| Compressed texture capture/replay | **Merged; audit-reviewed** | PR #244 final `cd4245cf`; complete/partial/mixed/unsupported chains; rendered BC1 alpha and compressed/decoded orientation equality | Same-seal decoded-vs-block pixel comparison on present 904 |
-| Live-GL control | **Blocked (scientific)** | Offline GL does not reproduce live GL; the first non-exact checkpoint is 15 (4 px / max 1, first pixel (209,50)), the 904 drawable sample/bit-depth and prior-frame observations are missing, and the stored control is unqualified at 15 (5/1) and 16 (4,645/86). The 904 measurements are historical and preserved unchanged; do not mint a new capture with the 904 seal | A newly sealed capture, paired with a new original-API control from that capture's own stream/resources/checkpoint, exact on all four BGRA channels; see the [scientific continuation](../analysis/harness-remediation/scientific-continuation-20261120.md) |
-| Campaign claim integrity | **Fixed (P0 #260)** | Corrupt, truncated or unreadable `claims.jsonl` now raises `ClaimLedgerError`; the bridge refuses with exit 3 before the checker, and a corrupt ledger cannot reset the budget | No remaining gap for the reader; a repair tool is deliberately absent |
-| Original-API control authority | **Fixed, fail-closed (P0 #261)** | Checkpoint identity comes from the sealed event record, all referenced blobs are verified, the renderer runs under a challenge and receipt, and only a renderer in the checked-in registry can authorize blame. The registry is empty, so no control qualifies | Populate `AUTHORITIES` only after the receipt is bound to the registered renderer (signed/registered key); that is a separate reviewed change |
+| Compressed texture capture/replay | **Merged; authentic comparison complete** | PR #244 final `cd4245cf`; BC1 alpha, orientation, geometry/format/device negatives. Sealed-904 comparison: compressed path 4 px vs decoded 858 at checkpoint 15, strictly worse decoded at every checkpoint ([compressed-904](../analysis/harness-remediation/compressed-904.md)) | Texture representation is material; the remaining 4-pixel residual is not explained by it |
+| Live-GL control | **Blocked (scientific) — transferred to M7** | Offline GL does not reproduce live GL; checkpoint 15 is 4 px / max 1 (first pixel (209,50)), the 904 drawable sample/bit-depth and prior-frame observations are missing, and the stored control is unqualified at 15 (5/1) and 16 (4,645/86). The 904 measurements are preserved unchanged; do not mint a new capture with the 904 seal | M7-owned: newly sealed capture with `GL_SAMPLES`, `GL_SAMPLE_BUFFERS`, bit depths and prior-frame contents, paired with a new original-API renderer from that capture's own stream/resources/checkpoint, bound to a registered authority; exact on all four BGRA channels before Metal blame |
+| Campaign claim integrity | **Fixed (#260, #264)** | Corrupt/truncated/unreadable rows refuse; a committed `claims.head.json` prefix witness refuses an empty replacement, truncation, a replaced prefix, a missing/malformed head and a failed flock; an interrupted first claim stays charged and is recovered by the next claim. Allowance remains `len(rows)` | The head is a local witness: deleting/rewriting it is the documented boundary; a stale head after an interrupted head write leaves one uncommitted tail. No repair tool |
+| Original-API control authority | **Fixed, fail-closed (#261, #263)** | Attribution re-authenticates the seal/stream, re-derives the checkpoint identity, re-validates the executed renderer receipt and recomputes exact four-channel equality from disk; flag flips, artifact mutation and malformed projections refuse. The registry is empty, so no control qualifies | Populate `AUTHORITIES` only after the receipt is bound to the registered renderer; a coordinated control+receipt rewrite only matters once a renderer is pinned |
 | Sampler/raster state | **Merged; audit-reviewed** | PR #245 final `ada20dbc`; full sampler key incl. compare-to-texture, cull gating and rendered front/back, signed scissor/viewport | Rendered front/back against an authentic draw |
-| Translation/replay identity | **Merged; audit-reviewed** | PR #248 final `1bffc7cb`; exact child env recent recipe, diagnostic-recipe rejection, cache repair, native MSL-byte keys | Fix recipe/cache findings; native function/pipeline cache audit |
+| Translation/replay identity | **Merged; cache profiled** | PR #248 final `1bffc7cb`; exact child env, diagnostic-recipe rejection, cache repair, native MSL-byte keys. On sealed 904: cold translation 3.211 s vs warm 0.374 s (8.59×), identity hash 26.8 ms, native replay 0.603 s, GPU `unknown`; native function/pipeline cache is in-process only | No material regression; no redesign. GPU service time needs host instrumentation if a breakdown is ever required |
 | Campaign lifecycle | **Merged; audit-reviewed** | #246 `8c17f779`, #249 `555447fb`, #250 `401d6863` and #256 `c403f06e`; per-session write roots, exactly-once reservations, terminal cleanup | Live wall-time measurement through restoration |
-| Metrics/documentation | **Merged; trials outstanding** | PR #251 `050f9272` accepted; service unions/GPU unknown, 3 focused runner calls, A/B measurements. #252's matrix needed post-merge state corrections (#257, #259 and this follow-up). | Three paired efficiency trials (`outstanding`), measuring wall time, launches, GPU service where available, cache hits and diagnostic attempts |
-| Authentic renderer parity | **Not established** | Latest authentic pilot localized [14, 15]; no accepted terrain correction | Exact control equality at the first differing writer |
+| Metrics/documentation | **Merged; trials complete** | PR #251 `050f9272`; service unions/GPU unknown. Three paired A/B trials on sealed 904: 6/6 correct, 0 confirmed EU4 launches, 1 replay per arm, GPU `unknown`; median 7.525 s (full report) vs 7.575 s (compact), payload 6,195,746 vs 7,768 B. No wall-time improvement claimed | Interface payload is measured; model-reasoning time is outside the trial |
+| Authentic renderer parity | **Not established** | Latest authentic pilot localized [14, 15]; no accepted terrain correction. The 904 compressed/decoded comparison narrows the input question but does not assign the 4 pixels | Exact control equality at the first differing writer (M7) |
+| Harness integrity | **Closed** | #263 attribution recomputation, #264 ledger witness, #265 flood retry, #266 anchor/session-root hardening, #267 plugin unload, #268 clean-tree builds; full profile completes on baseline and candidate and is not split around any module | Worktree-scoped build serialization is an owned follow-up; one suite per worktree is the current gate policy |
 
 ### Current authentic observations
 
@@ -661,9 +664,10 @@ captured. The portable `m7-pr3-live-603` case verifies 1,243 payload digests.
 Report: [PR 3 diagnosis](../analysis/m7/pr3-differential-diagnosis.md),
 [evidence](../analysis/m7/pr3-diagnosis-evidence.json).
 
-PR #201 remains open; this branch includes its native early-exit diagnostic
-hardening as a cherry-pick because PR 3 must preserve the first native stage
-through the shadow report and the diagnostic package.
+PR #201 (merged later at `35b8f504`) was still open when this historical branch
+was written; the branch includes its native early-exit diagnostic hardening as
+a cherry-pick because PR 3 must preserve the first native stage through the
+shadow report and the diagnostic package.
 
 ## M7 PR 4 — continuous same-process dual rendering (2026-11-16)
 

@@ -1,168 +1,146 @@
 # Harness review — implementation coverage matrix
 
-Durable issue-to-PR coverage for the 20 November 2026 review
+Final coverage for the 20 November 2026 review
 ([assessment](assessment.md), [quickwins](quickwins.md), [roadmap](roadmap.md),
 [steps](steps/01-exact-verdicts.md)). This file records implementation, the
 exact reviewed head, technical verification, the independent review record and
-the remaining work. It is not an issue-closure record.
+the remaining work. It is not an issue-closure record; the definitive
+disposition is [closure.md](../../analysis/harness-remediation/closure.md).
 
 ## State vocabulary
 
 | State | Meaning |
 |---|---|
-| `accepted` | An independent reviewer accepted the exact final head as technically ready; the PR is merged or merge-ready. A formal GitHub `APPROVE` is recorded only when the row says so. |
-| `verified` | The named head contains the change and its focused verification is green. Independent approval or merge is named separately. |
+| `accepted` | An independent reviewer accepted the exact final head as technically ready and it is merged. A formal GitHub `APPROVE` is recorded only when the row says so. |
+| `verified` | The named head contains the change and its focused verification is green; independent review and merge are named separately. |
 | `partial` | Part of the issue is implemented, or a review finding is still open at the head. The remainder is named. |
 | `blocked` | The required authentic observation is unavailable; the next discriminating test is named. |
-| `unresolved` | A confirmed defect has no reviewed fix merged; the missing change is named. |
+| `transferred` | The question is real but owned outside this plan, with a named next observation. |
 | `outstanding` | A required observation or experiment has not been performed; no result is claimed. |
 
 Technical readiness and the review record are separate columns. A green CI run
-is not a review, and an audit verdict or review comment is not a GitHub
-`APPROVE` state.
+is not a review, and a review comment is not a GitHub `APPROVE` state.
 
 ## Baseline and current state
 
 | Field | Value |
 |---|---|
 | Starting `main` | `e71c15d6` (merge of review PR #239) |
-| Current `main` | `4bf03285` (#261 merged) |
-| Audit review | [audit-20261120.md](../../analysis/harness-remediation/audit-20261120.md) · [scientific continuation](../../analysis/harness-remediation/scientific-continuation-20261120.md) |
-| Code follow-up | #258 `d29f45f0`, #259 `d5f6b73a`, #260 `1d7e37df`, #261 `4bf03285` |
-| Merged heads | #241 `3be433f7`, #242 `7bcaaa1c`, #243 `f62c7f18`, #244 `cd4245cf`, #245 `ada20dbc`, #246 `8c17f779`, #247 `ab28f2da`, #248 `1bffc7cb`, #249 `555447fb`, #250 `401d6863`, #251 `050f9272`, #252 `275df332`, #253 `2596b50e`, #254 `63a3148e`, #255 `090f2b52`, #256 `c403f06e`, #257 `b1bacce8`, #258 `8a5d4bc2`, #259 `2142f071`, #260 `63d00d31`, #261 `60e70b62` |
-| Approval record | GitHub has no `APPROVE` review for #241–#261. Each follow-up's independent exact-head review is recorded on its PR as a review comment, not an `APPROVE` state: the only available GitHub identity is the author and GitHub refuses self-approval. The historical audit verdicts are technical review evidence, not formal approvals. Green tests, CI and an audit session's self-report are not approvals. |
-| Known limitation | No new EU4 launch was performed by this audit. Pixel claims are offline fixture/seal measurements unless the row says otherwise. |
+| Historical stack | through #262 `25ee46db` |
+| Closure fixes | #263 `5ae0ccff`, #264 `3cb4d39d`, #265 `fbe23d51`, #266 `dc219a6d`, #267 `f5301f69`, #268 `c3fbeb77`, integrated by #269 `d3a0ce6b`, merged `fecff675` |
+| Merge commits | #268 `6ba77c05`; #263 `3fe7c602`; #264 `7cd4a072`; #265 `118c070c`; #266 `52cc1e89`; #267 `d3a0ce6b`; #269 `fecff675` |
+| Audit review | [audit-20261120.md](../../analysis/harness-remediation/audit-20261120.md) · [scientific continuation](../../analysis/harness-remediation/scientific-continuation-20261120.md) · [closure](../../analysis/harness-remediation/closure.md) |
+| Merged heads | #241 `3be433f7`, #242 `7bcaaa1c`, #243 `f62c7f18`, #244 `cd4245cf`, #245 `ada20dbc`, #246 `8c17f779`, #247 `ab28f2da`, #248 `1bffc7cb`, #249 `555447fb`, #250 `401d6863`, #251 `050f9272`, #252 `275df332`, #253 `2596b50e`, #254 `63a3148e`, #255 `090f2b52`, #256 `c403f06e`, #257 `b1bacce8`, #258 `8a5d4bc2`, #259 `2142f071`, #260 `63d00d31`, #261 `60e70b62`, #262 `7f553813`, #263 `5ae0ccff`, #264 `3cb4d39d`, #265 `fbe23d51`, #266 `dc219a6d`, #267 `f5301f69`, #268 `c3fbeb77`, #269 `d3a0ce6b` |
+| Approval record | GitHub has no `APPROVE` review for #241–#269. #263–#268 have an independent exact-head review comment; #251–#257 have **no** independent human exact-head review (Codex/audit verdict, author verification and CI only); #241–#250 were reviewed by Codex/audit at earlier commits, not necessarily their final heads. Review comments are not `APPROVE` states: the only available GitHub identity is the author and GitHub refuses self-approval. Green tests, CI and a review session's self-report are not approvals. |
+| Known limitation | No new EU4 launch was performed by this closure. Pixel claims are offline fixture/seal measurements unless the row says otherwise. |
 
 ## Findings, quickwins and follow-ups
 
 | ID | Source | Defect / recommendation | PR and exact head | State | Approval / merge | Verification and remainder |
 |---|---|---|---|---|---|---|
-| 1 / Q1 / Q2 | assessment §1, step 01 | Policy pass advertised as exact; completed divergence reported as tool failure; loose classifier qualified without identity; agent envelope unbounded | #241 `3be433f7`, residual in #258 `8a5d4bc2` | `accepted` | independent review at #258 `8a5d4bc2`; merged `d29f45f0` | Exact four-channel predicate, canonical outcome projection, compact/`--full` report locator; whole-envelope cap incl. Unicode reasons, `failure.detail`, `next_checkpoint` and malformed containers. #258 bounds the last-resort report/frame/final/checkpoint record and rejects malformed shadow/seal/nested producer evidence. Review: 132 ran / 131 executed / 1 skip / 0 failures; neighbours 162/162; the new tests fail on the base. |
-| 2 / Q5 | assessment §2, step 02 | Hand-written matrix misattributes writers; default checkpoints carry empty producer history | #242 `7bcaaa1c` | `accepted` | audit review at `7bcaaa1c`; merged `ced6cf25` | Capture identity projected from validated seal/checkpoint records; invalid seal fails closed; legacy empty only for fb:0, nonempty legacy texture history validated; production `build()` and negative tests; 616/904 matrices regenerated by a committed generator. The audit reran the focused graph suite in the aggregate selection. |
-| 3 / B1 | assessment §3, step 02 | Compressed chain silently decodes; DXT1 enum collapsed; no geometry/orientation/device validation | #244 `cd4245cf` | `accepted` | audit review at `cd4245cf`; merged `8822c03c` | Complete/partial/mixed/unsupported/invalid chains, transparent-index BC1 rendered alpha for RGB vs RGBA DXT1, compressed/decoded sampling equality, `compressed_expected`, mip/stride/device negatives. 18/18 native tests executed. The authentic 904 reference is unchanged and no parity is claimed; the same-seal decoded-vs-block comparison remains partial. |
-| 3b / B2 / B3 | assessment §3, step 02 | **Authentic live-GL control equivalence:** live GL vs offline GL vs Metal three-way equality not established; depth/drawable provenance missing | Follow-up #254 `63a3148e` plus #253 `2596b50e` | `blocked` | audit review at both heads; scientific blocker remains | 904's authentic pre-draw clear is event 7 (flags 7, depth 1, stencil 0, color 0,0,0,1). The stored control is **unqualified** at 15 (5/1) and 16 (4,645/86); `metal_blame_allowed=false`. Draw 14 has depth test/write enabled and the capture is marked multisample. Draw 1 is on framebuffer 6, not `fb:0`; the first `fb:0` draw is 14, and the event-7 `fb:0` depth clear is 1, which the one-draw control reproduces. The first non-exact checkpoint is **15** (4 px / max 1, first pixel (209,50)); the drawable state (`GL_SAMPLES`, `GL_SAMPLE_BUFFERS`, bit depths) and prior-frame contents were never observed in 904. **The 904 measurements are historical and are preserved unchanged; do not create a new capture with the 904 seal.** New observations require a newly sealed capture, paired with a new original-API control from that capture's own stream, resources and checkpoint; only zero differing BGRA pixels permit a Metal residual to be considered. Do not use a window/10-bit substitute. |
-| 3c / B2c / C5 | follow-up review | Campaign claim ledger fails open: malformed JSON rows are skipped and an unreadable ledger reads as zero attempts, so corrupt state can reset the validation budget | #260 `63d00d31` | `accepted` | independent exact-head review at `63d00d31`; merged `1d7e37df` | Typed `ClaimLedgerError` for malformed/truncated/unreadable/blank/non-object/wrong-schema/attempt-id-less rows; missing/empty ledger stays zero attempts; `flock` atomicity and duplicate idempotency preserved; bridge returns exit 3 `claim_ledger`; six-process limit test and interrupted-append regressions. 103 focused / 214 neighbours. New tests fail on base. |
-| 3d / B2d | follow-up review | Original-API control provenance/authority is not authenticated; pixel equality alone can qualify an exact image from a different seal and permit Metal blame | #261 `60e70b62` | `accepted` | independent exact-head review at `60e70b62`; merged `4bf03285` | Checkpoint identity comes from the seal-verified event's `default_checkpoint`; all referenced blobs verified; live bytes captured once and compared; renderer executed with a challenge nonce and receipt; pairing uses event positions (including unindexed clears); only a renderer listed in the checked-in `AUTHORITIES` registry can authorize blame. The registry is **empty**, so the gate is fail-closed and 904 remains unqualified. 32 focused / 353 neighbours; plugin 9/9. |
-| 3e / D1b | metrics | Three paired efficiency trials of the new workflow have not been run | Follow-up (not scheduled) | `outstanding` | no result claimed | D1's A/B numbers remain the only measurement; the trials must measure wall time, confirmed launches, GPU service when available, cache hits and diagnostic attempts across three paired runs. No wall-time improvement is claimed. |
-| 4a / B4 | assessment §4, step 03 | Shader stage/program cache keys omit effective linkage and tool identity; publication can overwrite a concurrent builder | #248 `1bffc7cb` | `accepted` | audit review at `1bffc7cb`; merged `755c20c1` | Combined shader/cache identity, key on actual MSL bytes/entry/options, corrupt-winner quarantine and validated concurrent winner, missing-stage tests, warm-cache/tool-hash profile. Native stale-shader test passes in the audit selection. |
-| 4b / B5 | assessment §4, step 03 | Receipts omit the exact consumed environment and diagnostic recipe | #248 `1bffc7cb` | `accepted` | audit review at `1bffc7cb`; merged `755c20c1` | Recipe v2 records exact child env, inherited/injected/scrubbed variables, faults and shader/policy identity; correction rejects diagnostic recipes unless an exact approved digest proves canonicality; byte-identical fault receipt rejected. |
-| 4c / B6 | assessment §4, step 04 | Sampler key omits R/compare/LOD; cull face and signed scissor wrong | #245 `ada20dbc` | `accepted` | audit review at `ada20dbc`; merged `fb766200` | Effective sampler identity (incl. 0x884E compare-to-texture, normalized enums/LODs, inert compare_func omission), cull gated on enabled/topology/`NO_CULL`, rendered front/back fixture, signed scissor and negative/outside viewport conversions. Rebasing dropped the duplicate #243 commit. |
-| 5 / Q3 / #231 | assessment architecture, step 05 | Startup/resume lacks verified case/worktree/budget context; reconnect could present unauthorized values | #247 `ab28f2da` | `accepted` | audit review at `ab28f2da`; merged `8c98db67` | Read-only `context` compares workspace/policy/budget/checker/baseline authority against the anchor, names drift and refuses; mutable candidate digest/commit excluded; side-effect-free snapshot test; seed/worktree profiles; goal plugin injects only an authorized context after `prepare`. Legacy anchors fall back to `sidecar_sha256`. |
-| 6 / Q4 | assessment verification, step 07 | Native compiler errors become skips | #243 `f62c7f18` | `accepted` | audit review at `f62c7f18`; merged `befd49cc` | Shared `require_build()`; missing prerequisite -> declared skip, eligible exit/timeout/exec error -> failure with bounded output and log path; `require_arm64=False` only for OpenGL-only hosts; Metal hosts retain arm64; missing replay-host sources now skip. 34 executed / 12 fixture skips on arm64; fixture-backed 54 executed. |
-| 7 / C1 | assessment autonomy, step 06 | Owned launch waits for an ops pair that never exists after a valid shadow result; cleanup failures hidden | #249 `555447fb` | `accepted` | audit review at `555447fb`; merged `c9576f4f` | Stops at the bound terminal shadow, validates capture-id/run/mode/frame boundaries incl. failure records, attempts termination/stream/display/lease cleanup independently, publishes and propagates cleanup on normal and raising paths, requires explicit `cleanup_ok=true`, exit 8 on cleanup failure. |
-| 8 / C3 / C4 | assessment resource limits, step 05 | Nested calls double-charge; direct replay unreserved; unchanged failures repeat | #250 `401d6863` | `accepted` | audit review at `401d6863`; merged `3dabc6fe` | Supplied frame count reservation, nonzero direct replay failed settlement with evidence, nested/descendant exactly-once token, bounded content fingerprint incl. untracked/non-Git and evidence/output exclusions, durable no-progress pause. |
-| 9 / D2 | assessment knowledge, step 08 | Stale status narrative; missing canonical navigation; retention needs a restore check | #252 `275df332` | `partial` | audit review at `275df332`; #257 and the docs follow-up correct stale states | Canonical docs/status refresh, byte-identical restore with digest+size, missing-member/missing-digest/size-drift negatives, strict doc links. #257 still named #256/#257 as open and `c289adf4` as current main after the final merges; this follow-up corrects that. |
-| Q6 / #232 (issue remains OPEN) | quickwins, step 07 | Launch/runner/build/replay counts and service time conflated; tombstone ends the window | #251 `050f9272` | `accepted` | audit review at `050f9272`; merged `845d7df6` | Guard+PID+termination join, runner invocation once, help/discovery excluded, GPU unknown, service unions vs wall/goal separated, A/B measurements in `plans/harness-review/measurements/d1-physical-work.md`. Three focused runner calls in B are confirmed; no wall-time improvement is claimed. |
-| #229 / #230 (both issues remain OPEN) | issues | Copy-window injection; discovery count/pagination scope; metadata-only safe-to-reuse | #246 `8c17f779` | `accepted` | audit review at `8c17f779`; merged `d45a9079` | Metadata-only never verified/safe; explicit verification scope across locate/inventory/discovery/pagination; corrupted evidence with verify=False/True; O_NOFOLLOW pre/post inventory and symlink/byte-change injection refused. |
-| #233 (issue remains OPEN) | issue | Non-list checkpoint containers traceback | #241 `3be433f7`, residual in #258 `8a5d4bc2` | `accepted` | independent review at #258 `8a5d4bc2`; merged `d29f45f0` | Non-list/non-object request/result/receipt paths return explicit invalid evidence; #258 rejects non-object shadow/seal containers and scalar nested `producer_events` without a traceback. Issue remains open until a separate closure is recorded. |
-| #234 (issue remains OPEN) | issue | Coordinator shader-less fail-closed, reader defaults, pixel edges | Follow-up #255 `090f2b52` | `accepted` | audit review at `090f2b52`; merged `c289adf4` | Translation without `shaders.json`/stages fails closed before diagnosis; DSH campaign reader defaults pinned with malformed-value refusals; exact pixel corners/1x1/alpha/inverse-grid regressions. The earlier `6b4c4bff` head in this matrix was stale. |
-| Concurrent sessions | Phase 2 | Shared writable binding/log roots mix sessions | Follow-up #256 `c403f06e` | `accepted` | audit review at `c403f06e`; merged `f0bfa16c` | Per-session validated `sessions/<id>/` root, campaign-wide atomic claim ledger and host-wide lease retained, legacy no-id fallback explicit, reconnect isolation, two-session/interruption/lease tests. No formal GitHub approval exists; the audit verdict is technical review evidence only. |
-| #258 envelope/checkpoint hardening | audit findings 1–2 | Whole-envelope cap still bypassable through a 20 KB report locator; malformed shadow/seal/nested producer evidence raised instead of failing closed | #258 `8a5d4bc2` | `accepted` | independent exact-head review recorded on the PR at `8a5d4bc2`; merged `d29f45f0` | Bounds every last-resort string and container, preserves classification/first divergence/bounded locator, returns explicit `invalid` problems for malformed evidence, and rejects scalar `producer_events`. Review: 132 ran / 131 executed / 1 skip / 0 failures; 162 neighbour tests; new tests fail on base `a0e3a4e8`; portable CI pass. Non-blocking residuals are named in the audit. |
+| 1 / Q1 / Q2 | assessment §1, step 01 | Policy pass advertised as exact; completed divergence reported as tool failure; loose classifier qualified without identity; agent envelope unbounded | #241 `3be433f7`, residual #258 `8a5d4bc2` | `accepted` | independent review at #258; merged `d29f45f0` | Exact four-channel predicate, canonical outcome projection, bounded envelope/checkpoint evidence; 132 ran / 131 executed / 1 skip; new tests fail on base. |
+| 2 / Q5 | assessment §2, step 02 | Hand-written matrix misattributes writers; default checkpoints carry empty producer history | #242 `7bcaaa1c` | `accepted` | review at `7bcaaa1c`; merged `ced6cf25` | Graph-generated matrices; 616/904 regenerated by a committed generator; 92 tests pass. |
+| 3 / B1 | assessment §3, step 02 | Compressed chain silently decodes; DXT1 enum collapsed; no geometry/device validation | #244 `cd4245cf`; authentic comparison completed in closure | `accepted` | review at `cd4245cf`; merged `8822c03c` | BC1 alpha, orientation, geometry/format/device negatives; sealed-904 compressed vs decoded completed ([compressed-904.md](../../analysis/harness-remediation/compressed-904.md)): 4 vs 858 px at checkpoint 15, decoded strictly worse; no parity. |
+| 3b / B2 / B3 | assessment §3, step 02 | Authentic live-GL control equivalence; drawable samples/bit depth and prior frame unobserved | #254 `63a3148e`, #253 `2596b50e` | **blocked — transferred to M7** | review at both heads; scientific blocker remains | 904 control unqualified at 15 (5/1) and 16 (4,645/86); `metal_blame_allowed=false`; `GL_SAMPLES`, `GL_SAMPLE_BUFFERS`, bit depths and prior-frame contents are absent from the 904 seal. 904 seal and measurements preserved. New observation: newly sealed capture + new bound original-API renderer + exact comparison at the first divergent checkpoint (M7 follow-up issue). |
+| 3c / B2c / C5 | follow-up review | Claim ledger fails open on corrupt/replaced/truncated state | #260 `63d00d31`, #264 `3cb4d39d` | `accepted` | independent review at `3cb4d39d` (two deltas); merged `1d7e37df`, `7cd4a072` | Typed refusal for malformed/truncated/unreadable rows; `claims.head.json` prefix witness refuses empty replacement, truncation, replaced prefix, missing/malformed head, failed flock; first-claim crash charged and recoverable; 27/27; base 10/12 fail. |
+| 3d / B2d | follow-up review | Control provenance/authority trusts an embedded exact flag | #261 `60e70b62`, #263 `5ae0ccff` | `accepted` | independent review at both heads; merged `4bf03285`, `3fe7c602` | Seal/stream re-authenticated, checkpoint re-derived, renderer receipt re-validated against the derived identity, exact four-channel equality recomputed from disk; flag flips, live/control/receipt mutation and malformed projections refuse. Registry empty and fail-closed. 39/39; base regressions fail. |
+| 3e / D1b | metrics | Three paired efficiency trials | #269 closure (no code) | `verified` | no independent approval needed for a measurement; review of the report in #269 | Three paired A/B runs on sealed 904: all correct (event 15, 4 px, max 1), 0 confirmed EU4 launches, 1 replay per arm, GPU `unknown`; medians 7.525 s vs 7.575 s (no improvement claimed); payload 6,195,746 → 7,768 B ([efficiency-20261121.md](../../analysis/harness-remediation/efficiency-20261121.md)). |
+| 4a / B4 | assessment §4, step 03 | Shader stage/program cache keys omit effective linkage/tool identity | #248 `1bffc7cb`; profile in closure | `accepted` | review at `1bffc7cb`; merged `755c20c1` | Combined identity, MSL-byte keys, quarantine/validated concurrent winner; cache profile: cold 3.211 s vs warm 0.374 s (8.59×), identity hash 26.8 ms/3.77 MB, native replay 0.603 s, GPU unknown; no material regression ([cache-profile.md](../../analysis/harness-remediation/cache-profile.md)). |
+| 4b / B5 | assessment §4, step 03 | Receipts omit the consumed environment/recipe | #248 `1bffc7cb` | `accepted` | review at `1bffc7cb`; merged `755c20c1` | Recipe v2 records child env/inherited/injected/scrubbed vars, faults and shader/policy identity; diagnostic recipes need an approved digest. |
+| 4c / B6 | assessment §4, step 04 | Sampler R/compare/LOD omitted; cull face and signed scissor wrong | #245 `ada20dbc` | `accepted` | review at `ada20dbc`; merged `fb766200` | Effective sampler identity, cull gating, signed scissor, rendered front/back fixture; 68 executed / 12 fixture skips. |
+| 5 / Q3 / #231 | architecture, step 05 | Startup/resume lacks verified case/worktree/budget context | #247 `ab28f2da` | `accepted`; issue #231 closed | review at `ab28f2da`; merged `8c98db67` | Read-only context compares workspace/policy/budget/checker/baseline to the anchor and refuses drift; startup text serialized into `goal_text`/`startup_text`; seed/worktree first-turn assertions; failed preflight leaves no anchor and consumes no allowance. |
+| 6 / Q4 | verification, step 07 | Native compiler errors become skips | #243 `f62c7f18` | `accepted` | review at `f62c7f18`; merged `befd49cc` | `require_build()` separates prerequisites from eligible failures; 34 executed / 12 fixture skips. |
+| 6b | closure finding | Clean checkout native suites link into a missing `benchmark/.build` | #268 `c3fbeb77` | `accepted` | independent review at `c3fbeb77`; merged `6ba77c05` | Six modules create the output parent; clean-tree selection 8 errors → 11/11 executed; an injected compiler error still fails. |
+| 7 / C1 | autonomy, step 06 | Owned launch waits for a non-existent ops pair; cleanup hidden | #249 `555447fb` | `accepted` | review at `555447fb`; merged `c9576f4f` | Terminal shadow stop, independent cleanup, explicit `cleanup_ok`, exit 8 on cleanup failure. |
+| 8 / C3 / C4 | resource limits, step 05 | Nested double-charge; direct replay unreserved; unchanged failures repeat | #250 `401d6863` | `accepted` | review at `401d6863`; merged `3dabc6fe` | Supplied-frame reservation, failed settlement evidence, exactly-once token, bounded fingerprint, durable no-progress pause. |
+| 9 / D2 | knowledge, step 08 | Stale status narrative; retention restore check | #252 `275df332`, #257 `b1bacce8`, this update | `accepted` | review at `275df332`; merged `4cc0ed80`; closure docs in #269 | Canonical navigation, byte-identical restore, strict doc links; final states corrected in this matrix, `docs/status.md` and the integration report. |
+| Q6 / #232 | quickwins, step 07 | Launch/runner/build/replay counts conflated; tombstone ends the window | #251 `050f9272` | `accepted`; issue #232 closed | review at `050f9272`; merged `845d7df6` | Guard+PID+termination join, runner invocation once, GPU unknown, service/wall separated, edit+clear regression. |
+| #229 / #230 | issues | Copy-window injection; discovery counts/pagination; metadata-only reuse | #246 `8c17f779` | `accepted`; issues closed | review at `8c17f779`; merged `d45a9079` | O_NOFOLLOW inventory + in-copy re-check, scoped counts + offset, truncated verified lookup non-success. |
+| #233 | issue | Non-list checkpoint containers traceback | #241 `3be433f7`, #258 `8a5d4bc2` | `accepted`; issue closed | review at #258; merged `d29f45f0` | Explicit invalid evidence for non-list/non-object containers; no traceback. |
+| #234 | issue | Coordinator shader-less fail-closed, reader defaults, pixel edges | #255 `090f2b52` | `accepted`; issue closed | review at `090f2b52`; merged `c289adf4` | Translation without `shaders.json` fails closed before diagnosis; pinned reader defaults; exact corner/alpha/inverse-grid tests; status predicate updated. |
+| Concurrent sessions | Phase 2 | Shared writable roots mix sessions | #256 `c403f06e` | `accepted` | review at `c403f06e`; merged `f0bfa16c` | Per-session roots, campaign-wide ledger, host-wide lease, reconnect isolation; 246/246. |
+| Housekeeping 1 | closure | Goal-plugin prompt fibers leak on unload | #267 `f5301f69` | `accepted` | independent review at `f5301f69`; merged `d3a0ce6b` | Unload disposes installed fibers, a late bridge answer installs nothing, a racing fiber is disposed; 50/50; base fails. |
+| Housekeeping 2 | closure | Corrupt anchor traceback; refused ops leave an empty session root | #266 `dc219a6d` | `accepted` | independent review at `dc219a6d`; merged `52cc1e89` | Structured `anchor_corrupt` for corrupt/null/empty/non-file/schema-only anchors; no pre-check session root for prepare/validate/review; existing roots re-tightened to 0700; legacy anchors still authorize; 93/93 + 241 neighbours. |
+| Phase 2 hang | audit/matrix | Full profile reported to hang around `tests.test_reconstruction_differential` | closure investigation | `verified` (not reproduced) | documented in [verification-20261121.md](../../analysis/harness-remediation/verification-20261121.md) | Baseline and candidate full discover profiles completed with the module executed (4,221 = 4,166 + 55 ran); historical `running` records have no counts/timeout marker and overlapped in one worktree. Gate policy: one suite per worktree, ≥30 min cold, never exclude a module; worktree build serialization is an owned follow-up. |
+| Flood flake | Phase 2 | One transient `ps` timeout failed the cleanup observation | #265 `fbe23d51` | `accepted` | independent review at `fbe23d51`; merged `118c070c` | Retry within a bounded deadline, empty-row retry, `os.kill` fallback only when `ps` is unavailable; live pid still refused; 7/7; base fails. |
 
 ## Roadmap packages
 
 | Package | PRs | State |
 |---|---|---|
-| A — Truth and startup | #241, #243, #247 | `accepted`; #241's residual is fixed by merged #258 |
-| B — Rendering correctness | #244, #245, #248, #254 | #244/#245/#248 accepted; authentic three-way control `blocked` |
-| C — Autonomous lifecycle | #246, #249, #250, #256 | `accepted`; per-session isolation audit-reviewed |
-| D — Verification, metrics, docs | #251, #252 | #251 accepted; #252 partial until this docs correction; three paired efficiency trials `outstanding` |
+| A — Truth and startup | #241, #243, #247, #258, #266 | `accepted`; session-root/anchor hardening added in closure |
+| B — Rendering correctness | #244, #245, #248, #254, #263 | #244/#245/#248/#263 accepted; authentic three-way control `blocked` and transferred to M7; compressed-vs-decoded comparison complete |
+| C — Autonomous lifecycle | #246, #249, #250, #256, #260, #264 | `accepted`; ledger witness and first-claim recovery verified |
+| D — Verification, metrics, docs | #251, #252, #265, #267, #268 | `accepted`; three paired trials and cache profile completed; clean-build and flood fixes merged |
 
 ## Dependency order and review state
 
-1. #243 merged before #245's rebase; #244 merged before #245's rebase. #245
-   was rebased onto `main` and its duplicate #243 commit dropped.
-2. #245's final head `ada20dbc` is the reviewed tree and is merged at
-   `fb766200`.
-3. #248/#249/#250/#251 are main-based and merged after their focused
-   verification; the exact-head audit verdicts are in the audit report.
-4. #252 documents the historical states; #257 corrected part of the record and
-   this follow-up corrects the remaining post-merge staleness.
-5. #254/#255/#256 are independent follow-ups. #255's final head is `090f2b52`.
-6. #258 (envelope/checkpoint hardening) was independently reviewed at
-   `8a5d4bc2` and merged at `d29f45f0`; its non-blocking residuals are named in
-   the audit.
-7. #259 (`2142f071`, merged `d5f6b73a`) corrected the post-merge state and
-   recorded the P0 findings. #260 (`63d00d31`, merged `1d7e37df`) fixed the
-   ledger. #261 (`60e70b62`, merged `4bf03285`) fixed control authority with an
-   empty, fail-closed renderer registry.
-8. The final documentation follow-up (this PR) requires independent review of
-   its exact final SHA before merge. A green focused run is not that review.
-9. Populating `automation/gfx_gl_control_authorities.AUTHORITIES` is a separate
-   reviewed change. A hand-written receipt can impersonate a registered
-   renderer until the receipt is bound to the renderer (signed/registered key);
-   do not add the first entry without that binding.
+1. #243 merged before #245's rebase; #244 merged before #245's rebase.
+2. #248/#249/#250/#251 are main-based and merged after focused verification.
+3. #252 documented historical states; #257 and #259 corrected the record.
+4. #258 was reviewed at `8a5d4bc2` and merged at `d29f45f0`.
+5. #260 (`63d00d31`, merged `1d7e37df`) fixed the ledger; #261 (`60e70b62`, merged `4bf03285`) fixed control authority with an empty, fail-closed registry.
+6. #262 (`7f553813`, merged `25ee46db`) recorded the P0 state; its scientific blocker remains.
+7. Closure fixes were reviewed at their exact heads: #263 `5ae0ccff`, #264 `3cb4d39d`, #265 `fbe23d51`, #266 `dc219a6d`, #267 `f5301f69`, #268 `c3fbeb77`.
+8. #268 merged first (`6ba77c05`); the other five were integrated through #269 `d3a0ce6b` with one explicit merge commit per reviewed head, because branch protection required each PR branch to be current with `main`.
+9. PR #269's merge-only delta was independently reviewed at `d3a0ce6b`; no code was added by it.
+10. Populating `automation/gfx_gl_control_authorities.AUTHORITIES` remains a separate reviewed change, and a receipt must be bound to the registered renderer before the first entry.
 
 ## Verification evidence
 
-The audit ran one combined focused selection at the merged main (`a0e3a4e8`)
-and one hardening selection at #258. Per-PR counts below are the authors'
-retained runs; they were not individually reproduced, so they are labelled as
-author evidence rather than audit evidence.
-
 | Selection | Command | Result | Source |
 |---|---|---|---|
-| Audit aggregate (29 modules) | `test_runner run --profile offline --label harness-final-audit` | 852 ran / 849 executed / 3 skipped / 0 failures | `20261120T185637Z-1a7c318d` at `a0e3a4e8` |
-| #258 hardening | `--module tests.test_agent_tools --module tests.test_m7_checkpoint_provenance` | 132 ran / 131 executed / 1 skipped / 0 failures / 0 errors; base `a0e3a4e8` fails 8 + 2 errors on the new tests | independent review at `8a5d4bc2`, runner `20261120T193740Z-bf9c332f` |
-| #258 neighbours | `--module tests.test_gfx_independent_replay --module tests.test_m7_diagnosis --module tests.test_m7_pixel_diagnostics --module tests.test_correction_accept` | 162 executed / 0 failures | independent review at `8a5d4bc2`, runner `20261120T193754Z-c7b5a22f` |
-| #241 author | `--module tests.test_agent_tools ...` | 241 ran / 240 executed / 1 skip / 0 failures | author at `3be433f7` |
-| #242 author | `--module tests.test_gfx_frame_graph ...` | 92 passed; generator byte-identical | author at `7bcaaa1c` |
-| #243 author | `--module tests.test_native_build --module tests.test_replay_blob_verifier` | 34 executed / 12 fixture skips / 0 failures | author at `f62c7f18` |
-| #244 author | `--module tests.test_gfx_compressed_textures --module tests.test_replay_blob_verifier` | 18/18 native executed | author at `cd4245cf` |
-| #245 author | `--module tests.test_gfx_render_state --module tests.test_m7_metal_replay --module tests.test_m6_frame` | 68 executed / 12 fixture skips / 0 failures | author at `ada20dbc` |
-| #246 author | `--module tests.test_case_locator --module tests.test_evidence_index --module tests.test_agent_tools` | 155 ran / 154 executed / 1 skip / 0 failures | author at `8c17f779` |
-| #247 author | `--module tests.test_dsh_bridge --module tests.test_dsh_receipts --module tests.test_case_locator` | 115/115 executed; plugin 44/44 | author at `ab28f2da` |
-| #248 author | `--module tests.test_m7_translation_cache --module tests.test_m6_frame --module tests.test_gfx_independent_replay --module tests.test_correction_accept` | 128 executed / 0 failures; native stale-shader test pass | author at `1bffc7cb` |
-| #249 author | `--module tests.test_gfx_startup_trace --module tests.test_m6_live_capture --module tests.test_m7_continuous_supervisor` | 108 executed / 0 failures | author at `555447fb` |
-| #250 author | `--module tests.test_campaign_guard --module tests.test_automation_runner --module tests.test_gfx_replay_case_sequence --module tests.test_agent_tools` | 292 ran / 290 executed / 2 skips / 0 failures | author at `401d6863` |
-| #251 author | `--module tests.test_dsh_efficiency --module tests.test_test_runner` | 66 executed / 0 failures | author at `050f9272` |
-| #252 author | `--module tests.test_dsh_docs --module tests.test_case_locator --module tests.test_pre_ready_forensic` | 45 ran / 44 executed / 1 skip / 0 failures | author at `275df332` |
-| #254 author | `tests.test_gfx_gl_control_qualification` | 6/6 passed; 904 control unqualified at 15/16 | author at `63a3148e` |
-| #255 author | `--module tests.test_m7_pixel_diagnostics --module tests.test_m7_continuous_coordinator --module tests.test_dsh_campaign` | 174/174 executed | author at `090f2b52` |
-| #256 author | `--module tests.test_campaign_guard --module tests.test_dsh_bridge --module tests.test_automation_runner` | 246/246 executed under `PYTHONPATH=tests`; plugin 38/38 | author at `c403f06e` |
-| #259 docs follow-up | `--module tests.test_dsh_docs --module tests.test_check_doc_links --module tests.test_case_locator --module tests.test_pre_ready_forensic` + strict `check_doc_links.py` selection | 70 ran / 69 executed / 1 skipped / 0 failures; strict links exit 0 | runner `20261120T195902Z-f4c8ed6d` at `2142f071` |
-| This final docs follow-up | same docs selection + strict `check_doc_links.py` | 70 ran / 69 executed / 1 skipped / 0 failures; strict links exit 0 | docs selection at the reviewed head; the exact-head runner is recorded in PR #262 |
-| #260 review | `--module tests.test_session_state_claims --module tests.test_dsh_bridge` + neighbours | 103 ran / 103 executed / 0 failures; neighbours 214/214 | independent review at `63d00d31`, runner `20261120T203912Z-1a36ca95` |
-| #261 review | `--module tests.test_gfx_gl_control_qualification --module tests.test_agent_tools` + neighbours + plugin | 32/32 qualification; 353 ran / 352 executed / 1 skipped / 0 failures; plugin 9/9 | independent review at `60e70b62`, runner `20261120T213011Z-971b2722` |
-| Targeted native on merged main | compressed DXT1, sampler/raster, translation/cache, checkpoint reconciliation, GL control, campaign budgets, claim ledger, continuous supervisor, Metal replay | 255 ran / 243 executed / 12 skipped / 0 failures | runner `20261120T213558Z-2eac8514` at `4bf03285` |
-| Full offline profile (split) | all modules except `tests.test_reconstruction_differential`; that module run separately because it hangs only in full-suite order | split: 4,166 ran / 4,103 executed / 63 skipped / 1 failure / 0 errors; isolated module: 55 ran / 53 executed / 2 skipped / 0 failures; **combined 4,221 ran / 4,156 executed / 65 skipped / 1 failure / 0 errors** | split runner `20261120T215930Z-f5b80bdf`; isolated runner `20261120T214602Z-d8854dda` at `4bf03285` |
+| Baseline full offline profile at `25ee46db` | `test_runner run --profile offline` (fresh worktree) | 4,221 ran / 4,156 executed / 65 skipped / 0 failures / 6 errors (clean-build defect; fixed in #268); 1,244.7 s | `20261120T224312Z-911ef529` |
+| Candidate full offline profile at `ba8b7ba4` | same | 4,241 ran / 4,176 executed / 65 skipped / 0 failures / 6 errors (same clean-build defect); 621.4 s | `20261120T230503Z-40f002f7` |
+| Final integrated profile (post-#268) | same, fresh worktree at the #269 tree | recorded in [verification-20261121.md](../../analysis/harness-remediation/verification-20261121.md) | final gate runner |
+| #263 focused / neighbour | `test_gfx_gl_control_qualification` / `test_agent_tools` | 39/39; 116 ran / 115 executed / 1 skip | `20261120T233158Z-4c8a1fc9`, `20261120T233202Z-66aecaa1` |
+| #263 base | head tests on `25ee46db` | 2 failures + 1 error on the new cases | `20261120T233031Z-95fdcebf`, `20261120T232302Z-426f7800` |
+| #264 focused / neighbours | `test_session_state_claims` / bridge+campaign_guard+runner | 27/27; 183/183 | `20261120T233849Z-8120d67c`, `20261120T232253Z-63431288` |
+| #264 base | head tests on `25ee46db` | 10 of 12 new tests fail/error | `20261120T232320Z-56213f9b` |
+| #265 focused / order / worker | `test_oracle_shadow_acceptance` / with `test_agent_tools` / worker | 7/7; 123 ran / 122 executed / 1 skip; 19/19 | `20261120T232220Z-f0988248`, `20261120T232220Z-d3890e12`, `20261120T232243Z-aaa53646` |
+| #265 base | head test on `25ee46db` | retry test fails | `20261120T232243Z-12c12cc9` |
+| #266 focused / neighbours | `test_dsh_bridge` / + locator, receipts, guard, runner | 93/93; 241/241 | `20261120T234146Z-9fb32f4c`, `20261120T234146Z-1b7e3aba` |
+| #266 base | head tests on `25ee46db` | corrupt anchor `infrastructure_error` + traceback; refused prepare left the session root | `20261120T232243Z-5139baff` |
+| #267 plugin | `node --test dsh/eu4-goal-plugin/tests/` | 50/50; base 47/47 with 3 new failures | local node runs |
+| #268 clean tree | six native modules, `.build` absent | 8 errors at `25ee46db`; 11/11 executed on the head | `20261120T231728Z-12176d5f`, `20261120T231738Z-d890def1` |
+| Audit aggregate | 29 modules at `a0e3a4e8` | 852 ran / 849 executed / 3 skipped | `20261120T185637Z-1a7c318d` |
+| Targeted native at `4bf03285` | compressed, sampler, translation, checkpoint, control, budgets, ledger, supervisor, replay | 255 ran / 243 executed / 12 skipped | `20261120T213558Z-2eac8514` |
+| Cache profile | 904, 3 reps | cold 3.211 s, warm 0.374 s, hash 26.8 ms, native 0.603 s, GPU unknown | [cache-profile.md](../../analysis/harness-remediation/cache-profile.md) |
+| Efficiency trials | 904, 3 paired A/B | 6/6 correct; medians 7.525 s / 7.575 s; payload 6.2 MB / 7.8 KB; 0 launches | [efficiency-20261121.md](../../analysis/harness-remediation/efficiency-20261121.md) |
 
 ## Unresolved scientific blockers
 
-1. **Authentic live-GL control equivalence (B2/B3).** `blocked`. The
-   authentic present-904 control differs from live GL at checkpoint 15 (5 px /
-   max 1) and 16 (4,645 / max 86), all four BGRA channels. The 904 trace marks
-   draw 14 with depth test/write enabled and `multisample=true`. Draw 1 targets
-   framebuffer 6, not `fb:0`; the first `fb:0` draw is 14, and the event-7
-   `fb:0` depth clear is 1, which the one-draw control reproduces. The drawable
-   state (`GL_SAMPLES`, `GL_SAMPLE_BUFFERS`, bit depths) and prior-frame
-   contents were never observed in 904. **The 904 measurements are historical
-   and preserved unchanged; do not create a new capture with the 904 seal.**
-   New observations require a newly sealed capture, paired with a new
-   original-API control from that capture's own stream, resources and
-   checkpoint. Only zero differing BGRA pixels between that control and that
-   capture's live GL permit a Metal residual to be considered; otherwise name
-   the next missing observation. Do not substitute a window or 10-bit FBO.
-2. **Campaign ledger integrity.** `fixed` in #260. Corrupt, truncated or
-   unreadable ledger state now refuses with `ClaimLedgerError`; the bridge
-   returns an explicit integrity refusal before the checker, and cross-process
-   and interrupted-write regressions pin the behaviour.
-3. **Original-API control provenance/authority.** `fixed` in #261, fail-closed.
-   The gate derives the checkpoint from the seal-verified event stream, verifies
-   all referenced blobs, executes a challenge-bound renderer, compares captured
-   live bytes, and refuses blame for any renderer absent from the checked-in
-   registry. The registry is empty; populating it requires a separate reviewed
-   change that binds the receipt to the renderer.
-4. **Authentic compressed same-seal comparison.** `partial`. BC1 transparent
-   alpha and orientation are rendered and verified against the decoded path; an
-   authentic 904 decoded-vs-original-block comparison is still needed.
-5. **Per-session write roots.** Implemented in #256 and audit-reviewed; no
-   formal GitHub approval exists.
-6. **Native function/pipeline cache.** Addressed in #248 with a synthetic
-   two-frame stale-name test; no authentic 326-event profile yet.
-7. **Three paired efficiency trials.** `outstanding`. D1 records comparable A/B
-   numbers; the three paired trials of the new workflow have not been run and
-   GPU time remains unknown. No wall-time improvement is claimed.
-8. **Plugin prompt cleanup and corrupt-anchor wording.** Nonblocking #247
-   follow-ups: plugin-root prompt-fiber cleanup on unload and a structured
-   refusal for a corrupt anchor.
+1. **Authentic live-GL control equivalence (B2/B3).** `blocked`, transferred to
+   M7. The historical 904 control differs from live GL at checkpoint 15
+   (5 px / max 1) and 16 (4,645 / max 86). The 904 seal lacks `GL_SAMPLES`,
+   `GL_SAMPLE_BUFFERS`, bit depths and prior-frame contents, so the residual
+   cannot be assigned to Metal. The 904 bytes and measurements are preserved;
+   do not create a new capture carrying the 904 seal. A new experiment needs a
+   newly sealed capture, a new original-API renderer from that capture's own
+   stream/resources/checkpoint, a receipt bound to the registered renderer
+   before `AUTHORITIES` is populated, and zero differing BGRA pixels at the
+   first divergent checkpoint before any Metal blame.
+2. **Claim-ledger integrity.** Closed by #260/#264. The witness is local to the
+   writable campaign directory; deleting/rewriting the head is the documented
+   boundary, and a stale head after an interrupted head write leaves one
+   uncommitted tail. No second budget authority was added.
+3. **Control provenance/authority.** Closed by #261/#263, fail-closed. A
+   coordinated control+receipt rewrite would only matter once a renderer is
+   pinned; receipt-to-renderer binding is required before the first registry
+   entry.
+4. **Authentic compressed same-seal comparison.** Completed for 904: the block
+   path is byte-identical to the stored shadow and much closer to live GL than
+   the decoded path; texture representation is material but does not explain
+   the remaining 4 pixels. No parity claim.
+5. **Per-session write roots and ledger.** Implemented and reviewed (#256,
+   #264); no formal GitHub `APPROVE` exists.
+6. **Native cache cost.** Profiled (#248 + this closure): translation cache
+   8.59× cold→warm, native function/pipeline cache in-process only, GPU
+   service time unknown. No material regression; no redesign.
+7. **Three paired efficiency trials.** Completed; no wall-time improvement is
+   claimed. The measured interface difference is 798× less JSON for the same
+   correct classification.
+8. **Plugin prompt cleanup and corrupt-anchor/session-root wording.** Fixed in
+   #267 and #266. A non-empty but structurally incomplete identities mapping
+   still authorizes `context` through the legacy path; it cannot produce a
+   false qualification and requires anchor write access.

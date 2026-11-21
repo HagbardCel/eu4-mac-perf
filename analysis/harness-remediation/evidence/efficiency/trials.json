@@ -1,0 +1,417 @@
+{
+  "schema": "harness-efficiency-trials/v1",
+  "machine": {
+    "host": "Fabians-MacBook-Pro.fritz.box",
+    "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "python": "3.14.10",
+    "cpu_count": 18
+  },
+  "workload": {
+    "frame": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/frame",
+    "present_index": 904,
+    "shaders": {
+      "path": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/shadow/shaders",
+      "files": 104,
+      "bytes": 1298349
+    },
+    "expected": {
+      "first_divergence_event": 15,
+      "checkpoint_15_pixels": 4,
+      "checkpoint_15_max_channel_error": 1
+    }
+  },
+  "arms": {
+    "A": "independent replay + full producer replay-report.json",
+    "B": "eu4_replay independent compact gfx-agent-diagnosis/v1"
+  },
+  "trials": [
+    {
+      "arm": "A-legacy-full-report",
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "-m",
+        "automation.gfx_independent_replay",
+        "--frame",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/frame",
+        "--shaders",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/shadow/shaders",
+        "--out",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/efficiency/runs/trial-1-A"
+      ],
+      "exit_code": 2,
+      "replay_invocations": 1,
+      "diagnosis_invocations": 1,
+      "payload_bytes": 6195746,
+      "first_divergence_event": 15,
+      "checkpoint_15": {
+        "mismatched_pixels": 4,
+        "max_channel_error": 1,
+        "alpha_different_pixels": 0,
+        "first_differing_pixel": {
+          "x": 209,
+          "y": 50,
+          "offset": 86609
+        },
+        "status": "divergent",
+        "metal_sha256": "dc2602847b06c23d068eaa599d4c38d99e747b9f4eebfaad69aad4750c798c11",
+        "reference_sha256": "3f71265b4e0c7afe9d92213bc679cd32c7625f39dc94a5ea1778abce3eae2232"
+      },
+      "classification": "incomplete_diagnostics",
+      "axes": {
+        "capture_validity": "valid",
+        "frame_shader_identity": "unverified_session",
+        "gpu_execution": "ok",
+        "resource_provenance": "verified",
+        "operation_coverage": "complete",
+        "rendering_state_coverage": "partial",
+        "pixel_comparison": "divergent",
+        "first_divergence_confidence": "intermediate"
+      },
+      "tool_failure": false,
+      "stderr_tail": "",
+      "stdout_bytes": 14749,
+      "wall_seconds": 7.855,
+      "trial": 1,
+      "order_position": "A",
+      "verdict": {
+        "correct_first_divergence": true,
+        "correct_checkpoint_pixels": true,
+        "correct_checkpoint_max_error": true,
+        "not_a_tool_failure": true,
+        "correct": true
+      },
+      "eu4_processes": [],
+      "shader_cache": {
+        "path": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/shadow/shaders",
+        "files": 104,
+        "bytes": 1298349
+      },
+      "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/efficiency/runs/trial-1-A"
+    },
+    {
+      "arm": "B-canonical-compact",
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "-m",
+        "automation.agent_tools",
+        "eu4_replay",
+        "independent",
+        "--frame",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/frame",
+        "--shaders",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/shadow/shaders",
+        "--replay-out",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/efficiency/runs/trial-1-B"
+      ],
+      "exit_code": 2,
+      "replay_invocations": 1,
+      "diagnosis_invocations": 1,
+      "payload_bytes": 7768,
+      "envelope_bytes": null,
+      "truncated": true,
+      "first_divergence_event": 15,
+      "checkpoint_15": {
+        "mismatched_pixels": 4,
+        "max_channel_error": 1,
+        "alpha_different_pixels": null,
+        "first_differing_pixel": {
+          "x": 209,
+          "y": 50,
+          "offset": 86609
+        },
+        "status": "divergent"
+      },
+      "classification": "incomplete_diagnostics",
+      "axes": {
+        "capture_validity": "valid",
+        "frame_shader_identity": "unverified_session",
+        "gpu_execution": "ok",
+        "resource_provenance": "verified",
+        "operation_coverage": "complete",
+        "rendering_state_coverage": "partial",
+        "pixel_comparison": "divergent",
+        "first_divergence_confidence": "intermediate"
+      },
+      "tool_failure": false,
+      "failure_kind": "evidence_invalid",
+      "stderr_tail": "",
+      "stdout_bytes": 7768,
+      "wall_seconds": 7.53,
+      "trial": 1,
+      "order_position": "B",
+      "verdict": {
+        "correct_first_divergence": true,
+        "correct_checkpoint_pixels": true,
+        "correct_checkpoint_max_error": true,
+        "not_a_tool_failure": true,
+        "correct": true
+      },
+      "eu4_processes": [],
+      "shader_cache": {
+        "path": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/shadow/shaders",
+        "files": 104,
+        "bytes": 1298349
+      },
+      "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/efficiency/runs/trial-1-B"
+    },
+    {
+      "arm": "B-canonical-compact",
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "-m",
+        "automation.agent_tools",
+        "eu4_replay",
+        "independent",
+        "--frame",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/frame",
+        "--shaders",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/shadow/shaders",
+        "--replay-out",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/efficiency/runs/trial-2-B"
+      ],
+      "exit_code": 2,
+      "replay_invocations": 1,
+      "diagnosis_invocations": 1,
+      "payload_bytes": 7768,
+      "envelope_bytes": null,
+      "truncated": true,
+      "first_divergence_event": 15,
+      "checkpoint_15": {
+        "mismatched_pixels": 4,
+        "max_channel_error": 1,
+        "alpha_different_pixels": null,
+        "first_differing_pixel": {
+          "x": 209,
+          "y": 50,
+          "offset": 86609
+        },
+        "status": "divergent"
+      },
+      "classification": "incomplete_diagnostics",
+      "axes": {
+        "capture_validity": "valid",
+        "frame_shader_identity": "unverified_session",
+        "gpu_execution": "ok",
+        "resource_provenance": "verified",
+        "operation_coverage": "complete",
+        "rendering_state_coverage": "partial",
+        "pixel_comparison": "divergent",
+        "first_divergence_confidence": "intermediate"
+      },
+      "tool_failure": false,
+      "failure_kind": "evidence_invalid",
+      "stderr_tail": "",
+      "stdout_bytes": 7768,
+      "wall_seconds": 7.575,
+      "trial": 2,
+      "order_position": "B",
+      "verdict": {
+        "correct_first_divergence": true,
+        "correct_checkpoint_pixels": true,
+        "correct_checkpoint_max_error": true,
+        "not_a_tool_failure": true,
+        "correct": true
+      },
+      "eu4_processes": [],
+      "shader_cache": {
+        "path": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/shadow/shaders",
+        "files": 104,
+        "bytes": 1298349
+      },
+      "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/efficiency/runs/trial-2-B"
+    },
+    {
+      "arm": "A-legacy-full-report",
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "-m",
+        "automation.gfx_independent_replay",
+        "--frame",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/frame",
+        "--shaders",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/shadow/shaders",
+        "--out",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/efficiency/runs/trial-2-A"
+      ],
+      "exit_code": 2,
+      "replay_invocations": 1,
+      "diagnosis_invocations": 1,
+      "payload_bytes": 6195746,
+      "first_divergence_event": 15,
+      "checkpoint_15": {
+        "mismatched_pixels": 4,
+        "max_channel_error": 1,
+        "alpha_different_pixels": 0,
+        "first_differing_pixel": {
+          "x": 209,
+          "y": 50,
+          "offset": 86609
+        },
+        "status": "divergent",
+        "metal_sha256": "dc2602847b06c23d068eaa599d4c38d99e747b9f4eebfaad69aad4750c798c11",
+        "reference_sha256": "3f71265b4e0c7afe9d92213bc679cd32c7625f39dc94a5ea1778abce3eae2232"
+      },
+      "classification": "incomplete_diagnostics",
+      "axes": {
+        "capture_validity": "valid",
+        "frame_shader_identity": "unverified_session",
+        "gpu_execution": "ok",
+        "resource_provenance": "verified",
+        "operation_coverage": "complete",
+        "rendering_state_coverage": "partial",
+        "pixel_comparison": "divergent",
+        "first_divergence_confidence": "intermediate"
+      },
+      "tool_failure": false,
+      "stderr_tail": "",
+      "stdout_bytes": 14749,
+      "wall_seconds": 7.496,
+      "trial": 2,
+      "order_position": "A",
+      "verdict": {
+        "correct_first_divergence": true,
+        "correct_checkpoint_pixels": true,
+        "correct_checkpoint_max_error": true,
+        "not_a_tool_failure": true,
+        "correct": true
+      },
+      "eu4_processes": [],
+      "shader_cache": {
+        "path": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/shadow/shaders",
+        "files": 104,
+        "bytes": 1298349
+      },
+      "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/efficiency/runs/trial-2-A"
+    },
+    {
+      "arm": "A-legacy-full-report",
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "-m",
+        "automation.gfx_independent_replay",
+        "--frame",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/frame",
+        "--shaders",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/shadow/shaders",
+        "--out",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/efficiency/runs/trial-3-A"
+      ],
+      "exit_code": 2,
+      "replay_invocations": 1,
+      "diagnosis_invocations": 1,
+      "payload_bytes": 6195746,
+      "first_divergence_event": 15,
+      "checkpoint_15": {
+        "mismatched_pixels": 4,
+        "max_channel_error": 1,
+        "alpha_different_pixels": 0,
+        "first_differing_pixel": {
+          "x": 209,
+          "y": 50,
+          "offset": 86609
+        },
+        "status": "divergent",
+        "metal_sha256": "dc2602847b06c23d068eaa599d4c38d99e747b9f4eebfaad69aad4750c798c11",
+        "reference_sha256": "3f71265b4e0c7afe9d92213bc679cd32c7625f39dc94a5ea1778abce3eae2232"
+      },
+      "classification": "incomplete_diagnostics",
+      "axes": {
+        "capture_validity": "valid",
+        "frame_shader_identity": "unverified_session",
+        "gpu_execution": "ok",
+        "resource_provenance": "verified",
+        "operation_coverage": "complete",
+        "rendering_state_coverage": "partial",
+        "pixel_comparison": "divergent",
+        "first_divergence_confidence": "intermediate"
+      },
+      "tool_failure": false,
+      "stderr_tail": "",
+      "stdout_bytes": 14749,
+      "wall_seconds": 7.525,
+      "trial": 3,
+      "order_position": "A",
+      "verdict": {
+        "correct_first_divergence": true,
+        "correct_checkpoint_pixels": true,
+        "correct_checkpoint_max_error": true,
+        "not_a_tool_failure": true,
+        "correct": true
+      },
+      "eu4_processes": [],
+      "shader_cache": {
+        "path": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/shadow/shaders",
+        "files": 104,
+        "bytes": 1298349
+      },
+      "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/efficiency/runs/trial-3-A"
+    },
+    {
+      "arm": "B-canonical-compact",
+      "command": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "-m",
+        "automation.agent_tools",
+        "eu4_replay",
+        "independent",
+        "--frame",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/frame",
+        "--shaders",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/shadow/shaders",
+        "--replay-out",
+        "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/efficiency/runs/trial-3-B"
+      ],
+      "exit_code": 2,
+      "replay_invocations": 1,
+      "diagnosis_invocations": 1,
+      "payload_bytes": 7768,
+      "envelope_bytes": null,
+      "truncated": true,
+      "first_divergence_event": 15,
+      "checkpoint_15": {
+        "mismatched_pixels": 4,
+        "max_channel_error": 1,
+        "alpha_different_pixels": null,
+        "first_differing_pixel": {
+          "x": 209,
+          "y": 50,
+          "offset": 86609
+        },
+        "status": "divergent"
+      },
+      "classification": "incomplete_diagnostics",
+      "axes": {
+        "capture_validity": "valid",
+        "frame_shader_identity": "unverified_session",
+        "gpu_execution": "ok",
+        "resource_provenance": "verified",
+        "operation_coverage": "complete",
+        "rendering_state_coverage": "partial",
+        "pixel_comparison": "divergent",
+        "first_divergence_confidence": "intermediate"
+      },
+      "tool_failure": false,
+      "failure_kind": "evidence_invalid",
+      "stderr_tail": "",
+      "stdout_bytes": 7768,
+      "wall_seconds": 7.667,
+      "trial": 3,
+      "order_position": "B",
+      "verdict": {
+        "correct_first_divergence": true,
+        "correct_checkpoint_pixels": true,
+        "correct_checkpoint_max_error": true,
+        "not_a_tool_failure": true,
+        "correct": true
+      },
+      "eu4_processes": [],
+      "shader_cache": {
+        "path": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/shadow/shaders",
+        "files": 104,
+        "bytes": 1298349
+      },
+      "out": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/efficiency/runs/trial-3-B"
+    }
+  ]
+}

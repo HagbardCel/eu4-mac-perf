@@ -1,0 +1,1646 @@
+{
+  "schema": "compressed-904/draw14-inputs/v1",
+  "present_index": 904,
+  "session_id": "afd444f2-6478-459f-8db6-e565c49dbd63",
+  "capture_dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/frame",
+  "draw": "draw index 14 = event 15 (1-based event stream line 15)",
+  "event_stream": {
+    "file": "frame-events.jsonl",
+    "bytes": 9219432,
+    "sha256": "8801f037a06ed618e973f081fa5a20dca5a705124f92fca50c9d12554e3dd547"
+  },
+  "frame_seal": {
+    "file": "frame-seal.json",
+    "bytes": 1229,
+    "sha256": "889bf02531216a2da7c7ab7a529a40801b77cd3b846ecc86f653a572af9e8e2f",
+    "declared_event_stream_sha256": "8801f037a06ed618e973f081fa5a20dca5a705124f92fca50c9d12554e3dd547"
+  },
+  "trace_manifest": {
+    "file": "frame-trace.json",
+    "sha256": "faf201f01583daf54a44a06432c3be674f00aca3bc7f20736b6986ec69d3027d"
+  },
+  "frame_reference": {
+    "file": "frame-reference.bgra",
+    "bytes": 7720704,
+    "sha256": "d06393582d04fc4a58dfd1cc60bf99757c46537ab7a9aa9c81064f3940208dda"
+  },
+  "texture_count": 15,
+  "level_count": 72,
+  "compressed_level_count": 65,
+  "textures": [
+    {
+      "texture_id": 375,
+      "internal_format": "DXT5",
+      "target": "2D",
+      "width": 2048,
+      "height": 2048,
+      "level_count": 12,
+      "compressed_level_count": 12,
+      "levels": [
+        {
+          "level": 0,
+          "width": 2048,
+          "height": 2048,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 16777216,
+          "file": "tex-029ecd445de582f54f616473a155b106767df1ca8a6d3d21430937420b68c4e5.bin",
+          "declared_sha256": "029ecd445de582f54f616473a155b106767df1ca8a6d3d21430937420b68c4e5",
+          "actual_sha256": "029ecd445de582f54f616473a155b106767df1ca8a6d3d21430937420b68c4e5",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 4194304,
+            "row_stride": 8192,
+            "file": "texc-7923730a3376cff4bf181d51fbc886efc17be3cb984de3d189094b50cdaa0da5.bin",
+            "declared_sha256": "7923730a3376cff4bf181d51fbc886efc17be3cb984de3d189094b50cdaa0da5",
+            "actual_sha256": "7923730a3376cff4bf181d51fbc886efc17be3cb984de3d189094b50cdaa0da5",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 1,
+          "width": 1024,
+          "height": 1024,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 4194304,
+          "file": "tex-f3b402f04d91374ca68d40d8e4e3885b7643ec5a2aef1994f945a03fa1fc24cb.bin",
+          "declared_sha256": "f3b402f04d91374ca68d40d8e4e3885b7643ec5a2aef1994f945a03fa1fc24cb",
+          "actual_sha256": "f3b402f04d91374ca68d40d8e4e3885b7643ec5a2aef1994f945a03fa1fc24cb",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 1048576,
+            "row_stride": 4096,
+            "file": "texc-22ee74d7a895e17b141c2fbb8bf67a5ab49a1fed14988aeb033a63c2b7091454.bin",
+            "declared_sha256": "22ee74d7a895e17b141c2fbb8bf67a5ab49a1fed14988aeb033a63c2b7091454",
+            "actual_sha256": "22ee74d7a895e17b141c2fbb8bf67a5ab49a1fed14988aeb033a63c2b7091454",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 2,
+          "width": 512,
+          "height": 512,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 1048576,
+          "file": "tex-0984d33abfe8b1d6a3dea3641f794f9f4c703dc868fd4d4f7d501ceed7ec8a8b.bin",
+          "declared_sha256": "0984d33abfe8b1d6a3dea3641f794f9f4c703dc868fd4d4f7d501ceed7ec8a8b",
+          "actual_sha256": "0984d33abfe8b1d6a3dea3641f794f9f4c703dc868fd4d4f7d501ceed7ec8a8b",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 262144,
+            "row_stride": 2048,
+            "file": "texc-378f588a81593a717c68bf4f3b69fd5971e756e8b98e26f7b964c0b6094112ad.bin",
+            "declared_sha256": "378f588a81593a717c68bf4f3b69fd5971e756e8b98e26f7b964c0b6094112ad",
+            "actual_sha256": "378f588a81593a717c68bf4f3b69fd5971e756e8b98e26f7b964c0b6094112ad",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 3,
+          "width": 256,
+          "height": 256,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 262144,
+          "file": "tex-7f0ea63d7823d41d4a740d0405ae804ac958f030d75602966d080a170bfbdb3e.bin",
+          "declared_sha256": "7f0ea63d7823d41d4a740d0405ae804ac958f030d75602966d080a170bfbdb3e",
+          "actual_sha256": "7f0ea63d7823d41d4a740d0405ae804ac958f030d75602966d080a170bfbdb3e",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 65536,
+            "row_stride": 1024,
+            "file": "texc-06594f453df216142828a47907ca420a72516165c1e7e805a141af69661cee2a.bin",
+            "declared_sha256": "06594f453df216142828a47907ca420a72516165c1e7e805a141af69661cee2a",
+            "actual_sha256": "06594f453df216142828a47907ca420a72516165c1e7e805a141af69661cee2a",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 4,
+          "width": 128,
+          "height": 128,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 65536,
+          "file": "tex-74291480173a6d1c028174e97611371909c9cc4397332b04cb9e0302e0bc4753.bin",
+          "declared_sha256": "74291480173a6d1c028174e97611371909c9cc4397332b04cb9e0302e0bc4753",
+          "actual_sha256": "74291480173a6d1c028174e97611371909c9cc4397332b04cb9e0302e0bc4753",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 16384,
+            "row_stride": 512,
+            "file": "texc-17d7850ddf7bea77d61eef3a3d9768b286eb68f962db84ab3e8cac908fe3b34f.bin",
+            "declared_sha256": "17d7850ddf7bea77d61eef3a3d9768b286eb68f962db84ab3e8cac908fe3b34f",
+            "actual_sha256": "17d7850ddf7bea77d61eef3a3d9768b286eb68f962db84ab3e8cac908fe3b34f",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 5,
+          "width": 64,
+          "height": 64,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 16384,
+          "file": "tex-f3034d297ae793aaf68f0a8e2a4b6185e713d751b80f7494e32db51f80b014da.bin",
+          "declared_sha256": "f3034d297ae793aaf68f0a8e2a4b6185e713d751b80f7494e32db51f80b014da",
+          "actual_sha256": "f3034d297ae793aaf68f0a8e2a4b6185e713d751b80f7494e32db51f80b014da",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 4096,
+            "row_stride": 256,
+            "file": "texc-4ccc385e24042bce137e38e8a686bfae0954a79c631ea19195a33cff40aa939e.bin",
+            "declared_sha256": "4ccc385e24042bce137e38e8a686bfae0954a79c631ea19195a33cff40aa939e",
+            "actual_sha256": "4ccc385e24042bce137e38e8a686bfae0954a79c631ea19195a33cff40aa939e",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 6,
+          "width": 32,
+          "height": 32,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 4096,
+          "file": "tex-990e60be37536b8dd772677d2ce45eb64fc32f06ed7da5c343dc9a4e2f0e3364.bin",
+          "declared_sha256": "990e60be37536b8dd772677d2ce45eb64fc32f06ed7da5c343dc9a4e2f0e3364",
+          "actual_sha256": "990e60be37536b8dd772677d2ce45eb64fc32f06ed7da5c343dc9a4e2f0e3364",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 1024,
+            "row_stride": 128,
+            "file": "texc-a7098aafc096fe6374fb58ce89380e6a7a3ceb18ed94a74593b7b0d68f05f31c.bin",
+            "declared_sha256": "a7098aafc096fe6374fb58ce89380e6a7a3ceb18ed94a74593b7b0d68f05f31c",
+            "actual_sha256": "a7098aafc096fe6374fb58ce89380e6a7a3ceb18ed94a74593b7b0d68f05f31c",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 7,
+          "width": 16,
+          "height": 16,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 1024,
+          "file": "tex-dea36ec0fb61a686a9d564ec60bd47e6e49f9251503e2e3c0f9cc516e9faebdd.bin",
+          "declared_sha256": "dea36ec0fb61a686a9d564ec60bd47e6e49f9251503e2e3c0f9cc516e9faebdd",
+          "actual_sha256": "dea36ec0fb61a686a9d564ec60bd47e6e49f9251503e2e3c0f9cc516e9faebdd",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 256,
+            "row_stride": 64,
+            "file": "texc-02bc7260ed83b8946366bbf2592f7e02ac0239d1c1c9e7752200b58ccb005f07.bin",
+            "declared_sha256": "02bc7260ed83b8946366bbf2592f7e02ac0239d1c1c9e7752200b58ccb005f07",
+            "actual_sha256": "02bc7260ed83b8946366bbf2592f7e02ac0239d1c1c9e7752200b58ccb005f07",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 8,
+          "width": 8,
+          "height": 8,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 256,
+          "file": "tex-0fcd31e293f694ad90f37dfd286decdde027c67705947542d522314f3fd132ee.bin",
+          "declared_sha256": "0fcd31e293f694ad90f37dfd286decdde027c67705947542d522314f3fd132ee",
+          "actual_sha256": "0fcd31e293f694ad90f37dfd286decdde027c67705947542d522314f3fd132ee",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 64,
+            "row_stride": 32,
+            "file": "texc-cd8c1f89b53bff7bbc85b86ee539310b6d25b26d650699feb93ecad212f4a03f.bin",
+            "declared_sha256": "cd8c1f89b53bff7bbc85b86ee539310b6d25b26d650699feb93ecad212f4a03f",
+            "actual_sha256": "cd8c1f89b53bff7bbc85b86ee539310b6d25b26d650699feb93ecad212f4a03f",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 9,
+          "width": 4,
+          "height": 4,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 64,
+          "file": "tex-d0e43bad49b69f911e52e4755a471787fa590d401dabaab05442700774b465d2.bin",
+          "declared_sha256": "d0e43bad49b69f911e52e4755a471787fa590d401dabaab05442700774b465d2",
+          "actual_sha256": "d0e43bad49b69f911e52e4755a471787fa590d401dabaab05442700774b465d2",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 16,
+            "row_stride": 16,
+            "file": "texc-31dc6e9d48c232a2487546a654bd64d2a57d34ffbdd4c8f3ee772bab8b4c3fc6.bin",
+            "declared_sha256": "31dc6e9d48c232a2487546a654bd64d2a57d34ffbdd4c8f3ee772bab8b4c3fc6",
+            "actual_sha256": "31dc6e9d48c232a2487546a654bd64d2a57d34ffbdd4c8f3ee772bab8b4c3fc6",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 10,
+          "width": 2,
+          "height": 2,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 16,
+          "file": "tex-b607e6d413753afda36fda5158a8af385b6e288e32a8935d3f1b57a058752964.bin",
+          "declared_sha256": "b607e6d413753afda36fda5158a8af385b6e288e32a8935d3f1b57a058752964",
+          "actual_sha256": "b607e6d413753afda36fda5158a8af385b6e288e32a8935d3f1b57a058752964",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 16,
+            "row_stride": 16,
+            "file": "texc-3537a6ae2cf0c0470ff2070b2bce88d9a5c2f1c4b634e374eabd8dbfca0c2fa8.bin",
+            "declared_sha256": "3537a6ae2cf0c0470ff2070b2bce88d9a5c2f1c4b634e374eabd8dbfca0c2fa8",
+            "actual_sha256": "3537a6ae2cf0c0470ff2070b2bce88d9a5c2f1c4b634e374eabd8dbfca0c2fa8",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 11,
+          "width": 1,
+          "height": 1,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 4,
+          "file": "tex-8b80d132e0981a2fd9aac0b3f86761449d8b72b9924b344577176ee9f05bee8a.bin",
+          "declared_sha256": "8b80d132e0981a2fd9aac0b3f86761449d8b72b9924b344577176ee9f05bee8a",
+          "actual_sha256": "8b80d132e0981a2fd9aac0b3f86761449d8b72b9924b344577176ee9f05bee8a",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 16,
+            "row_stride": 16,
+            "file": "texc-38fcdfe9d83304a1317c635a452dbf34e8f08f5e1e2ca498898737090a538755.bin",
+            "declared_sha256": "38fcdfe9d83304a1317c635a452dbf34e8f08f5e1e2ca498898737090a538755",
+            "actual_sha256": "38fcdfe9d83304a1317c635a452dbf34e8f08f5e1e2ca498898737090a538755",
+            "sha256_matches": true
+          }
+        }
+      ]
+    },
+    {
+      "texture_id": 387,
+      "internal_format": "DXT5",
+      "target": "2D",
+      "width": 512,
+      "height": 512,
+      "level_count": 1,
+      "compressed_level_count": 1,
+      "levels": [
+        {
+          "level": 0,
+          "width": 512,
+          "height": 512,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 1048576,
+          "file": "tex-1bbcbc44819fc88091fcab485db1b323fb2032aa581ec1d41be9b832d37f3e65.bin",
+          "declared_sha256": "1bbcbc44819fc88091fcab485db1b323fb2032aa581ec1d41be9b832d37f3e65",
+          "actual_sha256": "1bbcbc44819fc88091fcab485db1b323fb2032aa581ec1d41be9b832d37f3e65",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 262144,
+            "row_stride": 2048,
+            "file": "texc-eddf4a74cca8a84850bbb7660d3b8a33a5e36dc986ee304df3060aa4843947f9.bin",
+            "declared_sha256": "eddf4a74cca8a84850bbb7660d3b8a33a5e36dc986ee304df3060aa4843947f9",
+            "actual_sha256": "eddf4a74cca8a84850bbb7660d3b8a33a5e36dc986ee304df3060aa4843947f9",
+            "sha256_matches": true
+          }
+        }
+      ]
+    },
+    {
+      "texture_id": 376,
+      "internal_format": "DXT5",
+      "target": "2D",
+      "width": 2048,
+      "height": 2048,
+      "level_count": 12,
+      "compressed_level_count": 12,
+      "levels": [
+        {
+          "level": 0,
+          "width": 2048,
+          "height": 2048,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 16777216,
+          "file": "tex-1bc1e9f22bb64d90ee29502ca7bd2efc41159fc50f952703d95e8d6a98bc4189.bin",
+          "declared_sha256": "1bc1e9f22bb64d90ee29502ca7bd2efc41159fc50f952703d95e8d6a98bc4189",
+          "actual_sha256": "1bc1e9f22bb64d90ee29502ca7bd2efc41159fc50f952703d95e8d6a98bc4189",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 4194304,
+            "row_stride": 8192,
+            "file": "texc-2c5edcf78223a24e4c59057426cfa9fd346e3a9be6a7e902929c0c3e52f3db2a.bin",
+            "declared_sha256": "2c5edcf78223a24e4c59057426cfa9fd346e3a9be6a7e902929c0c3e52f3db2a",
+            "actual_sha256": "2c5edcf78223a24e4c59057426cfa9fd346e3a9be6a7e902929c0c3e52f3db2a",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 1,
+          "width": 1024,
+          "height": 1024,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 4194304,
+          "file": "tex-aa39c43f4e1be3576b501b6f1f269680264203af90fe55ba786c2777b8f7a5be.bin",
+          "declared_sha256": "aa39c43f4e1be3576b501b6f1f269680264203af90fe55ba786c2777b8f7a5be",
+          "actual_sha256": "aa39c43f4e1be3576b501b6f1f269680264203af90fe55ba786c2777b8f7a5be",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 1048576,
+            "row_stride": 4096,
+            "file": "texc-92f709d1e93f0a9c52fe48eb376f02d192c04210925f46ef7406ff6a4fb5ac22.bin",
+            "declared_sha256": "92f709d1e93f0a9c52fe48eb376f02d192c04210925f46ef7406ff6a4fb5ac22",
+            "actual_sha256": "92f709d1e93f0a9c52fe48eb376f02d192c04210925f46ef7406ff6a4fb5ac22",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 2,
+          "width": 512,
+          "height": 512,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 1048576,
+          "file": "tex-2aad6096d0ba1b1f330e3c33298319613fe36053ef069c26d5c92b8c339a6186.bin",
+          "declared_sha256": "2aad6096d0ba1b1f330e3c33298319613fe36053ef069c26d5c92b8c339a6186",
+          "actual_sha256": "2aad6096d0ba1b1f330e3c33298319613fe36053ef069c26d5c92b8c339a6186",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 262144,
+            "row_stride": 2048,
+            "file": "texc-d9ddce9f93d150cbead7f27032923aa79541e83aa0c766cd0f5feed4661fa707.bin",
+            "declared_sha256": "d9ddce9f93d150cbead7f27032923aa79541e83aa0c766cd0f5feed4661fa707",
+            "actual_sha256": "d9ddce9f93d150cbead7f27032923aa79541e83aa0c766cd0f5feed4661fa707",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 3,
+          "width": 256,
+          "height": 256,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 262144,
+          "file": "tex-bcd0098e0179165e4f141f32e1a549e5590d08b32ff24831374bd5f53137d576.bin",
+          "declared_sha256": "bcd0098e0179165e4f141f32e1a549e5590d08b32ff24831374bd5f53137d576",
+          "actual_sha256": "bcd0098e0179165e4f141f32e1a549e5590d08b32ff24831374bd5f53137d576",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 65536,
+            "row_stride": 1024,
+            "file": "texc-f5dea1b73c963f27691318a65763101418c411be96cbfe3753e59b2320afc591.bin",
+            "declared_sha256": "f5dea1b73c963f27691318a65763101418c411be96cbfe3753e59b2320afc591",
+            "actual_sha256": "f5dea1b73c963f27691318a65763101418c411be96cbfe3753e59b2320afc591",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 4,
+          "width": 128,
+          "height": 128,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 65536,
+          "file": "tex-38342e6128102ab3281f01203c6cbb4ce20c9e0c1771c40efb087253b60d1101.bin",
+          "declared_sha256": "38342e6128102ab3281f01203c6cbb4ce20c9e0c1771c40efb087253b60d1101",
+          "actual_sha256": "38342e6128102ab3281f01203c6cbb4ce20c9e0c1771c40efb087253b60d1101",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 16384,
+            "row_stride": 512,
+            "file": "texc-7d0028606aa46fe45ec0123d1d98ecf57478a210ee50b97fd715704516e1201b.bin",
+            "declared_sha256": "7d0028606aa46fe45ec0123d1d98ecf57478a210ee50b97fd715704516e1201b",
+            "actual_sha256": "7d0028606aa46fe45ec0123d1d98ecf57478a210ee50b97fd715704516e1201b",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 5,
+          "width": 64,
+          "height": 64,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 16384,
+          "file": "tex-173e7a8e6143570d3594b070e39298930abca49949f401d536b2c36988d82a93.bin",
+          "declared_sha256": "173e7a8e6143570d3594b070e39298930abca49949f401d536b2c36988d82a93",
+          "actual_sha256": "173e7a8e6143570d3594b070e39298930abca49949f401d536b2c36988d82a93",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 4096,
+            "row_stride": 256,
+            "file": "texc-3c341ac908723324141ac33765508e8fd33f12ec905d30768ac23e11e72c130d.bin",
+            "declared_sha256": "3c341ac908723324141ac33765508e8fd33f12ec905d30768ac23e11e72c130d",
+            "actual_sha256": "3c341ac908723324141ac33765508e8fd33f12ec905d30768ac23e11e72c130d",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 6,
+          "width": 32,
+          "height": 32,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 4096,
+          "file": "tex-49255f2be61cb77046c0f1fb74b2bb3fa0715fea3c0e92a43bf0150f70b35bf5.bin",
+          "declared_sha256": "49255f2be61cb77046c0f1fb74b2bb3fa0715fea3c0e92a43bf0150f70b35bf5",
+          "actual_sha256": "49255f2be61cb77046c0f1fb74b2bb3fa0715fea3c0e92a43bf0150f70b35bf5",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 1024,
+            "row_stride": 128,
+            "file": "texc-02ca90f70e1a93ae10adb31615481c592f1e0f96273afdd191d58892479b9583.bin",
+            "declared_sha256": "02ca90f70e1a93ae10adb31615481c592f1e0f96273afdd191d58892479b9583",
+            "actual_sha256": "02ca90f70e1a93ae10adb31615481c592f1e0f96273afdd191d58892479b9583",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 7,
+          "width": 16,
+          "height": 16,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 1024,
+          "file": "tex-4cfca58a14e83e6861f03f0fb6d25b1719c96fc8d70064cc7e15d8fc3ac11a94.bin",
+          "declared_sha256": "4cfca58a14e83e6861f03f0fb6d25b1719c96fc8d70064cc7e15d8fc3ac11a94",
+          "actual_sha256": "4cfca58a14e83e6861f03f0fb6d25b1719c96fc8d70064cc7e15d8fc3ac11a94",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 256,
+            "row_stride": 64,
+            "file": "texc-4007b3a718c5a7e965f3fa364027bba4d4aaf2a480d60b8fff8dcb469ae91473.bin",
+            "declared_sha256": "4007b3a718c5a7e965f3fa364027bba4d4aaf2a480d60b8fff8dcb469ae91473",
+            "actual_sha256": "4007b3a718c5a7e965f3fa364027bba4d4aaf2a480d60b8fff8dcb469ae91473",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 8,
+          "width": 8,
+          "height": 8,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 256,
+          "file": "tex-142745591b26563a9192b3df9435cb0539b167b7a53b0decd9a48a4c290b2671.bin",
+          "declared_sha256": "142745591b26563a9192b3df9435cb0539b167b7a53b0decd9a48a4c290b2671",
+          "actual_sha256": "142745591b26563a9192b3df9435cb0539b167b7a53b0decd9a48a4c290b2671",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 64,
+            "row_stride": 32,
+            "file": "texc-8f2617b028d18b094ed85b6eb81670a0d2ab216d8f7dd696097d9e9933ac7231.bin",
+            "declared_sha256": "8f2617b028d18b094ed85b6eb81670a0d2ab216d8f7dd696097d9e9933ac7231",
+            "actual_sha256": "8f2617b028d18b094ed85b6eb81670a0d2ab216d8f7dd696097d9e9933ac7231",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 9,
+          "width": 4,
+          "height": 4,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 64,
+          "file": "tex-63f3df29db4300d2b32b2d2fbbfb80a93de51a168109ddc8ed3719336436a355.bin",
+          "declared_sha256": "63f3df29db4300d2b32b2d2fbbfb80a93de51a168109ddc8ed3719336436a355",
+          "actual_sha256": "63f3df29db4300d2b32b2d2fbbfb80a93de51a168109ddc8ed3719336436a355",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 16,
+            "row_stride": 16,
+            "file": "texc-0def5b451488d4c57a343379b3abbec689cb44ec66ba944e3e0945efa588c2b2.bin",
+            "declared_sha256": "0def5b451488d4c57a343379b3abbec689cb44ec66ba944e3e0945efa588c2b2",
+            "actual_sha256": "0def5b451488d4c57a343379b3abbec689cb44ec66ba944e3e0945efa588c2b2",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 10,
+          "width": 2,
+          "height": 2,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 16,
+          "file": "tex-b727233b4b02d4bd9591d28d5f0e54c2544eb3ba7490d58725c41077606f255b.bin",
+          "declared_sha256": "b727233b4b02d4bd9591d28d5f0e54c2544eb3ba7490d58725c41077606f255b",
+          "actual_sha256": "b727233b4b02d4bd9591d28d5f0e54c2544eb3ba7490d58725c41077606f255b",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 16,
+            "row_stride": 16,
+            "file": "texc-49d2b04bb2fcee5174ffd6e19971c4cac64dcb2abac311840a19e15303d01361.bin",
+            "declared_sha256": "49d2b04bb2fcee5174ffd6e19971c4cac64dcb2abac311840a19e15303d01361",
+            "actual_sha256": "49d2b04bb2fcee5174ffd6e19971c4cac64dcb2abac311840a19e15303d01361",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 11,
+          "width": 1,
+          "height": 1,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 4,
+          "file": "tex-3d6ed2ff12a4a9b493c9a26d8eb5e33534341581f8f66aab8418ca6fdeff0ae3.bin",
+          "declared_sha256": "3d6ed2ff12a4a9b493c9a26d8eb5e33534341581f8f66aab8418ca6fdeff0ae3",
+          "actual_sha256": "3d6ed2ff12a4a9b493c9a26d8eb5e33534341581f8f66aab8418ca6fdeff0ae3",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 16,
+            "row_stride": 16,
+            "file": "texc-faaff9e82589796d80ad7336721aab8b60afa0cca5a1915d2115e241d02b45a1.bin",
+            "declared_sha256": "faaff9e82589796d80ad7336721aab8b60afa0cca5a1915d2115e241d02b45a1",
+            "actual_sha256": "faaff9e82589796d80ad7336721aab8b60afa0cca5a1915d2115e241d02b45a1",
+            "sha256_matches": true
+          }
+        }
+      ]
+    },
+    {
+      "texture_id": 429,
+      "internal_format": "RGB8",
+      "target": "2D",
+      "width": 5632,
+      "height": 2048,
+      "level_count": 1,
+      "compressed_level_count": 0,
+      "levels": [
+        {
+          "level": 0,
+          "width": 5632,
+          "height": 2048,
+          "pixel_format": "RGBA8",
+          "internal_format": "RGB8",
+          "bytes": 46137344,
+          "file": "tex-24511f578c576ab31018cd3fa65915ee58622de2363943908a9abaf7d69bfee5.bin",
+          "declared_sha256": "24511f578c576ab31018cd3fa65915ee58622de2363943908a9abaf7d69bfee5",
+          "actual_sha256": "24511f578c576ab31018cd3fa65915ee58622de2363943908a9abaf7d69bfee5",
+          "sha256_matches": true
+        }
+      ]
+    },
+    {
+      "texture_id": 356,
+      "internal_format": "RGBA8",
+      "target": "2D",
+      "width": 704,
+      "height": 256,
+      "level_count": 1,
+      "compressed_level_count": 0,
+      "levels": [
+        {
+          "level": 0,
+          "width": 704,
+          "height": 256,
+          "pixel_format": "RGBA8",
+          "internal_format": "RGBA8",
+          "bytes": 720896,
+          "file": "tex-a948ebd04d5ff2ff8698ab0031b1bddda4ff58d907895eee3c219da959130cf2.bin",
+          "declared_sha256": "a948ebd04d5ff2ff8698ab0031b1bddda4ff58d907895eee3c219da959130cf2",
+          "actual_sha256": "a948ebd04d5ff2ff8698ab0031b1bddda4ff58d907895eee3c219da959130cf2",
+          "sha256_matches": true
+        }
+      ]
+    },
+    {
+      "texture_id": 431,
+      "internal_format": "RGBA8",
+      "target": "2D",
+      "width": 1728,
+      "height": 1117,
+      "level_count": 1,
+      "compressed_level_count": 0,
+      "levels": [
+        {
+          "level": 0,
+          "width": 1728,
+          "height": 1117,
+          "pixel_format": "RGBA8",
+          "internal_format": "RGBA8",
+          "bytes": 7720704,
+          "file": "tex-577573f003fb348355d0ae287b17b2fdaac29e208dae1048e15ad94556153191.bin",
+          "declared_sha256": "577573f003fb348355d0ae287b17b2fdaac29e208dae1048e15ad94556153191",
+          "actual_sha256": "577573f003fb348355d0ae287b17b2fdaac29e208dae1048e15ad94556153191",
+          "sha256_matches": true
+        }
+      ]
+    },
+    {
+      "texture_id": 434,
+      "internal_format": "RGBA8",
+      "target": "2D",
+      "width": 256,
+      "height": 40,
+      "level_count": 1,
+      "compressed_level_count": 0,
+      "levels": [
+        {
+          "level": 0,
+          "width": 256,
+          "height": 40,
+          "pixel_format": "RGBA8",
+          "internal_format": "RGBA8",
+          "bytes": 40960,
+          "file": "tex-02b1c2234680617802901a77eae606ad02e4ddb4282ccbc60061eac5b2d90bba.bin",
+          "declared_sha256": "02b1c2234680617802901a77eae606ad02e4ddb4282ccbc60061eac5b2d90bba",
+          "actual_sha256": "02b1c2234680617802901a77eae606ad02e4ddb4282ccbc60061eac5b2d90bba",
+          "sha256_matches": true
+        }
+      ]
+    },
+    {
+      "texture_id": 374,
+      "internal_format": "DXT1",
+      "target": "2D",
+      "width": 2816,
+      "height": 1024,
+      "level_count": 11,
+      "compressed_level_count": 11,
+      "levels": [
+        {
+          "level": 0,
+          "width": 2816,
+          "height": 1024,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT1",
+          "bytes": 11534336,
+          "file": "tex-720969f1889f8b32095d849587b76913f62f4333547929ca35641917c3402b26.bin",
+          "declared_sha256": "720969f1889f8b32095d849587b76913f62f4333547929ca35641917c3402b26",
+          "actual_sha256": "720969f1889f8b32095d849587b76913f62f4333547929ca35641917c3402b26",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT1",
+            "bytes": 1441792,
+            "row_stride": 5632,
+            "file": "texc-e13c7149846f405f06f826a548d0ec704236d298de79e70e7a403a7a7fe3d627.bin",
+            "declared_sha256": "e13c7149846f405f06f826a548d0ec704236d298de79e70e7a403a7a7fe3d627",
+            "actual_sha256": "e13c7149846f405f06f826a548d0ec704236d298de79e70e7a403a7a7fe3d627",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 1,
+          "width": 1408,
+          "height": 512,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT1",
+          "bytes": 2883584,
+          "file": "tex-619537fd33c40f84a0e5566fc3a3a42fe2169eba2dd37004d510b3944ce5113f.bin",
+          "declared_sha256": "619537fd33c40f84a0e5566fc3a3a42fe2169eba2dd37004d510b3944ce5113f",
+          "actual_sha256": "619537fd33c40f84a0e5566fc3a3a42fe2169eba2dd37004d510b3944ce5113f",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT1",
+            "bytes": 360448,
+            "row_stride": 2816,
+            "file": "texc-651a15e5c91d17441d65261ad3d7b4c87264d1748485116ea7666faf5a505f0b.bin",
+            "declared_sha256": "651a15e5c91d17441d65261ad3d7b4c87264d1748485116ea7666faf5a505f0b",
+            "actual_sha256": "651a15e5c91d17441d65261ad3d7b4c87264d1748485116ea7666faf5a505f0b",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 2,
+          "width": 704,
+          "height": 256,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT1",
+          "bytes": 720896,
+          "file": "tex-e5f4b16f2301bc9c2122ecf972b56b0e8a3235641172f5038a4cd563045414ef.bin",
+          "declared_sha256": "e5f4b16f2301bc9c2122ecf972b56b0e8a3235641172f5038a4cd563045414ef",
+          "actual_sha256": "e5f4b16f2301bc9c2122ecf972b56b0e8a3235641172f5038a4cd563045414ef",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT1",
+            "bytes": 90112,
+            "row_stride": 1408,
+            "file": "texc-9f4592b0c32a510d1e873ab51d225b81b6076706c43c615c57e5e44b474b1a0e.bin",
+            "declared_sha256": "9f4592b0c32a510d1e873ab51d225b81b6076706c43c615c57e5e44b474b1a0e",
+            "actual_sha256": "9f4592b0c32a510d1e873ab51d225b81b6076706c43c615c57e5e44b474b1a0e",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 3,
+          "width": 352,
+          "height": 128,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT1",
+          "bytes": 180224,
+          "file": "tex-2f3cc79230f08c573d6c01417ed323f7f803f9320324eaca9ba25de7c537b2f9.bin",
+          "declared_sha256": "2f3cc79230f08c573d6c01417ed323f7f803f9320324eaca9ba25de7c537b2f9",
+          "actual_sha256": "2f3cc79230f08c573d6c01417ed323f7f803f9320324eaca9ba25de7c537b2f9",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT1",
+            "bytes": 22528,
+            "row_stride": 704,
+            "file": "texc-8566b0ae21d43df0f72b00604d704093a084f4a24e5e24ba569974ac48454807.bin",
+            "declared_sha256": "8566b0ae21d43df0f72b00604d704093a084f4a24e5e24ba569974ac48454807",
+            "actual_sha256": "8566b0ae21d43df0f72b00604d704093a084f4a24e5e24ba569974ac48454807",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 4,
+          "width": 176,
+          "height": 64,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT1",
+          "bytes": 45056,
+          "file": "tex-b38734a87ca24cbe455eec9879d1ad25b5586d726b9a2f7dc985d6a0eb3168f7.bin",
+          "declared_sha256": "b38734a87ca24cbe455eec9879d1ad25b5586d726b9a2f7dc985d6a0eb3168f7",
+          "actual_sha256": "b38734a87ca24cbe455eec9879d1ad25b5586d726b9a2f7dc985d6a0eb3168f7",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT1",
+            "bytes": 5632,
+            "row_stride": 352,
+            "file": "texc-45986bd2d4d1ccef843db5bf96fc7c88870c9a39e365bd1b0ff81f3855aa7250.bin",
+            "declared_sha256": "45986bd2d4d1ccef843db5bf96fc7c88870c9a39e365bd1b0ff81f3855aa7250",
+            "actual_sha256": "45986bd2d4d1ccef843db5bf96fc7c88870c9a39e365bd1b0ff81f3855aa7250",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 5,
+          "width": 88,
+          "height": 32,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT1",
+          "bytes": 11264,
+          "file": "tex-eb7fb3d58ebf1d35e807fe0166727266ac86fd49c11a94a9df7d1841d0908004.bin",
+          "declared_sha256": "eb7fb3d58ebf1d35e807fe0166727266ac86fd49c11a94a9df7d1841d0908004",
+          "actual_sha256": "eb7fb3d58ebf1d35e807fe0166727266ac86fd49c11a94a9df7d1841d0908004",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT1",
+            "bytes": 1408,
+            "row_stride": 176,
+            "file": "texc-cc042cafda762c021bc0a20cd635c8ec147405dd1d0dbdcb2bef536b1ef322c6.bin",
+            "declared_sha256": "cc042cafda762c021bc0a20cd635c8ec147405dd1d0dbdcb2bef536b1ef322c6",
+            "actual_sha256": "cc042cafda762c021bc0a20cd635c8ec147405dd1d0dbdcb2bef536b1ef322c6",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 6,
+          "width": 44,
+          "height": 16,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT1",
+          "bytes": 2816,
+          "file": "tex-aa54b2a2f9f766964edd4162c382b83bf65417c527bc367d5696e5af018d8836.bin",
+          "declared_sha256": "aa54b2a2f9f766964edd4162c382b83bf65417c527bc367d5696e5af018d8836",
+          "actual_sha256": "aa54b2a2f9f766964edd4162c382b83bf65417c527bc367d5696e5af018d8836",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT1",
+            "bytes": 352,
+            "row_stride": 88,
+            "file": "texc-bc4f5ddcf13e6e2db3059744049ad2d8e0d43a82376284d875481d6193f59ede.bin",
+            "declared_sha256": "bc4f5ddcf13e6e2db3059744049ad2d8e0d43a82376284d875481d6193f59ede",
+            "actual_sha256": "bc4f5ddcf13e6e2db3059744049ad2d8e0d43a82376284d875481d6193f59ede",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 7,
+          "width": 22,
+          "height": 8,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT1",
+          "bytes": 704,
+          "file": "tex-3174e67a6128f0153f5abda0ba85951e014d4749df4e3f1a4ec5a97409ef5f86.bin",
+          "declared_sha256": "3174e67a6128f0153f5abda0ba85951e014d4749df4e3f1a4ec5a97409ef5f86",
+          "actual_sha256": "3174e67a6128f0153f5abda0ba85951e014d4749df4e3f1a4ec5a97409ef5f86",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT1",
+            "bytes": 96,
+            "row_stride": 48,
+            "file": "texc-7d6ab03de81a0ffdb27a789bda1909d2b6558bd68b63ab2d95440e2f4d7e50e1.bin",
+            "declared_sha256": "7d6ab03de81a0ffdb27a789bda1909d2b6558bd68b63ab2d95440e2f4d7e50e1",
+            "actual_sha256": "7d6ab03de81a0ffdb27a789bda1909d2b6558bd68b63ab2d95440e2f4d7e50e1",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 8,
+          "width": 11,
+          "height": 4,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT1",
+          "bytes": 176,
+          "file": "tex-60b6d773b9baf17467ad0981fce2b5bcf17ff13afa22cf7bedecb340c0ca87a9.bin",
+          "declared_sha256": "60b6d773b9baf17467ad0981fce2b5bcf17ff13afa22cf7bedecb340c0ca87a9",
+          "actual_sha256": "60b6d773b9baf17467ad0981fce2b5bcf17ff13afa22cf7bedecb340c0ca87a9",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT1",
+            "bytes": 24,
+            "row_stride": 24,
+            "file": "texc-d3dfe54dce60400be527df06b01af782b3ff465529c52b2aaf524d1645cd7a8b.bin",
+            "declared_sha256": "d3dfe54dce60400be527df06b01af782b3ff465529c52b2aaf524d1645cd7a8b",
+            "actual_sha256": "d3dfe54dce60400be527df06b01af782b3ff465529c52b2aaf524d1645cd7a8b",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 9,
+          "width": 5,
+          "height": 2,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT1",
+          "bytes": 40,
+          "file": "tex-6238aa0d12d5ba979a0def47dbc6475d977cfcbc455d464d51474f15c5034329.bin",
+          "declared_sha256": "6238aa0d12d5ba979a0def47dbc6475d977cfcbc455d464d51474f15c5034329",
+          "actual_sha256": "6238aa0d12d5ba979a0def47dbc6475d977cfcbc455d464d51474f15c5034329",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT1",
+            "bytes": 16,
+            "row_stride": 16,
+            "file": "texc-cc825e0eec20ba7c9a50bbe18210fad5691b79f0a7b047b8a5cba63c181a186b.bin",
+            "declared_sha256": "cc825e0eec20ba7c9a50bbe18210fad5691b79f0a7b047b8a5cba63c181a186b",
+            "actual_sha256": "cc825e0eec20ba7c9a50bbe18210fad5691b79f0a7b047b8a5cba63c181a186b",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 10,
+          "width": 2,
+          "height": 1,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT1",
+          "bytes": 8,
+          "file": "tex-927bf45dd9999ae7d7b00785e5d125cb0d5110109405e9d959f72d06a398df5f.bin",
+          "declared_sha256": "927bf45dd9999ae7d7b00785e5d125cb0d5110109405e9d959f72d06a398df5f",
+          "actual_sha256": "927bf45dd9999ae7d7b00785e5d125cb0d5110109405e9d959f72d06a398df5f",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT1",
+            "bytes": 8,
+            "row_stride": 8,
+            "file": "texc-66e238f8a945de61a746699b23ef2a365a130995003ded23f459d8cb12f50cef.bin",
+            "declared_sha256": "66e238f8a945de61a746699b23ef2a365a130995003ded23f459d8cb12f50cef",
+            "actual_sha256": "66e238f8a945de61a746699b23ef2a365a130995003ded23f459d8cb12f50cef",
+            "sha256_matches": true
+          }
+        }
+      ]
+    },
+    {
+      "texture_id": 2,
+      "internal_format": "RGBA8",
+      "target": "2D",
+      "width": 704,
+      "height": 256,
+      "level_count": 1,
+      "compressed_level_count": 0,
+      "levels": [
+        {
+          "level": 0,
+          "width": 704,
+          "height": 256,
+          "pixel_format": "RGBA8",
+          "internal_format": "RGBA8",
+          "bytes": 720896,
+          "file": "tex-7c1c100e0887a7a2b30d8a2def7f15e818ddaee4efd65479c7991f38f91d5e70.bin",
+          "declared_sha256": "7c1c100e0887a7a2b30d8a2def7f15e818ddaee4efd65479c7991f38f91d5e70",
+          "actual_sha256": "7c1c100e0887a7a2b30d8a2def7f15e818ddaee4efd65479c7991f38f91d5e70",
+          "sha256_matches": true
+        }
+      ]
+    },
+    {
+      "texture_id": 371,
+      "internal_format": "DXT1",
+      "target": "2D",
+      "width": 2816,
+      "height": 1024,
+      "level_count": 11,
+      "compressed_level_count": 11,
+      "levels": [
+        {
+          "level": 0,
+          "width": 2816,
+          "height": 1024,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT1",
+          "bytes": 11534336,
+          "file": "tex-ce29f5090959af76c8094cff8f5e480d64d6e7d0eaa11248bdfac6b7777234d8.bin",
+          "declared_sha256": "ce29f5090959af76c8094cff8f5e480d64d6e7d0eaa11248bdfac6b7777234d8",
+          "actual_sha256": "ce29f5090959af76c8094cff8f5e480d64d6e7d0eaa11248bdfac6b7777234d8",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT1",
+            "bytes": 1441792,
+            "row_stride": 5632,
+            "file": "texc-4ac46be643adddf551144be7c4f078dc2dcf434d0761726633f74a163feffe7e.bin",
+            "declared_sha256": "4ac46be643adddf551144be7c4f078dc2dcf434d0761726633f74a163feffe7e",
+            "actual_sha256": "4ac46be643adddf551144be7c4f078dc2dcf434d0761726633f74a163feffe7e",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 1,
+          "width": 1408,
+          "height": 512,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT1",
+          "bytes": 2883584,
+          "file": "tex-ca71dcac1c75321b4095c6cf655747802dad544efb4ae94a5b2ca330ffa03472.bin",
+          "declared_sha256": "ca71dcac1c75321b4095c6cf655747802dad544efb4ae94a5b2ca330ffa03472",
+          "actual_sha256": "ca71dcac1c75321b4095c6cf655747802dad544efb4ae94a5b2ca330ffa03472",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT1",
+            "bytes": 360448,
+            "row_stride": 2816,
+            "file": "texc-855e5fcec5c82937a43990e44c231c4b9219c256793bd612f7dcfa65ffb15f7e.bin",
+            "declared_sha256": "855e5fcec5c82937a43990e44c231c4b9219c256793bd612f7dcfa65ffb15f7e",
+            "actual_sha256": "855e5fcec5c82937a43990e44c231c4b9219c256793bd612f7dcfa65ffb15f7e",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 2,
+          "width": 704,
+          "height": 256,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT1",
+          "bytes": 720896,
+          "file": "tex-f962faf55eaeae1368786e9820f5704f1b8c3da9c3b6ad94c327df18e24a2199.bin",
+          "declared_sha256": "f962faf55eaeae1368786e9820f5704f1b8c3da9c3b6ad94c327df18e24a2199",
+          "actual_sha256": "f962faf55eaeae1368786e9820f5704f1b8c3da9c3b6ad94c327df18e24a2199",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT1",
+            "bytes": 90112,
+            "row_stride": 1408,
+            "file": "texc-1fcd90b7efbd74fa81377671c6bdc398bb5320da4c68e852c2cdf7339f3647ea.bin",
+            "declared_sha256": "1fcd90b7efbd74fa81377671c6bdc398bb5320da4c68e852c2cdf7339f3647ea",
+            "actual_sha256": "1fcd90b7efbd74fa81377671c6bdc398bb5320da4c68e852c2cdf7339f3647ea",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 3,
+          "width": 352,
+          "height": 128,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT1",
+          "bytes": 180224,
+          "file": "tex-2e9625aa37848b07908efbecd7492a27b268798f321e3b45fd00d3d7da917d6a.bin",
+          "declared_sha256": "2e9625aa37848b07908efbecd7492a27b268798f321e3b45fd00d3d7da917d6a",
+          "actual_sha256": "2e9625aa37848b07908efbecd7492a27b268798f321e3b45fd00d3d7da917d6a",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT1",
+            "bytes": 22528,
+            "row_stride": 704,
+            "file": "texc-509e05b3e96ae436fb7a7d4cc50c4a605a5871e1adef8a76520f6e43fded55ed.bin",
+            "declared_sha256": "509e05b3e96ae436fb7a7d4cc50c4a605a5871e1adef8a76520f6e43fded55ed",
+            "actual_sha256": "509e05b3e96ae436fb7a7d4cc50c4a605a5871e1adef8a76520f6e43fded55ed",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 4,
+          "width": 176,
+          "height": 64,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT1",
+          "bytes": 45056,
+          "file": "tex-d5227462e9f5de7c8b31afec905ecacec9dd8fe6a26b101074e9565b7e98889e.bin",
+          "declared_sha256": "d5227462e9f5de7c8b31afec905ecacec9dd8fe6a26b101074e9565b7e98889e",
+          "actual_sha256": "d5227462e9f5de7c8b31afec905ecacec9dd8fe6a26b101074e9565b7e98889e",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT1",
+            "bytes": 5632,
+            "row_stride": 352,
+            "file": "texc-4b048ebf941bd8cb9f2a232532850025648b76dfec576d18899f430aa63ea135.bin",
+            "declared_sha256": "4b048ebf941bd8cb9f2a232532850025648b76dfec576d18899f430aa63ea135",
+            "actual_sha256": "4b048ebf941bd8cb9f2a232532850025648b76dfec576d18899f430aa63ea135",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 5,
+          "width": 88,
+          "height": 32,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT1",
+          "bytes": 11264,
+          "file": "tex-65e8d4e734ad8b5282a324e1fa9b3ab6aa2acc0440006224a6a5915ad3422614.bin",
+          "declared_sha256": "65e8d4e734ad8b5282a324e1fa9b3ab6aa2acc0440006224a6a5915ad3422614",
+          "actual_sha256": "65e8d4e734ad8b5282a324e1fa9b3ab6aa2acc0440006224a6a5915ad3422614",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT1",
+            "bytes": 1408,
+            "row_stride": 176,
+            "file": "texc-745ed47201aa2c5fa2fde1e307b3025a87ebe5684483be0e4a435ff8f39c5940.bin",
+            "declared_sha256": "745ed47201aa2c5fa2fde1e307b3025a87ebe5684483be0e4a435ff8f39c5940",
+            "actual_sha256": "745ed47201aa2c5fa2fde1e307b3025a87ebe5684483be0e4a435ff8f39c5940",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 6,
+          "width": 44,
+          "height": 16,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT1",
+          "bytes": 2816,
+          "file": "tex-cddf1eda579afb4c62931467a1ee6d41e24da65b7b18c52d63df7ae341e9c27d.bin",
+          "declared_sha256": "cddf1eda579afb4c62931467a1ee6d41e24da65b7b18c52d63df7ae341e9c27d",
+          "actual_sha256": "cddf1eda579afb4c62931467a1ee6d41e24da65b7b18c52d63df7ae341e9c27d",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT1",
+            "bytes": 352,
+            "row_stride": 88,
+            "file": "texc-0166329b08e1eadb5b93d2c4fc491b9105e7f8a339b88b39a24ab50734c1dca9.bin",
+            "declared_sha256": "0166329b08e1eadb5b93d2c4fc491b9105e7f8a339b88b39a24ab50734c1dca9",
+            "actual_sha256": "0166329b08e1eadb5b93d2c4fc491b9105e7f8a339b88b39a24ab50734c1dca9",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 7,
+          "width": 22,
+          "height": 8,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT1",
+          "bytes": 704,
+          "file": "tex-dcd5af50ea8ae6db9cd68945b65198bb29d2d99ac8b7756f44b5a46cd728b678.bin",
+          "declared_sha256": "dcd5af50ea8ae6db9cd68945b65198bb29d2d99ac8b7756f44b5a46cd728b678",
+          "actual_sha256": "dcd5af50ea8ae6db9cd68945b65198bb29d2d99ac8b7756f44b5a46cd728b678",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT1",
+            "bytes": 96,
+            "row_stride": 48,
+            "file": "texc-e163967ecc55e6ad6e6847ce496ccb2e79108c3774ee2f706eee30fef773b6c2.bin",
+            "declared_sha256": "e163967ecc55e6ad6e6847ce496ccb2e79108c3774ee2f706eee30fef773b6c2",
+            "actual_sha256": "e163967ecc55e6ad6e6847ce496ccb2e79108c3774ee2f706eee30fef773b6c2",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 8,
+          "width": 11,
+          "height": 4,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT1",
+          "bytes": 176,
+          "file": "tex-093a35943c29ec200371bb476a3016e9565e9d05dcd50f94d95954165a7a49d9.bin",
+          "declared_sha256": "093a35943c29ec200371bb476a3016e9565e9d05dcd50f94d95954165a7a49d9",
+          "actual_sha256": "093a35943c29ec200371bb476a3016e9565e9d05dcd50f94d95954165a7a49d9",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT1",
+            "bytes": 24,
+            "row_stride": 24,
+            "file": "texc-a3d9be894ddad26b34cbdcefd3aaa32d32213c84c68abc8e20db8def94e31a80.bin",
+            "declared_sha256": "a3d9be894ddad26b34cbdcefd3aaa32d32213c84c68abc8e20db8def94e31a80",
+            "actual_sha256": "a3d9be894ddad26b34cbdcefd3aaa32d32213c84c68abc8e20db8def94e31a80",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 9,
+          "width": 5,
+          "height": 2,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT1",
+          "bytes": 40,
+          "file": "tex-f48be7ddfaaee7d904842b1b58cba0d7d149f404f8eb2f065fcfc42f8d03d7fd.bin",
+          "declared_sha256": "f48be7ddfaaee7d904842b1b58cba0d7d149f404f8eb2f065fcfc42f8d03d7fd",
+          "actual_sha256": "f48be7ddfaaee7d904842b1b58cba0d7d149f404f8eb2f065fcfc42f8d03d7fd",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT1",
+            "bytes": 16,
+            "row_stride": 16,
+            "file": "texc-af9604b01e35464b1921904a5f223fe604e335246806e64d7901043bd29cba30.bin",
+            "declared_sha256": "af9604b01e35464b1921904a5f223fe604e335246806e64d7901043bd29cba30",
+            "actual_sha256": "af9604b01e35464b1921904a5f223fe604e335246806e64d7901043bd29cba30",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 10,
+          "width": 2,
+          "height": 1,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT1",
+          "bytes": 8,
+          "file": "tex-3daa222ef4b1337f630e751b67a8ee0204bfec68f3744455f3d9b695162c13b7.bin",
+          "declared_sha256": "3daa222ef4b1337f630e751b67a8ee0204bfec68f3744455f3d9b695162c13b7",
+          "actual_sha256": "3daa222ef4b1337f630e751b67a8ee0204bfec68f3744455f3d9b695162c13b7",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT1",
+            "bytes": 8,
+            "row_stride": 8,
+            "file": "texc-654ef82040b7a913e07095ad5b0740eb0ad5efe8813519e35b6281bbe0176792.bin",
+            "declared_sha256": "654ef82040b7a913e07095ad5b0740eb0ad5efe8813519e35b6281bbe0176792",
+            "actual_sha256": "654ef82040b7a913e07095ad5b0740eb0ad5efe8813519e35b6281bbe0176792",
+            "sha256_matches": true
+          }
+        }
+      ]
+    },
+    {
+      "texture_id": 389,
+      "internal_format": "DXT5",
+      "target": "2D",
+      "width": 128,
+      "height": 128,
+      "level_count": 8,
+      "compressed_level_count": 8,
+      "levels": [
+        {
+          "level": 0,
+          "width": 128,
+          "height": 128,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 65536,
+          "file": "tex-2ee1b7a29cd39127e8fc0fa93f256c86c99ac66a21a029ed007c5179d1080bed.bin",
+          "declared_sha256": "2ee1b7a29cd39127e8fc0fa93f256c86c99ac66a21a029ed007c5179d1080bed",
+          "actual_sha256": "2ee1b7a29cd39127e8fc0fa93f256c86c99ac66a21a029ed007c5179d1080bed",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 16384,
+            "row_stride": 512,
+            "file": "texc-833a61abd1f02d9ab2506bb55ba7483694694a37b2948c1ca2c64162bfdd13ad.bin",
+            "declared_sha256": "833a61abd1f02d9ab2506bb55ba7483694694a37b2948c1ca2c64162bfdd13ad",
+            "actual_sha256": "833a61abd1f02d9ab2506bb55ba7483694694a37b2948c1ca2c64162bfdd13ad",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 1,
+          "width": 64,
+          "height": 64,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 16384,
+          "file": "tex-e56cf14ee92bc94dd6954b0e14373d640ab1c863d195a0a223fef9ffc1b702ae.bin",
+          "declared_sha256": "e56cf14ee92bc94dd6954b0e14373d640ab1c863d195a0a223fef9ffc1b702ae",
+          "actual_sha256": "e56cf14ee92bc94dd6954b0e14373d640ab1c863d195a0a223fef9ffc1b702ae",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 4096,
+            "row_stride": 256,
+            "file": "texc-6cd7beb73766c25bf15d1f72a6e3546b2fc365867dcbcc2e34392e22ca982729.bin",
+            "declared_sha256": "6cd7beb73766c25bf15d1f72a6e3546b2fc365867dcbcc2e34392e22ca982729",
+            "actual_sha256": "6cd7beb73766c25bf15d1f72a6e3546b2fc365867dcbcc2e34392e22ca982729",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 2,
+          "width": 32,
+          "height": 32,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 4096,
+          "file": "tex-63d061761c2e75a4db1f0719a2d3ec8c5120604147722179c82c5f9d81602e03.bin",
+          "declared_sha256": "63d061761c2e75a4db1f0719a2d3ec8c5120604147722179c82c5f9d81602e03",
+          "actual_sha256": "63d061761c2e75a4db1f0719a2d3ec8c5120604147722179c82c5f9d81602e03",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 1024,
+            "row_stride": 128,
+            "file": "texc-e76bdbdd83080991a46b7a8ad66ca786eee9a5e0451707d8b86a3385e7871cc3.bin",
+            "declared_sha256": "e76bdbdd83080991a46b7a8ad66ca786eee9a5e0451707d8b86a3385e7871cc3",
+            "actual_sha256": "e76bdbdd83080991a46b7a8ad66ca786eee9a5e0451707d8b86a3385e7871cc3",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 3,
+          "width": 16,
+          "height": 16,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 1024,
+          "file": "tex-05f2222e82aabb6c643e058b2b4b25b20e194350670fcb97f8361de89a068b42.bin",
+          "declared_sha256": "05f2222e82aabb6c643e058b2b4b25b20e194350670fcb97f8361de89a068b42",
+          "actual_sha256": "05f2222e82aabb6c643e058b2b4b25b20e194350670fcb97f8361de89a068b42",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 256,
+            "row_stride": 64,
+            "file": "texc-524bfd093437984727a1a77c6c7ed10ff07aff5f25004843ab93f44f54a771db.bin",
+            "declared_sha256": "524bfd093437984727a1a77c6c7ed10ff07aff5f25004843ab93f44f54a771db",
+            "actual_sha256": "524bfd093437984727a1a77c6c7ed10ff07aff5f25004843ab93f44f54a771db",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 4,
+          "width": 8,
+          "height": 8,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 256,
+          "file": "tex-f465bc7926c2d37d43660fb9d7bbad145c183e10bcd5d0eaee63a9d11e6fe167.bin",
+          "declared_sha256": "f465bc7926c2d37d43660fb9d7bbad145c183e10bcd5d0eaee63a9d11e6fe167",
+          "actual_sha256": "f465bc7926c2d37d43660fb9d7bbad145c183e10bcd5d0eaee63a9d11e6fe167",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 64,
+            "row_stride": 32,
+            "file": "texc-b36807c5b90a03b2796f2ed3ec45afd15c7bce219b5044aef1ebf10f6dbee8e2.bin",
+            "declared_sha256": "b36807c5b90a03b2796f2ed3ec45afd15c7bce219b5044aef1ebf10f6dbee8e2",
+            "actual_sha256": "b36807c5b90a03b2796f2ed3ec45afd15c7bce219b5044aef1ebf10f6dbee8e2",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 5,
+          "width": 4,
+          "height": 4,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 64,
+          "file": "tex-cd05bb40284165c6c66d630413630945775cab7ce8fe44237d7e168a2266bfe0.bin",
+          "declared_sha256": "cd05bb40284165c6c66d630413630945775cab7ce8fe44237d7e168a2266bfe0",
+          "actual_sha256": "cd05bb40284165c6c66d630413630945775cab7ce8fe44237d7e168a2266bfe0",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 16,
+            "row_stride": 16,
+            "file": "texc-7177ce65bc603be9d66f88230f37b8b493a181a26a3a36ad817634a0754b4666.bin",
+            "declared_sha256": "7177ce65bc603be9d66f88230f37b8b493a181a26a3a36ad817634a0754b4666",
+            "actual_sha256": "7177ce65bc603be9d66f88230f37b8b493a181a26a3a36ad817634a0754b4666",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 6,
+          "width": 2,
+          "height": 2,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 16,
+          "file": "tex-b90d12e4dcec44405705b1f0e901f4bf82aa50d55c7dc7db137a24d05b8becda.bin",
+          "declared_sha256": "b90d12e4dcec44405705b1f0e901f4bf82aa50d55c7dc7db137a24d05b8becda",
+          "actual_sha256": "b90d12e4dcec44405705b1f0e901f4bf82aa50d55c7dc7db137a24d05b8becda",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 16,
+            "row_stride": 16,
+            "file": "texc-38e3c5b5aa4ee7d312b0ba72876de6f4784f940fe81d3e3e73775809f5287807.bin",
+            "declared_sha256": "38e3c5b5aa4ee7d312b0ba72876de6f4784f940fe81d3e3e73775809f5287807",
+            "actual_sha256": "38e3c5b5aa4ee7d312b0ba72876de6f4784f940fe81d3e3e73775809f5287807",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 7,
+          "width": 1,
+          "height": 1,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 4,
+          "file": "tex-956c3f1144ee99d2a4ca793e9371900bd055b5ffdf2990b845d55288a86c7e82.bin",
+          "declared_sha256": "956c3f1144ee99d2a4ca793e9371900bd055b5ffdf2990b845d55288a86c7e82",
+          "actual_sha256": "956c3f1144ee99d2a4ca793e9371900bd055b5ffdf2990b845d55288a86c7e82",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 16,
+            "row_stride": 16,
+            "file": "texc-702677365bd5391baa89b4be599f5de0ef4124b258b9ba2bdcc8404bc8d049aa.bin",
+            "declared_sha256": "702677365bd5391baa89b4be599f5de0ef4124b258b9ba2bdcc8404bc8d049aa",
+            "actual_sha256": "702677365bd5391baa89b4be599f5de0ef4124b258b9ba2bdcc8404bc8d049aa",
+            "sha256_matches": true
+          }
+        }
+      ]
+    },
+    {
+      "texture_id": 377,
+      "internal_format": "DXT5",
+      "target": "2D",
+      "width": 256,
+      "height": 256,
+      "level_count": 9,
+      "compressed_level_count": 9,
+      "levels": [
+        {
+          "level": 0,
+          "width": 256,
+          "height": 256,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 262144,
+          "file": "tex-bedc8577ef7844a4d0fc28d13d504fd57110dc6a19e4ec74d17d4584c11a32d0.bin",
+          "declared_sha256": "bedc8577ef7844a4d0fc28d13d504fd57110dc6a19e4ec74d17d4584c11a32d0",
+          "actual_sha256": "bedc8577ef7844a4d0fc28d13d504fd57110dc6a19e4ec74d17d4584c11a32d0",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 65536,
+            "row_stride": 1024,
+            "file": "texc-416c5e4f0dbfe42f2d295b1220e58de8f8a471f588e19a7b3c149ab7a0de5967.bin",
+            "declared_sha256": "416c5e4f0dbfe42f2d295b1220e58de8f8a471f588e19a7b3c149ab7a0de5967",
+            "actual_sha256": "416c5e4f0dbfe42f2d295b1220e58de8f8a471f588e19a7b3c149ab7a0de5967",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 1,
+          "width": 128,
+          "height": 128,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 65536,
+          "file": "tex-8a311aca567b08ee190e912afb4df0529cc2d32a87c1c386bd8766cc1d0703ab.bin",
+          "declared_sha256": "8a311aca567b08ee190e912afb4df0529cc2d32a87c1c386bd8766cc1d0703ab",
+          "actual_sha256": "8a311aca567b08ee190e912afb4df0529cc2d32a87c1c386bd8766cc1d0703ab",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 16384,
+            "row_stride": 512,
+            "file": "texc-4a5824fd9cc30052d7974897f741c83b2425c3ef37c583521d203b1290489060.bin",
+            "declared_sha256": "4a5824fd9cc30052d7974897f741c83b2425c3ef37c583521d203b1290489060",
+            "actual_sha256": "4a5824fd9cc30052d7974897f741c83b2425c3ef37c583521d203b1290489060",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 2,
+          "width": 64,
+          "height": 64,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 16384,
+          "file": "tex-28dfc4595ddbc46b954886216b33080052807a8704b7936925cb59d3d8991e7f.bin",
+          "declared_sha256": "28dfc4595ddbc46b954886216b33080052807a8704b7936925cb59d3d8991e7f",
+          "actual_sha256": "28dfc4595ddbc46b954886216b33080052807a8704b7936925cb59d3d8991e7f",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 4096,
+            "row_stride": 256,
+            "file": "texc-8281d0be353cd5bc3451f3d50de297346b02c3f12f760a8191bb4f7c98461a4f.bin",
+            "declared_sha256": "8281d0be353cd5bc3451f3d50de297346b02c3f12f760a8191bb4f7c98461a4f",
+            "actual_sha256": "8281d0be353cd5bc3451f3d50de297346b02c3f12f760a8191bb4f7c98461a4f",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 3,
+          "width": 32,
+          "height": 32,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 4096,
+          "file": "tex-0787cb14df355207460f60ebc5a8a2ab2e723db7ba667835f6e16b99c65878d7.bin",
+          "declared_sha256": "0787cb14df355207460f60ebc5a8a2ab2e723db7ba667835f6e16b99c65878d7",
+          "actual_sha256": "0787cb14df355207460f60ebc5a8a2ab2e723db7ba667835f6e16b99c65878d7",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 1024,
+            "row_stride": 128,
+            "file": "texc-d653d01ad872fd203702f7db57a66774f2ddb94f8b86ee92f7deb086e2d69b1d.bin",
+            "declared_sha256": "d653d01ad872fd203702f7db57a66774f2ddb94f8b86ee92f7deb086e2d69b1d",
+            "actual_sha256": "d653d01ad872fd203702f7db57a66774f2ddb94f8b86ee92f7deb086e2d69b1d",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 4,
+          "width": 16,
+          "height": 16,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 1024,
+          "file": "tex-0873bf789f2c3e447b7ed310b38bb2ce0943c187c605d7a2055ebe84723fbfae.bin",
+          "declared_sha256": "0873bf789f2c3e447b7ed310b38bb2ce0943c187c605d7a2055ebe84723fbfae",
+          "actual_sha256": "0873bf789f2c3e447b7ed310b38bb2ce0943c187c605d7a2055ebe84723fbfae",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 256,
+            "row_stride": 64,
+            "file": "texc-e31591163d9fb27b026a8f85364d75d7f30f10f225f8b5290698429f2636fa35.bin",
+            "declared_sha256": "e31591163d9fb27b026a8f85364d75d7f30f10f225f8b5290698429f2636fa35",
+            "actual_sha256": "e31591163d9fb27b026a8f85364d75d7f30f10f225f8b5290698429f2636fa35",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 5,
+          "width": 8,
+          "height": 8,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 256,
+          "file": "tex-e91d0c1a842799db74932e53f3590e5bcba0459f44dcbb973bbc24b9da92d4a8.bin",
+          "declared_sha256": "e91d0c1a842799db74932e53f3590e5bcba0459f44dcbb973bbc24b9da92d4a8",
+          "actual_sha256": "e91d0c1a842799db74932e53f3590e5bcba0459f44dcbb973bbc24b9da92d4a8",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 64,
+            "row_stride": 32,
+            "file": "texc-097dda773154f19a5bcd85a7bbebdcb0220c2e5af3706b84269e800ba2f185f8.bin",
+            "declared_sha256": "097dda773154f19a5bcd85a7bbebdcb0220c2e5af3706b84269e800ba2f185f8",
+            "actual_sha256": "097dda773154f19a5bcd85a7bbebdcb0220c2e5af3706b84269e800ba2f185f8",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 6,
+          "width": 4,
+          "height": 4,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 64,
+          "file": "tex-e3cdae587838d1bd9741dac0d5f0a697ae819d02e90ac0049b9aea8478fc68d4.bin",
+          "declared_sha256": "e3cdae587838d1bd9741dac0d5f0a697ae819d02e90ac0049b9aea8478fc68d4",
+          "actual_sha256": "e3cdae587838d1bd9741dac0d5f0a697ae819d02e90ac0049b9aea8478fc68d4",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 16,
+            "row_stride": 16,
+            "file": "texc-d85a5db6d8752dae9f64cf6638923f6d084943aeed88f734e137a86425c3ccee.bin",
+            "declared_sha256": "d85a5db6d8752dae9f64cf6638923f6d084943aeed88f734e137a86425c3ccee",
+            "actual_sha256": "d85a5db6d8752dae9f64cf6638923f6d084943aeed88f734e137a86425c3ccee",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 7,
+          "width": 2,
+          "height": 2,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 16,
+          "file": "tex-a52a0dcf831ec47986838993cf47cd8c7009f286b9d14f8702dfe94d40f8f732.bin",
+          "declared_sha256": "a52a0dcf831ec47986838993cf47cd8c7009f286b9d14f8702dfe94d40f8f732",
+          "actual_sha256": "a52a0dcf831ec47986838993cf47cd8c7009f286b9d14f8702dfe94d40f8f732",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 16,
+            "row_stride": 16,
+            "file": "texc-17afe6f7877b38a4c9b21331a7f17b5051ac009bd0879081f049ae4c3cd80125.bin",
+            "declared_sha256": "17afe6f7877b38a4c9b21331a7f17b5051ac009bd0879081f049ae4c3cd80125",
+            "actual_sha256": "17afe6f7877b38a4c9b21331a7f17b5051ac009bd0879081f049ae4c3cd80125",
+            "sha256_matches": true
+          }
+        },
+        {
+          "level": 8,
+          "width": 1,
+          "height": 1,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT5",
+          "bytes": 4,
+          "file": "tex-21b4632cf14a7c0e158c244772a6395298eff963b92f136ae89b06b69216332d.bin",
+          "declared_sha256": "21b4632cf14a7c0e158c244772a6395298eff963b92f136ae89b06b69216332d",
+          "actual_sha256": "21b4632cf14a7c0e158c244772a6395298eff963b92f136ae89b06b69216332d",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT5",
+            "bytes": 16,
+            "row_stride": 16,
+            "file": "texc-8616e707200f30f9c185276e103aa6612d15f10c34ad81fc8c88505e228b0bdb.bin",
+            "declared_sha256": "8616e707200f30f9c185276e103aa6612d15f10c34ad81fc8c88505e228b0bdb",
+            "actual_sha256": "8616e707200f30f9c185276e103aa6612d15f10c34ad81fc8c88505e228b0bdb",
+            "sha256_matches": true
+          }
+        }
+      ]
+    },
+    {
+      "texture_id": 367,
+      "internal_format": "RGBA8",
+      "target": "2D",
+      "width": 5632,
+      "height": 2048,
+      "level_count": 1,
+      "compressed_level_count": 0,
+      "levels": [
+        {
+          "level": 0,
+          "width": 5632,
+          "height": 2048,
+          "pixel_format": "RGBA8",
+          "internal_format": "RGBA8",
+          "bytes": 46137344,
+          "file": "tex-069048e51c0f107d59c4355bbf6013d826b60537d45cfaabb5ffe1b2019ecfad.bin",
+          "declared_sha256": "069048e51c0f107d59c4355bbf6013d826b60537d45cfaabb5ffe1b2019ecfad",
+          "actual_sha256": "069048e51c0f107d59c4355bbf6013d826b60537d45cfaabb5ffe1b2019ecfad",
+          "sha256_matches": true
+        }
+      ]
+    },
+    {
+      "texture_id": 394,
+      "internal_format": "DXT3",
+      "target": "2D",
+      "width": 1876,
+      "height": 2048,
+      "level_count": 1,
+      "compressed_level_count": 1,
+      "levels": [
+        {
+          "level": 0,
+          "width": 1876,
+          "height": 2048,
+          "pixel_format": "RGBA8",
+          "internal_format": "DXT3",
+          "bytes": 15368192,
+          "file": "tex-96417db8ddfa1cff2217d7502e99d39e400ae4e71cac26ab2648c0cfa4e538fd.bin",
+          "declared_sha256": "96417db8ddfa1cff2217d7502e99d39e400ae4e71cac26ab2648c0cfa4e538fd",
+          "actual_sha256": "96417db8ddfa1cff2217d7502e99d39e400ae4e71cac26ab2648c0cfa4e538fd",
+          "sha256_matches": true,
+          "compressed": {
+            "format": "DXT3",
+            "bytes": 3842048,
+            "row_stride": 7504,
+            "file": "texc-171cd5122edc9363ae0193e41de33a8db210385de77b770c90f76e6bbf38cec4.bin",
+            "declared_sha256": "171cd5122edc9363ae0193e41de33a8db210385de77b770c90f76e6bbf38cec4",
+            "actual_sha256": "171cd5122edc9363ae0193e41de33a8db210385de77b770c90f76e6bbf38cec4",
+            "sha256_matches": true
+          }
+        }
+      ]
+    },
+    {
+      "texture_id": 369,
+      "internal_format": "RGB8",
+      "target": "2D",
+      "width": 2816,
+      "height": 1024,
+      "level_count": 1,
+      "compressed_level_count": 0,
+      "levels": [
+        {
+          "level": 0,
+          "width": 2816,
+          "height": 1024,
+          "pixel_format": "RGBA8",
+          "internal_format": "RGB8",
+          "bytes": 11534336,
+          "file": "tex-e2c6457d872fe1c8312ee0c5d9594134dcc610c012e96e024e89d621ebcd6d9b.bin",
+          "declared_sha256": "e2c6457d872fe1c8312ee0c5d9594134dcc610c012e96e024e89d621ebcd6d9b",
+          "actual_sha256": "e2c6457d872fe1c8312ee0c5d9594134dcc610c012e96e024e89d621ebcd6d9b",
+          "sha256_matches": true
+        }
+      ]
+    }
+  ]
+}

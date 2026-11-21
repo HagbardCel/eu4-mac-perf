@@ -1,0 +1,572 @@
+{
+  "status": "invalid",
+  "outcome": {
+    "execution": "ok",
+    "coverage": "invalid",
+    "pixels": "divergent",
+    "semantic": "match",
+    "semantic_scope": "binding_audit",
+    "state_coverage": "partial",
+    "checkpoints": "ok",
+    "identity": "mismatch",
+    "capture_validity": "invalid",
+    "provenance": "verified",
+    "qualified": false,
+    "intermediate_divergence": true,
+    "fault_injection": false
+  },
+  "qualified": false,
+  "graph": "invalid",
+  "evaluation": "invalid",
+  "final": "divergent",
+  "mismatched_pixels": 1167071,
+  "checkpoints": [
+    {
+      "event": 11,
+      "target": "431",
+      "status": "match",
+      "mismatched_pixels": 0
+    },
+    {
+      "event": 13,
+      "target": "432",
+      "status": "match",
+      "mismatched_pixels": 0
+    },
+    {
+      "event": 14,
+      "target": "0",
+      "status": "match",
+      "mismatched_pixels": 0
+    },
+    {
+      "event": 15,
+      "target": "0",
+      "status": "divergent",
+      "mismatched_pixels": 858
+    },
+    {
+      "event": 16,
+      "target": "0",
+      "status": "divergent",
+      "mismatched_pixels": 196775
+    },
+    {
+      "event": 17,
+      "target": "0",
+      "status": "divergent",
+      "mismatched_pixels": 391898
+    },
+    {
+      "event": 272,
+      "target": "433",
+      "status": "divergent_diagnostic",
+      "mismatched_pixels": 797588
+    },
+    {
+      "event": 288,
+      "target": "442",
+      "status": "divergent",
+      "mismatched_pixels": 1241567
+    },
+    {
+      "event": 290,
+      "target": "447",
+      "status": "divergent",
+      "mismatched_pixels": 305867
+    },
+    {
+      "event": 292,
+      "target": "443",
+      "status": "divergent",
+      "mismatched_pixels": 318077
+    }
+  ],
+  "checkpoint_validation": {
+    "schema": "gfx-checkpoint-validation/v1",
+    "status": "ok",
+    "requested": 10,
+    "returned": 10,
+    "matched": 3,
+    "diagnostic": 1,
+    "divergent": 6,
+    "invalid": 0,
+    "problems": [],
+    "problems_count": 0,
+    "request_source": "published",
+    "request_binding": {
+      "status": "in_process",
+      "bindings": []
+    }
+  },
+  "state_coverage": {
+    "schema": "gfx-state-coverage/v1",
+    "status": "partial",
+    "draws": 317,
+    "supported": [
+      "blend",
+      "color_mask",
+      "cull",
+      "depth",
+      "render_targets",
+      "samplers",
+      "scissor",
+      "shader_bindings",
+      "viewport"
+    ],
+    "unsupported": [
+      "gl_dither",
+      "multisample"
+    ],
+    "unproven": [],
+    "proven_equivalent": [],
+    "categories": [
+      {
+        "state": "shader_bindings",
+        "status": "implemented",
+        "captured": true,
+        "evidence": "captured draw state is consumed by the Metal encoder"
+      },
+      {
+        "state": "render_targets",
+        "status": "implemented",
+        "captured": true,
+        "evidence": "captured draw state is consumed by the Metal encoder"
+      },
+      {
+        "state": "samplers",
+        "status": "implemented",
+        "captured": true,
+        "evidence": "captured draw state is consumed by the Metal encoder"
+      },
+      {
+        "state": "viewport",
+        "status": "implemented",
+        "captured": true,
+        "evidence": "captured draw state is consumed by the Metal encoder"
+      },
+      {
+        "state": "scissor",
+        "status": "implemented",
+        "captured": true,
+        "evidence": "captured draw state is consumed by the Metal encoder"
+      },
+      {
+        "state": "blend",
+        "status": "implemented",
+        "captured": true,
+        "evidence": "captured draw state is consumed by the Metal encoder"
+      },
+      {
+        "state": "depth",
+        "status": "implemented",
+        "captured": true,
+        "evidence": "captured draw state is consumed by the Metal encoder"
+      },
+      {
+        "state": "color_mask",
+        "status": "implemented",
+        "captured": true,
+        "evidence": "captured draw state is consumed by the Metal encoder"
+      },
+      {
+        "state": "cull",
+        "status": "implemented",
+        "captured": true,
+        "evidence": "captured draw state is consumed by the Metal encoder"
+      },
+      {
+        "state": "gl_dither",
+        "draws": 317,
+        "status": "unsupported"
+      },
+      {
+        "state": "multisample",
+        "draws": 317,
+        "status": "unsupported"
+      }
+    ],
+    "scope": "captured draw state observed by the replay host",
+    "claim": "unsupported states prevent a full renderer-equivalence claim; they are not evidence that they caused a particular difference"
+  },
+  "binding_audit": {
+    "ok": true,
+    "mismatched": 0,
+    "earliest_event": null
+  },
+  "first_divergence": {
+    "schema": "gfx-first-divergence/v1",
+    "frame_id": null,
+    "kind": "intermediate",
+    "event": 15,
+    "target": "0",
+    "resource": "fb:0",
+    "operation": "draw",
+    "entry": "_GfxDrawIndexed",
+    "caller_rva": "0x10d4e50",
+    "program": 301,
+    "producer_program": 301,
+    "producer_entry": "_GfxDrawIndexed",
+    "producer_caller_rva": "0x10d4e50",
+    "producer_event": 14,
+    "producer": {
+      "event": 14,
+      "kind": "draw",
+      "entry": "_GfxDrawIndexed",
+      "caller_rva": "0x10d4e50",
+      "program": 301
+    },
+    "prior_producers": [
+      {
+        "event": 7,
+        "kind": "clear",
+        "operation": null,
+        "program": null
+      },
+      {
+        "event": 14,
+        "kind": "draw",
+        "operation": null,
+        "program": 301
+      }
+    ],
+    "inputs": [
+      {
+        "resource": "tex:375",
+        "unit": 0,
+        "sampler": "tex0"
+      },
+      {
+        "resource": "tex:387",
+        "unit": 9,
+        "sampler": "tex9"
+      },
+      {
+        "resource": "tex:376",
+        "unit": 4,
+        "sampler": "tex4"
+      },
+      {
+        "resource": "tex:429",
+        "unit": 7,
+        "sampler": "tex7"
+      },
+      {
+        "resource": "tex:356",
+        "unit": 14,
+        "sampler": "tex14"
+      },
+      {
+        "resource": "tex:431",
+        "unit": 12,
+        "sampler": "tex12"
+      },
+      {
+        "resource": "tex:434",
+        "unit": 11,
+        "sampler": "tex11"
+      },
+      {
+        "resource": "tex:374",
+        "unit": 2,
+        "sampler": "tex2"
+      },
+      {
+        "resource": "tex:2",
+        "unit": 8,
+        "sampler": "tex8"
+      },
+      {
+        "resource": "tex:371",
+        "unit": 3,
+        "sampler": "tex3"
+      },
+      {
+        "resource": "tex:389",
+        "unit": 10,
+        "sampler": "tex10"
+      },
+      {
+        "resource": "tex:377",
+        "unit": 15,
+        "sampler": "tex15"
+      },
+      {
+        "resource": "tex:367",
+        "unit": 5,
+        "sampler": "tex5"
+      },
+      {
+        "resource": "tex:394",
+        "unit": 13,
+        "sampler": "tex13"
+      },
+      {
+        "resource": "tex:369",
+        "unit": 1,
+        "sampler": "tex1"
+      }
+    ],
+    "render_target": "fb:0",
+    "dependent_resources": [
+      {
+        "event": 286,
+        "unit": null,
+        "sampler": "resolve",
+        "operation": "glCopyTexSubImage2D",
+        "destination": "tex:442"
+      }
+    ],
+    "state": {
+      "blend": {
+        "enabled": false,
+        "src_rgb": "0x1",
+        "dst_rgb": "0x0",
+        "src_alpha": "0x1",
+        "dst_alpha": "0x0",
+        "equation_rgb": "0x8006",
+        "equation_alpha": "0x8006"
+      },
+      "depth": {
+        "test": true,
+        "func": "0x203",
+        "write": true
+      },
+      "stencil": {
+        "test": false,
+        "func": "0x207",
+        "ref": 0,
+        "value_mask": -1,
+        "fail": "0x1e00",
+        "zfail": "0x1e00",
+        "zpass": "0x1e00",
+        "write_mask": -1
+      },
+      "cull": {
+        "enabled": true,
+        "mode": "0x405",
+        "front": "0x901"
+      },
+      "polygon": {
+        "mode": [
+          "0x1b02",
+          "0x1b02"
+        ],
+        "offset_fill": false,
+        "offset_factor": 0,
+        "offset_units": 0
+      },
+      "alpha_test": {
+        "enabled": false,
+        "func": "0x206",
+        "ref": 1
+      },
+      "scissor": {
+        "enabled": false,
+        "box": [
+          0,
+          0,
+          1728,
+          1117
+        ]
+      },
+      "viewport": [
+        0,
+        0,
+        1728,
+        1117
+      ],
+      "color_mask": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "dither": true,
+      "multisample": true
+    },
+    "gl_sha256": "3f71265b4e0c7afe9d92213bc679cd32c7625f39dc94a5ea1778abce3eae2232",
+    "metal_sha256": "ae4abf0f5d8d56a33b1e74b1e31115cd16b45c934a20c68697c3c90d7d3fe7aa",
+    "statistics": {
+      "pixels": 1930176,
+      "mismatched_pixels": 858,
+      "mismatched_fraction": 0.0004445190490400875,
+      "alpha_different_pixels": 0,
+      "max_channel_error": 2,
+      "mean_abs_error": [
+        0.000310334,
+        0.000254899,
+        0.000184439,
+        0.0
+      ],
+      "mean_max_channel_error": 0.000475604,
+      "first_differing_pixel": {
+        "x": 201,
+        "y": 41,
+        "offset": 71049
+      },
+      "differing_bounds": {
+        "x": 2,
+        "y": 41,
+        "width": 229,
+        "height": 226
+      }
+    },
+    "pixel_location": {
+      "x": 201,
+      "y": 41,
+      "offset": 71049
+    },
+    "differing_bounds": {
+      "x": 2,
+      "y": 41,
+      "width": 229,
+      "height": 226
+    },
+    "upstream_checkpoints": [
+      {
+        "event": 14,
+        "target": "fb:0",
+        "status": "not_checkpointed"
+      }
+    ],
+    "semantic": null,
+    "final": "divergent",
+    "unresolved_interval": {
+      "start_event": 14,
+      "end_event": 15,
+      "lower_bound": "same_resource_match",
+      "search_start_event": 14,
+      "note": "the first confirmed divergent checkpoint; the lower bound is the last matching checkpoint for the same resource when one exists, otherwise it is unbounded. Event 0 is only an operational search start, not observed matching evidence"
+    },
+    "next_checkpoint": null,
+    "copy_source_evidence": null,
+    "cross_capture_excluded": {
+      "capture_matches": [],
+      "copy_source_matches": [],
+      "note": "same-resource matches from another capture were excluded from this interval; they cannot bound a sealed frame"
+    },
+    "recommended_action": {
+      "action": "investigate_event",
+      "event": 14,
+      "observation_event": 15,
+      "target": "0",
+      "resource": "fb:0",
+      "reason": "the last matching default-framebuffer checkpoint is immediately before the divergence; checkpoints observe state before their event, so operation 14 is the candidate and event 15 only observes the result"
+    },
+    "recommended_checkpoint": null,
+    "diagnostic_checkpoints": [],
+    "earliest_observed_difference": {
+      "event": 15,
+      "target": "0",
+      "resource": "fb:0",
+      "width": 1728,
+      "height": 1117,
+      "format": "BGRA8",
+      "producer_events": [
+        7,
+        14
+      ],
+      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/compressed-904/replay-decoded/intermediate-event15-tex0.bgra",
+      "reference_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/compressed-904/frame-decoded-copy/blobs/default-checkpoint-3f71265b4e0c7afe9d92213bc679cd32c7625f39dc94a5ea1778abce3eae2232.bin",
+      "authoritative": true,
+      "requested": true,
+      "normalization": {
+        "channel_swap": null,
+        "row_origin": "declared_lower_left"
+      },
+      "statistics": {
+        "pixels": 1930176,
+        "mismatched_pixels": 858,
+        "mismatched_fraction": 0.0004445190490400875,
+        "alpha_different_pixels": 0,
+        "max_channel_error": 2,
+        "mean_abs_error": [
+          0.000310334,
+          0.000254899,
+          0.000184439,
+          0.0
+        ],
+        "mean_max_channel_error": 0.000475604,
+        "first_differing_pixel": {
+          "x": 201,
+          "y": 41,
+          "offset": 71049
+        },
+        "differing_bounds": {
+          "x": 2,
+          "y": 41,
+          "width": 229,
+          "height": 226
+        }
+      },
+      "worst_regions": [
+        {
+          "row": 1,
+          "column": 0,
+          "x": 0,
+          "y": 140,
+          "width": 216,
+          "height": 140,
+          "mean_max_channel_error": 0.017857
+        },
+        {
+          "row": 0,
+          "column": 0,
+          "x": 0,
+          "y": 0,
+          "width": 216,
+          "height": 140,
+          "mean_max_channel_error": 0.008135
+        },
+        {
+          "row": 0,
+          "column": 1,
+          "x": 216,
+          "y": 0,
+          "width": 216,
+          "height": 140,
+          "mean_max_channel_error": 0.004365
+        },
+        {
+          "row": 0,
+          "column": 2,
+          "x": 432,
+          "y": 0,
+          "width": 216,
+          "height": 140,
+          "mean_max_channel_error": 0.0
+        }
+      ],
+      "metal_sha256": "ae4abf0f5d8d56a33b1e74b1e31115cd16b45c934a20c68697c3c90d7d3fe7aa",
+      "reference_sha256": "3f71265b4e0c7afe9d92213bc679cd32c7625f39dc94a5ea1778abce3eae2232",
+      "status": "divergent",
+      "capture": {
+        "session_id": null,
+        "capture_frame_id": null,
+        "present_index": 904,
+        "scene_index": 904,
+        "event_stream_sha256": null,
+        "reference_sha256": "d06393582d04fc4a58dfd1cc60bf99757c46537ab7a9aa9c81064f3940208dda",
+        "manifest_sha256": null
+      }
+    },
+    "limitations": [
+      "the default framebuffer matched immediately before the divergent checkpoint; no interior checkpoint remains",
+      "the earliest observed differing event is not a proven root cause; earlier operations in the unresolved interval were not checkpointed",
+      "captured state not implemented by Metal: gl_dither, multisample; no A/B experiment attributes the difference to it"
+    ],
+    "unsupported_state": [
+      "gl_dither",
+      "multisample"
+    ],
+    "confidence": "confirmed",
+    "root_cause": "not_established",
+    "authoritative_because": "this is a reconciled request/response checkpoint whose captured reference digest and Metal output were verified; it is the earliest such checkpoint before the final framebuffer",
+    "reason": "the earliest authoritative intermediate checkpoint differs; its inputs are not necessarily the cause",
+    "fault": null,
+    "present_index": 904,
+    "scene_index": 904
+  },
+  "report": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/compressed-904/replay-decoded/replay-report.json"
+}

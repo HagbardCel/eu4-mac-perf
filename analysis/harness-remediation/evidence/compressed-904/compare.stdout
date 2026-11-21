@@ -1,0 +1,39 @@
+i: compressed vs decoded event 15: mismatched=859 max=2 alpha=0 identical=False
+ii: compressed vs live-GL seal event 15: mismatched=4 max=1 alpha=0 identical=False
+iii: decoded vs live-GL seal event 15: mismatched=858 max=2 alpha=0 identical=False
+i: compressed vs decoded event 16: mismatched=196352 max=87 alpha=0 identical=False
+ii: compressed vs live-GL seal event 16: mismatched=3602 max=119 alpha=0 identical=False
+iii: decoded vs live-GL seal event 16: mismatched=196775 max=118 alpha=0 identical=False
+i: compressed vs decoded event 17: mismatched=391212 max=87 alpha=0 identical=False
+ii: compressed vs live-GL seal event 17: mismatched=7484 max=130 alpha=0 identical=False
+iii: decoded vs live-GL seal event 17: mismatched=391898 max=129 alpha=0 identical=False
+i: compressed vs decoded event final: mismatched=1097607 max=52 alpha=0 identical=False
+ii: compressed vs live-GL seal event final: mismatched=425560 max=68 alpha=0 identical=False
+iii: decoded vs live-GL seal event final: mismatched=1167071 max=68 alpha=0 identical=False
+shadow sanity: {
+ "15": {
+  "existing_shadow": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/shadow/intermediate-event15-tex0.bgra",
+  "existing_shadow_sha256": "dc2602847b06c23d068eaa599d4c38d99e747b9f4eebfaad69aad4750c798c11",
+  "compressed_replay_sha256": "dc2602847b06c23d068eaa599d4c38d99e747b9f4eebfaad69aad4750c798c11",
+  "byte_identical": true
+ },
+ "16": {
+  "existing_shadow": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/shadow/intermediate-event16-tex0.bgra",
+  "existing_shadow_sha256": "42e8ab2ae30dcbc75199ade4224691097ecc94869e421e4533eec01300035613",
+  "compressed_replay_sha256": "42e8ab2ae30dcbc75199ade4224691097ecc94869e421e4533eec01300035613",
+  "byte_identical": true
+ },
+ "17": {
+  "existing_shadow": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/shadow/intermediate-event17-tex0.bgra",
+  "existing_shadow_sha256": "e85776e1b5a5f04fdc14524575586c0e35122c7b3e44a8b2c8c5aef9e1e9bddc",
+  "compressed_replay_sha256": "e85776e1b5a5f04fdc14524575586c0e35122c7b3e44a8b2c8c5aef9e1e9bddc",
+  "byte_identical": true
+ },
+ "final": {
+  "existing_shadow": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/goal-round1/capture-c/shadow/metal-frame.bgra",
+  "existing_shadow_sha256": "b73cac940b66f8c5f1faef6e44302ed9e9dd24ec5ee0ba7049a798a0cb10ba6f",
+  "compressed_replay_sha256": "b73cac940b66f8c5f1faef6e44302ed9e9dd24ec5ee0ba7049a798a0cb10ba6f",
+  "byte_identical": true
+ }
+}
+wrote /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/analysis/harness-remediation/evidence/compressed-904/pixel-comparison.json
