@@ -175,6 +175,18 @@ through 0 only** (event 0 is exact; event 1 is the first divergent operation).
 Events 10 and 12–17 are exact observations but do not form a contiguous prefix
 until event 1 is resolved. No event-20 qualification is claimed.
 
+## Final decisions
+
+- **M7_AUTONOMOUS_READY: NO.** Trusted candidate execution, evidence isolation,
+  accounting, focused tests and the full gate pass, but a genuine native DSH
+  multi-round correction run with the corrected checker has not been
+  demonstrated.
+- **EVENT20_EXACT: NO.** Event 1 diverges (23 RGB pixels, max byte-channel
+  difference 1); event 11 has no original R32F observation in this seal. The
+  exact verified prefix is `[0, 0]`.
+- **Merge: NO** until independent review of the exact final head and the
+  native multi-round gate are complete.
+
 ## Outstanding limitations
 
 - The event-1 difference is not root-caused. It is a 1-LSB, sparse RGB
@@ -230,7 +242,10 @@ Focused suites executed during development:
   `test_gfx_frame_graph`, `test_gfx_independent_replay`,
   `test_gfx_replay_checkpoints`, `test_m7_checkpoint_provenance`,
   `test_campaign_guard`, `test_dsh_campaign`, `test_dsh_bridge`.
-- Final full offline gate on the remediation state
-  (`20261121T160914Z-11638740`): 4,440 ran / 4,404 executed / 36 skipped / 0
-  failures / 0 errors, 762.6 s, at `bb0ab5a8`. `test_profiles verify --profile
-  offline` passed before the gate.
+- Final autonomy gate (`20261121T163547Z-78be20d3`) at `09e03ec7`:
+  4,445 ran / 4,409 executed / 36 skipped / 0 failures / 0 errors, 977.3 s.
+  `test_profiles verify --profile offline` passed before the gate.
+- Canonical `accept.py` on the final pinned candidate (`6619f13a`) and immutable
+  copied reference returned `fail`: `FIRST_DIVERGENCE` at event 1, 23 px /
+  max 1 RGB, candidate source digest `255a5b7e…`, host `190fde92…`, trusted
+  reference root `b3e3d7b5…`.

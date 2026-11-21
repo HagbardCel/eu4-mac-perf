@@ -70,6 +70,11 @@ def main(argv: list[str]) -> int:
             "trusted evidence root is inside the candidate workspace: "
             f"{trusted_root}")
     record_path = trusted_root / "trusted-evidence.json"
+    if not record_path.is_file():
+        candidates = sorted(trusted_root.glob("*/trusted-evidence.json"))
+        if len(candidates) == 1:
+            record_path = candidates[0]
+            trusted_root = record_path.parent
     try:
         record = json.loads(record_path.read_text())
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
