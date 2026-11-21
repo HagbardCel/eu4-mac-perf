@@ -28,7 +28,7 @@ Governing references: [assessment](../../plans/closed/harness-review-20261120/as
 | Reviewed heads | #263 `5ae0ccff`, #264 `3cb4d39d`, #265 `fbe23d51`, #266 `dc219a6d`, #267 `f5301f69`, #268 `c3fbeb77`, #273 `8415ab86` |
 | Per-PR merge commits | #263 `3fe7c602`, #264 `7cd4a072`, #265 `118c070c`, #266 `52cc1e89`, #267 `d3a0ce6b`; integration merge `fecff675`; #273 `758e2f56` |
 | Review records | independent exact-head review comments on #263–#268 and #273; #251–#257 have no independent human exact-head review (Codex/audit/author/CI only); #241–#250 were reviewed at earlier commits. GitHub records comments as `COMMENTED`, not `APPROVE` (the only available identity is the author) |
-| Verification | [verification-20261121.md](verification-20261121.md); pre-archive gate `20261121T080139Z-89089cf0` (4,254 ran / 4,189 executed / 65 skipped / 0 failures / 0 errors at `758e2f56`); post-#276 gate recorded below once executed |
+| Verification | [verification-20261121.md](verification-20261121.md); pre-archive gate `20261121T080139Z-89089cf0` (4,254 ran / 4,189 executed / 65 skipped / 0 failures / 0 errors at `758e2f56`); post-#276 gate `20261121T091519Z-debdc76e` (4,257 ran / 4,191 executed / 66 skipped / 0 failures / 0 errors at `0e9447f8`) |
 
 The six closure PRs (#263–#268) and #273 were reviewed at their exact final
 commits by reviewers independent of the author. The #264 final P2 delta review was performed before merge (its

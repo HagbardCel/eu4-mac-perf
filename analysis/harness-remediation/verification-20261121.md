@@ -23,7 +23,11 @@ new test file: 25 ran / 24 executed / 1 skipped / 2 failures + 1 error
 (`20261121T090508Z-aa76fdfd`). The single macOS skip is the Linux-only zombie
 test, which CI executes.
 
-The post-#276 full offline gate is recorded as `POST276_GATE`.
+The post-#276 full offline gate in a clean worktree at `0e9447f8` was one
+`unittest discover -s tests` run with no module exclusion: **4,257 ran / 4,191
+executed / 66 skipped / 0 failures / 0 errors**, runner
+`20261121T091519Z-debdc76e`, label `harness-post-closure-final`, child exit 0,
+wall 643.98 s (unittest 642.594 s), committed tree `0e9447f8`.
 
 ## 1. Baseline and candidate full offline profiles
 
