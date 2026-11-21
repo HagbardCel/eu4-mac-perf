@@ -147,9 +147,15 @@ def _try_lock(path: Path):
             f"worktree execution lock is unusable: {path}: {exc}") from exc
     try:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    except OSError as exc:
         handle.close()
-        return None
+        if exc.errno in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EACCES):
+            return None
+        # A filesystem/syscall that cannot lock is an environment error, not
+        # another run holding the lock.
+        raise OSError(
+            f"worktree execution lock could not be taken: {path}: {exc}"
+        ) from exc
     return handle
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import signal
@@ -301,17 +302,24 @@ class RunnerTests(unittest.TestCase):
                                         state_dir=self.state)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
-SLOW_MODULE = """
+GATED_MODULE = """
 import os
 import time
 import unittest
-class Slow(unittest.TestCase):
-    def test_sleeps(self):
-        time.sleep(float(os.environ.get("TEST_RUNNER_SLEEP", "30")))
+from pathlib import Path
+class Gated(unittest.TestCase):
+    def test_waits_for_the_test_release(self):
+        ready = Path(os.environ["GATED_READY"])
+        release = Path(os.environ["GATED_RELEASE"])
+        ready.write_text("1")
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if release.exists():
+                return
+            time.sleep(0.02)
+        self.fail("the test release file never appeared")
 """
 
 BARRIER_MODULE = """
@@ -388,15 +396,22 @@ class WorktreeExecutionLockTests(unittest.TestCase):
         return process.returncode, value, stderr
 
     def test_two_different_selections_in_one_worktree_do_not_overlap(self):
-        self._module(self.worktree, "runner_slowish", SLOW_MODULE)
+        ready = self.root / "gated.ready"
+        release = self.root / "gated.release"
+        self._module(self.worktree, "runner_gated", GATED_MODULE)
         self._module(self.worktree, "runner_pass", PASS)
-        slow = self._spawn("runner_slowish", self.worktree,
-                           TEST_RUNNER_SLEEP="3")
+        slow = self._spawn("runner_gated", self.worktree,
+                           GATED_READY=ready, GATED_RELEASE=release)
         try:
             running = self._wait_for_running_record()
+            deadline = time.monotonic() + 15
+            while not ready.exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(ready.exists(), "the first run never started")
             second = self._spawn("runner_pass", self.worktree)
             code, value, stderr = self._collect(second, timeout=30)
         finally:
+            release.write_text("1")
             code_slow, slow_value, slow_stderr = self._collect(slow, timeout=60)
         self.assertEqual(code_slow, 0, slow_stderr)
         self.assertEqual(slow_value.get("status"), "passed", slow_value)
@@ -435,10 +450,12 @@ class WorktreeExecutionLockTests(unittest.TestCase):
         self.assertNotEqual(value_a.get("cwd"), value_b.get("cwd"))
 
     def test_abrupt_runner_termination_releases_the_worktree_lock(self):
-        self._module(self.worktree, "runner_very_slow", SLOW_MODULE)
+        ready = self.root / "abrupt.ready"
+        never = self.root / "abrupt.never"
+        self._module(self.worktree, "runner_gated", GATED_MODULE)
         self._module(self.worktree, "runner_pass", PASS)
-        slow = self._spawn("runner_very_slow", self.worktree,
-                           TEST_RUNNER_SLEEP="30")
+        slow = self._spawn("runner_gated", self.worktree,
+                           GATED_READY=ready, GATED_RELEASE=never)
         running = None
         try:
             running = self._wait_for_running_record()
@@ -476,6 +493,31 @@ class WorktreeExecutionLockTests(unittest.TestCase):
         self.assertIsNone(value["blocked_by"])
         self.assertFalse(list((self.state / "runs").glob("*.json")))
 
+    def test_a_lock_contention_is_reported_as_busy(self):
+        self._module(self.worktree, "runner_pass", PASS)
+        from unittest import mock
+        with mock.patch.object(
+                test_runner.fcntl, "flock",
+                side_effect=BlockingIOError(errno.EWOULDBLOCK, "held")):
+            value = test_runner.run_suite(
+                modules=["runner_pass"], cwd=self.worktree,
+                state_dir=self.state)
+        self.assertEqual(value["status"], "busy")
+        self.assertFalse(value["ok"])
+
+    def test_an_unusable_lock_is_an_error_not_busy(self):
+        self._module(self.worktree, "runner_pass", PASS)
+        from unittest import mock
+        with mock.patch.object(
+                test_runner.fcntl, "flock",
+                side_effect=OSError(errno.ENOLCK, "no locks")):
+            with self.assertRaises(OSError) as caught:
+                test_runner.run_suite(
+                    modules=["runner_pass"], cwd=self.worktree,
+                    state_dir=self.state)
+        self.assertIn("worktree execution lock", str(caught.exception))
+        self.assertFalse(list((self.state / "runs").glob("*.json")))
+
     def test_a_normal_run_releases_the_worktree_lock(self):
         self._module(self.worktree, "runner_pass", PASS)
         process = self._spawn("runner_pass", self.worktree)
@@ -485,3 +527,7 @@ class WorktreeExecutionLockTests(unittest.TestCase):
             test_runner._worktree_lock_path(self.worktree))
         self.assertIsNotNone(handle)
         test_runner._release_lock(handle)
+
+
+if __name__ == "__main__":
+    unittest.main()
