@@ -17,7 +17,7 @@ the outcome.
 | Stage-3 candidate worktree HEAD | `c06e3ea6c37336606b0e95d2d4545a2f19fb6d42` |
 | Trusted checker | `campaigns/eu4-m7-event20/accept.py` from the infrastructure checkout, importing `automation` from that checkout, never from the candidate |
 | Remediation code head | `385d44f6afaa3ba544f88b62f8c7eb1e713a0b68` |
-| Final autonomy gate | `09e03ec7` / `20261121T163547Z-78be20d3` (4,445 ran, 4,409 executed, 36 skipped, 0 failures, 0 errors, 977.3 s) |
+| Final autonomy gate | `4b34bbd5` / `20261121T172542Z-17dd1d11` (4,445 ran, 4,409 executed, 36 skipped, 0 failures, 0 errors, 1,079.9 s) |
 | Canonical acceptance on final candidate | `fail` at event 1; candidate `6619f13a`, source `255a5b7e…`, host `190fde92…`, immutable reference `b3e3d7b5…` |
 
 The checker was invoked against the candidate workspace; the candidate could

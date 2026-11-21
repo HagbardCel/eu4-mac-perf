@@ -242,8 +242,8 @@ Focused suites executed during development:
   `test_gfx_frame_graph`, `test_gfx_independent_replay`,
   `test_gfx_replay_checkpoints`, `test_m7_checkpoint_provenance`,
   `test_campaign_guard`, `test_dsh_campaign`, `test_dsh_bridge`.
-- Final autonomy gate (`20261121T163547Z-78be20d3`) at `09e03ec7`:
-  4,445 ran / 4,409 executed / 36 skipped / 0 failures / 0 errors, 977.3 s.
+- Final autonomy gate (`20261121T172542Z-17dd1d11`) at `4b34bbd5`:
+  4,445 ran / 4,409 executed / 36 skipped / 0 failures / 0 errors, 1,079.9 s.
   `test_profiles verify --profile offline` passed before the gate.
 - Canonical `accept.py` on the final pinned candidate (`6619f13a`) and immutable
   copied reference returned `fail`: `FIRST_DIVERGENCE` at event 1, 23 px /

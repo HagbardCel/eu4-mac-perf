@@ -5,7 +5,8 @@ candidate-execution remediation that follows it.
 
 ## 1. Final PR head and review decision
 
-- Final code head: `6619f13a753bb2183b14655392dacc4436a34435`
+- Final PR head: `4b34bbd5f1b4a58e41d666a932b7482677cfc545`
+- Candidate execution code head: `6619f13a753bb2183b14655392dacc4436a34435`
 - Canonical campaign pin: `09e03ec7` (configuration-only commit after the code
   head; the sidecar/source workspace point at `6619f13a`).
 - Independent review of this exact head: **not yet obtained**.
@@ -56,11 +57,9 @@ This is the blocking reason `M7_AUTONOMOUS_READY` is not claimed.
 
 - Required focused command: **passed**.
 - `test_profiles verify --profile offline`: **passed**.
-- Final autonomy gate `20261121T163547Z-78be20d3` at `09e03ec7`:
+- Final autonomy gate `20261121T172542Z-17dd1d11` at `4b34bbd5`:
   **4,445 ran / 4,409 executed / 36 skipped / 0 failures / 0 errors**,
-  977.3 s.
-- A final gate is rerun after the acceptance-root discovery cleanup and this
-  packet; the final recorded counts replace this row if they differ.
+  1,079.9 s. `test_profiles verify --profile offline` passed before the gate.
 
 ## 5. Budget-accounting verification
 
