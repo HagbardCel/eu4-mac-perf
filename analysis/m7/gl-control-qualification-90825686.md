@@ -219,7 +219,9 @@ regenerated, relabelled or combined.
 | PR2a focused (`m6_frame`, `frame_trace_writer`) | 105 ran / 0 failures | independent PR2 ordering review |
 | PR3 preflight | 22 ran / 0 failures | independent PR3 review |
 | PR3a capacity preflight | 223 ran / 0 failures | independent PR3 capacity review |
-| Full offline gate at the implementation head | see the final gate record | `automation.test_runner run --profile offline --label m7-final` |
+| Full verbose offline discovery on the PR1 base | exit 0, no failures | `EU4_TEST_PROFILE=offline EU4_OFFLINE_ONLY=1 python3.14 -m unittest discover -s tests -v` |
+| Final full offline gate attempts | **did not complete** — two attempts hung in pre-existing native harnesses (`test_gateway_runtime_harness`, and an OpenGL-polling host), with no test failure produced; the run was stopped rather than claimed | `test_runner run --profile offline --label m7-final`; bounded verbose rerun |
+| Final changed-module suites | 329 + 459 + 105 + 22 + 223 ran, 0 failures | focused runs listed above |
 | End-to-end qualifier probe (synthetic frame + real driver/native/signature) | `qualified=true`, exact, attribution allowed | independent PR3 review |
 
 EU4 launches for this experiment: **3** — two configuration hypotheses that
@@ -227,6 +229,16 @@ failed closed without a seal (target-guard ordering; event-index shift), and
 one sealed observation. No launch was made after the seal. The Metal replay is
 offline. Launch 1 and 2 each consumed one process, were terminated, and
 restored settings; no pixel result was claimed from an unsealed frame.
+
+The final full-suite gate is recorded as **incomplete, not green**: after the
+seal, two attempts to run the whole offline discovery stopped in pre-existing
+native harnesses (one OpenGL-polling subprocess; one
+`test_gateway_runtime_harness`) that are unrelated to the changed files. The
+runner produced no test failure; the runs were stopped rather than converted
+into a pass. The earlier full verbose discovery on the PR1 base exited 0, and
+every changed-module suite is green at the final heads. The gateway/runtime
+harness hang is an environment limitation of this session, not evidence of
+pixel correctness.
 
 ## 10. Decision
 
