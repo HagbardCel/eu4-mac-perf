@@ -24,7 +24,6 @@ from automation.verification_manifest import canonical_json, digest_text
 
 SCHEMA = "eu4-dsh-campaign/v1"
 MODES = ("seed", "worktree")
-RETRY_MODES = ("deterministic", "stateful")
 DEFAULT_STATE_ROOT = Path("~/.local/share/eu4-dsh/state")
 
 # Reader defaults. A sidecar may omit exactly these fields; the resolved
@@ -36,16 +35,12 @@ DEFAULT_STATE_ROOT = Path("~/.local/share/eu4-dsh/state")
 DEFAULT_RUN_ROOT = DEFAULT_STATE_ROOT  # <state root>/<campaign id>
 DEFAULT_WORKSPACE_BASE = "run_root"
 DEFAULT_CANDIDATE_WORKSPACE = "workspace"  # <workspace base>/workspace
-DEFAULT_RETRY_MODE = "deterministic"
-DEFAULT_CONFIRMATION_ROUNDS = 0
-DEFAULT_MAX_IDENTICAL_RETRIES = 0
-DEFAULT_MAX_ROUNDS = 6
 DEFAULT_REQUIRE_CHECKER_PASS = True
 DEFAULT_REQUIRE_INDEPENDENT_REVIEW = False
-DEFAULT_MAX_VALIDATIONS = 8
 DEFAULT_VALIDATION_TIMEOUT_SECONDS = 60.0
-DEFAULT_WALL_CLOCK_SECONDS = 1800.0
-DEFAULT_MAX_REVIEW_ATTEMPTS = 2
+# The single campaign-wide execution deadline.  An absent value means the
+# campaign has no deadline; per-operation subprocess timeouts still apply.
+DEFAULT_DEADLINE_SECONDS = 1800.0
 DEFAULT_EVIDENCE_PATHS: tuple[str, ...] = ()
 DEFAULT_REPLAY_INPUTS: tuple[str, ...] = ()
 DEFAULT_ALLOW_INCOMPLETE_INPUTS = False
@@ -80,18 +75,11 @@ class Sidecar:
     forbidden_paths: tuple[str, ...]
     allow_symlinks: bool
     policy_digest: str
-    retry_mode: str
-    confirmation_rounds: int
-    max_identical_retries: int
     evidence_paths: tuple[str, ...]
     live_capture_enabled: bool
-    max_rounds: int
     require_checker_pass: bool
     require_independent_review: bool
-    max_validations: int
     validation_timeout_seconds: float
-    wall_clock_seconds: float
-    max_review_attempts: int
     run_root: Path
     replay_inputs: tuple[str, ...] = ()
     allow_incomplete_inputs: bool = False
@@ -239,11 +227,9 @@ def load_sidecar(path: Path, *, infra: Path | None = None) -> Sidecar:
     allowed, forbidden, allow_symlinks, policy_digest = _load_policy(
         data, campaign_root, mode, seed
     )
-    retry_mode, confirmation_rounds, max_identical = _load_retry(data)
     evidence_paths = _load_evidence(data)
     live_enabled = _load_live(data)
-    (max_rounds, require_pass, require_review, max_validations,
-     timeout, wall, review_attempts) = _load_goal_limits(data)
+    require_pass, require_review, timeout = _load_goal_limits(data)
 
     return Sidecar(
         campaign_id=campaign_id,
@@ -267,22 +253,15 @@ def load_sidecar(path: Path, *, infra: Path | None = None) -> Sidecar:
         forbidden_paths=forbidden,
         allow_symlinks=allow_symlinks,
         policy_digest=policy_digest,
-        retry_mode=retry_mode,
-        confirmation_rounds=confirmation_rounds,
-        max_identical_retries=max_identical,
         evidence_paths=evidence_paths,
         live_capture_enabled=live_enabled,
-        max_rounds=max_rounds,
         require_checker_pass=require_pass,
         require_independent_review=require_review,
         replay_inputs=_load_replay_inputs(data),
         allow_incomplete_inputs=_optional_bool(
             data.get("allow_incomplete_inputs"), "allow_incomplete_inputs",
             DEFAULT_ALLOW_INCOMPLETE_INPUTS),
-        max_validations=max_validations,
         validation_timeout_seconds=timeout,
-        wall_clock_seconds=wall,
-        max_review_attempts=review_attempts,
         run_root=run_root,
     )
 
@@ -468,30 +447,6 @@ def _load_policy(data: dict, campaign_root: Path, mode: str, seed: Path | None):
     return allowed, forbidden, allow_symlinks, digest
 
 
-def _load_retry(data: dict):
-    retry = _require_object(data.get("checker_retry"), "checker_retry")
-    mode = _optional_string(retry.get("mode"), "checker_retry.mode",
-                            DEFAULT_RETRY_MODE)
-    if mode not in RETRY_MODES:
-        raise SidecarError("checker_retry.mode must be deterministic or stateful")
-    rounds = _optional_int(retry.get("confirmation_rounds"),
-                           "checker_retry.confirmation_rounds",
-                           DEFAULT_CONFIRMATION_ROUNDS)
-    identical = _optional_int(retry.get("max_identical_retries"),
-                              "checker_retry.max_identical_retries",
-                              DEFAULT_MAX_IDENTICAL_RETRIES)
-    if rounds < 0 or identical < 0:
-        raise SidecarError("checker_retry counters must be non-negative")
-    if mode == "stateful" and rounds < 1:
-        raise SidecarError(
-            "stateful checkers need confirmation_rounds >= 1; otherwise an unchanged "
-            "candidate can never reach its intended confirmation round"
-        )
-    if mode == "deterministic" and rounds:
-        raise SidecarError("confirmation_rounds only applies to stateful checkers")
-    return mode, rounds, identical
-
-
 def _load_evidence(data: dict) -> tuple[str, ...]:
     evidence = _require_object(data.get("evidence"), "evidence")
     raw = evidence.get("paths")
@@ -514,34 +469,41 @@ def _load_live(data: dict) -> bool:
 
 
 def _load_goal_limits(data: dict):
+    """Read the completion policy and each checker's subprocess timeout.
+
+    Fixed validation attempts and goal-round caps are gone: DSH decides when to
+    continue, and each checker invocation keeps its own subprocess timeout.  The
+    operator execution deadline is declared in ``limits.deadline_seconds`` but
+    enforced by the campaign guard, which the launcher seeds at launch; this
+    loader does not duplicate it.
+    """
     goal = _require_object(data.get("goal"), "goal")
     limits = _require_object(data.get("limits"), "limits")
-    max_rounds = _optional_int(goal.get("max_rounds"), "goal.max_rounds",
-                               DEFAULT_MAX_ROUNDS)
-    if max_rounds < 1:
-        raise SidecarError("goal.max_rounds must be positive")
+    if "max_rounds" in goal:
+        # Legacy goal-round cap: no longer consumed.  Present for historical
+        # sidecars only; the DSH goal driver continues while work is justified.
+        _optional_int(goal.get("max_rounds"), "goal.max_rounds", 0)
     require_pass = _optional_bool(goal.get("require_checker_pass"),
                                   "goal.require_checker_pass",
                                   DEFAULT_REQUIRE_CHECKER_PASS)
     require_review = _optional_bool(goal.get("require_independent_review"),
                                     "goal.require_independent_review",
                                     DEFAULT_REQUIRE_INDEPENDENT_REVIEW)
-    max_validations = _optional_int(limits.get("max_validations"),
-                                    "limits.max_validations",
-                                    DEFAULT_MAX_VALIDATIONS)
-    if max_validations < 1:
-        raise SidecarError("limits.max_validations must be positive")
+    for legacy in ("max_validations", "max_review_attempts"):
+        if legacy in limits:
+            _optional_int(limits.get(legacy), f"limits.{legacy}", 0)
     timeout = _optional_number(limits.get("validation_timeout_seconds"),
                                "limits.validation_timeout_seconds",
                                DEFAULT_VALIDATION_TIMEOUT_SECONDS)
-    wall = _optional_number(limits.get("wall_clock_seconds"),
-                            "limits.wall_clock_seconds",
-                            DEFAULT_WALL_CLOCK_SECONDS)
-    review = _optional_int(limits.get("max_review_attempts"),
-                           "limits.max_review_attempts",
-                           DEFAULT_MAX_REVIEW_ATTEMPTS)
-    if timeout <= 0 or wall <= 0:
-        raise SidecarError("limits timeouts must be positive")
-    if review < 0:
-        raise SidecarError("limits.max_review_attempts must be non-negative")
-    return (max_rounds, require_pass, require_review, max_validations, timeout, wall, review)
+    # ``wall_clock_seconds`` is the historical name for the same operator
+    # deadline; validate its shape for historical sidecars, but the campaign
+    # guard owns enforcement.
+    raw_deadline = limits.get("deadline_seconds")
+    if raw_deadline is None:
+        raw_deadline = limits.get("wall_clock_seconds")
+    if raw_deadline is not None:
+        _optional_number(raw_deadline, "limits.deadline_seconds",
+                         DEFAULT_DEADLINE_SECONDS)
+    if timeout <= 0:
+        raise SidecarError("limits.validation_timeout_seconds must be positive")
+    return require_pass, require_review, timeout

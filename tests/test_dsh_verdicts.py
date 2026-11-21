@@ -1,9 +1,9 @@
-"""Every row of the verdict table, and both budget stops.
+"""Every row of the verdict table and the goal policy that follows it.
 
 The plan's contract is that the checker's verdict is passed through unchanged and
 that the bridge's own classification is a separate axis. The branches that steer
-agent behaviour most -- inconclusive, blocked, unavailable -- had no coverage, nor
-did the validation and finalization budgets.
+agent behaviour most -- inconclusive, blocked, unavailable -- are covered here,
+including a repeated verdict that is requested again rather than cached.
 """
 
 import json
@@ -56,12 +56,8 @@ class ClassifyTests(unittest.TestCase):
 
 
 class GoalPolicyTests(BridgeTestCase):
-    def verdict_sidecar(self, *, max_validations: int = 6) -> Path:
-        sidecar = self.sidecar(self.campaign("verdict-campaign"))
-        data = json.loads(sidecar.read_text(encoding="utf-8"))
-        data["limits"]["max_validations"] = max_validations
-        sidecar.write_text(json.dumps(data), encoding="utf-8")
-        return sidecar
+    def verdict_sidecar(self) -> Path:
+        return self.sidecar(self.campaign("verdict-campaign"))
 
     def request(self, verdict: str) -> None:
         (self.root / "verdict.txt").write_text(verdict + "\n", encoding="utf-8")

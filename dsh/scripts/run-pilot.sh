@@ -93,24 +93,23 @@ EU4_DSH_PYTHON=$(
 }
 export EU4_DSH_PYTHON
 
-# Optional EU4 resource budget enforced by the action sites, not the model.
+# Optional campaign safety state.  A pilot is autonomous reconstruction by
+# default: it cannot launch EU4, and there is no replay/validation quota.
 if [ -n "${CAMPAIGN_STATE:-}" ]; then
   EU4_CAMPAIGN_STATE=$(CDPATH= cd -- "$(dirname -- "$CAMPAIGN_STATE")" 2>/dev/null && pwd)/$(basename -- "$CAMPAIGN_STATE") || EU4_CAMPAIGN_STATE=$CAMPAIGN_STATE
   export EU4_CAMPAIGN_STATE
-  if [ ! -f "$EU4_CAMPAIGN_STATE" ]; then
-    ( cd "$INFRA" && "$EU4_DSH_PYTHON" -m automation.campaign_guard init \
-        --state "$EU4_CAMPAIGN_STATE" ) >&2 || {
-      echo "$(basename "$0"): could not initialise the campaign state" >&2
-      exit 1
-    }
-  fi
+  ( cd "$INFRA" && "$EU4_DSH_PYTHON" -m automation.campaign_guard ensure \
+      --state "$EU4_CAMPAIGN_STATE" --mode autonomous_reconstruction ) >&2 || {
+    echo "$(basename "$0"): could not prepare the campaign state" >&2
+    exit 1
+  }
   echo "$(basename "$0"): campaign state=$EU4_CAMPAIGN_STATE" >&2
-  # The operator token initializes administrative recovery and must never be
+  # The operator token issues a live-launch authorization and must never be
   # inherited by the agent session.
   if [ -n "${EU4_CAMPAIGN_ADMIN_TOKEN:-}" ]; then
-    echo "$(basename "$0"): administrative recovery is enabled for this campaign" >&2
+    echo "$(basename "$0"): operator token present; issue each live launch with authorize-launch" >&2
   else
-    echo "$(basename "$0"): no EU4_CAMPAIGN_ADMIN_TOKEN; administrative recovery is disabled" >&2
+    echo "$(basename "$0"): no EU4_CAMPAIGN_ADMIN_TOKEN; live launches are impossible" >&2
   fi
   unset EU4_CAMPAIGN_ADMIN_TOKEN
 fi

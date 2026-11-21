@@ -147,6 +147,7 @@ export function buildArgs(tool, args = {}) {
     add('--shaders', 'shaders')
     add('--replay-out', args.replay_out === undefined ? 'out' : 'replay_out')
     add('--policy', 'policy')
+    add('--rationale', 'rationale')
     if (args.require_seal) output.push('--require-seal')
     add('--max-frames', 'max_frames')
     add('--max-bytes', 'max_bytes')

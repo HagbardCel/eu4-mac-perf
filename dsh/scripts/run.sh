@@ -80,6 +80,14 @@ while [ $# -gt 0 ]; do
       CAMPAIGN_STATE=${1#--campaign-state=}
       shift
       ;;
+    --campaign-mode)
+      CAMPAIGN_MODE=${2:?--campaign-mode needs a value}
+      shift 2
+      ;;
+    --campaign-mode=*)
+      CAMPAIGN_MODE=${1#--campaign-mode=}
+      shift
+      ;;
     *)
       break
       ;;
@@ -88,6 +96,12 @@ done
 
 if [ -n "$CAMPAIGN" ] && [ -n "$WORKSPACE" ]; then
   echo "run: use --campaign or --workspace, not both" >&2
+  exit 2
+fi
+# A campaign carries an operator deadline and a safety mode. Without a state
+# file neither exists, so the launch is refused instead of running ungoverned.
+if [ -n "$CAMPAIGN" ] && [ -z "$CAMPAIGN_STATE" ]; then
+  echo "run: --campaign requires --campaign-state <path>; the campaign deadline and safety mode live in that state" >&2
   exit 2
 fi
 
@@ -148,28 +162,52 @@ EU4_DSH_PYTHON=$(
 }
 export EU4_DSH_PYTHON
 
-# Optional EU4 resource budget enforced by the action sites (m6_frame capture,
-# Metal replay) independently of the model. DSH still owns goal rounds; this
-# file bounds launches, sealed frames, shadow executions and replays.
+# Optional campaign safety policy enforced by the action sites independently of
+# the model.  There is no replay or validation quota: the mode decides whether a
+# live EU4 launch may be authorized, and every launch is one-use.
+: "${CAMPAIGN_MODE:=autonomous_reconstruction}"
 if [ -n "$CAMPAIGN_STATE" ]; then
   EU4_CAMPAIGN_STATE=$(CDPATH= cd -- "$(dirname -- "$CAMPAIGN_STATE")" 2>/dev/null && pwd)/$(basename -- "$CAMPAIGN_STATE") || EU4_CAMPAIGN_STATE=$CAMPAIGN_STATE
   export EU4_CAMPAIGN_STATE
-  if [ ! -f "$EU4_CAMPAIGN_STATE" ]; then
-    ( cd "$INFRA" && "$EU4_DSH_PYTHON" -m automation.campaign_guard init \
-        --state "$EU4_CAMPAIGN_STATE" ) >&2 || {
-      echo "run: could not initialise the campaign state" >&2
+  # The operator's unattended allowance is declared once in the sidecar; the
+  # guard enforces it at every expensive action.  It starts at this launch.
+  CAMPAIGN_DEADLINE=''
+  if [ -n "$CAMPAIGN" ] && [ -f "$CAMPAIGN" ]; then
+    CAMPAIGN_DEADLINE=$("$EU4_DSH_PYTHON" -c 'import json,sys
+try:
+    data = json.load(open(sys.argv[1]))
+except Exception:
+    raise SystemExit(0)
+limits = data.get("limits") or {}
+value = limits.get("deadline_seconds", limits.get("wall_clock_seconds"))
+print("" if value is None else value)' "$CAMPAIGN" 2>/dev/null || true)
+  fi
+  # ``ensure`` validates the mode of an existing state as well as creating a
+  # new one, so a controlled-capture state cannot be reused as autonomous.
+  if [ -n "$CAMPAIGN_DEADLINE" ]; then
+    ( cd "$INFRA" && "$EU4_DSH_PYTHON" -m automation.campaign_guard ensure \
+        --state "$EU4_CAMPAIGN_STATE" --mode "$CAMPAIGN_MODE" \
+        --deadline-seconds "$CAMPAIGN_DEADLINE" ) >&2 || {
+      echo "run: campaign state refused (mode/deadline/marker)" >&2
+      exit 1
+    }
+  else
+    ( cd "$INFRA" && "$EU4_DSH_PYTHON" -m automation.campaign_guard ensure \
+        --state "$EU4_CAMPAIGN_STATE" --mode "$CAMPAIGN_MODE" ) >&2 || {
+      echo "run: campaign state refused (mode/marker)" >&2
       exit 1
     }
   fi
-  echo "run: campaign state=$EU4_CAMPAIGN_STATE" >&2
-  # The operator token initializes administrative recovery and must never be
+  echo "run: campaign state=$EU4_CAMPAIGN_STATE mode=$CAMPAIGN_MODE deadline=${CAMPAIGN_DEADLINE:-none}" >&2
+  # The operator token issues one live-launch authorization; it is never
   # inherited by the agent session.
   if [ -n "${EU4_CAMPAIGN_ADMIN_TOKEN:-}" ]; then
-    echo "run: administrative recovery is enabled for this campaign" >&2
+    echo "run: operator token present; issue each live launch with authorize-launch" >&2
   else
-    echo "run: no EU4_CAMPAIGN_ADMIN_TOKEN; administrative recovery is disabled" >&2
+    echo "run: no EU4_CAMPAIGN_ADMIN_TOKEN; live launches are impossible" >&2
   fi
   unset EU4_CAMPAIGN_ADMIN_TOKEN
+  echo "run: deactivate with \`python3 -m automation.campaign_guard deactivate --state \$EU4_CAMPAIGN_STATE\` when the campaign ends" >&2
 fi
 echo "run: Python interpreter: $EU4_DSH_PYTHON" >&2
 

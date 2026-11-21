@@ -436,7 +436,8 @@ Use it for a campaign that finishes in one turn.
 For a campaign that needs several rounds use the Web profile:
 
 ```sh
-./dsh/scripts/run.sh --campaign dsh/campaigns/<sidecar>.json
+./dsh/scripts/run.sh --campaign dsh/campaigns/<sidecar>.json \
+  --campaign-state .local/<campaign>/state.json
 ```
 
 The launcher resolves the sidecar, runs `prepare`, registers this checkout in the

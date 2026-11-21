@@ -151,9 +151,20 @@ class NativeBridgeTests(unittest.TestCase):
             verified["result"]["verification"]["independently_reproducible"],
             True)
 
+        rationale = fixture.base / "rationale.json"
+        rationale.write_text(json.dumps({
+            "question": "does the packaged case reproduce?",
+            "evidence": [str(moved)],
+            "gap": "the relocated case was not replayed",
+            "hypothesis": "the packaged case reproduces its diagnosis",
+            "action": "case replay",
+            "expected_information": "classification and reproduction status",
+            "cheaper_alternatives_checked": True,
+        }))
         replayed = self.run_node(
             "eu4_replay", {"op": "case", "case": str(moved),
-                           "replay_out": str(fixture.base / "rerun")})
+                           "replay_out": str(fixture.base / "rerun"),
+                           "rationale": str(rationale)})
         self.assertEqual(replayed["schema"], "eu4-agent-tool/v2")
         self.assertEqual(replayed["result"]["schema"],
                          gfx_replay_case.SEQUENCE_SCHEMA)

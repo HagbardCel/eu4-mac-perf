@@ -18,6 +18,13 @@ CAMPAIGN_STATE=${EU4_CAMPAIGN_STATE:-}
 SIDECAR=${1:?usage: run-campaign.sh <sidecar.json>}
 shift 2>/dev/null || true
 
+# A campaign carries an operator deadline and a safety mode. Without a state
+# file neither exists, so the launch is refused instead of running ungoverned.
+if [ -z "$CAMPAIGN_STATE" ]; then
+  echo "run-campaign: a sidecar campaign requires EU4_CAMPAIGN_STATE=<state>; the deadline and safety mode live there" >&2
+  exit 2
+fi
+
 : "${EU4_DSH_HOME:=$HOME/.local/share/eu4-dsh}"
 DSH_HOME=$EU4_DSH_HOME
 export DSH_HOME
@@ -55,24 +62,39 @@ EU4_DSH_PYTHON=$(
 }
 export EU4_DSH_PYTHON
 
-# Optional EU4 resource budget enforced by the action sites, not the model.
+# Optional campaign safety policy enforced by the action sites, not the model.
+# ``--mode`` is fixed when the state is created; there is no replay quota.
+: "${CAMPAIGN_MODE:=autonomous_reconstruction}"
 if [ -n "${CAMPAIGN_STATE:-}" ]; then
   EU4_CAMPAIGN_STATE=$(CDPATH= cd -- "$(dirname -- "$CAMPAIGN_STATE")" 2>/dev/null && pwd)/$(basename -- "$CAMPAIGN_STATE") || EU4_CAMPAIGN_STATE=$CAMPAIGN_STATE
   export EU4_CAMPAIGN_STATE
-  if [ ! -f "$EU4_CAMPAIGN_STATE" ]; then
-    ( cd "$INFRA" && "$EU4_DSH_PYTHON" -m automation.campaign_guard init \
-        --state "$EU4_CAMPAIGN_STATE" ) >&2 || {
-      echo "$(basename "$0"): could not initialise the campaign state" >&2
+  CAMPAIGN_DEADLINE=$("$EU4_DSH_PYTHON" -c 'import json,sys
+try:
+    data = json.load(open(sys.argv[1]))
+except Exception:
+    raise SystemExit(0)
+limits = data.get("limits") or {}
+value = limits.get("deadline_seconds", limits.get("wall_clock_seconds"))
+print("" if value is None else value)' "$EU4_DSH_SIDECAR" 2>/dev/null || true)
+  if [ -n "$CAMPAIGN_DEADLINE" ]; then
+    ( cd "$INFRA" && "$EU4_DSH_PYTHON" -m automation.campaign_guard ensure \
+        --state "$EU4_CAMPAIGN_STATE" --mode "$CAMPAIGN_MODE" \
+        --deadline-seconds "$CAMPAIGN_DEADLINE" ) >&2 || {
+      echo "$(basename "$0"): campaign state refused (mode/deadline/marker)" >&2
+      exit 1
+    }
+  else
+    ( cd "$INFRA" && "$EU4_DSH_PYTHON" -m automation.campaign_guard ensure \
+        --state "$EU4_CAMPAIGN_STATE" --mode "$CAMPAIGN_MODE" ) >&2 || {
+      echo "$(basename "$0"): campaign state refused (mode/marker)" >&2
       exit 1
     }
   fi
-  echo "$(basename "$0"): campaign state=$EU4_CAMPAIGN_STATE" >&2
-  # The operator token initializes administrative recovery and must never be
-  # inherited by the agent session.
+  echo "$(basename "$0"): campaign state=$EU4_CAMPAIGN_STATE mode=$CAMPAIGN_MODE deadline=${CAMPAIGN_DEADLINE:-none}" >&2
   if [ -n "${EU4_CAMPAIGN_ADMIN_TOKEN:-}" ]; then
-    echo "$(basename "$0"): administrative recovery is enabled for this campaign" >&2
+    echo "$(basename "$0"): operator token present; issue each live launch with authorize-launch" >&2
   else
-    echo "$(basename "$0"): no EU4_CAMPAIGN_ADMIN_TOKEN; administrative recovery is disabled" >&2
+    echo "$(basename "$0"): no EU4_CAMPAIGN_ADMIN_TOKEN; live launches are impossible" >&2
   fi
   unset EU4_CAMPAIGN_ADMIN_TOKEN
 fi
@@ -140,7 +162,9 @@ PATCH
 TASK="Create a goal for the objective below, then pursue it using the eu4_* tools.
 This run is a single turn: the one-shot runner exits when it ends, so finish the
 campaign now rather than leaving work for a round that will not run. Call
-create_goal with exactly this objective and max_goal_rounds 6.
+create_goal with exactly this objective and no goal-round cap: continue while a
+justified experiment remains, and stop only on verified success, a concrete
+blocker or the operator deadline.
 
 $OBJECTIVE"
 

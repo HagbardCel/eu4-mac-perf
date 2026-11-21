@@ -899,41 +899,28 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
     result["expected_request_sha256"] = hashlib.sha256(
         expected_canonical.encode()).hexdigest()
     if trusted_execution:
-        evidence = {
-            "entry_point": "automation.gfx_prefix_check.evaluate",
-            "frame_dir": str(frame_dir),
-            "candidate_workspace": (str(Path(candidate_workspace).expanduser()
-                                       .resolve())
-                                    if candidate_workspace is not None else None),
-            "candidate_sidecar": (str(Path(candidate_sidecar).expanduser()
-                                      .resolve())
-                                  if candidate_sidecar is not None else None),
-        }
+        # A safety stop ends the campaign; replay count is not budgeted, so
+        # the agent may validate as many corrected candidates as it can
+        # justify.
         execution_diagnostics: dict = {}
         try:
-            with campaign_guard.attempt("replays", evidence=evidence) as attempt:
-                try:
-                    protected = [frame_dir]
-                    if trusted_root is not None:
-                        protected.append(Path(trusted_root).expanduser().resolve())
-                    if trusted_record is not None:
-                        original = trusted_record.get("original_capture_dir")
-                        if original:
-                            protected.append(Path(str(original)))
-                    trusted = _run_trusted_replay(
-                        frame_dir, expected_request, trusted_run_dir,
-                        trace=trace,
-                        candidate_workspace=candidate_workspace,
-                        candidate_sidecar=candidate_sidecar,
-                        protected_paths=protected,
-                        diagnostics=execution_diagnostics)
-                except (PrefixCheckError, OSError,
-                        subprocess.TimeoutExpired) as exc:
-                    if attempt is not None:
-                        attempt.fail(str(exc), evidence=evidence)
-                    raise
+            campaign_guard.require_active_from_env()
+            protected = [frame_dir]
+            if trusted_root is not None:
+                protected.append(Path(trusted_root).expanduser().resolve())
+            if trusted_record is not None:
+                original = trusted_record.get("original_capture_dir")
+                if original:
+                    protected.append(Path(str(original)))
+            trusted = _run_trusted_replay(
+                frame_dir, expected_request, trusted_run_dir,
+                trace=trace,
+                candidate_workspace=candidate_workspace,
+                candidate_sidecar=candidate_sidecar,
+                protected_paths=protected,
+                diagnostics=execution_diagnostics)
         except campaign_guard.CampaignRefusal as exc:
-            problems.append(f"trusted replay budget refused: {exc}")
+            problems.append(f"trusted replay refused: {exc}")
             result["failed_execution"] = execution_diagnostics
             return _invalid_result(
                 result, problems, status="invalid",

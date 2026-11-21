@@ -1,6 +1,4 @@
-"""Per-session writable roots and the campaign-wide claim ledger.
-
-This module owns two deliberately different authorities.
+"""Per-session writable roots for DSH campaign records.
 
 **The session root** is writable state that belongs to one agent session: its
 goal/milestone binding, its validation-attempt log, its qualification receipt
@@ -22,29 +20,13 @@ root itself.  That choice is explicit: :class:`SessionLayout` reports
 ``kind="legacy-shared"`` and a human-readable ``reason``, which every bridge
 result carries.  It is not silently presented as an isolated session.
 
-**The campaign claim ledger** is the opposite: one append-only file for the
-whole campaign, ::
-
-    <run-root>/campaign/claims.jsonl
-
-guarded by ``flock(2)`` on ``claims.lock``.  A checker execution is claimed
-with :meth:`CampaignClaims.claim` *before* it starts; the limit check and the
-append happen in the same critical section, so two sessions cannot both spend
-the last validation attempt.  Claims are never deleted (an interrupted claim
-keeps its charge).  Per-session validation logs remain the detailed attempt
-audit trail; the ledger is the allowance counter.
-
-The host-wide EU4 process lease is untouched by this module: it lives in
-``automation.launch_lease`` and stays one host-wide lease regardless of how many
-sessions or roots exist.  This module does not add a scheduler, database or
-second budget authority.
+The host-wide EU4 process lease and the campaign guard live outside this
+module; this module only derives per-session writable roots.
 """
 
 from __future__ import annotations
 
-import contextlib
 import fcntl
-import hashlib
 import json
 import os
 import re
@@ -56,26 +38,7 @@ LAYOUT_SCHEMA = "eu4-dsh-session-layout/v1"
 SESSION_RECORD = "session.json"
 SESSIONS_DIRNAME = "sessions"
 
-CLAIM_SCHEMA = "eu4-dsh-campaign-claim/v1"
-CLAIMS_DIRNAME = "campaign"
-CLAIMS_LOGNAME = "claims.jsonl"
-CLAIMS_LOCKNAME = "claims.lock"
-CLAIM_HEADNAME = "claims.head.json"
-CLAIM_HEAD_SCHEMA = "eu4-dsh-campaign-claim-head/v1"
 
-
-def _claim_prefix_digest(rows: list[dict]) -> str:
-    """Fold the claimed rows into one digest.
-
-    The committed head must detect a replaced or edited *prefix*, not just a
-    changed tail, so each row digest is folded into the previous fold. The
-    allowance is still ``len(rows)``; this is a witness, not a counter.
-    """
-    fold = b"\x00" * 32
-    for row in rows:
-        digest = json.dumps(row, sort_keys=True).encode("utf-8")
-        fold = hashlib.sha256(fold + hashlib.sha256(digest).digest()).digest()
-    return fold.hex()
 
 MAX_SESSION_ID = 128
 # A DSH session id is a UUID.  This accepts the readable ids used by tests and
@@ -85,21 +48,6 @@ _SESSION_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 
 class SessionRootError(ValueError):
     """A session id or session root cannot be used safely."""
-
-
-class ClaimLedgerError(ValueError):
-    """The campaign claim ledger is corrupt, truncated or unreadable.
-
-    The ledger is the campaign-wide budget authority.  A reader that skipped a
-    bad row (or returned zero rows for an unreadable file) would silently reset
-    the allowance and let a caller spend attempts that were already used.  The
-    only safe response is to refuse until the operator inspects the file.
-    """
-
-    def __init__(self, kind: str, detail: str = ""):
-        super().__init__(kind if not detail else f"{kind}: {detail}")
-        self.kind = kind
-        self.detail = detail
 
 
 def validate_session_id(value) -> str:
@@ -316,273 +264,3 @@ def write_session_record(layout_value: SessionLayout, *, campaign_id: str) -> tu
         "created_at": time.time(),
     })
     return path, True
-
-
-class CampaignClaims:
-    """The campaign-wide, atomic validation-attempt ledger.
-
-    One row per claimed checker execution.  The file is append-only: a claim is
-    written before the checker starts and is never removed, so an interrupted
-    execution keeps its charge and a reconnect cannot reset it.
-
-    A valid JSONL file alone cannot detect a ledger that was replaced by an
-    empty file or truncated to fewer complete rows: every remaining row is
-    still well formed.  ``claims.head.json`` is a committed witness written
-    atomically after each append that records how many rows were committed and
-    a fold over every committed row's digest.  It is not a second budget: the
-    allowance is still ``len(rows)``.  It records a prefix so losing,
-    shortening, editing or reordering committed rows is refused instead of read
-    as a reset.  A missing ledger and missing head is the legitimate
-    first-initialization state; a missing ledger with a committed head, or a
-    ledger shorter than its head, is an integrity error.
-
-    The witness is local to the same writable campaign directory. Deleting both
-    the ledger and its head returns to the indistinguishable first-
-    initialization state, and a non-empty ledger without a head (the short-lived
-    pre-head format) is refused rather than adopted. Those are explicit
-    boundaries of this design, not migrations.
-    """
-
-    def __init__(self, campaign_root: Path | str):
-        self.root = _campaign_root(campaign_root)
-        self.directory = self.root / CLAIMS_DIRNAME
-        self.path = self.directory / CLAIMS_LOGNAME
-        self.lock_path = self.directory / CLAIMS_LOCKNAME
-        self.head_path = self.directory / CLAIM_HEADNAME
-
-    @contextlib.contextmanager
-    def _locked(self, *, shared: bool = False):
-        try:
-            self.directory.mkdir(parents=True, exist_ok=True)
-            try:
-                self.directory.chmod(0o700)
-            except OSError:
-                pass
-            handle = self.lock_path.open("a+")
-        except OSError as exc:
-            raise ClaimLedgerError(
-                "unreadable_lock", f"{self.lock_path}: {exc}") from exc
-        with handle:
-            try:
-                fcntl.flock(handle.fileno(),
-                            fcntl.LOCK_SH if shared else fcntl.LOCK_EX)
-            except OSError as exc:
-                # A lock that cannot be taken means the atomic check-and-append
-                # cannot be made atomic.  Fail closed rather than spend an
-                # allowance without serialization.
-                raise ClaimLedgerError(
-                    "lock_failed", f"{self.lock_path}: {exc}") from exc
-            try:
-                yield
-            finally:
-                try:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-                except OSError:
-                    pass
-
-    def _read_head(self) -> dict | None:
-        try:
-            raw = self.head_path.read_bytes()
-        except FileNotFoundError:
-            return None
-        except OSError as exc:
-            raise ClaimLedgerError(
-                "unreadable_head", f"{self.head_path}: {exc}") from exc
-        try:
-            value = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ClaimLedgerError(
-                "malformed_head", f"{self.head_path}: {exc}") from exc
-        if not isinstance(value, dict) or value.get("schema") != CLAIM_HEAD_SCHEMA:
-            raise ClaimLedgerError(
-                "malformed_head",
-                f"{self.head_path}: expected a {CLAIM_HEAD_SCHEMA!r} object")
-        count = value.get("count")
-        if type(count) is not int or count < 0:
-            raise ClaimLedgerError(
-                "malformed_head",
-                f"{self.head_path}: count is not a non-negative integer")
-        if count:
-            digest = value.get("prefix_sha256")
-            if not isinstance(digest, str) or len(digest) != 64 \
-                    or any(character not in "0123456789abcdef"
-                           for character in digest):
-                raise ClaimLedgerError(
-                    "malformed_head",
-                    f"{self.head_path}: prefix_sha256 is not a sha256")
-        return value
-
-    def _write_head(self, rows: list[dict], *, at: float | None = None) -> None:
-        document = {
-            "schema": CLAIM_HEAD_SCHEMA,
-            "count": len(rows),
-            "prefix_sha256": _claim_prefix_digest(rows) if rows else None,
-            "updated_at": time.time() if at is None else float(at),
-        }
-        temporary = self.head_path.with_name(self.head_path.name + ".tmp")
-        try:
-            with temporary.open("w", encoding="utf-8") as handle:
-                handle.write(json.dumps(document, sort_keys=True) + "\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, self.head_path)
-            directory = os.open(self.head_path.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
-        except OSError as exc:
-            raise ClaimLedgerError(
-                "unwritable_head", f"{self.head_path}: {exc}") from exc
-
-    def _parse_rows(self, raw: bytes) -> list[dict]:
-        if not raw:
-            return []
-        try:
-            text = raw.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise ClaimLedgerError(
-                "invalid_encoding", f"{self.path}: {exc}") from exc
-        if not text.endswith("\n"):
-            raise ClaimLedgerError(
-                "truncated",
-                f"{self.path} ends with an incomplete record (no final newline)")
-        rows: list[dict] = []
-        for number, line in enumerate(text.splitlines(), 1):
-            if not line.strip():
-                raise ClaimLedgerError(
-                    "malformed_record",
-                    f"{self.path}: line {number} is blank")
-            try:
-                value = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise ClaimLedgerError(
-                    "malformed_record",
-                    f"{self.path}: line {number}: {exc}") from exc
-            if not isinstance(value, dict):
-                raise ClaimLedgerError(
-                    "malformed_record",
-                    f"{self.path}: line {number} is not a JSON object")
-            if value.get("schema") != CLAIM_SCHEMA:
-                raise ClaimLedgerError(
-                    "malformed_record",
-                    f"{self.path}: line {number} has schema "
-                    f"{value.get('schema')!r}, expected {CLAIM_SCHEMA!r}")
-            attempt_id = value.get("attempt_id")
-            if not isinstance(attempt_id, str) or not attempt_id:
-                raise ClaimLedgerError(
-                    "malformed_record",
-                    f"{self.path}: line {number} has no non-empty attempt_id")
-            rows.append(value)
-        return rows
-
-    def _read_rows(self) -> list[dict]:
-        """Read and cross-check the ledger; the caller holds a lock."""
-        head = self._read_head()
-        try:
-            raw = self.path.read_bytes()
-        except FileNotFoundError:
-            if head is not None and head["count"] > 0:
-                raise ClaimLedgerError(
-                    "missing_after_claims",
-                    f"{self.path} is missing but its committed head records "
-                    f"{head['count']} claim(s)")
-            return []
-        except OSError as exc:
-            raise ClaimLedgerError(
-                "unreadable", f"{self.path}: {exc}") from exc
-        rows = self._parse_rows(raw)
-        if not raw and (head is None or head["count"] == 0):
-            # An existing empty file with no committed rows is the legacy
-            # zero-attempt state; the first claim adopts it and writes a head.
-            return []
-        if head is None:
-            if rows:
-                raise ClaimLedgerError(
-                    "missing_head",
-                    f"{self.path} has {len(rows)} row(s) but no committed head; "
-                    "refusing to treat uncommitted history as valid")
-            return []
-        if head["count"] > len(rows):
-            raise ClaimLedgerError(
-                "truncated",
-                f"{self.path} has {len(rows)} row(s) but its committed head "
-                f"records {head['count']}; rows were lost")
-        if head["count"] and _claim_prefix_digest(
-                rows[:head["count"]]) != head["prefix_sha256"]:
-            raise ClaimLedgerError(
-                "replaced",
-                f"{self.path}: the first {head['count']} row(s) do not match "
-                "the committed head; the ledger was replaced or edited")
-        return rows
-
-    def rows(self) -> list[dict]:
-        """Return every claim row, or refuse the whole ledger.
-
-        A missing ledger and head is the legitimate zero-attempt state.  Every
-        other inconsistency -- permissions, a directory in place of the file,
-        invalid UTF-8, a partial final record, a blank line, a row that is not
-        a claim object, a missing or malformed committed head, a ledger shorter
-        than its head, or a replaced prefix -- is an integrity error.  Skipping
-        or forgiving such state would make it look like fewer attempts, which
-        is exactly the budget-reset failure this ledger prevents.
-        """
-        if not self.directory.is_dir():
-            if self.directory.exists():
-                raise ClaimLedgerError(
-                    "unreadable", f"{self.directory} is not a directory")
-            return []
-        with self._locked(shared=True):
-            return self._read_rows()
-
-    def claim(self, *, operation: str, attempt_id: str,
-              session_id: str | None, limit: int | None,
-              at: float | None = None) -> dict:
-        """Atomically claim one checker execution.
-
-        ``limit`` of ``None`` or ``0`` means no external cap.  Returns
-        ``{"ok": bool, "used": int, ...}``; on refusal nothing is appended.  A
-        duplicate ``attempt_id`` is idempotent and is not charged twice.
-        """
-        at = time.time() if at is None else float(at)
-        cap = None if limit in (None, 0) else int(limit)
-        with self._locked():
-            rows = self._read_rows()
-            used = len(rows)
-            if any(row.get("attempt_id") == attempt_id for row in rows):
-                self._write_head(rows, at=at)
-                return {"ok": True, "used": used, "limit": cap,
-                        "path": str(self.path), "duplicate": True}
-            if cap is not None and used >= cap:
-                self._write_head(rows, at=at)
-                return {"ok": False, "kind": "budget_exhausted", "used": used,
-                        "limit": cap, "path": str(self.path)}
-            if not rows and self._read_head() is None:
-                # Persist the witness before the first row. If the append is
-                # fsynced and the process dies before the post-append head
-                # update, the count-0 head lets the existing catch-up path
-                # charge the row; without it the ledger would be refused as
-                # missing_head forever and neither reconnect nor retry could
-                # repair a genuine first initialization.
-                self._write_head([])
-            row = {
-                "schema": CLAIM_SCHEMA,
-                "attempt_id": attempt_id,
-                "operation": operation,
-                "session_id": session_id,
-                "at": at,
-            }
-            try:
-                with self.path.open("a", encoding="utf-8") as handle:
-                    handle.write(json.dumps(row, sort_keys=True) + "\n")
-                    handle.flush()
-                    os.fsync(handle.fileno())
-            except OSError as exc:
-                raise ClaimLedgerError(
-                    "unwritable", f"{self.path}: {exc}") from exc
-            # The head commits the whole prefix, including rows left over from
-            # an interrupted previous head update, so the witness catches up
-            # on the next successful claim instead of refusing that history.
-            self._write_head(rows + [row], at=at)
-            return {"ok": True, "used": used + 1, "limit": cap,
-                    "path": str(self.path), "row": row}

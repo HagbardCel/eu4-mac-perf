@@ -42,7 +42,7 @@ class BridgeTestCase(unittest.TestCase):
         self.addCleanup(shutil.rmtree, target, ignore_errors=True)
         return target
 
-    def sidecar(self, campaign: Path, *, retry=("stateful", 1), allowed=("*",),
+    def sidecar(self, campaign: Path, *, allowed=("*",),
                 manifest=None) -> Path:
         data = {
             "schema": "eu4-dsh-campaign/v1",
@@ -54,10 +54,9 @@ class BridgeTestCase(unittest.TestCase):
                 "workspace": str(self.workspace),
                 "policy": {"allowed_paths": list(allowed)},
             },
-            "checker_retry": {"mode": retry[0], "confirmation_rounds": retry[1]},
-            "goal": {"max_rounds": 4},
-            "limits": {"max_validations": 6, "validation_timeout_seconds": 30,
-                       "wall_clock_seconds": 600},
+            "goal": {},
+            "limits": {"validation_timeout_seconds": 30,
+                       "deadline_seconds": 600},
             "live_capture": {"enabled": False},
         }
         path = self.root / "sidecar.json"
@@ -138,16 +137,17 @@ class PrepareTests(BridgeTestCase):
         self.assertEqual(startup["objective_digest"],
                          out["identities"]["objective_digest"])
         self.assertEqual(startup["live_capture"]["enabled"], False)
-        self.assertEqual(startup["closing"]["max_rounds"], 4)
-        self.assertEqual(startup["closing"]["max_validations"], 6)
-        self.assertEqual(startup["closing"]["wall_clock_seconds"], 600)
+        self.assertEqual(startup["closing"]["validation_timeout_seconds"], 30)
+        self.assertIn("no validation, replay or goal-round quota",
+                      startup["closing"]["autonomy"])
         self.assertTrue(startup["closing"]["require_checker_pass"])
         self.assertEqual(startup["allowed_paths"], ["*"])
         self.assertEqual(startup["forbidden_paths"], [])
         self.assertIn(startup["first_command"][0], ("git", "ls"))
         self.assertIn("workspace:", out["startup_text"])
         self.assertIn(str(self.workspace.resolve()), out["startup_text"])
-        self.assertIn("validations used 0 of 6", out["startup_text"])
+        self.assertIn("attempts recorded (audit only, not a quota): 0",
+                      out["startup_text"])
         self.assertIn("last attempt: none recorded", out["startup_text"])
         self.assertIn("case context: no locator is bound", out["startup_text"])
         self.assertTrue(out["goal_text"].startswith(out["objective"]))
@@ -230,12 +230,12 @@ class PrepareTests(BridgeTestCase):
         after = self.snapshot_paths(self.run_root, self.workspace, sidecar)
         self.assertEqual(before, after, "context must not re-run or re-record the checker")
 
-    def test_context_refuses_a_changed_budget_and_names_the_field(self) -> None:
+    def test_context_refuses_a_changed_timeout_and_names_the_field(self) -> None:
         campaign = self.campaign("smoke-campaign")
         sidecar = self.sidecar(campaign)
         self.run_bridge("prepare", sidecar)
         data = json.loads(sidecar.read_text(encoding="utf-8"))
-        data["limits"]["max_validations"] = 4
+        data["limits"]["validation_timeout_seconds"] = 45
         sidecar.write_text(json.dumps(data), encoding="utf-8")
         before = self.snapshot_paths(
             self.run_root, self.workspace, sidecar, campaign)
@@ -245,8 +245,8 @@ class PrepareTests(BridgeTestCase):
         self.assertEqual(out["status"], "drift")
         self.assertEqual(out["outcome"], "refused")
         self.assertEqual(out["kind"], "identity_modified")
-        self.assertIn("budget.max_validations", out["drift"])
-        self.assertIn("budget.max_validations", out["detail"])
+        self.assertIn("limits.validation_timeout_seconds", out["drift"])
+        self.assertIn("limits.validation_timeout_seconds", out["detail"])
         self.assertNotIn("startup_text", out)
         self.assertNotIn("goal_text", out)
         after = self.snapshot_paths(
@@ -337,7 +337,7 @@ class PrepareTests(BridgeTestCase):
         self.assertEqual(context["startup"]["workspace_head"], baseline)
         self.assertIn(f"head={baseline}", context["startup_text"])
 
-    def test_startup_text_reports_used_and_remaining_validations(self) -> None:
+    def test_startup_text_reports_recorded_attempts_without_a_remaining_quota(self) -> None:
         sidecar = self.sidecar(self.campaign("smoke-campaign"))
         self.run_root.mkdir(parents=True, exist_ok=True)
         rows = [{
@@ -349,8 +349,9 @@ class PrepareTests(BridgeTestCase):
             "\n".join(json.dumps(row) for row in rows) + "\n")
         code, out = self.run_bridge("prepare", sidecar)
         self.assertEqual(code, dsh_bridge.EXIT_OK)
-        self.assertIn("validations used 2 of 6 (remaining 4)",
+        self.assertIn("attempts recorded (audit only, not a quota): 2",
                       out["startup_text"])
+        self.assertIn("enforced by the campaign guard", out["startup_text"])
         self.assertIn("classification=pass", out["startup_text"])
 
     def test_prepare_refuses_an_unwritable_workspace_before_anchoring(self) -> None:
@@ -542,57 +543,41 @@ class PrepareTests(BridgeTestCase):
         self.assertTrue(session_root.is_dir())
 
 
-class ValidationBudgetTests(BridgeTestCase):
-    """External sidecar limits are enforced from the bridge's attempt log."""
+class CampaignStopTests(BridgeTestCase):
+    """A campaign stop refuses checker work at the bridge entry point."""
 
-    def loaded(self, *, retry=None, limits=None):
+    def loaded(self, **limits):
         path = self.sidecar(self.campaign("smoke-campaign"))
-        data = json.loads(path.read_text())
-        if retry is not None:
-            data["checker_retry"].update(retry)
-        if limits is not None:
+        if limits:
+            data = json.loads(path.read_text())
             data["limits"].update(limits)
-        path.write_text(json.dumps(data), encoding="utf-8")
-        return dsh_campaign.load_sidecar(path)
+            path.write_text(json.dumps(data), encoding="utf-8")
+        return path
 
-    def test_max_validations_refuses_another_run(self):
-        sidecar = self.loaded(limits={"max_validations": 1})
-        history = [{"at": 1.0, "classification": "verdict",
-                    "checker_verdict": "fail", "digest": "a"}]
-        stop = dsh_bridge._campaign_budget_stop(sidecar, history, 2.0)
-        self.assertEqual(stop["kind"], "budget_exhausted")
-        self.assertIn("max_validations", stop["detail"])
+    def test_a_stopped_campaign_refuses_validate_before_the_checker(self):
+        from automation import campaign_guard
 
-    def test_identical_failure_streak_requires_changed_strategy(self):
-        sidecar = self.loaded(retry={"max_identical_retries": 1})
-        row = {"at": 1.0, "classification": "verdict",
-               "checker_verdict": "fail", "digest": "same"}
-        stop = dsh_bridge._campaign_budget_stop(
-            sidecar, [row, dict(row)], 2.0)
-        self.assertEqual(stop["kind"], "repeated_failure")
-        self.assertIn("change the diagnostic strategy", stop["detail"])
-
-    def test_different_failures_do_not_trip_the_strategy_gate(self):
-        sidecar = self.loaded(retry={"max_identical_retries": 1})
-        rows = [
-            {"at": 1.0, "classification": "verdict",
-             "checker_verdict": "fail", "digest": "a"},
-            {"at": 2.0, "classification": "verdict",
-             "checker_verdict": "fail", "digest": "b"},
-        ]
-        self.assertIsNone(dsh_bridge._campaign_budget_stop(sidecar, rows, 3.0))
-
-    def test_wall_clock_deadline_is_refused(self):
-        sidecar = self.loaded(limits={"wall_clock_seconds": 1})
-        rows = [{"at": 100.0, "classification": "verdict",
-                 "checker_verdict": "fail", "digest": "a"}]
-        stop = dsh_bridge._campaign_budget_stop(sidecar, rows, 200.0)
-        self.assertEqual(stop["kind"], "deadline")
-
-    def test_a_fresh_campaign_is_not_stopped(self):
         sidecar = self.loaded()
-        self.assertIsNone(dsh_bridge._campaign_budget_stop(
-            sidecar, [], 2.0))
+        state = self.root / "guard-state.json"
+        marker = mock.patch.object(
+            campaign_guard, "_marker_path",
+            return_value=self.root / "markers" / campaign_guard.MARKER_NAME)
+        marker.start()
+        self.addCleanup(marker.stop)
+        guard = campaign_guard.Guard(state)
+        guard.init(mode=campaign_guard.MODE_AUTONOMOUS,
+                   admin_token="token")
+        guard.stop("operator_stop", "operator cancelled")
+        self.run_bridge("prepare", sidecar)
+        with mock.patch.dict("os.environ",
+                             {"EU4_CAMPAIGN_STATE": str(state)}), \
+             mock.patch.object(dsh_bridge, "run_accept",
+                               side_effect=AssertionError(
+                                   "the checker must not start")):
+            code, out = self.run_bridge("validate", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertEqual(out["classification"], "policy_stop")
+        self.assertEqual(out["kind"], "stopped")
 
 
 class ClassificationTests(BridgeTestCase):
@@ -821,7 +806,7 @@ class FinalizeTests(BridgeTestCase):
         self.assertEqual(out["kind"], "stale")
 
     def test_finalize_refuses_without_a_passing_validation(self) -> None:
-        sidecar = self.sidecar(self.campaign("smoke-campaign"), retry=("stateful", 1))
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
         self.run_bridge("prepare", sidecar)
         _, first = self.run_bridge("validate", sidecar)
         self.assertEqual(first["checker_verdict"], "fail")
@@ -1331,10 +1316,11 @@ class CheckerAttemptAccountingTests(BridgeTestCase):
         rows = dsh_bridge._validation_history(self.run_root)
         return rows, dsh_bridge._validation_attempts(rows)
 
-    def sidecar_with_limit(self, fixture: str, max_validations: int) -> Path:
+    def sidecar_with_deadline(self, fixture: str,
+                              deadline_seconds: int = 600) -> Path:
         sidecar = self.sidecar(self.campaign(fixture))
         data = json.loads(sidecar.read_text(encoding="utf-8"))
-        data["limits"]["max_validations"] = max_validations
+        data["limits"]["deadline_seconds"] = deadline_seconds
         sidecar.write_text(json.dumps(data), encoding="utf-8")
         return sidecar
 
@@ -1418,62 +1404,39 @@ class CheckerAttemptAccountingTests(BridgeTestCase):
         self.assertEqual(attempts[0]["classification"], "inputs_incomplete")
         self.assertFalse(attempts[0]["qualified"])
 
-    def test_an_interrupted_attempt_counts_against_max_validations(self) -> None:
-        sidecar = self.sidecar_with_limit("pass-campaign", 1)
+    def test_an_interrupted_attempt_stays_visible_and_does_not_block(self) -> None:
+        sidecar = self.sidecar_with_deadline("pass-campaign")
         self.run_bridge("prepare", sidecar)
         # A crash between the start row and the checker result leaves exactly
-        # this durable record behind; a restarted bridge must still count it.
+        # this durable record behind; a restarted bridge must still show it.
         dsh_bridge._append_validation(self.run_root, {
             "attempt_id": "interrupted-attempt",
             "phase": "start",
             "at": 1.0,
             "operation": "validate",
         })
-        with mock.patch.object(dsh_bridge, "run_accept",
-                               side_effect=AssertionError(
-                                   "the checker must not start")):
-            code, out = self.run_bridge("validate", sidecar)
-        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
-        self.assertEqual(out["classification"], "policy_stop")
-        self.assertEqual(out["kind"], "budget_exhausted")
-        self.assertEqual(out["validations"], 1)
         _, attempts = self.logged()
         self.assertEqual(len(attempts), 1)
         self.assertFalse(attempts[0]["terminal"])
 
     def test_distinct_attempts_not_log_rows_are_counted(self) -> None:
         sidecar = dsh_campaign.load_sidecar(
-            self.sidecar_with_limit("pass-campaign", 2))
+            self.sidecar_with_deadline("pass-campaign"))
         rows = [
             {"attempt_id": "one", "phase": "start", "at": 1.0},
             {"attempt_id": "one", "phase": "result", "at": 1.1,
              "classification": "verdict", "checker_verdict": "pass",
              "qualified": True},
         ]
-        self.assertIsNone(dsh_bridge._campaign_budget_stop(sidecar, rows, 2.0))
         rows.extend([
             {"attempt_id": "two", "phase": "start", "at": 3.0},
             {"attempt_id": "two", "phase": "result", "at": 3.1,
              "classification": "verdict", "checker_verdict": "pass",
              "qualified": True},
         ])
-        stop = dsh_bridge._campaign_budget_stop(sidecar, rows, 4.0)
-        self.assertEqual(stop["kind"], "budget_exhausted")
-
-    def test_an_exhausted_budget_refuses_before_the_checker_starts(self) -> None:
-        sidecar = self.sidecar_with_limit("pass-campaign", 1)
-        self.run_bridge("prepare", sidecar)
-        self.assertEqual(self.run_bridge("validate", sidecar)[0],
-                         dsh_bridge.EXIT_OK)
-        rows_before = dsh_bridge._validation_history(self.run_root)
-        with mock.patch.object(dsh_bridge, "run_accept",
-                               side_effect=AssertionError(
-                                   "the checker must not start")):
-            code, out = self.run_bridge("validate", sidecar)
-        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
-        self.assertEqual(out["kind"], "budget_exhausted")
-        self.assertEqual(dsh_bridge._validation_history(self.run_root),
-                         rows_before)
+        attempts = dsh_bridge._validation_attempts(rows)
+        self.assertEqual([row["attempt_id"] for row in attempts],
+                         ["one", "two"])
 
     def test_finalization_fresh_checker_execution_is_accounted(self) -> None:
         sidecar = self.sidecar(self.campaign("pass-campaign"))
@@ -1489,26 +1452,9 @@ class CheckerAttemptAccountingTests(BridgeTestCase):
         self.assertTrue(all(row["qualified"] for row in attempts))
         self.assertEqual(len({row["attempt_id"] for row in attempts}), 2)
 
-    def test_finalization_refuses_before_a_fresh_checker_when_exhausted(self) -> None:
-        sidecar = self.sidecar_with_limit("pass-campaign", 1)
-        self.run_bridge("prepare", sidecar)
-        self.assertEqual(self.run_bridge("validate", sidecar)[0],
-                         dsh_bridge.EXIT_OK)
-        rows_before = dsh_bridge._validation_history(self.run_root)
-        with mock.patch.object(dsh_bridge, "run_accept",
-                               side_effect=AssertionError(
-                                   "the finalization checker must not start")):
-            code, out = self.run_bridge("finalize", sidecar)
-        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
-        self.assertEqual(out["classification"], "policy_stop")
-        self.assertEqual(out["kind"], "budget_exhausted")
-        self.assertFalse((self.run_root / "finalization.json").exists())
-        self.assertEqual(dsh_bridge._validation_history(self.run_root),
-                         rows_before)
-
     def test_legacy_rows_remain_readable_and_count_as_attempts(self) -> None:
         sidecar = dsh_campaign.load_sidecar(
-            self.sidecar_with_limit("pass-campaign", 3))
+            self.sidecar_with_deadline("pass-campaign"))
         rows = [
             {"at": 1.0, "classification": "verdict",
              "checker_verdict": "fail", "digest": "a"},
@@ -1520,11 +1466,6 @@ class CheckerAttemptAccountingTests(BridgeTestCase):
         self.assertTrue(all(row["terminal"] for row in attempts))
         self.assertFalse(attempts[0]["qualified"])
         self.assertTrue(attempts[1]["qualified"])
-        self.assertIsNone(dsh_bridge._campaign_budget_stop(sidecar, rows, 3.0))
-        self.assertEqual(
-            dsh_bridge._campaign_budget_stop(sidecar, rows + [rows[-1]],
-                                            4.0)["kind"],
-            "budget_exhausted")
 
 
 class SessionLayoutTests(unittest.TestCase):
@@ -1634,81 +1575,35 @@ class SessionIsolationTests(BridgeTestCase):
         self.assertEqual((a_root / "qualification.json").read_bytes(), a_receipt)
         self.assertEqual(len(dsh_bridge._validation_history(b_root)), 2)
 
-    def test_the_campaign_budget_is_charged_exactly_once_campaign_wide(self) -> None:
+    def test_each_session_records_its_own_attempt(self) -> None:
         sidecar = self.sidecar(self.campaign("pass-campaign"))
-        data = json.loads(sidecar.read_text(encoding="utf-8"))
-        data["limits"]["max_validations"] = 1
-        sidecar.write_text(json.dumps(data), encoding="utf-8")
         self.prepared(sidecar, "sess-a")
         self.prepared(sidecar, "sess-b")
 
         self.assertEqual(self.run_bridge(
             "validate", sidecar, session_id="sess-a")[0], dsh_bridge.EXIT_OK)
-        claims = session_state.CampaignClaims(self.run_root)
-        self.assertEqual(len(claims.rows()), 1)
-
-        with mock.patch.object(dsh_bridge, "run_accept",
-                               side_effect=AssertionError(
-                                   "the checker must not start in session B")):
-            code, out = self.run_bridge("validate", sidecar, session_id="sess-b")
+        code, out = self.run_bridge("validate", sidecar, session_id="sess-b")
         self.assertEqual(code, dsh_bridge.EXIT_OK, out)
-        self.assertEqual(out["classification"], "policy_stop")
-        self.assertEqual(out["kind"], "budget_exhausted")
-        self.assertEqual(out["validations"], 1)
-        # Still exactly one campaign-wide claim, not one per session.
-        self.assertEqual(len(claims.rows()), 1)
-        self.assertFalse(
+        history = dsh_bridge._campaign_attempt_history(self.run_root)
+        starts = [row for row in history if row.get("phase") == "start"]
+        self.assertEqual(len(starts), 2)
+        self.assertTrue(
             (self.session_root("sess-b") / "qualification.json").exists())
 
-    def test_an_interrupted_claim_in_one_session_still_counts(self) -> None:
+    def test_an_interrupted_attempt_stays_visible(self) -> None:
         sidecar = self.sidecar(self.campaign("pass-campaign"))
-        data = json.loads(sidecar.read_text(encoding="utf-8"))
-        data["limits"]["max_validations"] = 1
-        sidecar.write_text(json.dumps(data), encoding="utf-8")
         self.prepared(sidecar, "sess-a")
-        claims = session_state.CampaignClaims(self.run_root)
-        claimed = claims.claim(
-            operation="validate", attempt_id="interrupted-attempt",
-            session_id="sess-a", limit=None)
-        self.assertTrue(claimed["ok"])
         dsh_bridge._append_validation(self.session_root("sess-a"), {
             "attempt_id": "interrupted-attempt",
             "phase": "start",
             "at": 1.0,
             "operation": "validate",
         })
-
-        with mock.patch.object(dsh_bridge, "run_accept",
-                               side_effect=AssertionError(
-                                   "an interrupted attempt still consumes budget")):
-            code, out = self.run_bridge("validate", sidecar, session_id="sess-a")
+        code, out = self.run_bridge("validate", sidecar, session_id="sess-a")
         self.assertEqual(code, dsh_bridge.EXIT_OK, out)
-        self.assertEqual(out["kind"], "budget_exhausted")
-        self.assertEqual(out["validations"], 1)
-        self.assertEqual(len(claims.rows()), 1)
-
-    def test_a_corrupt_claim_ledger_refuses_before_the_checker_starts(self) -> None:
-        sidecar = self.sidecar(self.campaign("pass-campaign"))
-        self.prepared(sidecar, "sess-a")
-        claims = session_state.CampaignClaims(self.run_root)
-        claimed = claims.claim(
-            operation="validate", attempt_id="already-spent",
-            session_id="sess-a", limit=None)
-        self.assertTrue(claimed["ok"])
-        # A partial append is what an interrupted writer leaves behind.  A
-        # reader that skipped it would see zero attempts and reset the budget.
-        with claims.path.open("ab") as handle:
-            handle.write(b'{"schema": "eu4-dsh-campaign-claim/v1", '
-                         b'"attempt_id": "half"')
-
-        with mock.patch.object(dsh_bridge, "run_accept",
-                               side_effect=AssertionError(
-                                   "a corrupt ledger must refuse before the checker")):
-            code, out = self.run_bridge("validate", sidecar, session_id="sess-a")
-        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
-        self.assertEqual(out["classification"], "integrity_refusal")
-        self.assertEqual(out["kind"], "claim_ledger")
-        self.assertIn("truncated", out["detail"])
+        history = dsh_bridge._campaign_attempt_history(self.run_root)
+        self.assertIn("interrupted-attempt",
+                      {row.get("attempt_id") for row in history})
 
     def test_an_unsafe_session_id_is_refused_by_the_bridge(self) -> None:
         sidecar = self.sidecar(self.campaign("pass-campaign"))
@@ -1787,8 +1682,9 @@ class SessionLeaseTests(unittest.TestCase):
         self.executable.write_bytes(b"#!/bin/sh\nexit 0\n")
         self.executable.chmod(0o755)
         self.lease_dir = self.root / "lease"
-        patcher = mock.patch.dict(
-            os.environ, {"EU4_LAUNCH_LEASE_DIR": str(self.lease_dir)})
+        patcher = mock.patch(
+            "automation.launch_lease.lease_dir",
+            return_value=self.lease_dir)
         patcher.start()
         self.addCleanup(patcher.stop)
 

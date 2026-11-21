@@ -224,7 +224,7 @@ def run(
 
     guard = campaign_guard.from_env()
     try:
-        campaign_guard.require_launch_reservation(campaign_reservation,
+        campaign_guard.require_launch_authorization(campaign_reservation,
                                                   guard=guard)
     except campaign_guard.CampaignRefusal as exc:
         raise StartupError(str(exc)) from exc
@@ -276,7 +276,7 @@ def run(
                 insertion.append(existing)
             env["DYLD_INSERT_LIBRARIES"] = ":".join(insertion)
         try:
-            campaign_guard.claim_launch_reservation(
+            campaign_guard.claim_launch_authorization(
                 campaign_reservation, guard=guard,
                 evidence={"output": str(run_dir)})
         except campaign_guard.CampaignRefusal as exc:
@@ -690,7 +690,7 @@ def run_ops(
     # alternative unguarded launcher cannot bypass the guard.
     guard = campaign_guard.from_env()
     try:
-        campaign_guard.require_launch_reservation(campaign_reservation,
+        campaign_guard.require_launch_authorization(campaign_reservation,
                                                   guard=guard)
     except campaign_guard.CampaignRefusal as exc:
         raise StartupError(str(exc)) from exc
@@ -788,7 +788,7 @@ def run_ops(
         # The one-use entitlement is consumed after all read-only preflight and
         # environment preparation, immediately before the process exists.
         try:
-            campaign_guard.claim_launch_reservation(
+            campaign_guard.claim_launch_authorization(
                 campaign_reservation, guard=guard,
                 evidence={"output": str(run_dir)})
         except campaign_guard.CampaignRefusal as exc:

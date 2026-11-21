@@ -332,6 +332,12 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
     started = dt.datetime.now(dt.timezone.utc).isoformat()
     stdout = (run_dir / "game.stdout").open("wb")
     stderr = (run_dir / "game.stderr").open("wb")
+    from automation import campaign_guard, test_profiles
+    try:
+        test_profiles.ensure_live_launch("eu4_metal_boot.launch_session")
+    except test_profiles.LiveProfileError as exc:
+        raise base.BenchmarkError(str(exc)) from exc
+    campaign_guard.refuse_unmanaged_launch("eu4_metal_boot.launch_session")
     lease = launch_lease.acquire(base.GOG_EXE, output=run_dir)
     try:
         game = subprocess.Popen(

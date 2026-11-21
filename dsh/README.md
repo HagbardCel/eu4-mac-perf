@@ -36,8 +36,10 @@ Two deliberate deviations from the shipped web profile:
 ./dsh/scripts/run.sh                # boot the profile on a free port
 ./dsh/scripts/run.sh --workspace <dir>  # root new sessions in a Git worktree
 ./dsh/scripts/smoke-goal.sh [sidecar]  # print the exact /goal objective
-./dsh/scripts/run-campaign.sh <sidecar>  # start an autonomous campaign (headless, one turn)
-./dsh/scripts/run.sh --campaign <sidecar> --campaign-state <path>  # native multi-round campaign with an external EU4 budget
+EU4_CAMPAIGN_STATE=<path> ./dsh/scripts/run-campaign.sh <sidecar>  # one-turn campaign (state required)
+./dsh/scripts/run.sh --campaign <sidecar> --campaign-state <path>  # native multi-round campaign with an external safety state
+./dsh/scripts/run.sh --campaign <sidecar> --campaign-state <path> \
+  --campaign-mode controlled_capture                                # live-capture campaign (default: autonomous_reconstruction)
 ./dsh/scripts/run-pilot.sh --task-file <path>  # run one evidenced headless pilot turn
 ./dsh/scripts/ghidra-probe.sh       # reproduce the shared-project lock failure
 ./dsh/scripts/ghidra-replica.sh --check|--create  # private Ghidra replica

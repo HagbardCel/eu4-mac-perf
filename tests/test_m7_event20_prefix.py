@@ -468,45 +468,42 @@ class Event20PrefixTests(unittest.TestCase):
             self.assertEqual(entry["statistics"]["max_channel_error"], 0)
             self.assertEqual(entry["statistics"]["alpha_different_pixels"], 0)
 
-    def test_trusted_execution_charges_one_replay_and_refuses_exhaustion(self):
+    def test_trusted_execution_is_not_budgeted_and_a_stop_refuses_it(self):
         frame, _metal = self._fixture()
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         state_path = Path(temporary.name) / "state.json"
+        markers = Path(temporary.name) / "markers"
+        marker = mock.patch.object(
+            campaign_guard, "_marker_path",
+            return_value=markers / campaign_guard.MARKER_NAME)
+        marker.start()
+        self.addCleanup(marker.stop)
         guard = campaign_guard.Guard(state_path)
-        guard.init(budgets={"replays": 1})
+        guard.init(mode=campaign_guard.MODE_AUTONOMOUS)
         previous = os.environ.get("EU4_CAMPAIGN_STATE")
         os.environ["EU4_CAMPAIGN_STATE"] = str(state_path)
-        self.addCleanup(lambda: os.environ.pop("EU4_CAMPAIGN_STATE", None)
-                        if previous is None else
-                        os.environ.__setitem__("EU4_CAMPAIGN_STATE", previous))
+        self.addCleanup(
+            lambda: os.environ.pop("EU4_CAMPAIGN_STATE", None)
+            if previous is None
+            else os.environ.__setitem__("EU4_CAMPAIGN_STATE", previous))
         first = gfx_prefix_check.evaluate(
             frame, None, require_end=20, trusted_execution=True)
         self.assertEqual(first["verdict"], "INCOMPLETE_EVIDENCE")
-        self.assertEqual(guard.state()["counts"]["replays"], 1)
+        self.assertNotEqual((first.get("execution") or {}).get("status"),
+                            "refused")
+        # No replay counter exists: a second trusted execution is attempted.
         second = gfx_prefix_check.evaluate(
             frame, None, require_end=20, trusted_execution=True)
         self.assertEqual(second["verdict"], "INCOMPLETE_EVIDENCE")
-        self.assertEqual((second.get("execution") or {}).get("status"),
+        self.assertNotEqual((second.get("execution") or {}).get("status"),
+                            "refused")
+        # A safety stop still ends the campaign.
+        guard.stop("invalid_evidence", "reference seal is not authentic")
+        stopped = gfx_prefix_check.evaluate(
+            frame, None, require_end=20, trusted_execution=True)
+        self.assertEqual((stopped.get("execution") or {}).get("status"),
                          "refused")
-        self.assertEqual(guard.state()["counts"]["replays"], 1)
-
-    def test_nested_trusted_execution_joins_one_budget_reservation(self):
-        frame, _metal = self._fixture()
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        state_path = Path(temporary.name) / "state.json"
-        guard = campaign_guard.Guard(state_path)
-        guard.init(budgets={"replays": 1})
-        previous = os.environ.get("EU4_CAMPAIGN_STATE")
-        os.environ["EU4_CAMPAIGN_STATE"] = str(state_path)
-        self.addCleanup(lambda: os.environ.pop("EU4_CAMPAIGN_STATE", None)
-                        if previous is None else
-                        os.environ.__setitem__("EU4_CAMPAIGN_STATE", previous))
-        with campaign_guard.attempt("replays"):
-            gfx_prefix_check.evaluate(
-                frame, None, require_end=20, trusted_execution=True)
-        self.assertEqual(guard.state()["counts"]["replays"], 1)
 
     def test_selected_late_events_do_not_claim_a_prefix(self):
         directory = Path(tempfile.mkdtemp(dir=self.temporary.name))

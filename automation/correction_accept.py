@@ -727,61 +727,27 @@ def evaluate(*, case_dir: Path | str, baseline_path: Path | str,
              claimed_regressions=()) -> dict:
     """Independently accept or reject one proposed correction.
 
-    Under an active campaign, one evaluation atomically reserves the
-    ``corrections`` allowance before any evidence is read.  The reservation is
-    completed with the actual outcome; an exhausted allowance refuses further
-    submissions through every caller, including the DSH validation path.
+    A correction is not an attempt counter: every submission is evaluated on its
+    evidence, so a campaign can independently validate as many source
+    corrections as it can justify.  An explicit safety stop still refuses the
+    evaluation before any evidence is read.
     """
     from automation import campaign_guard
 
-    guard = campaign_guard.from_env()
-    reservation = None
-    if guard is not None:
-        try:
-            reservation = guard.reserve(
-                {"corrections": 1},
-                evidence={"candidate_revision": str(candidate_revision),
-                          "case": str(case_dir),
-                          "after_replay": str(after_replay)})
-        except campaign_guard.CampaignRefusal as exc:
-            raise AcceptanceError(
-                "campaign_refused", f"{exc.kind}: {exc.detail}") from exc
     try:
-        result = _evaluate(
-            case_dir=case_dir, baseline_path=baseline_path,
-            candidate_revision=candidate_revision,
-            after_replay=after_replay, claimed_before=claimed_before,
-            claimed_after=claimed_after, baseline_revision=baseline_revision,
-            regressions=regressions, policy=policy,
-            expected_revision=expected_revision,
-            qualification_contract=qualification_contract,
-            claimed_regressions=claimed_regressions)
-    except BaseException as exc:  # noqa: BLE001 - record then propagate
-        if guard is not None and reservation is not None:
-            guard.complete(
-                reservation, outcome="failed",
-                detail=f"{type(exc).__name__}: {exc}",
-                evidence={"candidate_revision": str(candidate_revision)})
-        raise
-    if guard is not None and reservation is not None:
-        verdict = str(result.get("result") or "unknown")
-        problems = [str(item.get("code"))
-                    for item in (result.get("problems") or [])
-                    if isinstance(item, dict)]
-        accepted = verdict == "accepted"
-        # Only an independently accepted correction is a successful attempt;
-        # a rejection or invalid evidence is a failed attempt that keeps its
-        # charge.  The audit record names the verdict and problem codes.
-        guard.complete(
-            reservation,
-            outcome="ok" if accepted else "failed",
-            detail=verdict,
-            evidence={"candidate_revision": str(candidate_revision),
-                      "result": verdict,
-                      "accepted": accepted,
-                      "problem_codes": problems,
-                      "problem_count": len(problems)})
-    return result
+        campaign_guard.require_active_from_env()
+    except campaign_guard.CampaignRefusal as exc:
+        raise AcceptanceError(
+            "campaign_refused", f"{exc.kind}: {exc.detail}") from exc
+    return _evaluate(
+        case_dir=case_dir, baseline_path=baseline_path,
+        candidate_revision=candidate_revision,
+        after_replay=after_replay, claimed_before=claimed_before,
+        claimed_after=claimed_after, baseline_revision=baseline_revision,
+        regressions=regressions, policy=policy,
+        expected_revision=expected_revision,
+        qualification_contract=qualification_contract,
+        claimed_regressions=claimed_regressions)
 
 
 def _evaluate(*, case_dir: Path | str, baseline_path: Path | str,

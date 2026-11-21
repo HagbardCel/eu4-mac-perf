@@ -7,11 +7,13 @@
     "workspace_base": "infra",
     "workspace": ".local/dsh/dsh-multiround-smoke/workspace",
     "policy": {
-      "allowed_paths": ["marker.txt", "progress.md"]
+      "allowed_paths": [
+        "marker.txt",
+        "progress.md"
+      ]
     }
   },
   "goal": {
-    "max_rounds": 6,
     "require_checker_pass": true,
     "require_independent_review": false
   },
