@@ -33,7 +33,9 @@ The audit record said `tests.test_reconstruction_differential` "hangs only in
 full-suite order" and the profile was split around it. Reproduced controlled:
 
 - The module executed **inside** both full profiles: baseline 4,221 ran /
-  4,156 executed / 65 skipped minus the audit's split (4,166 / 4,103 / 63)
+  4,156 executed / 65 skipped minus the audit's split (4,166 / 4,103 / 63,
+  runner `20261120T215930Z-f5b80bdf` at `4bf03285`, recorded in the historical
+  matrix)
   equals the module's isolated result (55 ran / 53 executed / 2 skipped)
   exactly, so it was not skipped or excluded.
 - Neither controlled run stalled. The historical records that were left
@@ -59,21 +61,25 @@ withdrawn as unsupported.
 
 ## 3. Regression verification and base comparison
 
-Each fix was verified on its exact head and the new tests were run against
-`25ee46db` in a separate worktree where the base module is unmodified.
+Each fix was verified on its exact head; the closure PRs (#263–#268) also have
+an independent review comment at that exact head. The new tests were run
+against `25ee46db` in a separate worktree where the base module is unmodified.
 
 | Fix / PR | Head | Focused result | Base comparison |
 |---|---|---|---|
 | #263 GL control attribution | `5ae0ccff` | 39/39; neighbour `test_agent_tools` 116 ran / 115 executed / 1 skipped | 3 new tests fail/error on base (`20261120T233031Z-95fdcebf`, `20261120T232302Z-426f7800`) |
-| #264 claim ledger | `dd103c49` | 26/26; neighbours 183/183 | 10 of 12 new tests fail/error on base (`20261120T232320Z-56213f9b`) |
+| #264 claim ledger | `3cb4d39d` | 27/27; module+bridge 116/116 | 10 of 12 new tests fail/error on base (`20261120T232320Z-56213f9b`); the P2 first-claim delta was separately reviewed at `3cb4d39d` |
 | #265 flood cleanup | `fbe23d51` | 7/7; order-sensitive selection 123 ran / 122 executed / 1 skipped; worker neighbour 19/19 | retry test fails on base (`20261120T232243Z-12c12cc9`) |
-| #266 anchor/session-root | `25f162b4` | 93/93; neighbours 241 ran / 241 executed | corrupt anchor was `infrastructure_error` + traceback and a refused prepare left the session root on base (`20261120T232243Z-5139baff`) |
+| #266 anchor/session-root | `dc219a6d` | 93/93; neighbours 241 ran / 241 executed | corrupt anchor was `infrastructure_error` + traceback and a refused prepare left the session root on base (`20261120T232243Z-5139baff`) |
 | #267 goal-plugin unload | `f5301f69` | `node --test` 50/50 | late-fiber tests fail on `origin/main`; the race test fails on `a57ba95b` |
 | #268 clean build dirs | `c3fbeb77` | 11/11 on a clean worktree | 8 errors on clean `25ee46db` (`20261120T231728Z-12176d5f`) |
 
-Independent reviews of the exact heads are recorded on the PRs as review
+Independent reviews of the exact heads are recorded on #263–#268 as review
 comments (the only available GitHub identity is the author, so GitHub records
-them as `COMMENTED`, not `APPROVE`). Two review findings were fixed before
+them as `COMMENTED`, not `APPROVE`). #251–#257 have **no** independent review
+comment on GitHub; their evidence is the audit verdict, author verification and
+CI, which are not approvals. #241–#250 were reviewed by Codex/audit at earlier
+commits, not necessarily their final heads. Two review findings were fixed before
 merge: the goal-plugin in-flight unload race and the remaining pre-check
 session roots plus an empty-object anchor hole (which previously authorized a
 context with an empty drift list).
@@ -143,7 +149,7 @@ a **fresh worktree with no `benchmark/.build`**, one full
 | Status | `passed` (exit 0, not timed out) |
 | Wall | 584.7 s |
 
-The count decomposes exactly: 4,166 (audit split) + 55 (`test_reconstruction_differential`) + 26 closure tests = 4,247; executed 4,103 + 53 + 26 = 4,182; skipped 63 + 2 = 65. The module that was previously excluded is included and fully executed (53) with its two declared Ghidra-dependent skips. The six clean-tree errors seen in both earlier full-profile runs are gone after #268.
+The count decomposes exactly: 4,166 (audit split, runner `20261120T215930Z-f5b80bdf`) + 55 (`test_reconstruction_differential`) + 26 closure tests = 4,247; executed 4,103 + 53 + 26 = 4,182; skipped 63 + 2 = 65. The module that was previously excluded is included and fully executed (53) with its two declared Ghidra-dependent skips. The six clean-tree errors seen in both earlier full-profile runs are gone after #268.
 
 ## 6. Limits
 

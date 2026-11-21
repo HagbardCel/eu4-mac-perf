@@ -32,17 +32,19 @@ scientific blocker is closed; the definitive disposition is
 | #261 control authority | `60e70b62` | `4bf03285` | 32/32 qualification; neighbours 353 |
 | #262 final P0 state | `7f553813` | `25ee46db` | docs selection |
 | #263 attribution recomputation | `5ae0ccff` | `3fe7c602` | 39/39; neighbour 116 ran / 115 executed |
-| #264 ledger head witness | `3cb4d39d` | `7cd4a072` | 27/27; neighbours 183/183 |
+| #264 ledger head witness | `3cb4d39d` | `7cd4a072` | 27/27; module+bridge 116/116 |
 | #265 flood cleanup retry | `fbe23d51` | `118c070c` | 7/7; order selection 123 ran / 122 executed |
 | #266 anchor/session-root | `dc219a6d` | `52cc1e89` | 93/93; neighbours 241/241 |
 | #267 plugin unload | `f5301f69` | `d3a0ce6b` | node 50/50 |
 | #268 clean build dirs | `c3fbeb77` | `6ba77c05` | 11/11 clean tree |
 | #269 closure integration | `d3a0ce6b` | `fecff675` | merge-only; reviewed exact tree |
 
-Portable CI passed on every merged head. Independent exact-head review was
-recorded for #241–#268 as a review comment on each PR; #269 is the merge-only
-integration of the five remaining reviewed heads. GitHub records these as
-`COMMENTED`, not `APPROVE`, because the only available identity is the author.
+Portable CI passed on every merged head. #263–#268 have an independent review
+comment at their exact heads; #251–#257 have no independent review comment on
+GitHub (audit verdict/author verification/CI only); #241–#250 were reviewed by
+Codex/audit at earlier commits. #269 is the merge-only integration of the five
+remaining reviewed heads. GitHub records the comments as `COMMENTED`, not
+`APPROVE`, because the only available identity is the author.
 
 ## Verification
 

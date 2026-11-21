@@ -22,19 +22,19 @@ history and must be read with its original run/seal identity.
 
 As of this snapshot #241–#269 are merged. The harness review is closed: every
 harness-integrity finding has a disposition, the two scientific remainders are
-transferred to M7, and no remediation PR is open. Exact head SHAs, review
+transferred to M7, and this closure PR is the only remaining remediation PR. Exact head SHAs, review
 records and dependency order are in the
 [coverage matrix](../plans/harness-review/implementation.md), the
 [closure](../analysis/harness-remediation/closure.md), the
 [verification report](../analysis/harness-remediation/verification-20261121.md)
 and the [exact-head audit](../analysis/harness-remediation/audit-20261120.md).
 
-GitHub has no `APPROVE` review for #241–#269. Each PR's independent exact-head
-review is recorded on its PR as a review comment, not an `APPROVE` state,
-because the only available GitHub identity is the author and GitHub refuses
-self-approval. The audit verdicts are technical review evidence, not formal
-approvals; green CI, green tests and a review session's self-report are not
-approvals.
+GitHub has no `APPROVE` review for #241–#269. The closure PRs #263–#268 have an
+independent exact-head review comment; #251–#257 have no independent review
+comment on GitHub (their evidence is the audit verdict, author verification and
+CI, which are not approvals); #241–#250 were reviewed by Codex/audit at earlier
+commits. Review comments are not `APPROVE` states because the only available
+GitHub identity is the author and GitHub refuses self-approval.
 
 | Area | State | Evidence / scope | Smallest missing discriminator |
 |---|---|---|---|
@@ -665,9 +665,10 @@ captured. The portable `m7-pr3-live-603` case verifies 1,243 payload digests.
 Report: [PR 3 diagnosis](../analysis/m7/pr3-differential-diagnosis.md),
 [evidence](../analysis/m7/pr3-diagnosis-evidence.json).
 
-PR #201 remains open; this branch includes its native early-exit diagnostic
-hardening as a cherry-pick because PR 3 must preserve the first native stage
-through the shadow report and the diagnostic package.
+PR #201 (merged later at `35b8f504`) was still open when this historical branch
+was written; the branch includes its native early-exit diagnostic hardening as
+a cherry-pick because PR 3 must preserve the first native stage through the
+shadow report and the diagnostic package.
 
 ## M7 PR 4 — continuous same-process dual rendering (2026-11-16)
 
