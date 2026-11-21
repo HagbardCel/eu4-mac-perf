@@ -179,6 +179,20 @@ def _shader_dir(frame_dir: Path, explicit: Path | str | None) -> Path:
     )
 
 
+def _opaque_alpha(payload: bytes) -> bytes:
+    """Canonicalize an alpha-less target's implicit alpha for comparison.
+
+    The original OpenGL RGB8 attachment has no alpha channel; a BGRA8 Metal
+    materialization carries an arbitrary alpha byte.  Alpha is not an
+    applicable channel for that checkpoint, so both sides are compared with
+    opaque alpha while every stored colour channel remains exact.
+    """
+    data = bytearray(payload)
+    for offset in range(3, len(data), 4):
+        data[offset] = 255
+    return bytes(data)
+
+
 def _swap_red_blue(payload: bytes) -> bytes:
     data = bytearray(payload)
     for offset in range(0, len(data) - 3, 4):
@@ -588,6 +602,18 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
             channel_swap = False
             internal = reported_format
         candidate = _swap_red_blue(metal) if channel_swap else metal
+        alpha_declared = wanted.get("alpha_applicable")
+        if alpha_declared is None:
+            # Older prefix requests did not carry the applicability flag.
+            # An RGB8 original attachment has no alpha channel; its BGRA8
+            # materialization cannot be compared on alpha.
+            alpha_applicable = not (
+                reference_format and captured_format == "RGB8")
+        else:
+            alpha_applicable = alpha_declared is not False
+        if not alpha_applicable:
+            reference = _opaque_alpha(reference)
+            candidate = _opaque_alpha(candidate)
         statistics = m6_compare.compare_images(
             reference, candidate, width, height)
         entry = {
@@ -619,6 +645,7 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
             "metal_sha256": _sha(metal_path),
             "reference_sha256": reference_sha,
             "timing": timing,
+            "alpha_applicable": alpha_applicable,
             "reference_pixel_format": reference_format or None,
             "candidate_pixel_format": _normalize_format(item.get("pixel_format"))
             or None,

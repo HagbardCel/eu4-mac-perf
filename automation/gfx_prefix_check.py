@@ -51,6 +51,13 @@ def _require(condition: bool, problems: list[str], message: str) -> None:
         problems.append(message)
 
 
+def _opaque_alpha(payload: bytes) -> bytes:
+    data = bytearray(payload)
+    for offset in range(3, len(data), 4):
+        data[offset] = 255
+    return bytes(data)
+
+
 def classify_prefix(events_out: list[dict], *, problems: list[str],
                     end: int, require_end: int) -> dict:
     """Classify reconciled/excluded observations without trusting a report."""
@@ -266,6 +273,7 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str,
             "dimensions": [entry.get("width"), entry.get("height")],
             "reference_pixel_format": entry.get("reference_pixel_format"),
             "candidate_pixel_format": entry.get("candidate_pixel_format"),
+            "alpha_applicable": entry.get("alpha_applicable", True) is not False,
         }
         statistics = entry.get("statistics") or {}
         row["statistics"] = statistics
@@ -308,6 +316,10 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str,
             if (len(reference) != width * height * 4
                     or len(candidate) != width * height * 4):
                 raise PrefixCheckError("pixel payload size mismatch")
+            alpha_applicable = entry.get("alpha_applicable", True) is not False
+            if not alpha_applicable:
+                reference = _opaque_alpha(reference)
+                candidate = _opaque_alpha(candidate)
             exact = m6_compare.compare_images(
                 reference, candidate, width, height)
             row["independent"] = {

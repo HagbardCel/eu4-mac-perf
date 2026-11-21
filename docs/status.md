@@ -47,6 +47,7 @@ GitHub identity is the author and GitHub refuses self-approval.
 | Area | State | Evidence / scope | Smallest missing discriminator |
 |---|---|---|---|
 | Sealed same-frame differential | **Established** | Capture, seal, shadow, offline replay and exact four-channel comparator; all channels are compared | — |
+| Exact-prefix event-20 coverage | **Implemented; live pilot stops at event 1** | Opt-in post-event observations for every event, offscreen targets, clears and copies; independent checker recomputes all bytes; see [readiness](../analysis/m7/m7-event20-readiness.md) and [comparison](../analysis/m7/m7-event20-comparison.json) | The event-1 1-LSB DXT1_ALPHA difference (`tex:433`, 23 px) is not root-caused; decoded-texture fallback is worse. Event 11 is an isolated unsupported aux clear |
 | Exact verdict semantics | **Merged and audit-reviewed** | PR #241 final `3be433f7`; raw exactness separated from policy; envelope hard cap. #258 `8a5d4bc2` fixes the residual report-locator cap and malformed-evidence tracebacks; merged `d29f45f0` after independent exact-head review. | No missing discriminator for the envelope contract; non-blocking residuals are named in the audit |
 | Event/writer attribution | **Merged; audit-reviewed** | PR #242 final `7bcaaa1c`; capture identity from validated graph/checkpoint records; 616/904 matrices generated | Regenerate present 904/616 rows from the sealed graph |
 | Compressed texture capture/replay | **Merged; authentic comparison complete** | PR #244 final `cd4245cf`; BC1 alpha, orientation, geometry/format/device negatives. Sealed-904 comparison: compressed path 4 px vs decoded 858 at checkpoint 15, strictly worse decoded at every checkpoint ([compressed-904](../analysis/harness-remediation/compressed-904.md)) | Texture representation is material; the remaining 4-pixel residual is not explained by it |
@@ -62,6 +63,15 @@ GitHub identity is the author and GitHub refuses self-approval.
 
 ### Current authentic observations
 
+- New event-20 prefix seal (session `47590918…`, frame 1, present 72, 283
+  operations, 1728×1117): 21 post-event observations plus the initial state.
+  The independent checker finds the first authoritative divergence at **event
+  1**, `tex:433` (RGB8), 23 pixels / max 1; events 10 and 12–17 match exactly;
+  events 18–20 differ (359/12, 1,186/12, 4,781/22); event 11 is an isolated
+  unsupported auxiliary clear and is explicitly excluded. Exact verified
+  prefix `[0, 0]`. The event-1 cause is unresolved; the compressed texture
+  path is already better than the decoded path (17,446 px). Report:
+  [readiness](../analysis/m7/m7-event20-readiness.md).
 - Present **615** (session `2564021f…`): 325 operations, checkpoints 14 match,
   17/19/20/284/final differ. Interval **[14, 17]**, next checkpoint 15.
 - Present **616** (session `2da0a8fc…`): checkpoint 14 match, 15 differs

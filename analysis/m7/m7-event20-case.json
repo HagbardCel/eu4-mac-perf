@@ -1,0 +1,27 @@
+{
+  "schema": "m7-event20-portable-case-record/v1",
+  "case_id": "m7-event20-event1-47590918",
+  "seal_session": "47590918-d63a-4798-9737-df00285ad51b",
+  "capture_frame_id": 1,
+  "divergence_event": 1,
+  "case_path": ".local/m7/event20/case",
+  "reproduction": {
+    "status": "incomplete",
+    "independently_reproducible": false,
+    "reason": "artifact_budget",
+    "status_reason": "artifact_budget",
+    "required_bytes": 860327938,
+    "max_bytes": 536870912,
+    "missing": [
+      {
+        "kind": "artifact_budget",
+        "reason": "artifact_budget",
+        "required_bytes": 860327938,
+        "max_bytes": 536870912,
+        "detail": "the single-frame case exceeds the artifact budget"
+      }
+    ]
+  },
+  "case_sha256": null,
+  "note": "The single-frame case requires 860,327,938 bytes, above the established 512 MiB artifact budget, so the packager published an incomplete case instead of an oversized one. The full sealed frame, shadow outputs, request, receipt and logs remain under the campaign evidence directory; the reproduction command and provenance are preserved in the case manifest."
+}

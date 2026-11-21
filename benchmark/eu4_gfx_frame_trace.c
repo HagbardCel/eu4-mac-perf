@@ -2930,6 +2930,7 @@ typedef struct {
     int color_blue_bits;
     int color_alpha_bits;
     int unsupported_format;
+    int alpha_applicable;
     int direct_texture;
     GLenum read_format;
     const char *pixel_format;
@@ -3005,17 +3006,18 @@ static int prefix_target_locked(prefix_target_state *out, int direct_texture) {
         if (out->internal_format == GL_RGBA8) {
             out->read_format = GL_RGBA;
             out->pixel_format = "RGBA8";
+            out->alpha_applicable = 1;
         } else if (out->internal_format == GL_RGB8 ||
                    out->internal_format == GL_SRGB8_ALPHA8_VALUE) {
             out->read_format = GL_BGRA;
             out->pixel_format = "BGRA8";
+            out->alpha_applicable = 0;
         } else if (out->color_red_bits == 8 && out->color_green_bits == 8 &&
                    out->color_blue_bits == 8 &&
                    (out->color_alpha_bits == 8 || out->color_alpha_bits == 0)) {
-            /* An unmapped eight-bit normalized format is materialized by the
-               Metal replay as RGBA8Unorm; read the same canonical bytes. */
             out->read_format = GL_RGBA;
             out->pixel_format = "RGBA8";
+            out->alpha_applicable = out->color_alpha_bits == 8 ? 1 : 0;
         } else if (!g.test_only) {
             out->unsupported_format = 1;
             out->pixel_format = NULL;
@@ -3167,16 +3169,21 @@ static int prefix_target_locked(prefix_target_state *out, int direct_texture) {
             /* The Metal replay allocates RGBA8 targets as RGBA8Unorm. */
             out->read_format = GL_RGBA;
             out->pixel_format = "RGBA8";
+            out->alpha_applicable = 1;
         } else if (internal == GL_RGB8 || internal == GL_SRGB8_ALPHA8_VALUE) {
-            /* The Metal replay allocates RGB8 targets as BGRA8Unorm. */
+            /* The Metal replay allocates RGB8 targets as BGRA8Unorm.  The
+               original target has no alpha channel, so alpha is not an
+               applicable comparison channel. */
             out->read_format = GL_BGRA;
             out->pixel_format = "BGRA8";
+            out->alpha_applicable = 0;
         } else if (component_error == GL_NO_ERROR &&
                    component_type == GL_UNSIGNED_NORMALIZED && red == 8 &&
                    green == 8 && blue == 8 &&
                    (alpha == 8 || alpha == 0)) {
             out->read_format = GL_RGBA;
             out->pixel_format = "RGBA8";
+            out->alpha_applicable = alpha == 8 ? 1 : 0;
         } else {
             out->unsupported_format = 1;
             out->pixel_format = NULL;
@@ -3657,7 +3664,8 @@ static int prefix_emit_target_locked(int event, const char *timing,
         "{\"schema\":\"gfx-prefix-observation/v1\",\"event\":%d,"
         "\"timing\":\"%s\",\"kind\":\"%s\",%s,"
         "\"resource\":\"%s\",\"target_name\":\"%s\","
-        "\"pixel_format\":%s,\"origin\":\"lower_left\","
+        "\"pixel_format\":%s,\"alpha_applicable\":%s,"
+        "\"origin\":\"lower_left\","
         "\"width\":%d,\"height\":%d,\"row_stride\":%d,"
         "\"target_identity\":{\"internal_format\":%d,"
         "\"component_type\":%d,\"red_bits\":%d,\"green_bits\":%d,"
@@ -3670,6 +3678,8 @@ static int prefix_emit_target_locked(int event, const char *timing,
         "\"used_ns\":%llu,\"max_ns\":%llu}}",
         event, timing, kind, target_json, resource, target_name,
         pixel_format_json,
+        unsupported_colour ? "false"
+                           : (target.alpha_applicable ? "true" : "false"),
         target.width, target.height, target.width * 4,
         target.internal_format, target.color_component_type,
         target.color_red_bits, target.color_green_bits,

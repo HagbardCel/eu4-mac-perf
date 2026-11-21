@@ -1490,6 +1490,27 @@ def checkpoint_plan(graph: dict) -> list[dict]:
     return plan
 
 
+def _alpha_applicable(observation: dict) -> bool:
+    declared = observation.get("alpha_applicable")
+    if declared is not None:
+        return declared is not False
+    identity = observation.get("target_identity") or {}
+    try:
+        internal = int(identity.get("internal_format") or 0)
+    except (TypeError, ValueError):
+        internal = 0
+    alpha_bits = identity.get("alpha_bits")
+    if internal == 0:
+        # Default framebuffer: its attachment query is unavailable, but the
+        # drawable has an alpha channel (8 bits).
+        return True
+    if internal == 0x8051:  # GL_RGB8
+        return False
+    if isinstance(alpha_bits, int) and not isinstance(alpha_bits, bool):
+        return alpha_bits != 0
+    return True
+
+
 def prefix_checkpoint_plan(graph: dict) -> list[dict]:
     """Post-event Metal checkpoints for the opt-in exact-prefix mode.
 
@@ -1522,6 +1543,7 @@ def prefix_checkpoint_plan(graph: dict) -> list[dict]:
             "reference_height": observation.get("height"),
             "reference_pixel_format": colour.get("pixel_format")
             or observation.get("pixel_format"),
+            "alpha_applicable": _alpha_applicable(observation),
             "producer_events": [event],
             "writer_authority": "prefix_observation",
             "session_id": _observation_identity(observation, "session_id"),
@@ -1579,6 +1601,7 @@ def checkpoint_request(graph: dict) -> dict:
             "reference_width": item["reference_width"],
             "reference_height": item["reference_height"],
             "reference_pixel_format": item.get("reference_pixel_format"),
+            "alpha_applicable": item.get("alpha_applicable", True),
             "producer_events": item["producer_events"],
             "writer_authority": item["writer_authority"],
         }
