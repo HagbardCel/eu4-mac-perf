@@ -253,7 +253,8 @@ review are recorded in the completion report after the post-review fixes.
 | PR3 preflight | 22 ran / 0 failures | independent PR3 review |
 | PR3a capacity preflight | 223 ran / 0 failures | independent PR3 capacity review |
 | Full verbose offline discovery on the PR1 base | exit 0, no failures | `EU4_TEST_PROFILE=offline EU4_OFFLINE_ONLY=1 python3.14 -m unittest discover -s tests -v` |
-| Final full offline gate attempts | **did not complete** — two attempts hung in pre-existing native harnesses (`test_gateway_runtime_harness`, and an OpenGL-polling host), with no test failure produced; the run was stopped rather than claimed | `test_runner run --profile offline --label m7-final`; bounded verbose rerun |
+| Earlier full-gate attempts | **incomplete, not green** — `20261121T085735Z-fb9f5e74` was terminated while executing the long native/reconstruction modules; `20261121T104838Z-eda50f39` was terminated after two minutes. Neither recorded a failure or a timeout | `test_runner run --profile offline` on the intermediate heads |
+| **Final full offline gate on `ae8fbd13`** | **passed**: 4,368 ran / 4,302 executed / 66 skipped / 0 failures / 0 errors; exit 0, no timeout | clean worktree at `ae8fbd13`; `test_runner run --profile offline --label final-full-gate-ae8fbd13 --timeout 3600` (`20261121T123736Z-6c3c5dcc`) |
 | Final changed-module suites | 329 + 459 + 105 + 22 + 223 ran, 0 failures | focused runs listed above |
 | End-to-end qualifier probe (synthetic frame + real driver/native/signature) | `qualified=true`, exact, attribution allowed | independent PR3 review |
 
@@ -263,24 +264,28 @@ one sealed observation. No launch was made after the seal. The Metal replay is
 offline. Launch 1 and 2 each consumed one process, were terminated, and
 restored settings; no pixel result was claimed from an unsealed frame.
 
-The final full-suite gate is recorded as **incomplete, not green**: after the
-seal, two attempts to run the whole offline discovery stopped in pre-existing
-native harnesses (one OpenGL-polling subprocess; one
-`test_gateway_runtime_harness`) that are unrelated to the changed files. The
-runner produced no test failure; the runs were stopped rather than converted
-into a pass. The earlier full verbose discovery on the PR1 base exited 0, and
-every changed-module suite is green at the final heads. The gateway/runtime
-harness hang is an environment limitation of this session, not evidence of
-pixel correctness.
+The two intermediate full-gate attempts are **incomplete, not green**: both
+were terminated by the operator while the suite was still executing long
+native/reconstruction modules (`test_reconstruction_differential` in the
+12-minute run; `test_check_oracle_receipt` in the 2-minute run), and neither
+recorded a failure or a timeout. The previously named
+`test_gateway_runtime_harness` passes in isolation in 0.6 s, and a bounded
+verbose probe reached `test_oracle_bundle` after 20 minutes with no failure
+before its wrapper bound. The final clean-worktree gate above then completed:
+4,368 tests ran, 4,302 executed, 66 skipped, 0 failures and 0 errors. A skipped
+test is not counted as executed; the gate is green on the exact final head.
 
 ## 10. Decision
 
-**Case 2 — non-exact scientific stop.** The independently reconstructed
-original-API OpenGL control executes the selected draw from the new seal's
-authenticated inputs and produces a valid, signed, authority-bound image that
-differs from live GL by 347 of 1,930,176 pixels (max channel 10, alpha 0). The
-exact criterion is not lowered, the Metal shader is not changed, no authority
-is manufactured, and `metal_blame_allowed` stays false. Issue #270 is closed as
-**unqualified**, with the precise remaining observable (the default drawable's
-internal pixel/depth format and render-target path) transferred to a separately
-owned issue.
+**Case 2 — non-exact scientific stop.** The original-API OpenGL control was
+produced under the pre-fix reviewed driver and differs from live GL by 347 of
+1,930,176 pixels (max channel 10, alpha 0). Under the corrected gate the same
+capture is not an authorized control: the captured drawable's internal format
+identity is missing, so `drawable_equivalence=unproven` and the gate stops
+before execution. The exact criterion is not lowered, the Metal shader is not
+changed, no authority is manufactured, and `metal_blame_allowed` stays false.
+Issue #270 is closed as a completed **unqualified** investigation once this
+integration merges, with the precise remaining observable (the default
+drawable's internal pixel/depth format and render-target path) transferred to
+#278. Closure records a scientific stop; it is not a claim of exact GL
+equivalence or renderer parity.

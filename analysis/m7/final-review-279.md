@@ -60,7 +60,7 @@ modified tracked files and neither launched EU4.
 | `review-fixes` neighbours | 303 ran / 302 executed / 1 skipped / 0 failures |
 | `review-integrated` focused | 311 ran / 311 executed / 0 skipped / 0 failures |
 | Reconciliation focused run (`post-r1-fixes`) | 427 ran / 426 executed / 1 skipped / 0 failures |
-| Full offline gate on the final attestation head | recorded in `docs/status.md` after the run; this file is not a substitute for it |
+| Full offline gate on `ae8fbd13` (clean worktree, `--timeout 3600`) | **passed**: 4,368 ran / 4,302 executed / 66 skipped / 0 failures / 0 errors, exit 0, no timeout (`20261121T123736Z-6c3c5dcc`) |
 
 ## Non-blocking residuals
 
