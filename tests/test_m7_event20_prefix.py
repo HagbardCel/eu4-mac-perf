@@ -23,7 +23,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from automation import (  # noqa: E402
-    gfx_frame_graph, gfx_prefix_check, m6_frame, native_build)
+    gfx_frame_graph, gfx_prefix_case, gfx_prefix_check, m6_frame,
+    native_build)
 BENCH = ROOT / "benchmark"
 CHECKER = ROOT / "campaigns" / "eu4-m7-event20" / "accept.py"
 
@@ -169,6 +170,29 @@ class Event20PrefixTests(unittest.TestCase):
             self.assertEqual(entry["independent"]["mismatched_pixels"], 0)
             self.assertEqual(entry["independent"]["max_channel_error"], 0)
             self.assertEqual(entry["independent"]["alpha_different_pixels"], 0)
+
+    def test_derived_prefix_frame_is_clearly_labelled(self):
+        frame, _metal = self._fixture()
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        destination = Path(temporary.name) / "prefix"
+        summary = gfx_prefix_case.build_prefix_frame(frame, 1, destination)
+        self.assertEqual(summary["events"], 2)
+        self.assertEqual(summary["end"], 1)
+        self.assertLess(summary["bytes"], 512 * 1024 * 1024)
+        derived = m6_frame.load_trace(destination, verify_blobs=True)
+        self.assertEqual(derived["events"], 2)
+        self.assertEqual([event["kind"] for event in derived["_events"]],
+                         ["clear", "draw"])
+        self.assertEqual(derived["_prefix"]["end"], 1)
+        self.assertEqual(derived["derived_from"]["original_operation_count"],
+                         21)
+        self.assertIn("not the original full seal",
+                      derived["derived_from"]["scope"])
+        seal = m6_frame.load_seal(destination)
+        self.assertTrue(seal["sealed"])
+        self.assertEqual(seal["operation_count"], 2)
+        self.assertEqual(seal["derived_from"]["original_operation_count"], 21)
 
     def test_request_covers_every_event_with_its_own_resource(self):
         frame, metal = self._fixture()
