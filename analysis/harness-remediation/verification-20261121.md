@@ -5,6 +5,30 @@ Evidence is offline unless a row says otherwise. This report records actual
 executed/skipped/failed counts; a green exit status alone is not used as
 evidence.
 
+## Post-archive reliability correction (#276)
+
+The final tested code merge is `758e2f56` (#273), the closure documentation
+merge is `cd0a6d82` (#274) and the archive merge is `484bcbe5` (#275). A
+post-archive correction, #276 (`ce6f8b2f`, merged `0e9447f8`), fixes the
+worktree lock so a `unittest` child that survives a supervisor `SIGKILL` keeps
+the lock until it exits. An interrupted runner now stops the child process
+group before releasing the lock; a timed-out run escalates from `SIGTERM` to
+`SIGKILL` even when the direct child already exited; Linux zombies are not
+treated as live; and the escalation timer is cancelled with the run.
+
+#276 focused tests: 25 ran / 24 executed / 1 skipped / 0 failures
+(`20261121T090852Z-edb741ef`); required neighbours 105 ran / 102 executed / 3
+skipped / 0 failures (`20261121T090358Z-9bc3f018`). On base `484bcbe5` with the
+new test file: 25 ran / 24 executed / 1 skipped / 2 failures + 1 error
+(`20261121T090508Z-aa76fdfd`). The single macOS skip is the Linux-only zombie
+test, which CI executes.
+
+The post-#276 full offline gate in a clean worktree at `0e9447f8` was one
+`unittest discover -s tests` run with no module exclusion: **4,257 ran / 4,191
+executed / 66 skipped / 0 failures / 0 errors**, runner
+`20261121T091519Z-debdc76e`, label `harness-post-closure-final`, child exit 0,
+wall 643.98 s (unittest 642.594 s), committed tree `0e9447f8`.
+
 ## 1. Baseline and candidate full offline profiles
 
 The full offline profile is one `unittest discover -s tests` run (no module

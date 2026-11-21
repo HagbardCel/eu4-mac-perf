@@ -20,11 +20,15 @@ Governing references: [assessment](../../plans/closed/harness-review-20261120/as
 | Closure fix integration | #269 `d3a0ce6b`, merged `fecff675` (five reviewed heads, one merge commit each) |
 | Closure documentation | #272 `30e8d7e2`, merged `9ecc1131` |
 | Worktree execution lock | #273 `8415ab86`, merged `758e2f56` |
-| Final `main` | `758e2f56` |
-| Reviewed heads | #263 `5ae0ccff`, #264 `3cb4d39d`, #265 `fbe23d51`, #266 `dc219a6d`, #267 `f5301f69`, #268 `c3fbeb77`, #273 `8415ab86` |
+| Final tested code merge | `758e2f56` (#273) |
+| Closure documentation merge | `cd0a6d82` (#274) |
+| Archive merge | `484bcbe5` (#275) |
+| Post-archive reliability correction | #276 `ce6f8b2f`, merged `0e9447f8` |
+| Current `main` | `0e9447f8` |
+| Reviewed heads | #263 `5ae0ccff`, #264 `3cb4d39d`, #265 `fbe23d51`, #266 `dc219a6d`, #267 `f5301f69`, #268 `c3fbeb77`, #273 `8415ab86`, #276 `ce6f8b2f` |
 | Per-PR merge commits | #263 `3fe7c602`, #264 `7cd4a072`, #265 `118c070c`, #266 `52cc1e89`, #267 `d3a0ce6b`; integration merge `fecff675`; #273 `758e2f56` |
-| Review records | independent exact-head review comments on #263–#268 and #273; #251–#257 have no independent human exact-head review (Codex/audit/author/CI only); #241–#250 were reviewed at earlier commits. GitHub records comments as `COMMENTED`, not `APPROVE` (the only available identity is the author) |
-| Verification | [verification-20261121.md](verification-20261121.md); final gate `20261121T080139Z-89089cf0` (4,254 ran / 4,189 executed / 65 skipped / 0 failures / 0 errors at `758e2f56`) |
+| Review records | independent exact-head review comments on #263–#268, #273 and #276; #251–#257 have no independent human exact-head review (Codex/audit/author/CI only); #241–#250 were reviewed at earlier commits. GitHub records comments as `COMMENTED`, not `APPROVE` (the only available identity is the author) |
+| Verification | [verification-20261121.md](verification-20261121.md); pre-archive gate `20261121T080139Z-89089cf0` (4,254 ran / 4,189 executed / 65 skipped / 0 failures / 0 errors at `758e2f56`); post-#276 gate `20261121T091519Z-debdc76e` (4,257 ran / 4,191 executed / 66 skipped / 0 failures / 0 errors at `0e9447f8`) |
 
 The six closure PRs (#263–#268) and #273 were reviewed at their exact final
 commits by reviewers independent of the author. The #264 final P2 delta review was performed before merge (its
@@ -65,7 +69,7 @@ base comparison where a regression was added), `verified` (measurement done),
 | Shared writable roots mix sessions | concurrent sessions | implemented and verified (#256 `c403f06e`) | Per-session roots, campaign-wide ledger, host-wide lease, reconnect isolation; 246/246. |
 | Goal-plugin prompt fiber leaks on plugin unload | closure housekeeping | fixed before closure (#267 `f5301f69`) | Unload disposes installed fibers; an in-flight bridge answer installs nothing; a racing fiber is disposed, not retained. 50/50; base fails. |
 | Corrupt anchor becomes a traceback; refused prepare leaves an empty session root | closure housekeeping | fixed before closure (#266 `dc219a6d`) | Structured `anchor_corrupt` for corrupt/null/empty/non-file/schema-only anchors; `review-run`, `review-verify`, `prepare`, `validate` create no root before their checks; existing roots re-tightened to 0700; legacy anchors without `authority` still authorize. 93/93 + 241 neighbours. |
-| Full offline profile reported to hang around `tests.test_reconstruction_differential` | Phase 2; issue #271 | resolved: not reproduced; execution contract enforced | Controlled baseline `25ee46db` and candidate both completed the full discover profile, with the module executed (4,221 = 4,166 + 55 ran; 4,156 = 4,103 + 53 executed). The historical `running` records have no counts/timeout marker; those runs overlapped in one worktree without a cross-process build lock. #273 now holds one kernel lock per worktree for the whole child execution, so different selections cannot compile the same `.build` output concurrently; separate worktrees still run in parallel. Final gate: 4,254 ran / 4,189 executed / 65 skipped / 0 failures / 0 errors (`20261121T080139Z-89089cf0`). |
+| Full offline profile reported to hang around `tests.test_reconstruction_differential` | Phase 2; issue #271 | resolved: not reproduced; execution contract enforced | Controlled baseline `25ee46db` and candidate both completed the full discover profile, with the module executed (4,221 = 4,166 + 55 ran; 4,156 = 4,103 + 53 executed). The historical `running` records have no counts/timeout marker; those runs overlapped in one worktree without a cross-process build lock. #273 now holds one kernel lock per worktree for the whole child execution, so different selections cannot compile the same `.build` output concurrently; separate worktrees still run in parallel. Pre-archive gate: 4,254 ran / 4,189 executed / 65 skipped / 0 failures / 0 errors (`20261121T080139Z-89089cf0`). |
 | Flood cleanup flaked on one transient `ps` timeout | Phase 2 | fixed before closure (#265 `fbe23d51`) | Retry within a bounded deadline, empty-row retry, `os.kill` fallback only when `ps` is unavailable; live pid still refused. 7/7; base fails. |
 
 ## Issues
@@ -108,7 +112,7 @@ not, and is not presented as one.
 | Item | Owner | Next observation / action |
 |---|---|---|
 | Live-GL control equivalence (B2/B3) | **M7** (follow-up issue) | Newly sealed capture with drawable samples/bit depth + prior-frame contents; new bound original-API renderer; exact comparison at the first divergent checkpoint. Until then the 904 control stays unqualified. |
-| Worktree-scoped native build serialization | **Resolved in #273** | One kernel `flock` per `--cwd` worktree, held across the child; concurrent selections return pending/busy with the running locator. Documented boundaries: an orphaned child can briefly outlive a killed runner; a refusal cannot return a locator when the running record lives in another state dir; the lock scope is the `--cwd` path. |
+| Worktree-scoped native build serialization | **Resolved in #273; crash-recovery corrected in #276** | One kernel `flock` per `--cwd` worktree, held across the child; the lock descriptor is inherited by the unittest child, so a surviving child keeps exclusivity after a supervisor SIGKILL and the worktree becomes available when it exits. Concurrent selections return pending/busy with the running locator. Documented boundaries: a descendant that escapes the child's process group and inherits stdout is outside the timeout group kill; a refusal cannot return a locator when the running record lives in another state dir; the lock scope is the `--cwd` path. |
 | Decoded texture path sampling equivalence | Renderer / M7 | The decoded fallback is strictly worse on 904; if the decoded path must be supported, compare BC filtering against the decode path on a controlled fixture. No parity claim. |
 | Claim-ledger staged window | Harness (documented) | A stale head after an interrupted head write leaves one uncommitted tail; deleting/rewriting the head remains the documented local-witness boundary. |
 | Coordinated control+receipt rewrite | Harness (documented) | Only reachable if a renderer is pinned in `AUTHORITIES`; receipt-to-renderer binding is required before the first registry entry. |
