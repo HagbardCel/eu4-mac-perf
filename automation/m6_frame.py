@@ -174,7 +174,7 @@ def _prefix_record_problems(record, index: int) -> list[str]:
                             "status")
             continue
         status = value.get("status")
-        if status not in ("captured", "absent", "not_used"):
+        if status not in ("captured", "absent", "not_used", "not_present"):
             problems.append(f"prefix observation {index} has an invalid "
                             f"{member} status")
         elif status == "captured":

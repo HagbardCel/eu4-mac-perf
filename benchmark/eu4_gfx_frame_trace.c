@@ -302,6 +302,7 @@ static struct {
     int prefix_copy_pending_event;
     int prefix_copy_pending_texture;
     int prefix_clear_pending_event;
+    int prefix_clear_flags;
 
     /* Bounded continuous capture.  The single-frame path leaves every field
        below zero/empty and keeps its one-shot gate unchanged. */
@@ -2916,6 +2917,11 @@ typedef struct {
     int stencil_present;
     int depth_bits;
     int stencil_bits;
+    int color_component_type;
+    int color_red_bits;
+    int color_green_bits;
+    int color_blue_bits;
+    int color_alpha_bits;
     int direct_texture;
     GLenum read_format;
     const char *pixel_format;
@@ -2969,6 +2975,25 @@ static int prefix_target_locked(prefix_target_state *out, int direct_texture) {
             out->height = (int)texture_height;
             out->internal_format = (int)internal;
         }
+        if (!g.test_only) {
+            GLint red = 0, green = 0, blue = 0, alpha = 0;
+            GLint previous_texture = 0;
+            glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous_texture);
+            glBindTexture(GL_TEXTURE_2D, (GLuint)direct_texture);
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_RED_SIZE,
+                                     &red);
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_GREEN_SIZE,
+                                     &green);
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_BLUE_SIZE,
+                                     &blue);
+            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_ALPHA_SIZE,
+                                     &alpha);
+            glBindTexture(GL_TEXTURE_2D, (GLuint)previous_texture);
+            out->color_red_bits = (int)red;
+            out->color_green_bits = (int)green;
+            out->color_blue_bits = (int)blue;
+            out->color_alpha_bits = (int)alpha;
+        }
         if (out->internal_format == GL_RGBA8) {
             out->read_format = GL_RGBA;
             out->pixel_format = "RGBA8";
@@ -2976,6 +3001,13 @@ static int prefix_target_locked(prefix_target_state *out, int direct_texture) {
                    out->internal_format == GL_SRGB8_ALPHA8_VALUE) {
             out->read_format = GL_BGRA;
             out->pixel_format = "BGRA8";
+        } else if (out->color_red_bits == 8 && out->color_green_bits == 8 &&
+                   out->color_blue_bits == 8 &&
+                   (out->color_alpha_bits == 8 || out->color_alpha_bits == 0)) {
+            /* An unmapped eight-bit normalized format is materialized by the
+               Metal replay as RGBA8Unorm; read the same canonical bytes. */
+            out->read_format = GL_RGBA;
+            out->pixel_format = "RGBA8";
         } else if (!g.test_only) {
             fail_capture_locked("prefix_unsupported_format");
             return -1;
@@ -3063,10 +3095,66 @@ static int prefix_target_locked(prefix_target_state *out, int direct_texture) {
         glGetFramebufferAttachmentParameteriv(
             GL_DRAW_FRAMEBUFFER, GL_STENCIL_ATTACHMENT,
             GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &stencil_type);
-        out->depth_present = depth_type != GL_NONE;
-        out->stencil_present = stencil_type != GL_NONE;
-        out->depth_bits = out->depth_present ? 24 : 0;
-        out->stencil_bits = out->stencil_present ? 8 : 0;
+        GLint depth_size = 0, stencil_size = 0;
+        while (glGetError() != GL_NO_ERROR) {
+        }
+        glGetFramebufferAttachmentParameteriv(
+            GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+            GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, &depth_size);
+        GLenum depth_size_error = glGetError();
+        while (glGetError() != GL_NO_ERROR) {
+        }
+        glGetFramebufferAttachmentParameteriv(
+            GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+            GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE, &stencil_size);
+        GLenum stencil_size_error = glGetError();
+        out->depth_present = depth_type != GL_NONE ||
+                             (depth_size_error == GL_NO_ERROR && depth_size > 0);
+        out->stencil_present = stencil_type != GL_NONE ||
+                               (stencil_size_error == GL_NO_ERROR &&
+                                stencil_size > 0);
+        out->depth_bits = out->depth_present
+                              ? (depth_size_error == GL_NO_ERROR
+                                     ? (int)depth_size : 24)
+                              : 0;
+        out->stencil_bits = out->stencil_present
+                                ? (stencil_size_error == GL_NO_ERROR &&
+                                           stencil_size > 0
+                                       ? (int)stencil_size : 8)
+                                : 0;
+        GLint component_type = 0, red = 0, green = 0, blue = 0, alpha = 0;
+        while (glGetError() != GL_NO_ERROR) {
+        }
+        glGetFramebufferAttachmentParameteriv(
+            GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+            GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE, &component_type);
+        GLenum component_error = glGetError();
+        const struct {
+            GLenum parameter;
+            GLint *value;
+        } colour_sizes[] = {
+            {GL_FRAMEBUFFER_ATTACHMENT_RED_SIZE, &red},
+            {GL_FRAMEBUFFER_ATTACHMENT_GREEN_SIZE, &green},
+            {GL_FRAMEBUFFER_ATTACHMENT_BLUE_SIZE, &blue},
+            {GL_FRAMEBUFFER_ATTACHMENT_ALPHA_SIZE, &alpha},
+        };
+        for (size_t size_index = 0;
+             size_index < sizeof(colour_sizes) / sizeof(colour_sizes[0]);
+             size_index++) {
+            while (glGetError() != GL_NO_ERROR) {
+            }
+            glGetFramebufferAttachmentParameteriv(
+                GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                colour_sizes[size_index].parameter,
+                colour_sizes[size_index].value);
+            (void)glGetError();
+        }
+        out->color_component_type = component_error == GL_NO_ERROR
+                                        ? (int)component_type : 0;
+        out->color_red_bits = (int)red;
+        out->color_green_bits = (int)green;
+        out->color_blue_bits = (int)blue;
+        out->color_alpha_bits = (int)alpha;
         if (internal == GL_RGBA8) {
             /* The Metal replay allocates RGBA8 targets as RGBA8Unorm. */
             out->read_format = GL_RGBA;
@@ -3075,6 +3163,12 @@ static int prefix_target_locked(prefix_target_state *out, int direct_texture) {
             /* The Metal replay allocates RGB8 targets as BGRA8Unorm. */
             out->read_format = GL_BGRA;
             out->pixel_format = "BGRA8";
+        } else if (component_error == GL_NO_ERROR &&
+                   component_type == GL_UNSIGNED_NORMALIZED && red == 8 &&
+                   green == 8 && blue == 8 &&
+                   (alpha == 8 || alpha == 0)) {
+            out->read_format = GL_RGBA;
+            out->pixel_format = "RGBA8";
         } else {
             fail_capture_locked("prefix_unsupported_format");
             return -1;
@@ -3305,29 +3399,31 @@ static int prefix_emit_target_locked(int event, const char *timing,
     if (strcmp(kind, "draw") == 0) {
         if (!g.test_only) {
             GLboolean depth_mask = GL_TRUE;
-            GLint stencil_test = 0;
+            GLint depth_test = 0, stencil_test = 0;
             glGetBooleanv(GL_DEPTH_WRITEMASK, &depth_mask);
+            glGetIntegerv(GL_DEPTH_TEST, &depth_test);
             glGetIntegerv(GL_STENCIL_TEST, &stencil_test);
-            depth_required = depth_mask != 0;
+            depth_required = depth_mask != 0 || depth_test != 0;
             stencil_required = stencil_test != 0;
         }
     } else if (strcmp(kind, "clear") == 0) {
-        if (!g.test_only) {
-            GLboolean depth_mask = GL_TRUE;
-            GLint stencil_mask = -1;
-            glGetBooleanv(GL_DEPTH_WRITEMASK, &depth_mask);
-            glGetIntegerv(GL_STENCIL_WRITEMASK, &stencil_mask);
-            depth_required = depth_mask != 0;
-            stencil_required = stencil_mask != 0;
+        depth_required = (g.prefix_clear_flags & 2) != 0;
+        stencil_required = (g.prefix_clear_flags & 4) != 0;
+        if (g.test_only) {
+            depth_required = 0;
+            stencil_required = 0;
         }
     }
-    if (depth_required && !target.depth_present) {
-        fail_capture_locked("prefix_depth_unavailable");
-        return -1;
+    /* A target without a depth (or stencil) attachment cannot read or write
+       that buffer, so the absence is a recorded fact rather than a missing
+       observation.  Every other unsupported state still fails closed. */
+    int depth_attachment_present = target.depth_present;
+    int stencil_attachment_present = target.stencil_present;
+    if (depth_required && !depth_attachment_present) {
+        depth_required = 0;
     }
-    if (stencil_required && !target.stencil_present) {
-        fail_capture_locked("prefix_stencil_unavailable");
-        return -1;
+    if (stencil_required && !stencil_attachment_present) {
+        stencil_required = 0;
     }
     uint64_t colour_bytes = (uint64_t)target.width * (uint64_t)target.height * 4ull;
     uint64_t depth_bytes = depth_required ? colour_bytes : 0;
@@ -3486,8 +3582,9 @@ static int prefix_emit_target_locked(int event, const char *timing,
                  "\"width\":%d,\"height\":%d},",
                  depth_file, depth_sha, actual_depth, target.width,
                  target.height);
-    } else if (depth_required) {
-        snprintf(depth_json, sizeof(depth_json), "\"depth\":{\"status\":\"absent\"},");
+    } else if (!depth_attachment_present) {
+        snprintf(depth_json, sizeof(depth_json),
+                 "\"depth\":{\"status\":\"not_present\"},");
     } else {
         snprintf(depth_json, sizeof(depth_json),
                  "\"depth\":{\"status\":\"not_used\"},");
@@ -3500,9 +3597,9 @@ static int prefix_emit_target_locked(int event, const char *timing,
                  "\"width\":%d,\"height\":%d}",
                  stencil_file, stencil_sha, actual_stencil, target.width,
                  target.height);
-    } else if (stencil_required) {
+    } else if (!stencil_attachment_present) {
         snprintf(stencil_json, sizeof(stencil_json),
-                 "\"stencil\":{\"status\":\"absent\"}");
+                 "\"stencil\":{\"status\":\"not_present\"}");
     } else {
         snprintf(stencil_json, sizeof(stencil_json),
                  "\"stencil\":{\"status\":\"not_used\"}");
@@ -3515,6 +3612,10 @@ static int prefix_emit_target_locked(int event, const char *timing,
         "\"resource\":\"%s\",\"target_name\":\"%s\","
         "\"pixel_format\":\"%s\",\"origin\":\"lower_left\","
         "\"width\":%d,\"height\":%d,\"row_stride\":%d,"
+        "\"target_identity\":{\"internal_format\":%d,"
+        "\"component_type\":%d,\"red_bits\":%d,\"green_bits\":%d,"
+        "\"blue_bits\":%d,\"alpha_bits\":%d,"
+        "\"depth_present\":%s,\"stencil_present\":%s},"
         "\"color\":{\"file\":\"%s\",\"sha256\":\"%s\",\"bytes\":%zu,"
         "\"pixel_format\":\"%s\"},%s%s,"
         "\"readback_ns\":%llu,\"pid\":%d,"
@@ -3523,6 +3624,11 @@ static int prefix_emit_target_locked(int event, const char *timing,
         "\"used_ns\":%llu,\"max_ns\":%llu}}",
         event, timing, kind, target_json, resource, target_name,
         target.pixel_format, target.width, target.height, target.width * 4,
+        target.internal_format, target.color_component_type,
+        target.color_red_bits, target.color_green_bits,
+        target.color_blue_bits, target.color_alpha_bits,
+        target.depth_present ? "true" : "false",
+        target.stencil_present ? "true" : "false",
         colour_file, colour_sha, actual_colour, target.pixel_format,
         depth_json, stencil_json, (unsigned long long)(now_ns() - started),
         (int)getpid(), g.session_id,
@@ -6363,6 +6469,7 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
     pthread_mutex_lock(&g_lock);
     call->retain = 0;
     g.prefix_clear_pending_event = -1;
+    g.prefix_clear_flags = (int)frame->rsi;
     if (capture_timed_out_locked()) {
         pthread_mutex_unlock(&g_lock);
         eu4_gfx_frame_sealed_dispatch();
