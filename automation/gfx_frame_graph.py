@@ -1143,6 +1143,9 @@ def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
             "the capture records draws and clears only; a sampled full-extent "
             "texture without a producer indicates an uncaptured resolve/copy "
             "operation (for example _GfxResolve)")
+    prefix = prefix_coverage(trace, events, resources)
+    if prefix["status"] == "invalid":
+        contract_problems.extend(prefix["problems"])
     coverage = m6_frame.coverage_report(trace)
     for problem in coverage.get("missing") or []:
         issue = problem.get("issue")
@@ -1195,6 +1198,7 @@ def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
         "resources": resources,
         "events": event_rows,
         "default_checkpoints": default_checkpoints,
+        "prefix": prefix,
         "counts": {
             "events": len(events),
             "draws": sum(1 for event in events if event.get("kind") == "draw"),
@@ -1224,6 +1228,116 @@ def build(frame_dir: Path | str, trace: dict | None = None) -> dict:
             key for key, value in resources.items()
             if value.get("origin") == BOUNDARY
             and (value.get("history") or {}).get("carried")),
+    }
+
+
+def _event_output_resource(event: dict) -> str | None:
+    """Resource written by one executed event, or ``None`` if it has none."""
+    kind = event.get("kind")
+    if kind in ("resolve", "copy"):
+        destination = _name(event.get("destination"))
+        return f"tex:{destination}" if destination else None
+    if kind in ("draw", "clear"):
+        return _target_resource(event.get("target") or {})[0]
+    return None
+
+
+def prefix_coverage(trace: dict, events: list[dict],
+                    resources: dict) -> dict:
+    """Validate opt-in exact-prefix coverage against the captured event stream.
+
+    Every executed event from 0 through the declared end must have exactly one
+    post-event observation naming the event's own written resource, and every
+    resource consumed inside the prefix must have an in-prefix producer whose
+    write was observed (or be an explicitly external/boundary input).  A
+    missing, misattributed or unobserved operation is a coverage failure, never
+    an implicit match.
+    """
+    prefix = trace.get("_prefix")
+    if prefix is None:
+        return {"status": "absent", "end": None, "post_events": [],
+                "initial": None, "problems": []}
+    problems: list[str] = []
+    end = prefix["end"]
+    post = prefix["post_events"]
+    if len(events) <= end:
+        return {"status": "invalid", "end": end, "post_events": [],
+                "initial": prefix["initial"],
+                "problems": [f"prefix end {end} exceeds the "
+                             f"{len(events)}-event stream"]}
+    by_event: dict[int, dict] = {}
+    for record in post:
+        event_index = record.get("event")
+        if not isinstance(event_index, int) or isinstance(event_index, bool):
+            problems.append("prefix observation has an invalid event index")
+            continue
+        if event_index in by_event:
+            problems.append(f"prefix event {event_index} is observed twice")
+            continue
+        by_event[event_index] = record
+    for event_index in range(end + 1):
+        event = events[event_index]
+        record = by_event.get(event_index)
+        if record is None:
+            problems.append(
+                f"prefix event {event_index} has no post-event observation")
+            continue
+        expected = _event_output_resource(event)
+        if expected is None:
+            problems.append(
+                f"prefix event {event_index} has no identified output "
+                "resource")
+            continue
+        if record.get("resource") != expected:
+            problems.append(
+                f"prefix event {event_index} observes "
+                f"{record.get('resource')!r}, not {expected!r}")
+        if record.get("kind") != event.get("kind"):
+            problems.append(
+                f"prefix event {event_index} kind disagrees with the stream")
+        producers = [
+            int(item["event"]) for item in
+            (resources.get(expected) or {}).get("producers") or []
+            if item.get("event") is not None]
+        if event_index not in producers:
+            problems.append(
+                f"prefix event {event_index} is not a producer of {expected}")
+    initial = prefix.get("initial") or {}
+    if initial.get("resource") != "fb:0":
+        # The initial observation is the default framebuffer state; a
+        # non-default initial target is allowed only when it is the frame's
+        # first written resource and is covered by its own producer.
+        expected_initial = _event_output_resource(events[0])
+        if initial.get("resource") != expected_initial:
+            problems.append(
+                "prefix initial observation does not name the first event's "
+                "render target")
+    for key, resource in resources.items():
+        consumers = [
+            int(item["event"]) for item in resource.get("consumers") or []
+            if item.get("event") is not None and int(item["event"]) <= end]
+        if not consumers:
+            continue
+        producers = [
+            int(item["event"]) for item in resource.get("producers") or []
+            if item.get("event") is not None and int(item["event"]) <= end]
+        if producers:
+            last = max(producers)
+            if last not in by_event:
+                problems.append(
+                    f"{key} is consumed inside the prefix but its last "
+                    f"in-prefix write at event {last} is not observed")
+                continue
+        elif resource.get("origin") not in (EXTERNAL, BOUNDARY):
+            problems.append(
+                f"{key} is consumed inside the prefix with no in-prefix "
+                "producer and no initial observation")
+    return {
+        "status": "complete" if not problems else "invalid",
+        "end": end,
+        "initial": prefix.get("initial"),
+        "post_events": post,
+        "problems": problems,
     }
 
 
@@ -1339,6 +1453,49 @@ def checkpoint_plan(graph: dict) -> list[dict]:
     return plan
 
 
+def prefix_checkpoint_plan(graph: dict) -> list[dict]:
+    """Post-event Metal checkpoints for the opt-in exact-prefix mode.
+
+    The reference is the original EU4 post-event readback captured natively.
+    Each entry names ``timing="post_event"`` so the replay reads the target
+    after the event executed, never before it.
+    """
+    prefix = graph.get("prefix") or {}
+    if prefix.get("status") != "complete":
+        return []
+    resources = graph.get("resources") or {}
+    plan: list[dict] = []
+    for observation in prefix.get("post_events") or []:
+        event = int(observation["event"])
+        resource = str(observation["resource"])
+        target = str(observation["target_name"])
+        colour = observation.get("color") or {}
+        plan.append({
+            "event": event,
+            "target": target,
+            "resource": resource,
+            "timing": "post_event",
+            "file": f"prefix-event{event}-{target}.bgra",
+            "reference_file": colour.get("file"),
+            "reference_sha256": colour.get("sha256"),
+            "reference_width": observation.get("width"),
+            "reference_height": observation.get("height"),
+            "reference_pixel_format": colour.get("pixel_format")
+            or observation.get("pixel_format"),
+            "producer_events": [event],
+            "writer_authority": "prefix_observation",
+            "session_id": _observation_identity(observation, "session_id"),
+            "capture_frame_id": _observation_identity(
+                observation, "capture_frame_id"),
+        })
+    return plan
+
+
+def _observation_identity(observation: dict, field: str):
+    value = observation.get(field)
+    return value if value is not None else None
+
+
 def checkpoint_request(graph: dict) -> dict:
     """Build the deterministic checkpoint request for one graph.
 
@@ -1365,6 +1522,26 @@ def checkpoint_request(graph: dict) -> dict:
         # derived before them therefore has a different digest; legacy
         # published requests remain valid through the explicit legacy path,
         # but their exact source digest is not preserved by re-derivation.
+        if item.get("session_id") is not None:
+            entry["session_id"] = item["session_id"]
+        if item.get("capture_frame_id") is not None:
+            entry["capture_frame_id"] = item["capture_frame_id"]
+        checkpoints.append(entry)
+    for item in prefix_checkpoint_plan(graph):
+        entry = {
+            "event": item["event"],
+            "target": item["target"],
+            "resource": item["resource"],
+            "timing": "post_event",
+            "file": item["file"],
+            "reference_file": item["reference_file"],
+            "reference_sha256": item["reference_sha256"],
+            "reference_width": item["reference_width"],
+            "reference_height": item["reference_height"],
+            "reference_pixel_format": item.get("reference_pixel_format"),
+            "producer_events": item["producer_events"],
+            "writer_authority": item["writer_authority"],
+        }
         if item.get("session_id") is not None:
             entry["session_id"] = item["session_id"]
         if item.get("capture_frame_id") is not None:

@@ -162,6 +162,11 @@ typedef struct {
 
 int eu4_gfx_frame_trace_copy_event(const eu4_gfx_copy_event *event);
 
+/* Post-copy notification.  Called immediately after the real GL copy when the
+   opt-in exact-prefix mode is active, so the destination is observed after the
+   operation executed.  It is a no-op otherwise. */
+void eu4_gfx_frame_trace_copy_exit(void);
+
 /* GL lifecycle notification from the copy/texture interposer.  Deleted GL
    names are removed from the carried render-target set immediately and are
    published in the next continuous frame's lifecycle record, so a recycled

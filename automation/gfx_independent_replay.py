@@ -208,8 +208,14 @@ def _normalize_format(value) -> str:
     return str(value).upper()
 
 
-def _checkpoint_key(item: dict) -> tuple[int, str]:
-    return (_as_int(item.get("event"), -1), str(item.get("target")))
+def _checkpoint_key(item: dict) -> tuple[int, str, str]:
+    """Checkpoint identity is (event, target, timing).
+
+    A pre-event observation and a post-event observation of the same target
+    are distinct scientific observations and must never overwrite each other.
+    """
+    timing = str(item.get("timing") or "pre_event")
+    return (_as_int(item.get("event"), -1), str(item.get("target")), timing)
 
 
 def _valid_producer_events(value) -> bool:
@@ -255,6 +261,7 @@ def _invalid_checkpoint(item: dict, graph: dict, reason: str,
         "status": "invalid",
         "reason": reason,
         "requested": requested,
+        "timing": str(item.get("timing") or "pre_event"),
     }
 
 
@@ -371,14 +378,14 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
         key = _checkpoint_key(item)
         if key in requested:
             problems.append({"kind": "duplicate_request", "event": key[0],
-                             "target": key[1]})
+                             "target": key[1], "timing": key[2]})
             continue
         target = key[1]
         expected_resource = "fb:0" if target == "0" else f"tex:{target}"
         if str(item.get("resource") or expected_resource) != expected_resource:
             problems.append({
                 "kind": "substituted_request", "event": key[0],
-                "target": key[1],
+                "target": key[1], "timing": key[2],
                 "expected_resource": expected_resource,
                 "actual_resource": item.get("resource")})
             continue
@@ -386,7 +393,7 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
                 and not _valid_producer_events(item.get("producer_events"))):
             problems.append({
                 "kind": "malformed_request", "event": key[0],
-                "target": key[1],
+                "target": key[1], "timing": key[2],
                 "reason": "producer_events is not an integer array"})
             continue
         requested[key] = item
@@ -403,22 +410,23 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
     for key in returned:
         if key not in requested:
             problems.append({"kind": "unexpected_result", "event": key[0],
-                             "target": key[1]})
+                             "target": key[1], "timing": key[2]})
 
     results: list[dict] = []
     for key, wanted in requested.items():
-        event, target = key
+        event, target, timing = key
         rows = returned.get(key, [])
         if len(rows) == 0:
             problems.append({"kind": "missing_result", "event": event,
-                             "target": target})
+                             "target": target, "timing": timing})
             results.append(_invalid_checkpoint(
                 wanted, graph, "requested checkpoint missing from replay response",
                 requested=True))
             continue
         if len(rows) > 1:
             problems.append({"kind": "duplicate_result", "event": event,
-                             "target": target, "count": len(rows)})
+                             "target": target, "timing": timing,
+                             "count": len(rows)})
             results.append(_invalid_checkpoint(
                 wanted, graph, "duplicate checkpoint results in replay response",
                 requested=True))
@@ -538,7 +546,22 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
         resource = (graph.get("resources") or {}).get(resource_id) or {}
         captured_format = _normalize_format(resource.get("format"))
         reported_format = _normalize_format(item.get("format"))
-        if captured_format:
+        reference_format = _normalize_format(
+            wanted.get("reference_pixel_format"))
+        if reference_format:
+            # Exact-prefix entries compare the bytes the original GL readback
+            # produced with the bytes the Metal target materialized.  No
+            # channel-order normalization is permitted: the declared pixel
+            # formats must agree exactly.
+            reported_bytes = _normalize_format(item.get("pixel_format"))
+            if reported_bytes != reference_format:
+                fail(
+                    f"prefix candidate pixel format {reported_bytes or '<missing>'} "
+                    f"does not match the reference format {reference_format}")
+                continue
+            channel_swap = False
+            internal = reference_format
+        elif captured_format:
             if not reported_format:
                 fail("checkpoint is missing its reported format")
                 continue
@@ -595,6 +618,10 @@ def reconcile_checkpoints(graph: dict, request: dict, replay: dict,
             "worst_regions": statistics["regions"][:4],
             "metal_sha256": _sha(metal_path),
             "reference_sha256": reference_sha,
+            "timing": timing,
+            "reference_pixel_format": reference_format or None,
+            "candidate_pixel_format": _normalize_format(item.get("pixel_format"))
+            or None,
         }
         if statistics["mismatched_pixels"] == 0:
             entry["status"] = "match"

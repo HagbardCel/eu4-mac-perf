@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Independent M7 event-20 acceptance checker.
+
+    python3 accept.py <workspace>
+
+The checker lives in the trusted infrastructure checkout and imports the
+trusted ``automation`` modules from there, never from the candidate.  It reads
+the sealed original-EU4 frame and the in-process Metal replay under
+
+    <workspace>/.local/m7/event20/live/frame
+    <workspace>/.local/m7/event20/live/shadow
+
+and recomputes every exact-prefix comparison from the original pixel bytes.
+A model statement, a matching final image, or a missing intermediate checkpoint
+cannot pass.
+
+Supported verdicts: ``pass`` only for an independently verified EVENT20_EXACT;
+``fail`` for a verified first divergence; ``inconclusive`` when the evidence is
+missing, incomplete, unsupported or unproven.  ``blocked`` is reserved for an
+environment that cannot be restored.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from automation import gfx_prefix_check  # noqa: E402
+
+RELATIVE_BASE = Path(".local") / "m7" / "event20" / "live"
+
+
+def _emit(verdict: str, diagnostics: str, result: dict | None = None) -> int:
+    payload = {
+        "schema": "m7-event20-acceptance/v1",
+        "verdict": verdict,
+        "diagnostics": diagnostics,
+    }
+    if result is not None:
+        payload["result"] = result
+    print(json.dumps(payload, indent=2))
+    return 0 if verdict == "pass" else 1
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 2:
+        return _emit("inconclusive", "usage: accept.py <workspace>")
+    workspace = Path(argv[1]).expanduser().resolve()
+    base = Path(os.environ.get("EU4_M7_EVENT20_EVIDENCE", "")
+                or (workspace / RELATIVE_BASE)).expanduser().resolve()
+    frame_dir = base / "frame"
+    metal_dir = base / "shadow"
+    if not frame_dir.is_dir():
+        return _emit("inconclusive",
+                     f"sealed frame directory is absent: {frame_dir}")
+    if not metal_dir.is_dir():
+        return _emit("inconclusive",
+                     f"Metal replay directory is absent: {metal_dir}")
+    try:
+        result = gfx_prefix_check.evaluate(
+            frame_dir, metal_dir, require_end=20)
+    except (gfx_prefix_check.PrefixCheckError, OSError, ValueError) as exc:
+        return _emit("inconclusive", f"prefix checker could not evaluate: {exc}")
+    verdict = result.get("verdict")
+    if verdict == "EVENT20_EXACT":
+        return _emit(
+            "pass",
+            "independent exact-prefix comparison verified events 0 through 20",
+            result)
+    if verdict == "FIRST_DIVERGENCE":
+        event = result.get("first_divergence")
+        return _emit(
+            "fail",
+            f"earliest verified divergence is event {event}; "
+            "the campaign must stop there",
+            result)
+    return _emit(
+        "inconclusive",
+        "exact event-20 qualification is not established: "
+        + "; ".join(result.get("problems") or ["unknown"]),
+        result)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

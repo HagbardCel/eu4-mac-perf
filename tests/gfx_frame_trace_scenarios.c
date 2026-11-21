@@ -126,6 +126,9 @@ static void reset_env(void) {
     unsetenv("EU4_GFX_FRAME_TRACE_DEFAULT_CHECKPOINT_EVENTS");
     unsetenv("EU4_GFX_FRAME_TRACE_MAX_CHECKPOINTS");
     unsetenv("EU4_GFX_FRAME_TRACE_CHECKPOINT_MAX_BYTES");
+    unsetenv("EU4_GFX_FRAME_TRACE_PREFIX_END");
+    unsetenv("EU4_GFX_FRAME_TRACE_PREFIX_MAX_BYTES");
+    unsetenv("EU4_GFX_FRAME_TRACE_PREFIX_MAX_NS");
 }
 
 static int configure(const char *directory) {
@@ -365,6 +368,64 @@ static void clear_one(void) {
     eu4_gfx_frame_trace_clear_exit(&frame, &call, NULL);
 }
 
+
+static int configure_prefix(const char *directory, const char *end) {
+    reset_env();
+    setenv("EU4_GFX_FRAME_TRACE_DIR", directory, 1);
+    setenv("EU4_GFX_FRAME_TRACE_TEST_ONLY", "1", 1);
+    setenv("EU4_GFX_FRAME_TRACE_PREFIX_END", end, 1);
+    setenv("EU4_GFX_FRAME_TRACE_PREFIX_MAX_BYTES", "1048576", 1);
+    return eu4_gfx_frame_trace_configure_from_env();
+}
+
+/* Exact-prefix mode captures one post-event observation for every executed
+   operation from event 0 through the declared end, plus the initial pre-event-0
+   state.  Clear events are observed on their exit hook, draws on draw exit. */
+static int scenario_prefix(const char *directory, const char *end,
+                           int target_framebuffer) {
+    if (configure_prefix(directory, end) <= 0) {
+        return 2;
+    }
+    if (target_framebuffer >= 0) {
+        eu4_gfx_frame_trace_test_set_target(target_framebuffer);
+    }
+    arm_via_present();
+    clear_one();
+    draw(true, 0x1000);
+    draw(false, 0x1000);
+    clear_one();
+    finish_via_present();
+    return 0;
+}
+
+/* The same mode must fail closed when an executed prefix event has no
+   observation (here event 2 is never executed before finalization). */
+static int scenario_prefix_incomplete(const char *directory) {
+    if (configure_prefix(directory, "2") <= 0) {
+        return 2;
+    }
+    arm_via_present();
+    clear_one();
+    draw(true, 0x1000);
+    draw(false, 0x1000);
+    finish_via_present();
+    return 0;
+}
+
+/* Copies are observed after the real transfer, matching the post-event
+   boundary the Metal replay checkpoints. */
+static int scenario_prefix_copy(const char *directory) {
+    if (configure_prefix(directory, "1") <= 0) {
+        return 2;
+    }
+    arm_via_present();
+    draw(true, 0x1000);
+    draw(false, 0x1000);
+    valid_copy(442);
+    eu4_gfx_frame_trace_copy_exit();
+    finish_via_present();
+    return 0;
+}
 
 static int configure_checkpoint(const char *directory, const char *event) {
     reset_env();
@@ -977,6 +1038,35 @@ static void report_seal(const char *scenario, const seal_state *state) {
            state->descriptor.boundary, state->descriptor.failure_reason);
 }
 
+/* A sealed 21-event prefix frame.  The synthetic readback is event-dependent,
+   so every post-event observation is a distinct reference image. */
+static int scenario_prefix_seal(const char *directory) {
+    seal_state state;
+    memset(&state, 0, sizeof(state));
+    reset_env();
+    setenv("EU4_GFX_FRAME_TRACE_DIR", directory, 1);
+    setenv("EU4_GFX_FRAME_TRACE_TEST_ONLY", "1", 1);
+    setenv("EU4_GFX_FRAME_SEAL", "1", 1);
+    setenv("EU4_GFX_FRAME_TRACE_MIN_DRAWS", "1", 1);
+    setenv("EU4_GFX_FRAME_TRACE_PREFIX_END", "20", 1);
+    setenv("EU4_GFX_FRAME_TRACE_PREFIX_MAX_BYTES", "1048576", 1);
+    eu4_gfx_frame_trace_test_reset_seal();
+    if (eu4_gfx_frame_sealed_subscribe(seal_test_callback, &state) != 0) {
+        return 3;
+    }
+    if (eu4_gfx_frame_trace_configure_from_env() <= 0) {
+        return 2;
+    }
+    arm_via_present();
+    for (int index = 0; index <= 20; index++) {
+        draw(true, 0x1000);
+        draw(false, 0x1000);
+    }
+    finish_via_present();
+    report_seal("prefix-seal", &state);
+    return state.fail ? 3 : 0;
+}
+
 static int scenario_seal(const char *directory, const char *mode) {
     seal_state state;
     memset(&state, 0, sizeof(state));
@@ -1123,6 +1213,21 @@ int main(int argc, char **argv) {
     }
     if (strcmp(scenario, "copy-valid") == 0) {
         return scenario_copy(directory, 0);
+    }
+    if (strcmp(scenario, "prefix-valid") == 0) {
+        return scenario_prefix(directory, "2", -1);
+    }
+    if (strcmp(scenario, "prefix-offscreen") == 0) {
+        return scenario_prefix(directory, "2", 6);
+    }
+    if (strcmp(scenario, "prefix-incomplete") == 0) {
+        return scenario_prefix_incomplete(directory);
+    }
+    if (strcmp(scenario, "prefix-copy") == 0) {
+        return scenario_prefix_copy(directory);
+    }
+    if (strcmp(scenario, "prefix-seal") == 0) {
+        return scenario_prefix_seal(directory);
     }
     if (strcmp(scenario, "checkpoint-offscreen") == 0) {
         return scenario_checkpoint_offscreen(directory);
