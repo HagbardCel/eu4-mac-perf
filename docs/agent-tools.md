@@ -196,31 +196,56 @@ transfer/readback path; it is not a full-frame GL replay. A mismatch is
 
 `gl-control-qualify` is the selected-draw original-API gate. It reports three
 separate outcomes: exact BGRA comparison, authenticated sealed-observation
-qualification, and permission for causal Metal attribution. Qualification
-requires the frame seal to validate; the checkpoint identity to come from the
-seal-verified event stream's own `default_checkpoint` record (not a mutable
-request sidecar); the live image to be that exact sealed blob and digest; and a
-completed `opengl` control renderer executed by the qualifier with a fresh
-challenge nonce. The renderer must write `result.bgra` plus `receipt.json` in
-`--control-out`; the receipt must echo the nonce, match the executed renderer's
-digest, and bind the frame, stream, checkpoint, draw, artifact digest, extent,
-pixel format and renderer identity. The executed renderer must also be listed in the checked-in registry
-[`automation/gfx_gl_control_authorities.py`](https://github.com/HagbardCel/eu4-mac-perf/blob/main/automation/gfx_gl_control_authorities.py);
-adding an entry is a reviewed code change, not a caller-supplied JSON file.
+qualification, and permission for causal Metal attribution.
+`--live-image` must be the sealed post-draw checkpoint blob; the same frame's
+event stream must also contain the pre-draw checkpoint at `--draw-event`, which
+becomes the colour seed. Qualification requires the frame seal to validate; the
+checkpoint identity to come from the seal-verified event stream's own
+`default_checkpoint` record (not a mutable request sidecar); the live image to
+be that exact sealed blob and digest; and a completed `opengl` control renderer
+executed by the qualifier with a fresh challenge nonce.
+
+The qualifier derives the mandatory drawable and pre-draw state from the seal
+itself, never from caller JSON: `GL_SAMPLES`, `GL_SAMPLE_BUFFERS`, depth/
+stencil/colour bit depths and the actual extent from the captured `gl.drawable`
+record; `GL_FRAMEBUFFER_SRGB`, `GL_DITHER` and `GL_MULTISAMPLE`; and depth/
+stencil contents, either as captured seeds or as a provably complete clear
+history (full extent, enabled write masks, no intervening same-target writer).
+`--drawable` and `--prestate` are refused. A missing or unproven observable is
+an explicit `unqualified` or `unsupported_state`, even when the two images are
+byte-identical.
+
+Reference isolation is structural. The renderer receives a separate,
+content-addressed replay-input package (`replay-input/replay-input.json` plus
+`blobs/<sha256>.*`) containing only authorised pre-draw state, shaders,
+uniforms, typed buffers, indices, captured texture blocks and sampler/render
+state. It never receives the frame directory, the live image path, the live
+digest or a copy of the target checkpoint. The comparison reference stays with
+the qualifier.
+
+The renderer must write `result.bgra` plus a signed `receipt.json` under
+`--control-out/renderer-run`. The receipt binds the renderer digest, its
+registry-declared component digests, the challenge nonce, the frame/stream/
+draw/checkpoint identity, the effective input-package digest, the output image
+digest/dimensions/format/origin, the queried target drawable properties and a
+completed execution status, and it is signed with the Ed25519 key registered for
+that renderer in
+[`automation/gfx_gl_control_authorities.py`](https://github.com/HagbardCel/eu4-mac-perf/blob/main/automation/gfx_gl_control_authorities.py).
+Adding an entry is a reviewed code change, not a caller-supplied JSON file.
 The registry is currently empty, so no stored control is authorized. Without a
 registry entry the run is `self-attested` and `metal_blame_allowed` stays false,
-however exact the pixels are. The qualifier
-hashes the sealed live blob and reads it once; the renderer receives a copy, and
-the comparison uses the authenticated bytes, so a renderer cannot change what is
-being qualified. All referenced frame blobs are verified before the run, and the
-sealed blob is re-hashed afterwards. `attribution()` re-reads the receipt,
-authority, nonce and artifact instead of trusting a boolean. An exact image from
-a different seal is explicitly `unqualified`; `--comparison-only` compares two
-files and can never qualify. Missing identity, execution provenance or renderer
-authority is reported as `unqualified` with the missing observation named.
-Supplying `--renderer` executes that file with the caller's privileges; the
-checked-in registry entry is the explicit trust decision, and the qualifier does
-not sandbox the renderer.
+however exact the pixels are.
+
+The qualifier re-verifies the package before and after execution, hashes the
+sealed live blob and reads it once, and uses the authenticated bytes for the
+comparison, so a renderer cannot change what is being qualified.
+`attribution()` re-authenticates the seal, re-derives the evidence, re-verifies
+the package and the signature, and recomputes exact four-channel equality
+instead of trusting a boolean. An exact image from a different seal is
+explicitly `unqualified`; `--comparison-only` compares two files and can never
+qualify. Supplying `--renderer` executes that file with the caller's privileges;
+the checked-in registry entry is the explicit trust decision, and the qualifier
+does not sandbox the renderer.
 
 `probe` is a pass-through to the existing live launch path and still requires an
 operator ledger.
