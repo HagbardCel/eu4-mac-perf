@@ -99,6 +99,16 @@ class Ed25519Tests(unittest.TestCase):
         self.assertFalse(gfx_ed25519.verify(public, b"payload",
                                             non_canonical_r))
 
+    def test_decode_rejects_off_curve_and_non_canonical_points_directly(self):
+        # These assertions discriminate the decode checks themselves; driving
+        # them only through verify() can be masked by the later equation.
+        for encoded in ((2).to_bytes(32, "little"),
+                        gfx_ed25519.Q.to_bytes(32, "little"),
+                        (gfx_ed25519.Q + 1).to_bytes(32, "little")):
+            with self.subTest(y=encoded.hex()[:8]):
+                with self.assertRaises(ValueError):
+                    gfx_ed25519._decode(encoded)
+
     def test_small_order_points_cannot_forge_a_receipt(self):
         # The classic identity-key forgery: A = identity, R = identity, S = 0
         # satisfies the cofactorless equation for *every* message unless the
@@ -125,7 +135,9 @@ class Ed25519Tests(unittest.TestCase):
         public = bytes.fromhex(_VECTORS[0][1])
         signature = gfx_ed25519.sign(seed, b"payload")
         encoded_r = signature[:32]
-        for scalar in (gfx_ed25519.L, gfx_ed25519.L + 1, (1 << 256) - 1):
+        original = int.from_bytes(signature[32:], "little")
+        for scalar in (gfx_ed25519.L, original + gfx_ed25519.L,
+                       gfx_ed25519.L + 1, (1 << 256) - 1):
             with self.subTest(scalar=scalar):
                 forged = encoded_r + scalar.to_bytes(32, "little")
                 self.assertFalse(gfx_ed25519.verify(public, b"payload",

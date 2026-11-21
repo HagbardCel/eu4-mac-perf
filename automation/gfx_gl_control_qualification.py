@@ -1135,7 +1135,8 @@ def qualify_sealed(live_path: Path | str, width: int, height: int, *,
             checkpoint_event=checkpoint_event, draw_event=draw_event,
             width=width, height=height, resource=resource,
             out_dir=out_dir / "replay-input")
-    except (OSError, replay_input.ReplayInputError) as exc:
+    except (OSError, replay_input.ReplayInputError, AttributeError, KeyError,
+            IndexError, TypeError, ValueError, OverflowError) as exc:
         public_authentication["reasons"].append(
             f"restricted replay-input package could not be built: {exc}")
         return _assemble(
@@ -1181,9 +1182,15 @@ def _evidence_recheck(qualification: dict) -> bool:
     the drawable/prestate evidence, re-reads and re-verifies the input package
     and signed receipt, and recomputes exact four-channel equality.
     """
+    if not isinstance(qualification, dict):
+        return False
     checked = qualification.get("qualification") or {}
+    if not isinstance(checked, dict):
+        return False
     identity = checked.get("identity") or {}
     comparison = qualification.get("comparison") or {}
+    if not isinstance(identity, dict) or not isinstance(comparison, dict):
+        return False
     authority = _load_authority(checked.get("renderer_sha256"))
     if authority.get("qualified") is not True:
         return False

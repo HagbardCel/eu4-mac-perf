@@ -255,6 +255,10 @@ def _ctl_lines(manifest: dict, package_dir: Path) -> list[str]:
     first_vertices = {
         int(attribute.get("first_vertex") or 0)
         for attribute in manifest["attributes"]}
+    if len(first_vertices) > 1:
+        raise RendererError(
+            "the captured attributes disagree on their first vertex; a "
+            "single vertex origin cannot be chosen")
     if not draw.get("indexed"):
         origin = next(iter(first_vertices)) if first_vertices else 0
         first -= origin
@@ -313,6 +317,10 @@ def _ctl_lines(manifest: dict, package_dir: Path) -> list[str]:
             if isinstance(unit, bool) or not isinstance(unit, int) or unit < 0:
                 raise RendererError(
                     f"sampler {name} has no captured texture unit")
+            if "[" in name:
+                raise RendererError(
+                    f"sampler {name} is an array; its element bindings were "
+                    "not captured")
             samplers.append((name, unit))
             continue
         lines.append(

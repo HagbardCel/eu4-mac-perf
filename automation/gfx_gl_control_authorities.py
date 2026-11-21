@@ -53,23 +53,21 @@ SCHEMA = "gfx-gl-control-renderer-authorities/v2"
 # .local/m7/authority/gl-control-ed25519.key (not checked in).  A re-review is
 # required before changing any digest or adding another renderer.
 AUTHORITIES: dict[str, dict] = {
-    "b05ab20a307b8281144b10a32c92b143a9e4ecccb2a47d94cc67e4a2f6114c74": {
+    "19f819b444738888b84ddbbb68e413af0e908ba35c738db5811d689257b8b70b": {
         "name": "m7-original-gl-control",
         "api": "opengl",
-        "qualified": True,
+        "qualified": False,
         "qualified_by": (
-            "independent review of the post-fix #279 integration head "
-            "(review-final); the earlier PR3 review "
-            "93a7c9110c15be49cac922ac5f261753e2bed005 and the capacity review "
-            "at 92f84b4137f15fb8ded80f2b763d28b064dea010 cover the "
-            "pre-fix implementation"),
+            "pending independent review of the post-fix #279 head; this entry "
+            "does not authorize Metal blame until that review records an "
+            "APPROVE verdict for these digests"),
         "public_key": (
             "b129e1bcd834600e8a3986159b7d9a540d1951f09f30ce3bfd4881844247a727"),
         "components": [
             {"role": "native-gl-executor",
-             "sha256": "285d1fb4ba936e24ae5a247b572098e3ebbdf1ffa8836afb2a585e78b07ab878"},
+             "sha256": "6b8d8aa94e71200c8caee6277f89003a12755881d1c40535c305862b32bc3ba6"},
             {"role": "replay-input-verifier",
-             "sha256": "640994da46e11d145da27766b78637be41ad3d556c759a334ecc2060b6779119"},
+             "sha256": "c8563b3f201facd585735be21b0dff33b3951eb630875803dee057fb2337c6cf"},
             {"role": "receipt-signer",
              "sha256": "52e03dd0c0b80c10c4e8acf2f72d4307a07c2c0321a06bd1107e0903f3ffa3b4"},
         ],

@@ -79,7 +79,7 @@ def _int_or_none(value):
         return None
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -148,10 +148,10 @@ def _box_covers_full_framebuffer(box, width: int, height: int) -> bool:
         return False
     if not isinstance(box, (list, tuple)) or len(box) != 4:
         return False
-    try:
-        x, y, w, h = (int(item) for item in box)
-    except (TypeError, ValueError):
+    if not all(isinstance(item, int) and not isinstance(item, bool)
+               for item in box):
         return False
+    x, y, w, h = box
     return x <= 0 and y <= 0 and x + w >= width and y + h >= height
 
 
@@ -439,7 +439,7 @@ def _drawable_evidence(trace: dict, width: int, height: int) -> tuple[dict | Non
 
 def _checkpoint_seed(draw: dict, draw_event: int, resource: str,
                      width: int, height: int, frame_dir: Path | None,
-                     missing: list[str]) -> dict | None:
+                     missing: list[str], *, seal: dict | None = None) -> dict | None:
     """The pre-draw colour seed captured immediately before the draw."""
     record = draw.get("default_checkpoint")
     if not isinstance(record, dict):
@@ -453,8 +453,19 @@ def _checkpoint_seed(draw: dict, draw_event: int, resource: str,
         problems.append("checkpoint is not the pre-event observation")
     if str(record.get("resource") or "") != resource:
         problems.append("checkpoint resource does not match the draw target")
-    if not isinstance(record.get("session_id"), str):
+    session_id = record.get("session_id")
+    if not isinstance(session_id, str) or not session_id:
         problems.append("checkpoint has no session identity")
+    elif seal is not None and seal.get("session_id") is not None \
+            and session_id != seal.get("session_id"):
+        problems.append(
+            "checkpoint session identity differs from the seal")
+    capture_frame_id = record.get("capture_frame_id")
+    if capture_frame_id is not None and seal is not None \
+            and seal.get("capture_frame_id") is not None \
+            and capture_frame_id != seal.get("capture_frame_id"):
+        problems.append(
+            "checkpoint capture-frame identity differs from the seal")
     if problems:
         missing.extend(
             f"pre-draw colour seed is unproven: {problem}"
@@ -536,11 +547,13 @@ def _prestate_evidence(draw: dict, events: list[dict], position: int,
                        framebuffer: int, width: int, height: int,
                        *, draw_event: int, resource: str,
                        drawable: dict | None,
-                       frame_dir: Path | None) -> tuple[dict | None, list[str], list[str]]:
+                       frame_dir: Path | None,
+                       seal: dict | None = None) -> tuple[dict | None, list[str], list[str]]:
     missing: list[str] = []
     unsupported: list[str] = []
     colour = _checkpoint_seed(
-        draw, draw_event, resource, width, height, frame_dir, missing)
+        draw, draw_event, resource, width, height, frame_dir, missing,
+        seal=seal)
     state = draw.get("state") if isinstance(draw.get("state"), dict) else {}
     last = _last_writer(events, position, framebuffer)
     checkpoint = draw.get("default_checkpoint")
@@ -651,13 +664,15 @@ def _unknown_writers(events: list[dict], position: int,
     return problems
 
 
-def derive_evidence(trace: dict, seal: dict, *, checkpoint_event: int,
-                    draw_event: int, resource: str = DEFAULT_RESOURCE,
-                    width: int, height: int) -> dict:
+def _derive_evidence(trace: dict, seal: dict, *, checkpoint_event: int,
+                     draw_event: int, resource: str = DEFAULT_RESOURCE,
+                     width: int, height: int) -> dict:
     """Derive mandatory pre-draw evidence from the sealed event graph.
 
     Nothing here trusts caller-supplied JSON.  ``trace`` must be a verified
     frame trace (``m6_frame.load_trace``) and ``seal`` its verified seal.
+    Structural objections raise :class:`ReplayInputError`; malformed nested
+    values are converted to a structured refusal by :func:`derive_evidence`.
     """
     events = trace.get("_events") or []
     frame_dir = trace.get("_frame_dir")
@@ -726,7 +741,7 @@ def derive_evidence(trace: dict, seal: dict, *, checkpoint_event: int,
     prestate, prestate_missing, prestate_unsupported = _prestate_evidence(
         draw, events, position, expected_fb, width, height,
         draw_event=draw_event, resource=resource, drawable=drawable,
-        frame_dir=frame_path)
+        frame_dir=frame_path, seal=seal)
     missing.extend(prestate_missing)
     unsupported.extend(prestate_unsupported)
 
@@ -793,6 +808,39 @@ def derive_evidence(trace: dict, seal: dict, *, checkpoint_event: int,
     }
 
 
+def derive_evidence(trace: dict, seal: dict, *, checkpoint_event: int,
+                    draw_event: int, resource: str = DEFAULT_RESOURCE,
+                    width: int, height: int) -> dict:
+    """Derive evidence, turning malformed nested state into a refusal.
+
+    A sealed stream can still contain a malformed member (for example a draw
+    ``state`` whose ``depth`` is a string, or a numeric field that is not
+    finite).  The qualification boundary must refuse those explicitly rather
+    than let an ``AttributeError``/``OverflowError`` escape.
+    """
+    try:
+        return _derive_evidence(
+            trace, seal, checkpoint_event=checkpoint_event,
+            draw_event=draw_event, resource=resource, width=width,
+            height=height)
+    except ReplayInputError:
+        raise
+    except (AttributeError, KeyError, IndexError, TypeError, ValueError,
+            OverflowError) as exc:
+        return {
+            "schema": EVIDENCE_SCHEMA,
+            "status": "unsupported_state",
+            "proven": False,
+            "drawable": None,
+            "drawable_equivalence": "unproven",
+            "prestate": None,
+            "missing": [],
+            "unsupported": [
+                f"malformed_evidence: {type(exc).__name__}: {exc}"],
+            "identity": {},
+        }
+
+
 class _PackageWriter:
     def __init__(self, root: Path, forbidden_digests: set[str]):
         self.root = root
@@ -836,6 +884,49 @@ class _PackageWriter:
 
 def _record_path(record: dict) -> str:
     return record["path"]
+
+
+def _validate_sampler_bindings(uniforms: list[dict],
+                               textures: list[dict]) -> None:
+    """Every active sampler must bind a captured unit, once, explicitly.
+
+    Texture uploads are deduplicated by unit, but sampler *uniform bindings*
+    are not: two active uniforms may name the same unit, and every one of them
+    must still be bound.  Contradictory or uncaptured bindings are refused
+    rather than silently leaving a uniform at its linked default of zero.
+    """
+    texture_units = {_int_or_none(texture.get("unit")) for texture in textures}
+    sampler_units: dict[str, int] = {}
+    for uniform in uniforms:
+        if uniform.get("type") != "sampler":
+            continue
+        name = uniform.get("name")
+        unit = _int_or_none(uniform.get("unit"))
+        if not isinstance(name, str) or not name:
+            raise ReplayInputError(
+                "invalid_sampler_binding",
+                "a captured sampler uniform has no name")
+        if "[" in name:
+            raise ReplayInputError(
+                "sampler_array_unsupported",
+                f"sampler {name} is an array; its element bindings were not "
+                "captured, so binding only element zero would alias unit zero")
+        if unit is None or unit < 0:
+            raise ReplayInputError(
+                "invalid_sampler_binding",
+                f"sampler {name} has no captured texture unit")
+        if unit not in texture_units:
+            raise ReplayInputError(
+                "missing_sampler_binding",
+                f"sampler {name} names texture unit {unit}, which has no "
+                "captured texture")
+        previous = sampler_units.get(name)
+        if previous is not None and previous != unit:
+            raise ReplayInputError(
+                "contradictory_sampler_binding",
+                f"sampler {name} is captured at both unit {previous} and "
+                f"unit {unit}")
+        sampler_units[name] = unit
 
 
 def build_package(*, frame_dir: Path, trace: dict, seal: dict, evidence: dict,
@@ -1032,6 +1123,13 @@ def build_package(*, frame_dir: Path, trace: dict, seal: dict, evidence: dict,
                 continue
             compressed = level.get("compressed") \
                 if isinstance(level.get("compressed"), dict) else None
+            if level.get("compressed_expected") is True and not (
+                    compressed and compressed.get("file")):
+                raise ReplayInputError(
+                    "missing_compressed_level",
+                    "a captured level expects original compressed blocks but "
+                    "carries no block record; refusing to substitute decoded "
+                    "pixels")
             source = compressed if compressed and compressed.get("file") \
                 else level
             if not source.get("file"):
@@ -1054,6 +1152,10 @@ def build_package(*, frame_dir: Path, trace: dict, seal: dict, evidence: dict,
                 "sha256": copied["sha256"],
                 "bytes": copied["bytes"],
             })
+        if not levels:
+            raise ReplayInputError(
+                "missing_texture_levels",
+                f"texture unit {texture.get('unit')!r} has no captured levels")
         textures.append({
             "unit": texture.get("unit"),
             "sampler_name": texture.get("sampler_name"),
@@ -1067,38 +1169,7 @@ def build_package(*, frame_dir: Path, trace: dict, seal: dict, evidence: dict,
         })
     manifest["textures"] = textures
 
-    # Texture uploads are deduplicated by unit, but sampler *uniform bindings*
-    # are not: two active uniforms may name the same unit, and every one of
-    # them must still be bound.  Each sampler must therefore resolve to a
-    # captured texture unit, and contradictory captures are refused rather
-    # than silently leaving a uniform at its linked default of zero.
-    texture_units = {_int_or_none(texture.get("unit")) for texture in textures}
-    sampler_units: dict[str, int] = {}
-    for uniform in uniforms:
-        if uniform.get("type") != "sampler":
-            continue
-        name = uniform.get("name")
-        unit = _int_or_none(uniform.get("unit"))
-        if not isinstance(name, str) or not name:
-            raise ReplayInputError(
-                "invalid_sampler_binding",
-                "a captured sampler uniform has no name")
-        if unit is None or unit < 0:
-            raise ReplayInputError(
-                "invalid_sampler_binding",
-                f"sampler {name} has no captured texture unit")
-        if unit not in texture_units:
-            raise ReplayInputError(
-                "missing_sampler_binding",
-                f"sampler {name} names texture unit {unit}, which has no "
-                "captured texture")
-        previous = sampler_units.get(name)
-        if previous is not None and previous != unit:
-            raise ReplayInputError(
-                "contradictory_sampler_binding",
-                f"sampler {name} is captured at both unit {previous} and "
-                f"unit {unit}")
-        sampler_units[name] = unit
+    _validate_sampler_bindings(uniforms, textures)
 
     # No file may be the target checkpoint's output blob under another name.
     for record in writer.files:

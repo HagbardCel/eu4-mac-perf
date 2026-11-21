@@ -63,7 +63,9 @@ No EU4 launch is permitted until these synthetic queries pass.
 - Run the reviewed original-OpenGL control against the **new** seal's own
   restricted inputs, with the new drawable-format identity in the package.
 - The control target must report the same identity (component types/internal
-  formats, samples, render-target path). An identity mismatch is
+  formats, samples, render-target path). This also requires the native executor
+  to query and report its own target identity, and the authority digests to be
+  re-pinned after that reviewed change. An identity mismatch is
   `unsupported_drawable`, not a silent fallback.
 - Authenticate the control independently: seal/stream/checkpoint, signed
   receipt bound to the registered renderer, recomputed exact four-channel BGRA

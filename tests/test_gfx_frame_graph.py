@@ -1390,3 +1390,10 @@ class ClearCoverageEndpointTests(unittest.TestCase):
         coverage = self._coverage({"enabled": False, "box": [0, 0, 1, 1]})
         self.assertTrue(coverage["full_extent"])
         self.assertTrue(coverage["color_full"])
+
+    def test_non_integer_boxes_are_not_full_coverage(self):
+        for box in (["0", "0", "8", "8"], [0.0, 0.0, 8, 8],
+                    [0, 0, 8.0, 8]):
+            with self.subTest(box=box):
+                coverage = self._coverage({"enabled": True, "box": box})
+                self.assertFalse(coverage["full_extent"])

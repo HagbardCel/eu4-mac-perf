@@ -873,6 +873,54 @@ class ControlQualificationTests(unittest.TestCase):
         self.assertTrue(any("depth" in item and "unproven" in item
                             for item in value["missing_observation"]))
 
+    def test_a_malformed_draw_state_is_a_structured_refusal(self):
+        events = [
+            self._clear_event(7),
+            self._draw_event(14, with_checkpoint=True),
+            self._checkpoint_event(15),
+        ]
+        events[1]["state"]["depth"] = "unknown"
+        self._rewrite_events(events)
+        value = self._qualify()
+        self.assertFalse(value["qualified"])
+        self.assertEqual(value["status"], "unsupported_state")
+        self.assertTrue(any("malformed_evidence" in item
+                            for item in value["unsupported_state"]))
+
+    def test_a_malformed_draw_record_is_a_structured_refusal(self):
+        events = [
+            self._clear_event(7),
+            self._draw_event(14, with_checkpoint=True),
+            self._checkpoint_event(15),
+        ]
+        events[1]["draw"] = None
+        self._rewrite_events(events)
+        value = self._qualify()
+        self.assertFalse(value["qualified"])
+        self.assertFalse(value["metal_blame_allowed"])
+        self.assertTrue(any("package could not be built" in item
+                            for item in value["qualification"]["reasons"]),
+                        value["qualification"]["reasons"])
+
+    def test_a_non_finite_state_value_is_a_structured_refusal(self):
+        events = [
+            self._clear_event(7),
+            self._draw_event(14, with_checkpoint=True),
+            self._checkpoint_event(15),
+        ]
+        events[1]["state"]["polygon"]["offset_factor"] = float("nan")
+        self._rewrite_events(events)
+        value = self._qualify()
+        self.assertFalse(value["qualified"])
+        self.assertTrue(any("package could not be built" in item
+                            for item in value["qualification"]["reasons"]),
+                        value["qualification"]["reasons"])
+
+    def test_evidence_recheck_refuses_a_malformed_projection(self):
+        self.assertFalse(qualification._evidence_recheck({"qualification": "x"}))
+        self.assertFalse(qualification._evidence_recheck({}))
+        self.assertFalse(qualification._evidence_recheck([]))
+
     def test_a_forged_external_drawable_or_prestate_is_refused(self):
         forged = self.root / "forged.json"
         forged.write_text(json.dumps({"observed": True, "samples": 0}))
@@ -1293,6 +1341,20 @@ class EvidenceDerivationTests(unittest.TestCase):
         self.assertEqual(evidence["prestate"]["stencil"]["source"],
                          "clear_history")
 
+    def test_a_foreign_pre_draw_seed_is_refused(self):
+        for field, value in (("session_id", "foreign-session"),
+                             ("capture_frame_id", 99)):
+            with self.subTest(field=field):
+                events = copy.deepcopy(self.events)
+                events[1]["default_checkpoint"][field] = value
+                evidence = self._derive(drawable=self._drawable(),
+                                        events=events)
+                self.assertEqual(evidence["status"], "missing", evidence)
+                self.assertTrue(
+                    any(field.split("_")[0] in item or "identity differs" in item
+                        for item in evidence["missing"]),
+                    evidence["missing"])
+
     def test_a_later_writer_breaks_the_clear_history(self):
         events = list(self.events)
         events.insert(1, {
@@ -1342,7 +1404,7 @@ class EvidenceDerivationTests(unittest.TestCase):
 
     def test_a_partial_depth_stencil_clear_cannot_authorize_uniform_state(self):
         events = copy.deepcopy(self.events)
-        events[0]["flags"] = 0x100 | 0x400  # GL_DEPTH_BUFFER_BIT | STENCIL
+        events[0]["flags"] = 0x2 | 0x4  # GL_DEPTH_BUFFER_BIT | STENCIL
         events[0]["state"]["scissor"] = {"enabled": True,
                                          "box": [0, 0, 2, 2]}
         evidence = self._derive(drawable=self._drawable(), events=events)
@@ -1561,6 +1623,39 @@ class EvidenceDerivationTests(unittest.TestCase):
         self.assertEqual(evidence["status"], "proven", evidence)
 
 
+class SamplerBindingValidationTests(unittest.TestCase):
+    def test_two_samplers_may_share_one_captured_unit(self):
+        replay_input._validate_sampler_bindings(
+            [{"name": "texA", "type": "sampler", "unit": 1},
+             {"name": "texB", "type": "sampler", "unit": 1}],
+            [{"unit": 1}])
+
+    def test_an_uncaptured_unit_is_refused(self):
+        with self.assertRaises(replay_input.ReplayInputError):
+            replay_input._validate_sampler_bindings(
+                [{"name": "texA", "type": "sampler", "unit": 2}],
+                [{"unit": 1}])
+
+    def test_a_contradictory_binding_is_refused(self):
+        with self.assertRaises(replay_input.ReplayInputError):
+            replay_input._validate_sampler_bindings(
+                [{"name": "texA", "type": "sampler", "unit": 1},
+                 {"name": "texA", "type": "sampler", "unit": 2}],
+                [{"unit": 1}, {"unit": 2}])
+
+    def test_a_sampler_array_is_refused(self):
+        with self.assertRaises(replay_input.ReplayInputError) as caught:
+            replay_input._validate_sampler_bindings(
+                [{"name": "tex[0]", "type": "sampler", "unit": 1}],
+                [{"unit": 1}])
+        self.assertEqual(caught.exception.kind, "sampler_array_unsupported")
+
+    def test_a_sampler_without_a_unit_is_refused(self):
+        with self.assertRaises(replay_input.ReplayInputError):
+            replay_input._validate_sampler_bindings(
+                [{"name": "texA", "type": "sampler"}], [{"unit": 1}])
+
+
 class ShippedAuthorityRegistryTests(unittest.TestCase):
     """The production registry pins exactly the reviewed renderer."""
 
@@ -1576,8 +1671,8 @@ class ShippedAuthorityRegistryTests(unittest.TestCase):
                               / "gfx_gl_control_renderer.py"), digest)
         self.assertEqual(entry["name"], "m7-original-gl-control")
         self.assertEqual(entry["api"], "opengl")
-        self.assertTrue(entry["qualified"])
-        self.assertIn("independent review", entry["qualified_by"])
+        self.assertFalse(entry["qualified"])
+        self.assertIn("pending independent review", entry["qualified_by"])
         self.assertEqual(len(entry["public_key"]), 64)
         roles = {item["role"]: item["sha256"] for item in entry["components"]}
         self.assertEqual(set(roles), {"native-gl-executor",

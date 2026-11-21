@@ -203,6 +203,7 @@ typedef struct {
     unsigned cull_mode;
     unsigned front_face;
     int polygon_mode[2];
+    int polygon_mode_seen;
     int polygon_offset_fill;
     float polygon_offset_factor;
     float polygon_offset_units;
@@ -393,9 +394,16 @@ static void parse_ctl(const char *path) {
             else if (strcmp(field, "polygon_mode") == 0) {
                 g.polygon_mode[0] = parsed;
                 g.polygon_mode[1] = parsed;
+                g.polygon_mode_seen = 1;
             }
-            else if (strcmp(field, "polygon_mode_front") == 0) g.polygon_mode[0] = parsed;
-            else if (strcmp(field, "polygon_mode_back") == 0) g.polygon_mode[1] = parsed;
+            else if (strcmp(field, "polygon_mode_front") == 0) {
+                g.polygon_mode[0] = parsed;
+                g.polygon_mode_seen = 1;
+            }
+            else if (strcmp(field, "polygon_mode_back") == 0) {
+                g.polygon_mode[1] = parsed;
+                g.polygon_mode_seen = 1;
+            }
             else if (strcmp(field, "polygon_offset_fill") == 0) g.polygon_offset_fill = parsed;
             else if (strcmp(field, "polygon_offset_factor") == 0) g.polygon_offset_factor = (float)atof(value);
             else if (strcmp(field, "polygon_offset_units") == 0) g.polygon_offset_units = (float)atof(value);
@@ -1074,7 +1082,9 @@ int main(int argc, char **argv) {
     } else {
         glDisable(GL_CULL_FACE);
     }
-    if (g.polygon_mode[0] < GL_POINT || g.polygon_mode[0] > GL_FILL ||
+    if (!g.polygon_mode_seen) {
+        add_missing("the control file has no captured front/back polygon mode");
+    } else if (g.polygon_mode[0] < GL_POINT || g.polygon_mode[0] > GL_FILL ||
         g.polygon_mode[1] < GL_POINT || g.polygon_mode[1] > GL_FILL) {
         add_missing("an unsupported front/back polygon mode was captured");
     } else {
