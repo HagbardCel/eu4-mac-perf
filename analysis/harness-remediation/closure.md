@@ -5,10 +5,10 @@ Date: 21 November 2026. This is the definitive disposition of the 20 November
 blocked or transferred, and who owns each remainder. It does not claim GL/Metal
 parity and does not reopen any original measurement.
 
-Governing references: [assessment](../../plans/harness-review/assessment.md),
-[quickwins](../../plans/harness-review/quickwins.md),
-[roadmap](../../plans/harness-review/roadmap.md),
-[matrix](../../plans/harness-review/implementation.md),
+Governing references: [assessment](../../plans/closed/harness-review-20261120/assessment.md),
+[quickwins](../../plans/closed/harness-review-20261120/quickwins.md),
+[roadmap](../../plans/closed/harness-review-20261120/roadmap.md),
+[matrix](../../plans/closed/harness-review-20261120/implementation.md),
 [audit](audit-20261120.md), [integration report](integration-report.md).
 
 ## Final merged state
@@ -116,8 +116,8 @@ not, and is not presented as one.
 ## Archive recommendation
 
 The harness-review plan is archived at
-`plans/closed/harness-review-20261120/` by the archive PR after this
-documentation PR merges. The condition is not "all historical PRs merged":
+`plans/closed/harness-review-20261120/` (archive PR). References to the earlier
+archived review under `plans/closed/harness-review/` are preserved. The condition is not "all historical PRs merged":
 every harness-integrity finding now has a disposition, evidence and an owner,
 the scientific remainder is transferred to M7 (#270) rather than silently
 dropped, and the remaining work is explicitly owned. Do not treat the archive

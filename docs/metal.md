@@ -59,7 +59,7 @@ Supported and explicitly rejected values are projected through
 - signed scissor boxes are intersected from both endpoints.
 
 See [render state](renderer-reconstruction-and-differential-validation.md) and
-the [review matrix](../plans/harness-review/implementation.md).
+the [review matrix](../plans/closed/harness-review-20261120/implementation.md).
 
 ## Qualification
 
