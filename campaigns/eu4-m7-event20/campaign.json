@@ -3,7 +3,9 @@
   "objective": "objective.md",
   "runtime": "dsh",
   "workspace": {
-    "mode": "repo"
+    "mode": "worktree",
+    "path": ".local/dsh/m7-event20-20261121/workspace",
+    "commit": "29fc2318c1023abcdedd31f71a46ce2559c2b40d"
   },
   "accept": [
     "python3",

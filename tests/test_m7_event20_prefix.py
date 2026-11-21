@@ -269,6 +269,95 @@ class Event20PrefixTests(unittest.TestCase):
                          {"start": 0, "end": 4})
 
 
+class ExcludedAuxiliaryTests(unittest.TestCase):
+    def test_isolated_unsupported_aux_clear_is_not_event20_exact(self):
+        rows = [{"event": event, "status": "match"} for event in range(21)]
+        rows[11] = {"event": 11, "status": "unsupported_auxiliary"}
+        result = gfx_prefix_check.classify_prefix(
+            rows, problems=[], end=20, require_end=20)
+        self.assertEqual(result["verdict"],
+                         "EVENT20_BGRA_EXACT_WITH_EXCLUDED_AUX")
+        self.assertEqual(result["status"], "qualified_with_exclusions")
+        self.assertEqual(result["excluded_events"], [11])
+        self.assertNotIn(11, result["verified_color_events"])
+        self.assertEqual(result["verified_prefix"]["excluded_events"], [11])
+
+    def test_isolated_aux_clear_coverage_is_complete_but_excluded(self):
+        events = [
+            {"kind": "clear",
+             "target": {"framebuffer": 6, "color_attachment": {
+                 "type": "texture", "name": 433, "level": 0,
+                 "internal_format": "other", "width": 2048, "height": 2048}},
+             "flags": 1},
+            {"kind": "draw",
+             "target": {"framebuffer": 0}},
+        ]
+        resources = {
+            "tex:433": {"producers": [{"event": 0, "cleared": True,
+                                       "coverage": {"color_full": True}}],
+                        "consumers": [], "origin": "renderer_generated"},
+            "fb:0": {"producers": [{"event": 1}], "consumers": [],
+                     "origin": "renderer_generated"},
+        }
+        trace = {"_prefix": {
+            "end": 1,
+            "initial": {"event": 0, "timing": "pre_event",
+                        "resource": "fb:0"},
+            "post_events": [
+                {"event": 0, "timing": "post_event", "kind": "clear",
+                 "resource": "tex:433", "target_name": "433",
+                 "color": {"status": "unsupported_format"}},
+                {"event": 1, "timing": "post_event", "kind": "draw",
+                 "resource": "fb:0", "target_name": "0",
+                 "color": {"status": "captured", "file": "x.bin",
+                           "sha256": "0" * 64, "bytes": 64,
+                           "pixel_format": "BGRA8"}},
+            ],
+        }}
+        coverage = gfx_frame_graph.prefix_coverage(trace, events, resources)
+        self.assertEqual(coverage["status"], "complete", coverage["problems"])
+        self.assertEqual(coverage["excluded_events"], [0])
+
+    def test_consumed_unsupported_aux_clear_is_invalid(self):
+        events = [
+            {"kind": "clear",
+             "target": {"framebuffer": 6, "color_attachment": {
+                 "type": "texture", "name": 433, "level": 0,
+                 "internal_format": "other", "width": 2048, "height": 2048}},
+             "flags": 1},
+            {"kind": "draw",
+             "target": {"framebuffer": 0}},
+        ]
+        resources = {
+            "tex:433": {"producers": [{"event": 0, "cleared": True,
+                                       "coverage": {"color_full": True}}],
+                        "consumers": [{"event": 1}],
+                        "origin": "renderer_generated"},
+            "fb:0": {"producers": [{"event": 1}], "consumers": [],
+                     "origin": "renderer_generated"},
+        }
+        trace = {"_prefix": {
+            "end": 1,
+            "initial": {"event": 0, "timing": "pre_event",
+                        "resource": "fb:0"},
+            "post_events": [
+                {"event": 0, "timing": "post_event", "kind": "clear",
+                 "resource": "tex:433", "target_name": "433",
+                 "color": {"status": "unsupported_format"}},
+                {"event": 1, "timing": "post_event", "kind": "draw",
+                 "resource": "fb:0", "target_name": "0",
+                 "color": {"status": "captured", "file": "x.bin",
+                           "sha256": "0" * 64, "bytes": 64,
+                           "pixel_format": "BGRA8"}},
+            ],
+        }}
+        coverage = gfx_frame_graph.prefix_coverage(trace, events, resources)
+        self.assertEqual(coverage["status"], "invalid")
+        self.assertTrue(any("consumed" in problem
+                            for problem in coverage["problems"]),
+                        coverage["problems"])
+
+
 class OffscreenCoverageTests(unittest.TestCase):
     def test_missing_offscreen_post_event_observation_is_invalid(self):
         events = [

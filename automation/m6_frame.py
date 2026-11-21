@@ -131,7 +131,9 @@ def _prefix_record_problems(record, index: int) -> list[str]:
     if record.get("origin") != "lower_left":
         problems.append(f"prefix observation {index} is not lower-left origin")
     pixel_format = record.get("pixel_format")
-    if pixel_format not in ("BGRA8", "RGBA8"):
+    colour_block = record.get("color") if isinstance(record.get("color"), dict) else {}
+    if (pixel_format not in ("BGRA8", "RGBA8")
+            and colour_block.get("status") != "unsupported_format"):
         problems.append(f"prefix observation {index} has an unsupported "
                         "pixel format")
     width = record.get("width")
@@ -151,6 +153,15 @@ def _prefix_record_problems(record, index: int) -> list[str]:
     colour = record.get("color")
     if not isinstance(colour, dict):
         problems.append(f"prefix observation {index} has no colour image")
+    elif colour.get("status") == "unsupported_format":
+        if record.get("kind") != "clear":
+            problems.append(
+                f"prefix observation {index} has an unsupported colour "
+                "format for a non-clear operation")
+        if pixel_format is not None:
+            problems.append(
+                f"prefix observation {index} declares a pixel format for an "
+                "unsupported colour target")
     else:
         name = colour.get("file")
         if (not isinstance(name, str) or not name

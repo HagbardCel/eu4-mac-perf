@@ -2922,6 +2922,7 @@ typedef struct {
     int color_green_bits;
     int color_blue_bits;
     int color_alpha_bits;
+    int unsupported_format;
     int direct_texture;
     GLenum read_format;
     const char *pixel_format;
@@ -3009,8 +3010,8 @@ static int prefix_target_locked(prefix_target_state *out, int direct_texture) {
             out->read_format = GL_RGBA;
             out->pixel_format = "RGBA8";
         } else if (!g.test_only) {
-            fail_capture_locked("prefix_unsupported_format");
-            return -1;
+            out->unsupported_format = 1;
+            out->pixel_format = NULL;
         }
         if (out->width <= 0 || out->height <= 0 || out->width > 8192 ||
             out->height > 8192) {
@@ -3170,8 +3171,8 @@ static int prefix_target_locked(prefix_target_state *out, int direct_texture) {
             out->read_format = GL_RGBA;
             out->pixel_format = "RGBA8";
         } else {
-            fail_capture_locked("prefix_unsupported_format");
-            return -1;
+            out->unsupported_format = 1;
+            out->pixel_format = NULL;
         }
     }
     if (out->width <= 0 || out->height <= 0 || out->width > 8192 ||
@@ -3394,6 +3395,15 @@ static int prefix_emit_target_locked(int event, const char *timing,
     if (prefix_target_locked(&target, direct_texture) != 0) {
         return -1;
     }
+    int unsupported_colour = target.unsupported_format;
+    if (unsupported_colour &&
+        (direct_texture >= 0 || strcmp(kind, "clear") != 0)) {
+        /* A draw or copy into an unsupported colour format cannot be
+           accounted for; only an isolated auxiliary clear may be recorded as
+           an explicit exclusion. */
+        fail_capture_locked("prefix_unsupported_format");
+        return -1;
+    }
     int depth_required = 0;
     int stencil_required = 0;
     if (strcmp(kind, "draw") == 0) {
@@ -3425,8 +3435,14 @@ static int prefix_emit_target_locked(int event, const char *timing,
     if (stencil_required && !stencil_attachment_present) {
         stencil_required = 0;
     }
-    uint64_t colour_bytes = (uint64_t)target.width * (uint64_t)target.height * 4ull;
-    uint64_t depth_bytes = depth_required ? colour_bytes : 0;
+    uint64_t colour_bytes = unsupported_colour
+                                ? 0
+                                : (uint64_t)target.width *
+                                      (uint64_t)target.height * 4ull;
+    uint64_t depth_bytes = depth_required
+                               ? (uint64_t)target.width *
+                                     (uint64_t)target.height * 4ull
+                               : 0;
     uint64_t stencil_bytes = stencil_required
                                  ? (uint64_t)target.width * (uint64_t)target.height
                                  : 0;
@@ -3443,10 +3459,13 @@ static int prefix_emit_target_locked(int event, const char *timing,
     size_t actual_depth = 0;
     uint8_t *stencil = NULL;
     size_t actual_stencil = 0;
-    if (prefix_read_colour_locked(&target, event, &colour, &actual_colour) != 0 ||
-        actual_colour != (size_t)colour_bytes) {
-        free(colour);
-        return -1;
+    if (!unsupported_colour) {
+        if (prefix_read_colour_locked(&target, event, &colour,
+                                      &actual_colour) != 0 ||
+            actual_colour != (size_t)colour_bytes) {
+            free(colour);
+            return -1;
+        }
     }
     if (depth_required) {
         if (prefix_read_attachment_locked(&target, GL_DEPTH_COMPONENT, GL_FLOAT,
@@ -3472,7 +3491,8 @@ static int prefix_emit_target_locked(int event, const char *timing,
     }
     char colour_file[FTRACE_NAME] = "";
     char colour_sha[65] = "";
-    if (put_blob(colour, actual_colour, "prefix-color", colour_file,
+    if (!unsupported_colour &&
+        put_blob(colour, actual_colour, "prefix-color", colour_file,
                  colour_sha) != 0) {
         free(colour);
         free(depth);
@@ -3604,33 +3624,53 @@ static int prefix_emit_target_locked(int event, const char *timing,
         snprintf(stencil_json, sizeof(stencil_json),
                  "\"stencil\":{\"status\":\"not_used\"}");
     }
+    char colour_json[512];
+    if (unsupported_colour) {
+        snprintf(colour_json, sizeof(colour_json),
+                 "\"color\":{\"status\":\"unsupported_format\","
+                 "\"reason\":\"not a comparable BGRA colour format\","
+                 "\"internal_format\":%d}",
+                 target.internal_format);
+    } else {
+        snprintf(colour_json, sizeof(colour_json),
+                 "\"color\":{\"file\":\"%s\",\"sha256\":\"%s\","
+                 "\"bytes\":%zu,\"pixel_format\":\"%s\"}",
+                 colour_file, colour_sha, actual_colour, target.pixel_format);
+    }
+    char pixel_format_json[64];
+    if (unsupported_colour || target.pixel_format == NULL) {
+        snprintf(pixel_format_json, sizeof(pixel_format_json), "null");
+    } else {
+        snprintf(pixel_format_json, sizeof(pixel_format_json), "\"%s\"",
+                 target.pixel_format);
+    }
     char line[FTRACE_PREFIX_LINE_MAX];
     int length = snprintf(
         line, sizeof(line),
         "{\"schema\":\"gfx-prefix-observation/v1\",\"event\":%d,"
         "\"timing\":\"%s\",\"kind\":\"%s\",%s,"
         "\"resource\":\"%s\",\"target_name\":\"%s\","
-        "\"pixel_format\":\"%s\",\"origin\":\"lower_left\","
+        "\"pixel_format\":%s,\"origin\":\"lower_left\","
         "\"width\":%d,\"height\":%d,\"row_stride\":%d,"
         "\"target_identity\":{\"internal_format\":%d,"
         "\"component_type\":%d,\"red_bits\":%d,\"green_bits\":%d,"
         "\"blue_bits\":%d,\"alpha_bits\":%d,"
         "\"depth_present\":%s,\"stencil_present\":%s},"
-        "\"color\":{\"file\":\"%s\",\"sha256\":\"%s\",\"bytes\":%zu,"
-        "\"pixel_format\":\"%s\"},%s%s,"
+        "%s,%s%s,"
         "\"readback_ns\":%llu,\"pid\":%d,"
         "\"session_id\":\"%s\",\"capture_frame_id\":%llu,"
         "\"budget\":{\"used_bytes\":%llu,\"max_bytes\":%llu,"
         "\"used_ns\":%llu,\"max_ns\":%llu}}",
         event, timing, kind, target_json, resource, target_name,
-        target.pixel_format, target.width, target.height, target.width * 4,
+        pixel_format_json,
+        target.width, target.height, target.width * 4,
         target.internal_format, target.color_component_type,
         target.color_red_bits, target.color_green_bits,
         target.color_blue_bits, target.color_alpha_bits,
         target.depth_present ? "true" : "false",
         target.stencil_present ? "true" : "false",
-        colour_file, colour_sha, actual_colour, target.pixel_format,
-        depth_json, stencil_json, (unsigned long long)(now_ns() - started),
+        colour_json, depth_json, stencil_json,
+        (unsigned long long)(now_ns() - started),
         (int)getpid(), g.session_id,
         (unsigned long long)g.capture_id,
         (unsigned long long)(g.prefix_bytes + projected),

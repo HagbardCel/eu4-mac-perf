@@ -1256,7 +1256,7 @@ def prefix_coverage(trace: dict, events: list[dict],
     prefix = trace.get("_prefix")
     if prefix is None:
         return {"status": "absent", "end": None, "post_events": [],
-                "initial": None, "problems": []}
+                "initial": None, "excluded_events": [], "problems": []}
     problems: list[str] = []
     end = prefix["end"]
     post = prefix["post_events"]
@@ -1266,6 +1266,7 @@ def prefix_coverage(trace: dict, events: list[dict],
                 "problems": [f"prefix end {end} exceeds the "
                              f"{len(events)}-event stream"]}
     by_event: dict[int, dict] = {}
+    excluded_events: list[int] = []
     for record in post:
         event_index = record.get("event")
         if not isinstance(event_index, int) or isinstance(event_index, bool):
@@ -1295,6 +1296,41 @@ def prefix_coverage(trace: dict, events: list[dict],
         if record.get("kind") != event.get("kind"):
             problems.append(
                 f"prefix event {event_index} kind disagrees with the stream")
+        colour = record.get("color") or {}
+        if colour.get("status") == "unsupported_format":
+            if event.get("kind") != "clear":
+                problems.append(
+                    f"prefix event {event_index} has an unsupported colour "
+                    "format for a non-clear operation")
+                continue
+            resource = resources.get(expected) or {}
+            consumers = [
+                int(item["event"]) for item in
+                resource.get("consumers") or []
+                if item.get("event") is not None
+                and int(item["event"]) <= end]
+            if consumers:
+                problems.append(
+                    f"prefix event {event_index} writes an unsupported colour "
+                    f"format to {expected}, which is consumed at "
+                    f"{consumers[0]}")
+                continue
+            later = [
+                item for item in resource.get("producers") or []
+                if item.get("event") is not None
+                and event_index < int(item["event"]) <= end]
+            unsafe = [
+                item for item in later
+                if not item.get("cleared")
+                or not (item.get("coverage") or {}).get("color_full")]
+            if unsafe:
+                problems.append(
+                    f"prefix event {event_index} writes an unsupported colour "
+                    f"format to {expected}, which is rewritten without a full "
+                    "clear inside the prefix")
+                continue
+            excluded_events.append(event_index)
+            continue
         producers = [
             int(item["event"]) for item in
             (resources.get(expected) or {}).get("producers") or []
@@ -1337,6 +1373,7 @@ def prefix_coverage(trace: dict, events: list[dict],
         "end": end,
         "initial": prefix.get("initial"),
         "post_events": post,
+        "excluded_events": excluded_events,
         "problems": problems,
     }
 
@@ -1466,6 +1503,9 @@ def prefix_checkpoint_plan(graph: dict) -> list[dict]:
     resources = graph.get("resources") or {}
     plan: list[dict] = []
     for observation in prefix.get("post_events") or []:
+        if ((observation.get("color") or {}).get("status")
+                == "unsupported_format"):
+            continue
         event = int(observation["event"])
         resource = str(observation["resource"])
         target = str(observation["target_name"])

@@ -73,6 +73,14 @@ def main(argv: list[str]) -> int:
             "pass",
             "independent exact-prefix comparison verified events 0 through 20",
             result)
+    if verdict == "EVENT20_BGRA_EXACT_WITH_EXCLUDED_AUX":
+        return _emit(
+            "inconclusive",
+            "all compared BGRA colour events match, but excluded auxiliary "
+            "operations remain: "
+            + ", ".join(str(event) for event in
+                        result.get("excluded_events") or []),
+            result)
     if verdict == "FIRST_DIVERGENCE":
         event = result.get("first_divergence")
         return _emit(
