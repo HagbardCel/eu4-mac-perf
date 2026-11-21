@@ -209,8 +209,10 @@ The qualifier derives the mandatory drawable and pre-draw state from the seal
 itself, never from caller JSON: `GL_SAMPLES`, `GL_SAMPLE_BUFFERS`, depth/
 stencil/colour bit depths and the actual extent from the captured `gl.drawable`
 record; `GL_FRAMEBUFFER_SRGB`, `GL_DITHER` and `GL_MULTISAMPLE`; and depth/
-stencil contents, either as captured seeds or as a provably complete clear
-history (full extent, enabled write masks, no intervening same-target writer).
+stencil contents, either as captured seeds or as a provably complete clear history
+(full extent, recorded clear values, enabled write masks, no intervening
+same-target writer). The pre-draw colour image is mandatory: a clear is not a
+substitute for it.
 `--drawable` and `--prestate` are refused. A missing or unproven observable is
 an explicit `unqualified` or `unsupported_state`, even when the two images are
 byte-identical.
@@ -226,7 +228,18 @@ of its ancestors; an output directory that overlaps that tree is refused as
 `unsafe_output_directory`, because a renderer can walk its working directory
 and the package ancestors. The package is a closed set: undeclared files,
 nested directories and symlinks are refused, and a symlinked receipt or
-artifact is not accepted as evidence.
+artifact is not accepted as evidence. Pre-created `replay-input`/`renderer-run`
+symlinks and any that resolve inside the capture tree are refused, and the
+renderer inherits a scrubbed environment (`PWD`/`OLDPWD` removed, `HOME` and
+`TMPDIR` pointed at its run directory).
+
+This is isolation of the *provided input surface*. Filesystem sandboxing of an
+arbitrary process is not available on the supported host (`sandbox-exec` is
+denied), so the authority registry remains the trust anchor: it pins the exact
+reviewed renderer. A deliberately malicious pinned renderer that searches the
+host filesystem for the sealed frame is outside the boundary the gate can
+prove; the negative test exercises a renderer that searches its working
+directory, ancestors and package and finds no reference.
 
 The renderer must write `result.bgra` plus a signed `receipt.json` under
 `--control-out/renderer-run`. The receipt binds the renderer digest, its

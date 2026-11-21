@@ -683,6 +683,60 @@ class ControlQualificationTests(unittest.TestCase):
         self.assertTrue(any("multisampled" in item
                             for item in value["unsupported_state"]))
 
+    def test_an_unclassified_event_kind_is_refused(self):
+        events = copy.deepcopy(self.events)
+        events.insert(2, {"kind": "scene_entry", "seq": 1})
+        self._build_frame(events=events)
+        value = self._qualify()
+        self.assertFalse(value["qualified"])
+        self.assertTrue(any(
+            "unclassified" in item
+            for item in (value["missing_observation"]
+                         + value["unsupported_state"]
+                         + value["qualification"]["reasons"])))
+
+    def test_a_clear_without_a_recorded_value_is_refused(self):
+        events = copy.deepcopy(self.events)
+        events[0].pop("depth")
+        events[1]["default_checkpoint"].pop("depth", None)
+        self._build_frame(events=events)
+        result = self._qualify()
+        self.assertFalse(result["qualified"])
+        self.assertTrue(any("clear depth value" in item
+                            for item in
+                            result["qualification"]["evidence"]["missing"]))
+
+    def test_a_precreated_package_or_run_symlink_is_refused(self):
+        for name in ("replay-input", "renderer-run"):
+            with self.subTest(name=name):
+                out = self.output_root / f"symlink-{name}"
+                out.mkdir(parents=True, exist_ok=True)
+                (out / name).symlink_to(self.frame)
+                value = self._qualify(out_dir=out)
+                self.assertFalse(value["qualified"])
+                self.assertTrue(any("symlink" in item
+                                    for item in value["unsupported_state"]))
+
+    def test_a_legacy_capture_without_the_new_state_fields_is_unqualified(self):
+        mutations = (
+            ("read_buffer", lambda events: events[1]["target"].pop(
+                "read_buffer", None), "read buffer"),
+            ("framebuffer_srgb", lambda events: events[1]["state"].pop(
+                "framebuffer_srgb", None), "framebuffer_srgb"),
+            ("depth.range", lambda events: events[1]["state"]["depth"].pop(
+                "range", None), "depth.range"),
+        )
+        for label, mutate, needle in mutations:
+            with self.subTest(field=label):
+                events = copy.deepcopy(self.events)
+                mutate(events)
+                self._build_frame(events=events)
+                value = self._qualify()
+                self.assertFalse(value["qualified"])
+                evidence = value["qualification"]["evidence"]
+                self.assertTrue(any(needle in item
+                                    for item in evidence["missing"]))
+
     def test_unproven_colour_seed_metadata_is_refused(self):
         for field, value in (("bytes", 4), ("pixel_format", "RGBA8"),
                              ("origin", "upper_left")):
@@ -699,10 +753,8 @@ class ControlQualificationTests(unittest.TestCase):
     def test_an_exact_image_with_missing_drawable_is_refused(self):
         self._build_frame(drawable=None)
         value = self._qualify()
-        self.assertTrue(value["comparison"]["exact"]
-                        if value["comparison"]["status"] != "unavailable"
-                        else True)
         self.assertFalse(value["qualified"])
+        self.assertEqual(value["comparison"]["status"], "unavailable")
         self.assertEqual(value["status"], "unqualified")
         self.assertTrue(any("drawable" in item
                             for item in value["missing_observation"]))
@@ -1205,13 +1257,12 @@ class EvidenceDerivationTests(unittest.TestCase):
         self.assertTrue(any("depth" in item and "unproven" in item
                             for item in evidence["missing"]))
 
-    def test_a_clear_with_a_partial_colour_mask_is_not_proven(self):
+    def test_a_clear_cannot_substitute_for_the_colour_seed(self):
         events = copy.deepcopy(self.events)
-        events[0]["state"]["color_mask"] = [1, 1, 0, 1]
         events[1].pop("default_checkpoint")
         evidence = self._derive(drawable=self._drawable(), events=events)
         self.assertEqual(evidence["status"], "missing")
-        self.assertTrue(any("colour write mask" in item
+        self.assertTrue(any("pre-draw colour seed was not captured" in item
                             for item in evidence["missing"]))
 
     def test_a_targetless_writer_is_not_ignored(self):
@@ -1232,6 +1283,29 @@ class EvidenceDerivationTests(unittest.TestCase):
         self.assertEqual(evidence["status"], "missing")
         self.assertTrue(any("unsupported" in item
                             for item in evidence["missing"]))
+
+    def test_a_clear_without_a_depth_value_is_not_proven(self):
+        events = copy.deepcopy(self.events)
+        events[0].pop("depth")
+        events[1]["default_checkpoint"].pop("depth", None)
+        evidence = self._derive(drawable=self._drawable(), events=events)
+        self.assertEqual(evidence["status"], "missing")
+        self.assertTrue(any("clear depth value" in item
+                            for item in evidence["missing"]))
+
+    def test_a_clear_without_a_stencil_value_is_not_proven(self):
+        events = copy.deepcopy(self.events)
+        events[0].pop("stencil")
+        evidence = self._derive(drawable=self._drawable(), events=events)
+        self.assertEqual(evidence["status"], "missing")
+        self.assertTrue(any("clear stencil value" in item
+                            for item in evidence["missing"]))
+
+    def test_an_unclassified_event_kind_is_not_ignored(self):
+        events = copy.deepcopy(self.events)
+        events.insert(1, {"kind": "scene_entry", "seq": 1})
+        with self.assertRaises(replay_input.ReplayInputError):
+            self._derive(drawable=self._drawable(), events=events)
 
     def test_a_v2_checkpoint_record_is_accepted(self):
         events = copy.deepcopy(self.events)

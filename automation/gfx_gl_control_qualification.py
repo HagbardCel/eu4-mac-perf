@@ -113,13 +113,16 @@ def _intervening_writer(events: list[dict], draw_position: int,
     the framebuffer.
     """
     from automation import gfx_frame_graph
+    from automation.gfx_gl_replay_input import SUPPORTED_EVENT_KINDS
     for position in range(draw_position + 1, checkpoint_position):
         event = events[position]
         kind = event.get("kind")
+        if kind not in SUPPORTED_EVENT_KINDS:
+            return event
         if kind in ("draw", "clear"):
             target = event.get("target") or {}
             recorded = target.get("framebuffer")
-            if not isinstance(recorded, int) or recorded == framebuffer:
+            if type(recorded) is not int or recorded == framebuffer:
                 # An unknown target cannot be excluded as a writer.
                 return event
         elif kind in ("copy", "resolve"):
@@ -318,6 +321,12 @@ def _authenticate(frame_dir: Path, live_path: Path, width: int, height: int,
                 f"{seal.get('width')}x{seal.get('height')}")
     if trace is not None:
         events = trace.get("_events") or []
+        from automation.gfx_gl_replay_input import SUPPORTED_EVENT_KINDS
+        for position, event in enumerate(events):
+            if event.get("kind") not in SUPPORTED_EVENT_KINDS:
+                fail(
+                    f"event at position {position} has unclassified kind "
+                    f"{event.get('kind')!r}")
         checkpoint = _event(events, checkpoint_event)
         draw = _event(events, draw_event)
         if checkpoint is None:
@@ -498,12 +507,17 @@ def _request_document(*, nonce: str, package: dict, identity: dict,
     }
 
 
-def _sanitized_env(repo_root: Path) -> dict:
+def _sanitized_env(repo_root: Path, run_dir: Path) -> dict:
     env = {key: value for key, value in os.environ.items()
-           if not key.startswith("EU4_")}
+           if not key.startswith("EU4_")
+           and key not in ("PWD", "OLDPWD")}
     existing = env.get("PYTHONPATH")
     env["PYTHONPATH"] = (str(repo_root) if not existing
                          else str(repo_root) + os.pathsep + existing)
+    # A renderer that is confined to its working directory should not learn the
+    # operator's shell or evidence paths from inherited variables.
+    env["HOME"] = str(run_dir)
+    env["TMPDIR"] = str(run_dir)
     return env
 
 
@@ -542,6 +556,8 @@ def _run_renderer(*, renderer: Path, package: dict, identity: dict,
         return fail(f"control renderer is unreadable: {renderer}")
     result["renderer_sha256"] = renderer_sha
     try:
+        if run_dir.is_symlink():
+            return fail("control run directory is a symlink")
         if run_dir.exists():
             if any(run_dir.iterdir()):
                 return fail(
@@ -570,7 +586,8 @@ def _run_renderer(*, renderer: Path, package: dict, identity: dict,
         repo_root = Path(__file__).resolve().parents[1]
         completed = subprocess.run(
             command, capture_output=True, text=True, timeout=timeout,
-            check=False, cwd=str(run_dir), env=_sanitized_env(repo_root))
+            check=False, cwd=str(run_dir),
+            env=_sanitized_env(repo_root, run_dir))
         after = replay_input.verify_package(package["path"])
         if after["package_sha256"] != package["package_sha256"]:
             fail("input package changed during execution")
@@ -1009,6 +1026,21 @@ def qualify_sealed(live_path: Path | str, width: int, height: int, *,
                 "unsafe_output_directory",
                 f"control output {out_resolved} overlaps the sealed capture "
                 f"tree {capture_root}; choose a directory outside it"))
+    for sub in ("replay-input", "renderer-run"):
+        candidate = out_resolved / sub
+        if candidate.is_symlink():
+            return _assemble(
+                None, None,
+                evidence=_refused_evidence(
+                    "unsafe_output_directory",
+                    f"control subdirectory {candidate} is a symlink"))
+        if candidate.exists() and _within(candidate.resolve(), capture_root):
+            return _assemble(
+                None, None,
+                evidence=_refused_evidence(
+                    "unsafe_output_directory",
+                    f"control subdirectory {candidate} resolves inside the "
+                    "sealed capture tree"))
     authentication = _authenticate(
         frame_dir, live_path, width, height,
         checkpoint_event=checkpoint_event, draw_event=draw_event,
@@ -1022,9 +1054,15 @@ def qualify_sealed(live_path: Path | str, width: int, height: int, *,
                 "missing": list(authentication.get("missing") or []),
                 "unsupported": [], "identity": {},
             })
-    evidence = derive_evidence(
-        authentication, checkpoint_event=checkpoint_event,
-        draw_event=draw_event, width=width, height=height, resource=resource)
+    try:
+        evidence = derive_evidence(
+            authentication, checkpoint_event=checkpoint_event,
+            draw_event=draw_event, width=width, height=height,
+            resource=resource)
+    except replay_input.ReplayInputError as exc:
+        return _assemble(
+            None, _public_authentication(authentication),
+            evidence=_refused_evidence(exc.kind, exc.detail))
     public_authentication = _public_authentication(authentication)
     if evidence.get("status") != "proven":
         return _assemble(

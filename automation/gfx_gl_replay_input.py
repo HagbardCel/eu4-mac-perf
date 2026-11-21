@@ -42,6 +42,7 @@ GL_BACK = 0x0405
 GL_FRONT = 0x0404
 
 DEFAULT_RESOURCE = "fb:0"
+SUPPORTED_EVENT_KINDS = ("draw", "clear", "resolve", "copy")
 
 _UNKNOWN_VALUES = (None, "", "unknown")
 
@@ -172,6 +173,20 @@ def _clear_covers(clear: dict, bit: int, width: int, height: int,
     flags = _int_or_none(clear.get("flags"))
     if flags is None or not (flags & bit):
         return False, "clear does not include this buffer"
+    if bit == GL_COLOR_BUFFER_BIT:
+        value = clear.get("color")
+        if not (isinstance(value, (list, tuple)) and len(value) == 4
+                and all(isinstance(item, (int, float))
+                        and not isinstance(item, bool) for item in value)):
+            return False, "clear colour value was not recorded"
+    elif bit == GL_DEPTH_BUFFER_BIT:
+        value = clear.get("depth")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return False, "clear depth value was not recorded"
+    elif bit == GL_STENCIL_BUFFER_BIT:
+        value = clear.get("stencil")
+        if not isinstance(value, int) or isinstance(value, bool):
+            return False, "clear stencil value was not recorded"
     target = clear.get("target") or {}
     if _int_or_none(target.get("width")) != width \
             or _int_or_none(target.get("height")) != height:
@@ -477,23 +492,13 @@ def _prestate_evidence(draw: dict, events: list[dict], position: int,
                     "kind": (last or {}).get("kind"),
                     "index": (last or {}).get("index"),
                 }}
+    # The comparison is full-frame, so the exact pre-draw colour image is
+    # mandatory.  A clear-history substitute is not a captured colour image and
+    # would hide any pre-existing content outside the clear.
     if colour is None:
-        if isinstance(last, dict) and last.get("kind") == "clear":
-            ok, reason = _clear_covers(
-                last, GL_COLOR_BUFFER_BIT, width, height, _colour_mask_ok)
-            if ok:
-                prestate["color"] = {
-                    "source": "clear_history",
-                    "event": last.get("index"),
-                    "value": last.get("color"),
-                    "coverage": "full",
-                }
-            else:
-                missing.append(f"pre-draw colour is unproven: {reason}")
-        else:
-            missing.append(
-                "pre-draw colour seed and a complete colour clear history "
-                "were both unavailable")
+        missing.append(
+            "pre-draw colour seed was not captured; a full-frame comparison "
+            "requires the exact pre-draw colour image")
 
     depth_used = (state.get("depth") or {}).get("test") is True
     stencil_used = (state.get("stencil") or {}).get("test") is True
@@ -569,9 +574,13 @@ def _unknown_writers(events: list[dict], position: int,
     from automation import gfx_frame_graph
     for index, event in enumerate(events[:position]):
         kind = event.get("kind")
-        if kind in ("draw", "clear"):
+        if kind not in SUPPORTED_EVENT_KINDS:
+            problems.append(
+                f"event at position {index} has unclassified kind {kind!r}; "
+                "it could be an unobserved writer")
+        elif kind in ("draw", "clear"):
             target = event.get("target") or {}
-            if not isinstance(target.get("framebuffer"), int):
+            if type(target.get("framebuffer")) is not int:
                 problems.append(
                     f"{kind} event at position {index} has no recorded target "
                     "framebuffer; the selected draw's prestate cannot be "
@@ -615,6 +624,11 @@ def derive_evidence(trace: dict, seal: dict, *, checkpoint_event: int,
             "wrong_target",
             f"draw event {draw_event} does not target {resource}")
     position = _event_position(events, draw)
+    for index, event in enumerate(events):
+        if event.get("kind") not in SUPPORTED_EVENT_KINDS:
+            raise ReplayInputError(
+                "unclassified_event",
+                f"event at position {index} has kind {event.get('kind')!r}")
 
     missing: list[str] = []
     unsupported: list[str] = []
@@ -776,7 +790,10 @@ def build_package(*, frame_dir: Path, trace: dict, seal: dict, evidence: dict,
             "unproven_evidence",
             "the input package requires proven drawable and prestate evidence")
     frame_dir = Path(frame_dir).expanduser().resolve()
-    out_dir = Path(out_dir).expanduser().resolve()
+    out_dir = Path(out_dir).expanduser()
+    if out_dir.is_symlink():
+        raise ReplayInputError("package_dir_symlink", str(out_dir))
+    out_dir = out_dir.resolve()
     if out_dir.exists() and any(out_dir.iterdir()):
         raise ReplayInputError(
             "package_dir_not_empty", f"{out_dir} already has contents")
