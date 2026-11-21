@@ -26,8 +26,8 @@ Trust boundary.  A signature authenticates execution identity: the holder of
 the registered private key ran a renderer whose reviewed digest is pinned.  It
 is not, by itself, proof that the renderer made OpenGL calls; that property
 follows from the reviewed implementation and the digest-pinned execution path.
-The shipped authority registry is therefore empty until a renderer is
-implemented, independently reviewed and pinned.
+The shipped authority registry pins the reviewed M7 original-OpenGL renderer;
+an unlisted renderer remains unqualified.
 """
 
 from __future__ import annotations

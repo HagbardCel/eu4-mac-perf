@@ -33,7 +33,8 @@ format and completed execution status.
 
 Population condition: the renderer must be implemented, independently
 reviewed, pinned here and verified against its own synthetic original-GL
-reference before the first entry.  This file intentionally ships empty.
+reference before the first entry.  This file pins exactly the reviewed M7 original-OpenGL control; adding or
+changing an entry is a separately reviewed code change.
 """
 
 from __future__ import annotations
