@@ -20,18 +20,27 @@ history and must be read with its original run/seal identity.
 
 ### Capability snapshot
 
-As of this snapshot #241–#273 are merged. The technical findings of the harness review are closed: every
-harness-integrity finding has a disposition, the two scientific remainders are
-transferred to M7. The archive PR is the only remaining remediation step; the only remaining engineering item is the M7 scientific follow-up #270. Exact head SHAs, review
-records and dependency order are in the
+As of this snapshot #241–#276 are merged and the 20 November harness review is
+archived at [plans/closed/harness-review-20261120/](../plans/closed/harness-review-20261120/implementation.md).
+The technical findings are closed: every harness-integrity finding has a
+disposition and the two scientific remainders are transferred to M7. The only
+remaining engineering item is the M7 scientific follow-up #270. Exact head
+SHAs, review records and dependency order are in the archived
 [coverage matrix](../plans/closed/harness-review-20261120/implementation.md), the
 [closure](../analysis/harness-remediation/closure.md), the
 [verification report](../analysis/harness-remediation/verification-20261121.md)
 and the [exact-head audit](../analysis/harness-remediation/audit-20261120.md).
 
-GitHub has no `APPROVE` review for #241–#273. The closure PRs #263–#268 and #273 have an
-independent exact-head review comment; #251–#257 have no independent human exact-head review
-(Codex/audit verdict, author verification and CI, none of which are approvals); #241–#250 were reviewed by Codex/audit at earlier
+The commit sequence is distinct: the final tested code merge is `758e2f56`
+(#273); the closure documentation merge is `cd0a6d82` (#274); the archive merge
+is `484bcbe5` (#275); the post-archive reliability correction is #276
+(`ce6f8b2f`, merged `0e9447f8`), which keeps the worktree lock held by a
+surviving test child. `main` is `0e9447f8`.
+
+GitHub has no `APPROVE` review for #241–#276. The closure PRs #263–#268, #273
+and #276 have an independent exact-head review comment; #251–#257 have no
+independent human exact-head review (Codex/audit verdict, author verification
+and CI, none of which are approvals); #241–#250 were reviewed by Codex/audit at earlier
 commits. Review comments are not `APPROVE` states because the only available
 GitHub identity is the author and GitHub refuses self-approval.
 
@@ -49,7 +58,7 @@ GitHub identity is the author and GitHub refuses self-approval.
 | Campaign lifecycle | **Merged; audit-reviewed** | #246 `8c17f779`, #249 `555447fb`, #250 `401d6863` and #256 `c403f06e`; per-session write roots, exactly-once reservations, terminal cleanup | Live wall-time measurement through restoration |
 | Metrics/documentation | **Merged; trials complete** | PR #251 `050f9272`; service unions/GPU unknown. Three paired A/B trials on sealed 904: 6/6 correct, 0 confirmed EU4 launches, 1 replay per arm, GPU `unknown`; median 7.525 s (full report) vs 7.575 s (compact), payload 6,195,746 vs 7,768 B. No wall-time improvement claimed | Interface payload is measured; model-reasoning time is outside the trial |
 | Authentic renderer parity | **Not established** | Latest authentic pilot localized [14, 15]; no accepted terrain correction. The 904 compressed/decoded comparison narrows the input question but does not assign the 4 pixels | Exact control equality at the first differing writer (M7) |
-| Harness integrity | **Closed** | #263 attribution recomputation, #264 ledger witness, #265 flood retry, #266 anchor/session-root hardening, #267 plugin unload, #268 clean-tree builds, #273 worktree execution lock; #240 verified/closed. Final gate: 4,254 ran / 4,189 executed / 65 skipped / 0 failures / 0 errors at `758e2f56` | Only M7 scientific ownership (#270) remains; worktree lock boundaries are documented (orphan child after SIGKILL, cross-state-dir locator, `--cwd` scope) |
+| Harness integrity | **Closed** | #263 attribution recomputation, #264 ledger witness, #265 flood retry, #266 anchor/session-root hardening, #267 plugin unload, #268 clean-tree builds, #273 worktree execution lock, #276 surviving-child lock retention; #240 verified/closed. Post-#276 full gate: 4,257 ran / 4,191 executed / 66 skipped / 0 failures / 0 errors at `0e9447f8` (`20261121T091519Z-debdc76e`) | Only M7 scientific ownership (#270) remains. A surviving child now holds the worktree lock after a supervisor SIGKILL; the supported timeout boundary is the child's process group (a descendant that escapes the group and inherits stdout must redirect stdio). Cross-state-dir locator and `--cwd` scope boundaries remain |
 
 ### Current authentic observations
 
