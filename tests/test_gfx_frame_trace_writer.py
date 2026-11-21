@@ -148,6 +148,15 @@ class FrameTraceWriterTests(unittest.TestCase):
                              ["draw", "clear"])
             self.assertEqual(checkpoint["event"], 1)
 
+    def test_a_checkpoint_at_an_offscreen_target_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "capture"
+            self._run("checkpoint-offscreen", directory)
+            manifest = self._manifest(directory)
+            self.assertFalse(manifest["complete"], manifest)
+            self.assertEqual(manifest["reason"],
+                             "default_checkpoint_not_default")
+
     def test_selected_checkpoint_attaches_to_the_copy_event(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary) / "capture"

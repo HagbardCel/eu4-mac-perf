@@ -213,6 +213,8 @@ static struct {
     char gl_vendor[256];
     char gl_renderer[256];
     char gl_version[256];
+    int last_capture_target_fb;
+    int test_target_fb_override;
     int gl_drawable_valid;
     int gl_drawable_binding;
     int gl_samples;
@@ -2575,7 +2577,12 @@ static int capture_attributes(GLuint program, int indexed, int first, int count,
 
 static int capture_target(json_out *out, GLint *out_width, GLint *out_height) {
     GLint framebuffer = 0;
-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &framebuffer);
+    if (g.test_only && g.test_target_fb_override >= 0) {
+        framebuffer = (GLint)g.test_target_fb_override;
+    } else {
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &framebuffer);
+    }
+    g.last_capture_target_fb = (int)framebuffer;
     GLint draw_buffer = 0, read_buffer = 0;
     glGetIntegerv(GL_DRAW_BUFFER, &draw_buffer);
     glGetIntegerv(GL_READ_BUFFER, &read_buffer);
@@ -4121,6 +4128,7 @@ static void start_capture_at_frame(int next_frame) {
     }
     g.checkpoint_total_bytes = 0;
     g.checkpoint_pending = -1;
+    g.last_capture_target_fb = 0;
     g.truncated = 0;
     g.capture_failed = 0;
     g.stream_validated = 0;
@@ -4679,21 +4687,11 @@ static int maybe_capture_default_checkpoint_locked(void) {
         drawable.draw_buffer = GL_BACK;
         drawable.read_buffer = GL_BACK;
     } else {
-        /* A default-framebuffer checkpoint is only meaningful while the real
-           default drawable is current.  An event that targets an offscreen
-           FBO is a configuration error, not an invitation to read fb:0 and
-           label it as that event's prestate. */
-        GLint binding = 0;
-        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &binding);
-        if (binding != 0) {
-            fail_capture_locked("default_checkpoint_not_default");
-            return -1;
-        }
-        query_drawable_state(&drawable);
-        if (!drawable.valid) {
-            fail_capture_locked("default_checkpoint_not_default");
-            return -1;
-        }
+        /* The event's own target is not necessarily bound yet at the entry
+           hook (the draw body binds it).  Read fb:0 for the prestate and let
+           the event writer reject a checkpoint whose recorded target is not
+           the default framebuffer; the readback fills the drawable state
+           while framebuffer zero is actually current. */
         capture_dimensions_only(&width, &height);
     }
     if (width == 0 || height == 0) {
@@ -4947,6 +4945,12 @@ int eu4_gfx_frame_trace_test_checkpoint_production(const char *directory,
         snprintf(out_file, out_size, "%s", g.checkpoint_file[0]);
     }
     return 0;
+}
+
+/* Host-test only: force the recorded target framebuffer for a scenario that
+   has no GL context.  Value -1 restores the live query. */
+void eu4_gfx_frame_trace_test_set_target(int framebuffer) {
+    g.test_target_fb_override = framebuffer;
 }
 
 /* Host-test only: the last checkpoint's record and attachment blob names, so a
@@ -5431,7 +5435,10 @@ void eu4_gfx_frame_trace_clear_entry(eu4_gfx_capture_frame *frame,
                     (double)color[3], (double)depth, stencil);
             capture_clear_state(&out);
             capture_target(&out, NULL, NULL);
-            if (checkpoint_slot >= 0) {
+            if (checkpoint_slot >= 0 &&
+                g.last_capture_target_fb != 0) {
+                fail_capture_locked("default_checkpoint_not_default");
+            } else if (checkpoint_slot >= 0) {
                 jprintf(&out, ",\"default_checkpoint\":%s",
                         g.checkpoint_json[checkpoint_slot]);
             }
@@ -5639,15 +5646,25 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
                 g.truncated = 1;
             } else {
                 int checkpoint_slot = checkpoint_pending_slot_locked();
+                int target_fb = g.test_target_fb_override >= 0
+                    ? g.test_target_fb_override : g.last_capture_target_fb;
+                const char *checkpoint_prefix = "";
+                const char *checkpoint_body = "";
+                if (checkpoint_slot >= 0) {
+                    if (target_fb != 0) {
+                        fail_capture_locked("default_checkpoint_not_default");
+                    } else {
+                        checkpoint_prefix = ",\"default_checkpoint\":";
+                        checkpoint_body = g.checkpoint_json[checkpoint_slot];
+                    }
+                }
                 char body[2048];
                 int length = snprintf(
                     body, sizeof body,
                     "{\"kind\":\"draw\",\"index\":%d,\"test\":true,"
                     "\"draw\":{\"entry\":\"_GfxDraw\",\"caller_rva\":\"0x%llx\"}%s%s}",
                     g.event_count, (unsigned long long)call->caller_rva,
-                    checkpoint_slot >= 0 ? ",\"default_checkpoint\":" : "",
-                    checkpoint_slot >= 0
-                        ? g.checkpoint_json[checkpoint_slot] : "");
+                    checkpoint_prefix, checkpoint_body);
                 if (length > 0 && (size_t)length < sizeof body &&
                     emit_event(body)) {
                     g.event_count++;
@@ -5671,7 +5688,10 @@ static void draw_exit_common(eu4_gfx_capture_frame *frame,
         if (memory != NULL) {
             json_out out = {memory, 0};
             jprintf(&out, "{\"kind\":\"draw\",\"index\":%d", g.event_count);
-            if (checkpoint_slot >= 0) {
+            if (checkpoint_slot >= 0 &&
+                g.last_capture_target_fb != 0) {
+                fail_capture_locked("default_checkpoint_not_default");
+            } else if (checkpoint_slot >= 0) {
                 jprintf(&out, ",\"default_checkpoint\":%s",
                         g.checkpoint_json[checkpoint_slot]);
             }

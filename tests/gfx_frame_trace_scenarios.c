@@ -376,6 +376,23 @@ static int configure_checkpoint(const char *directory, const char *event) {
 
 /* The selected checkpoint is captured on entry, before the draw record (which
    is emitted on exit) and before the draw itself. */
+/* A checkpoint selected at an event that writes an offscreen FBO is a
+   configuration error and must fail the frame, not label fb:0 as its prestate. */
+static int scenario_checkpoint_offscreen(const char *directory) {
+    if (configure_checkpoint(directory, "1") <= 0) {
+        return 2;
+    }
+    arm_via_present();
+    draw(true, 0x1000);
+    eu4_gfx_frame_trace_test_set_target(10);
+    draw(false, 0x1000);
+    draw(true, 0x1000);
+    draw(false, 0x1000);
+    eu4_gfx_frame_trace_test_set_target(-1);
+    finish_via_present();
+    return 0;
+}
+
 static int scenario_checkpoint_draw(const char *directory) {
     if (configure_checkpoint(directory, "1") <= 0) {
         return 2;
@@ -1106,6 +1123,9 @@ int main(int argc, char **argv) {
     }
     if (strcmp(scenario, "copy-valid") == 0) {
         return scenario_copy(directory, 0);
+    }
+    if (strcmp(scenario, "checkpoint-offscreen") == 0) {
+        return scenario_checkpoint_offscreen(directory);
     }
     if (strcmp(scenario, "checkpoint-draw") == 0) {
         return scenario_checkpoint_draw(directory);
