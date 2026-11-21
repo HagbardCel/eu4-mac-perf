@@ -108,11 +108,11 @@ session in the registered workspace:
 
 ### Goal to paste (manually create `/goal`)
 
-Print the authoritative objective and paste it verbatim:
-
-```fish
-cat $REPO/campaigns/eu4-m7-autonomy-offline/objective.md
-```
+`run.sh` prints the complete, verified `goal_text` (the objective plus the
+trusted startup context) between the two dashed lines of its `Campaign
+prepared` block. Submit **that whole block** verbatim; do not paste only
+`campaigns/eu4-m7-autonomy-offline/objective.md`. The objective file is public
+reference text, not the complete goal.
 
 Do not add budget, round or correction limits to the goal.
 
