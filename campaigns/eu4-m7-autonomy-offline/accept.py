@@ -53,11 +53,12 @@ def main(argv: list[str]) -> int:
     if not frame.is_dir():
         return _emit("inconclusive",
                      f"trusted offline fixture is absent: {frame}")
+    run_dir = os.environ.get("EU4_M7_AUTONOMY_RUN_DIR", "").strip() or None
     try:
         result = gfx_prefix_check.evaluate(
             frame, None, require_end=EXPECTED_END, trusted_execution=True,
             trusted_root=TRUSTED_ROOT, candidate_workspace=workspace,
-            candidate_sidecar=SIDECAR)
+            candidate_sidecar=SIDECAR, trusted_run_dir=run_dir)
     except (gfx_prefix_check.PrefixCheckError, OSError, ValueError) as exc:
         return _emit("inconclusive",
                      f"offline checker could not evaluate: {exc}")

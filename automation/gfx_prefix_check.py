@@ -205,7 +205,8 @@ def resolve_trusted_reference(configured: str | Path | None,
 
 def prepare_trusted_evidence(frame_dir: Path | str, destination: Path | str,
                              *, source_note: str = "",
-                             read_only: bool = True, copy: bool = True) -> dict:
+                             read_only: bool = True, copy: bool = True,
+                             validate: bool = True) -> dict:
     """Copy a sealed frame outside the candidate workspace and bind its bytes.
 
     The destination is a read-only, digest-bound qualification root.  The
@@ -214,6 +215,11 @@ def prepare_trusted_evidence(frame_dir: Path | str, destination: Path | str,
     """
     frame_dir = Path(frame_dir).expanduser().resolve()
     destination = Path(destination).expanduser().resolve()
+    if validate:
+        # Admit only a complete sealed frame with a verified event stream and
+        # all referenced blobs before it can become trusted evidence.
+        m6_frame.load_seal(frame_dir)
+        m6_frame.load_trace(frame_dir, verify_blobs=True)
     if destination.exists():
         shutil.rmtree(destination)
     destination.mkdir(parents=True)
@@ -922,3 +928,43 @@ def evaluate(frame_dir: Path | str, metal_dir: Path | str | None = None,
     result["verdict"] = classification["verdict"]
     result["problems_count"] = len(problems)
     return result
+
+
+def _main(argv: list[str]) -> int:
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+    prepare = sub.add_parser("prepare", help="copy and bind a trusted reference")
+    prepare.add_argument("--frame", required=True)
+    prepare.add_argument("--destination", required=True)
+    prepare.add_argument("--note", default="")
+    prepare.add_argument("--no-copy", action="store_true")
+    verify = sub.add_parser("verify", help="verify a trusted reference root")
+    verify.add_argument("--root", required=True)
+    verify.add_argument("--frame", required=True)
+    args = parser.parse_args(argv)
+    if args.command == "prepare":
+        record = prepare_trusted_evidence(
+            args.frame, args.destination, source_note=args.note,
+            copy=not args.no_copy)
+        print(json.dumps({
+            "schema": "m7-trusted-evidence-prepared/v1",
+            "destination": str(Path(args.destination).expanduser().resolve()),
+            "frame_relative": record.get("frame_relative"),
+            "frame_path": record.get("frame_path"),
+            "root_sha256": record.get("root_sha256"),
+            "file_count": len(record.get("files") or []),
+        }, indent=2))
+        return 0
+    record = verify_trusted_evidence(args.root, args.frame)
+    print(json.dumps({
+        "schema": "m7-trusted-evidence-verified/v1",
+        "root": str(Path(args.root).expanduser().resolve()),
+        "root_sha256": record.get("root_sha256"),
+        "file_count": len(record.get("files") or []),
+    }, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main(sys.argv[1:]))

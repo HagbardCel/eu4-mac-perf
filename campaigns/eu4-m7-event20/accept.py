@@ -99,11 +99,12 @@ def main(argv: list[str]) -> int:
     sidecar = Path(os.environ.get(
         "EU4_M7_CANDIDATE_SIDECAR",
         str(ROOT / "dsh" / "campaigns" / "m7-event20.json"))).expanduser().resolve()
+    run_dir = os.environ.get("EU4_M7_CHECKER_RUN_DIR", "").strip() or None
     try:
         result = gfx_prefix_check.evaluate(
             frame_dir, None, require_end=20, trusted_execution=True,
             trusted_root=trusted_root, candidate_workspace=workspace,
-            candidate_sidecar=sidecar)
+            candidate_sidecar=sidecar, trusted_run_dir=run_dir)
     except (gfx_prefix_check.PrefixCheckError, OSError, ValueError) as exc:
         return _emit("inconclusive", f"prefix checker could not evaluate: {exc}")
     verdict = result.get("verdict")
