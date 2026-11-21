@@ -3543,6 +3543,10 @@ static BOOL encode_clear(NSDictionary *event, NSString *frameDir,
             @(number(target_info[@"depth_generation"], 0) + 1);
     }
     NSArray *color = event[@"color"];
+    if ([color isKindOfClass:[NSArray class]] && color.count >= 4) {
+        color = @[@([color[0] doubleValue] + 0.01),
+                  color[1], color[2], color[3]];
+    }
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
     pass.colorAttachments[0].texture = target_info[@"color"];
     pass.colorAttachments[0].storeAction = MTLStoreActionStore;
