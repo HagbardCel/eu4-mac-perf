@@ -1216,6 +1216,13 @@ static int put_blob(const void *data, size_t size, const char *prefix,
     uint64_t blob_cap = g.continuous
         ? (4ull * 1024ull * 1024ull * 1024ull)
         : (uint64_t)FTRACE_MAX_BLOB_BYTES;
+    if (g.prefix_enabled) {
+        /* The exact-prefix payload is an explicit, separately budgeted set of
+           full-frame readbacks; it must not be silently truncated by the
+           ordinary per-frame artifact cap.  The prefix budget and the ordinary
+           frame artifacts are both still bounded. */
+        blob_cap += g.prefix_max_bytes;
+    }
     if (size > blob_cap || g.blob_bytes > blob_cap - size) {
         fail_capture_locked("artifact_size_limit");
         return -1;
