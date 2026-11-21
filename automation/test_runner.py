@@ -9,6 +9,10 @@ to start an identical suite that is already running.
 It also holds one kernel lock per worktree for the whole child execution, so a
 different selection cannot compile the same ``benchmark/.build`` output at the
 same time.  Separate worktrees use separate locks and still run in parallel.
+The lock descriptor is passed to the unittest child, so if the supervising
+runner is killed the surviving child keeps the worktree locked until it exits.
+Native compiler descendants that outlive the unittest child are outside that
+descriptor chain; the boundary is stated in :func:`_run_locked`.
 
 It is not a CI scheduler.  It does not discover work, retry, parallelise or
 schedule anything.
@@ -181,7 +185,7 @@ def _active_in_worktree(state: Path, workdir: Path) -> dict | None:
             continue
         if cwd != target:
             continue
-        if _alive(row.get("pid")):
+        if _record_alive(row):
             return row
     return None
 
@@ -237,7 +241,29 @@ def _alive(pid) -> bool:
         os.kill(pid, 0)
     except OSError as exc:
         return exc.errno == errno.EPERM
+    # A zombie still accepts signal 0 but is not executing.  On Linux the
+    # procfs state is authoritative; on macOS an orphaned child is reaped by
+    # launchd promptly, so signal 0 is sufficient there.
+    if sys.platform.startswith("linux"):
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        except OSError:
+            return True
+        try:
+            state = stat.rsplit(")", 1)[1].split()[0]
+        except (IndexError, AttributeError):
+            return True
+        return state != "Z"
     return True
+
+
+def _record_alive(row: dict) -> bool:
+    """Whether the supervisor or its surviving unittest child is alive.
+
+    After a supervisor SIGKILL the child keeps the worktree lock and continues
+    executing; the record is still live for duplicate/active-run decisions.
+    """
+    return _alive(row.get("pid")) or _alive(row.get("child_pid"))
 
 
 def _records(state: Path) -> list[dict]:
@@ -260,7 +286,7 @@ def _running(state: Path, key: str) -> dict | None:
             continue
         if row.get("host") not in (None, os.uname().nodename):
             continue
-        if _alive(row.get("pid")):
+        if _record_alive(row):
             return row
     return None
 
@@ -374,14 +400,32 @@ def run_suite(
         return _run_locked(
             state=state, workdir=workdir, suite=suite, label=label,
             base_ref=base_ref, timeout=timeout, compare_to=compare_to,
-            profile=profile, min_tests=min_tests)
+            profile=profile, min_tests=min_tests,
+            worktree_handle=worktree_handle)
     finally:
         _release_lock(worktree_handle)
 
 
 def _run_locked(*, state: Path, workdir: Path, suite: dict, label, base_ref,
-                timeout, compare_to, profile, min_tests) -> dict:
-    """The pre-existing body, now held under the worktree execution lock."""
+                timeout, compare_to, profile, min_tests,
+                worktree_handle) -> dict:
+    """The pre-existing body, now held under the worktree execution lock.
+
+    The worktree lock descriptor is inherited by the unittest child.  If this
+    supervisor is SIGKILLed, the child keeps the lock until it exits; a second
+    invocation therefore cannot enter the worktree while the first child keeps
+    running.  Native compiler descendants spawned by the child do not inherit
+    that descriptor (the child's own ``subprocess`` calls use close-fds
+    defaults), so a compiler descendant that outlives the unittest child is
+    outside the lock.  Timeout kills the child's process group to bound that
+    window; a supervisor SIGKILL leaves the child itself as the lock holder.
+
+    Supported boundary: the timeout group kill covers the child and descendants
+    that remain in its process group.  A descendant that both escapes the group
+    (``start_new_session=True``) and inherits the child's stdout is outside the
+    group kill and can keep the supervisor's stdout drain open; such a tool must
+    redirect its stdio or be supervised separately.
+    """
     run_id = (dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
               + "-" + uuid.uuid4().hex[:8])
     record_path = _record_path(state, run_id)
@@ -454,27 +498,38 @@ def _run_locked(*, state: Path, workdir: Path, suite: dict, label, base_ref,
                 cwd=str(workdir), env=environment,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1,
+                pass_fds=(worktree_handle.fileno(),),
+                start_new_session=True,
             )
             record["child_pid"] = child.pid
             _write(record_path, record)
+            child_pgid = child.pid  # start_new_session makes the child leader
+
+            def signal_child_group(sig: int) -> None:
+                try:
+                    os.killpg(child_pgid, sig)
+                except OSError:
+                    try:
+                        child.send_signal(sig)
+                    except OSError:
+                        pass
+
+            killer_holder: list[threading.Timer] = []
 
             def stop() -> None:
                 nonlocal timed_out
                 timed_out = True
-                try:
-                    child.send_signal(signal.SIGTERM)
-                except OSError:
-                    pass
+                signal_child_group(signal.SIGTERM)
 
                 def hard_kill() -> None:
-                    if child.poll() is None:
-                        try:
-                            child.kill()
-                        except OSError:
-                            pass
+                    # The direct child may already have exited while a
+                    # descendant still holds the stdout pipe.  Kill the group
+                    # unconditionally; killpg reports ESRCH when it is gone.
+                    signal_child_group(signal.SIGKILL)
 
                 killer = threading.Timer(10.0, hard_kill)
                 killer.daemon = True
+                killer_holder.append(killer)
                 killer.start()
 
             watchdog = threading.Timer(float(timeout), stop)
@@ -482,12 +537,32 @@ def _run_locked(*, state: Path, workdir: Path, suite: dict, label, base_ref,
             watchdog.start()
             assert child.stdout is not None
             try:
-                for line in child.stdout:
-                    log.write(line)
+                try:
+                    for line in child.stdout:
+                        log.write(line)
+                        log.flush()
+                    exit_code = child.wait()
+                except BaseException:
+                    # Ctrl-C/KeyboardInterrupt must not release the worktree
+                    # lock while the detached child or its descendants are
+                    # still running.
+                    log.write("\n[test_runner] interrupted; stopping child group\n")
                     log.flush()
-                exit_code = child.wait()
+                    signal_child_group(signal.SIGTERM)
+                    try:
+                        exit_code = child.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    # Kill any descendant that outlived the unittest child,
+                    # including one that inherited the stdout pipe.
+                    signal_child_group(signal.SIGKILL)
+                    if exit_code is None:
+                        exit_code = child.wait()
+                    raise
             finally:
                 watchdog.cancel()
+                for killer in killer_holder:
+                    killer.cancel()
                 try:
                     child.stdout.close()
                 except OSError:
@@ -587,7 +662,7 @@ def status(run_id: str | None = None, *,
             record = _read(candidate) if candidate.is_file() else {}
             if not record:
                 raise ValueError(f"unknown test run: {run_id}")
-        if record.get("status") == "running" and not _alive(record.get("pid")):
+        if record.get("status") == "running" and not _record_alive(record):
             record["status"] = "lost"
     record = dict(record)
     log = record.get("log")
