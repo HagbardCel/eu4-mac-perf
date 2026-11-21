@@ -1,9 +1,14 @@
 {
   "schema": "m7-event20-prefix-check/v1",
   "frame_dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame",
-  "metal_dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow",
+  "metal_dir": "None",
   "required_through": 20,
   "problems": [],
+  "trusted_evidence": {
+    "root": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted/47590918",
+    "root_sha256": "b3e3d7b5d1e4cefe814f460c99a19c32011242d100a8b0c5bdd97aa9e485756c",
+    "file_count": 1192
+  },
   "capture": {
     "session_id": "47590918-d63a-4798-9737-df00285ad51b",
     "capture_frame_id": 1,
@@ -17,16 +22,355 @@
   "graph_reasons": [],
   "prefix_status": "complete",
   "prefix_end": 20,
+  "initial_state": [
+    {
+      "resource": "tex:370",
+      "first_consumer": 1,
+      "first_producer": null,
+      "status": "declared_external_input",
+      "proof": "the resource is an explicit external/boundary input, not renderer output"
+    },
+    {
+      "resource": "tex:386",
+      "first_consumer": 1,
+      "first_producer": null,
+      "status": "declared_external_input",
+      "proof": "the resource is an explicit external/boundary input, not renderer output"
+    },
+    {
+      "resource": "tex:369",
+      "first_consumer": 1,
+      "first_producer": null,
+      "status": "declared_external_input",
+      "proof": "the resource is an explicit external/boundary input, not renderer output"
+    },
+    {
+      "resource": "tex:431",
+      "first_consumer": 14,
+      "first_producer": 12,
+      "status": "overwritten_by_producer",
+      "proof": "the first in-prefix writer is an observed full clear"
+    },
+    {
+      "resource": "tex:432",
+      "first_consumer": 16,
+      "first_producer": 13,
+      "status": "overwritten_by_producer",
+      "proof": "the first in-prefix writer is an observed full clear"
+    },
+    {
+      "resource": "tex:375",
+      "first_consumer": 17,
+      "first_producer": null,
+      "status": "declared_external_input",
+      "proof": "the resource is an explicit external/boundary input, not renderer output"
+    },
+    {
+      "resource": "tex:387",
+      "first_consumer": 17,
+      "first_producer": null,
+      "status": "declared_external_input",
+      "proof": "the resource is an explicit external/boundary input, not renderer output"
+    },
+    {
+      "resource": "tex:376",
+      "first_consumer": 17,
+      "first_producer": null,
+      "status": "declared_external_input",
+      "proof": "the resource is an explicit external/boundary input, not renderer output"
+    },
+    {
+      "resource": "tex:429",
+      "first_consumer": 17,
+      "first_producer": null,
+      "status": "declared_external_input",
+      "proof": "the resource is an explicit external/boundary input, not renderer output"
+    },
+    {
+      "resource": "tex:356",
+      "first_consumer": 17,
+      "first_producer": null,
+      "status": "declared_external_input",
+      "proof": "the resource is an explicit external/boundary input, not renderer output"
+    },
+    {
+      "resource": "tex:434",
+      "first_consumer": 17,
+      "first_producer": null,
+      "status": "declared_external_input",
+      "proof": "the resource is an explicit external/boundary input, not renderer output"
+    },
+    {
+      "resource": "tex:374",
+      "first_consumer": 17,
+      "first_producer": null,
+      "status": "declared_external_input",
+      "proof": "the resource is an explicit external/boundary input, not renderer output"
+    },
+    {
+      "resource": "tex:2",
+      "first_consumer": 17,
+      "first_producer": null,
+      "status": "declared_external_input",
+      "proof": "the resource is an explicit external/boundary input, not renderer output"
+    },
+    {
+      "resource": "tex:371",
+      "first_consumer": 17,
+      "first_producer": null,
+      "status": "declared_external_input",
+      "proof": "the resource is an explicit external/boundary input, not renderer output"
+    },
+    {
+      "resource": "tex:389",
+      "first_consumer": 17,
+      "first_producer": null,
+      "status": "declared_external_input",
+      "proof": "the resource is an explicit external/boundary input, not renderer output"
+    },
+    {
+      "resource": "tex:377",
+      "first_consumer": 17,
+      "first_producer": null,
+      "status": "declared_external_input",
+      "proof": "the resource is an explicit external/boundary input, not renderer output"
+    },
+    {
+      "resource": "tex:367",
+      "first_consumer": 17,
+      "first_producer": null,
+      "status": "declared_external_input",
+      "proof": "the resource is an explicit external/boundary input, not renderer output"
+    },
+    {
+      "resource": "tex:394",
+      "first_consumer": 17,
+      "first_producer": null,
+      "status": "declared_external_input",
+      "proof": "the resource is an explicit external/boundary input, not renderer output"
+    },
+    {
+      "resource": "fb:0",
+      "first_consumer": 271,
+      "first_producer": 10,
+      "status": "not_consumed_inside_prefix",
+      "proof": "the initial default-framebuffer state is captured and no default-framebuffer consumer exists inside the prefix"
+    }
+  ],
+  "state_coverage": [
+    {
+      "event": 1,
+      "resource": "tex:433",
+      "color_initialized": true,
+      "depth_used": true,
+      "depth_present": true,
+      "depth_initialized": true,
+      "stencil_used": false,
+      "stencil_present": true,
+      "stencil_initialized": false
+    },
+    {
+      "event": 2,
+      "resource": "tex:433",
+      "color_initialized": true,
+      "depth_used": true,
+      "depth_present": true,
+      "depth_initialized": true,
+      "stencil_used": false,
+      "stencil_present": true,
+      "stencil_initialized": false
+    },
+    {
+      "event": 3,
+      "resource": "tex:433",
+      "color_initialized": true,
+      "depth_used": true,
+      "depth_present": true,
+      "depth_initialized": true,
+      "stencil_used": false,
+      "stencil_present": true,
+      "stencil_initialized": false
+    },
+    {
+      "event": 4,
+      "resource": "tex:433",
+      "color_initialized": true,
+      "depth_used": true,
+      "depth_present": true,
+      "depth_initialized": true,
+      "stencil_used": false,
+      "stencil_present": true,
+      "stencil_initialized": false
+    },
+    {
+      "event": 5,
+      "resource": "tex:433",
+      "color_initialized": true,
+      "depth_used": true,
+      "depth_present": true,
+      "depth_initialized": true,
+      "stencil_used": false,
+      "stencil_present": true,
+      "stencil_initialized": false
+    },
+    {
+      "event": 6,
+      "resource": "tex:433",
+      "color_initialized": true,
+      "depth_used": true,
+      "depth_present": true,
+      "depth_initialized": true,
+      "stencil_used": false,
+      "stencil_present": true,
+      "stencil_initialized": false
+    },
+    {
+      "event": 7,
+      "resource": "tex:433",
+      "color_initialized": true,
+      "depth_used": true,
+      "depth_present": true,
+      "depth_initialized": true,
+      "stencil_used": false,
+      "stencil_present": true,
+      "stencil_initialized": false
+    },
+    {
+      "event": 8,
+      "resource": "tex:433",
+      "color_initialized": true,
+      "depth_used": true,
+      "depth_present": true,
+      "depth_initialized": true,
+      "stencil_used": false,
+      "stencil_present": true,
+      "stencil_initialized": false
+    },
+    {
+      "event": 9,
+      "resource": "tex:433",
+      "color_initialized": true,
+      "depth_used": true,
+      "depth_present": true,
+      "depth_initialized": true,
+      "stencil_used": false,
+      "stencil_present": true,
+      "stencil_initialized": false
+    },
+    {
+      "event": 14,
+      "resource": "tex:432",
+      "color_initialized": true,
+      "depth_used": false,
+      "depth_present": false,
+      "depth_initialized": null,
+      "stencil_used": false,
+      "stencil_present": false,
+      "stencil_initialized": null
+    },
+    {
+      "event": 16,
+      "resource": "tex:431",
+      "color_initialized": true,
+      "depth_used": false,
+      "depth_present": true,
+      "depth_initialized": true,
+      "stencil_used": false,
+      "stencil_present": true,
+      "stencil_initialized": false
+    },
+    {
+      "event": 17,
+      "resource": "fb:0",
+      "color_initialized": true,
+      "depth_used": true,
+      "depth_present": true,
+      "depth_initialized": true,
+      "stencil_used": false,
+      "stencil_present": true,
+      "stencil_initialized": true
+    },
+    {
+      "event": 18,
+      "resource": "fb:0",
+      "color_initialized": true,
+      "depth_used": true,
+      "depth_present": true,
+      "depth_initialized": true,
+      "stencil_used": false,
+      "stencil_present": true,
+      "stencil_initialized": true
+    },
+    {
+      "event": 19,
+      "resource": "fb:0",
+      "color_initialized": true,
+      "depth_used": true,
+      "depth_present": true,
+      "depth_initialized": true,
+      "stencil_used": false,
+      "stencil_present": true,
+      "stencil_initialized": true
+    },
+    {
+      "event": 20,
+      "resource": "fb:0",
+      "color_initialized": true,
+      "depth_used": true,
+      "depth_present": true,
+      "depth_initialized": true,
+      "stencil_used": false,
+      "stencil_present": true,
+      "stencil_initialized": true
+    }
+  ],
+  "prefix_coverage": {
+    "status": "complete",
+    "end": 20,
+    "post_events": 21,
+    "excluded_events": [
+      11
+    ]
+  },
+  "expected_request_sha256": "928312d4124a7785f33086f8ee4e9eca82f60ec87cd38711074daad967f18e76",
+  "execution": {
+    "schema": "m7-trusted-execution/v1",
+    "mode": "checker-native-replay",
+    "started_epoch": 1795277103.307945,
+    "finished_epoch": 1795277103.7340958,
+    "frame_dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame",
+    "request_sha256": "f3f22ce7eef778670820d88478634293bd1f1ff27f743ab71ee2f29dd030fffb",
+    "replay_host": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/benchmark/.build/gfx_frame_replay",
+    "replay_host_sha256": "41796ac0eef0895442a96d20f18e4120bd0705e31f5492336350c570280168cd",
+    "shaders_json_sha256": "d38282fea023265f3ab326ff90b6a2c2891ae5c4c6fcdc94ccef274c60cfe4bd",
+    "replay_json_sha256": "ddb3d4aa4856908053484f84ee81e52e2050ba1164f69b11073d350401dd0b1f",
+    "status": "ok",
+    "events": 283,
+    "encoded": 283,
+    "failed": 0,
+    "command": [
+      "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/benchmark/.build/gfx_frame_replay",
+      "--frame",
+      "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame",
+      "--shaders",
+      "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/shaders",
+      "--out",
+      "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal",
+      "--checkpoints",
+      "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/checkpoint-request.json"
+    ]
+  },
   "request": {
-    "path": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow/checkpoint-request.json",
-    "sha256": "99c8f7cf33b90b2e32bee80e86f5879f227aecafc4e9009eddd05dc051dd82f2"
+    "path": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal/checkpoint-request.json",
+    "sha256": "f3f22ce7eef778670820d88478634293bd1f1ff27f743ab71ee2f29dd030fffb",
+    "agrees_with_derivation": true
   },
   "receipt": {
-    "path": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow/shader-receipt.json",
-    "sha256": "e79162922a9a7f6d71a28daf466fe199227cb870ba876fccc69596d3efd33c38"
+    "path": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal/shader-receipt.json",
+    "sha256": "3e6f2a389b1599bfe73fb3dd3d1b9258eafcaf75afa38b70adfd5651f2826a3f"
   },
   "replay": {
-    "path": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow/replay.json",
+    "path": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal/replay.json",
     "sha256": "ddb3d4aa4856908053484f84ee81e52e2050ba1164f69b11073d350401dd0b1f",
     "status": "ok",
     "events": 283,
@@ -56,7 +400,7 @@
       "timing": "post_event",
       "status": "match",
       "reference_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame/blobs/prefix-color-137637b6a69b02841cdd04a748ab6cdcb739299bd10b934b2e1bf4ea571524ba.bin",
-      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow/prefix-event0-433.bgra",
+      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal/prefix-event0-433.bgra",
       "reference_sha256": "137637b6a69b02841cdd04a748ab6cdcb739299bd10b934b2e1bf4ea571524ba",
       "metal_sha256": "825e6ce0e61e2724e503c39b0c97859a026cc5b6f109f66c7e6466d805d4d9ac",
       "dimensions": [
@@ -66,6 +410,7 @@
       "reference_pixel_format": "BGRA8",
       "candidate_pixel_format": "BGRA8",
       "alpha_applicable": false,
+      "compared_channels": "RGB",
       "statistics": {
         "pixels": 1930176,
         "mismatched_pixels": 0,
@@ -96,7 +441,7 @@
       "timing": "post_event",
       "status": "divergent",
       "reference_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame/blobs/prefix-color-1af2bbb3e6123aa2f1fb7e9c07dbc24ae6ea9013c61737fd15cfe13cc4886d6f.bin",
-      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow/prefix-event1-433.bgra",
+      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal/prefix-event1-433.bgra",
       "reference_sha256": "1af2bbb3e6123aa2f1fb7e9c07dbc24ae6ea9013c61737fd15cfe13cc4886d6f",
       "metal_sha256": "054c645f7418534c7d001e3b3aa328835d4c2bee63a357a09ecce1b3f8da4f78",
       "dimensions": [
@@ -106,6 +451,7 @@
       "reference_pixel_format": "BGRA8",
       "candidate_pixel_format": "BGRA8",
       "alpha_applicable": false,
+      "compared_channels": "RGB",
       "statistics": {
         "pixels": 1930176,
         "mismatched_pixels": 23,
@@ -146,7 +492,7 @@
       "timing": "post_event",
       "status": "divergent",
       "reference_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame/blobs/prefix-color-abb5ed19dcb25b3bb759ff3de84e636151f79379f480cdaee89dd5ef012e7814.bin",
-      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow/prefix-event2-433.bgra",
+      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal/prefix-event2-433.bgra",
       "reference_sha256": "abb5ed19dcb25b3bb759ff3de84e636151f79379f480cdaee89dd5ef012e7814",
       "metal_sha256": "976df89a058a951bcffd48be21ed5b0a67fb37f75a8372faa2f4532459e2f8ba",
       "dimensions": [
@@ -156,6 +502,7 @@
       "reference_pixel_format": "BGRA8",
       "candidate_pixel_format": "BGRA8",
       "alpha_applicable": false,
+      "compared_channels": "RGB",
       "statistics": {
         "pixels": 1930176,
         "mismatched_pixels": 164,
@@ -196,7 +543,7 @@
       "timing": "post_event",
       "status": "divergent",
       "reference_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame/blobs/prefix-color-50d5b4deff03114dc27d4f04653baabc49433aac9e1957664504c077e8a47dc4.bin",
-      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow/prefix-event3-433.bgra",
+      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal/prefix-event3-433.bgra",
       "reference_sha256": "50d5b4deff03114dc27d4f04653baabc49433aac9e1957664504c077e8a47dc4",
       "metal_sha256": "7f65b7a5aa96059b269f8deed5436e6167f7c84af76687752dd7501ad7f64751",
       "dimensions": [
@@ -206,6 +553,7 @@
       "reference_pixel_format": "BGRA8",
       "candidate_pixel_format": "BGRA8",
       "alpha_applicable": false,
+      "compared_channels": "RGB",
       "statistics": {
         "pixels": 1930176,
         "mismatched_pixels": 301,
@@ -246,7 +594,7 @@
       "timing": "post_event",
       "status": "divergent",
       "reference_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame/blobs/prefix-color-a78d1e7c40452d3591f57fd110d1c85cd216046e1005183ad40b78d0d3ea0254.bin",
-      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow/prefix-event4-433.bgra",
+      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal/prefix-event4-433.bgra",
       "reference_sha256": "a78d1e7c40452d3591f57fd110d1c85cd216046e1005183ad40b78d0d3ea0254",
       "metal_sha256": "ccfbe83426c35f7ebaf5b81fda52b654f1d2aab7b0dec3df083392431b5a3c1f",
       "dimensions": [
@@ -256,6 +604,7 @@
       "reference_pixel_format": "BGRA8",
       "candidate_pixel_format": "BGRA8",
       "alpha_applicable": false,
+      "compared_channels": "RGB",
       "statistics": {
         "pixels": 1930176,
         "mismatched_pixels": 1630,
@@ -296,7 +645,7 @@
       "timing": "post_event",
       "status": "divergent",
       "reference_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame/blobs/prefix-color-fee69496c214b1c56ec91f207441c87a137863b8f43107a868b5e29203498657.bin",
-      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow/prefix-event5-433.bgra",
+      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal/prefix-event5-433.bgra",
       "reference_sha256": "fee69496c214b1c56ec91f207441c87a137863b8f43107a868b5e29203498657",
       "metal_sha256": "5ab0836946b617e527aa7e3e588a70c5827b84f0b8c71b999687ad06cd77afc6",
       "dimensions": [
@@ -306,6 +655,7 @@
       "reference_pixel_format": "BGRA8",
       "candidate_pixel_format": "BGRA8",
       "alpha_applicable": false,
+      "compared_channels": "RGB",
       "statistics": {
         "pixels": 1930176,
         "mismatched_pixels": 1933,
@@ -346,7 +696,7 @@
       "timing": "post_event",
       "status": "divergent",
       "reference_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame/blobs/prefix-color-7c4f7add2959b8a46c98ed453f118640d7db8eab4b29b5565ffe107814622009.bin",
-      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow/prefix-event6-433.bgra",
+      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal/prefix-event6-433.bgra",
       "reference_sha256": "7c4f7add2959b8a46c98ed453f118640d7db8eab4b29b5565ffe107814622009",
       "metal_sha256": "16553ba35402a5e80c262a09e34cd8b47456b2b26ffa464cfbeb624589628355",
       "dimensions": [
@@ -356,6 +706,7 @@
       "reference_pixel_format": "BGRA8",
       "candidate_pixel_format": "BGRA8",
       "alpha_applicable": false,
+      "compared_channels": "RGB",
       "statistics": {
         "pixels": 1930176,
         "mismatched_pixels": 2549,
@@ -396,7 +747,7 @@
       "timing": "post_event",
       "status": "divergent",
       "reference_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame/blobs/prefix-color-e219815cc6612c7b78ddf639602e5b0373fabf94fdefa8fd7a06e0f8409c751b.bin",
-      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow/prefix-event7-433.bgra",
+      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal/prefix-event7-433.bgra",
       "reference_sha256": "e219815cc6612c7b78ddf639602e5b0373fabf94fdefa8fd7a06e0f8409c751b",
       "metal_sha256": "93039a41f2da5d03c511671e530de401eb7e75a4f0f94acd3ccabf3fbba84576",
       "dimensions": [
@@ -406,6 +757,7 @@
       "reference_pixel_format": "BGRA8",
       "candidate_pixel_format": "BGRA8",
       "alpha_applicable": false,
+      "compared_channels": "RGB",
       "statistics": {
         "pixels": 1930176,
         "mismatched_pixels": 2583,
@@ -446,7 +798,7 @@
       "timing": "post_event",
       "status": "divergent",
       "reference_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame/blobs/prefix-color-aad913e5f7420c08d11c06ff82a2933e386897c43de86c58571728ae20f26552.bin",
-      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow/prefix-event8-433.bgra",
+      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal/prefix-event8-433.bgra",
       "reference_sha256": "aad913e5f7420c08d11c06ff82a2933e386897c43de86c58571728ae20f26552",
       "metal_sha256": "a93cea4817de4236fed0ecca99fdf1ca8791eacd90014f1fe39e14d8ae63c65e",
       "dimensions": [
@@ -456,6 +808,7 @@
       "reference_pixel_format": "BGRA8",
       "candidate_pixel_format": "BGRA8",
       "alpha_applicable": false,
+      "compared_channels": "RGB",
       "statistics": {
         "pixels": 1930176,
         "mismatched_pixels": 3673,
@@ -496,7 +849,7 @@
       "timing": "post_event",
       "status": "divergent",
       "reference_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame/blobs/prefix-color-e4ae9a3b7ef04ab722fffbc1e371c4cada8e574710dee6ae5a7fed800d140062.bin",
-      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow/prefix-event9-433.bgra",
+      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal/prefix-event9-433.bgra",
       "reference_sha256": "e4ae9a3b7ef04ab722fffbc1e371c4cada8e574710dee6ae5a7fed800d140062",
       "metal_sha256": "3c2fc826298c4c5f8e5a92b010300203eb635fe119e15071884bcba4dcce8df5",
       "dimensions": [
@@ -506,6 +859,7 @@
       "reference_pixel_format": "BGRA8",
       "candidate_pixel_format": "BGRA8",
       "alpha_applicable": false,
+      "compared_channels": "RGB",
       "statistics": {
         "pixels": 1930176,
         "mismatched_pixels": 5199,
@@ -546,7 +900,7 @@
       "timing": "post_event",
       "status": "match",
       "reference_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame/blobs/prefix-color-137637b6a69b02841cdd04a748ab6cdcb739299bd10b934b2e1bf4ea571524ba.bin",
-      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow/prefix-event10-0.bgra",
+      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal/prefix-event10-0.bgra",
       "reference_sha256": "137637b6a69b02841cdd04a748ab6cdcb739299bd10b934b2e1bf4ea571524ba",
       "metal_sha256": "137637b6a69b02841cdd04a748ab6cdcb739299bd10b934b2e1bf4ea571524ba",
       "dimensions": [
@@ -556,6 +910,7 @@
       "reference_pixel_format": "BGRA8",
       "candidate_pixel_format": "BGRA8",
       "alpha_applicable": true,
+      "compared_channels": "RGBA",
       "statistics": {
         "pixels": 1930176,
         "mismatched_pixels": 0,
@@ -592,7 +947,7 @@
       "timing": "post_event",
       "status": "match",
       "reference_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame/blobs/prefix-color-577573f003fb348355d0ae287b17b2fdaac29e208dae1048e15ad94556153191.bin",
-      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow/prefix-event12-431.bgra",
+      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal/prefix-event12-431.bgra",
       "reference_sha256": "577573f003fb348355d0ae287b17b2fdaac29e208dae1048e15ad94556153191",
       "metal_sha256": "577573f003fb348355d0ae287b17b2fdaac29e208dae1048e15ad94556153191",
       "dimensions": [
@@ -602,6 +957,7 @@
       "reference_pixel_format": "RGBA8",
       "candidate_pixel_format": "RGBA8",
       "alpha_applicable": true,
+      "compared_channels": "RGBA",
       "statistics": {
         "pixels": 1930176,
         "mismatched_pixels": 0,
@@ -632,7 +988,7 @@
       "timing": "post_event",
       "status": "match",
       "reference_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame/blobs/prefix-color-577573f003fb348355d0ae287b17b2fdaac29e208dae1048e15ad94556153191.bin",
-      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow/prefix-event13-432.bgra",
+      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal/prefix-event13-432.bgra",
       "reference_sha256": "577573f003fb348355d0ae287b17b2fdaac29e208dae1048e15ad94556153191",
       "metal_sha256": "577573f003fb348355d0ae287b17b2fdaac29e208dae1048e15ad94556153191",
       "dimensions": [
@@ -642,6 +998,7 @@
       "reference_pixel_format": "RGBA8",
       "candidate_pixel_format": "RGBA8",
       "alpha_applicable": true,
+      "compared_channels": "RGBA",
       "statistics": {
         "pixels": 1930176,
         "mismatched_pixels": 0,
@@ -672,7 +1029,7 @@
       "timing": "post_event",
       "status": "match",
       "reference_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame/blobs/prefix-color-577573f003fb348355d0ae287b17b2fdaac29e208dae1048e15ad94556153191.bin",
-      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow/prefix-event14-432.bgra",
+      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal/prefix-event14-432.bgra",
       "reference_sha256": "577573f003fb348355d0ae287b17b2fdaac29e208dae1048e15ad94556153191",
       "metal_sha256": "577573f003fb348355d0ae287b17b2fdaac29e208dae1048e15ad94556153191",
       "dimensions": [
@@ -682,6 +1039,7 @@
       "reference_pixel_format": "RGBA8",
       "candidate_pixel_format": "RGBA8",
       "alpha_applicable": true,
+      "compared_channels": "RGBA",
       "statistics": {
         "pixels": 1930176,
         "mismatched_pixels": 0,
@@ -712,7 +1070,7 @@
       "timing": "post_event",
       "status": "match",
       "reference_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame/blobs/prefix-color-577573f003fb348355d0ae287b17b2fdaac29e208dae1048e15ad94556153191.bin",
-      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow/prefix-event15-431.bgra",
+      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal/prefix-event15-431.bgra",
       "reference_sha256": "577573f003fb348355d0ae287b17b2fdaac29e208dae1048e15ad94556153191",
       "metal_sha256": "577573f003fb348355d0ae287b17b2fdaac29e208dae1048e15ad94556153191",
       "dimensions": [
@@ -722,6 +1080,7 @@
       "reference_pixel_format": "RGBA8",
       "candidate_pixel_format": "RGBA8",
       "alpha_applicable": true,
+      "compared_channels": "RGBA",
       "statistics": {
         "pixels": 1930176,
         "mismatched_pixels": 0,
@@ -752,7 +1111,7 @@
       "timing": "post_event",
       "status": "match",
       "reference_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame/blobs/prefix-color-577573f003fb348355d0ae287b17b2fdaac29e208dae1048e15ad94556153191.bin",
-      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow/prefix-event16-431.bgra",
+      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal/prefix-event16-431.bgra",
       "reference_sha256": "577573f003fb348355d0ae287b17b2fdaac29e208dae1048e15ad94556153191",
       "metal_sha256": "577573f003fb348355d0ae287b17b2fdaac29e208dae1048e15ad94556153191",
       "dimensions": [
@@ -762,6 +1121,7 @@
       "reference_pixel_format": "RGBA8",
       "candidate_pixel_format": "RGBA8",
       "alpha_applicable": true,
+      "compared_channels": "RGBA",
       "statistics": {
         "pixels": 1930176,
         "mismatched_pixels": 0,
@@ -792,7 +1152,7 @@
       "timing": "post_event",
       "status": "match",
       "reference_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame/blobs/prefix-color-137637b6a69b02841cdd04a748ab6cdcb739299bd10b934b2e1bf4ea571524ba.bin",
-      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow/prefix-event17-0.bgra",
+      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal/prefix-event17-0.bgra",
       "reference_sha256": "137637b6a69b02841cdd04a748ab6cdcb739299bd10b934b2e1bf4ea571524ba",
       "metal_sha256": "137637b6a69b02841cdd04a748ab6cdcb739299bd10b934b2e1bf4ea571524ba",
       "dimensions": [
@@ -802,6 +1162,7 @@
       "reference_pixel_format": "BGRA8",
       "candidate_pixel_format": "BGRA8",
       "alpha_applicable": true,
+      "compared_channels": "RGBA",
       "statistics": {
         "pixels": 1930176,
         "mismatched_pixels": 0,
@@ -832,7 +1193,7 @@
       "timing": "post_event",
       "status": "divergent",
       "reference_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame/blobs/prefix-color-ab379ee45973b64ad7d2cd8ce3094b76f086ce71389823fccdcbe842afaf494c.bin",
-      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow/prefix-event18-0.bgra",
+      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal/prefix-event18-0.bgra",
       "reference_sha256": "ab379ee45973b64ad7d2cd8ce3094b76f086ce71389823fccdcbe842afaf494c",
       "metal_sha256": "1dfd4d1b428fc8fcd0dd63a4eb51ecb3c1ca4033333a414e235c84cfa058ae3d",
       "dimensions": [
@@ -842,6 +1203,7 @@
       "reference_pixel_format": "BGRA8",
       "candidate_pixel_format": "BGRA8",
       "alpha_applicable": true,
+      "compared_channels": "RGBA",
       "statistics": {
         "pixels": 1930176,
         "mismatched_pixels": 359,
@@ -882,7 +1244,7 @@
       "timing": "post_event",
       "status": "divergent",
       "reference_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame/blobs/prefix-color-dbe07879f247e87fad6ba0b0463b8ff2b80dd490ec3144e55a36178cdfec3bc5.bin",
-      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow/prefix-event19-0.bgra",
+      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal/prefix-event19-0.bgra",
       "reference_sha256": "dbe07879f247e87fad6ba0b0463b8ff2b80dd490ec3144e55a36178cdfec3bc5",
       "metal_sha256": "218f305889140fcf9db350ba534d940eb9222ec6c7d61c69c2aa4ac2fd6a66c8",
       "dimensions": [
@@ -892,6 +1254,7 @@
       "reference_pixel_format": "BGRA8",
       "candidate_pixel_format": "BGRA8",
       "alpha_applicable": true,
+      "compared_channels": "RGBA",
       "statistics": {
         "pixels": 1930176,
         "mismatched_pixels": 1186,
@@ -932,7 +1295,7 @@
       "timing": "post_event",
       "status": "divergent",
       "reference_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/frame/blobs/prefix-color-6ec3e1af440e9e42178bdc79d465de0cbb7cbd69071251b7905fa07d4ca4e718.bin",
-      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live/shadow/prefix-event20-0.bgra",
+      "metal_file": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/m7/event20/trusted-run/47590918/metal/prefix-event20-0.bgra",
       "reference_sha256": "6ec3e1af440e9e42178bdc79d465de0cbb7cbd69071251b7905fa07d4ca4e718",
       "metal_sha256": "b5ac3b29ed052a5c24c71f6a9a3b0e5bbfcce768c9b59d615c1d9f84575589a8",
       "dimensions": [
@@ -942,6 +1305,7 @@
       "reference_pixel_format": "BGRA8",
       "candidate_pixel_format": "BGRA8",
       "alpha_applicable": true,
+      "compared_channels": "RGBA",
       "statistics": {
         "pixels": 1930176,
         "mismatched_pixels": 4781,
@@ -978,7 +1342,10 @@
   ],
   "observed_events": 21,
   "first_divergence": 1,
-  "invalid_events": [],
+  "unverified_event": null,
+  "invalid_events": [
+    11
+  ],
   "verified_color_events": [
     0,
     10,

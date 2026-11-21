@@ -1,8 +1,8 @@
 {
   "schema": "eu4-dsh-campaign/v1",
-  "campaign_id": "m7-event20-canonical",
+  "campaign_id": "m7-event20-final",
   "source_campaign": "campaigns/eu4-m7-event20/campaign.json",
-  "candidate_baseline_commit": "4add5e41d245f6f77b04d710fbdf1de156ee1eb3",
+  "candidate_baseline_commit": "385d44f6afaa3ba544f88b62f8c7eb1e713a0b68",
   "checker_retry": {
     "mode": "deterministic",
     "max_identical_retries": 0
@@ -10,7 +10,7 @@
   "candidate": {
     "mode": "worktree",
     "workspace_base": "infra",
-    "workspace": ".local/dsh/m7-event20-canonical/workspace",
+    "workspace": ".local/dsh/m7-event20-final/workspace",
     "policy": {
       "allowed_paths": [
         "benchmark/**",
@@ -31,7 +31,7 @@
       ]
     }
   },
-  "run_root": ".local/dsh/m7-event20-canonical/run",
+  "run_root": ".local/dsh/m7-event20-final/run",
   "goal": {
     "max_rounds": 12,
     "require_checker_pass": true,

@@ -4,8 +4,8 @@
   "runtime": "dsh",
   "workspace": {
     "mode": "worktree",
-    "path": ".local/dsh/m7-event20-canonical/workspace",
-    "commit": "4add5e41d245f6f77b04d710fbdf1de156ee1eb3"
+    "path": ".local/dsh/m7-event20-final/workspace",
+    "commit": "385d44f6afaa3ba544f88b62f8c7eb1e713a0b68"
   },
   "accept": [
     "python3",

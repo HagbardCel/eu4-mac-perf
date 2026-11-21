@@ -1,0 +1,469 @@
+{
+  "schema": "m7-autonomous-pilot-round/v1",
+  "date": "2026-11-19",
+  "pilot": "m7-autonomous-round1",
+  "conclusion": "capture_side_divergence_not_metal",
+  "supersedes_capture": {
+    "session_id": "2564021f-4e00-4a58-a448-043697249a91",
+    "present_index": 615,
+    "status": "raw_capture_deleted_with_worktree",
+    "deleted_by": ".local/cleanup/worktree-rescue-20261119T211250Z",
+    "note": "cleanup excluded each worktree's .local; only committed summaries survive; this round captured its own frame and used only its own checkpoints"
+  },
+  "capture": {
+    "session_id": "2da0a8fc-d442-475d-aeb3-8b902ce0caa0",
+    "pid": 25295,
+    "capture_frame_id": 1,
+    "present_index": 616,
+    "scene_index": 616,
+    "operation_count": 325,
+    "draws": 315,
+    "clears": 9,
+    "copies": 1,
+    "width": 1728,
+    "height": 1117,
+    "pixel_format": "BGRA8",
+    "origin": "lower_left",
+    "manifest_sha256": "2f983a670d3925be466ff006534a97af32f7277166bd817127af29d8fdd12a49",
+    "event_stream_sha256": "ea7116be3e917e939ced608cfd74347c728c37ddb26a547f73c0b1845909d7c6",
+    "reference_sha256": "8dbd7c93c62a57d4dcd9833eec24675f3019b2fd45b89ef161b603dbed84063f",
+    "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "campaign_id": "m7-goal-round1",
+    "checkpoints_requested": 11,
+    "checkpoints_returned": 11,
+    "axes": {
+      "capture_validity": "valid",
+      "frame_shader_identity": "verified",
+      "gpu_execution": "ok",
+      "resource_provenance": "verified",
+      "operation_coverage": "complete",
+      "rendering_state_coverage": "partial",
+      "pixel_comparison": "divergent",
+      "first_divergence_confidence": "intermediate"
+    }
+  },
+  "checkpoints": [
+    {
+      "event": 14,
+      "resource": "fb:0",
+      "status": "match",
+      "mismatched_pixels": 0,
+      "max_channel_error": 0
+    },
+    {
+      "event": 15,
+      "resource": "fb:0",
+      "status": "divergent",
+      "mismatched_pixels": 607,
+      "max_channel_error": 2
+    },
+    {
+      "event": 16,
+      "resource": "fb:0",
+      "status": "divergent",
+      "mismatched_pixels": 200197,
+      "max_channel_error": 85
+    },
+    {
+      "event": 17,
+      "resource": "fb:0",
+      "status": "divergent",
+      "mismatched_pixels": 391005,
+      "max_channel_error": 85
+    },
+    {
+      "event": 284,
+      "resource": "fb:0",
+      "status": "divergent",
+      "mismatched_pixels": 1235845,
+      "max_channel_error": 102
+    }
+  ],
+  "final": {
+    "mismatched_pixels": 1160228,
+    "pixels": 1930176,
+    "mismatched_fraction": 0.601029,
+    "max_channel_error": 78,
+    "one_lsb_share": 0.7741,
+    "alpha_different_pixels": 0
+  },
+  "first_divergence": {
+    "event": 15,
+    "resource": "fb:0",
+    "producer_event": 14,
+    "operation": "draw",
+    "program": 301,
+    "function": "CPdxMapTerrainLayer::DrawTerrain",
+    "function_rva": "0x10d475a",
+    "callsite_rva": "0x10d4e4b",
+    "draw_entry": "_GfxDrawIndexed",
+    "draw_entry_rva": "0x15eaa77",
+    "caller_rva": "0x10d4e50",
+    "interval": [
+      14,
+      15
+    ],
+    "lower_bound": "same_resource_match",
+    "bounded_by_single_producer": true
+  },
+  "first_divergent_draw": {
+    "event": 14,
+    "painted_pixels": 970,
+    "painted_bbox": [
+      0,
+      27,
+      212,
+      259
+    ],
+    "differing_pixels": 607,
+    "max_channel_error": 2,
+    "gl_higher_fraction": 0.993,
+    "indices": 24576,
+    "mode": "triangles"
+  },
+  "amplifying_draw": {
+    "event": 15,
+    "painted_pixels": 320176,
+    "differing_pixels": 200197,
+    "painted_bbox": [
+      0,
+      0,
+      1045,
+      586
+    ],
+    "water": {
+      "pixels": 49120,
+      "differing_fraction": 0.863,
+      "mean_blue_delta": 0.793,
+      "max_channel_error": 9
+    },
+    "land": {
+      "pixels": 271056,
+      "differing_fraction": 0.582,
+      "mean_blue_delta": 0.227,
+      "max_channel_error": 85
+    },
+    "one_lsb_share": 0.95,
+    "alpha_different_pixels": 0,
+    "dither_positional_pattern": false
+  },
+  "hypotheses": [
+    {
+      "id": "gl_dither",
+      "claim": "unsupported gl_dither explains the 1-LSB residual",
+      "verdict": "refuted_for_this_frame",
+      "evidence": "error sign uniform across (x%4,y%4) (0.037-0.042 positive per cell); 3x3-flat regions are constant in both images (GL B=147, Metal B=146) rather than a dither matrix; prior Phase E0 Bayer A/B raised mismatches"
+    },
+    {
+      "id": "metal_fast_math",
+      "claim": "Metal fast-math / relaxed precision (fast::, powr) is the cause",
+      "verdict": "compiler_fast_math_refuted__source_level_fast_not_yet_tested",
+      "evidence": "prior A/B fastMathEnabled=NO changed 253 of 1,160,152 mismatches; the same code and MSL now render the canonical menu-occ300 terrain frame byte-identically (0/7,720,704 bytes); however MTLCompileOptions.fastMathEnabled cannot change the source-level fast::/powr calls, and spirv-dis reports zero RelaxedPrecision decorations while the MSL still uses fast::normalize (6x), fast::clamp, fast::min, fast::max and powr, so the relaxed-math translation remains an open sub-hypothesis"
+    },
+    {
+      "id": "content_dependent_shading",
+      "claim": "program-301 terrain shading differs by a smooth scalar factor (fog/lighting path)",
+      "verdict": "leading_not_proven",
+      "evidence": "first divergence is the first terrain draw; 95% of differing pixels are 1 LSB and alpha never differs; per-channel fit delta=a+b*value shows land as an almost pure scalar multiplier (0.18-0.27% relative) and water with an additional channel-dependent component; differing fraction is higher in smooth regions (66.6%) than detailed regions (56.3%) and the error autocorrelation is broad and smooth with no texel-scale or periodic peak, which refutes texture filtering as the dominant mechanism; textures, index/position buffers and UNIFORM1 are identical to the byte-exact canonical frame, only the engine uniform block differs"
+    }
+  ],
+  "executions": {
+    "eu4_launches": 3,
+    "sealed_frames": 3,
+    "in_process_shadow_executions": 3,
+    "offline_replays": 4,
+    "correction_evaluations": 0,
+    "automatic_merges": 0,
+    "replay_1": {
+      "target": "this sealed frame",
+      "result": "reproduced in-process checkpoints exactly"
+    },
+    "replay_2": {
+      "target": "canonical .local/m6/frames/menu-occ300/frame",
+      "result": "byte-identical to reference; 0 differing bytes"
+    },
+    "standalone_classification": "incomplete_diagnostics",
+    "standalone_reason": "frame_shader_identity=unverified_session (documented standalone-replay limitation)",
+    "replays_continuation": 2
+  },
+  "source_changes": [],
+  "checker": {
+    "correction_accept": "not_run",
+    "reason": "no correction proposed"
+  },
+  "cleanup": {
+    "terminated": true,
+    "killed": false,
+    "orphans": false,
+    "display": "EU4 Test (main=false)",
+    "settings_restored": true,
+    "campaign_stop": null
+  },
+  "next_experiment": {
+    "offline": true,
+    "eu4_launch_required": false,
+    "steps": [
+      "replay this sealed frame with EU4_FRAME_REPLAY_PRECISE_MATH=1 (expect no change; H2 re-check on this content)",
+      "replay with EU4_FRAME_REPLAY_NEAREST_ALL=1 and EU4_FRAME_REPLAY_LINEAR_ALL=1; if the 1-LSB bias collapses only under a filter change, texture-filter precision is causal",
+      "if filtering is implicated, add one bounded in-process diagnostic that writes the sampled terrain texel to a checkpoint before touching the renderer"
+    ]
+  },
+  "limitations": [
+    "the previous pilot's raw frame is deleted; this round's frame is the authoritative evidence",
+    "rendering_state_coverage is partial (gl_dither, multisample) and no equivalence is claimed",
+    "the leading hypothesis is a classification; a concrete implementation defect is not established",
+    "round-2 refinement is CPU analysis of the same frame; the relaxed-math A/B replay was not possible within the replay budget",
+    "both A/B replays are negative: the residual is not precision, filtering or pipeline state; a content-dependent time/camera-sensitive shading term remains",
+    "the GL control establishes the divergence class (capture inputs) but not yet the exact lossy resource; compressed-texture decode is the prime candidate"
+  ],
+  "round2_refinement": {
+    "method": "CPU analysis of the round-1 sealed frame; no new launch or replay",
+    "fit_land": {
+      "B": [
+        0.0925,
+        0.00251
+      ],
+      "G": [
+        0.0574,
+        0.00268
+      ],
+      "R": [
+        0.1308,
+        0.00182
+      ]
+    },
+    "fit_water": {
+      "B": [
+        -1.1516,
+        0.01508
+      ],
+      "G": [
+        -0.1523,
+        0.00594
+      ],
+      "R": [
+        -0.5483,
+        0.01008
+      ]
+    },
+    "fit_note": "delta = a + b*value, OpenGL minus Metal, checkpoint 16 painted pixels",
+    "filtering_refuted": {
+      "smooth_diff_fraction": 0.666,
+      "detailed_diff_fraction": 0.563,
+      "edge_diff_fraction": 0.653,
+      "edge_pixels": 3193,
+      "autocorrelation_lags": "0.13-0.18 over +/-4 px, no periodicity"
+    },
+    "spirv_relaxed_precision_decorations": 0,
+    "msl_relaxed_calls": [
+      "fast::normalize x6",
+      "fast::clamp",
+      "fast::min",
+      "fast::max",
+      "powr"
+    ],
+    "prior_ab_gap": "MTLCompileOptions.fastMathEnabled does not change source-level fast::/powr calls, so the earlier raw-math A/B did not test them",
+    "next_replay": "translate without relaxed math (fast::/powr -> precise intrinsics) and compare checkpoints 15/16/17; if the multiplicative bias collapses, the translation policy is the defect"
+  },
+  "independent_verification": {
+    "tool": "eu4_replay verify",
+    "case": ".local/m7/goal-round1/capture/shadow/case",
+    "ok": true,
+    "problems": [],
+    "files": 1252,
+    "graph_status": "complete",
+    "independently_reproducible": true,
+    "capture_identity_matches": true,
+    "first_divergence": "event 15 / producer 14 / program 301 / caller 0x10d4e50 / interval [14,15]",
+    "final": {
+      "mismatched_pixels": 1160228,
+      "pixels": 1930176,
+      "max_channel_error": 78,
+      "alpha_different_pixels": 0
+    },
+    "producer_identity": "legacy_missing (package metadata limitation)"
+  },
+  "ab_replays": {
+    "authorization": "operator, 2026-11-20; continuation state .local/m7/goal-round1/state-continuation.json (2 replays, 1 correction, no launches/frames/shadow)",
+    "A_source_relaxed_math_removed": {
+      "method": "temporary patch replacing fast::normalize/clamp/min/max and powr with precise MSL intrinsics in translated *.metal; replayed same sealed frame",
+      "result": "byte-identical to baseline replay at every checkpoint and final frame (0/7,720,704 bytes)",
+      "checkpoints": [
+        [
+          15,
+          607,
+          2
+        ],
+        [
+          16,
+          200197,
+          85
+        ],
+        [
+          17,
+          391005,
+          85
+        ],
+        [
+          284,
+          1235845,
+          102
+        ]
+      ]
+    },
+    "B_compiler_fast_math_off": {
+      "method": "EU4_FRAME_REPLAY_PRECISE_MATH=1, MTLCompileOptions.fastMathEnabled=NO",
+      "result": "19,925/7,720,704 bytes differ (0.26%); checkpoint stats effectively unchanged",
+      "checkpoints": [
+        [
+          15,
+          608,
+          3
+        ],
+        [
+          16,
+          200062,
+          85
+        ],
+        [
+          17,
+          390698,
+          85
+        ],
+        [
+          284,
+          1235357,
+          102
+        ]
+      ]
+    },
+    "conclusion": "precision family (SPIR-V decorations, source-level relaxed intrinsics, compiler fast math) excluded as dominant cause",
+    "source_change": "temporary translator patch reverted; tree identical to baseline"
+  },
+  "additional_captures": {
+    "A": {
+      "session": "f525e3ca-1fb7-4494-9cbd-1174bc08dd33",
+      "present_index": 611,
+      "phase_uniform0_22_y": 43.137,
+      "checkpoints": {
+        "14": [
+          0,
+          0
+        ],
+        "15": [
+          728,
+          44
+        ],
+        "16": [
+          199455,
+          76
+        ],
+        "17": [
+          390854,
+          76
+        ],
+        "284": [
+          1237503,
+          95
+        ]
+      }
+    },
+    "B": {
+      "session": "8ee43ade-fb4e-4873-b243-0ff704b225ce",
+      "present_index": 916,
+      "phase_uniform0_22_y": 25.247,
+      "checkpoints": {
+        "14": [
+          0,
+          0
+        ],
+        "15": [
+          884,
+          3
+        ],
+        "16": [
+          196949,
+          84
+        ],
+        "17": [
+          391990,
+          84
+        ]
+      }
+    },
+    "cleanup": "terminated, not killed, no orphans, background display only, settings byte-identical"
+  },
+  "gl_control": {
+    "where": ".local/m7/goal-round1/gl-control (not part of the repository)",
+    "method": "seed the captured pre-draw GL image, replay one captured draw through a legacy CGL OpenGL context with the captured GLSL, attribute/index blobs, texture levels, sampler state, uniforms and GL state, read back",
+    "results": [
+      {
+        "frame": "A",
+        "event": 14,
+        "gl_control_vs_live_gl": [
+          724,
+          3
+        ],
+        "metal_vs_live_gl": [
+          728,
+          44
+        ],
+        "gl_control_vs_metal": [
+          7,
+          43
+        ]
+      },
+      {
+        "frame": "B",
+        "event": 14,
+        "gl_control_vs_live_gl": [
+          885,
+          3
+        ],
+        "metal_vs_live_gl": [
+          884,
+          3
+        ],
+        "gl_control_vs_metal": [
+          4,
+          1
+        ]
+      },
+      {
+        "frame": "B",
+        "event": 15,
+        "gl_control_vs_live_gl": [
+          196242,
+          84
+        ],
+        "metal_vs_live_gl": [
+          196949,
+          84
+        ],
+        "gl_control_vs_metal": [
+          5901,
+          47
+        ]
+      }
+    ],
+    "overlap_event15_B": {
+      "both": 194853,
+      "gl_only": 1389,
+      "metal_only": 2096,
+      "sign_agreement": 0.9886
+    },
+    "dither_ab": {
+      "control_default": [
+        724,
+        3
+      ],
+      "control_no_dither": [
+        724,
+        3
+      ]
+    },
+    "interpretation": "the Metal replay reproduces the captured inputs almost exactly as OpenGL does; both differ from the live GL frame on the same pixels in the same direction, so the divergence is introduced by the captured inputs, not by Metal translation",
+    "candidate_lossy_input": "compressed textures are captured as glGetTexImage RGBA8 readbacks, so both replays sample the readback decode instead of the sampler decode; the canonical menu-occ300 frame replays byte-exactly, so the loss is content-dependent",
+    "limits": "single-sample FBO versus the reference multisampled default framebuffer; depth cleared to 1.0 (the <=1152 px painted by event 14 are excluded from sensitivity); textures are the captured decompressed payloads by design"
+  }
+}

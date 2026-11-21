@@ -16,7 +16,8 @@ the outcome.
 | Prefix blob-budget fix | `c06e3ea6c37336606b0e95d2d4545a2f19fb6d42` |
 | Stage-3 candidate worktree HEAD | `c06e3ea6c37336606b0e95d2d4545a2f19fb6d42` |
 | Trusted checker | `campaigns/eu4-m7-event20/accept.py` from the infrastructure checkout, importing `automation` from that checkout, never from the candidate |
-| Final integration head / full gate | `ad967428` / `20261121T152010Z-3847774f` (4,420 ran, 4,384 executed, 36 skipped, 0 failures, 0 errors, 831.9 s) |
+| Remediation code head | `385d44f6afaa3ba544f88b62f8c7eb1e713a0b68` |
+| Final integration head / full gate | pending the remediation gate |
 
 The checker was invoked against the candidate workspace; the candidate could
 edit `benchmark/**`, `analysis/m7/**`, `tests/**`, `progress.md` and `.local/**`.
@@ -112,6 +113,41 @@ no custom launcher or capture script was used.
 Result: seal written, shadow execution `ok`/`complete`, 283/283 events encoded,
 26 checkpoint entries (21 post-event prefix entries plus the ordinary graph
 checkpoints). Divergence: event 1, `tex:433`, 23 pixels, max channel error 1.
+
+## PR #280 remediation (no new launch)
+
+The review remediation re-derived the acceptance result from the same sealed
+artifacts. No EU4 launch was made.
+
+- The checker derives the expected checkpoint request from the verified graph
+  and rejects a published request that disagrees before comparison.
+- `trusted_execution=True` translates the sealed shaders with the
+  infrastructure checkout, runs the trusted replay host and compares only the
+  files that host just wrote. Candidate `replay.json`, receipt and pixels are
+  not authority.
+- A digest-bound trusted-evidence record was created outside the candidate
+  worktree:
+  `.local/m7/event20/trusted/47590918/trusted-evidence.json`, root SHA-256
+  `b3e3d7b5d1e4cefe814f460c99a19c32011242d100a8b0c5bdd97aa9e485756c`
+  over 1,192 files. The frame path remains the original sealed capture; any
+  byte change invalidates the record.
+- Trusted execution: request
+  `f3f22ce7eef778670820d88478634293bd1f1ff27f743ab71ee2f29dd030fffb`,
+  host SHA-256 `41796ac0eef0895442a96d20f18e4120bd0705e31f5492336350c570280168cd`,
+  283/283 events encoded, failed 0, status `ok`.
+- Corrected result: `FIRST_DIVERGENCE` at event 1 (23 px / max 1, RGB scope);
+  events 10 and 12–17 exact in RGBA scope; events 18–20 divergent; event 11
+  remains unobserved for this seal (R32F support added for future captures).
+- The derived portable case (events 0..1) is 75,456,851 bytes over 56 files,
+  root SHA-256
+  `d87b9241295333b7233afa11386c6ae176f18ee4d967ebb0b8d415d52d4da80d`,
+  and the trusted checker reproduces `FIRST_DIVERGENCE` at event 1.
+- One canonical campaign is pinned to the tested code revision; the three
+  pilot stage sidecars are archived as non-executable history.
+
+The corrected comparison is `analysis/m7/m7-event20-comparison.json`; the
+pre-remediation measurement is preserved as
+`analysis/m7/m7-event20-comparison-untrusted-20261121.json`.
 
 ## Offline discriminator
 

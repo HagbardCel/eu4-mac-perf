@@ -2,10 +2,20 @@
 
 Date: 21 November 2026 (Europe/Berlin). Baseline: `main` at
 `3e725d3c693797853b1265f870dc16598d8b598c`.
-Verdict: **infrastructure and independent checker implemented and qualified;
-the live pilot found its first authoritative divergence at event 1, so event-20
-parity is not claimed.** The live drawable-format prerequisite for issue #278 is
-now recorded from the original EU4 process.
+Verdict: **checker and trusted-evidence remediation is implemented; the live
+pilot's first authoritative divergence remains event 1, so event-20 parity is
+not claimed. `M7_AUTONOMOUS_READY` is also not claimed because the corrected
+checker has not been exercised in a fresh native multi-round DSH run.** The live
+drawable-format prerequisite for issue #278 is recorded from the original EU4
+process.
+
+Remediation status for PR #280: requests are independently derived from the
+sealed graph, the checker executes the Metal replay from the trusted
+infrastructure instead of accepting candidate-authored outputs, original
+evidence is digest-bound outside the candidate workspace, alpha/format scope is
+derived from attachment identity, and prefix classification walks events
+sequentially. The scientific result was re-derived from the same immutable
+artifacts without another EU4 launch.
 
 This report distinguishes *observed pixel equality* from engine-semantic
 equivalence. Only the original EU4 OpenGL process is the oracle. The
@@ -23,7 +33,10 @@ reconstructed OpenGL control was not run and is not the reference.
 | Manifest binding and blob verification | native manifest + `automation/m6_frame.py` | prefix file digest, embedded observations and every blob are re-verified |
 | Metal post-event checkpoints | `benchmark/eu4_gfx_frame_replay.mm` | implemented; `timing=post_event` |
 | Graph coverage and unsupported-aux policy | `automation/gfx_frame_graph.py` | implemented; isolated unconsumed unsupported clears are explicit exclusions |
-| Independent exact checker | `automation/gfx_prefix_check.py`, `campaigns/eu4-m7-event20/accept.py` | implemented; recomputes every comparison from original bytes |
+| Independent exact checker | `automation/gfx_prefix_check.py`, `campaigns/eu4-m7-event20/accept.py` | implemented; derives the request from the graph, executes the trusted Metal replay, recomputes every comparison from original bytes |
+| Trusted execution and evidence | `gfx_prefix_check._run_trusted_replay`, `prepare_trusted_evidence` | implemented; candidate `replay.json`/receipt/pixels are not authority; digest-bound evidence record verified |
+| Portable bounded reproduction | `automation/gfx_prefix_case.py` | implemented; 75,456,851-byte derived event-0..1 case, 56 files, independently reproduces event 1 |
+| Canonical campaign revision | `dsh/campaigns/m7-event20.json` | one active pin; stage sidecars archived as non-executable |
 | Issue #278 synthetic observer | `tests/gfx_drawable_observe_host.m` | implemented and tested |
 | Issue #278 live drawable record | native manifest `gl.cgl` + `gl.default_drawable` | implemented; live values recorded in the pilot |
 | Campaign and DSH sidecar | `campaigns/eu4-m7-event20/`, `dsh/campaigns/m7-event20*.json` | implemented; isolated worktree and trusted checker outside the candidate |
@@ -36,10 +49,13 @@ identity and readback time. The sealed manifest binds the observation file and
 all blobs. A missing operation, an unobserved consumed resource, a wrong event
 or resource identity, a stale receipt or a mismatched pixel format fails closed.
 
-RGB8 targets are compared on R/G/B exactly; their BGRA8 materialization's alpha
-byte is not an applicable channel of the original alpha-less attachment. This
-normalization is declared per checkpoint and is not a tolerance. Default and
-RGBA8 targets compare all four channels, including alpha.
+Alpha applicability is derived from the sealed attachment identity, not from a
+mutable declaration. The default drawable and RGBA8 targets compare all four
+channels, including alpha. RGB8 targets have no stored alpha and are reported
+as **RGB-scope** exact comparisons; their BGRA8 materialization's alpha byte is
+excluded explicitly, not silently. R32F targets are compared as the exact
+four-byte float payload (**R32F-scope**). A declared `alpha_applicable` that
+contradicts the attachment identity invalidates the frame.
 
 ## Issue #278 drawable identity
 
@@ -98,7 +114,7 @@ Independent checker result (`analysis/m7/m7-event20-comparison.json`):
 | 8 | `tex:433` | divergent | 3,673 | 118 |
 | 9 | `tex:433` | divergent | 5,199 | 118 |
 | 10 | `fb:0` | match (RGBA) | 0 | 0 |
-| 11 | `tex:430` (unsupported aux) | excluded, isolated | — | — |
+| 11 | `tex:430` (R32F) | unobserved in this seal; excluded | — | — |
 | 12 | `tex:431` | match (RGBA) | 0 | 0 |
 | 13 | `tex:432` | match (RGBA) | 0 | 0 |
 | 14 | `tex:432` | match (RGBA) | 0 | 0 |
@@ -109,11 +125,15 @@ Independent checker result (`analysis/m7/m7-event20-comparison.json`):
 | 19 | `fb:0` | divergent | 1,186 | 12 |
 | 20 | `fb:0` | divergent | 4,781 | 22 |
 
+These results were re-derived by the corrected checker using a trusted replay
+executed from the infrastructure checkout (request
+`f3f22ce7eef778670820d88478634293bd1f1ff27f743ab71ee2f29dd030fffb`,
+host `benchmark/.build/gfx_frame_replay`), not from candidate metadata.
 First authoritative divergence: **event 1**, `tex:433`, first differing pixel
-(129, 4), bounds x4..169, y4..559, 23 pixels, max channel error 1. Events 10
-and 12–17 match exactly, including alpha. The later event-18 divergence (359
-px, max 12) is a second, larger difference that is not reachable while the
-campaign stops at event 1.
+(129, 4), bounds x4..169, y4..559, 23 pixels, max channel error 1, **RGB
+scope**. Events 10 and 12–17 match exactly in **RGBA scope**, including alpha.
+The later event-18 divergence (359 px, max 12, RGBA scope) is a second, larger
+difference that is not reachable while the campaign stops at event 1.
 
 Verdict: **`FIRST_DIVERGENCE` at event 1. Exact verified prefix: events 0
 through 0 only** (event 0 is exact; event 1 is the first divergent operation).
@@ -128,24 +148,28 @@ until event 1 is resolved. No event-20 qualification is claimed.
   compressed BC representation is already the better path; the remaining
   single-LSB difference needs original-driver decode/filter rounding evidence
   or a captured state discriminator.
-- Event 11 writes `tex:430` with an internal format the Metal replay does not
-  materialize (the event stream records `other`; the sealed run treats it as an
-  explicitly excluded, unconsumed auxiliary clear). It is accounted for but not
-  compared. If it were consumed inside the prefix, coverage would be invalid.
+- Event 11 writes `tex:430`; the live observation records internal format
+  **0x822E (GL_R32F)**, component type float, red bits 32. Native and Metal
+  R32F support, plans, readback and tests are implemented, but the existing
+  seal captured the event before that support existed, so it has no original
+  R32F reference pixels. It remains an explicitly unverified operation:
+  `EVENT20_EXACT` is impossible for this seal, and exclusions are never
+  accepted as exact. A future capture will record and compare R32F.
 - The event-18+ divergence on `fb:0` is real and later than the first
   divergence; it was preserved but not corrected.
-- The portable replay case is incomplete under the established 512 MiB artifact
-  budget: the single-frame case requires 860,327,938 bytes. The full sealed
-  frame, shadow outputs, request, receipt and logs are preserved under
-  `.local/dsh/m7-event20-stage3/workspace/.local/m7/event20/live`; the case
-  manifest records `reproduction.status=incomplete` and
-  `reason=artifact_budget`.
+- The original full-frame case attempt required 860,327,938 bytes and remains
+  recorded as incomplete under the 512 MiB budget. A bounded **derived prefix**
+  case is now verified: events 0..1, 75,456,851 bytes, 56 files, explicit
+  `derived_from` provenance, trusted-checker verdict `FIRST_DIVERGENCE` at
+  event 1. It is not the original full seal.
 - The reconstructed-GL control was not re-qualified for the new seal. Direct
   EU4-versus-Metal evidence does not require it; no causal Metal claim relies on
   it.
-- `treats gl_dither and multisample as unsupported Metal state` remains a
-  limitation of the shared state coverage. The event-1 pattern is not periodic
-  and therefore is not attributed to dithering by this pilot.
+- `gl_dither` and `multisample` remain unsupported Metal state. The event-1
+  pattern is not periodic and is not attributed to dithering by this pilot.
+- The corrected checker has not been exercised in a new native multi-round DSH
+  run. Previous controlled multi-round evidence predates these changes, so
+  `M7_AUTONOMOUS_READY` is not claimed.
 
 ## Tests and gates
 
