@@ -61,8 +61,9 @@ export function definitions(run) {
   return [
     tool(
       'eu4_re_query',
-      'Query existing Ghidra/corpus knowledge (function, callers/callees, xrefs, ' +
-        'pseudocode, ABI, struct layouts, provenance). Query before disassembling.',
+      'Fast indexed lookups over existing Ghidra/corpus knowledge: symbols, ' +
+        'function relationships, call xrefs, pseudocode, ABI and struct ' +
+        'layouts, provenance. Query before disassembling.',
       {
         op: { type: 'string', enum: ['resolve', 'function', 'callers', 'callees', 'decompile', 'xrefs', 'abi', 'struct', 'provenance'], description: 'query operation' },
         target: string('name, RVA, or struct/layout name'),
@@ -72,6 +73,30 @@ export function definitions(run) {
       },
       ['op'],
       safe('eu4_re_query'),
+    ),
+    tool(
+      'eu4_research',
+      'Read the sealed renderer snapshot: machine instructions, detailed ' +
+        'decompiler output and paginated static cross-references for one ' +
+        'function, with provenance and explicit unavailable/not_found/' +
+        'identity_error/ambiguous status. Use eu4_re_query first for fast ' +
+        'indexed symbols and relationships; use eu4_research for the ' +
+        'instruction and decompilation evidence the index does not carry.',
+      {
+        op: { type: 'string', enum: ['status', 'resolve', 'function', 'xrefs'], description: 'sealed-snapshot research operation' },
+        target: string('RVA for function/xrefs, or an RVA/symbol for resolve'),
+        view: { type: 'string', enum: ['static', 'decompiled', 'all'], description: 'function evidence to return' },
+        baseline_revision: string('pinned baseline revision (default: latest export)'),
+        max_bytes: integer('maximum response bytes (1024..262144)'),
+        limit: integer('maximum matches or instructions per page'),
+        static_offset: integer('instruction pagination offset'),
+        decompile_offset: integer('pseudocode character offset'),
+        incoming_offset: integer('incoming xref pagination offset'),
+        outgoing_offset: integer('outgoing xref pagination offset'),
+        callsite_offset: integer('callsite pagination offset'),
+      },
+      ['op'],
+      safe('eu4_research'),
     ),
     tool(
       'eu4_session',

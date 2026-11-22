@@ -120,7 +120,8 @@ bytes stay under `.local`; only hashes, lengths and provenance are tracked.
 
 Before starting another live EU4 run:
 
-1. query existing Ghidra/engine-contract knowledge (`eu4_re_query`);
+1. query existing Ghidra/engine-contract knowledge (`eu4_re_query` /
+   `eu4_research`);
 2. run the focused native/static tests;
 3. replay known local cases (`eu4_replay`);
 4. inspect the recorded differential observations (`eu4_diff_inspect`,

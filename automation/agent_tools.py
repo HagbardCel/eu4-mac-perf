@@ -1,8 +1,10 @@
 """Stable JSON tool core for agents (CLI, DSH plugin, MCP, OpenCode).
 
-Seven logical tools share one implementation:
+Eight logical tools share one implementation:
 
-``eu4_re_query``       reverse-engineering knowledge
+``eu4_re_query``       fast indexed reverse-engineering knowledge
+``eu4_research``       sealed renderer-snapshot instructions, decompilation and
+                       paginated static cross-references
 ``eu4_session``        owned session inspection and safe termination
 ``eu4_capture``        frame/health inspection and targeted capture requests
 ``eu4_diff_run``       run a dual-process differential campaign
@@ -46,7 +48,9 @@ v1 reported as a success.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
+import io
 import json
 import os
 import subprocess
@@ -67,6 +71,7 @@ SCHEMA = "eu4-agent-tool/v2"
 RUNTIME_SCHEMA = "eu4-tool-runtime/v1"
 TOOLS = (
     "eu4_re_query",
+    "eu4_research",
     "eu4_session",
     "eu4_capture",
     "eu4_diff_run",
@@ -697,6 +702,75 @@ def eu4_re_query(args: argparse.Namespace) -> dict:
     result["truncated"] = bool(value.get("truncated"))
     return _envelope("eu4_re_query", status, result,
                      reason=value.get("reason", ""))
+
+
+def eu4_research(args: argparse.Namespace) -> dict:
+    """Translate the typed request to the sealed-snapshot research CLI.
+
+    The CLI owns corpus validation, statuses and bounds; this adapter only
+    validates the arguments it forwards and maps the document into the shared
+    envelope.
+    """
+    from reverse_engineering import research
+
+    operation = args.research_op
+    if operation != "status" and not args.target:
+        return _envelope("eu4_research", "error",
+                         reason=f"{operation} requires a target RVA or symbol")
+    if not research.MIN_MAX_BYTES <= args.max_bytes <= research.HARD_MAX_BYTES:
+        return _envelope(
+            "eu4_research", "error",
+            reason=(f"max-bytes must be from {research.MIN_MAX_BYTES} to "
+                    f"{research.HARD_MAX_BYTES}"))
+    if args.limit is not None and args.limit < 1:
+        return _envelope("eu4_research", "error",
+                         reason="limit must be a positive integer")
+    offsets = (args.static_offset, args.decompile_offset, args.incoming_offset,
+               args.outgoing_offset, args.callsite_offset)
+    if any(offset < 0 for offset in offsets):
+        return _envelope("eu4_research", "error",
+                         reason="offsets must be zero or positive")
+
+    argv = [operation]
+    if operation != "status":
+        argv.append(args.target)
+    if operation == "resolve":
+        if args.limit is not None:
+            argv += ["--limit", str(args.limit)]
+    elif operation == "function":
+        argv += ["--view", args.view,
+                 "--static-offset", str(args.static_offset),
+                 "--decompile-offset", str(args.decompile_offset)]
+        if args.limit is not None:
+            argv += ["--limit", str(args.limit)]
+    elif operation == "xrefs":
+        argv += ["--incoming-offset", str(args.incoming_offset),
+                 "--outgoing-offset", str(args.outgoing_offset),
+                 "--callsite-offset", str(args.callsite_offset)]
+    if args.baseline_revision:
+        argv += ["--baseline-revision", args.baseline_revision]
+    argv += ["--max-bytes", str(args.max_bytes)]
+
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        code = research.main(argv)
+    text = buffer.getvalue().strip()
+    if not text:
+        return _envelope(
+            "eu4_research", "error",
+            reason=(f"sealed-snapshot research rejected the request "
+                    f"(exit {code})"))
+    try:
+        document = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return _envelope("eu4_research", "failed",
+                         reason=f"research output is not JSON: {exc}")
+    if not isinstance(document, dict):
+        return _envelope("eu4_research", "failed",
+                         reason="research output is not an object")
+    status = str(document.get("status") or "unavailable")
+    return _envelope("eu4_research", status, document,
+                     reason=str(document.get("reason") or ""))
 
 
 def discover_evidence(*, roots, query=None, classification=None, since=None,
@@ -3788,6 +3862,21 @@ def _parser() -> argparse.ArgumentParser:
     re_query.add_argument("--limit", type=int, default=10)
     re_query.add_argument("--max-bytes", type=int, default=24000)
 
+    research = sub.add_parser("eu4_research")
+    research.add_argument("research_op", choices=(
+        "status", "resolve", "function", "xrefs"))
+    research.add_argument("target", nargs="?", default=None)
+    research.add_argument("--view", choices=("static", "decompiled", "all"),
+                          default="all")
+    research.add_argument("--baseline-revision", default=None)
+    research.add_argument("--max-bytes", type=int, default=24000)
+    research.add_argument("--limit", type=int, default=None)
+    research.add_argument("--static-offset", type=int, default=0)
+    research.add_argument("--decompile-offset", type=int, default=0)
+    research.add_argument("--incoming-offset", type=int, default=0)
+    research.add_argument("--outgoing-offset", type=int, default=0)
+    research.add_argument("--callsite-offset", type=int, default=0)
+
     session = sub.add_parser("eu4_session")
     session.add_argument("session_op", choices=(
         "list", "inspect", "terminate", "lease", "discover"))
@@ -3975,6 +4064,7 @@ def main(argv: list[str] | None = None) -> int:
         args.out = envelope_out
     implementations = {
         "eu4_re_query": eu4_re_query,
+        "eu4_research": eu4_research,
         "eu4_session": eu4_session,
         "eu4_capture": eu4_capture,
         "eu4_diff_run": eu4_diff_run,

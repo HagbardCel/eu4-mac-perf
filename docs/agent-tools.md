@@ -125,6 +125,35 @@ python3 -m automation.agent_tools eu4_re_query provenance
 data references. `abi` is `unavailable` unless the function is in the sealed
 renderer snapshot; it never guesses a prototype.
 
+### `eu4_research`
+
+Read the sealed renderer snapshot when the indexed corpus is not enough:
+machine instructions, decompiler output and paginated static cross-references
+for one function. `eu4_re_query` stays the fast indexed entry point for
+symbols, relationships, ABI and layouts; `eu4_research` adds the instruction
+and decompilation evidence from the frozen snapshot. It never launches Ghidra,
+rebuilds the corpus or writes evidence.
+
+```sh
+python3 -m automation.agent_tools eu4_research status
+python3 -m automation.agent_tools eu4_research resolve InternalSetTextureAndSamplerState
+python3 -m automation.agent_tools eu4_research function 0x15ecce2 --view static \
+  --limit 40 --max-bytes 16384 --static-offset 0
+python3 -m automation.agent_tools eu4_research function 0x15efec7 --view decompiled \
+  --decompile-offset 4000 --max-bytes 16384
+python3 -m automation.agent_tools eu4_research xrefs 0x15ecce2 \
+  --incoming-offset 0 --outgoing-offset 10 --callsite-offset 0
+```
+
+The research document's own status is preserved: `ok`, `unavailable` (missing
+corpus/index/package/callsites), `not_found`, `not_in_snapshot`,
+`identity_error` (stale index or invalid package/receipt) and `ambiguous`
+(multiple or truncated matches). A missing corpus is never an empty successful
+result. `view` selects `static`, `decompiled` or `all`; the independent
+`static_offset`/`decompile_offset` (functions) and `incoming_offset`/
+`outgoing_offset`/`callsite_offset` (xrefs) continue a bounded page, and
+`max_bytes` keeps the document within its 1 KiB–256 KiB response budget.
+
 ### `eu4_session`
 
 ```sh
@@ -613,7 +642,7 @@ is synthetic and sanitized: no credentials, machine paths or private content.
 
 ## DSH plugin
 
-`dsh/eu4-tools-plugin` (`@eu4/dsh-tools`) registers the seven names as native
+`dsh/eu4-tools-plugin` (`@eu4/dsh-tools`) registers the eight names as native
 DSH tools with typed JSON schemas and spawns the Python core. It has no runtime
 dependency on DSH packages (raw JSON schema), so it can be linked into a
 profile:

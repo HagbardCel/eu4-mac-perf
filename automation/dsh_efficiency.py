@@ -1354,8 +1354,9 @@ def execution_summary(value: dict) -> dict:
         native_names = set(_native)
     except Exception:  # noqa: BLE001 - the metric is still usable
         native_names = {
-            "eu4_re_query", "eu4_session", "eu4_capture", "eu4_diff_run",
-            "eu4_diff_inspect", "eu4_replay", "eu4_case_inspect",
+            "eu4_re_query", "eu4_research", "eu4_session", "eu4_capture",
+            "eu4_diff_run", "eu4_diff_inspect", "eu4_replay",
+            "eu4_case_inspect",
         }
     native_calls = sum(count for name, count in by_tool.items()
                        if name in native_names)

@@ -47,7 +47,7 @@ STANDALONE_REPORT_STATUSES = frozenset({
 
 
 def _native_tool_names() -> frozenset[str]:
-    """The seven native EU4 tools, from their single existing definition."""
+    """The registered native EU4 tools, from their single existing definition."""
     from automation.agent_tools import TOOLS
 
     return frozenset(TOOLS)
